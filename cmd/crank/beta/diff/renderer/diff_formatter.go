@@ -273,8 +273,8 @@ func GenerateDiffWithOptions(current, desired *un.Unstructured, logger logging.L
 		}
 
 		// Clean up both objects for comparison
-		currentClean := cleanupForDiff(current.DeepCopy(), logger)
-		desiredClean := cleanupForDiff(desired.DeepCopy(), logger)
+		currentClean := cleanupForDiff(current.DeepCopy(), logger.WithValues("resourceStage", "current", "before", current))
+		desiredClean := cleanupForDiff(desired.DeepCopy(), logger.WithValues("resourceStage", "desired", "before", desired))
 
 		// Check if the cleaned objects are equal
 		if equality.Semantic.DeepEqual(currentClean.Object, desiredClean.Object) {
@@ -515,7 +515,8 @@ func cleanupForDiff(obj *un.Unstructured, logger logging.Logger) *un.Unstructure
 	if len(modifications) > 0 {
 		logger.Debug("Cleaned object for diff",
 			"resource", resKey,
-			"removed", strings.Join(modifications, ", "))
+			"removed", strings.Join(modifications, ", "),
+			"after", obj)
 	}
 
 	return obj

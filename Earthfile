@@ -3,7 +3,7 @@ VERSION --try --raw-output 0.8
 
 PROJECT crossplane/crossplane
 
-ARG --global GO_VERSION=1.23.7
+ARG --global GO_VERSION=1.23.8
 
 # reviewable checks that a branch is ready for review. Run it before opening a
 # pull request. It will catch a lot of the things our CI workflow will catch.
@@ -21,20 +21,15 @@ test:
 # lint runs linters.
 lint:
   BUILD +go-lint
-  BUILD +helm-lint
 
 # build builds Crossplane for your native OS and architecture.
 build:
   ARG USERPLATFORM
   BUILD --platform=$USERPLATFORM +go-build
-  BUILD +image
-  BUILD +helm-build
 
 # multiplatform-build builds Crossplane for all supported OS and architectures.
 multiplatform-build:
   BUILD +go-multiplatform-build
-  BUILD +multiplatform-image
-  BUILD +helm-build
 
 # generate runs code generation. To keep builds fast, it doesn't run as part of
 # the build target. It's important to run it explicitly when code needs to be
@@ -42,7 +37,6 @@ multiplatform-build:
 generate:
   BUILD +go-modules-tidy
   BUILD +go-generate
-  BUILD +helm-generate
 
 # e2e runs end-to-end tests. See test/e2e/README.md for details.
 e2e:
@@ -72,7 +66,7 @@ e2e:
     # Using a static CROSSPLANE_VERSION allows Earthly to cache E2E runs as long
     # as no code changed. If the version contains a git commit (the default) the
     # build layer cache is invalidated on every commit.
-    WITH DOCKER --load crossplane-e2e/crossplane:latest=(+image --CROSSPLANE_VERSION=v0.0.0-e2e)
+    WITH DOCKER --pull crossplane/crossplane:main
       # TODO(negz:) Set GITHUB_ACTIONS=true and use RUN --raw-output when
       # https://github.com/earthly/earthly/issues/4143 is fixed.
       RUN gotestsum --no-color=false --format testname --junitfile e2e-tests.xml --raw-command go tool test2json -t -p E2E ./e2e -test.v ${FLAGS}
@@ -80,42 +74,6 @@ e2e:
   FINALLY
     SAVE ARTIFACT --if-exists e2e-tests.xml AS LOCAL _output/tests/e2e-tests.xml
   END
-
-# hack builds Crossplane, and deploys it to a kind cluster. It runs in your
-# local environment, not a container. The kind cluster will keep running until
-# you run the unhack target. Run hack again to rebuild Crossplane and restart
-# the kind cluster with the new build.
-hack:
-  # TODO(negz): This could run an interactive shell inside a temporary container
-  # once https://github.com/earthly/earthly/issues/3206 is fixed.
-  ARG USERPLATFORM
-  ARG SIMULATE_CROSSPLANE_VERSION=v0.0.0-hack
-  ARG XPARGS="--debug"
-  LOCALLY
-  WAIT
-    BUILD +unhack
-  END
-  COPY --platform=${USERPLATFORM} +helm-setup/helm .hack/helm
-  COPY --platform=${USERPLATFORM} +kind-setup/kind .hack/kind
-  COPY (+helm-build/output --CROSSPLANE_VERSION=v0.0.0-hack) .hack/charts
-  WITH DOCKER --load crossplane-hack/crossplane:${SIMULATE_CROSSPLANE_VERSION}=(+image --CROSSPLANE_VERSION=${SIMULATE_CROSSPLANE_VERSION})
-    RUN \
-      .hack/kind create cluster --name crossplane-hack && \
-      .hack/kind load docker-image --name crossplane-hack crossplane-hack/crossplane:${SIMULATE_CROSSPLANE_VERSION} && \
-      .hack/helm install --create-namespace --namespace crossplane-system crossplane .hack/charts/crossplane-0.0.0-hack.tgz \
-        --set "image.pullPolicy=Never,image.repository=crossplane-hack/crossplane,image.tag=${SIMULATE_CROSSPLANE_VERSION}" \
-        --set "args={${XPARGS}}"
-  END
-  RUN docker image rm crossplane-hack/crossplane:${SIMULATE_CROSSPLANE_VERSION}
-  RUN rm -rf .hack
-
-# unhack deletes the kind cluster created by the hack target.
-unhack:
-  ARG USERPLATFORM
-  LOCALLY
-  COPY --platform=${USERPLATFORM} +kind-setup/kind .hack/kind
-  RUN .hack/kind delete cluster --name crossplane-hack
-  RUN rm -rf .hack
 
 # go-modules downloads Crossplane's go modules. It's the base target of most Go
 # related target (go-build, etc).
@@ -133,7 +91,7 @@ go-modules:
 go-modules-tidy:
   FROM +go-modules
   CACHE --id go-build --sharing shared /root/.cache/go-build
-  COPY --dir apis/ cmd/ internal/ pkg/ test/ .
+  COPY --dir cmd/ test/ .
   RUN go mod tidy
   RUN go mod verify
   SAVE ARTIFACT go.mod AS LOCAL go.mod
@@ -145,8 +103,7 @@ go-generate:
   CACHE --id go-build --sharing shared /root/.cache/go-build
   COPY +kubectl-setup/kubectl /usr/local/bin/kubectl
   COPY --dir cluster/crd-patches cluster/crd-patches
-  COPY --dir hack/ apis/ internal/ .
-  RUN go generate -tags 'generate' ./apis/...
+  COPY --dir hack/ .
   # TODO(negz): Can this move into generate.go? Ideally it would live there with
   # the code that actually generates the CRDs, but it depends on kubectl.
   RUN kubectl patch --local --type=json \
@@ -154,7 +111,6 @@ go-generate:
     --filename cluster/crds/pkg.crossplane.io_deploymentruntimeconfigs.yaml \
     --output=yaml > /tmp/patched.yaml \
     && mv /tmp/patched.yaml cluster/crds/pkg.crossplane.io_deploymentruntimeconfigs.yaml
-  SAVE ARTIFACT apis/ AS LOCAL apis
   SAVE ARTIFACT cluster/crds AS LOCAL cluster/crds
   SAVE ARTIFACT cluster/meta AS LOCAL cluster/meta
 
@@ -175,15 +131,11 @@ go-build:
     SET ext = ".exe"
   END
   CACHE --id go-build --sharing shared /root/.cache/go-build
-  COPY --dir apis/ cmd/ internal/ pkg/ .
-  RUN go build -o crossplane${ext} ./cmd/crossplane
-  RUN sha256sum crossplane${ext} | head -c 64 > crossplane${ext}.sha256
+  COPY --dir cmd/ .
   RUN go build -o crank${ext} ./cmd/crank
   RUN sha256sum crank${ext} | head -c 64 > crank${ext}.sha256
   RUN tar -czvf crank.tar.gz crank${ext} crank${ext}.sha256
   RUN sha256sum crank.tar.gz | head -c 64 > crank.tar.gz.sha256
-  SAVE ARTIFACT --keep-ts crossplane${ext} AS LOCAL _output/bin/${GOOS}_${GOARCH}/crossplane${ext}
-  SAVE ARTIFACT --keep-ts crossplane${ext}.sha256 AS LOCAL _output/bin/${GOOS}_${GOARCH}/crossplane${ext}.sha256
   SAVE ARTIFACT --keep-ts crank${ext} AS LOCAL _output/bin/${GOOS}_${GOARCH}/crank${ext}
   SAVE ARTIFACT --keep-ts crank${ext}.sha256 AS LOCAL _output/bin/${GOOS}_${GOARCH}/crank${ext}.sha256
   SAVE ARTIFACT --keep-ts crank.tar.gz AS LOCAL _output/bundle/${GOOS}_${GOARCH}/crank.tar.gz
@@ -207,7 +159,7 @@ go-build-e2e:
   ARG CGO_ENABLED=0
   FROM +go-modules
   CACHE --id go-build --sharing shared /root/.cache/go-build
-  COPY --dir apis/ internal/ test/ .
+  COPY --dir test/ .
   RUN go test -c -o e2e ./test/e2e
   SAVE ARTIFACT e2e
 
@@ -217,7 +169,7 @@ go-test:
   FROM +go-modules
   DO github.com/earthly/lib+INSTALL_DIND
   CACHE --id go-build --sharing shared /root/.cache/go-build
-  COPY --dir apis/ cmd/ internal/ pkg/ cluster/ .
+  COPY --dir cmd/ cluster/ .
   COPY --dir +envtest-setup/envtest /usr/local/kubebuilder/bin
   # a bit dirty but preload the cache with the images we use in IT (found in functions.yaml)
   WITH DOCKER \
@@ -249,68 +201,20 @@ go-lint:
   SAVE ARTIFACT pkg AS LOCAL pkg
   SAVE ARTIFACT test AS LOCAL test
 
-# image builds the Crossplane OCI image for your native architecture.
-image:
-  ARG EARTHLY_GIT_BRANCH
-  ARG EARTHLY_GIT_SHORT_HASH
-  ARG EARTHLY_GIT_COMMIT_TIMESTAMP
-  ARG CROSSPLANE_REPO=build-${EARTHLY_GIT_SHORT_HASH}/crossplane
-  ARG CROSSPLANE_VERSION=v0.0.0-${EARTHLY_GIT_COMMIT_TIMESTAMP}-${EARTHLY_GIT_SHORT_HASH}
-  ARG NATIVEPLATFORM
-  ARG TARGETPLATFORM
-  ARG TARGETARCH
-  ARG TARGETOS
-  FROM --platform=${TARGETPLATFORM} gcr.io/distroless/static@sha256:5c7e2b465ac6a2a4e5f4f7f722ce43b147dabe87cb21ac6c4007ae5178a1fa58
-  COPY --platform=${NATIVEPLATFORM} (+go-build/crossplane --GOOS=${TARGETOS} --GOARCH=${TARGETARCH}) /usr/local/bin/
-  COPY --dir cluster/crds/ /crds
-  COPY --dir cluster/webhookconfigurations/ /webhookconfigurations
-  EXPOSE 8080
-  USER 65532
-  ENTRYPOINT ["crossplane"]
-  SAVE IMAGE --push ${CROSSPLANE_REPO}:${CROSSPLANE_VERSION}
-  SAVE IMAGE --push ${CROSSPLANE_REPO}:${EARTHLY_GIT_BRANCH}
-
-# multiplatform-image builds the Crossplane OCI image for all supported
-# architectures.
-multiplatform-image:
-  BUILD \
-    --platform=linux/amd64 \
-    --platform=linux/arm64 \
-    --platform=linux/arm \
-    --platform=linux/ppc64le \
-    +image
-
-# helm-lint lints the Crossplane Helm chart.
-helm-lint:
-  FROM alpine:3.20
-  WORKDIR /chart
-  COPY +helm-setup/helm /usr/local/bin/helm
-  COPY cluster/charts/crossplane/ .
-  RUN --entrypoint helm lint
-
-# helm-generate runs Helm code generation - specifically helm-docs.
-helm-generate:
-  FROM alpine:3.20
-  WORKDIR /chart
-  COPY +helm-docs-setup/helm-docs /usr/local/bin/helm-docs
-  COPY cluster/charts/crossplane/ .
-  RUN helm-docs
-  SAVE ARTIFACT . AS LOCAL cluster/charts/crossplane
-
-# helm-build packages the Crossplane Helm chart.
-helm-build:
-  ARG EARTHLY_GIT_SHORT_HASH
-  ARG EARTHLY_GIT_COMMIT_TIMESTAMP
-  ARG CROSSPLANE_VERSION=v0.0.0-${EARTHLY_GIT_COMMIT_TIMESTAMP}-${EARTHLY_GIT_SHORT_HASH}
-  FROM alpine:3.20
-  WORKDIR /chart
-  COPY +helm-setup/helm /usr/local/bin/helm
-  COPY cluster/charts/crossplane/ .
-  # We strip the leading v from Helm chart versions.
-  LET CROSSPLANE_CHART_VERSION=$(echo ${CROSSPLANE_VERSION}|sed -e 's/^v//')
-  RUN helm dependency update
-  RUN helm package --version ${CROSSPLANE_CHART_VERSION} --app-version ${CROSSPLANE_CHART_VERSION} -d output .
-  SAVE ARTIFACT output AS LOCAL _output/charts
+## helm-build packages the Crossplane Helm chart.
+#helm-build:
+#  ARG EARTHLY_GIT_SHORT_HASH
+#  ARG EARTHLY_GIT_COMMIT_TIMESTAMP
+#  ARG CROSSPLANE_VERSION=v0.0.0-${EARTHLY_GIT_COMMIT_TIMESTAMP}-${EARTHLY_GIT_SHORT_HASH}
+#  FROM alpine:3.20
+#  WORKDIR /chart
+#  COPY +helm-setup/helm /usr/local/bin/helm
+#  COPY cluster/charts/crossplane/ .
+#  # We strip the leading v from Helm chart versions.
+#  LET CROSSPLANE_CHART_VERSION=$(echo ${CROSSPLANE_VERSION}|sed -e 's/^v//')
+#  RUN helm dependency update
+#  RUN helm package --version ${CROSSPLANE_CHART_VERSION} --app-version ${CROSSPLANE_CHART_VERSION} -d output .
+#  SAVE ARTIFACT output AS LOCAL _output/charts
 
 # envtest-setup is used by other targets to setup envtest.
 envtest-setup:
@@ -482,12 +386,7 @@ ci-promote-build-artifacts:
   ARG PRERELEASE=false
   ARG AWS_DEFAULT_REGION
   FROM amazon/aws-cli:2.15.61
-  COPY +helm-setup/helm /usr/local/bin/helm
-  RUN --secret=AWS_ACCESS_KEY_ID --secret=AWS_SECRET_ACCESS_KEY aws s3 sync --only-show-errors s3://${BUCKET_CHARTS}/${CHANNEL} repo
   RUN --secret=AWS_ACCESS_KEY_ID --secret=AWS_SECRET_ACCESS_KEY aws s3 sync --only-show-errors s3://${BUCKET_RELEASES}/build/${BUILD_DIR}/${CROSSPLANE_VERSION}/charts repo
-  RUN helm repo index --url ${HELM_REPO_URL}/${CHANNEL} repo
-  RUN --push --secret=AWS_ACCESS_KEY_ID --secret=AWS_SECRET_ACCESS_KEY aws s3 sync --delete --only-show-errors repo s3://${BUCKET_CHARTS}/${CHANNEL}
-  RUN --push --secret=AWS_ACCESS_KEY_ID --secret=AWS_SECRET_ACCESS_KEY aws s3 cp --only-show-errors --cache-control "private, max-age=0, no-transform" repo/index.yaml s3://${BUCKET_CHARTS}/${CHANNEL}/index.yaml
   RUN --push --secret=AWS_ACCESS_KEY_ID --secret=AWS_SECRET_ACCESS_KEY aws s3 sync --delete --only-show-errors s3://${BUCKET_RELEASES}/build/${BUILD_DIR}/${CROSSPLANE_VERSION} s3://${BUCKET_RELEASES}/${CHANNEL}/${CROSSPLANE_VERSION}
   IF [ "${PRERELEASE}" = "false" ]
     RUN --push --secret=AWS_ACCESS_KEY_ID --secret=AWS_SECRET_ACCESS_KEY aws s3 sync --delete --only-show-errors s3://${BUCKET_RELEASES}/build/${BUILD_DIR}/${CROSSPLANE_VERSION} s3://${BUCKET_RELEASES}/${CHANNEL}/current

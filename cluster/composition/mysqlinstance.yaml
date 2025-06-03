@@ -1,0 +1,45 @@
+---
+apiVersion: apiextensions.crossplane.io/v1
+kind: CompositeResourceDefinition
+metadata:
+  name: compositemysqlinstances.common.crossplane.io
+spec:
+  group: common.crossplane.io
+  names:
+    categories:
+      - crossplane
+    kind: CompositeMySQLInstance
+    plural: compositemysqlinstances
+  claimNames:
+    categories:
+      - crossplane
+    kind: MySQLInstance
+    plural: mysqlinstances
+  connectionSecretKeys:
+    - username
+    - password
+    - endpoint
+    - port
+  versions:
+  - name: v1alpha1
+    served: true
+    referenceable: true
+    schema:
+      openAPIV3Schema:
+        type: object
+        properties:
+          spec:
+            type: object
+            properties:
+              version:
+                description: Version specifies the desired MySQL engine version,
+                  e.g. 5.7.
+                enum:
+                  - "5.6"
+                  - "5.7"
+                type: string
+              storageGB:
+                type: integer
+            required:
+              - version
+              - storageGB

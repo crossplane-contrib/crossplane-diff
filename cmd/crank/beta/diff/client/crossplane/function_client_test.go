@@ -56,7 +56,7 @@ func TestDefaultFunctionClient_GetFunctionsFromPipeline(t *testing.T) {
 			args: args{
 				comp: &apiextensionsv1.Composition{
 					Spec: apiextensionsv1.CompositionSpec{
-						Mode: &nonPipelineMode,
+						Mode: nonPipelineMode,
 					},
 				},
 			},
@@ -64,25 +64,25 @@ func TestDefaultFunctionClient_GetFunctionsFromPipeline(t *testing.T) {
 				err: errors.New("unsupported composition Mode 'NonPipeline'; supported types are [Pipeline]"),
 			},
 		},
-		"NoModeSpecified": {
-			reason: "Should throw an error when composition mode is not specified",
-			fields: fields{
-				functions: map[string]pkgv1.Function{},
-			},
-			mockResource: tu.NewMockResourceClient().
-				WithSuccessfulInitialize().
-				Build(),
-			args: args{
-				comp: &apiextensionsv1.Composition{
-					Spec: apiextensionsv1.CompositionSpec{
-						Mode: nil,
-					},
-				},
-			},
-			want: want{
-				err: errors.New("unsupported Composition; no Mode found"),
-			},
-		},
+		//"NoModeSpecified": { // illegal state?
+		//	reason: "Should throw an error when composition mode is not specified",
+		//	fields: fields{
+		//		functions: map[string]pkgv1.Function{},
+		//	},
+		//	mockResource: tu.NewMockResourceClient().
+		//		WithSuccessfulInitialize().
+		//		Build(),
+		//	args: args{
+		//		comp: &apiextensionsv1.Composition{
+		//			Spec: apiextensionsv1.CompositionSpec{
+		//				Mode: nil,
+		//			},
+		//		},
+		//	},
+		//	want: want{
+		//		err: errors.New("unsupported Composition; no Mode found"),
+		//	},
+		//},
 		"EmptyPipeline": {
 			reason: "Should return empty slice for empty pipeline",
 			fields: fields{
@@ -94,7 +94,7 @@ func TestDefaultFunctionClient_GetFunctionsFromPipeline(t *testing.T) {
 			args: args{
 				comp: &apiextensionsv1.Composition{
 					Spec: apiextensionsv1.CompositionSpec{
-						Mode:     &pipelineMode,
+						Mode:     pipelineMode,
 						Pipeline: []apiextensionsv1.PipelineStep{},
 					},
 				},
@@ -124,7 +124,7 @@ func TestDefaultFunctionClient_GetFunctionsFromPipeline(t *testing.T) {
 			args: args{
 				comp: &apiextensionsv1.Composition{
 					Spec: apiextensionsv1.CompositionSpec{
-						Mode: &pipelineMode,
+						Mode: pipelineMode,
 						Pipeline: []apiextensionsv1.PipelineStep{
 							{
 								Step:        "step-a",

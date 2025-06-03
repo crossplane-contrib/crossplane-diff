@@ -30,6 +30,7 @@ import (
 	"time"
 	"unicode"
 
+	corev1 "k8s.io/api/core/v1"
 	"sigs.k8s.io/e2e-framework/pkg/envconf"
 	"sigs.k8s.io/e2e-framework/pkg/features"
 
@@ -37,6 +38,8 @@ import (
 
 	apiextensionsv1 "github.com/crossplane/crossplane/apis/apiextensions/v1"
 	pkgv1 "github.com/crossplane/crossplane/apis/pkg/v1"
+	"github.com/crossplane/crossplane/pkg/xresource/unstructured/composed"
+	"github.com/crossplane/crossplane/test/e2e"
 	"github.com/crossplane/crossplane/test/e2e/config"
 	"github.com/crossplane/crossplane/test/e2e/funcs"
 )
@@ -77,11 +80,11 @@ func TestCrossplaneDiffCommand(t *testing.T) {
 	environment.Test(t,
 		// Create a test for a new resource - should show all resources being created
 		features.NewWithDescription(t.Name()+"WithNewResource", "Test that we can diff against a net-new resource with `crossplane diff`").
-			WithLabel(LabelArea, LabelAreaDiff).
-			WithLabel(LabelSize, LabelSizeSmall).
+			WithLabel(e2e.LabelArea, LabelAreaDiff).
+			WithLabel(e2e.LabelSize, e2e.LabelSizeSmall).
 			WithLabel(config.LabelTestSuite, config.TestSuiteDefault).
 			WithSetup("CreatePrerequisites", funcs.AllOf(
-				funcs.ApplyResources(FieldManager, manifests, "setup/*.yaml"),
+				funcs.ApplyResources(e2e.FieldManager, manifests, "setup/*.yaml"),
 				funcs.ResourcesCreatedWithin(30*time.Second, manifests, "setup/*.yaml"),
 				funcs.ResourcesHaveConditionWithin(1*time.Minute, manifests, "setup/definition.yaml", apiextensionsv1.WatchingComposite()),
 				funcs.ResourcesHaveConditionWithin(2*time.Minute, manifests, "setup/provider.yaml", pkgv1.Healthy(), pkgv1.Active()),
@@ -104,17 +107,17 @@ func TestCrossplaneDiffCommand(t *testing.T) {
 
 		// Create a test for modifying an existing resource
 		features.NewWithDescription(t.Name()+"WithExistingResource", "Test that we can diff against an existing resource with `crossplane diff`").
-			WithLabel(LabelArea, LabelAreaDiff).
-			WithLabel(LabelSize, LabelSizeSmall).
+			WithLabel(e2e.LabelArea, LabelAreaDiff).
+			WithLabel(e2e.LabelSize, e2e.LabelSizeSmall).
 			WithLabel(config.LabelTestSuite, config.TestSuiteDefault).
 			WithSetup("CreatePrerequisites", funcs.AllOf(
-				funcs.ApplyResources(FieldManager, manifests, "setup/*.yaml"),
+				funcs.ApplyResources(e2e.FieldManager, manifests, "setup/*.yaml"),
 				funcs.ResourcesCreatedWithin(30*time.Second, manifests, "setup/*.yaml"),
 				funcs.ResourcesHaveConditionWithin(1*time.Minute, manifests, "setup/definition.yaml", apiextensionsv1.WatchingComposite()),
 				funcs.ResourcesHaveConditionWithin(2*time.Minute, manifests, "setup/provider.yaml", pkgv1.Healthy(), pkgv1.Active()),
 			)).
 			WithSetup("CreateInitialResource", funcs.AllOf(
-				funcs.ApplyResources(FieldManager, manifests, "existing-xr.yaml"),
+				funcs.ApplyResources(e2e.FieldManager, manifests, "existing-xr.yaml"),
 				funcs.ResourcesCreatedWithin(30*time.Second, manifests, "existing-xr.yaml"),
 				funcs.ResourcesHaveConditionWithin(5*time.Minute, manifests, "existing-xr.yaml", xpv1.Available()),
 			)).
@@ -246,6 +249,10 @@ func assertDiffMatchesFile(t *testing.T, actual, expectedSource, log string) {
 	}
 
 	if failed {
+		t.Errorf("###### Manifest (actual): \n%s\n", actual)
+		t.Errorf("------------------------------------------------------------------")
+		t.Errorf("###### Manifest (expected): \n%s\n", string(expected))
+
 		t.Fatalf("Log output:\n%s", log)
 	}
 }
@@ -274,3 +281,8 @@ func makeStringReadable(s string) string {
 	}
 	return result.String()
 }
+
+var nopList = composed.NewList(composed.FromReferenceToList(corev1.ObjectReference{
+	APIVersion: "nop.crossplane.io/v1alpha1",
+	Kind:       "NopResource",
+}))

@@ -1,0 +1,43 @@
+---
+apiVersion: apiextensions.crossplane.io/v1
+kind: CompositeResourceDefinition
+metadata:
+  name: compositeredisclusters.common.crossplane.io
+spec:
+  group: common.crossplane.io
+  names:
+    categories:
+      - crossplane
+    kind: CompositeRedisCluster
+    plural: compositeredisclusters
+  claimNames:
+    categories:
+      - crossplane
+    kind: RedisCluster
+    plural: redisclusters
+  connectionSecretKeys:
+    - endpoint
+    - password
+    - port
+  versions:
+  - name: v1alpha1
+    served: true
+    referenceable: true
+    schema:
+      openAPIV3Schema:
+        type: object
+        properties:
+          spec:
+            type: object
+            properties:
+              version:
+                description: Version specifies the desired Redis version.
+                enum:
+                  - "2.6"
+                  - "2.8"
+                  - "3.2"
+                  - "4.0"
+                  - "5.0"
+                type: string
+            required:
+              - version

@@ -97,7 +97,7 @@ func createTestCompositionWithExtraResources() (*xpextv1.Composition, error) {
 				APIVersion: "example.org/v1",
 				Kind:       "XExampleResource",
 			},
-			Mode: &pipelineMode,
+			Mode: pipelineMode,
 			Pipeline: []xpextv1.PipelineStep{
 				{
 					Step:        "extra-resources",
@@ -292,6 +292,9 @@ func addResourceRef(parent, child *un.Unstructured) error {
 		ref["namespace"] = ns
 	}
 
+	// TODO: suspicious.  resourceRefs going to live under spec.crossplane in v2, but is the current state of v2 failing
+	// the test for a v1 object def?
+	
 	// Get current resourceRefs or initialize if not present
 	resourceRefs, found, err := un.NestedSlice(parent.Object, "spec", "resourceRefs")
 	if err != nil {

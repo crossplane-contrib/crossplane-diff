@@ -8,7 +8,7 @@ import (
 
 	"github.com/crossplane/crossplane-runtime/pkg/errors"
 	"github.com/crossplane/crossplane-runtime/pkg/logging"
-	cmp "github.com/crossplane/crossplane-runtime/pkg/resource/unstructured/composite"
+	cmp "github.com/crossplane/crossplane/pkg/xresource/unstructured/composite"
 
 	xp "github.com/crossplane-contrib/crossplane-diff/cmd/crank/beta/diff/client/crossplane"
 	k8 "github.com/crossplane-contrib/crossplane-diff/cmd/crank/beta/diff/client/kubernetes"
@@ -86,9 +86,10 @@ func (c *DefaultDiffCalculator) CalculateDiff(ctx context.Context, composite *un
 		c.logger.Debug("Resource is new (not found in cluster)", "resource", resourceID)
 	} else if current != nil {
 		c.logger.Debug("Found existing resource",
-			"resource", resourceID,
+			"resourceID", resourceID,
 			"existingName", current.GetName(),
-			"resourceVersion", current.GetResourceVersion())
+			"resourceVersion", current.GetResourceVersion(),
+			"resource", current)
 	}
 
 	// Update owner references if needed
@@ -115,12 +116,15 @@ func (c *DefaultDiffCalculator) CalculateDiff(ctx context.Context, composite *un
 		// Perform a dry-run apply to get the result after we'd apply
 		c.logger.Debug("Performing dry-run apply",
 			"resource", resourceID,
-			"name", desired.GetName())
+			"name", desired.GetName(),
+			"desired", desired)
 		wouldBeResult, err = c.applyClient.DryRunApply(ctx, desired)
 		if err != nil {
 			c.logger.Debug("Dry-run apply failed", "resource", resourceID, "error", err)
 			return nil, errors.Wrap(err, "cannot dry-run apply desired object")
 		}
+
+		c.logger.Debug("Dry-run apply succeeded", "resource", resourceID, "result", wouldBeResult)
 	}
 
 	// Generate diff with the configured options

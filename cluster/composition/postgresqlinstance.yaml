@@ -1,0 +1,45 @@
+---
+apiVersion: apiextensions.crossplane.io/v1
+kind: CompositeResourceDefinition
+metadata:
+  name: compositepostgresqlinstances.common.crossplane.io
+spec:
+  group: common.crossplane.io
+  names:
+    categories:
+      - crossplane
+    kind: CompositePostgreSQLInstance
+    plural: compositepostgresqlinstances
+  claimNames:
+    categories:
+      - crossplane
+    kind: PostgreSQLInstance
+    plural: postgresqlinstances
+  connectionSecretKeys:
+    - username
+    - password
+    - endpoint
+    - port
+  versions:
+  - name: v1alpha1
+    served: true
+    referenceable: true
+    schema:
+      openAPIV3Schema:
+        type: object
+        properties:
+          spec:
+            type: object
+            properties:
+              engineVersion:
+                description: 'EngineVersion specifies the desired PostgreSQL engine
+                              version. Allowed Versions: 10 and 11.'
+                enum:
+                  - "10"
+                  - "11"
+                type: string
+              storageGB:
+                type: integer
+            required:
+              - version
+              - storageGB

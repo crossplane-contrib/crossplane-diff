@@ -12,7 +12,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 
 	"github.com/crossplane/crossplane-runtime/pkg/errors"
-	cpd "github.com/crossplane/crossplane-runtime/pkg/resource/unstructured/composed"
+	cpd "github.com/crossplane/crossplane/pkg/xresource/unstructured/composed"
 
 	xp "github.com/crossplane-contrib/crossplane-diff/cmd/crank/beta/diff/client/crossplane"
 	tu "github.com/crossplane-contrib/crossplane-diff/cmd/crank/beta/diff/testutils"

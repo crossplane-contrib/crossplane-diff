@@ -14,8 +14,8 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 
 	"github.com/crossplane/crossplane-runtime/pkg/errors"
-	cpd "github.com/crossplane/crossplane-runtime/pkg/resource/unstructured/composed"
-	cmp "github.com/crossplane/crossplane-runtime/pkg/resource/unstructured/composite"
+	cpd "github.com/crossplane/crossplane/pkg/xresource/unstructured/composed"
+	cmp "github.com/crossplane/crossplane/pkg/xresource/unstructured/composite"
 
 	xpextv1 "github.com/crossplane/crossplane/apis/apiextensions/v1"
 	pkgv1 "github.com/crossplane/crossplane/apis/pkg/v1"
