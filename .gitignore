@@ -12,6 +12,7 @@ Zone.Identifier
 .tmp-earthly-out/
 build/
 
+
 # gitlab example
 # exclude files generate by running the example
 external-dns-*.tgz
@@ -30,3 +31,6 @@ gitlab/
 # go build output (from go build ./cmd/crank etc)
 /crank
 /crossplane
+
+# ignore the cluster dir since it's pulled from crossplane/crossplane by earthly
+cluster/

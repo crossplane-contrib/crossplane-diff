@@ -5,6 +5,23 @@ PROJECT crossplane/crossplane
 
 ARG --global GO_VERSION=1.23.8
 
+# fetch-crossplane-cluster fetches the cluster directory from crossplane/crossplane
+# at the git revision corresponding to CROSSPLANE_IMAGE_TAG
+fetch-crossplane-cluster:
+  ARG CROSSPLANE_IMAGE_TAG=main
+  ARG CROSSPLANE_REPO=https://github.com/crossplane/crossplane.git
+  FROM alpine/git:latest
+  WORKDIR /src
+
+  # Clone the crossplane repository at the specified tag/revision
+  RUN git clone --depth 1 --branch ${CROSSPLANE_IMAGE_TAG} ${CROSSPLANE_REPO} crossplane || \
+      (git clone ${CROSSPLANE_REPO} crossplane && \
+       cd crossplane && \
+       git checkout ${CROSSPLANE_IMAGE_TAG})
+
+  # Save the cluster directory as an artifact
+  SAVE ARTIFACT crossplane/cluster AS LOCAL cluster
+
 # reviewable checks that a branch is ready for review. Run it before opening a
 # pull request. It will catch a lot of the things our CI workflow will catch.
 reviewable:
@@ -67,7 +84,9 @@ e2e:
   # but we don't so it's fine for now.
   COPY +go-build/crank .
   COPY +go-build-e2e/e2e .
-  COPY --dir cluster test .
+  # Fetch the cluster directory from the crossplane repo at the specified tag
+  COPY (+fetch-crossplane-cluster/cluster --CROSSPLANE_IMAGE_TAG=${CROSSPLANE_IMAGE_TAG}) cluster
+  COPY --dir test .
   TRY
     # Using a static CROSSPLANE_VERSION allows Earthly to cache E2E runs as long
     # as no code changed. If the version contains a git commit (the default) the
@@ -105,10 +124,12 @@ go-modules-tidy:
 
 # go-generate runs Go code generation.
 go-generate:
+  ARG CROSSPLANE_IMAGE_TAG=main
   FROM +go-modules
   CACHE --id go-build --sharing shared /root/.cache/go-build
   COPY +kubectl-setup/kubectl /usr/local/bin/kubectl
-  COPY --dir cluster/crd-patches cluster/crd-patches
+  # Fetch the cluster directory from the crossplane repo at the specified tag
+  COPY (+fetch-crossplane-cluster/cluster --CROSSPLANE_IMAGE_TAG=${CROSSPLANE_IMAGE_TAG}) cluster
   COPY --dir hack/ .
   # TODO(negz): Can this move into generate.go? Ideally it would live there with
   # the code that actually generates the CRDs, but it depends on kubectl.
@@ -172,10 +193,13 @@ go-build-e2e:
 # go-test runs Go unit tests.
 go-test:
   ARG KUBE_VERSION=1.30.3
+  ARG CROSSPLANE_IMAGE_TAG=main
   FROM +go-modules
   DO github.com/earthly/lib+INSTALL_DIND
   CACHE --id go-build --sharing shared /root/.cache/go-build
-  COPY --dir cmd/ cluster/ .
+  COPY --dir cmd/ .
+  # Fetch the cluster directory from the crossplane repo at the specified tag
+  COPY (+fetch-crossplane-cluster/cluster --CROSSPLANE_IMAGE_TAG=${CROSSPLANE_IMAGE_TAG}) cluster
   COPY --dir +envtest-setup/envtest /usr/local/kubebuilder/bin
   # a bit dirty but preload the cache with the images we use in IT (found in functions.yaml)
   WITH DOCKER \
@@ -212,9 +236,12 @@ go-lint:
 #  ARG EARTHLY_GIT_SHORT_HASH
 #  ARG EARTHLY_GIT_COMMIT_TIMESTAMP
 #  ARG CROSSPLANE_VERSION=v0.0.0-${EARTHLY_GIT_COMMIT_TIMESTAMP}-${EARTHLY_GIT_SHORT_HASH}
+#  ARG CROSSPLANE_IMAGE_TAG=main
 #  FROM alpine:3.20
 #  WORKDIR /chart
 #  COPY +helm-setup/helm /usr/local/bin/helm
+#  # Fetch the cluster directory from the crossplane repo at the specified tag
+#  COPY (+fetch-crossplane-cluster/cluster --CROSSPLANE_IMAGE_TAG=${CROSSPLANE_IMAGE_TAG}) cluster
 #  COPY cluster/charts/crossplane/ .
 #  # We strip the leading v from Helm chart versions.
 #  LET CROSSPLANE_CHART_VERSION=$(echo ${CROSSPLANE_VERSION}|sed -e 's/^v//')
