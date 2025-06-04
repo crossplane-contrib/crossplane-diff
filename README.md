@@ -10,7 +10,13 @@ setup-envtest use 1.30.3 # or whatever cluster version we're using now
 ```
 
 The setup command will download the necessary binaries and set up the environment for you.  It'll set 
-`KUBEBUILDER_ASSETS` on the environment, so restart your terminal (or IDE) as necessary. 
+`KUBEBUILDER_ASSETS` on the environment, so restart your terminal (or IDE) as necessary.
+
+Next, run `go generate` with earthly to pull in the cluster manifests needed for the ITs/e2es:
+
+```bash
+earthly +go-generate --CROSSPLANE_IMAGE_TAG=(target crossplane version here)
+```
 
 Then you can run the tests with:
 

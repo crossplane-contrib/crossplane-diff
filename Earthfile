@@ -130,7 +130,6 @@ go-generate:
   COPY +kubectl-setup/kubectl /usr/local/bin/kubectl
   # Fetch the cluster directory from the crossplane repo at the specified tag
   COPY (+fetch-crossplane-cluster/cluster --CROSSPLANE_IMAGE_TAG=${CROSSPLANE_IMAGE_TAG}) cluster
-  COPY --dir hack/ .
   # TODO(negz): Can this move into generate.go? Ideally it would live there with
   # the code that actually generates the CRDs, but it depends on kubectl.
   RUN kubectl patch --local --type=json \
