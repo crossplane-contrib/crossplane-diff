@@ -38,10 +38,16 @@ generate:
   BUILD +go-modules-tidy
   BUILD +go-generate
 
+e2e-matrix:
+  BUILD +e2e \
+    --CROSSPLANE_IMAGE_TAG=release-1.20 \
+    --CROSSPLANE_IMAGE_TAG=main
+
 # e2e runs end-to-end tests. See test/e2e/README.md for details.
 e2e:
   ARG TARGETARCH
   ARG TARGETOS
+  ARG CROSSPLANE_IMAGE_TAG=main
   ARG GOARCH=${TARGETARCH}
   ARG GOOS=${TARGETOS}
   ARG FLAGS="-test-suite=base"
@@ -66,10 +72,10 @@ e2e:
     # Using a static CROSSPLANE_VERSION allows Earthly to cache E2E runs as long
     # as no code changed. If the version contains a git commit (the default) the
     # build layer cache is invalidated on every commit.
-    WITH DOCKER --pull crossplane/crossplane:main
+    WITH DOCKER --pull crossplane/crossplane:${CROSSPLANE_IMAGE_TAG}
       # TODO(negz:) Set GITHUB_ACTIONS=true and use RUN --raw-output when
       # https://github.com/earthly/earthly/issues/4143 is fixed.
-      RUN gotestsum --no-color=false --format testname --junitfile e2e-tests.xml --raw-command go tool test2json -t -p E2E ./e2e -test.v ${FLAGS}
+      RUN gotestsum --no-color=false --format testname --junitfile e2e-tests.xml --raw-command go tool test2json -t -p E2E ./e2e -test.v -crossplane-image=crossplane/crossplane:${CROSSPLANE_IMAGE_TAG} ${FLAGS}
     END
   FINALLY
     SAVE ARTIFACT --if-exists e2e-tests.xml AS LOCAL _output/tests/e2e-tests.xml

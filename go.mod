@@ -4,7 +4,7 @@ go 1.23.8
 
 toolchain go1.24.1
 
-replace github.com/crossplane/crossplane => github.com/Sanyaku/crossplane v0.0.0-20250602192242-61ec33968b41
+replace github.com/crossplane/crossplane => github.com/Sanyaku/crossplane v0.0.0-20250604205438-cfc39ff06182
 
 require (
 	dario.cat/mergo v1.0.1
@@ -14,6 +14,7 @@ require (
 	github.com/google/go-cmp v0.7.0
 	github.com/sergi/go-diff v1.3.2-0.20230802210424-5b0b94c5c0d3
 	golang.org/x/exp v0.0.0-20240808152545-0cdaa3abc0fa
+	k8s.io/api v0.31.2
 	k8s.io/apiextensions-apiserver v0.31.2
 	k8s.io/apimachinery v0.31.2
 	k8s.io/client-go v0.31.2
@@ -72,7 +73,6 @@ require (
 	google.golang.org/grpc v1.71.1 // indirect
 	google.golang.org/protobuf v1.36.6 // indirect
 	gopkg.in/evanphx/json-patch.v4 v4.12.0 // indirect
-	k8s.io/api v0.31.2 // indirect
 	k8s.io/apiserver v0.31.2 // indirect
 	k8s.io/cli-runtime v0.29.1 // indirect
 	k8s.io/kubectl v0.29.1 // indirect
@@ -184,7 +184,7 @@ require (
 	gopkg.in/yaml.v2 v2.4.0 // indirect
 	gopkg.in/yaml.v3 v3.0.1
 	k8s.io/component-base v0.31.2 // indirect
-	k8s.io/klog/v2 v2.130.1 // indirect
+	k8s.io/klog/v2 v2.130.1
 	k8s.io/kube-openapi v0.0.0-20240808142205-8e686545bdb8 // indirect
 	sigs.k8s.io/json v0.0.0-20221116044647-bc3834ca7abd // indirect
 	sigs.k8s.io/structured-merge-diff/v4 v4.4.1 // indirect
