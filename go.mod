@@ -4,7 +4,7 @@ go 1.23.8
 
 toolchain go1.24.1
 
-replace github.com/crossplane/crossplane => github.com/Sanyaku/crossplane v0.0.0-20250604205438-cfc39ff06182
+replace github.com/crossplane/crossplane => github.com/Sanyaku/crossplane v0.0.0-20250604221454-75827f847341
 
 require (
 	dario.cat/mergo v1.0.1
