@@ -19,7 +19,6 @@ package e2e
 
 import (
 	"context"
-	"flag"
 	"os"
 	"strings"
 	"testing"
@@ -59,8 +58,11 @@ func TestMain(m *testing.M) {
 	// https://github.com/kubernetes-sigs/e2e-framework/issues/270
 	log.SetLogger(klog.NewKlogr())
 
-	// Parse the flags to ensure we have the environment set up.
-	flag.Parse()
+	// Parse flags to ensure we have the environment configured
+	cfg, err := envconf.NewFromFlags()
+	if err != nil {
+		panic(err)
+	}
 
 	// Set the default suite, to be used as base for all the other suites.
 	environment.AddDefaultTestSuite(
@@ -84,11 +86,6 @@ func TestMain(m *testing.M) {
 			config.LabelTestSuite: []string{config.TestSuiteDefault},
 		}),
 	)
-
-	cfg, err := envconf.NewFromFlags()
-	if err != nil {
-		panic(err)
-	}
 
 	var setup []env.Func
 	var finish []env.Func
