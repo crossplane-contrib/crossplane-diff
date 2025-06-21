@@ -10,6 +10,7 @@ ARG --global GO_VERSION=1.23.8
 fetch-crossplane-cluster:
   ARG CROSSPLANE_IMAGE_TAG=main
   ARG CROSSPLANE_REPO=https://github.com/crossplane/crossplane.git
+  ARG SAVE_LOCALLY=true
   FROM alpine/git:latest
   WORKDIR /src
 
@@ -20,7 +21,11 @@ fetch-crossplane-cluster:
        git checkout ${CROSSPLANE_IMAGE_TAG})
 
   # Save the cluster directory as an artifact
-  SAVE ARTIFACT crossplane/cluster AS LOCAL cluster
+  SAVE ARTIFACT crossplane/cluster
+  # Conditionally save locally (disabled for matrix builds)
+  IF [ "$SAVE_LOCALLY" = "true" ]
+    SAVE ARTIFACT crossplane/cluster AS LOCAL cluster
+  END
 
 # reviewable checks that a branch is ready for review. Run it before opening a
 # pull request. It will catch a lot of the things our CI workflow will catch.
@@ -58,13 +63,15 @@ generate:
 e2e-matrix:
   BUILD +e2e \
     --CROSSPLANE_IMAGE_TAG=release-1.20 \
-    --CROSSPLANE_IMAGE_TAG=main
+    --CROSSPLANE_IMAGE_TAG=main \
+    --SAVE_LOCALLY=false
 
 # e2e runs end-to-end tests. See test/e2e/README.md for details.
 e2e:
   ARG TARGETARCH
   ARG TARGETOS
   ARG CROSSPLANE_IMAGE_TAG=release-1.20
+  ARG SAVE_LOCALLY=true
   ARG GOARCH=${TARGETARCH}
   ARG GOOS=${TARGETOS}
   ARG FLAGS="-test-suite=base"
@@ -85,7 +92,7 @@ e2e:
   COPY +go-build/crank .
   COPY +go-build-e2e/e2e .
   # Fetch the cluster directory from the crossplane repo at the specified tag
-  COPY (+fetch-crossplane-cluster/cluster --CROSSPLANE_IMAGE_TAG=${CROSSPLANE_IMAGE_TAG}) cluster
+  COPY (+fetch-crossplane-cluster/cluster --CROSSPLANE_IMAGE_TAG=${CROSSPLANE_IMAGE_TAG} --SAVE_LOCALLY=${SAVE_LOCALLY}) cluster
   COPY --dir test .
   TRY
     # Using a static CROSSPLANE_VERSION allows Earthly to cache E2E runs as long
@@ -130,6 +137,7 @@ go-generate:
   COPY +kubectl-setup/kubectl /usr/local/bin/kubectl
   # Fetch the cluster directory from the crossplane repo at the specified tag
   COPY (+fetch-crossplane-cluster/cluster --CROSSPLANE_IMAGE_TAG=${CROSSPLANE_IMAGE_TAG}) cluster
+  COPY --dir hack/ .
   # TODO(negz): Can this move into generate.go? Ideally it would live there with
   # the code that actually generates the CRDs, but it depends on kubectl.
   RUN kubectl patch --local --type=json \
