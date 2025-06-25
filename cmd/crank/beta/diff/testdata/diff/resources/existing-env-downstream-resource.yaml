@@ -8,6 +8,7 @@ metadata:
     crossplane.io/composite: test-env-resource
   name: test-env-resource
 spec:
+  compositionUpdatePolicy: Automatic
   forProvider:
     configData: existing-config-value
     environment: staging

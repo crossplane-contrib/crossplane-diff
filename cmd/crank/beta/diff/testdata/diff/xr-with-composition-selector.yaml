@@ -4,6 +4,7 @@ metadata:
   name: test-resource
 spec:
   coolField: "test-value"
+  compositionUpdatePolicy: Automatic
   compositionSelector:
     matchLabels:
       environment: staging

@@ -3,6 +3,7 @@ kind: XNopResource
 metadata:
   name: test-resource
 spec:
-  coolField: "test-value"
   compositionRef:
     name: production-composition
+  compositionUpdatePolicy: Automatic
+  coolField: "test-value"

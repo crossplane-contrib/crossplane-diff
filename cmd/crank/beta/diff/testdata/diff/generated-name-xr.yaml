@@ -3,4 +3,5 @@ kind: XNopResource
 metadata:
   generateName: generated-xr-
 spec:
+  compositionUpdatePolicy: Automatic
   coolField: "new-value"

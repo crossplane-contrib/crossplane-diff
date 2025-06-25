@@ -12,8 +12,8 @@ import (
 	"k8s.io/client-go/dynamic"
 
 	"github.com/crossplane/crossplane-runtime/pkg/errors"
-	cpd "github.com/crossplane/crossplane/pkg/xresource/unstructured/composed"
-	cmp "github.com/crossplane/crossplane/pkg/xresource/unstructured/composite"
+	cpd "github.com/crossplane/crossplane-runtime/pkg/resource/unstructured/composed"
+	cmp "github.com/crossplane/crossplane-runtime/pkg/resource/unstructured/composite"
 
 	dt "github.com/crossplane-contrib/crossplane-diff/cmd/crank/beta/diff/renderer/types"
 	xpextv1 "github.com/crossplane/crossplane/apis/apiextensions/v1"

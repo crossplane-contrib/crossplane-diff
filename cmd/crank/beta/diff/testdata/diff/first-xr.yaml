@@ -3,4 +3,5 @@ kind: XNopResource
 metadata:
   name: first-resource
 spec:
+  compositionUpdatePolicy: Automatic
   coolField: "first-value"

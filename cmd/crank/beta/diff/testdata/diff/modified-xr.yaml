@@ -3,4 +3,5 @@ kind: XNopResource
 metadata:
   name: test-resource
 spec:
+  compositionUpdatePolicy: Automatic
   coolField: "modified-value"

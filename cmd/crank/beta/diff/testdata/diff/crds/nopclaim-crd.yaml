@@ -28,6 +28,8 @@ spec:
                   properties:
                     name:
                       type: string
+                compositeDeletePolicy:
+                  type: string
                 compositionSelector:
                   type: object
                   properties:

@@ -3,5 +3,6 @@ kind: XNopResource
 metadata:
   name: test-resource
 spec:
+  compositionUpdatePolicy: Automatic
   coolField: existing-value
   environment: staging

@@ -3,4 +3,5 @@ kind: XEnvResource
 metadata:
   name: test-env-resource
 spec:
+  compositionUpdatePolicy: Automatic
   configKey: "modified-config-value"

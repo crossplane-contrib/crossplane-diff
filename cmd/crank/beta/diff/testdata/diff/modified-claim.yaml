@@ -4,6 +4,7 @@ metadata:
   name: test-claim
   namespace: existing-namespace
 spec:
+  compositeDeletePolicy: Background
   coolField: modified-value
   compositionRef:
     name: claim-composition

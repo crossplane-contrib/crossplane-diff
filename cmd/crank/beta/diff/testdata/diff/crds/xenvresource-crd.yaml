@@ -23,6 +23,10 @@ spec:
               properties:
                 configKey:
                   type: string
+                compositeDeletePolicy:
+                  type: string
+                compositionUpdatePolicy:
+                  type: string
                 resourceRefs:
                   type: array
                   items:

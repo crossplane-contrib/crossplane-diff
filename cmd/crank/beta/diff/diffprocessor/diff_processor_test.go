@@ -16,8 +16,8 @@ import (
 
 	"github.com/crossplane/crossplane-runtime/pkg/errors"
 	"github.com/crossplane/crossplane-runtime/pkg/logging"
-	cpd "github.com/crossplane/crossplane/pkg/xresource/unstructured/composed"
-	cmp "github.com/crossplane/crossplane/pkg/xresource/unstructured/composite"
+	cpd "github.com/crossplane/crossplane-runtime/pkg/resource/unstructured/composed"
+	cmp "github.com/crossplane/crossplane-runtime/pkg/resource/unstructured/composite"
 
 	xp "github.com/crossplane-contrib/crossplane-diff/cmd/crank/beta/diff/client/crossplane"
 	k8 "github.com/crossplane-contrib/crossplane-diff/cmd/crank/beta/diff/client/kubernetes"

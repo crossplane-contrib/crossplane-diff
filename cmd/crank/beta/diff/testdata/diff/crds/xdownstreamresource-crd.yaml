@@ -32,6 +32,8 @@ spec:
                     resourceTier:
                       type: string
                       description: "Tier of the resource (e.g., default, production, staging)"
+                compositeDeletePolicy:
+                  type: string
                 resourceRefs:
                   type: array
                   description: "References to resources that this resource depends on"

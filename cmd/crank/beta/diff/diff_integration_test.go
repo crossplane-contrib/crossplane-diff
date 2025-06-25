@@ -83,6 +83,7 @@ func TestDiffIntegration(t *testing.T) {
 + metadata:
 +   name: test-resource
 + spec:
++   compositionUpdatePolicy: Automatic
 +   coolField: new-value
 `), `
 ---
@@ -123,6 +124,7 @@ func TestDiffIntegration(t *testing.T) {
   metadata:
     name: test-resource
   spec:
+    compositionUpdatePolicy: Automatic
 ` + tu.Red("-   coolField: existing-value") + `
 ` + tu.Green("+   coolField: modified-value") + `
 
@@ -160,6 +162,7 @@ func TestDiffIntegration(t *testing.T) {
   metadata:
     name: test-resource
   spec:
+    compositionUpdatePolicy: Automatic
 ` + tu.Red("-   coolField: existing-value") + `
 ` + tu.Green("+   coolField: modified-value") + `
 
@@ -190,6 +193,7 @@ func TestDiffIntegration(t *testing.T) {
       crossplane.io/composite: test-env-resource
     name: test-env-resource
   spec:
+    compositionUpdatePolicy: Automatic
     forProvider:
 -     configData: existing-config-value
 +     configData: modified-config-value
@@ -204,6 +208,7 @@ func TestDiffIntegration(t *testing.T) {
   metadata:
     name: test-env-resource
   spec:
+    compositionUpdatePolicy: Automatic
 -   configKey: existing-config-value
 +   configKey: modified-config-value
 
@@ -250,6 +255,7 @@ func TestDiffIntegration(t *testing.T) {
   metadata:
     name: test-resource
   spec:
+    compositionUpdatePolicy: Automatic
 -   coolField: existing-value
 -   environment: staging
 +   coolField: modified-with-external-dep
@@ -295,6 +301,7 @@ func TestDiffIntegration(t *testing.T) {
   metadata:
     name: test-resource
   spec:
+    compositionUpdatePolicy: Automatic
 -   coolField: existing-value
 -   environment: staging
 +   coolField: modified-with-external-dep
@@ -379,6 +386,7 @@ func TestDiffIntegration(t *testing.T) {
   metadata:
     name: test-resource
   spec:
+    compositionUpdatePolicy: Automatic
 -   coolField: existing-value
 +   coolField: modified-value
 
@@ -428,6 +436,7 @@ func TestDiffIntegration(t *testing.T) {
   metadata:
     name: test-resource
   spec:
+    compositionUpdatePolicy: Automatic
 -   coolField: existing-value
 +   coolField: new-value
 
@@ -465,6 +474,7 @@ func TestDiffIntegration(t *testing.T) {
 + metadata:
 +   generateName: generated-xr-
 + spec:
++   compositionUpdatePolicy: Automatic
 +   coolField: new-value
 
 ---
@@ -523,6 +533,7 @@ func TestDiffIntegration(t *testing.T) {
 + metadata:
 +   name: first-resource
 + spec:
++   compositionUpdatePolicy: Automatic
 +   coolField: first-value
 
 ---
@@ -532,6 +543,7 @@ func TestDiffIntegration(t *testing.T) {
   metadata:
     name: test-resource
   spec:
+    compositionUpdatePolicy: Automatic
 -   coolField: existing-value
 +   coolField: modified-value
 
@@ -579,6 +591,7 @@ Summary: 2 added, 2 modified
 + spec:
 +   compositionRef:
 +     name: production-composition
++   compositionUpdatePolicy: Automatic
 +   coolField: test-value
 `,
 			expectedError: false,
@@ -623,6 +636,7 @@ Summary: 2 added, 2 modified
 +     matchLabels:
 +       environment: staging
 +       provider: aws
++   compositionUpdatePolicy: Automatic
 +   coolField: test-value
 `,
 			expectedError: false,
@@ -661,6 +675,7 @@ Summary: 2 added, 2 modified
 +   name: test-claim
 +   namespace: existing-namespace
 + spec:
++   compositeDeletePolicy: Background
 +   compositionRef:
 +     name: claim-composition
 +   coolField: new-value
@@ -706,6 +721,7 @@ Summary: 2 added`,
     name: test-claim
     namespace: existing-namespace
   spec:
+    compositeDeletePolicy: Background
     compositionRef:
       name: claim-composition
 -   coolField: existing-value

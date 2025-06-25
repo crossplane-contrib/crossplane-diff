@@ -32,6 +32,8 @@ spec:
                       type: string
                     serviceLevel:
                       type: string
+                compositionUpdatePolicy:
+                  type: string
             status:
               type: object
               properties:
