@@ -3,6 +3,7 @@ kind: XNopResource
 metadata:
   name: existing-resource
 spec:
+  compositionUpdatePolicy: Automatic
   coolField: "I'm modified!"
   parameters:
     config:

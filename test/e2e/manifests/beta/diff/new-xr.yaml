@@ -3,6 +3,7 @@ kind: XNopResource
 metadata:
   name: new-resource
 spec:
+  compositionUpdatePolicy: Automatic
   coolField: "I'm new!"
   parameters:
     config:

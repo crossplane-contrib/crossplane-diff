@@ -10,11 +10,16 @@
 [32m+   labels:[0m
 [32m+     crossplane.io/composite: new-resource[0m
 [32m+ spec:[0m
+[32m+   deletionPolicy: Delete[0m
 [32m+   forProvider:[0m
 [32m+     conditionAfter:[0m
 [32m+     - conditionStatus: "True"[0m
 [32m+       conditionType: Ready[0m
 [32m+       time: 0s[0m
+[32m+   managementPolicies:[0m
+[32m+   - '*'[0m
+[32m+   providerConfigRef:[0m
+[32m+     name: default[0m
 
 ---
 +++ XNopResource/new-resource
@@ -23,6 +28,7 @@
 [32m+ metadata:[0m
 [32m+   name: new-resource[0m
 [32m+ spec:[0m
+[32m+   compositionUpdatePolicy: Automatic[0m
 [32m+   coolField: I'm new![0m
 [32m+   parameters:[0m
 [32m+     config:[0m
