@@ -211,7 +211,8 @@ jobs:
           echo "EARTHLY_MAX_REMOTE_CACHE=true" >> $GITHUB_ENV
 
       - name: Run Unit Tests
-        run: earthly -P --strict --remote-cache ghcr.io/crossplane/earthly-cache:${{ github.job }} +test
+#        run: earthly -P --strict --remote-cache ghcr.io/crossplane/earthly-cache:${{ github.job }} +test
+        run: earthly -P --strict +test # crossplane remote cache has v2 which fails these tests for now
 
       - name: Publish Unit Test Coverage
         uses: codecov/codecov-action@b9fd7d16f6d7d1b5d2bec1a2887e65ceed900238 # v4
