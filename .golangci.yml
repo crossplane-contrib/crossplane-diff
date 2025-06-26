@@ -146,7 +146,6 @@ linters-settings:
     # XXX: if you enable this setting, unused will report a lot of false-positives in text editors:
     # if it's called for subdir of a project it can't find funcs usages. All text editor integrations
     # with golangci-lint call it on a directory with the changed file.
-    exported-is-used: true
     exported-fields-are-used: true
 
   unparam:

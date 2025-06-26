@@ -199,7 +199,7 @@ go-build-e2e:
 # go-test runs Go unit tests.
 go-test:
   ARG KUBE_VERSION=1.30.3
-  ARG CROSSPLANE_IMAGE_TAG=main
+  ARG CROSSPLANE_IMAGE_TAG=release-1.20
   FROM +go-modules
   DO github.com/earthly/lib+INSTALL_DIND
   CACHE --id go-build --sharing shared /root/.cache/go-build
