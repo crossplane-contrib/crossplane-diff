@@ -121,12 +121,7 @@ func TestCmd_Run(t *testing.T) {
 			},
 			setupFiles: func() []string {
 				// Create a temporary test file
-				tempDir, err := os.MkdirTemp("", "diff-test")
-				if err != nil {
-					t.Fatalf("Failed to create temp dir: %v", err)
-				}
-				t.Cleanup(func() { _ = os.RemoveAll(tempDir) })
-
+				tempDir := t.TempDir()
 				tempFile := filepath.Join(tempDir, "test-resource.yaml")
 				content := `
 apiVersion: test.org/v1alpha1
@@ -230,12 +225,7 @@ metadata:
 			},
 			setupFiles: func() []string {
 				// Create a temporary test file
-				tempDir, err := os.MkdirTemp("", "diff-test")
-				if err != nil {
-					t.Fatalf("Failed to create temp dir: %v", err)
-				}
-				t.Cleanup(func() { _ = os.RemoveAll(tempDir) })
-
+				tempDir := t.TempDir()
 				tempFile := filepath.Join(tempDir, "test-resource.yaml")
 				content := `
 apiVersion: test.org/v1alpha1

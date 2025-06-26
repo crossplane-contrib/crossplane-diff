@@ -40,9 +40,6 @@ import (
 // TODO(phisco): make it configurable.
 const namespace = "crossplane-system"
 
-// TODO(phisco): make it configurable.
-const crdsDir = "cluster/crds"
-
 const (
 	// TODO(phisco): make it configurable.
 	helmChartDir = "cluster/charts/crossplane"
