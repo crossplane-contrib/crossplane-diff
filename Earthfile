@@ -137,7 +137,6 @@ go-generate:
   COPY +kubectl-setup/kubectl /usr/local/bin/kubectl
   # Fetch the cluster directory from the crossplane repo at the specified tag
   COPY (+fetch-crossplane-cluster/cluster --CROSSPLANE_IMAGE_TAG=${CROSSPLANE_IMAGE_TAG}) cluster
-  COPY --dir hack/ .
   # TODO(negz): Can this move into generate.go? Ideally it would live there with
   # the code that actually generates the CRDs, but it depends on kubectl.
   RUN kubectl patch --local --type=json \
@@ -230,7 +229,7 @@ go-lint:
   CACHE --id go-build --sharing shared /root/.cache/go-build
   RUN curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/master/install.sh | sh -s -- -b $(go env GOPATH)/bin ${GOLANGCI_LINT_VERSION}
   COPY .golangci.yml .
-  COPY --dir apis/ cmd/ internal/ pkg/ test/ .
+  COPY --dir cmd/ test/ .
   RUN golangci-lint run --fix
   SAVE ARTIFACT apis AS LOCAL apis
   SAVE ARTIFACT cmd AS LOCAL cmd
@@ -369,7 +368,7 @@ ci-codeql:
   END
   COPY --dir +ci-codeql-setup/codeql /codeql
   CACHE --id go-build --sharing shared /root/.cache/go-build
-  COPY --dir apis/ cmd/ internal/ pkg/ .
+  COPY --dir cmd/ .
   RUN /codeql/codeql database create /codeqldb --language=go
   RUN /codeql/codeql database analyze /codeqldb --threads=0 --format=sarif-latest --output=go.sarif --sarif-add-baseline-file-info
   SAVE ARTIFACT go.sarif AS LOCAL _output/codeql/go.sarif

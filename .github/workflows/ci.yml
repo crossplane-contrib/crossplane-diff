@@ -211,7 +211,7 @@ jobs:
           echo "EARTHLY_MAX_REMOTE_CACHE=true" >> $GITHUB_ENV
 
       - name: Run Unit Tests
-        run: earthly --strict --remote-cache ghcr.io/crossplane/earthly-cache:${{ github.job }} +test
+        run: earthly -P --strict --remote-cache ghcr.io/crossplane/earthly-cache:${{ github.job }} +test
 
       - name: Publish Unit Test Coverage
         uses: codecov/codecov-action@b9fd7d16f6d7d1b5d2bec1a2887e65ceed900238 # v4
@@ -227,9 +227,8 @@ jobs:
       matrix:
         test-suite:
           - base
-          - realtime-compositions
-          - package-dependency-updates
-          - package-signature-verification
+          # - package-dependency-updates  # TODO(jcogilvie):  do we need these?
+          # - package-signature-verification
 
     steps:
       - name: Checkout
@@ -395,63 +394,64 @@ jobs:
           name: output
           path: _output/**
 
-  fuzz-test:
-    runs-on: ubuntu-22.04
+#  fuzz-test:
+#    runs-on: ubuntu-22.04
+#
+#    steps:
+#      # TODO(negz): Can we make this use our Go build and dependency cache? It
+#      # seems to build Crossplane inside of a Docker image.
+#      - name: Build Fuzzers
+#        id: build
+#        uses: google/oss-fuzz/infra/cifuzz/actions/build_fuzzers@a2d113bc6b45af6135bc4bdb30916bb7c0aae07b # master
+#        with:
+#          oss-fuzz-project-name: "crossplane"
+#          language: go
+#
+#      - name: Run Fuzzers
+#        uses: google/oss-fuzz/infra/cifuzz/actions/run_fuzzers@a2d113bc6b45af6135bc4bdb30916bb7c0aae07b # master
+#        with:
+#          oss-fuzz-project-name: "crossplane"
+#          fuzz-seconds: 300
+#          language: go
+#
+#      - name: Upload Crash
+#        uses: actions/upload-artifact@6f51ac03b9356f520e9adb1b1b7802705f340c2b # v4
+#        if: failure() && steps.build.outcome == 'success'
+#        with:
+#          name: artifacts
+#          path: ./out/artifacts
 
-    steps:
-      # TODO(negz): Can we make this use our Go build and dependency cache? It
-      # seems to build Crossplane inside of a Docker image.
-      - name: Build Fuzzers
-        id: build
-        uses: google/oss-fuzz/infra/cifuzz/actions/build_fuzzers@a2d113bc6b45af6135bc4bdb30916bb7c0aae07b # master
-        with:
-          oss-fuzz-project-name: "crossplane"
-          language: go
-
-      - name: Run Fuzzers
-        uses: google/oss-fuzz/infra/cifuzz/actions/run_fuzzers@a2d113bc6b45af6135bc4bdb30916bb7c0aae07b # master
-        with:
-          oss-fuzz-project-name: "crossplane"
-          fuzz-seconds: 300
-          language: go
-
-      - name: Upload Crash
-        uses: actions/upload-artifact@6f51ac03b9356f520e9adb1b1b7802705f340c2b # v4
-        if: failure() && steps.build.outcome == 'success'
-        with:
-          name: artifacts
-          path: ./out/artifacts
-
-  protobuf-schemas:
-    runs-on: ubuntu-22.04
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
-
-      - name: Setup Buf
-        uses: bufbuild/buf-setup-action@76ddbd1bcb9da6da11cb7c41bd97e47f81c39a39 # v1.37.0
-        with:
-          github_token: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Lint Protocol Buffers
-        uses: bufbuild/buf-lint-action@06f9dd823d873146471cfaaf108a993fe00e5325 # v1.1.1
-        with:
-          input: apis
-
-      # buf-breaking-action doesn't support branches
-      # https://github.com/bufbuild/buf-push-action/issues/34
-      - name: Detect Breaking Changes in Protocol Buffers
-        uses: bufbuild/buf-breaking-action@a074e988ee34efcd4927079e79c611f428354c01 # v1
-        # We want to run this for the main branch, and PRs against main.
-        if: ${{ github.ref == 'refs/heads/main' || github.base_ref == 'main' }}
-        with:
-          input: apis
-          against: "https://github.com/${GITHUB_REPOSITORY}.git#branch=main,subdir=apis"
-
-      - name: Push Protocol Buffers to Buf Schema Registry
-        if: ${{ github.repository == 'crossplane/crossplane' && github.ref == 'refs/heads/main' }}
-        uses: bufbuild/buf-push-action@a654ff18effe4641ebea4a4ce242c49800728459 # v1.2.0
-        with:
-          input: apis
-          buf_token: ${{ secrets.BUF_TOKEN }}
+# TODO(jcogilvie):  we shouldn't need to publish any proto schemas for diff.
+#  protobuf-schemas:
+#    runs-on: ubuntu-22.04
+#
+#    steps:
+#      - name: Checkout
+#        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
+#
+#      - name: Setup Buf
+#        uses: bufbuild/buf-setup-action@76ddbd1bcb9da6da11cb7c41bd97e47f81c39a39 # v1.37.0
+#        with:
+#          github_token: ${{ secrets.GITHUB_TOKEN }}
+#
+#      - name: Lint Protocol Buffers
+#        uses: bufbuild/buf-lint-action@06f9dd823d873146471cfaaf108a993fe00e5325 # v1.1.1
+#        with:
+#          input: apis
+#
+#      # buf-breaking-action doesn't support branches
+#      # https://github.com/bufbuild/buf-push-action/issues/34
+#      - name: Detect Breaking Changes in Protocol Buffers
+#        uses: bufbuild/buf-breaking-action@a074e988ee34efcd4927079e79c611f428354c01 # v1
+#        # We want to run this for the main branch, and PRs against main.
+#        if: ${{ github.ref == 'refs/heads/main' || github.base_ref == 'main' }}
+#        with:
+#          input: apis
+#          against: "https://github.com/${GITHUB_REPOSITORY}.git#branch=main,subdir=apis"
+#
+#      - name: Push Protocol Buffers to Buf Schema Registry
+#        if: ${{ github.repository == 'crossplane/crossplane' && github.ref == 'refs/heads/main' }}
+#        uses: bufbuild/buf-push-action@a654ff18effe4641ebea4a4ce242c49800728459 # v1.2.0
+#        with:
+#          input: apis
+#          buf_token: ${{ secrets.BUF_TOKEN }}
