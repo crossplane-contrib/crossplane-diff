@@ -1,14 +1,14 @@
 # See https://docs.earthly.dev/docs/earthfile/features
 VERSION --try --raw-output 0.8
 
-PROJECT crossplane/crossplane
+PROJECT crossplane-contrib/crossplane-diff
 
-ARG --global GO_VERSION=1.23.8
+ARG --global GO_VERSION=1.24.1
 
 # fetch-crossplane-cluster fetches the cluster directory from crossplane/crossplane
 # at the git revision corresponding to CROSSPLANE_IMAGE_TAG
 fetch-crossplane-cluster:
-  ARG CROSSPLANE_IMAGE_TAG=main
+  ARG CROSSPLANE_IMAGE_TAG=release-1.20
   ARG CROSSPLANE_REPO=https://github.com/crossplane/crossplane.git
   ARG SAVE_LOCALLY=true
   FROM alpine/git:latest
@@ -86,10 +86,10 @@ e2e:
   COPY +helm-setup/helm /usr/local/bin/helm
   COPY +kind-setup/kind /usr/local/bin/kind
   COPY +gotestsum-setup/gotestsum /usr/local/bin/gotestsum
-  # go-build is needed to create the `crank` binary that we use in some of the e2es.
-  # technically this will break if we ever used a windows builder (since this would be crank.exe)
+  # go-build is needed to create the `crossplane-diff` binary that we use in some of the e2es.
+  # technically this will break if we ever used a windows builder (since this would be crossplane-diff.exe)
   # but we don't so it's fine for now.
-  COPY +go-build/crank .
+  COPY +go-build/crossplane-diff .
   COPY +go-build-e2e/e2e .
   # Fetch the cluster directory from the crossplane repo at the specified tag
   COPY (+fetch-crossplane-cluster/cluster --CROSSPLANE_IMAGE_TAG=${CROSSPLANE_IMAGE_TAG} --SAVE_LOCALLY=${SAVE_LOCALLY}) cluster
@@ -112,7 +112,7 @@ e2e:
 go-modules:
   ARG NATIVEPLATFORM
   FROM --platform=${NATIVEPLATFORM} golang:${GO_VERSION}
-  WORKDIR /crossplane
+  WORKDIR /crossplane-diff
   CACHE --id go-build --sharing shared /root/.cache/go-build
   COPY go.mod go.sum ./
   RUN go mod download
@@ -158,6 +158,7 @@ go-build:
   ARG GOOS=${TARGETOS}
   ARG GOFLAGS="\"-ldflags=-s -w -X=github.com/crossplane/crossplane/internal/version.version=${CROSSPLANE_VERSION}\""
   ARG CGO_ENABLED=0
+  ARG BIN_NAME=crossplane-diff
   FROM +go-modules
   LET ext = ""
   IF [ "$GOOS" = "windows" ]
@@ -165,14 +166,14 @@ go-build:
   END
   CACHE --id go-build --sharing shared /root/.cache/go-build
   COPY --dir cmd/ .
-  RUN go build -o crank${ext} ./cmd/crank
-  RUN sha256sum crank${ext} | head -c 64 > crank${ext}.sha256
-  RUN tar -czvf crank.tar.gz crank${ext} crank${ext}.sha256
-  RUN sha256sum crank.tar.gz | head -c 64 > crank.tar.gz.sha256
-  SAVE ARTIFACT --keep-ts crank${ext} AS LOCAL _output/bin/${GOOS}_${GOARCH}/crank${ext}
-  SAVE ARTIFACT --keep-ts crank${ext}.sha256 AS LOCAL _output/bin/${GOOS}_${GOARCH}/crank${ext}.sha256
-  SAVE ARTIFACT --keep-ts crank.tar.gz AS LOCAL _output/bundle/${GOOS}_${GOARCH}/crank.tar.gz
-  SAVE ARTIFACT --keep-ts crank.tar.gz.sha256 AS LOCAL _output/bundle/${GOOS}_${GOARCH}/crank.tar.gz.sha256
+  RUN go build -o ${BIN_NAME}${ext} ./cmd/diff
+  RUN sha256sum ${BIN_NAME}${ext} | head -c 64 > ${BIN_NAME}${ext}.sha256
+  RUN tar -czvf ${BIN_NAME}.tar.gz ${BIN_NAME}${ext} ${BIN_NAME}${ext}.sha256
+  RUN sha256sum ${BIN_NAME}.tar.gz | head -c 64 > ${BIN_NAME}.tar.gz.sha256
+  SAVE ARTIFACT --keep-ts ${BIN_NAME}${ext} AS LOCAL _output/bin/${GOOS}_${GOARCH}/${BIN_NAME}${ext}
+  SAVE ARTIFACT --keep-ts ${BIN_NAME}${ext}.sha256 AS LOCAL _output/bin/${GOOS}_${GOARCH}/${BIN_NAME}${ext}.sha256
+  SAVE ARTIFACT --keep-ts ${BIN_NAME}.tar.gz AS LOCAL _output/bundle/${GOOS}_${GOARCH}/${BIN_NAME}.tar.gz
+  SAVE ARTIFACT --keep-ts ${BIN_NAME}.tar.gz.sha256 AS LOCAL _output/bundle/${GOOS}_${GOARCH}/${BIN_NAME}.tar.gz.sha256
 
 # go-multiplatform-build builds Crossplane binaries for all supported OS
 # and architectures.

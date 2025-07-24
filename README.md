@@ -21,7 +21,7 @@ earthly +go-generate --CROSSPLANE_IMAGE_TAG=(target crossplane version here)
 Then you can run the tests with:
 
 ```bash
-cd cmd/crank
+cd cmd/crossplane-diff
 go test ./...
 ```
 

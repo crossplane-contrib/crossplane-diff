@@ -49,17 +49,17 @@ const LabelAreaDiff = "diff"
 
 // RunDiff runs the crossplane diff command on the provided resources.
 // It returns the output and any error encountered.
-func RunDiff(t *testing.T, c *envconf.Config, crankPath string, resourcePaths ...string) (string, string, error) {
+func RunDiff(t *testing.T, c *envconf.Config, binPath string, resourcePaths ...string) (string, string, error) {
 	t.Helper()
 
 	var err error
 
 	// Prepare the command to run
-	args := append([]string{"--verbose", "beta", "diff", "--timeout=2m", "-n", namespace}, resourcePaths...)
-	t.Logf("Running command: %s %s", crankPath, strings.Join(args, " "))
-	cmd := exec.Command(crankPath, args...)
+	args := append([]string{"--verbose", "diff", "--timeout=2m", "-n", namespace}, resourcePaths...)
+	t.Logf("Running command: %s %s", binPath, strings.Join(args, " "))
+	cmd := exec.Command(binPath, args...)
 	cmd.Env = append(cmd.Env, "KUBECONFIG="+c.KubeconfigFile())
-	t.Logf("ENV: %s %s", crankPath, strings.Join(cmd.Env, " "))
+	t.Logf("ENV: %s %s", binPath, strings.Join(cmd.Env, " "))
 
 	// Capture standard output and error
 	var stdout, stderr bytes.Buffer
@@ -75,7 +75,7 @@ func RunDiff(t *testing.T, c *envconf.Config, crankPath string, resourcePaths ..
 // TestCrossplaneDiffCommand tests the functionality of the crossplane diff command.
 func TestCrossplaneDiffCommand(t *testing.T) {
 	manifests := "test/e2e/manifests/beta/diff"
-	crankPath := "./crank"
+	binPath := "./crossplane-diff"
 
 	environment.Test(t,
 		// Create a test for a new resource - should show all resources being created
@@ -93,7 +93,7 @@ func TestCrossplaneDiffCommand(t *testing.T) {
 				t.Helper()
 
 				// Run the diff command on a new resource that doesn't exist yet
-				output, log, err := RunDiff(t, c, crankPath, filepath.Join(manifests, "new-xr.yaml"))
+				output, log, err := RunDiff(t, c, binPath, filepath.Join(manifests, "new-xr.yaml"))
 				if err != nil {
 					t.Fatalf("Error running diff command: %v\nLog output:\n%s", err, log)
 				}
@@ -125,7 +125,7 @@ func TestCrossplaneDiffCommand(t *testing.T) {
 				t.Helper()
 
 				// Run the diff command on a modified existing resource
-				output, log, err := RunDiff(t, c, crankPath, filepath.Join(manifests, "modified-xr.yaml"))
+				output, log, err := RunDiff(t, c, binPath, filepath.Join(manifests, "modified-xr.yaml"))
 				if err != nil {
 					t.Fatalf("Error running diff command: %v\n Log output:\n%s", err, log)
 				}

@@ -37,4 +37,4 @@
 /design/                             @crossplane/crossplane-maintainers @negz
 
 # Crossplane CLI
-/cmd/crank/                          @crossplane/crossplane-maintainers @phisco
+/cmd/crossplane-diff/                          @crossplane/crossplane-maintainers @phisco
