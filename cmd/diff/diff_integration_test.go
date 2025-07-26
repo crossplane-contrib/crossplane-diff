@@ -68,7 +68,6 @@ func TestDiffIntegration(t *testing.T) {
 + metadata:
 +   annotations:
 +     crossplane.io/composition-resource-name: nop-resource
-+   generateName: test-resource-
 +   labels:
 +     crossplane.io/composite: test-resource
 +   name: test-resource
@@ -147,7 +146,6 @@ func TestDiffIntegration(t *testing.T) {
 + metadata:
 +   annotations:
 +     crossplane.io/composition-resource-name: nop-resource
-+   generateName: test-resource-
 +   labels:
 +     crossplane.io/composite: test-resource
 +   name: test-resource
@@ -460,9 +458,9 @@ func TestDiffIntegration(t *testing.T) {
 + metadata:
 +   annotations:
 +     crossplane.io/composition-resource-name: nop-resource
-+   generateName: generated-xr-
 +   labels:
 +     crossplane.io/composite: generated-xr-(generated)
++   name: generated-xr-(generated)
 + spec:
 +   forProvider:
 +     configData: new-value
@@ -502,7 +500,6 @@ func TestDiffIntegration(t *testing.T) {
 + metadata:
 +   annotations:
 +     crossplane.io/composition-resource-name: nop-resource
-+   generateName: first-resource-
 +   labels:
 +     crossplane.io/composite: first-resource
 +   name: first-resource
@@ -573,7 +570,6 @@ Summary: 2 added, 2 modified
 + metadata:
 +   annotations:
 +     crossplane.io/composition-resource-name: production-resource
-+   generateName: test-resource-
 +   labels:
 +     crossplane.io/composite: test-resource
 +   name: test-resource
@@ -616,7 +612,6 @@ Summary: 2 added, 2 modified
 + metadata:
 +   annotations:
 +     crossplane.io/composition-resource-name: staging-resource
-+   generateName: test-resource-
 +   labels:
 +     crossplane.io/composite: test-resource
 +   name: test-resource
@@ -687,7 +682,6 @@ Summary: 2 added, 2 modified
 + metadata:
 +   annotations:
 +     crossplane.io/composition-resource-name: nop-resource
-+   generateName: test-claim-
 +   labels:
 +     crossplane.io/composite: test-claim
 +   name: test-claim
