@@ -6,24 +6,18 @@ import (
 	xp "github.com/crossplane-contrib/crossplane-diff/cmd/diff/client/crossplane"
 	k8 "github.com/crossplane-contrib/crossplane-diff/cmd/diff/client/kubernetes"
 	"github.com/crossplane-contrib/crossplane-diff/cmd/diff/renderer"
-	tu "github.com/crossplane-contrib/crossplane-diff/cmd/diff/testutils"
 )
 
 func TestNewDiffProcessor(t *testing.T) {
-	mockClient := &tu.MockClusterClient{}
-
 	tests := map[string]struct {
-		client      *tu.MockClusterClient
 		options     []ProcessorOption
 		expectError bool
 	}{
 		"WithOptions": {
-			client:      mockClient,
 			options:     []ProcessorOption{WithNamespace("test"), WithColorize(false), WithCompact(true)},
 			expectError: false,
 		},
 		"BasicOptions": {
-			client:      mockClient,
 			options:     []ProcessorOption{},
 			expectError: false,
 		},

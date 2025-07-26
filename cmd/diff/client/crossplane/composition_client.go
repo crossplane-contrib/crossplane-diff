@@ -37,6 +37,7 @@ type DefaultCompositionClient struct {
 
 	// Cache of compositions
 	compositions map[string]*apiextensionsv1.Composition
+	gvks         []schema.GroupVersionKind
 }
 
 // NewCompositionClient creates a new DefaultCompositionClient.
@@ -51,6 +52,12 @@ func NewCompositionClient(resourceClient kubernetes.ResourceClient, logger loggi
 // Initialize loads compositions into the cache.
 func (c *DefaultCompositionClient) Initialize(ctx context.Context) error {
 	c.logger.Debug("Initializing composition client")
+
+	gvks, err := c.resourceClient.GetGVKsForGroupKind(ctx, "apiextensions.crossplane.io", "Composition")
+	if err != nil {
+		return errors.Wrap(err, "cannot get Composition GVKs")
+	}
+	c.gvks = gvks
 
 	// List compositions to populate the cache
 	comps, err := c.ListCompositions(ctx)
@@ -77,6 +84,9 @@ func (c *DefaultCompositionClient) ListCompositions(ctx context.Context) ([]*api
 		Version: "v1",
 		Kind:    "Composition",
 	}
+
+	// TODO:  we don't actually use our cached GVKs here -- but there's only one version of Composition
+	// and this part is strongly typed which will make a second version hard to handle
 
 	// Get all compositions using the resource client
 	unComps, err := c.resourceClient.ListResources(ctx, gvk, "")
@@ -121,7 +131,7 @@ func (c *DefaultCompositionClient) GetComposition(ctx context.Context, name stri
 		return nil, errors.Wrapf(err, "cannot get composition %s", name)
 	}
 
-	// Convert to typed
+	// Convert to typed # TODO:  troublesome because typed has a version
 	comp := &apiextensionsv1.Composition{}
 	if err := runtime.DefaultUnstructuredConverter.FromUnstructured(unComp.Object, comp); err != nil {
 		return nil, errors.Wrap(err, "cannot convert unstructured to Composition")

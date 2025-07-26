@@ -530,6 +530,7 @@ func TestDefaultFunctionClient_Initialize(t *testing.T) {
 			reason: "Should successfully initialize and cache functions",
 			mockResource: *tu.NewMockResourceClient().
 				WithSuccessfulInitialize().
+				WithFoundGVKs([]schema.GroupVersionKind{EnvConfigV1alpha1GVK}).
 				WithListResources(func(_ context.Context, gvk schema.GroupVersionKind, _ string) ([]*un.Unstructured, error) {
 					if gvk.Group == "pkg.crossplane.io" && gvk.Kind == "Function" {
 						return []*un.Unstructured{u1, u2}, nil
@@ -547,6 +548,7 @@ func TestDefaultFunctionClient_Initialize(t *testing.T) {
 			reason: "Should successfully initialize with empty cache when no functions exist",
 			mockResource: *tu.NewMockResourceClient().
 				WithSuccessfulInitialize().
+				WithFoundGVKs([]schema.GroupVersionKind{EnvConfigV1alpha1GVK}).
 				WithEmptyListResources().
 				Build(),
 			wantErr:    false,

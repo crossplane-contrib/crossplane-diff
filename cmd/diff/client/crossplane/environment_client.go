@@ -31,6 +31,7 @@ type DefaultEnvironmentClient struct {
 
 	// Cache of environment configs
 	envConfigs map[string]*un.Unstructured
+	gvks       []schema.GroupVersionKind
 }
 
 // NewEnvironmentClient creates a new DefaultEnvironmentClient.
@@ -45,6 +46,12 @@ func NewEnvironmentClient(resourceClient kubernetes.ResourceClient, logger loggi
 // Initialize loads environment configs into the cache.
 func (c *DefaultEnvironmentClient) Initialize(ctx context.Context) error {
 	c.logger.Debug("Initializing environment client")
+
+	gvks, err := c.resourceClient.GetGVKsForGroupKind(ctx, "apiextensions.crossplane.io", "EnvironmentConfig")
+	if err != nil {
+		return errors.Wrap(err, "cannot get EnvironmentConfig GVKs")
+	}
+	c.gvks = gvks
 
 	// List environment configs to populate the cache
 	configs, err := c.GetEnvironmentConfigs(ctx)
@@ -65,18 +72,9 @@ func (c *DefaultEnvironmentClient) Initialize(ctx context.Context) error {
 func (c *DefaultEnvironmentClient) GetEnvironmentConfigs(ctx context.Context) ([]*un.Unstructured, error) {
 	c.logger.Debug("Getting environment configs")
 
-	// Define the EnvironmentConfig GVK
-	gvk := schema.GroupVersionKind{
-		Group:   "apiextensions.crossplane.io",
-		Version: "v1alpha1",
-		Kind:    "EnvironmentConfig",
-	}
-
-	// List all EnvironmentConfigs
-	envConfigs, err := c.resourceClient.ListResources(ctx, gvk, "")
+	envConfigs, err := listMatchingResources(ctx, c.resourceClient, c.gvks)
 	if err != nil {
-		c.logger.Debug("Failed to list environment configs", "error", err)
-		return nil, errors.Wrap(err, "cannot list environment configs")
+		return nil, err
 	}
 
 	c.logger.Debug("Environment configs retrieved", "count", len(envConfigs))
@@ -85,25 +83,6 @@ func (c *DefaultEnvironmentClient) GetEnvironmentConfigs(ctx context.Context) ([
 
 // GetEnvironmentConfig gets a specific environment config by name.
 func (c *DefaultEnvironmentClient) GetEnvironmentConfig(ctx context.Context, name string) (*un.Unstructured, error) {
-	// Check cache first
-	if config, ok := c.envConfigs[name]; ok {
-		return config, nil
-	}
-
-	// Not in cache, fetch from cluster
-	gvk := schema.GroupVersionKind{
-		Group:   "apiextensions.crossplane.io",
-		Version: "v1alpha1",
-		Kind:    "EnvironmentConfig",
-	}
-
-	config, err := c.resourceClient.GetResource(ctx, gvk, "", name)
-	if err != nil {
-		return nil, errors.Wrapf(err, "cannot get environment config %s", name)
-	}
-
-	// Update cache
-	c.envConfigs[name] = config
-
-	return config, nil
+	c.logger.Debug("Getting environment config", "name", name)
+	return getFirstMatchingResource(ctx, c.resourceClient, c.gvks, name, c.envConfigs)
 }

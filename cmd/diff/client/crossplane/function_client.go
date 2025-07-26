@@ -34,6 +34,7 @@ type DefaultFunctionClient struct {
 
 	// Cache of functions
 	functions map[string]pkgv1.Function
+	gvks      []schema.GroupVersionKind
 }
 
 // NewFunctionClient creates a new DefaultFunctionClient.
@@ -48,6 +49,12 @@ func NewFunctionClient(resourceClient kubernetes.ResourceClient, logger logging.
 // Initialize loads functions into the cache.
 func (c *DefaultFunctionClient) Initialize(ctx context.Context) error {
 	c.logger.Debug("Initializing function client")
+
+	gvks, err := c.resourceClient.GetGVKsForGroupKind(ctx, "apiextensions.crossplane.io", "Function")
+	if err != nil {
+		return errors.Wrap(err, "cannot get Function GVKs")
+	}
+	c.gvks = gvks
 
 	// List functions to populate the cache
 	fns, err := c.ListFunctions(ctx)
@@ -67,6 +74,9 @@ func (c *DefaultFunctionClient) Initialize(ctx context.Context) error {
 // ListFunctions lists all functions in the cluster.
 func (c *DefaultFunctionClient) ListFunctions(ctx context.Context) ([]pkgv1.Function, error) {
 	c.logger.Debug("Listing functions from cluster")
+
+	// TODO:  we don't actually use our cached GVKs here -- but there's only one version of Function
+	// and this part is strongly typed which will make a second version hard to handle
 
 	// Define the function GVK
 	gvk := schema.GroupVersionKind{

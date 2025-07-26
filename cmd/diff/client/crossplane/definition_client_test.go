@@ -16,6 +16,9 @@ import (
 
 var _ DefinitionClient = (*tu.MockDefinitionClient)(nil)
 
+var XRDv1GVK = schema.GroupVersionKind{Group: CrossplaneAPIExtGroup, Version: "v1", Kind: "CompositeResourceDefinition"}
+var XRDv2GVK = schema.GroupVersionKind{Group: CrossplaneAPIExtGroup, Version: "v2", Kind: "CompositeResourceDefinition"}
+
 func TestDefaultDefinitionClient_GetXRDs(t *testing.T) {
 	ctx := context.Background()
 
@@ -41,6 +44,7 @@ func TestDefaultDefinitionClient_GetXRDs(t *testing.T) {
 	type fields struct {
 		xrds       []*un.Unstructured
 		xrdsLoaded bool
+		gvks       []schema.GroupVersionKind
 	}
 
 	tests := map[string]struct {
@@ -69,12 +73,13 @@ func TestDefaultDefinitionClient_GetXRDs(t *testing.T) {
 			want:    []*un.Unstructured{},
 			wantErr: false,
 		},
+		// TODO:  test for v1 and v2 xrds
 		"XRDsExist": {
 			reason: "Should return all XRDs when they exist",
 			mockResource: *tu.NewMockResourceClient().
 				WithSuccessfulInitialize().
 				WithListResources(func(_ context.Context, gvk schema.GroupVersionKind, _ string) ([]*un.Unstructured, error) {
-					if gvk.Group == CrossplaneAPIExtGroup && gvk.Kind == "CompositeResourceDefinition" {
+					if gvk.Group == CrossplaneAPIExtGroup && gvk.Kind == "CompositeResourceDefinition" && gvk.Version == "v1" {
 						return []*un.Unstructured{xrd1, xrd2}, nil
 					}
 					return nil, errors.New("unexpected GVK")
@@ -83,6 +88,7 @@ func TestDefaultDefinitionClient_GetXRDs(t *testing.T) {
 			fields: fields{
 				xrds:       nil,
 				xrdsLoaded: false,
+				gvks:       []schema.GroupVersionKind{XRDv1GVK},
 			},
 			want:    []*un.Unstructured{xrd1, xrd2},
 			wantErr: false,
@@ -96,6 +102,7 @@ func TestDefaultDefinitionClient_GetXRDs(t *testing.T) {
 			fields: fields{
 				xrds:       nil,
 				xrdsLoaded: false,
+				gvks:       []schema.GroupVersionKind{XRDv1GVK},
 			},
 			want:         nil,
 			wantErr:      true,
@@ -127,6 +134,7 @@ func TestDefaultDefinitionClient_GetXRDs(t *testing.T) {
 				logger:         tu.TestLogger(t, false),
 				xrds:           tt.fields.xrds,
 				xrdsLoaded:     tt.fields.xrdsLoaded,
+				gvks:           tt.fields.gvks,
 			}
 
 			got, err := c.GetXRDs(ctx)
@@ -219,20 +227,22 @@ func TestDefaultDefinitionClient_GetXRDForClaim(t *testing.T) {
 	}
 
 	tests := map[string]struct {
-		reason       string
-		mockResource tu.MockResourceClient
-		cachedXRDs   []*un.Unstructured
-		args         args
-		want         *un.Unstructured
-		wantErr      bool
-		errSubstring string
+		reason            string
+		mockResource      tu.MockResourceClient
+		cachedXRDs        []*un.Unstructured
+		discoveredXRDGVKs []schema.GroupVersionKind
+		args              args
+		want              *un.Unstructured
+		wantErr           bool
+		errSubstring      string
 	}{
 		"MatchingClaimFound": {
 			reason: "Should return the XRD that defines the claim kind",
 			mockResource: *tu.NewMockResourceClient().
 				WithSuccessfulInitialize().
 				Build(),
-			cachedXRDs: []*un.Unstructured{xrdWithClaimKind, xrdWithoutClaimKind},
+			cachedXRDs:        []*un.Unstructured{xrdWithClaimKind, xrdWithoutClaimKind},
+			discoveredXRDGVKs: []schema.GroupVersionKind{XRDv1GVK},
 			args: args{
 				gvk: schema.GroupVersionKind{
 					Group:   "example.org",
@@ -266,7 +276,8 @@ func TestDefaultDefinitionClient_GetXRDForClaim(t *testing.T) {
 				WithSuccessfulInitialize().
 				WithListResourcesFailure("list error").
 				Build(),
-			cachedXRDs: nil, // Force GetXRDs to be called
+			discoveredXRDGVKs: []schema.GroupVersionKind{XRDv1GVK},
+			cachedXRDs:        nil, // Force GetXRDs to be called
 			args: args{
 				gvk: schema.GroupVersionKind{
 					Group:   "example.org",
@@ -321,6 +332,7 @@ func TestDefaultDefinitionClient_GetXRDForClaim(t *testing.T) {
 				logger:         tu.TestLogger(t, false),
 				xrds:           tt.cachedXRDs,
 				xrdsLoaded:     tt.cachedXRDs != nil, // Only mark as loaded if we have cached XRDs
+				gvks:           tt.discoveredXRDGVKs,
 			}
 
 			got, err := c.GetXRDForClaim(ctx, tt.args.gvk)
@@ -407,13 +419,14 @@ func TestDefaultDefinitionClient_GetXRDForXR(t *testing.T) {
 	}
 
 	tests := map[string]struct {
-		reason       string
-		mockResource tu.MockResourceClient
-		cachedXRDs   []*un.Unstructured
-		args         args
-		want         *un.Unstructured
-		wantErr      bool
-		errSubstring string
+		reason            string
+		mockResource      tu.MockResourceClient
+		cachedXRDs        []*un.Unstructured
+		discoveredXRDGVKs []schema.GroupVersionKind
+		args              args
+		want              *un.Unstructured
+		wantErr           bool
+		errSubstring      string
 	}{
 		"MatchingXRFound": {
 			reason: "Should return the XRD that defines the XR kind",
@@ -470,7 +483,8 @@ func TestDefaultDefinitionClient_GetXRDForXR(t *testing.T) {
 				WithSuccessfulInitialize().
 				WithListResourcesFailure("list error").
 				Build(),
-			cachedXRDs: nil, // Force GetXRDs to be called
+			cachedXRDs:        nil, // Force GetXRDs to be called
+			discoveredXRDGVKs: []schema.GroupVersionKind{XRDv1GVK},
 			args: args{
 				gvk: schema.GroupVersionKind{
 					Group:   "example.org",
@@ -525,6 +539,7 @@ func TestDefaultDefinitionClient_GetXRDForXR(t *testing.T) {
 				logger:         tu.TestLogger(t, false),
 				xrds:           tt.cachedXRDs,
 				xrdsLoaded:     tt.cachedXRDs != nil, // Only mark as loaded if we have cached XRDs
+				gvks:           tt.discoveredXRDGVKs,
 			}
 
 			got, err := c.GetXRDForXR(ctx, tt.args.gvk)
@@ -571,6 +586,7 @@ func TestDefaultDefinitionClient_Initialize(t *testing.T) {
 			reason: "Should successfully initialize the client",
 			mockResource: *tu.NewMockResourceClient().
 				WithSuccessfulInitialize().
+				WithFoundGVKs([]schema.GroupVersionKind{XRDv1GVK}).
 				WithEmptyListResources().
 				Build(),
 			wantErr: false,

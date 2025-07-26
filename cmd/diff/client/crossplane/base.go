@@ -5,7 +5,11 @@ package crossplane
 import (
 	"context"
 
+	"github.com/crossplane-contrib/crossplane-diff/cmd/diff/client/kubernetes"
+	"github.com/crossplane/crossplane-runtime/pkg/errors"
 	"github.com/crossplane/crossplane-runtime/pkg/logging"
+	un "k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 
 	"github.com/crossplane-contrib/crossplane-diff/cmd/diff/client/core"
 )
@@ -29,4 +33,44 @@ type Clients struct {
 	Environment  EnvironmentClient
 	Function     FunctionClient
 	ResourceTree ResourceTreeClient
+}
+
+// getFirstMatchingResource retrieves the first resource matching the given GVKs and name.
+func getFirstMatchingResource(ctx context.Context, client kubernetes.ResourceClient, gvks []schema.GroupVersionKind, name string, cache map[string]*un.Unstructured) (*un.Unstructured, error) {
+	// Check cache first
+	if config, ok := cache[name]; ok {
+		return config, nil
+	}
+
+	var errs []error
+	for _, gvk := range gvks {
+		// try for this version
+		item, err := client.GetResource(ctx, gvk, "", name)
+		if err != nil {
+			errs = append(errs, errors.Wrapf(err, "cannot get %s %s", gvk.String(), name))
+			// not found in this version, try next
+			continue
+		}
+
+		// Found item; update cache
+		cache[name] = item
+
+		return item, nil
+	}
+
+	return nil, errors.Join(errs...) // return all errors if none found
+}
+
+func listMatchingResources(ctx context.Context, client kubernetes.ResourceClient, gvks []schema.GroupVersionKind) ([]*un.Unstructured, error) {
+	// List all matching resources for the given GVKs
+	var envConfigs []*un.Unstructured
+	for _, gvk := range gvks {
+		ecs, err := client.ListResources(ctx, gvk, "")
+		if err != nil {
+			return nil, errors.Wrapf(err, "cannot list items for GVK %s", gvk.String())
+		}
+		envConfigs = append(envConfigs, ecs...)
+	}
+
+	return envConfigs, nil
 }

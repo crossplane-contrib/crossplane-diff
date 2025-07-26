@@ -235,124 +235,6 @@ func (m *MockResourceInterface) ApplyStatus(_ context.Context, _ string, _ *un.U
 
 // endregion
 
-// region MockClusterClient
-
-// MockClusterClient implements the ClusterClient interface for testing.
-type MockClusterClient struct {
-	InitializeFn               func(context.Context) error
-	FindMatchingCompositionFn  func(context.Context, *un.Unstructured) (*xpextv1.Composition, error)
-	GetFunctionsFromPipelineFn func(*xpextv1.Composition) ([]pkgv1.Function, error)
-	GetXRDsFn                  func(context.Context) ([]*un.Unstructured, error)
-	GetResourceFn              func(context.Context, schema.GroupVersionKind, string, string) (*un.Unstructured, error)
-	GetResourceTreeFn          func(context.Context, *un.Unstructured) (*resource.Resource, error)
-	DryRunApplyFn              func(context.Context, *un.Unstructured) (*un.Unstructured, error)
-	GetResourcesByLabelFn      func(context.Context, string, schema.GroupVersionKind, metav1.LabelSelector) ([]*un.Unstructured, error)
-	GetEnvironmentConfigsFn    func(context.Context) ([]*un.Unstructured, error)
-	GetAllResourcesByLabelsFn  func(context.Context, []schema.GroupVersionKind, []metav1.LabelSelector) ([]*un.Unstructured, error)
-	IsCRDRequiredFn            func(ctx context.Context, gvk schema.GroupVersionKind) bool
-	GetCRDFn                   func(ctx context.Context, gvk schema.GroupVersionKind) (*un.Unstructured, error)
-}
-
-// Initialize implements the ClusterClient interface.
-func (m *MockClusterClient) Initialize(ctx context.Context) error {
-	if m.InitializeFn != nil {
-		return m.InitializeFn(ctx)
-	}
-	return nil
-}
-
-// FindMatchingComposition implements the ClusterClient interface.
-func (m *MockClusterClient) FindMatchingComposition(ctx context.Context, res *un.Unstructured) (*xpextv1.Composition, error) {
-	if m.FindMatchingCompositionFn != nil {
-		return m.FindMatchingCompositionFn(ctx, res)
-	}
-	return nil, errors.New("FindMatchingComposition not implemented")
-}
-
-// GetAllResourcesByLabels implements the ClusterClient interface.
-func (m *MockClusterClient) GetAllResourcesByLabels(ctx context.Context, gvks []schema.GroupVersionKind, selectors []metav1.LabelSelector) ([]*un.Unstructured, error) {
-	if m.GetAllResourcesByLabelsFn != nil {
-		return m.GetAllResourcesByLabelsFn(ctx, gvks, selectors)
-	}
-	return nil, errors.New("GetAllResourcesByLabels not implemented")
-}
-
-// GetFunctionsFromPipeline implements the ClusterClient interface.
-func (m *MockClusterClient) GetFunctionsFromPipeline(comp *xpextv1.Composition) ([]pkgv1.Function, error) {
-	if m.GetFunctionsFromPipelineFn != nil {
-		return m.GetFunctionsFromPipelineFn(comp)
-	}
-	return nil, errors.New("GetFunctionsFromPipeline not implemented")
-}
-
-// GetXRDs implements the ClusterClient interface.
-func (m *MockClusterClient) GetXRDs(ctx context.Context) ([]*un.Unstructured, error) {
-	if m.GetXRDsFn != nil {
-		return m.GetXRDsFn(ctx)
-	}
-	return nil, errors.New("GetXRDs not implemented")
-}
-
-// GetResource implements the ClusterClient interface.
-func (m *MockClusterClient) GetResource(ctx context.Context, gvk schema.GroupVersionKind, namespace, name string) (*un.Unstructured, error) {
-	if m.GetResourceFn != nil {
-		return m.GetResourceFn(ctx, gvk, namespace, name)
-	}
-	return nil, errors.New("GetResource not implemented")
-}
-
-// GetResourceTree implements the ClusterClient interface.
-func (m *MockClusterClient) GetResourceTree(ctx context.Context, root *un.Unstructured) (*resource.Resource, error) {
-	if m.GetResourceTreeFn != nil {
-		return m.GetResourceTreeFn(ctx, root)
-	}
-	return nil, errors.New("GetResourceTree not implemented")
-}
-
-// GetResourcesByLabel implements the ClusterClient interface
-// Updated to accept GVK instead of GVR.
-func (m *MockClusterClient) GetResourcesByLabel(ctx context.Context, ns string, gvk schema.GroupVersionKind, selector metav1.LabelSelector) ([]*un.Unstructured, error) {
-	if m.GetResourcesByLabelFn != nil {
-		return m.GetResourcesByLabelFn(ctx, ns, gvk, selector)
-	}
-	return nil, errors.New("GetResourcesByLabel not implemented")
-}
-
-// DryRunApply implements the ClusterClient interface.
-func (m *MockClusterClient) DryRunApply(ctx context.Context, obj *un.Unstructured) (*un.Unstructured, error) {
-	if m.DryRunApplyFn != nil {
-		return m.DryRunApplyFn(ctx, obj)
-	}
-	return nil, errors.New("DryRunApply not implemented")
-}
-
-// GetEnvironmentConfigs implements the ClusterClient interface.
-func (m *MockClusterClient) GetEnvironmentConfigs(ctx context.Context) ([]*un.Unstructured, error) {
-	if m.GetEnvironmentConfigsFn != nil {
-		return m.GetEnvironmentConfigsFn(ctx)
-	}
-	return nil, errors.New("GetEnvironmentConfigs not implemented")
-}
-
-// IsCRDRequired implements the ClusterClient interface.
-func (m *MockClusterClient) IsCRDRequired(ctx context.Context, gvk schema.GroupVersionKind) bool {
-	if m.IsCRDRequiredFn != nil {
-		return m.IsCRDRequiredFn(ctx, gvk)
-	}
-	// Default behavior if not implemented - assume CRD is required
-	return true
-}
-
-// GetCRD implements the ClusterClient interface.
-func (m *MockClusterClient) GetCRD(ctx context.Context, gvk schema.GroupVersionKind) (*un.Unstructured, error) {
-	if m.GetCRDFn != nil {
-		return m.GetCRDFn(ctx, gvk)
-	}
-	return nil, errors.New("GetCRD not implemented")
-}
-
-// endregion
-
 // region MockDiffProcessor
 
 // MockDiffProcessor implements the DiffProcessor interface for testing.
@@ -413,8 +295,9 @@ type MockResourceClient struct {
 	InitializeFn              func(ctx context.Context) error
 	GetResourceFn             func(ctx context.Context, gvk schema.GroupVersionKind, namespace, name string) (*un.Unstructured, error)
 	ListResourcesFn           func(ctx context.Context, gvk schema.GroupVersionKind, namespace string) ([]*un.Unstructured, error)
-	GetResourcesByLabelFn     func(ctx context.Context, namespace string, gvk schema.GroupVersionKind, sel metav1.LabelSelector) ([]*un.Unstructured, error)
+	GetResourcesByLabelFn     func(ctx context.Context, gvk schema.GroupVersionKind, namespace string, sel metav1.LabelSelector) ([]*un.Unstructured, error)
 	GetAllResourcesByLabelsFn func(ctx context.Context, gvks []schema.GroupVersionKind, selectors []metav1.LabelSelector) ([]*un.Unstructured, error)
+	GetGVKsForGroupKindFn     func(ctx context.Context, group, kind string) ([]schema.GroupVersionKind, error)
 }
 
 // Initialize implements kubernetes.ResourceClient.
@@ -442,9 +325,9 @@ func (m *MockResourceClient) ListResources(ctx context.Context, gvk schema.Group
 }
 
 // GetResourcesByLabel implements kubernetes.ResourceClient.
-func (m *MockResourceClient) GetResourcesByLabel(ctx context.Context, namespace string, gvk schema.GroupVersionKind, sel metav1.LabelSelector) ([]*un.Unstructured, error) {
+func (m *MockResourceClient) GetResourcesByLabel(ctx context.Context, gvk schema.GroupVersionKind, namespace string, sel metav1.LabelSelector) ([]*un.Unstructured, error) {
 	if m.GetResourcesByLabelFn != nil {
-		return m.GetResourcesByLabelFn(ctx, namespace, gvk, sel)
+		return m.GetResourcesByLabelFn(ctx, gvk, namespace, sel)
 	}
 	return nil, errors.New("GetResourcesByLabel not implemented")
 }
@@ -455,6 +338,14 @@ func (m *MockResourceClient) GetAllResourcesByLabels(ctx context.Context, gvks [
 		return m.GetAllResourcesByLabelsFn(ctx, gvks, selectors)
 	}
 	return nil, errors.New("GetAllResourcesByLabels not implemented")
+}
+
+// GetGVKsForGroupKind implements kubernetes.ResourceClient.
+func (m *MockResourceClient) GetGVKsForGroupKind(ctx context.Context, group, kind string) ([]schema.GroupVersionKind, error) {
+	if m.GetGVKsForGroupKindFn != nil {
+		return m.GetGVKsForGroupKindFn(ctx, group, kind)
+	}
+	return nil, errors.New("GetGVKsForGroupKind not implemented")
 }
 
 // MockSchemaClient implements the kubernetes.SchemaClient interface.

@@ -195,7 +195,7 @@ func (m *DefaultResourceManager) lookupByComposite(ctx context.Context, composit
 	}
 
 	// Look up resources with the composite label
-	resources, err := m.client.GetResourcesByLabel(ctx, namespace, gvk, labelSelector)
+	resources, err := m.client.GetResourcesByLabel(ctx, gvk, namespace, labelSelector)
 	if err != nil {
 		return nil, false, errors.Wrapf(err, "cannot list resources for composite %s", composite.GetName())
 	}

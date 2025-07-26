@@ -137,7 +137,7 @@ func TestDefaultResourceManager_FetchCurrentObject(t *testing.T) {
 						)
 					}).
 					// Return existing resource when looking up by label AND check the composition-resource-name annotation
-					WithGetResourcesByLabel(func(_ context.Context, _ string, _ schema.GroupVersionKind, sel metav1.LabelSelector) ([]*un.Unstructured, error) {
+					WithGetResourcesByLabel(func(_ context.Context, _ schema.GroupVersionKind, _ string, sel metav1.LabelSelector) ([]*un.Unstructured, error) {
 						if owner, exists := sel.MatchLabels["crossplane.io/composite"]; exists && owner == "parent-xr" {
 							return []*un.Unstructured{existingGeneratedResource, existingGeneratedResourceWithDifferentResName}, nil
 						}
@@ -165,7 +165,7 @@ func TestDefaultResourceManager_FetchCurrentObject(t *testing.T) {
 					// Return "not found" for direct name lookup to force label lookup
 					WithResourceNotFound().
 					// Return our existing resource when looking up by label AND check the composition-resource-name annotation
-					WithGetResourcesByLabel(func(_ context.Context, _ string, _ schema.GroupVersionKind, sel metav1.LabelSelector) ([]*un.Unstructured, error) {
+					WithGetResourcesByLabel(func(_ context.Context, _ schema.GroupVersionKind, _ string, sel metav1.LabelSelector) ([]*un.Unstructured, error) {
 						if owner, exists := sel.MatchLabels["crossplane.io/composite"]; exists && owner == "parent-xr" {
 							return []*un.Unstructured{composedResource}, nil
 						}
@@ -216,7 +216,7 @@ func TestDefaultResourceManager_FetchCurrentObject(t *testing.T) {
 
 				return tu.NewMockResourceClient().
 					WithResourceNotFound().
-					WithGetResourcesByLabel(func(_ context.Context, _ string, _ schema.GroupVersionKind, sel metav1.LabelSelector) ([]*un.Unstructured, error) {
+					WithGetResourcesByLabel(func(_ context.Context, _ schema.GroupVersionKind, _ string, sel metav1.LabelSelector) ([]*un.Unstructured, error) {
 						if owner, exists := sel.MatchLabels["crossplane.io/composite"]; exists && owner == "parent-xr" {
 							return []*un.Unstructured{mismatchedResource}, nil
 						}
@@ -242,7 +242,7 @@ func TestDefaultResourceManager_FetchCurrentObject(t *testing.T) {
 			setupResourceClient: func() *tu.MockResourceClient {
 				return tu.NewMockResourceClient().
 					WithResourceNotFound().
-					WithGetResourcesByLabel(func(context.Context, string, schema.GroupVersionKind, metav1.LabelSelector) ([]*un.Unstructured, error) {
+					WithGetResourcesByLabel(func(context.Context, schema.GroupVersionKind, string, metav1.LabelSelector) ([]*un.Unstructured, error) {
 						return nil, errors.New("error looking up resources")
 					}).
 					Build()

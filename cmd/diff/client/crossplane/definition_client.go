@@ -34,6 +34,7 @@ type DefaultDefinitionClient struct {
 	logger         logging.Logger
 
 	// XRDs cache
+	gvks       []schema.GroupVersionKind
 	xrds       []*un.Unstructured
 	xrdsMutex  sync.RWMutex
 	xrdsLoaded bool
@@ -52,8 +53,14 @@ func NewDefinitionClient(resourceClient kubernetes.ResourceClient, logger loggin
 func (c *DefaultDefinitionClient) Initialize(ctx context.Context) error {
 	c.logger.Debug("Initializing definition client")
 
+	gvks, err := c.resourceClient.GetGVKsForGroupKind(ctx, "apiextensions.crossplane.io", "CompositeResourceDefinition")
+	if err != nil {
+		return errors.Wrap(err, "cannot get XRD GVKs")
+	}
+	c.gvks = gvks
+
 	// Load XRDs
-	_, err := c.GetXRDs(ctx)
+	_, err = c.GetXRDs(ctx)
 	if err != nil {
 		return errors.Wrap(err, "cannot load XRDs")
 	}
@@ -86,15 +93,9 @@ func (c *DefaultDefinitionClient) GetXRDs(ctx context.Context) ([]*un.Unstructur
 
 	c.logger.Debug("Fetching XRDs from cluster")
 
-	// Define XRD GVK
-	xrdGVK := schema.GroupVersionKind{
-		Group:   "apiextensions.crossplane.io",
-		Version: "v1",
-		Kind:    "CompositeResourceDefinition",
-	}
+	xrds, err := listMatchingResources(ctx, c.resourceClient, c.gvks)
 
 	// List all XRDs
-	xrds, err := c.resourceClient.ListResources(ctx, xrdGVK, "")
 	if err != nil {
 		c.logger.Debug("Failed to list XRDs", "error", err)
 		return nil, errors.Wrap(err, "cannot list XRDs")

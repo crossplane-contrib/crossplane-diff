@@ -16,6 +16,18 @@ import (
 
 var _ EnvironmentClient = (*tu.MockEnvironmentClient)(nil)
 
+var EnvConfigV1alpha1GVK = schema.GroupVersionKind{
+	Group:   CrossplaneAPIExtGroup,
+	Version: "v1alpha1",
+	Kind:    "EnvironmentConfig",
+}
+
+var EnvConfigV1beta1GVK = schema.GroupVersionKind{
+	Group:   CrossplaneAPIExtGroup,
+	Version: "v1beta1",
+	Kind:    "EnvironmentConfig",
+}
+
 func TestDefaultEnvironmentClient_GetEnvironmentConfigs(t *testing.T) {
 	ctx := context.Background()
 
@@ -79,7 +91,7 @@ func TestDefaultEnvironmentClient_GetEnvironmentConfigs(t *testing.T) {
 				Build(),
 			want:         nil,
 			wantErr:      true,
-			errSubstring: "cannot list environment configs",
+			errSubstring: "cannot list items for GVK apiextensions.crossplane.io/v1alpha1, Kind=EnvironmentConfig",
 		},
 	}
 
@@ -89,6 +101,8 @@ func TestDefaultEnvironmentClient_GetEnvironmentConfigs(t *testing.T) {
 				resourceClient: &tt.mockResource,
 				logger:         tu.TestLogger(t, false),
 				envConfigs:     make(map[string]*un.Unstructured),
+				// ECs have alpha1 and beta1 versions, TODO:  test both
+				gvks: []schema.GroupVersionKind{{Group: CrossplaneAPIExtGroup, Version: "v1alpha1", Kind: "EnvironmentConfig"}},
 			}
 
 			got, err := c.GetEnvironmentConfigs(ctx)
@@ -225,7 +239,7 @@ func TestDefaultEnvironmentClient_GetEnvironmentConfig(t *testing.T) {
 			},
 			want:         nil,
 			wantErr:      true,
-			errSubstring: "cannot get environment config",
+			errSubstring: "cannot get apiextensions.crossplane.io/v1alpha1, Kind=EnvironmentConfig nonexistent-config",
 		},
 	}
 
@@ -235,6 +249,8 @@ func TestDefaultEnvironmentClient_GetEnvironmentConfig(t *testing.T) {
 				resourceClient: &tt.mockResource,
 				logger:         tu.TestLogger(t, false),
 				envConfigs:     tt.cachedConfig,
+				// ECs have alpha1 and beta1 versions, TODO:  test both
+				gvks: []schema.GroupVersionKind{{Group: CrossplaneAPIExtGroup, Version: "v1alpha1", Kind: "EnvironmentConfig"}},
 			}
 
 			got, err := c.GetEnvironmentConfig(ctx, tt.args.name)
@@ -292,6 +308,7 @@ func TestDefaultEnvironmentClient_Initialize(t *testing.T) {
 			reason: "Should successfully initialize and cache environment configs",
 			mockResource: *tu.NewMockResourceClient().
 				WithSuccessfulInitialize().
+				WithFoundGVKs([]schema.GroupVersionKind{EnvConfigV1alpha1GVK}).
 				WithListResources(func(_ context.Context, gvk schema.GroupVersionKind, _ string) ([]*un.Unstructured, error) {
 					if gvk.Group == "apiextensions.crossplane.io" &&
 						gvk.Version == "v1alpha1" &&
@@ -311,6 +328,7 @@ func TestDefaultEnvironmentClient_Initialize(t *testing.T) {
 			reason: "Should successfully initialize with empty cache when no configs exist",
 			mockResource: *tu.NewMockResourceClient().
 				WithSuccessfulInitialize().
+				WithFoundGVKs([]schema.GroupVersionKind{EnvConfigV1alpha1GVK}).
 				WithEmptyListResources().
 				Build(),
 			wantErr:    false,

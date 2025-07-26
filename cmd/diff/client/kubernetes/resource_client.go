@@ -4,14 +4,13 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/crossplane/crossplane-runtime/pkg/errors"
+	"github.com/crossplane/crossplane-runtime/pkg/logging"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	un "k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/discovery"
 	"k8s.io/client-go/dynamic"
-
-	"github.com/crossplane/crossplane-runtime/pkg/errors"
-	"github.com/crossplane/crossplane-runtime/pkg/logging"
 
 	"github.com/crossplane-contrib/crossplane-diff/cmd/diff/client/core"
 )
@@ -25,10 +24,12 @@ type ResourceClient interface {
 	ListResources(ctx context.Context, gvk schema.GroupVersionKind, namespace string) ([]*un.Unstructured, error)
 
 	// GetResourcesByLabel returns resources matching labels in the given namespace
-	GetResourcesByLabel(ctx context.Context, namespace string, gvk schema.GroupVersionKind, sel metav1.LabelSelector) ([]*un.Unstructured, error)
+	GetResourcesByLabel(ctx context.Context, gvk schema.GroupVersionKind, namespace string, sel metav1.LabelSelector) ([]*un.Unstructured, error)
 
 	// GetAllResourcesByLabels gets resources by labels across multiple GVKs
 	GetAllResourcesByLabels(ctx context.Context, gvks []schema.GroupVersionKind, selectors []metav1.LabelSelector) ([]*un.Unstructured, error)
+
+	GetGVKsForGroupKind(ctx context.Context, group, kind string) ([]schema.GroupVersionKind, error)
 }
 
 // DefaultResourceClient implements the ResourceClient interface.
@@ -76,7 +77,7 @@ func (c *DefaultResourceClient) GetResource(ctx context.Context, gvk schema.Grou
 }
 
 // GetResourcesByLabel returns resources matching labels in the given namespace.
-func (c *DefaultResourceClient) GetResourcesByLabel(ctx context.Context, namespace string, gvk schema.GroupVersionKind, sel metav1.LabelSelector) ([]*un.Unstructured, error) {
+func (c *DefaultResourceClient) GetResourcesByLabel(ctx context.Context, gvk schema.GroupVersionKind, namespace string, sel metav1.LabelSelector) ([]*un.Unstructured, error) {
 	c.logger.Debug("Getting resources by label",
 		"namespace", namespace,
 		"gvk", gvk.String(),
@@ -156,7 +157,7 @@ func (c *DefaultResourceClient) GetAllResourcesByLabels(ctx context.Context, gvk
 		sel := selectors[i]
 		c.logger.Debug("Getting resources for GVK with selector", "gvk", gvk.String(), "selector", sel.MatchLabels)
 
-		res, err := c.GetResourcesByLabel(ctx, "", gvk, sel)
+		res, err := c.GetResourcesByLabel(ctx, gvk, "", sel)
 		if err != nil {
 			c.logger.Debug("Failed to get resources by label", "gvk", gvk.String(), "error", err)
 			return nil, errors.Wrapf(err, "cannot get all resources")
@@ -168,4 +169,43 @@ func (c *DefaultResourceClient) GetAllResourcesByLabels(ctx context.Context, gvk
 
 	c.logger.Debug("Completed fetching resources by labels", "total_resources", len(resources))
 	return resources, nil
+}
+
+func (c *DefaultResourceClient) GetGVKsForGroupKind(ctx context.Context, group, kind string) ([]schema.GroupVersionKind, error) {
+	// Get discovery client
+	discoveryClient := c.discoveryClient
+
+	// Get all API resources
+	apiResourceLists, err := discoveryClient.ServerPreferredResources()
+	if err != nil {
+		return nil, err
+	}
+
+	var gvks []schema.GroupVersionKind
+
+	// Find all versions for the given group+kind
+	for _, apiResourceList := range apiResourceLists {
+		gv, err := schema.ParseGroupVersion(apiResourceList.GroupVersion)
+		if err != nil {
+			continue
+		}
+
+		if gv.Group != group {
+			continue
+		}
+
+		for _, resource := range apiResourceList.APIResources {
+			if resource.Kind == kind {
+				gvk := schema.GroupVersionKind{
+					Group:   gv.Group,
+					Version: gv.Version,
+					Kind:    kind,
+				}
+				gvks = append(gvks, gvk)
+				break // Found the kind in this version, move to next version
+			}
+		}
+	}
+
+	return gvks, nil
 }

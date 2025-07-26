@@ -56,6 +56,22 @@ func (b *MockResourceClientBuilder) WithSuccessfulInitialize() *MockResourceClie
 	})
 }
 
+// WithFoundGVKs sets the GetGVKsForGroupKind behavior.
+func (b *MockResourceClientBuilder) WithFoundGVKs(gvks []schema.GroupVersionKind) *MockResourceClientBuilder {
+	b.mock.GetGVKsForGroupKindFn = func(ctx context.Context, group, kind string) ([]schema.GroupVersionKind, error) {
+		return gvks, nil
+	}
+	return b
+}
+
+// WithoutFoundGVKs sets the GetGVKsForGroupKind behavior.
+func (b *MockResourceClientBuilder) WithoutFoundGVKs(err string) *MockResourceClientBuilder {
+	b.mock.GetGVKsForGroupKindFn = func(ctx context.Context, group, kind string) ([]schema.GroupVersionKind, error) {
+		return nil, errors.New(err)
+	}
+	return b
+}
+
 // WithGetResource sets the GetResource behavior.
 func (b *MockResourceClientBuilder) WithGetResource(fn func(context.Context, schema.GroupVersionKind, string, string) (*un.Unstructured, error)) *MockResourceClientBuilder {
 	b.mock.GetResourceFn = fn
@@ -118,14 +134,14 @@ func (b *MockResourceClientBuilder) WithListResourcesFailure(errorStr string) *M
 }
 
 // WithGetResourcesByLabel sets the GetResourcesByLabel behavior.
-func (b *MockResourceClientBuilder) WithGetResourcesByLabel(fn func(context.Context, string, schema.GroupVersionKind, metav1.LabelSelector) ([]*un.Unstructured, error)) *MockResourceClientBuilder {
+func (b *MockResourceClientBuilder) WithGetResourcesByLabel(fn func(context.Context, schema.GroupVersionKind, string, metav1.LabelSelector) ([]*un.Unstructured, error)) *MockResourceClientBuilder {
 	b.mock.GetResourcesByLabelFn = fn
 	return b
 }
 
 // WithResourcesFoundByLabel sets GetResourcesByLabel to return resources for a specific label.
 func (b *MockResourceClientBuilder) WithResourcesFoundByLabel(resources []*un.Unstructured, label, value string) *MockResourceClientBuilder {
-	return b.WithGetResourcesByLabel(func(_ context.Context, _ string, _ schema.GroupVersionKind, selector metav1.LabelSelector) ([]*un.Unstructured, error) {
+	return b.WithGetResourcesByLabel(func(_ context.Context, _ schema.GroupVersionKind, _ string, selector metav1.LabelSelector) ([]*un.Unstructured, error) {
 		// Check if the selector matches our expected label
 		if labelValue, exists := selector.MatchLabels[label]; exists && labelValue == value {
 			return resources, nil

@@ -968,6 +968,7 @@ func TestDefaultCompositionClient_Initialize(t *testing.T) {
 			reason: "Should successfully initialize the client",
 			mockResource: tu.NewMockResourceClient().
 				WithSuccessfulInitialize().
+				WithFoundGVKs([]schema.GroupVersionKind{{Group: CrossplaneAPIExtGroup, Kind: "Composition"}}).
 				WithEmptyListResources().
 				Build(),
 			expectError: false,

@@ -154,7 +154,7 @@ func (p *RequirementsProvider) ProvideRequirements(ctx context.Context, requirem
 					"gvk", gvk.String(),
 					"labels", labelSelector.MatchLabels)
 
-				resources, err := p.client.GetResourcesByLabel(ctx, "", gvk, labelSelector)
+				resources, err := p.client.GetResourcesByLabel(ctx, gvk, "", labelSelector)
 				if err != nil {
 					return nil, errors.Wrapf(err, "cannot get resources by label")
 				}

@@ -479,7 +479,7 @@ func TestResourceClient_GetResourcesByLabel(t *testing.T) {
 				logger:        tu.TestLogger(t, false),
 			}
 
-			got, err := c.GetResourcesByLabel(tc.args.ctx, tc.args.namespace, tc.args.gvk, tc.args.selector)
+			got, err := c.GetResourcesByLabel(tc.args.ctx, tc.args.gvk, tc.args.namespace, tc.args.selector)
 
 			if tc.want.err != nil {
 				if err == nil {

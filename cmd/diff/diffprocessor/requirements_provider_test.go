@@ -95,7 +95,7 @@ func TestRequirementsProvider_ProvideRequirements(t *testing.T) {
 			},
 			setupResourceClient: func() *tu.MockResourceClient {
 				return tu.NewMockResourceClient().
-					WithGetResourcesByLabel(func(_ context.Context, _ string, _ schema.GroupVersionKind, sel metav1.LabelSelector) ([]*un.Unstructured, error) {
+					WithGetResourcesByLabel(func(_ context.Context, _ schema.GroupVersionKind, _ string, sel metav1.LabelSelector) ([]*un.Unstructured, error) {
 						// Return resources for label-based selectors
 						if sel.MatchLabels["app"] == "test-app" {
 							return []*un.Unstructured{configMap}, nil

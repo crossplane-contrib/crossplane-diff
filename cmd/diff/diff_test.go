@@ -312,7 +312,7 @@ func TestDiffCommand(t *testing.T) {
 						}
 						return nil, errors.Errorf("resource %q not found", name)
 					}).
-					WithGetResourcesByLabel(func(_ context.Context, _ string, _ schema.GroupVersionKind, sel metav1.LabelSelector) ([]*un.Unstructured, error) {
+					WithGetResourcesByLabel(func(_ context.Context, _ schema.GroupVersionKind, _ string, sel metav1.LabelSelector) ([]*un.Unstructured, error) {
 						// Return resources based on label selector
 						if sel.MatchLabels["app"] == "test-app" {
 							return []*un.Unstructured{testExtraResource}, nil
