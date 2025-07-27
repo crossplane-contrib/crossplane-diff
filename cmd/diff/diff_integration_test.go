@@ -44,6 +44,9 @@ func TestDiffIntegration(t *testing.T) {
 	_ = pkgv1.AddToScheme(scheme)
 	_ = extv1.AddToScheme(scheme)
 
+	// TODO:  add a test to cover v2 CompositeResourceDefinition (XRD) if running against Crossplane v2
+	// TODO:  add a test to cover namespaced xrds against v2
+
 	// Test cases
 	tests := map[string]struct {
 		setupFiles              []string
@@ -168,13 +171,60 @@ func TestDiffIntegration(t *testing.T) {
 `,
 			expectedError: false,
 		},
-		"EnvironmentConfig incorporation in diff": {
+		"EnvironmentConfig v1alpha1 incorporation in diff": {
 			setupFiles: []string{
 				"testdata/diff/resources/xdownstreamenvresource-xrd.yaml",
 				"testdata/diff/resources/env-xrd.yaml",
 				"testdata/diff/resources/env-composition.yaml",
 				"testdata/diff/resources/functions.yaml",
-				"testdata/diff/resources/environment-config.yaml",
+				"testdata/diff/resources/environment-config-v1alpha1.yaml",
+				"testdata/diff/resources/existing-env-downstream-resource.yaml",
+				"testdata/diff/resources/existing-env-xr.yaml",
+			},
+			inputFiles: []string{"testdata/diff/modified-env-xr.yaml"},
+			expectedOutput: `
+~~~ XDownstreamEnvResource/test-env-resource
+  apiVersion: nop.example.org/v1alpha1
+  kind: XDownstreamEnvResource
+  metadata:
+    annotations:
+      crossplane.io/composition-resource-name: env-resource
+    generateName: test-env-resource-
+    labels:
+      crossplane.io/composite: test-env-resource
+    name: test-env-resource
+  spec:
+    compositionUpdatePolicy: Automatic
+    forProvider:
+-     configData: existing-config-value
++     configData: modified-config-value
+      environment: staging
+      region: us-west-2
+      serviceLevel: premium
+
+---
+~~~ XEnvResource/test-env-resource
+  apiVersion: diff.example.org/v1alpha1
+  kind: XEnvResource
+  metadata:
+    name: test-env-resource
+  spec:
+    compositionUpdatePolicy: Automatic
+-   configKey: existing-config-value
++   configKey: modified-config-value
+
+---
+`,
+			expectedError: false,
+			noColor:       true,
+		},
+		"EnvironmentConfig v1beta1 incorporation in diff": {
+			setupFiles: []string{
+				"testdata/diff/resources/xdownstreamenvresource-xrd.yaml",
+				"testdata/diff/resources/env-xrd.yaml",
+				"testdata/diff/resources/env-composition.yaml",
+				"testdata/diff/resources/functions.yaml",
+				"testdata/diff/resources/environment-config-v1beta1.yaml",
 				"testdata/diff/resources/existing-env-downstream-resource.yaml",
 				"testdata/diff/resources/existing-env-xr.yaml",
 			},
