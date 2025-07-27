@@ -20,11 +20,16 @@ fetch-crossplane-cluster:
        cd crossplane && \
        git checkout ${CROSSPLANE_IMAGE_TAG})
 
+  # Prefix the cluster directory with the tag/revision
+  RUN mv crossplane/cluster crossplane/cluster-tmp
+  RUN mkdir -p crossplane/cluster
+  RUN mv crossplane/cluster-tmp crossplane/cluster/${CROSSPLANE_IMAGE_TAG}
+
   # Save the cluster directory as an artifact
-  SAVE ARTIFACT crossplane/cluster
+  SAVE ARTIFACT crossplane/cluster/${CROSSPLANE_IMAGE_TAG}
   # Conditionally save locally (disabled for matrix builds)
   IF [ "$SAVE_LOCALLY" = "true" ]
-    SAVE ARTIFACT crossplane/cluster AS LOCAL cluster
+    SAVE ARTIFACT crossplane/cluster/${CROSSPLANE_IMAGE_TAG} AS LOCAL cluster/${CROSSPLANE_IMAGE_TAG}
   END
 
 # reviewable checks that a branch is ready for review. Run it before opening a
@@ -92,7 +97,7 @@ e2e:
   COPY +go-build/crossplane-diff .
   COPY +go-build-e2e/e2e .
   # Fetch the cluster directory from the crossplane repo at the specified tag
-  COPY (+fetch-crossplane-cluster/cluster --CROSSPLANE_IMAGE_TAG=${CROSSPLANE_IMAGE_TAG} --SAVE_LOCALLY=${SAVE_LOCALLY}) cluster
+  COPY (+fetch-crossplane-cluster/${CROSSPLANE_IMAGE_TAG} --CROSSPLANE_IMAGE_TAG=${CROSSPLANE_IMAGE_TAG} --SAVE_LOCALLY=${SAVE_LOCALLY}) cluster/${CROSSPLANE_IMAGE_TAG}
   COPY --dir test .
   TRY
     # Using a static CROSSPLANE_VERSION allows Earthly to cache E2E runs as long
@@ -136,16 +141,16 @@ go-generate:
   CACHE --id go-build --sharing shared /root/.cache/go-build
   COPY +kubectl-setup/kubectl /usr/local/bin/kubectl
   # Fetch the cluster directory from the crossplane repo at the specified tag
-  COPY (+fetch-crossplane-cluster/cluster --CROSSPLANE_IMAGE_TAG=${CROSSPLANE_IMAGE_TAG}) cluster
+  COPY (+fetch-crossplane-cluster/${CROSSPLANE_IMAGE_TAG} --CROSSPLANE_IMAGE_TAG=${CROSSPLANE_IMAGE_TAG}) cluster/${CROSSPLANE_IMAGE_TAG}
   # TODO(negz): Can this move into generate.go? Ideally it would live there with
   # the code that actually generates the CRDs, but it depends on kubectl.
   RUN kubectl patch --local --type=json \
-    --patch-file cluster/crd-patches/pkg.crossplane.io_deploymentruntimeconfigs.yaml \
-    --filename cluster/crds/pkg.crossplane.io_deploymentruntimeconfigs.yaml \
+    --patch-file cluster/${CROSSPLANE_IMAGE_TAG}/crd-patches/pkg.crossplane.io_deploymentruntimeconfigs.yaml \
+    --filename cluster/${CROSSPLANE_IMAGE_TAG}/crds/pkg.crossplane.io_deploymentruntimeconfigs.yaml \
     --output=yaml > /tmp/patched.yaml \
-    && mv /tmp/patched.yaml cluster/crds/pkg.crossplane.io_deploymentruntimeconfigs.yaml
-  SAVE ARTIFACT cluster/crds AS LOCAL cluster/crds
-  SAVE ARTIFACT cluster/meta AS LOCAL cluster/meta
+    && mv /tmp/patched.yaml cluster/${CROSSPLANE_IMAGE_TAG}/crds/pkg.crossplane.io_deploymentruntimeconfigs.yaml
+  SAVE ARTIFACT cluster/${CROSSPLANE_IMAGE_TAG}/crds AS LOCAL cluster/${CROSSPLANE_IMAGE_TAG}/crds
+  SAVE ARTIFACT cluster/${CROSSPLANE_IMAGE_TAG}/meta AS LOCAL cluster/${CROSSPLANE_IMAGE_TAG}/meta
 
 # go-build builds Crossplane binaries for your native OS and architecture.
 go-build:
@@ -206,7 +211,7 @@ go-test:
   CACHE --id go-build --sharing shared /root/.cache/go-build
   COPY --dir cmd/ .
   # Fetch the cluster directory from the crossplane repo at the specified tag
-  COPY (+fetch-crossplane-cluster/cluster --CROSSPLANE_IMAGE_TAG=${CROSSPLANE_IMAGE_TAG}) cluster
+  COPY (+fetch-crossplane-cluster/${CROSSPLANE_IMAGE_TAG} --CROSSPLANE_IMAGE_TAG=${CROSSPLANE_IMAGE_TAG}) cluster/${CROSSPLANE_IMAGE_TAG}
   COPY --dir +envtest-setup/envtest /usr/local/kubebuilder/bin
   # a bit dirty but preload the cache with the images we use in IT (found in functions.yaml)
   WITH DOCKER \
@@ -237,24 +242,6 @@ go-lint:
   SAVE ARTIFACT internal AS LOCAL internal
   SAVE ARTIFACT pkg AS LOCAL pkg
   SAVE ARTIFACT test AS LOCAL test
-
-## helm-build packages the Crossplane Helm chart.
-#helm-build:
-#  ARG EARTHLY_GIT_SHORT_HASH
-#  ARG EARTHLY_GIT_COMMIT_TIMESTAMP
-#  ARG CROSSPLANE_VERSION=v0.0.0-${EARTHLY_GIT_COMMIT_TIMESTAMP}-${EARTHLY_GIT_SHORT_HASH}
-#  ARG CROSSPLANE_IMAGE_TAG=main
-#  FROM alpine:3.20
-#  WORKDIR /chart
-#  COPY +helm-setup/helm /usr/local/bin/helm
-#  # Fetch the cluster directory from the crossplane repo at the specified tag
-#  COPY (+fetch-crossplane-cluster/cluster --CROSSPLANE_IMAGE_TAG=${CROSSPLANE_IMAGE_TAG}) cluster
-#  COPY cluster/charts/crossplane/ .
-#  # We strip the leading v from Helm chart versions.
-#  LET CROSSPLANE_CHART_VERSION=$(echo ${CROSSPLANE_VERSION}|sed -e 's/^v//')
-#  RUN helm dependency update
-#  RUN helm package --version ${CROSSPLANE_CHART_VERSION} --app-version ${CROSSPLANE_CHART_VERSION} -d output .
-#  SAVE ARTIFACT output AS LOCAL _output/charts
 
 # envtest-setup is used by other targets to setup envtest.
 envtest-setup:

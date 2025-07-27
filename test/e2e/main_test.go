@@ -19,6 +19,7 @@ package e2e
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"strings"
 	"testing"
@@ -42,7 +43,7 @@ const namespace = "crossplane-system"
 
 const (
 	// TODO(phisco): make it configurable.
-	helmChartDir = "cluster/charts/crossplane"
+	helmChartDir = "cluster/%s/charts/crossplane"
 	// TODO(phisco): make it configurable.
 	helmReleaseName = "crossplane"
 )
@@ -61,21 +62,26 @@ func TestMain(m *testing.M) {
 		panic(err)
 	}
 
+	imageRepo := strings.Split(environment.GetCrossplaneImage(), ":")[0]
+	imageTag := strings.Split(environment.GetCrossplaneImage(), ":")[1]
+
+	versionedHelmChartDir := fmt.Sprintf(helmChartDir, imageTag)
+
 	// Set the default suite, to be used as base for all the other suites.
 	environment.AddDefaultTestSuite(
 		config.WithoutBaseDefaultTestSuite(),
 		config.WithHelmInstallOpts(
 			helm.WithName(helmReleaseName),
 			helm.WithNamespace(namespace),
-			helm.WithChart(helmChartDir),
+			helm.WithChart(versionedHelmChartDir),
 			// wait for the deployment to be ready for up to 5 minutes before returning
 			helm.WithWait(),
 			helm.WithTimeout("5m"),
 			helm.WithArgs(
 				// Run with debug logging to ensure all log statements are run.
 				"--set args={--debug}",
-				"--set image.repository="+strings.Split(environment.GetCrossplaneImage(), ":")[0],
-				"--set image.tag="+strings.Split(environment.GetCrossplaneImage(), ":")[1],
+				"--set image.repository="+imageRepo,
+				"--set image.tag="+imageTag,
 				"--set metrics.enabled=true",
 			),
 		),

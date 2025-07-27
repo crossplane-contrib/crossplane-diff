@@ -13,8 +13,8 @@ github.com/Masterminds/semver v1.5.0 h1:H65muMkzWKEuNDnfl9d70GUjFniHKHRbFPGBuZ3Q
 github.com/Masterminds/semver v1.5.0/go.mod h1:MB6lktGJrhw8PrUyiEoblNEGEQ+RzHPF078ddwwvV3Y=
 github.com/Microsoft/go-winio v0.6.2 h1:F2VQgta7ecxGYO8k3ZZz3RS8fVIXVxONVUPlNERoyfY=
 github.com/Microsoft/go-winio v0.6.2/go.mod h1:yd8OoFMLzJbo9gZq8j5qaps8bJ9aShtEA8Ipt1oGCvU=
-github.com/Sanyaku/crossplane v0.0.0-20250715201335-0602f609bf13 h1:ieZ8Y7Os0/Uab7CzwG9eQAYBX6l7LMNPu8TxvJ+N1Bg=
-github.com/Sanyaku/crossplane v0.0.0-20250715201335-0602f609bf13/go.mod h1:fhgGxEG/07UAg1wrIaQoAmfHdJoj12Sa9USLETJZmxk=
+github.com/Sanyaku/crossplane v0.0.0-20250727004935-9bcd5bd31399 h1:PfbFQVsp+lQzVhIaUaMbyK2Sr2k5EiXJrw7UqQQUHe8=
+github.com/Sanyaku/crossplane v0.0.0-20250727004935-9bcd5bd31399/go.mod h1:SlUwMSW4yRwlxiOcwyJg/zvk1X6oG60bc46BWklr/tA=
 github.com/alecthomas/assert/v2 v2.11.0 h1:2Q9r3ki8+JYXvGsDyBXwH3LcJ+WK5D0gc5E8vS6K3D0=
 github.com/alecthomas/assert/v2 v2.11.0/go.mod h1:Bze95FyfUr7x34QZrjL+XP+0qgp/zg8yS+TtBj1WA3k=
 github.com/alecthomas/kong v1.4.0 h1:UL7tzGMnnY0YRMMvJyITIRX1EpO6RbBRZDNcCevy3HA=
