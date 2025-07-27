@@ -5,6 +5,11 @@ PROJECT crossplane-contrib/crossplane-diff
 
 ARG --global GO_VERSION=1.24.1
 
+fetch-crossplane-clusters:
+  BUILD +fetch-crossplane-cluster \
+    --CROSSPLANE_IMAGE_TAG=release-1.20 \
+    --CROSSPLANE_IMAGE_TAG=main
+
 # fetch-crossplane-cluster fetches the cluster directory from crossplane/crossplane
 # at the git revision corresponding to CROSSPLANE_IMAGE_TAG
 fetch-crossplane-cluster:
@@ -217,7 +222,7 @@ go-test:
   WITH DOCKER \
     --pull xpkg.upbound.io/crossplane-contrib/function-go-templating:v0.9.0 \
     --pull xpkg.upbound.io/crossplane-contrib/function-auto-ready:v0.4.2 \
-    --pull xpkg.upbound.io/crossplane-contrib/function-environment-configs:v0.2.0 \
+    --pull xpkg.upbound.io/crossplane-contrib/function-environment-configs:v0.3.0 \
     --pull xpkg.upbound.io/crossplane-contrib/function-extra-resources:v0.0.3
     # this is silly, but we put these files into the default KUBEBUILDER_ASSETS location, because if we set
     # KUBEBUILDER_ASSETS on `go test` to the artifact path, which is perhaps more intuitive, the syntax highlighting

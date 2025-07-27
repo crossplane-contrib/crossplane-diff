@@ -24,12 +24,40 @@ import (
 
 	tu "github.com/crossplane-contrib/crossplane-diff/cmd/diff/testutils"
 	xpextv1 "github.com/crossplane/crossplane/apis/apiextensions/v1"
+	xpextv2 "github.com/crossplane/crossplane/apis/apiextensions/v2"
+
 	pkgv1 "github.com/crossplane/crossplane/apis/pkg/v1"
 )
 
 const (
 	timeout = 60 * time.Second
 )
+
+type XpVersion int
+
+const (
+	V1 XpVersion = iota
+	V2
+)
+
+var versionNames = map[XpVersion]string{
+	V1: "v1",
+	V2: "v2",
+}
+
+func (s XpVersion) String() string {
+	return versionNames[s]
+}
+
+// TODO:  somehow correlate these with earthly +fetch-crossplane-cluster's crossplane version tags list
+var clusterPaths = map[XpVersion]string{
+	V1: "release-1.20",
+	V2: "main",
+}
+
+func (s XpVersion) Path() string {
+	return clusterPaths[s]
+}
 
 // TestDiffIntegration runs an integration test for the diff command.
 func TestDiffIntegration(t *testing.T) {
@@ -41,11 +69,20 @@ func TestDiffIntegration(t *testing.T) {
 
 	// Register Crossplane types
 	_ = xpextv1.AddToScheme(scheme)
+	_ = xpextv2.AddToScheme(scheme)
 	_ = pkgv1.AddToScheme(scheme)
 	_ = extv1.AddToScheme(scheme)
 
 	// TODO:  add a test to cover v2 CompositeResourceDefinition (XRD) if running against Crossplane v2
 	// TODO:  add a test to cover namespaced xrds against v2
+	// update:  these ITs don't run against a version of xp besides what they are compiled against.  that'll matter
+	// in the e2es.
+	// we'll want to rig up some way to specify xrd-v1 or xrd-v2 or both in the test cases
+	// but the rub is that the cluster directory containing the crds is pulled from either v1 or v2, so we can't just
+	// run both.
+	// thinking we should just grab the cluster directory for v1 and check it in, since it won't advance anymore once
+	// v2 is out.  v2 we can update at build time.  every test spins up its own envtest with the crd path, so we can
+	// definitely toggle there.
 
 	// Test cases
 	tests := map[string]struct {
@@ -56,6 +93,7 @@ func TestDiffIntegration(t *testing.T) {
 		expectedError           bool
 		expectedErrorContains   string
 		noColor                 bool
+		versions                []XpVersion
 	}{
 		"New resource shows color diff": {
 			inputFiles: []string{"testdata/diff/new-xr.yaml"},
@@ -171,54 +209,7 @@ func TestDiffIntegration(t *testing.T) {
 `,
 			expectedError: false,
 		},
-		"EnvironmentConfig v1alpha1 incorporation in diff": {
-			setupFiles: []string{
-				"testdata/diff/resources/xdownstreamenvresource-xrd.yaml",
-				"testdata/diff/resources/env-xrd.yaml",
-				"testdata/diff/resources/env-composition.yaml",
-				"testdata/diff/resources/functions.yaml",
-				"testdata/diff/resources/environment-config-v1alpha1.yaml",
-				"testdata/diff/resources/existing-env-downstream-resource.yaml",
-				"testdata/diff/resources/existing-env-xr.yaml",
-			},
-			inputFiles: []string{"testdata/diff/modified-env-xr.yaml"},
-			expectedOutput: `
-~~~ XDownstreamEnvResource/test-env-resource
-  apiVersion: nop.example.org/v1alpha1
-  kind: XDownstreamEnvResource
-  metadata:
-    annotations:
-      crossplane.io/composition-resource-name: env-resource
-    generateName: test-env-resource-
-    labels:
-      crossplane.io/composite: test-env-resource
-    name: test-env-resource
-  spec:
-    compositionUpdatePolicy: Automatic
-    forProvider:
--     configData: existing-config-value
-+     configData: modified-config-value
-      environment: staging
-      region: us-west-2
-      serviceLevel: premium
-
----
-~~~ XEnvResource/test-env-resource
-  apiVersion: diff.example.org/v1alpha1
-  kind: XEnvResource
-  metadata:
-    name: test-env-resource
-  spec:
-    compositionUpdatePolicy: Automatic
--   configKey: existing-config-value
-+   configKey: modified-config-value
-
----
-`,
-			expectedError: false,
-			noColor:       true,
-		},
-		"EnvironmentConfig v1beta1 incorporation in diff": {
+		"EnvironmentConfig (v1beta1) incorporation in diff": {
 			setupFiles: []string{
 				"testdata/diff/resources/xdownstreamenvresource-xrd.yaml",
 				"testdata/diff/resources/env-xrd.yaml",
@@ -798,155 +789,162 @@ Summary: 2 modified`,
 	tu.SetupKubeTestLogger(t)
 
 	for name, tt := range tests {
-		t.Run(name, func(t *testing.T) {
-			// Setup a brand new test environment for each test case
-			_, thisFile, _, _ := run.Caller(0)
-			thisDir := filepath.Dir(thisFile)
+		if tt.versions == nil || len(tt.versions) == 0 {
+			// Default to testing against both versions if not specified
+			tt.versions = []XpVersion{V1, V2}
+		}
 
-			testEnv := &envtest.Environment{
-				CRDDirectoryPaths: []string{
-					filepath.Join(thisDir, "..", "..", "cluster", "crds"),
-					filepath.Join(thisDir, "testdata", "diff", "crds"),
-				},
-				ErrorIfCRDPathMissing: true,
-				Scheme:                scheme,
-			}
+		for _, version := range tt.versions {
+			t.Run(fmt.Sprintf("%s (%s)", name, version.String()), func(t *testing.T) {
+				// Setup a brand new test environment for each test case
+				_, thisFile, _, _ := run.Caller(0)
+				thisDir := filepath.Dir(thisFile)
 
-			// Start the test environment
-			cfg, err := testEnv.Start()
-			if err != nil {
-				t.Fatalf("failed to start test environment: %v", err)
-			}
-
-			// Ensure we clean up at the end of the test
-			defer func() {
-				if err := testEnv.Stop(); err != nil {
-					t.Logf("failed to stop test environment: %v", err)
+				testEnv := &envtest.Environment{
+					CRDDirectoryPaths: []string{
+						filepath.Join(thisDir, "..", "..", "cluster", version.Path(), "crds"),
+						filepath.Join(thisDir, "testdata", "diff", "crds"),
+					},
+					ErrorIfCRDPathMissing: true,
+					Scheme:                scheme,
 				}
-			}()
 
-			// Create a controller-runtime client for setup operations
-			k8sClient, err := client.New(cfg, client.Options{Scheme: scheme})
-			if err != nil {
-				t.Fatalf("failed to create client: %v", err)
-			}
-
-			ctx, cancel := context.WithTimeout(context.Background(), timeout)
-			defer cancel()
-
-			// Apply the setup resources
-			if err := applyResourcesFromFiles(ctx, k8sClient, tt.setupFiles); err != nil {
-				t.Fatalf("failed to setup resources: %v", err)
-			}
-
-			// Apply resources with owner references
-			if len(tt.setupFilesWithOwnerRefs) > 0 {
-				if err := applyHierarchicalOwnership(ctx, tu.TestLogger(t, false), k8sClient, tt.setupFilesWithOwnerRefs); err != nil {
-					t.Fatalf("failed to setup owner references: %v", err)
-				}
-			}
-
-			// Set up the test file
-			tempDir := t.TempDir()
-			var testFiles []string
-
-			// Handle any additional input files
-			for i, inputFile := range tt.inputFiles {
-				testFile := filepath.Join(tempDir, fmt.Sprintf("test_%d.yaml", i))
-				content, err := os.ReadFile(inputFile)
+				// Start the test environment
+				cfg, err := testEnv.Start()
 				if err != nil {
-					t.Fatalf("failed to read input file: %v", err)
+					t.Fatalf("failed to start test environment: %v", err)
 				}
-				err = os.WriteFile(testFile, content, 0o644)
+
+				// Ensure we clean up at the end of the test
+				defer func() {
+					if err := testEnv.Stop(); err != nil {
+						t.Logf("failed to stop test environment: %v", err)
+					}
+				}()
+
+				// Create a controller-runtime client for setup operations
+				k8sClient, err := client.New(cfg, client.Options{Scheme: scheme})
 				if err != nil {
-					t.Fatalf("failed to write test file: %v", err)
+					t.Fatalf("failed to create client: %v", err)
 				}
-				testFiles = append(testFiles, testFile)
-			}
 
-			// Create a buffer to capture the output
-			var stdout bytes.Buffer
+				ctx, cancel := context.WithTimeout(context.Background(), timeout)
+				defer cancel()
 
-			// TODO:  is this necessary?
-			// Override fprintf to capture output
-			origFprintf := fprintf
-			defer func() { fprintf = origFprintf }()
-			fprintf = func(_ io.Writer, format string, a ...interface{}) (int, error) {
-				return fmt.Fprintf(&stdout, format, a...)
-			}
-
-			// Create command line args that match your pre-populated struct
-			args := []string{
-				"--namespace=default",
-				fmt.Sprintf("--timeout=%s", timeout.String()),
-			}
-
-			// Add no-color flag if true
-			if tt.noColor {
-				args = append(args, "--no-color")
-			}
-
-			// Add files as positional arguments
-			args = append(args, testFiles...)
-
-			// Set up the diff command
-			cmd := &Cmd{}
-
-			logger := tu.TestLogger(t, true)
-			// Create a Kong context with stdout
-			parser, err := kong.New(cmd,
-				kong.Writers(&stdout, &stdout),
-				kong.Bind(cfg),
-				kong.BindTo(logger, (*logging.Logger)(nil)),
-			)
-			if err != nil {
-				t.Fatalf("failed to create kong parser: %v", err)
-			}
-
-			kongCtx, err := parser.Parse(args)
-			if err != nil {
-				t.Fatalf("failed to parse kong context: %v", err)
-			}
-
-			err = kongCtx.Run(cfg)
-
-			if tt.expectedError && err == nil {
-				t.Fatal("expected error but got none")
-			}
-			if !tt.expectedError && err != nil {
-				t.Fatalf("expected no error but got: %v", err)
-			}
-
-			// Check for specific error message if expected
-			if err != nil {
-				if tt.expectedErrorContains != "" && strings.Contains(err.Error(), tt.expectedErrorContains) {
-					// This is an expected error with the expected message
-					t.Logf("Got expected error containing: %s", tt.expectedErrorContains)
-				} else {
-					t.Errorf("Expected no error or specific error message, got: %v", err)
+				// Apply the setup resources
+				if err := applyResourcesFromFiles(ctx, k8sClient, tt.setupFiles); err != nil {
+					t.Fatalf("failed to setup resources: %v", err)
 				}
-			}
 
-			// For expected errors with specific messages, we've already checked above
-			if tt.expectedError && tt.expectedErrorContains != "" {
-				// Skip output check for expected error cases
-				return
-			}
-
-			// Check the output
-			outputStr := stdout.String()
-			// Using TrimSpace because the output might have trailing newlines
-			if !strings.Contains(strings.TrimSpace(outputStr), strings.TrimSpace(tt.expectedOutput)) {
-				// Strings aren't equal, *including* ansi.  but we can compare ignoring ansi to determine what output to
-				// show for the failure.  if the difference is only in color codes, we'll show escaped ansi codes.
-				out := outputStr
-				expect := tt.expectedOutput
-				if tu.CompareIgnoringAnsi(strings.TrimSpace(outputStr), strings.TrimSpace(tt.expectedOutput)) {
-					out = strconv.QuoteToASCII(outputStr)
-					expect = strconv.QuoteToASCII(tt.expectedOutput)
+				// Apply resources with owner references
+				if len(tt.setupFilesWithOwnerRefs) > 0 {
+					if err := applyHierarchicalOwnership(ctx, tu.TestLogger(t, false), k8sClient, tt.setupFilesWithOwnerRefs); err != nil {
+						t.Fatalf("failed to setup owner references: %v", err)
+					}
 				}
-				t.Fatalf("expected output to contain:\n%s\n\nbut got:\n%s", expect, out)
-			}
-		})
+
+				// Set up the test file
+				tempDir := t.TempDir()
+				var testFiles []string
+
+				// Handle any additional input files
+				for i, inputFile := range tt.inputFiles {
+					testFile := filepath.Join(tempDir, fmt.Sprintf("test_%d.yaml", i))
+					content, err := os.ReadFile(inputFile)
+					if err != nil {
+						t.Fatalf("failed to read input file: %v", err)
+					}
+					err = os.WriteFile(testFile, content, 0o644)
+					if err != nil {
+						t.Fatalf("failed to write test file: %v", err)
+					}
+					testFiles = append(testFiles, testFile)
+				}
+
+				// Create a buffer to capture the output
+				var stdout bytes.Buffer
+
+				// TODO:  is this necessary?
+				// Override fprintf to capture output
+				origFprintf := fprintf
+				defer func() { fprintf = origFprintf }()
+				fprintf = func(_ io.Writer, format string, a ...interface{}) (int, error) {
+					return fmt.Fprintf(&stdout, format, a...)
+				}
+
+				// Create command line args that match your pre-populated struct
+				args := []string{
+					"--namespace=default",
+					fmt.Sprintf("--timeout=%s", timeout.String()),
+				}
+
+				// Add no-color flag if true
+				if tt.noColor {
+					args = append(args, "--no-color")
+				}
+
+				// Add files as positional arguments
+				args = append(args, testFiles...)
+
+				// Set up the diff command
+				cmd := &Cmd{}
+
+				logger := tu.TestLogger(t, true)
+				// Create a Kong context with stdout
+				parser, err := kong.New(cmd,
+					kong.Writers(&stdout, &stdout),
+					kong.Bind(cfg),
+					kong.BindTo(logger, (*logging.Logger)(nil)),
+				)
+				if err != nil {
+					t.Fatalf("failed to create kong parser: %v", err)
+				}
+
+				kongCtx, err := parser.Parse(args)
+				if err != nil {
+					t.Fatalf("failed to parse kong context: %v", err)
+				}
+
+				err = kongCtx.Run(cfg)
+
+				if tt.expectedError && err == nil {
+					t.Fatal("expected error but got none")
+				}
+				if !tt.expectedError && err != nil {
+					t.Fatalf("expected no error but got: %v", err)
+				}
+
+				// Check for specific error message if expected
+				if err != nil {
+					if tt.expectedErrorContains != "" && strings.Contains(err.Error(), tt.expectedErrorContains) {
+						// This is an expected error with the expected message
+						t.Logf("Got expected error containing: %s", tt.expectedErrorContains)
+					} else {
+						t.Errorf("Expected no error or specific error message, got: %v", err)
+					}
+				}
+
+				// For expected errors with specific messages, we've already checked above
+				if tt.expectedError && tt.expectedErrorContains != "" {
+					// Skip output check for expected error cases
+					return
+				}
+
+				// Check the output
+				outputStr := stdout.String()
+				// Using TrimSpace because the output might have trailing newlines
+				if !strings.Contains(strings.TrimSpace(outputStr), strings.TrimSpace(tt.expectedOutput)) {
+					// Strings aren't equal, *including* ansi.  but we can compare ignoring ansi to determine what output to
+					// show for the failure.  if the difference is only in color codes, we'll show escaped ansi codes.
+					out := outputStr
+					expect := tt.expectedOutput
+					if tu.CompareIgnoringAnsi(strings.TrimSpace(outputStr), strings.TrimSpace(tt.expectedOutput)) {
+						out = strconv.QuoteToASCII(outputStr)
+						expect = strconv.QuoteToASCII(tt.expectedOutput)
+					}
+					t.Fatalf("expected output to contain:\n%s\n\nbut got:\n%s", expect, out)
+				}
+			})
+		}
 	}
 }
