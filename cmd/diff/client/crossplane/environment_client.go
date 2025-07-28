@@ -61,7 +61,7 @@ func (c *DefaultEnvironmentClient) Initialize(ctx context.Context) error {
 
 	// Store in cache
 	for _, config := range configs {
-		c.envConfigs[config.GetName()] = config
+		c.envConfigs[cacheKey("", config.GetName())] = config
 	}
 
 	c.logger.Debug("Environment client initialized", "envConfigsCount", len(c.envConfigs))
@@ -72,7 +72,7 @@ func (c *DefaultEnvironmentClient) Initialize(ctx context.Context) error {
 func (c *DefaultEnvironmentClient) GetEnvironmentConfigs(ctx context.Context) ([]*un.Unstructured, error) {
 	c.logger.Debug("Getting environment configs")
 
-	envConfigs, err := listMatchingResources(ctx, c.resourceClient, c.gvks)
+	envConfigs, err := listMatchingResources(ctx, c.resourceClient, c.gvks, "" /* ECs are cluster scoped */)
 	if err != nil {
 		return nil, err
 	}
@@ -84,5 +84,5 @@ func (c *DefaultEnvironmentClient) GetEnvironmentConfigs(ctx context.Context) ([
 // GetEnvironmentConfig gets a specific environment config by name.
 func (c *DefaultEnvironmentClient) GetEnvironmentConfig(ctx context.Context, name string) (*un.Unstructured, error) {
 	c.logger.Debug("Getting environment config", "name", name)
-	return getFirstMatchingResource(ctx, c.resourceClient, c.gvks, name, c.envConfigs)
+	return getFirstMatchingResource(ctx, c.resourceClient, c.gvks, name, "" /* ECs are cluster scoped */, c.envConfigs)
 }

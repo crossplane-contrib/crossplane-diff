@@ -9,7 +9,8 @@ spec:
     listKind: XNopResourceList
     plural: xnopresources
     singular: xnopresource
-  scope: Cluster
+  # This supports a v2 XRD, which makes it namespace scoped.
+  scope: Namespaced
   versions:
     - name: v1alpha1
       served: true
@@ -25,45 +26,48 @@ spec:
                   type: string
                 environment:
                   type: string
-                compositionRef:
+                crossplane:
                   type: object
                   properties:
-                    name:
-                      type: string
-                compositionSelector:
-                  type: object
-                  properties:
-                    matchLabels:
+                    compositionRef:
                       type: object
-                      additionalProperties:
-                        type: string
-                compositeDeletePolicy:
-                  type: string
-                compositionUpdatePolicy:
-                  type: string
-                resourceRefs:
-                  type: array
-                  items:
-                    type: object
-                    required:
-                      - apiVersion
-                      - kind
-                      - name
-                    properties:
-                      apiVersion:
-                        type: string
-                      kind:
-                        type: string
-                      name:
-                        type: string
-                      namespace:
-                        type: string
-                      uid:
-                        type: string
-                      resourceVersion:
-                        type: string
-                      fieldPath:
-                        type: string
+                      properties:
+                        name:
+                          type: string
+                    compositionSelector:
+                      type: object
+                      properties:
+                        matchLabels:
+                          type: object
+                          additionalProperties:
+                            type: string
+                    compositeDeletePolicy:
+                      type: string
+                    compositionUpdatePolicy:
+                      type: string
+                    resourceRefs:
+                      type: array
+                      items:
+                        type: object
+                        required:
+                          - apiVersion
+                          - kind
+                          - name
+                        properties:
+                          apiVersion:
+                            type: string
+                          kind:
+                            type: string
+                          name:
+                            type: string
+                          namespace:
+                            type: string
+                          uid:
+                            type: string
+                          resourceVersion:
+                            type: string
+                          fieldPath:
+                            type: string
             status:
               type: object
               properties:

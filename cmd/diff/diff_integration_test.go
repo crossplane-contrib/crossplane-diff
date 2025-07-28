@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"io"
 	"os"
 	"path/filepath"
 	run "runtime"
@@ -73,6 +72,12 @@ func TestDiffIntegration(t *testing.T) {
 	_ = pkgv1.AddToScheme(scheme)
 	_ = extv1.AddToScheme(scheme)
 
+	// TODO:  is there a reason to even run this against v1 if everything is backwards compatible?
+	// claims are still here (for now).  we obviously need to keep tests for those.
+	// we've already removed the deprecated environmentconfig version.
+	// I can see running the ITs against v2 since we can test against an old image.  important to IT against v1 image
+	// given changes to move xp specific stuff into spec.crossplane, which will not be reflected in running these tests
+
 	// TODO:  add a test to cover v2 CompositeResourceDefinition (XRD) if running against Crossplane v2
 	// TODO:  add a test to cover namespaced xrds against v2
 	// update:  these ITs don't run against a version of xp besides what they are compiled against.  that'll matter
@@ -84,6 +89,14 @@ func TestDiffIntegration(t *testing.T) {
 	// v2 is out.  v2 we can update at build time.  every test spins up its own envtest with the crd path, so we can
 	// definitely toggle there.
 
+	// the CRDs that support the XRDs will vary based on the Crossplane version, though (namespaced vs cluster scoped),
+	// so we need to bifurcate /testdata/diff/crds accordingly.  although each XRD that we define will have a version
+	// specified inside it which will lead to the generation of that crd.  so maybe it's test specific actually.
+
+	// TODO:  namespaced XRDs cannot compose cluster-scoped resources, so we need to ensure XDownstreamResource definitions
+	// account for that.  maybe we just need to add parallel CRDs for namespace scoped and cluster scoped XRDs that can
+	// coexist.
+
 	// Test cases
 	tests := map[string]struct {
 		setupFiles              []string
@@ -93,11 +106,15 @@ func TestDiffIntegration(t *testing.T) {
 		expectedError           bool
 		expectedErrorContains   string
 		noColor                 bool
-		versions                []XpVersion
+		crdVersions             []XpVersion
 	}{
 		"New resource shows color diff": {
 			inputFiles: []string{"testdata/diff/new-xr.yaml"},
 			setupFiles: []string{
+				// TODO: For v2, we need to upgrade the XRD apiversion to v2 + put the xr in a namespace.
+				// this might be better served as a separate test(s).
+				// since we aren't actually creating resources (there's no crossplane actually running in unit tests),
+				// we don't need to worry about upgrading providers or anything.
 				"testdata/diff/resources/xrd.yaml",
 				"testdata/diff/resources/composition.yaml",
 				"testdata/diff/resources/functions.yaml",
@@ -122,8 +139,8 @@ func TestDiffIntegration(t *testing.T) {
 + kind: XNopResource
 + metadata:
 +   name: test-resource
++   namespace: default
 + spec:
-+   compositionUpdatePolicy: Automatic
 +   coolField: new-value
 `), `
 ---
@@ -163,8 +180,8 @@ func TestDiffIntegration(t *testing.T) {
   kind: XNopResource
   metadata:
     name: test-resource
+    namespace: default
   spec:
-    compositionUpdatePolicy: Automatic
 ` + tu.Red("-   coolField: existing-value") + `
 ` + tu.Green("+   coolField: modified-value") + `
 
@@ -200,8 +217,8 @@ func TestDiffIntegration(t *testing.T) {
   kind: XNopResource
   metadata:
     name: test-resource
+    namespace: default
   spec:
-    compositionUpdatePolicy: Automatic
 ` + tu.Red("-   coolField: existing-value") + `
 ` + tu.Green("+   coolField: modified-value") + `
 
@@ -293,8 +310,8 @@ func TestDiffIntegration(t *testing.T) {
   kind: XNopResource
   metadata:
     name: test-resource
+    namespace: default
   spec:
-    compositionUpdatePolicy: Automatic
 -   coolField: existing-value
 -   environment: staging
 +   coolField: modified-with-external-dep
@@ -339,8 +356,8 @@ func TestDiffIntegration(t *testing.T) {
   kind: XNopResource
   metadata:
     name: test-resource
+    namespace: default
   spec:
-    compositionUpdatePolicy: Automatic
 -   coolField: existing-value
 -   environment: staging
 +   coolField: modified-with-external-dep
@@ -424,8 +441,8 @@ func TestDiffIntegration(t *testing.T) {
   kind: XNopResource
   metadata:
     name: test-resource
+    namespace: default
   spec:
-    compositionUpdatePolicy: Automatic
 -   coolField: existing-value
 +   coolField: modified-value
 
@@ -474,8 +491,8 @@ func TestDiffIntegration(t *testing.T) {
   kind: XNopResource
   metadata:
     name: test-resource
+    namespace: default
   spec:
-    compositionUpdatePolicy: Automatic
 -   coolField: existing-value
 +   coolField: new-value
 
@@ -512,8 +529,8 @@ func TestDiffIntegration(t *testing.T) {
 + kind: XNopResource
 + metadata:
 +   generateName: generated-xr-
++   namespace: default
 + spec:
-+   compositionUpdatePolicy: Automatic
 +   coolField: new-value
 
 ---
@@ -570,8 +587,8 @@ func TestDiffIntegration(t *testing.T) {
 + kind: XNopResource
 + metadata:
 +   name: first-resource
++   namespace: default
 + spec:
-+   compositionUpdatePolicy: Automatic
 +   coolField: first-value
 
 ---
@@ -580,8 +597,8 @@ func TestDiffIntegration(t *testing.T) {
   kind: XNopResource
   metadata:
     name: test-resource
+    namespace: default
   spec:
-    compositionUpdatePolicy: Automatic
 -   coolField: existing-value
 +   coolField: modified-value
 
@@ -626,10 +643,10 @@ Summary: 2 added, 2 modified
 + metadata:
 +   name: test-resource
 + spec:
-+   compositionRef:
-+     name: production-composition
-+   compositionUpdatePolicy: Automatic
 +   coolField: test-value
++   crossplane:
++     compositionRef:
++       name: production-composition
 `,
 			expectedError: false,
 			noColor:       true,
@@ -668,12 +685,13 @@ Summary: 2 added, 2 modified
 + metadata:
 +   name: test-resource
 + spec:
-+   compositionSelector:
-+     matchLabels:
-+       environment: staging
-+       provider: aws
-+   compositionUpdatePolicy: Automatic
 +   coolField: test-value
++   crossplane:
++     compositionSelector:
++       matchLabels:
++         environment: staging
++         provider: aws
+
 `,
 			expectedError: false,
 			noColor:       true,
@@ -788,163 +806,158 @@ Summary: 2 modified`,
 
 	tu.SetupKubeTestLogger(t)
 
+	version := V2
+
 	for name, tt := range tests {
-		if tt.versions == nil || len(tt.versions) == 0 {
-			// Default to testing against both versions if not specified
-			tt.versions = []XpVersion{V1, V2}
-		}
+		//if tt.crdVersions == nil || len(tt.crdVersions) == 0 {
+		//	// Default to testing against v2 CRDs if not specified.  claims still exist in v2, though deprecated.
+		//	// old style XRDs are still supported, too.
+		//	tt.crdVersions = []XpVersion{V2}
+		//}
 
-		for _, version := range tt.versions {
-			t.Run(fmt.Sprintf("%s (%s)", name, version.String()), func(t *testing.T) {
-				// Setup a brand new test environment for each test case
-				_, thisFile, _, _ := run.Caller(0)
-				thisDir := filepath.Dir(thisFile)
+		//for _, version := range tt.crdVersions {
+		t.Run(name /*fmt.Sprintf("%s (%s)", name, version.String()) */, func(t *testing.T) {
+			// Setup a brand new test environment for each test case
+			_, thisFile, _, _ := run.Caller(0)
+			thisDir := filepath.Dir(thisFile)
 
-				testEnv := &envtest.Environment{
-					CRDDirectoryPaths: []string{
-						filepath.Join(thisDir, "..", "..", "cluster", version.Path(), "crds"),
-						filepath.Join(thisDir, "testdata", "diff", "crds"),
-					},
-					ErrorIfCRDPathMissing: true,
-					Scheme:                scheme,
+			testEnv := &envtest.Environment{
+				CRDDirectoryPaths: []string{
+					filepath.Join(thisDir, "..", "..", "cluster", version.Path(), "crds"),
+					filepath.Join(thisDir, "testdata", "diff", "crds"),
+				},
+				ErrorIfCRDPathMissing: true,
+				Scheme:                scheme,
+			}
+
+			// Start the test environment
+			cfg, err := testEnv.Start()
+			if err != nil {
+				t.Fatalf("failed to start test environment: %v", err)
+			}
+
+			// Ensure we clean up at the end of the test
+			defer func() {
+				if err := testEnv.Stop(); err != nil {
+					t.Logf("failed to stop test environment: %v", err)
 				}
+			}()
 
-				// Start the test environment
-				cfg, err := testEnv.Start()
+			// Create a controller-runtime client for setup operations
+			k8sClient, err := client.New(cfg, client.Options{Scheme: scheme})
+			if err != nil {
+				t.Fatalf("failed to create client: %v", err)
+			}
+
+			ctx, cancel := context.WithTimeout(context.Background(), timeout)
+			defer cancel()
+
+			// Apply the setup resources
+			if err := applyResourcesFromFiles(ctx, k8sClient, tt.setupFiles); err != nil {
+				t.Fatalf("failed to setup resources: %v", err)
+			}
+
+			// Apply resources with owner references
+			if len(tt.setupFilesWithOwnerRefs) > 0 {
+				if err := applyHierarchicalOwnership(ctx, tu.TestLogger(t, false), k8sClient, tt.setupFilesWithOwnerRefs); err != nil {
+					t.Fatalf("failed to setup owner references: %v", err)
+				}
+			}
+
+			// Set up the test file
+			tempDir := t.TempDir()
+			var testFiles []string
+
+			// Handle any additional input files
+			for i, inputFile := range tt.inputFiles {
+				testFile := filepath.Join(tempDir, fmt.Sprintf("test_%d.yaml", i))
+				content, err := os.ReadFile(inputFile)
 				if err != nil {
-					t.Fatalf("failed to start test environment: %v", err)
+					t.Fatalf("failed to read input file: %v", err)
 				}
-
-				// Ensure we clean up at the end of the test
-				defer func() {
-					if err := testEnv.Stop(); err != nil {
-						t.Logf("failed to stop test environment: %v", err)
-					}
-				}()
-
-				// Create a controller-runtime client for setup operations
-				k8sClient, err := client.New(cfg, client.Options{Scheme: scheme})
+				err = os.WriteFile(testFile, content, 0o644)
 				if err != nil {
-					t.Fatalf("failed to create client: %v", err)
+					t.Fatalf("failed to write test file: %v", err)
 				}
+				testFiles = append(testFiles, testFile)
+			}
 
-				ctx, cancel := context.WithTimeout(context.Background(), timeout)
-				defer cancel()
+			// Create a buffer to capture the output
+			var stdout bytes.Buffer
 
-				// Apply the setup resources
-				if err := applyResourcesFromFiles(ctx, k8sClient, tt.setupFiles); err != nil {
-					t.Fatalf("failed to setup resources: %v", err)
+			// Create command line args that match your pre-populated struct
+			args := []string{
+				"--namespace=default",
+				fmt.Sprintf("--timeout=%s", timeout.String()),
+			}
+
+			// Add no-color flag if true
+			if tt.noColor {
+				args = append(args, "--no-color")
+			}
+
+			// Add files as positional arguments
+			args = append(args, testFiles...)
+
+			// Set up the diff command
+			cmd := &Cmd{}
+
+			logger := tu.TestLogger(t, true)
+			// Create a Kong context with stdout
+			parser, err := kong.New(cmd,
+				kong.Writers(&stdout, &stdout),
+				kong.Bind(cfg),
+				kong.BindTo(logger, (*logging.Logger)(nil)),
+			)
+			if err != nil {
+				t.Fatalf("failed to create kong parser: %v", err)
+			}
+
+			kongCtx, err := parser.Parse(args)
+			if err != nil {
+				t.Fatalf("failed to parse kong context: %v", err)
+			}
+
+			err = kongCtx.Run(cfg)
+
+			if tt.expectedError && err == nil {
+				t.Fatal("expected error but got none")
+			}
+			if !tt.expectedError && err != nil {
+				t.Fatalf("expected no error but got: %v", err)
+			}
+
+			// Check for specific error message if expected
+			if err != nil {
+				if tt.expectedErrorContains != "" && strings.Contains(err.Error(), tt.expectedErrorContains) {
+					// This is an expected error with the expected message
+					t.Logf("Got expected error containing: %s", tt.expectedErrorContains)
+				} else {
+					t.Errorf("Expected no error or specific error message, got: %v", err)
 				}
+			}
 
-				// Apply resources with owner references
-				if len(tt.setupFilesWithOwnerRefs) > 0 {
-					if err := applyHierarchicalOwnership(ctx, tu.TestLogger(t, false), k8sClient, tt.setupFilesWithOwnerRefs); err != nil {
-						t.Fatalf("failed to setup owner references: %v", err)
-					}
+			// For expected errors with specific messages, we've already checked above
+			if tt.expectedError && tt.expectedErrorContains != "" {
+				// Skip output check for expected error cases
+				return
+			}
+
+			// Check the output
+			outputStr := stdout.String()
+			// Using TrimSpace because the output might have trailing newlines
+			if !strings.Contains(strings.TrimSpace(outputStr), strings.TrimSpace(tt.expectedOutput)) {
+				// Strings aren't equal, *including* ansi.  but we can compare ignoring ansi to determine what output to
+				// show for the failure.  if the difference is only in color codes, we'll show escaped ansi codes.
+				out := outputStr
+				expect := tt.expectedOutput
+				if tu.CompareIgnoringAnsi(strings.TrimSpace(outputStr), strings.TrimSpace(tt.expectedOutput)) {
+					out = strconv.QuoteToASCII(outputStr)
+					expect = strconv.QuoteToASCII(tt.expectedOutput)
 				}
-
-				// Set up the test file
-				tempDir := t.TempDir()
-				var testFiles []string
-
-				// Handle any additional input files
-				for i, inputFile := range tt.inputFiles {
-					testFile := filepath.Join(tempDir, fmt.Sprintf("test_%d.yaml", i))
-					content, err := os.ReadFile(inputFile)
-					if err != nil {
-						t.Fatalf("failed to read input file: %v", err)
-					}
-					err = os.WriteFile(testFile, content, 0o644)
-					if err != nil {
-						t.Fatalf("failed to write test file: %v", err)
-					}
-					testFiles = append(testFiles, testFile)
-				}
-
-				// Create a buffer to capture the output
-				var stdout bytes.Buffer
-
-				// TODO:  is this necessary?
-				// Override fprintf to capture output
-				origFprintf := fprintf
-				defer func() { fprintf = origFprintf }()
-				fprintf = func(_ io.Writer, format string, a ...interface{}) (int, error) {
-					return fmt.Fprintf(&stdout, format, a...)
-				}
-
-				// Create command line args that match your pre-populated struct
-				args := []string{
-					"--namespace=default",
-					fmt.Sprintf("--timeout=%s", timeout.String()),
-				}
-
-				// Add no-color flag if true
-				if tt.noColor {
-					args = append(args, "--no-color")
-				}
-
-				// Add files as positional arguments
-				args = append(args, testFiles...)
-
-				// Set up the diff command
-				cmd := &Cmd{}
-
-				logger := tu.TestLogger(t, true)
-				// Create a Kong context with stdout
-				parser, err := kong.New(cmd,
-					kong.Writers(&stdout, &stdout),
-					kong.Bind(cfg),
-					kong.BindTo(logger, (*logging.Logger)(nil)),
-				)
-				if err != nil {
-					t.Fatalf("failed to create kong parser: %v", err)
-				}
-
-				kongCtx, err := parser.Parse(args)
-				if err != nil {
-					t.Fatalf("failed to parse kong context: %v", err)
-				}
-
-				err = kongCtx.Run(cfg)
-
-				if tt.expectedError && err == nil {
-					t.Fatal("expected error but got none")
-				}
-				if !tt.expectedError && err != nil {
-					t.Fatalf("expected no error but got: %v", err)
-				}
-
-				// Check for specific error message if expected
-				if err != nil {
-					if tt.expectedErrorContains != "" && strings.Contains(err.Error(), tt.expectedErrorContains) {
-						// This is an expected error with the expected message
-						t.Logf("Got expected error containing: %s", tt.expectedErrorContains)
-					} else {
-						t.Errorf("Expected no error or specific error message, got: %v", err)
-					}
-				}
-
-				// For expected errors with specific messages, we've already checked above
-				if tt.expectedError && tt.expectedErrorContains != "" {
-					// Skip output check for expected error cases
-					return
-				}
-
-				// Check the output
-				outputStr := stdout.String()
-				// Using TrimSpace because the output might have trailing newlines
-				if !strings.Contains(strings.TrimSpace(outputStr), strings.TrimSpace(tt.expectedOutput)) {
-					// Strings aren't equal, *including* ansi.  but we can compare ignoring ansi to determine what output to
-					// show for the failure.  if the difference is only in color codes, we'll show escaped ansi codes.
-					out := outputStr
-					expect := tt.expectedOutput
-					if tu.CompareIgnoringAnsi(strings.TrimSpace(outputStr), strings.TrimSpace(tt.expectedOutput)) {
-						out = strconv.QuoteToASCII(outputStr)
-						expect = strconv.QuoteToASCII(tt.expectedOutput)
-					}
-					t.Fatalf("expected output to contain:\n%s\n\nbut got:\n%s", expect, out)
-				}
-			})
-		}
+				t.Fatalf("expected output to contain:\n%s\n\nbut got:\n%s", expect, out)
+			}
+		})
 	}
+	//}
 }

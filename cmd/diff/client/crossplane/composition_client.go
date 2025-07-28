@@ -126,7 +126,7 @@ func (c *DefaultCompositionClient) GetComposition(ctx context.Context, name stri
 		Kind:    "Composition",
 	}
 
-	unComp, err := c.resourceClient.GetResource(ctx, gvk, "", name)
+	unComp, err := c.resourceClient.GetResource(ctx, gvk, "" /* Compositions are cluster scoped */, name)
 	if err != nil {
 		return nil, errors.Wrapf(err, "cannot get composition %s", name)
 	}

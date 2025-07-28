@@ -127,7 +127,7 @@ func (p *RequirementsProvider) ProvideRequirements(ctx context.Context, requirem
 				}
 
 				// Not in cache, fetch from cluster
-				ns := "" // TODO: handle namespaced resources
+				ns := "" // TODO: handle namespaced resources; they must be in the same namespace as the desired object even if picked with selectors
 
 				p.logger.Debug("Fetching reference by name",
 					"gvk", gvk.String(),

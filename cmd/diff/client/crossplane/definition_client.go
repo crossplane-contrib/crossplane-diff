@@ -93,7 +93,7 @@ func (c *DefaultDefinitionClient) GetXRDs(ctx context.Context) ([]*un.Unstructur
 
 	c.logger.Debug("Fetching XRDs from cluster")
 
-	xrds, err := listMatchingResources(ctx, c.resourceClient, c.gvks)
+	xrds, err := listMatchingResources(ctx, c.resourceClient, c.gvks, "" /* XRDs are cluster scoped */)
 
 	// List all XRDs
 	if err != nil {
