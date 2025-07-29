@@ -121,7 +121,7 @@ func TestDiffIntegration(t *testing.T) {
 			},
 			expectedOutput: strings.Join([]string{
 				`+++ XDownstreamResource/test-resource
-`, tu.Green(`+ apiVersion: nop.example.org/v1alpha1
+`, tu.Green(`+ apiVersion: ns.nop.example.org/v1alpha1
 + kind: XDownstreamResource
 + metadata:
 +   annotations:
@@ -129,6 +129,7 @@ func TestDiffIntegration(t *testing.T) {
 +   labels:
 +     crossplane.io/composite: test-resource
 +   name: test-resource
++   namespace: default
 + spec:
 +   forProvider:
 +     configData: new-value
@@ -160,7 +161,7 @@ func TestDiffIntegration(t *testing.T) {
 			inputFiles: []string{"testdata/diff/modified-xr.yaml"},
 			expectedOutput: `
 ~~~ XDownstreamResource/test-resource
-  apiVersion: nop.example.org/v1alpha1
+  apiVersion: ns.nop.example.org/v1alpha1
   kind: XDownstreamResource
   metadata:
     annotations:
@@ -169,6 +170,7 @@ func TestDiffIntegration(t *testing.T) {
     labels:
       crossplane.io/composite: test-resource
     name: test-resource
+    namespace: default
   spec:
     forProvider:
 ` + tu.Red("-     configData: existing-value") + `
@@ -199,7 +201,7 @@ func TestDiffIntegration(t *testing.T) {
 			inputFiles: []string{"testdata/diff/modified-xr.yaml"},
 			expectedOutput: `
 +++ XDownstreamResource/test-resource
-` + tu.Green(`+ apiVersion: nop.example.org/v1alpha1
+` + tu.Green(`+ apiVersion: ns.nop.example.org/v1alpha1
 + kind: XDownstreamResource
 + metadata:
 +   annotations:
@@ -207,6 +209,7 @@ func TestDiffIntegration(t *testing.T) {
 +   labels:
 +     crossplane.io/composite: test-resource
 +   name: test-resource
++   namespace: default
 + spec:
 +   forProvider:
 +     configData: modified-value
@@ -288,7 +291,7 @@ func TestDiffIntegration(t *testing.T) {
 			inputFiles: []string{"testdata/diff/modified-xr-with-external-dep.yaml"},
 			expectedOutput: `
 ~~~ XDownstreamResource/test-resource
-  apiVersion: nop.example.org/v1alpha1
+  apiVersion: ns.nop.example.org/v1alpha1
   kind: XDownstreamResource
   metadata:
     annotations:
@@ -297,6 +300,7 @@ func TestDiffIntegration(t *testing.T) {
     labels:
       crossplane.io/composite: test-resource
     name: test-resource
+    namespace: default
   spec:
     forProvider:
 -     configData: existing-value
@@ -334,7 +338,7 @@ func TestDiffIntegration(t *testing.T) {
 			inputFiles: []string{"testdata/diff/modified-xr-with-external-dep.yaml"},
 			expectedOutput: `
 ~~~ XDownstreamResource/test-resource
-  apiVersion: nop.example.org/v1alpha1
+  apiVersion: ns.nop.example.org/v1alpha1
   kind: XDownstreamResource
   metadata:
     annotations:
@@ -343,6 +347,7 @@ func TestDiffIntegration(t *testing.T) {
     labels:
       crossplane.io/composite: test-resource
     name: test-resource
+    namespace: default
   spec:
     forProvider:
 -     configData: existing-value
@@ -391,7 +396,7 @@ func TestDiffIntegration(t *testing.T) {
 			inputFiles: []string{"testdata/diff/modified-xr.yaml"},
 			expectedOutput: `
 ~~~ XDownstreamResource/resource-to-be-kept
-  apiVersion: nop.example.org/v1alpha1
+  apiVersion: ns.nop.example.org/v1alpha1
   kind: XDownstreamResource
   metadata:
     annotations:
@@ -400,6 +405,7 @@ func TestDiffIntegration(t *testing.T) {
     labels:
       crossplane.io/composite: test-resource
     name: resource-to-be-kept
+    namespace: default
   spec:
     forProvider:
 -     configData: existing-value
@@ -416,6 +422,7 @@ func TestDiffIntegration(t *testing.T) {
 -   labels:
 -     crossplane.io/composite: test-resource
 -   name: resource-to-be-removed
+-   namespace: default
 - spec:
 -   forProvider:
 -     configData: existing-value
@@ -431,6 +438,7 @@ func TestDiffIntegration(t *testing.T) {
 -   labels:
 -     crossplane.io/composite: test-resource
 -   name: resource-to-be-removed-child
+-   namespace: default
 - spec:
 -   forProvider:
 -     configData: child-value
@@ -471,7 +479,7 @@ func TestDiffIntegration(t *testing.T) {
 			inputFiles: []string{"testdata/diff/new-xr.yaml"},
 			expectedOutput: `
 ~~~ XDownstreamResource/test-resource-abc123
-  apiVersion: nop.example.org/v1alpha1
+  apiVersion: ns.nop.example.org/v1alpha1
   kind: XDownstreamResource
   metadata:
     annotations:
@@ -480,6 +488,7 @@ func TestDiffIntegration(t *testing.T) {
     labels:
       crossplane.io/composite: test-resource
     name: test-resource-abc123
+    namespace: default
   spec:
     forProvider:
 -     configData: existing-value
@@ -511,7 +520,7 @@ func TestDiffIntegration(t *testing.T) {
 			inputFiles: []string{"testdata/diff/generated-name-xr.yaml"},
 			expectedOutput: `
 +++ XDownstreamResource/generated-xr-(generated)
-+ apiVersion: nop.example.org/v1alpha1
++ apiVersion: ns.nop.example.org/v1alpha1
 + kind: XDownstreamResource
 + metadata:
 +   annotations:
@@ -519,6 +528,7 @@ func TestDiffIntegration(t *testing.T) {
 +   labels:
 +     crossplane.io/composite: generated-xr-(generated)
 +   name: generated-xr-(generated)
++   namespace: default
 + spec:
 +   forProvider:
 +     configData: new-value
@@ -553,7 +563,7 @@ func TestDiffIntegration(t *testing.T) {
 			},
 			expectedOutput: `
 +++ XDownstreamResource/first-resource
-+ apiVersion: nop.example.org/v1alpha1
++ apiVersion: ns.nop.example.org/v1alpha1
 + kind: XDownstreamResource
 + metadata:
 +   annotations:
@@ -561,13 +571,14 @@ func TestDiffIntegration(t *testing.T) {
 +   labels:
 +     crossplane.io/composite: first-resource
 +   name: first-resource
++   namespace: default
 + spec:
 +   forProvider:
 +     configData: first-value
 
 ---
 ~~~ XDownstreamResource/test-resource
-  apiVersion: nop.example.org/v1alpha1
+  apiVersion: ns.nop.example.org/v1alpha1
   kind: XDownstreamResource
   metadata:
     annotations:
@@ -576,6 +587,7 @@ func TestDiffIntegration(t *testing.T) {
     labels:
       crossplane.io/composite: test-resource
     name: test-resource
+    namespace: default
   spec:
     forProvider:
 -     configData: existing-value
@@ -623,7 +635,7 @@ Summary: 2 added, 2 modified
 			},
 			expectedOutput: `
 +++ XDownstreamResource/test-resource
-+ apiVersion: nop.example.org/v1alpha1
++ apiVersion: ns.nop.example.org/v1alpha1
 + kind: XDownstreamResource
 + metadata:
 +   annotations:
@@ -631,6 +643,7 @@ Summary: 2 added, 2 modified
 +   labels:
 +     crossplane.io/composite: test-resource
 +   name: test-resource
++   namespace: default
 + spec:
 +   forProvider:
 +     configData: test-value
@@ -666,7 +679,7 @@ Summary: 2 added, 2 modified
 			},
 			expectedOutput: `
 +++ XDownstreamResource/test-resource
-+ apiVersion: nop.example.org/v1alpha1
++ apiVersion: ns.nop.example.org/v1alpha1
 + kind: XDownstreamResource
 + metadata:
 +   annotations:
@@ -674,6 +687,7 @@ Summary: 2 added, 2 modified
 +   labels:
 +     crossplane.io/composite: test-resource
 +   name: test-resource
++   namespace: default
 + spec:
 +   forProvider:
 +     configData: test-value

@@ -91,7 +91,6 @@ func TestDefaultCompositionClient_FindMatchingComposition(t *testing.T) {
 		WithCompositeTypeRef("example.org/v2", "XR1").
 		Build()
 
-	// TODO:  add tests against v2 XRDs
 	tests := map[string]struct {
 		reason       string
 		mockResource tu.MockResourceClient
@@ -653,6 +652,7 @@ func TestDefaultCompositionClient_FindMatchingComposition(t *testing.T) {
 				err:         errors.New("no referenceable version found in XRD"), // Should fail with this error
 			},
 		},
+		// TODO:  add more tests against v2 XRDs
 		"ResourceWithV2XRD": {
 			reason: "Should determine path to compositionRef by determining XR type from XRD",
 			mockResource: *tu.NewMockResourceClient().

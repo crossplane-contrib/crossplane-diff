@@ -17,12 +17,13 @@ spec:
         source: Inline
         inline:
           template: |
-            apiVersion: nop.example.org/v1alpha1
+            apiVersion: ns.nop.example.org/v1alpha1
             kind: XDownstreamResource
             metadata:
               generateName: test-resource-
               annotations:
                 gotemplating.fn.crossplane.io/composition-resource-name: nop-resource
+              namespace: {{ .observed.composite.resource.metadata.namespace }}
             spec:
               forProvider:
                 configData: {{ .observed.composite.resource.spec.coolField }}

@@ -31,10 +31,11 @@ spec:
             {{ $configMaps := index . "configmaps" }}
             {{- range $i, $configMap := $configMaps.items }}
             ---
-            apiVersion: nop.example.org/v1alpha1
+            apiVersion: ns.nop.example.org/v1alpha1
             kind: XDownstreamResource
             metadata:
               name: {{ $.observed.composite.resource.metadata.name }}
+              namespace: {{ $.observed.composite.resource.metadata.namespace }}
               annotations: 
                 gotemplating.fn.crossplane.io/composition-resource-name: nop-resource
             spec:
