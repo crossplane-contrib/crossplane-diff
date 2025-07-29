@@ -619,6 +619,42 @@ func (b *MockDefinitionClientBuilder) WithGetXRDForXR(fn func(context.Context, s
 	return b
 }
 
+// WithV1XRDForXR sets the GetXRDForXR behavior to return a v1 XRD.
+func (b *MockDefinitionClientBuilder) WithV1XRDForXR() *MockDefinitionClientBuilder {
+	return b.WithGetXRDForXR(func(_ context.Context, _ schema.GroupVersionKind) (*un.Unstructured, error) {
+		return &un.Unstructured{
+			Object: map[string]interface{}{
+				"apiVersion": "apiextensions.crossplane.io/v1",
+			},
+		}, nil
+	})
+}
+
+// WithV2XRDForXR sets the GetXRDForXR behavior to return a v1 XRD.
+func (b *MockDefinitionClientBuilder) WithV2XRDForXR() *MockDefinitionClientBuilder {
+	return b.WithGetXRDForXR(func(_ context.Context, _ schema.GroupVersionKind) (*un.Unstructured, error) {
+		return &un.Unstructured{
+			Object: map[string]interface{}{
+				"apiVersion": "apiextensions.crossplane.io/v2",
+			},
+		}, nil
+	})
+}
+
+// WithXRDForXR sets the GetXRDForXR behavior to return the specified XR.
+func (b *MockDefinitionClientBuilder) WithXRDForXR(unstructured *un.Unstructured) *MockDefinitionClientBuilder {
+	return b.WithGetXRDForXR(func(_ context.Context, _ schema.GroupVersionKind) (*un.Unstructured, error) {
+		return unstructured, nil
+	})
+}
+
+// WithXRDForClaim sets the GetXRDForXR behavior to return the specified XR.
+func (b *MockDefinitionClientBuilder) WithXRDForClaim(unstructured *un.Unstructured) *MockDefinitionClientBuilder {
+	return b.WithGetXRDForClaim(func(_ context.Context, _ schema.GroupVersionKind) (*un.Unstructured, error) {
+		return unstructured, nil
+	})
+}
+
 // Build returns the built mock.
 func (b *MockDefinitionClientBuilder) Build() *MockDefinitionClient {
 	return b.mock

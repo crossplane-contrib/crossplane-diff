@@ -642,6 +642,7 @@ Summary: 2 added, 2 modified
 + kind: XNopResource
 + metadata:
 +   name: test-resource
++   namespace: default
 + spec:
 +   coolField: test-value
 +   crossplane:
@@ -684,6 +685,7 @@ Summary: 2 added, 2 modified
 + kind: XNopResource
 + metadata:
 +   name: test-resource
++   namespace: default
 + spec:
 +   coolField: test-value
 +   crossplane:
@@ -709,7 +711,7 @@ Summary: 2 added, 2 modified
 				"testdata/diff/xr-with-ambiguous-selector.yaml",
 			},
 			expectedError:         true,
-			expectedErrorContains: "ambiguous composition selection: multiple compositions match",
+			expectedErrorContains: "ambiguous composition selection: multiple compositions exist for diff.example.org/v1alpha1, Kind=XNopResource",
 			noColor:               true,
 		},
 		"NewClaimShowsDiff": {

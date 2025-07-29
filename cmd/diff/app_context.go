@@ -36,9 +36,11 @@ func NewAppContext(config *rest.Config, logger logging.Logger) (*AppContext, err
 		Schema:   k8.NewSchemaClient(coreClients, tc, logger),
 	}
 
+	defClient := xp.NewDefinitionClient(k8c.Resource, logger)
+
 	xpc := xp.Clients{
-		Composition:  xp.NewCompositionClient(k8c.Resource, logger),
-		Definition:   xp.NewDefinitionClient(k8c.Resource, logger),
+		Definition: defClient,
+		Composition:  xp.NewCompositionClient(k8c.Resource, defClient, logger),
 		Environment:  xp.NewEnvironmentClient(k8c.Resource, logger),
 		Function:     xp.NewFunctionClient(k8c.Resource, logger),
 		ResourceTree: xp.NewResourceTreeClient(coreClients.Tree, logger),

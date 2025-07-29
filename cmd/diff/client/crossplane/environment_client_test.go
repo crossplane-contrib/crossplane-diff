@@ -198,7 +198,7 @@ func TestDefaultEnvironmentClient_GetEnvironmentConfig(t *testing.T) {
 				}).
 				Build(),
 			cachedConfig: map[string]*un.Unstructured{
-				"cached-config": envConfig,
+				"/cached-config": envConfig,
 			},
 			args: args{
 				name: "cached-config",
@@ -284,7 +284,7 @@ func TestDefaultEnvironmentClient_GetEnvironmentConfig(t *testing.T) {
 			}
 
 			// Verify the config was added to the cache
-			if _, ok := c.envConfigs[tt.args.name]; !ok {
+			if _, ok := c.envConfigs["/" + tt.args.name]; !ok {
 				t.Errorf("\n%s\nGetEnvironmentConfig(): config not added to cache after fetch", tt.reason)
 			}
 		})
@@ -365,7 +365,7 @@ func TestDefaultEnvironmentClient_Initialize(t *testing.T) {
 			// If no error expected, check the cache state
 			if !tt.wantErr {
 				for name := range tt.wantCached {
-					if _, ok := c.envConfigs[name]; !ok {
+					if _, ok := c.envConfigs["/" + name]; !ok {
 						t.Errorf("\n%s\nInitialize(): expected config %s to be cached, but it's not", tt.reason, name)
 					}
 				}

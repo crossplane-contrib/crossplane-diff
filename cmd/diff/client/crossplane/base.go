@@ -18,8 +18,9 @@ import (
 // Initialize initializes all the clients in this bundle.
 func (c *Clients) Initialize(ctx context.Context, logger logging.Logger) error {
 	return core.InitializeClients(ctx, logger,
-		c.Composition,
+		// definition client before composition client since it's a dependency
 		c.Definition,
+		c.Composition,
 		c.Environment,
 		c.Function,
 		c.ResourceTree,
@@ -43,7 +44,7 @@ func cacheKey(namespace, name string) string {
 
 // getFirstMatchingResource retrieves the first resource matching the given GVKs and name.
 func getFirstMatchingResource(ctx context.Context, client kubernetes.ResourceClient, gvks []schema.GroupVersionKind, name, namespace string, cache map[string]*un.Unstructured) (*un.Unstructured, error) {
-    key := cacheKey(namespace, name)
+	key := cacheKey(namespace, name)
 
 	// Check cache first
 	if config, ok := cache[key]; ok {
