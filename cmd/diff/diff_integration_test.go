@@ -126,7 +126,7 @@ func TestDiffIntegration(t *testing.T) {
 `), `
 ---
 +++ XNopResource/test-resource
-`, tu.Green(`+ apiVersion: diff.example.org/v1alpha1
+`, tu.Green(`+ apiVersion: ns.diff.example.org/v1alpha1
 + kind: XNopResource
 + metadata:
 +   name: test-resource
@@ -168,7 +168,7 @@ func TestDiffIntegration(t *testing.T) {
 
 ---
 ~~~ XNopResource/test-resource
-  apiVersion: diff.example.org/v1alpha1
+  apiVersion: ns.diff.example.org/v1alpha1
   kind: XNopResource
   metadata:
     name: test-resource
@@ -206,7 +206,7 @@ func TestDiffIntegration(t *testing.T) {
 `) + `
 ---
 ~~~ XNopResource/test-resource
-  apiVersion: diff.example.org/v1alpha1
+  apiVersion: ns.diff.example.org/v1alpha1
   kind: XNopResource
   metadata:
     name: test-resource
@@ -252,7 +252,7 @@ func TestDiffIntegration(t *testing.T) {
 
 ---
 ~~~ XEnvResource/test-env-resource
-  apiVersion: diff.example.org/v1alpha1
+  apiVersion: ns.diff.example.org/v1alpha1
   kind: XEnvResource
   metadata:
     name: test-env-resource
@@ -300,7 +300,7 @@ func TestDiffIntegration(t *testing.T) {
 
 ---
 ~~~ XNopResource/test-resource
-  apiVersion: diff.example.org/v1alpha1
+  apiVersion: ns.diff.example.org/v1alpha1
   kind: XNopResource
   metadata:
     name: test-resource
@@ -347,7 +347,7 @@ func TestDiffIntegration(t *testing.T) {
 
 ---
 ~~~ XNopResource/test-resource
-  apiVersion: diff.example.org/v1alpha1
+  apiVersion: ns.diff.example.org/v1alpha1
   kind: XNopResource
   metadata:
     name: test-resource
@@ -519,7 +519,7 @@ func TestDiffIntegration(t *testing.T) {
 
 ---
 ~~~ XNopResource/test-resource
-  apiVersion: diff.example.org/v1alpha1
+  apiVersion: ns.diff.example.org/v1alpha1
   kind: XNopResource
   metadata:
     name: test-resource
@@ -652,7 +652,7 @@ func TestDiffIntegration(t *testing.T) {
 
 ---
 ~~~ XNopResource/test-resource
-  apiVersion: diff.example.org/v1alpha1
+  apiVersion: ns.diff.example.org/v1alpha1
   kind: XNopResource
   metadata:
     name: test-resource
@@ -691,7 +691,7 @@ func TestDiffIntegration(t *testing.T) {
 
 ---
 +++ XNopResource/generated-xr-(generated)
-+ apiVersion: diff.example.org/v1alpha1
++ apiVersion: ns.diff.example.org/v1alpha1
 + kind: XNopResource
 + metadata:
 +   generateName: generated-xr-
@@ -751,7 +751,7 @@ func TestDiffIntegration(t *testing.T) {
 
 ---
 +++ XNopResource/first-resource
-+ apiVersion: diff.example.org/v1alpha1
++ apiVersion: ns.diff.example.org/v1alpha1
 + kind: XNopResource
 + metadata:
 +   name: first-resource
@@ -761,7 +761,7 @@ func TestDiffIntegration(t *testing.T) {
 
 ---
 ~~~ XNopResource/test-resource
-  apiVersion: diff.example.org/v1alpha1
+  apiVersion: ns.diff.example.org/v1alpha1
   kind: XNopResource
   metadata:
     name: test-resource
@@ -807,7 +807,7 @@ Summary: 2 added, 2 modified
 
 ---
 +++ XNopResource/test-resource
-+ apiVersion: diff.example.org/v1alpha1
++ apiVersion: ns.diff.example.org/v1alpha1
 + kind: XNopResource
 + metadata:
 +   name: test-resource
@@ -851,7 +851,7 @@ Summary: 2 added, 2 modified
 
 ---
 +++ XNopResource/test-resource
-+ apiVersion: diff.example.org/v1alpha1
++ apiVersion: ns.diff.example.org/v1alpha1
 + kind: XNopResource
 + metadata:
 +   name: test-resource

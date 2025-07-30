@@ -4,7 +4,7 @@ metadata:
   name: xnopresources.diff.example.org
 spec:
   compositeTypeRef:
-    apiVersion: diff.example.org/v1alpha1
+    apiVersion: ns.diff.example.org/v1alpha1
     kind: XNopResource
   mode: Pipeline
   pipeline:
