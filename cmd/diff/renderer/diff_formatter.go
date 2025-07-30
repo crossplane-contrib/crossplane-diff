@@ -495,6 +495,7 @@ func cleanupForDiff(obj *un.Unstructured, logger logging.Logger) *un.Unstructure
 	}
 
 	// Remove resourceRefs field from spec if it exists
+	// TODO:  remove spec.crossplane entirely, or only spec.crossplane.resourceRefs?
 	spec, found, _ := un.NestedMap(obj.Object, "spec")
 	if found && spec != nil {
 		if _, exists := spec["resourceRefs"]; exists {
@@ -503,6 +504,24 @@ func cleanupForDiff(obj *un.Unstructured, logger logging.Logger) *un.Unstructure
 		}
 
 		_ = un.SetNestedMap(obj.Object, spec, "spec")
+	}
+
+	crossplane, found, _ := un.NestedMap(obj.Object, "spec", "crossplane")
+	if found && crossplane != nil {
+		if _, exists := crossplane["resourceRefs"]; exists {
+			delete(crossplane, "resourceRefs")
+			modifications = append(modifications, "resourceRefs from spec.crossplane")
+		}
+
+		_ = un.SetNestedMap(obj.Object, crossplane, "spec", "crossplane")
+
+		if len(crossplane) == 0 {
+			// If spec.crossplane is empty after removing resourceRefs, remove the entire field
+			delete(spec, "crossplane")
+			_ = un.SetNestedMap(obj.Object, spec, "spec")
+
+			modifications = append(modifications, "empty spec.crossplane field")
+		}
 	}
 
 	// Remove status field as we're focused on spec changes

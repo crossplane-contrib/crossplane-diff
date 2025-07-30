@@ -2,13 +2,13 @@
 apiVersion: apiextensions.crossplane.io/v2
 kind: CompositeResourceDefinition
 metadata:
-  name: xnopresources.diff.example.org
+  name: xnopresources.cluster.diff.example.org
 spec:
-  group: diff.example.org
+  group: cluster.diff.example.org
   names:
     kind: XNopResource
     plural: xnopresources
-  scope: Namespaced
+  scope: Cluster
   versions:
     - name: v1alpha1
       served: true

@@ -1,13 +1,12 @@
-apiVersion: ns.nop.example.org/v1alpha1
+apiVersion: legacycluster.nop.example.org/v1alpha1
 kind: XDownstreamResource
 metadata:
   annotations:
-    crossplane.io/composition-resource-name: nop-resource
+    crossplane.io/composition-resource-name: resource2
   generateName: test-resource-
   labels:
     crossplane.io/composite: test-resource
-  name: test-resource-abc123
-  namespace: default
+  name: resource-to-be-removed
 spec:
   forProvider:
     configData: existing-value

@@ -1,0 +1,7 @@
+# TODO:  use opposite pattern of prefixing namespaced api group instead of prefixing cluster api group
+apiVersion: cluster.diff.example.org/v1alpha1
+kind: XNopResource
+metadata:
+  name: test-resource
+spec:
+  coolField: "existing-value"

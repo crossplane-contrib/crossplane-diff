@@ -279,7 +279,7 @@ func setOwnerReference(resource, owner *un.Unstructured) {
 }
 
 // addResourceRef adds a reference to the child resource in the parent's resourceRefs array.
-func addResourceRef(parent, child *un.Unstructured) error {
+func addResourceRef(parent, child *un.Unstructured, xrApiVersion XrdApiVersion) error {
 	// Create the resource reference
 	ref := map[string]interface{}{
 		"apiVersion": child.GetAPIVersion(),
@@ -292,11 +292,16 @@ func addResourceRef(parent, child *un.Unstructured) error {
 		ref["namespace"] = ns
 	}
 
-	// TODO: suspicious.  resourceRefs going to live under spec.crossplane in v2, but is the current state of v2 failing
-	// the test for a v1 object def?
+	var resourceRefsPath []string
+	switch xrApiVersion {
+	case V1:
+		resourceRefsPath = []string{"spec", "resourceRefs"}
+	case V2:
+		resourceRefsPath = []string{"spec", "crossplane", "resourceRefs"}
+	}
 
 	// Get current resourceRefs or initialize if not present
-	resourceRefs, found, err := un.NestedSlice(parent.Object, "spec", "resourceRefs")
+	resourceRefs, found, err := un.NestedSlice(parent.Object, resourceRefsPath...)
 	if err != nil {
 		return errors.Wrap(err, "cannot get resourceRefs from parent")
 	}
@@ -307,7 +312,7 @@ func addResourceRef(parent, child *un.Unstructured) error {
 
 	// Add the new reference and update the parent
 	resourceRefs = append(resourceRefs, ref)
-	return un.SetNestedSlice(parent.Object, resourceRefs, "spec", "resourceRefs")
+	return un.SetNestedSlice(parent.Object, resourceRefs, resourceRefsPath...)
 }
 
 // applyResourcesFromFiles loads and applies resources from YAML files
@@ -376,7 +381,7 @@ func createResources(ctx context.Context, c client.Client, resources []*un.Unstr
 }
 
 // applyHierarchicalOwnership applies a hierarchical ownership structure.
-func applyHierarchicalOwnership(ctx context.Context, _ logging.Logger, c client.Client, hierarchies []HierarchicalOwnershipRelation) error {
+func applyHierarchicalOwnership(ctx context.Context, _ logging.Logger, c client.Client, xrdApiVersion XrdApiVersion, hierarchies []HierarchicalOwnershipRelation) error {
 	// Map to store created resources by file path
 	createdResources := make(map[string]*un.Unstructured)
 	// Map to track parent-child relationships for establishing resourceRefs
@@ -388,7 +393,7 @@ func applyHierarchicalOwnership(ctx context.Context, _ logging.Logger, c client.
 	}
 
 	// Second pass: Apply all owner references and resource refs between parents and children
-	if err := applyAllRelationships(ctx, c, createdResources, parentChildRelationships); err != nil {
+	if err := applyAllRelationships(ctx, c, createdResources, parentChildRelationships, xrdApiVersion); err != nil {
 		return err
 	}
 
@@ -549,6 +554,7 @@ func createResourceFromFile(ctx context.Context, c client.Client, path string,
 func applyAllRelationships(ctx context.Context, c client.Client,
 	createdResources map[string]*un.Unstructured,
 	parentChildRelationships map[string]string,
+	xrdApiVersion XrdApiVersion,
 ) error {
 	// Process all parent-child relationships
 	for childFile, parentFile := range parentChildRelationships {
@@ -566,7 +572,7 @@ func applyAllRelationships(ctx context.Context, c client.Client,
 		}
 
 		// 2. Add the child resource reference to the parent
-		if err := addResourceRefAndUpdate(ctx, c, parentResource, childResource); err != nil {
+		if err := addResourceRefAndUpdate(ctx, c, parentResource, childResource, xrdApiVersion); err != nil {
 			return err
 		}
 	}
@@ -602,7 +608,7 @@ func setOwnerReferenceAndUpdate(ctx context.Context, c client.Client,
 
 // addResourceRefAndUpdate adds a resource reference to the owner and updates it.
 func addResourceRefAndUpdate(ctx context.Context, c client.Client,
-	owner *un.Unstructured, owned *un.Unstructured,
+	owner *un.Unstructured, owned *un.Unstructured, xrdApiVersion XrdApiVersion,
 ) error {
 	// Get the latest version of the owner
 	latestOwner := &un.Unstructured{}
@@ -616,7 +622,7 @@ func addResourceRefAndUpdate(ctx context.Context, c client.Client,
 	}
 
 	// Add the resource reference
-	if err := addResourceRef(latestOwner, owned); err != nil {
+	if err := addResourceRef(latestOwner, owned, xrdApiVersion); err != nil {
 		return fmt.Errorf("unable to add resource ref: %w", err)
 	}
 

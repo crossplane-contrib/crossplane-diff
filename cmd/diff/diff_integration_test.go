@@ -32,30 +32,20 @@ const (
 	timeout = 60 * time.Second
 )
 
-type XpVersion int
+type XrdApiVersion int
 
 const (
-	V1 XpVersion = iota
-	V2
+	V2 XrdApiVersion = iota // v2 comes first so that this is the default value
+	V1
 )
 
-var versionNames = map[XpVersion]string{
-	V1: "v1",
-	V2: "v2",
+var versionNames = map[XrdApiVersion]string{
+	V1: "apiextensions.crossplane.io/v1",
+	V2: "apiextensions.crossplane.io/v2",
 }
 
-func (s XpVersion) String() string {
+func (s XrdApiVersion) String() string {
 	return versionNames[s]
-}
-
-// TODO:  somehow correlate these with earthly +fetch-crossplane-cluster's crossplane version tags list
-var clusterPaths = map[XpVersion]string{
-	V1: "release-1.20",
-	V2: "main",
-}
-
-func (s XpVersion) Path() string {
-	return clusterPaths[s]
 }
 
 // TestDiffIntegration runs an integration test for the diff command.
@@ -106,7 +96,7 @@ func TestDiffIntegration(t *testing.T) {
 		expectedError           bool
 		expectedErrorContains   string
 		noColor                 bool
-		crdVersions             []XpVersion
+		xrdApiVersion           XrdApiVersion
 	}{
 		"New resource shows color diff": {
 			inputFiles: []string{"testdata/diff/new-xr.yaml"},
@@ -373,16 +363,100 @@ func TestDiffIntegration(t *testing.T) {
 			expectedError: false,
 			noColor:       true,
 		},
-		"Resource removal detection with hierarchy": {
+		"Resource removal detection with hierarchy (v1 style resourceRefs; cluster scoped downstreams)": {
+			xrdApiVersion: V1,
+			setupFilesWithOwnerRefs: []HierarchicalOwnershipRelation{
+				{
+					OwnerFile: "testdata/diff/resources/existing-legacy-xr.yaml",
+					OwnedFiles: map[string]*HierarchicalOwnershipRelation{
+						"testdata/diff/resources/removal-test-legacycluster-downstream-resource1.yaml": nil, // Will be kept
+						"testdata/diff/resources/removal-test-legacycluster-downstream-resource2.yaml": {
+							// This resource will be removed and has a child
+							OwnedFiles: map[string]*HierarchicalOwnershipRelation{
+								"testdata/diff/resources/removal-test-legacycluster-downstream-resource2-child.yaml": nil, // Child will also be removed
+							},
+						},
+					},
+				},
+			},
+			setupFiles: []string{
+				"testdata/diff/resources/legacy-xrd.yaml",
+				"testdata/diff/resources/removal-test-legacy-composition.yaml",
+				"testdata/diff/resources/functions.yaml",
+			},
+			inputFiles: []string{"testdata/diff/modified-legacy-xr.yaml"},
+			expectedOutput: `
+~~~ XDownstreamResource/resource-to-be-kept
+  apiVersion: legacycluster.nop.example.org/v1alpha1
+  kind: XDownstreamResource
+  metadata:
+    annotations:
+      crossplane.io/composition-resource-name: resource1
+    generateName: test-resource-
+    labels:
+      crossplane.io/composite: test-resource
+    name: resource-to-be-kept
+  spec:
+    forProvider:
+-     configData: existing-value
++     configData: modified-value
+
+---
+--- XDownstreamResource/resource-to-be-removed
+- apiVersion: legacycluster.nop.example.org/v1alpha1
+- kind: XDownstreamResource
+- metadata:
+-   annotations:
+-     crossplane.io/composition-resource-name: resource2
+-   generateName: test-resource-
+-   labels:
+-     crossplane.io/composite: test-resource
+-   name: resource-to-be-removed
+- spec:
+-   forProvider:
+-     configData: existing-value
+
+---
+--- XDownstreamResource/resource-to-be-removed-child
+- apiVersion: legacycluster.nop.example.org/v1alpha1
+- kind: XDownstreamResource
+- metadata:
+-   annotations:
+-     crossplane.io/composition-resource-name: resource2-child
+-   generateName: test-resource-child-
+-   labels:
+-     crossplane.io/composite: test-resource
+-   name: resource-to-be-removed-child
+- spec:
+-   forProvider:
+-     configData: child-value
+
+---
+~~~ XNopResource/test-resource
+  apiVersion: legacycluster.diff.example.org/v1alpha1
+  kind: XNopResource
+  metadata:
+    name: test-resource
+  spec:
+    compositionUpdatePolicy: Automatic
+-   coolField: existing-value
++   coolField: modified-value
+
+---
+`,
+			expectedError: false,
+			noColor:       true,
+		},
+		"Resource removal detection with hierarchy (v2 style resourceRefs; namespaced downstreams)": {
 			setupFilesWithOwnerRefs: []HierarchicalOwnershipRelation{
 				{
 					OwnerFile: "testdata/diff/resources/existing-xr.yaml",
 					OwnedFiles: map[string]*HierarchicalOwnershipRelation{
-						"testdata/diff/resources/removal-test-downstream-resource1.yaml": nil, // Will be kept
-						"testdata/diff/resources/removal-test-downstream-resource2.yaml": {
+						"testdata/diff/resources/removal-test-ns-downstream-resource1.yaml": nil, // Will be kept
+						"testdata/diff/resources/removal-test-ns-downstream-resource2.yaml": {
 							// This resource will be removed and has a child
 							OwnedFiles: map[string]*HierarchicalOwnershipRelation{
-								"testdata/diff/resources/removal-test-downstream-resource2-child.yaml": nil, // Child will also be removed
+								"testdata/diff/resources/removal-test-ns-downstream-resource2-child.yaml": nil, // Child will also be removed
 							},
 						},
 					},
@@ -413,7 +487,7 @@ func TestDiffIntegration(t *testing.T) {
 
 ---
 --- XDownstreamResource/resource-to-be-removed
-- apiVersion: nop.example.org/v1alpha1
+- apiVersion: ns.nop.example.org/v1alpha1
 - kind: XDownstreamResource
 - metadata:
 -   annotations:
@@ -429,7 +503,7 @@ func TestDiffIntegration(t *testing.T) {
 
 ---
 --- XDownstreamResource/resource-to-be-removed-child
-- apiVersion: nop.example.org/v1alpha1
+- apiVersion: ns.nop.example.org/v1alpha1
 - kind: XDownstreamResource
 - metadata:
 -   annotations:
@@ -450,6 +524,88 @@ func TestDiffIntegration(t *testing.T) {
   metadata:
     name: test-resource
     namespace: default
+  spec:
+-   coolField: existing-value
++   coolField: modified-value
+
+---
+`,
+			expectedError: false,
+			noColor:       true,
+		},
+		"Resource removal detection with hierarchy (v2 style resourceRefs; cluster scoped downstreams)": {
+			setupFilesWithOwnerRefs: []HierarchicalOwnershipRelation{
+				{
+					OwnerFile: "testdata/diff/resources/existing-cluster-xr.yaml",
+					OwnedFiles: map[string]*HierarchicalOwnershipRelation{
+						"testdata/diff/resources/removal-test-cluster-downstream-resource1.yaml": nil, // Will be kept
+						"testdata/diff/resources/removal-test-cluster-downstream-resource2.yaml": {
+							// This resource will be removed and has a child
+							OwnedFiles: map[string]*HierarchicalOwnershipRelation{
+								"testdata/diff/resources/removal-test-cluster-downstream-resource2-child.yaml": nil, // Child will also be removed
+							},
+						},
+					},
+				},
+			},
+			setupFiles: []string{
+				"testdata/diff/resources/cluster-xrd.yaml",
+				"testdata/diff/resources/removal-test-cluster-composition.yaml",
+				"testdata/diff/resources/functions.yaml",
+			},
+			inputFiles: []string{"testdata/diff/modified-cluster-xr.yaml"},
+			expectedOutput: `
+~~~ XDownstreamResource/resource-to-be-kept
+  apiVersion: nop.example.org/v1alpha1
+  kind: XDownstreamResource
+  metadata:
+    annotations:
+      crossplane.io/composition-resource-name: resource1
+    generateName: test-resource-
+    labels:
+      crossplane.io/composite: test-resource
+    name: resource-to-be-kept
+  spec:
+    forProvider:
+-     configData: existing-value
++     configData: modified-value
+
+---
+--- XDownstreamResource/resource-to-be-removed
+- apiVersion: nop.example.org/v1alpha1
+- kind: XDownstreamResource
+- metadata:
+-   annotations:
+-     crossplane.io/composition-resource-name: resource2
+-   generateName: test-resource-
+-   labels:
+-     crossplane.io/composite: test-resource
+-   name: resource-to-be-removed
+- spec:
+-   forProvider:
+-     configData: existing-value
+
+---
+--- XDownstreamResource/resource-to-be-removed-child
+- apiVersion: nop.example.org/v1alpha1
+- kind: XDownstreamResource
+- metadata:
+-   annotations:
+-     crossplane.io/composition-resource-name: resource2-child
+-   generateName: test-resource-child-
+-   labels:
+-     crossplane.io/composite: test-resource
+-   name: resource-to-be-removed-child
+- spec:
+-   forProvider:
+-     configData: child-value
+
+---
+~~~ XNopResource/test-resource
+  apiVersion: cluster.diff.example.org/v1alpha1
+  kind: XNopResource
+  metadata:
+    name: test-resource
   spec:
 -   coolField: existing-value
 +   coolField: modified-value
@@ -725,7 +881,7 @@ Summary: 2 added, 2 modified
 				"testdata/diff/xr-with-ambiguous-selector.yaml",
 			},
 			expectedError:         true,
-			expectedErrorContains: "ambiguous composition selection: multiple compositions exist for diff.example.org/v1alpha1, Kind=XNopResource",
+			expectedErrorContains: "ambiguous composition selection: multiple compositions match",
 			noColor:               true,
 		},
 		"NewClaimShowsDiff": {
@@ -822,13 +978,13 @@ Summary: 2 modified`,
 
 	tu.SetupKubeTestLogger(t)
 
-	version := V2
+	//version := V2
 
 	for name, tt := range tests {
 		//if tt.crdVersions == nil || len(tt.crdVersions) == 0 {
 		//	// Default to testing against v2 CRDs if not specified.  claims still exist in v2, though deprecated.
 		//	// old style XRDs are still supported, too.
-		//	tt.crdVersions = []XpVersion{V2}
+		//	tt.crdVersions = []XrdApiVersion{V2}
 		//}
 
 		//for _, version := range tt.crdVersions {
@@ -839,7 +995,7 @@ Summary: 2 modified`,
 
 			testEnv := &envtest.Environment{
 				CRDDirectoryPaths: []string{
-					filepath.Join(thisDir, "..", "..", "cluster", version.Path(), "crds"),
+					filepath.Join(thisDir, "..", "..", "cluster", "main", "crds"),
 					filepath.Join(thisDir, "testdata", "diff", "crds"),
 				},
 				ErrorIfCRDPathMissing: true,
@@ -873,9 +1029,15 @@ Summary: 2 modified`,
 				t.Fatalf("failed to setup resources: %v", err)
 			}
 
+			// Default to v2 API version for XR resources unless otherwise specified
+			xrdApiVersion := V2
+			if tt.xrdApiVersion != V2 {
+				xrdApiVersion = tt.xrdApiVersion
+			}
+
 			// Apply resources with owner references
 			if len(tt.setupFilesWithOwnerRefs) > 0 {
-				if err := applyHierarchicalOwnership(ctx, tu.TestLogger(t, false), k8sClient, tt.setupFilesWithOwnerRefs); err != nil {
+				if err := applyHierarchicalOwnership(ctx, tu.TestLogger(t, false), k8sClient, xrdApiVersion, tt.setupFilesWithOwnerRefs); err != nil {
 					t.Fatalf("failed to setup owner references: %v", err)
 				}
 			}
