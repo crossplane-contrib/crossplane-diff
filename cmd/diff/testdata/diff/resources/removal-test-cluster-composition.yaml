@@ -4,7 +4,7 @@ metadata:
   name: removal-test-composition
 spec:
   compositeTypeRef:
-    apiVersion: cluster.diff.example.org/v1alpha1
+    apiVersion: diff.example.org/v1alpha1
     kind: XNopResource
   mode: Pipeline
   pipeline:

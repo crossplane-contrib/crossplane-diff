@@ -602,7 +602,7 @@ func TestDiffIntegration(t *testing.T) {
 
 ---
 ~~~ XNopResource/test-resource
-  apiVersion: cluster.diff.example.org/v1alpha1
+  apiVersion: diff.example.org/v1alpha1
   kind: XNopResource
   metadata:
     name: test-resource

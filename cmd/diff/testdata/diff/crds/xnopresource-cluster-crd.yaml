@@ -1,9 +1,9 @@
 apiVersion: apiextensions.k8s.io/v1
 kind: CustomResourceDefinition
 metadata:
-  name: xnopresources.cluster.diff.example.org
+  name: xnopresources.diff.example.org
 spec:
-  group: cluster.diff.example.org
+  group: diff.example.org
   names:
     kind: XNopResource
     listKind: XNopResourceList
