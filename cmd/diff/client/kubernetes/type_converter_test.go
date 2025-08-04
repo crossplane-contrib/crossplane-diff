@@ -10,7 +10,7 @@ import (
 	testdiscovery "k8s.io/client-go/discovery/fake"
 	kt "k8s.io/client-go/testing"
 
-	"github.com/crossplane/crossplane-runtime/pkg/errors"
+	"github.com/crossplane/crossplane-runtime/v2/pkg/errors"
 
 	tu "github.com/crossplane-contrib/crossplane-diff/cmd/diff/testutils"
 )

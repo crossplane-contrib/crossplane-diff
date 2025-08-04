@@ -11,10 +11,10 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 
-	"github.com/crossplane/crossplane-runtime/pkg/errors"
+	"github.com/crossplane/crossplane-runtime/v2/pkg/errors"
 
 	tu "github.com/crossplane-contrib/crossplane-diff/cmd/diff/testutils"
-	apiextensionsv1 "github.com/crossplane/crossplane/apis/apiextensions/v1"
+	apiextensionsv1 "github.com/crossplane/crossplane/v2/apis/apiextensions/v1"
 )
 
 var _ CompositionClient = (*tu.MockCompositionClient)(nil)

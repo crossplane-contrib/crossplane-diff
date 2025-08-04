@@ -19,13 +19,13 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/envtest"
 
-	"github.com/crossplane/crossplane-runtime/pkg/logging"
+	"github.com/crossplane/crossplane-runtime/v2/pkg/logging"
 
 	tu "github.com/crossplane-contrib/crossplane-diff/cmd/diff/testutils"
-	xpextv1 "github.com/crossplane/crossplane/apis/apiextensions/v1"
-	xpextv2 "github.com/crossplane/crossplane/apis/apiextensions/v2"
+	xpextv1 "github.com/crossplane/crossplane/v2/apis/apiextensions/v1"
+	xpextv2 "github.com/crossplane/crossplane/v2/apis/apiextensions/v2"
 
-	pkgv1 "github.com/crossplane/crossplane/apis/pkg/v1"
+	pkgv1 "github.com/crossplane/crossplane/v2/apis/pkg/v1"
 )
 
 const (

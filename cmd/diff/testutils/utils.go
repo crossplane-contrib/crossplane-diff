@@ -15,7 +15,7 @@ import (
 	kt "k8s.io/client-go/testing"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
-	"github.com/crossplane/crossplane-runtime/pkg/logging"
+	"github.com/crossplane/crossplane-runtime/v2/pkg/logging"
 )
 
 // Colors for terminal output.

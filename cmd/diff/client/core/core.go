@@ -12,11 +12,11 @@ import (
 	"k8s.io/client-go/rest"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
-	"github.com/crossplane/crossplane-runtime/pkg/errors"
-	"github.com/crossplane/crossplane-runtime/pkg/logging"
+	"github.com/crossplane/crossplane-runtime/v2/pkg/errors"
+	"github.com/crossplane/crossplane-runtime/v2/pkg/logging"
 
-	"github.com/crossplane/crossplane/apis/pkg"
-	"github.com/crossplane/crossplane/cmd/crank/foundation/resource/xrm"
+	"github.com/crossplane/crossplane/v2/apis/pkg"
+	"github.com/crossplane/crossplane/v2/cmd/crank/common/resource/xrm"
 )
 
 // Initializable is an interface for any client that can be initialized.

@@ -8,10 +8,10 @@ import (
 	un "k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 
-	"github.com/crossplane/crossplane-runtime/pkg/errors"
+	"github.com/crossplane/crossplane-runtime/v2/pkg/errors"
 
 	tu "github.com/crossplane-contrib/crossplane-diff/cmd/diff/testutils"
-	v1 "github.com/crossplane/crossplane/proto/fn/v1"
+	v1 "github.com/crossplane/crossplane/v2/proto/fn/v1"
 )
 
 func TestRequirementsProvider_ProvideRequirements(t *testing.T) {

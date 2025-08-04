@@ -4,20 +4,20 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/crossplane/crossplane/cmd/crank/foundation"
-	"github.com/crossplane/crossplane/cmd/crank/foundation/loggerwriter"
+	"github.com/crossplane/crossplane/v2/cmd/crank/common/crd"
+	"github.com/crossplane/crossplane/v2/cmd/crank/common/loggerwriter"
 	extv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	un "k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 
-	"github.com/crossplane/crossplane-runtime/pkg/errors"
-	"github.com/crossplane/crossplane-runtime/pkg/logging"
-	cpd "github.com/crossplane/crossplane-runtime/pkg/resource/unstructured/composed"
+	"github.com/crossplane/crossplane-runtime/v2/pkg/errors"
+	"github.com/crossplane/crossplane-runtime/v2/pkg/logging"
+	cpd "github.com/crossplane/crossplane-runtime/v2/pkg/resource/unstructured/composed"
 
 	xp "github.com/crossplane-contrib/crossplane-diff/cmd/diff/client/crossplane"
 	k8 "github.com/crossplane-contrib/crossplane-diff/cmd/diff/client/kubernetes"
-	"github.com/crossplane/crossplane/cmd/crank/beta/validate"
+	"github.com/crossplane/crossplane/v2/cmd/crank/beta/validate"
 )
 
 // SchemaValidator handles validation of resources against CRD schemas.
@@ -59,7 +59,7 @@ func (v *DefaultSchemaValidator) LoadCRDs(ctx context.Context) error {
 	}
 
 	// Convert XRDs to CRDs
-	crds, err := foundation.ConvertToCRDs(xrds)
+	crds, err := crd.ConvertToCRDs(xrds)
 	if err != nil {
 		v.logger.Debug("Failed to convert XRDs to CRDs", "error", err)
 		return errors.Wrap(err, "cannot convert XRDs to CRDs")

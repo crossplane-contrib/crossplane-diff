@@ -9,7 +9,7 @@ import (
 	un "k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 
-	"github.com/crossplane/crossplane-runtime/pkg/errors"
+	"github.com/crossplane/crossplane-runtime/v2/pkg/errors"
 
 	tu "github.com/crossplane-contrib/crossplane-diff/cmd/diff/testutils"
 )
@@ -284,7 +284,7 @@ func TestDefaultEnvironmentClient_GetEnvironmentConfig(t *testing.T) {
 			}
 
 			// Verify the config was added to the cache
-			if _, ok := c.envConfigs["/" + tt.args.name]; !ok {
+			if _, ok := c.envConfigs["/"+tt.args.name]; !ok {
 				t.Errorf("\n%s\nGetEnvironmentConfig(): config not added to cache after fetch", tt.reason)
 			}
 		})
@@ -365,7 +365,7 @@ func TestDefaultEnvironmentClient_Initialize(t *testing.T) {
 			// If no error expected, check the cache state
 			if !tt.wantErr {
 				for name := range tt.wantCached {
-					if _, ok := c.envConfigs["/" + name]; !ok {
+					if _, ok := c.envConfigs["/"+name]; !ok {
 						t.Errorf("\n%s\nInitialize(): expected config %s to be cached, but it's not", tt.reason, name)
 					}
 				}
