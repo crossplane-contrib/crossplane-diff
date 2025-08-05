@@ -76,6 +76,8 @@ func RunDiff(t *testing.T, c *envconf.Config, binPath string, resourcePaths ...s
 func TestCrossplaneDiffCommand(t *testing.T) {
 	manifests := "test/e2e/manifests/beta/diff"
 	binPath := "./crossplane-diff"
+	imageTag := strings.Split(environment.GetCrossplaneImage(), ":")[1]
+	expectPath := filepath.Join(manifests, "expect", imageTag)
 
 	environment.Test(t,
 		// Create a test for a new resource - should show all resources being created
@@ -98,7 +100,7 @@ func TestCrossplaneDiffCommand(t *testing.T) {
 					t.Fatalf("Error running diff command: %v\nLog output:\n%s", err, log)
 				}
 
-				assertDiffMatchesFile(t, output, filepath.Join(manifests, "expect/new-xr.ansi"), log)
+				assertDiffMatchesFile(t, output, filepath.Join(expectPath, "new-xr.ansi"), log)
 
 				return ctx
 			}).
@@ -130,7 +132,7 @@ func TestCrossplaneDiffCommand(t *testing.T) {
 					t.Fatalf("Error running diff command: %v\n Log output:\n%s", err, log)
 				}
 
-				assertDiffMatchesFile(t, output, filepath.Join(manifests, "expect/existing-xr.ansi"), log)
+				assertDiffMatchesFile(t, output, filepath.Join(expectPath, "existing-xr.ansi"), log)
 
 				return ctx
 			}).
@@ -145,7 +147,7 @@ func TestCrossplaneDiffCommand(t *testing.T) {
 
 // Regular expressions to match the dynamic parts.
 var (
-	resourceNameRegex        = regexp.MustCompile(`(existing-resource)-[a-z0-9]{5,}`)
+	resourceNameRegex        = regexp.MustCompile(`(existing-resource)-[a-z0-9]{5,}(?:-nop-resource)?`)
 	compositionRevisionRegex = regexp.MustCompile(`(xnopresources\.diff\.example\.org)-[a-z0-9]{7,}`)
 	ansiEscapeRegex          = regexp.MustCompile(`\x1b\[[0-9;]*m`)
 )
