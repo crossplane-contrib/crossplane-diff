@@ -30,13 +30,12 @@ import (
 	"time"
 	"unicode"
 
-	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/e2e-framework/pkg/envconf"
 	"sigs.k8s.io/e2e-framework/pkg/features"
 
 	xpv1 "github.com/crossplane/crossplane-runtime/v2/apis/common/v1"
 
-	"github.com/crossplane/crossplane-runtime/v2/pkg/resource/unstructured/composed"
 	apiextensionsv1 "github.com/crossplane/crossplane/v2/apis/apiextensions/v1"
 	pkgv1 "github.com/crossplane/crossplane/v2/apis/pkg/v1"
 	"github.com/crossplane/crossplane/v2/test/e2e"
@@ -58,8 +57,8 @@ func RunDiff(t *testing.T, c *envconf.Config, binPath string, resourcePaths ...s
 	args := append([]string{"--verbose", "diff", "--timeout=2m", "-n", namespace}, resourcePaths...)
 	t.Logf("Running command: %s %s", binPath, strings.Join(args, " "))
 	cmd := exec.Command(binPath, args...)
-	cmd.Env = append(cmd.Env, "KUBECONFIG="+c.KubeconfigFile())
-	t.Logf("ENV: %s %s", binPath, strings.Join(cmd.Env, " "))
+	cmd.Env = append(os.Environ(), "KUBECONFIG="+c.KubeconfigFile())
+	t.Logf("ENV: %s KUBECONFIG=%s", binPath, c.KubeconfigFile())
 
 	// Capture standard output and error
 	var stdout, stderr bytes.Buffer
@@ -74,73 +73,121 @@ func RunDiff(t *testing.T, c *envconf.Config, binPath string, resourcePaths ...s
 
 // TestCrossplaneDiffCommand tests the functionality of the crossplane diff command.
 func TestCrossplaneDiffCommand(t *testing.T) {
-	manifests := "test/e2e/manifests/beta/diff"
 	binPath := "./crossplane-diff"
 	imageTag := strings.Split(environment.GetCrossplaneImage(), ":")[1]
-	expectPath := filepath.Join(manifests, "expect", imageTag)
+	root := filepath.Join("test/e2e/manifests/beta/diff", imageTag)
+	versions, err := os.ReadDir(root)
+	if err != nil {
+		t.Fatalf("Failed to read manifests directory: %v", err)
+	}
+
+	setup := func(setupPath string) features.Func {
+		return funcs.AllOf(
+			funcs.ApplyResources(e2e.FieldManager, setupPath, "*.yaml"),
+			funcs.ResourcesCreatedWithin(30*time.Second, setupPath, "*.yaml"),
+			funcs.ResourcesHaveConditionWithin(1*time.Minute, setupPath, "definition.yaml", apiextensionsv1.WatchingComposite()),
+			funcs.ResourcesHaveConditionWithin(2*time.Minute, setupPath, "provider.yaml", pkgv1.Healthy(), pkgv1.Active()),
+		)
+	}
+
+	// Follow Crossplane's established pattern: explicit ordered teardowns
+	deleteXRs := func(manifests string) features.Func {
+		return funcs.AllOf(
+			funcs.DeleteResourcesWithPropagationPolicy(manifests, "existing-xr.yaml", metav1.DeletePropagationForeground),
+			funcs.ResourcesDeletedWithin(1*time.Minute, manifests, "existing-xr.yaml"),
+		)
+	}
+
+	deletePrerequisites := func(setupPath string) features.Func {
+		return funcs.AllOf(
+			funcs.DeleteResourcesWithPropagationPolicy(setupPath, "*.yaml", metav1.DeletePropagationForeground),
+			funcs.ResourcesDeletedWithin(3*time.Minute, setupPath, "*.yaml"),
+		)
+	}
+
+	cases := features.Table{}
+	for _, v := range versions {
+		if !v.IsDir() {
+			continue // Skip non-directory entries
+		}
+
+		// TODO remove.  skip v1 to test v2 for setup/teardown issues at test boundaries
+		if v.Name() == "v1" {
+			continue
+		}
+
+		manifests := filepath.Join(root, v.Name())
+		setupPath := filepath.Join(manifests, "setup")
+		expectPath := filepath.Join(manifests, "expect")
+
+		cases = append(cases, features.Table{
+			{
+				Name:        fmt.Sprintf("WithNewResource (%s)", v.Name()),
+				Description: "Test that we can diff against a net-new resource with `crossplane diff`",
+				Assessment: func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
+					t.Helper()
+					ctx = setup(setupPath)(ctx, t, c)
+
+					// Run the diff command on a new resource that doesn't exist yet
+					output, log, err := RunDiff(t, c, binPath, filepath.Join(manifests, "new-xr.yaml"))
+					if err != nil {
+						t.Fatalf("Error running diff command: %v\nLog output:\n%s", err, log)
+					}
+
+					assertDiffMatchesFile(t, output, filepath.Join(expectPath, "new-xr.ansi"), log)
+
+					// No XRs to delete for new-xr test, just delete prerequisites
+					ctx = deletePrerequisites(setupPath)(ctx, t, c)
+
+					// Add delay to prevent API rate limiting between test iterations
+					ctx = funcs.SleepFor(5*time.Second)(ctx, t, c)
+
+					return ctx
+				},
+			},
+			{
+				Name:        fmt.Sprintf("WithExistingResource (%s)", v.Name()),
+				Description: "Test that we can diff against an existing resource with `crossplane diff`",
+				Assessment: func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
+					t.Helper()
+
+					ctx = setup(setupPath)(ctx, t, c)
+
+					// Create the initial resource first
+					setupFuncs := funcs.AllOf(
+						funcs.ApplyResources(e2e.FieldManager, manifests, "existing-xr.yaml"),
+						funcs.ResourcesCreatedWithin(30*time.Second, manifests, "existing-xr.yaml"),
+						funcs.ResourcesHaveConditionWithin(2*time.Minute, manifests, "existing-xr.yaml", xpv1.Available()),
+					)
+
+					ctx = setupFuncs(ctx, t, c)
+
+					// Run the diff command on a modified existing resource
+					output, log, err := RunDiff(t, c, binPath, filepath.Join(manifests, "modified-xr.yaml"))
+					if err != nil {
+						t.Fatalf("Error running diff command: %v\n Log output:\n%s", err, log)
+					}
+
+					assertDiffMatchesFile(t, output, filepath.Join(expectPath, "existing-xr.ansi"), log)
+
+					// Clean up the resource we created (following Crossplane pattern)
+					ctx = deleteXRs(manifests)(ctx, t, c)
+					ctx = deletePrerequisites(setupPath)(ctx, t, c)
+
+					// Add delay to prevent API rate limiting between test iterations
+					ctx = funcs.SleepFor(5*time.Second)(ctx, t, c)
+
+					return ctx
+				},
+			},
+		}...)
+	}
 
 	environment.Test(t,
-		// Create a test for a new resource - should show all resources being created
-		features.NewWithDescription(t.Name()+"WithNewResource", "Test that we can diff against a net-new resource with `crossplane diff`").
+		cases.Build(t.Name()).
 			WithLabel(e2e.LabelArea, LabelAreaDiff).
 			WithLabel(e2e.LabelSize, e2e.LabelSizeSmall).
 			WithLabel(config.LabelTestSuite, config.TestSuiteDefault).
-			WithSetup("CreatePrerequisites", funcs.AllOf(
-				funcs.ApplyResources(e2e.FieldManager, manifests, "setup/*.yaml"),
-				funcs.ResourcesCreatedWithin(30*time.Second, manifests, "setup/*.yaml"),
-				funcs.ResourcesHaveConditionWithin(1*time.Minute, manifests, "setup/definition.yaml", apiextensionsv1.WatchingComposite()),
-				funcs.ResourcesHaveConditionWithin(2*time.Minute, manifests, "setup/provider.yaml", pkgv1.Healthy(), pkgv1.Active()),
-			)).
-			Assess("DiffNewResource", func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
-				t.Helper()
-
-				// Run the diff command on a new resource that doesn't exist yet
-				output, log, err := RunDiff(t, c, binPath, filepath.Join(manifests, "new-xr.yaml"))
-				if err != nil {
-					t.Fatalf("Error running diff command: %v\nLog output:\n%s", err, log)
-				}
-
-				assertDiffMatchesFile(t, output, filepath.Join(expectPath, "new-xr.ansi"), log)
-
-				return ctx
-			}).
-			WithTeardown("DeletePrerequisites", funcs.ResourcesDeletedAfterListedAreGone(3*time.Minute, manifests, "setup/*.yaml", nopList)).
-			Feature(),
-
-		// Create a test for modifying an existing resource
-		features.NewWithDescription(t.Name()+"WithExistingResource", "Test that we can diff against an existing resource with `crossplane diff`").
-			WithLabel(e2e.LabelArea, LabelAreaDiff).
-			WithLabel(e2e.LabelSize, e2e.LabelSizeSmall).
-			WithLabel(config.LabelTestSuite, config.TestSuiteDefault).
-			WithSetup("CreatePrerequisites", funcs.AllOf(
-				funcs.ApplyResources(e2e.FieldManager, manifests, "setup/*.yaml"),
-				funcs.ResourcesCreatedWithin(30*time.Second, manifests, "setup/*.yaml"),
-				funcs.ResourcesHaveConditionWithin(1*time.Minute, manifests, "setup/definition.yaml", apiextensionsv1.WatchingComposite()),
-				funcs.ResourcesHaveConditionWithin(2*time.Minute, manifests, "setup/provider.yaml", pkgv1.Healthy(), pkgv1.Active()),
-			)).
-			WithSetup("CreateInitialResource", funcs.AllOf(
-				funcs.ApplyResources(e2e.FieldManager, manifests, "existing-xr.yaml"),
-				funcs.ResourcesCreatedWithin(30*time.Second, manifests, "existing-xr.yaml"),
-				funcs.ResourcesHaveConditionWithin(5*time.Minute, manifests, "existing-xr.yaml", xpv1.Available()),
-			)).
-			Assess("DiffModifiedResource", func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
-				t.Helper()
-
-				// Run the diff command on a modified existing resource
-				output, log, err := RunDiff(t, c, binPath, filepath.Join(manifests, "modified-xr.yaml"))
-				if err != nil {
-					t.Fatalf("Error running diff command: %v\n Log output:\n%s", err, log)
-				}
-
-				assertDiffMatchesFile(t, output, filepath.Join(expectPath, "existing-xr.ansi"), log)
-
-				return ctx
-			}).
-			WithTeardown("DeleteResources", funcs.AllOf(
-				funcs.DeleteResources(manifests, "existing-xr.yaml"),
-				funcs.ResourcesDeletedWithin(2*time.Minute, manifests, "existing-xr.yaml"),
-			)).
-			WithTeardown("DeletePrerequisites", funcs.ResourcesDeletedAfterListedAreGone(3*time.Minute, manifests, "setup/*.yaml", nopList)).
 			Feature(),
 	)
 }
@@ -283,8 +330,3 @@ func makeStringReadable(s string) string {
 	}
 	return result.String()
 }
-
-var nopList = composed.NewList(composed.FromReferenceToList(corev1.ObjectReference{
-	APIVersion: "nop.crossplane.io/v1alpha1",
-	Kind:       "NopResource",
-}))

@@ -3,14 +3,13 @@ package crossplane
 import (
 	"context"
 
+	"github.com/crossplane-contrib/crossplane-diff/cmd/diff/client/core"
+	"github.com/crossplane-contrib/crossplane-diff/cmd/diff/client/kubernetes"
 	un "k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 
 	"github.com/crossplane/crossplane-runtime/v2/pkg/errors"
 	"github.com/crossplane/crossplane-runtime/v2/pkg/logging"
-
-	"github.com/crossplane-contrib/crossplane-diff/cmd/diff/client/core"
-	"github.com/crossplane-contrib/crossplane-diff/cmd/diff/client/kubernetes"
 )
 
 // EnvironmentClient handles environment configurations.
@@ -84,5 +83,6 @@ func (c *DefaultEnvironmentClient) GetEnvironmentConfigs(ctx context.Context) ([
 // GetEnvironmentConfig gets a specific environment config by name.
 func (c *DefaultEnvironmentClient) GetEnvironmentConfig(ctx context.Context, name string) (*un.Unstructured, error) {
 	c.logger.Debug("Getting environment config", "name", name)
+
 	return getFirstMatchingResource(ctx, c.resourceClient, c.gvks, name, "" /* ECs are cluster scoped */, c.envConfigs)
 }

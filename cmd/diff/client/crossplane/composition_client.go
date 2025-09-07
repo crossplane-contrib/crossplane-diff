@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/crossplane-contrib/crossplane-diff/cmd/diff/client/core"
+	"github.com/crossplane-contrib/crossplane-diff/cmd/diff/client/kubernetes"
 	un "k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -11,8 +13,6 @@ import (
 	"github.com/crossplane/crossplane-runtime/v2/pkg/errors"
 	"github.com/crossplane/crossplane-runtime/v2/pkg/logging"
 
-	"github.com/crossplane-contrib/crossplane-diff/cmd/diff/client/core"
-	"github.com/crossplane-contrib/crossplane-diff/cmd/diff/client/kubernetes"
 	apiextensionsv1 "github.com/crossplane/crossplane/v2/apis/apiextensions/v1"
 )
 
@@ -277,7 +277,6 @@ func makeCrossplaneRefPath(apiVersion string, path ...string) []string {
 
 // findByDirectReference attempts to find a composition directly referenced by name.
 func (c *DefaultCompositionClient) findByDirectReference(ctx context.Context, xrd, res *un.Unstructured, targetGVK schema.GroupVersionKind, resourceID string) (*apiextensionsv1.Composition, error) {
-
 	compositionRefName, compositionRefFound, err := un.NestedString(res.Object, makeCrossplaneRefPath(xrd.GetAPIVersion(), "compositionRef", "name")...)
 	if err == nil && compositionRefFound && compositionRefName != "" {
 		c.logger.Debug("Found direct composition reference",
@@ -366,7 +365,7 @@ func (c *DefaultCompositionClient) findByLabelSelector(ctx context.Context, xrd,
 }
 
 // findByTypeReference attempts to find a composition by matching the type reference.
-func (c *DefaultCompositionClient) findByTypeReference(ctx context.Context, xrd *un.Unstructured, targetGVK schema.GroupVersionKind, resourceID string) (*apiextensionsv1.Composition, error) {
+func (c *DefaultCompositionClient) findByTypeReference(ctx context.Context, _ *un.Unstructured, targetGVK schema.GroupVersionKind, resourceID string) (*apiextensionsv1.Composition, error) {
 	// Get all compositions if we haven't loaded them yet
 	if len(c.compositions) == 0 {
 		if _, err := c.ListCompositions(ctx); err != nil {

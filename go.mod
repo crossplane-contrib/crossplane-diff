@@ -4,19 +4,15 @@ go 1.24.0
 
 toolchain go1.24.5
 
-replace github.com/crossplane/crossplane/v2 => github.com/Sanyaku/crossplane/v2 v2.0.0-20250804185139-834ab9de9591
-
 //replace github.com/crossplane/crossplane/v2 => /Users/jonathan.ogilvie/workspace/crossplane
 
 require (
 	dario.cat/mergo v1.0.2
 	github.com/alecthomas/kong v1.4.0
-	github.com/crossplane/crossplane-runtime/v2 v2.0.0-20250730220209-c306b1c8b181
-	github.com/crossplane/crossplane/v2 v2.0.0-rc.0.0.20250803020012-34b1efbc11b2
+	github.com/crossplane/crossplane-runtime/v2 v2.0.0
+	github.com/crossplane/crossplane/v2 v2.0.2
 	github.com/google/go-cmp v0.7.0
 	github.com/sergi/go-diff v1.3.2-0.20230802210424-5b0b94c5c0d3
-	golang.org/x/exp v0.0.0-20240808152545-0cdaa3abc0fa
-	k8s.io/api v0.33.0
 	k8s.io/apiextensions-apiserver v0.33.0
 	k8s.io/apimachinery v0.33.0
 	k8s.io/client-go v0.33.0
@@ -67,12 +63,14 @@ require (
 	go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc v1.35.0 // indirect
 	go.opentelemetry.io/proto/otlp v1.5.0 // indirect
 	go.starlark.net v0.0.0-20230525235612-a134d8f9ddca // indirect
+	golang.org/x/exp v0.0.0-20240808152545-0cdaa3abc0fa // indirect
 	golang.org/x/sync v0.13.0 // indirect
 	google.golang.org/genproto/googleapis/api v0.0.0-20250218202821-56aae31c358a // indirect
 	google.golang.org/grpc v1.71.1 // indirect
 	google.golang.org/protobuf v1.36.6 // indirect
 	gopkg.in/evanphx/json-patch.v4 v4.12.0 // indirect
 	gotest.tools/v3 v3.1.0 // indirect
+	k8s.io/api v0.33.0 // indirect
 	k8s.io/apiserver v0.33.0 // indirect
 	k8s.io/cli-runtime v0.29.1 // indirect
 	k8s.io/code-generator v0.33.0 // indirect

@@ -4,15 +4,14 @@ import (
 	"cmp"
 	"fmt"
 	"io"
+	"maps"
+	"slices"
 	"strings"
 
-	"golang.org/x/exp/maps"
-	"golang.org/x/exp/slices"
+	dt "github.com/crossplane-contrib/crossplane-diff/cmd/diff/renderer/types"
 
 	"github.com/crossplane/crossplane-runtime/v2/pkg/errors"
 	"github.com/crossplane/crossplane-runtime/v2/pkg/logging"
-
-	dt "github.com/crossplane-contrib/crossplane-diff/cmd/diff/renderer/types"
 )
 
 // DiffRenderer handles rendering diffs to output.
@@ -58,7 +57,7 @@ func (r *DefaultDiffRenderer) RenderDiffs(stdout io.Writer, diffs map[string]*dt
 		"compact", r.diffOpts.Compact)
 
 	// Sort the keys to ensure a consistent output order
-	d := maps.Values(diffs)
+	d := slices.AppendSeq(make([]*dt.ResourceDiff, 0, len(diffs)), maps.Values(diffs))
 
 	// Sort by GetKindName which is how it's displayed to the user
 	slices.SortFunc(d, func(a, b *dt.ResourceDiff) int {

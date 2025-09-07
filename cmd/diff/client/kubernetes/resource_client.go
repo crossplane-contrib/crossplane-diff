@@ -4,15 +4,15 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/crossplane/crossplane-runtime/v2/pkg/errors"
-	"github.com/crossplane/crossplane-runtime/v2/pkg/logging"
+	"github.com/crossplane-contrib/crossplane-diff/cmd/diff/client/core"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	un "k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/discovery"
 	"k8s.io/client-go/dynamic"
 
-	"github.com/crossplane-contrib/crossplane-diff/cmd/diff/client/core"
+	"github.com/crossplane/crossplane-runtime/v2/pkg/errors"
+	"github.com/crossplane/crossplane-runtime/v2/pkg/logging"
 )
 
 // ResourceClient handles basic CRUD operations for Kubernetes resources.
@@ -28,6 +28,9 @@ type ResourceClient interface {
 
 	// GetGVKsForGroupKind retrieves all GroupVersionKinds for a given group and kind
 	GetGVKsForGroupKind(ctx context.Context, group, kind string) ([]schema.GroupVersionKind, error)
+
+	// IsNamespacedResource determines if a given GVK represents a namespaced resource
+	IsNamespacedResource(ctx context.Context, gvk schema.GroupVersionKind) (bool, error)
 }
 
 // DefaultResourceClient implements the ResourceClient interface.
@@ -139,12 +142,13 @@ func (c *DefaultResourceClient) ListResources(ctx context.Context, gvk schema.Gr
 	return resources, nil
 }
 
-func (c *DefaultResourceClient) GetGVKsForGroupKind(ctx context.Context, group, kind string) ([]schema.GroupVersionKind, error) {
-	// Get discovery client
-	discoveryClient := c.discoveryClient
-
+// GetGVKsForGroupKind returns all available GroupVersionKinds for a given group and kind.
+func (c *DefaultResourceClient) GetGVKsForGroupKind(_ context.Context, group, kind string) ([]schema.GroupVersionKind, error) {
 	// Get all API resources
-	apiResourceLists, err := discoveryClient.ServerPreferredResources()
+
+	// TODO:  is there any way to do this more efficiently than getting all resources?  that can be tremendously expensive
+	// in crossplane envs with tons of CRDs.
+	apiResourceLists, err := c.discoveryClient.ServerPreferredResources()
 	if err != nil {
 		return nil, err
 	}
@@ -176,4 +180,33 @@ func (c *DefaultResourceClient) GetGVKsForGroupKind(ctx context.Context, group, 
 	}
 
 	return gvks, nil
+}
+
+// IsNamespacedResource determines if a given GVK represents a namespaced resource
+// by querying the cluster's discovery API.
+func (c *DefaultResourceClient) IsNamespacedResource(_ context.Context, gvk schema.GroupVersionKind) (bool, error) {
+	// Get the server resources for this group/version
+	groupVersion := gvk.GroupVersion().String()
+	resourceList, err := c.discoveryClient.ServerResourcesForGroupVersion(groupVersion)
+	if err != nil {
+		return false, errors.Wrapf(err, "cannot get server resources for group version %s", groupVersion)
+	}
+
+	// Find the resource matching our kind
+	for _, resource := range resourceList.APIResources {
+		if resource.Kind == gvk.Kind {
+			// The Namespaced field indicates whether the resource is namespaced
+			c.logger.Debug("Determined resource scope from discovery",
+				"gvk", gvk.String(),
+				"namespaced", resource.Namespaced)
+			return resource.Namespaced, nil
+		}
+	}
+
+	// If we can't find the resource, this is an error condition that should fail the diff
+	availableKinds := make([]string, len(resourceList.APIResources))
+	for i, resource := range resourceList.APIResources {
+		availableKinds[i] = resource.Kind
+	}
+	return false, errors.Errorf("resource kind %s not found in discovery API for group version %s (available kinds: %v)", gvk.Kind, groupVersion, availableKinds)
 }

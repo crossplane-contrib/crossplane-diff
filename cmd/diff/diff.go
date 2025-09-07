@@ -22,12 +22,12 @@ import (
 	"time"
 
 	"github.com/alecthomas/kong"
+	dp "github.com/crossplane-contrib/crossplane-diff/cmd/diff/diffprocessor"
 	"k8s.io/client-go/rest"
 
 	"github.com/crossplane/crossplane-runtime/v2/pkg/errors"
 	"github.com/crossplane/crossplane-runtime/v2/pkg/logging"
 
-	dp "github.com/crossplane-contrib/crossplane-diff/cmd/diff/diffprocessor"
 	ld "github.com/crossplane/crossplane/v2/cmd/crank/common/load"
 	"github.com/crossplane/crossplane/v2/cmd/crank/render"
 )

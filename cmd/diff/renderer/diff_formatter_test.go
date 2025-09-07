@@ -4,12 +4,11 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/crossplane-contrib/crossplane-diff/cmd/diff/renderer/types"
+	tu "github.com/crossplane-contrib/crossplane-diff/cmd/diff/testutils"
 	"github.com/google/go-cmp/cmp"
 	"github.com/sergi/go-diff/diffmatchpatch"
 	un "k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
-
-	"github.com/crossplane-contrib/crossplane-diff/cmd/diff/renderer/types"
-	tu "github.com/crossplane-contrib/crossplane-diff/cmd/diff/testutils"
 )
 
 func TestGenerateDiffWithOptions(t *testing.T) {

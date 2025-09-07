@@ -5,6 +5,11 @@ import (
 	"strings"
 	"testing"
 
+	xp "github.com/crossplane-contrib/crossplane-diff/cmd/diff/client/crossplane"
+	k8 "github.com/crossplane-contrib/crossplane-diff/cmd/diff/client/kubernetes"
+	"github.com/crossplane-contrib/crossplane-diff/cmd/diff/renderer"
+	dt "github.com/crossplane-contrib/crossplane-diff/cmd/diff/renderer/types"
+	tu "github.com/crossplane-contrib/crossplane-diff/cmd/diff/testutils"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	un "k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -14,11 +19,6 @@ import (
 	cpd "github.com/crossplane/crossplane-runtime/v2/pkg/resource/unstructured/composed"
 	cmp "github.com/crossplane/crossplane-runtime/v2/pkg/resource/unstructured/composite"
 
-	xp "github.com/crossplane-contrib/crossplane-diff/cmd/diff/client/crossplane"
-	k8 "github.com/crossplane-contrib/crossplane-diff/cmd/diff/client/kubernetes"
-	"github.com/crossplane-contrib/crossplane-diff/cmd/diff/renderer"
-	dt "github.com/crossplane-contrib/crossplane-diff/cmd/diff/renderer/types"
-	tu "github.com/crossplane-contrib/crossplane-diff/cmd/diff/testutils"
 	"github.com/crossplane/crossplane/v2/cmd/crank/render"
 )
 
@@ -26,7 +26,7 @@ import (
 var _ DiffCalculator = &tu.MockDiffCalculator{}
 
 func TestDefaultDiffCalculator_CalculateDiff(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 
 	// Create test resources
 	existingResource := tu.NewResource("example.org/v1", "TestResource", "existing-resource").
@@ -397,7 +397,7 @@ func TestDefaultDiffCalculator_CalculateDiff(t *testing.T) {
 }
 
 func TestDefaultDiffCalculator_CalculateDiffs(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 
 	// Create test XR
 	modifiedXr := tu.NewResource("example.org/v1", "XR", "test-xr").
@@ -722,7 +722,7 @@ func TestDefaultDiffCalculator_CalculateDiffs(t *testing.T) {
 }
 
 func TestDefaultDiffCalculator_CalculateRemovedResourceDiffs(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 
 	// Create a test XR
 	xr := tu.NewResource("example.org/v1", "XR", "test-xr").

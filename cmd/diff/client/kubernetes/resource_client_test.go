@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	tu "github.com/crossplane-contrib/crossplane-diff/cmd/diff/testutils"
 	"github.com/google/go-cmp/cmp"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	un "k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -15,8 +16,6 @@ import (
 	kt "k8s.io/client-go/testing"
 
 	"github.com/crossplane/crossplane-runtime/v2/pkg/errors"
-
-	tu "github.com/crossplane-contrib/crossplane-diff/cmd/diff/testutils"
 )
 
 var _ ResourceClient = (*tu.MockResourceClient)(nil)
@@ -68,7 +67,7 @@ func TestResourceClient_GetResource(t *testing.T) {
 				return dynamicClient, mockConverter
 			},
 			args: args{
-				ctx: context.Background(),
+				ctx: t.Context(),
 				gvk: schema.GroupVersionKind{
 					Group:   "example.org",
 					Version: "v1",
@@ -108,7 +107,7 @@ func TestResourceClient_GetResource(t *testing.T) {
 				return dynamicClient, mockConverter
 			},
 			args: args{
-				ctx: context.Background(),
+				ctx: t.Context(),
 				gvk: schema.GroupVersionKind{
 					Group:   "example.org",
 					Version: "v1",
@@ -144,7 +143,7 @@ func TestResourceClient_GetResource(t *testing.T) {
 				return dc, mockConverter
 			},
 			args: args{
-				ctx: context.Background(),
+				ctx: t.Context(),
 				gvk: schema.GroupVersionKind{
 					Group:   "example.org",
 					Version: "v1",
@@ -172,7 +171,7 @@ func TestResourceClient_GetResource(t *testing.T) {
 				return dynamicClient, mockConverter
 			},
 			args: args{
-				ctx: context.Background(),
+				ctx: t.Context(),
 				gvk: schema.GroupVersionKind{
 					Group:   "example.org",
 					Version: "v1",
@@ -278,7 +277,7 @@ func TestResourceClient_GetResourcesByLabel(t *testing.T) {
 				gvk       schema.GroupVersionKind
 				selector  metav1.LabelSelector
 			}{
-				ctx:       context.Background(),
+				ctx:       t.Context(),
 				namespace: "test-namespace",
 				gvk: schema.GroupVersionKind{
 					Group:   "example.org",
@@ -348,7 +347,7 @@ func TestResourceClient_GetResourcesByLabel(t *testing.T) {
 				gvk       schema.GroupVersionKind
 				selector  metav1.LabelSelector
 			}{
-				ctx:       context.Background(),
+				ctx:       t.Context(),
 				namespace: "test-namespace",
 				gvk: schema.GroupVersionKind{
 					Group:   "example.org",
@@ -412,7 +411,7 @@ func TestResourceClient_GetResourcesByLabel(t *testing.T) {
 				gvk       schema.GroupVersionKind
 				selector  metav1.LabelSelector
 			}{
-				ctx:       context.Background(),
+				ctx:       t.Context(),
 				namespace: "test-namespace",
 				gvk: schema.GroupVersionKind{
 					Group:   "example.org",
@@ -449,7 +448,7 @@ func TestResourceClient_GetResourcesByLabel(t *testing.T) {
 				gvk       schema.GroupVersionKind
 				selector  metav1.LabelSelector
 			}{
-				ctx:       context.Background(),
+				ctx:       t.Context(),
 				namespace: "test-namespace",
 				gvk: schema.GroupVersionKind{
 					Group:   "example.org",
@@ -572,7 +571,7 @@ func TestResourceClient_ListResources(t *testing.T) {
 				return dc, mockConverter
 			},
 			args: args{
-				ctx: context.Background(),
+				ctx: t.Context(),
 				gvk: schema.GroupVersionKind{
 					Group:   "example.org",
 					Version: "v1",
@@ -613,7 +612,7 @@ func TestResourceClient_ListResources(t *testing.T) {
 				return dc, mockConverter
 			},
 			args: args{
-				ctx: context.Background(),
+				ctx: t.Context(),
 				gvk: schema.GroupVersionKind{
 					Group:   "example.org",
 					Version: "v1",
@@ -659,7 +658,7 @@ func TestResourceClient_ListResources(t *testing.T) {
 				return dc, mockConverter
 			},
 			args: args{
-				ctx: context.Background(),
+				ctx: t.Context(),
 				gvk: schema.GroupVersionKind{
 					Group:   "example.org",
 					Version: "v1",
@@ -685,7 +684,7 @@ func TestResourceClient_ListResources(t *testing.T) {
 				return dc, mockConverter
 			},
 			args: args{
-				ctx: context.Background(),
+				ctx: t.Context(),
 				gvk: schema.GroupVersionKind{
 					Group:   "example.org",
 					Version: "v1",
@@ -757,6 +756,180 @@ func TestResourceClient_ListResources(t *testing.T) {
 				if !wantResources[name] {
 					t.Errorf("\n%s\nListResources(...): unexpected resource: %s", tc.reason, name)
 				}
+			}
+		})
+	}
+}
+
+func TestResourceClient_IsNamespacedResource(t *testing.T) {
+	tests := map[string]struct {
+		reason    string
+		resources map[string][]metav1.APIResource
+		gvk       schema.GroupVersionKind
+		want      bool
+		wantErr   bool
+		errMsg    string
+	}{
+		"NamespacedResource": {
+			reason: "Should return true for namespaced resources",
+			resources: map[string][]metav1.APIResource{
+				"example.org/v1": {
+					{
+						Name:       "testresources",
+						Kind:       "TestResource",
+						Namespaced: true,
+					},
+				},
+			},
+			gvk: schema.GroupVersionKind{
+				Group:   "example.org",
+				Version: "v1",
+				Kind:    "TestResource",
+			},
+			want:    true,
+			wantErr: false,
+		},
+		"ClusterScopedResource": {
+			reason: "Should return false for cluster-scoped resources",
+			resources: map[string][]metav1.APIResource{
+				"example.org/v1": {
+					{
+						Name:       "clusterresources",
+						Kind:       "ClusterResource",
+						Namespaced: false,
+					},
+				},
+			},
+			gvk: schema.GroupVersionKind{
+				Group:   "example.org",
+				Version: "v1",
+				Kind:    "ClusterResource",
+			},
+			want:    false,
+			wantErr: false,
+		},
+		"BuiltInNamespacedResource": {
+			reason: "Should return true for built-in namespaced resources like ConfigMap",
+			resources: map[string][]metav1.APIResource{
+				"v1": {
+					{
+						Name:       "configmaps",
+						Kind:       "ConfigMap",
+						Namespaced: true,
+					},
+				},
+			},
+			gvk: schema.GroupVersionKind{
+				Group:   "",
+				Version: "v1",
+				Kind:    "ConfigMap",
+			},
+			want:    true,
+			wantErr: false,
+		},
+		"BuiltInClusterScopedResource": {
+			reason: "Should return false for built-in cluster-scoped resources like Node",
+			resources: map[string][]metav1.APIResource{
+				"v1": {
+					{
+						Name:       "nodes",
+						Kind:       "Node",
+						Namespaced: false,
+					},
+				},
+			},
+			gvk: schema.GroupVersionKind{
+				Group:   "",
+				Version: "v1",
+				Kind:    "Node",
+			},
+			want:    false,
+			wantErr: false,
+		},
+		"ResourceNotFound": {
+			reason: "Should return error when resource kind is not found in API resources",
+			resources: map[string][]metav1.APIResource{
+				"example.org/v1": {
+					{
+						Name:       "otherresources",
+						Kind:       "OtherResource",
+						Namespaced: true,
+					},
+				},
+			},
+			gvk: schema.GroupVersionKind{
+				Group:   "example.org",
+				Version: "v1",
+				Kind:    "NonExistentResource",
+			},
+			want:    false,
+			wantErr: true,
+			errMsg:  "resource kind NonExistentResource not found in discovery API for group version example.org/v1",
+		},
+		"MultipleResourcesInGroup": {
+			reason: "Should find the correct resource when multiple resources exist in same group",
+			resources: map[string][]metav1.APIResource{
+				"example.org/v1": {
+					{
+						Name:       "clusterresources",
+						Kind:       "ClusterResource",
+						Namespaced: false,
+					},
+					{
+						Name:       "namespacedresources",
+						Kind:       "NamespacedResource",
+						Namespaced: true,
+					},
+					{
+						Name:       "otherresources",
+						Kind:       "OtherResource",
+						Namespaced: true,
+					},
+				},
+			},
+			gvk: schema.GroupVersionKind{
+				Group:   "example.org",
+				Version: "v1",
+				Kind:    "NamespacedResource",
+			},
+			want:    true,
+			wantErr: false,
+		},
+	}
+
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			discoveryClient := tu.CreateFakeDiscoveryClient(tc.resources)
+			converter := tu.NewMockTypeConverter().Build()
+
+			c := &DefaultResourceClient{
+				dynamicClient:   nil, // Not needed for this test
+				converter:       converter,
+				discoveryClient: discoveryClient,
+				logger:          tu.TestLogger(t, false),
+			}
+
+			got, err := c.IsNamespacedResource(t.Context(), tc.gvk)
+
+			if tc.wantErr {
+				if err == nil {
+					t.Errorf("\n%s\nIsNamespacedResource(...): expected error but got none", tc.reason)
+					return
+				}
+				if tc.errMsg != "" && !strings.Contains(err.Error(), tc.errMsg) {
+					t.Errorf("\n%s\nIsNamespacedResource(...): expected error containing %q, got %q",
+						tc.reason, tc.errMsg, err.Error())
+				}
+				return
+			}
+
+			if err != nil {
+				t.Errorf("\n%s\nIsNamespacedResource(...): unexpected error: %v", tc.reason, err)
+				return
+			}
+
+			if got != tc.want {
+				t.Errorf("\n%s\nIsNamespacedResource(...): got %v, want %v", tc.reason, got, tc.want)
 			}
 		})
 	}

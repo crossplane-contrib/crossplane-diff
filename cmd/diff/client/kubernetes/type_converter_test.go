@@ -5,14 +5,13 @@ import (
 	"strings"
 	"testing"
 
+	tu "github.com/crossplane-contrib/crossplane-diff/cmd/diff/testutils"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	testdiscovery "k8s.io/client-go/discovery/fake"
 	kt "k8s.io/client-go/testing"
 
 	"github.com/crossplane/crossplane-runtime/v2/pkg/errors"
-
-	tu "github.com/crossplane-contrib/crossplane-diff/cmd/diff/testutils"
 )
 
 var _ TypeConverter = (*tu.MockTypeConverter)(nil)
@@ -50,7 +49,7 @@ func TestTypeConverter_GVKToGVR(t *testing.T) {
 			},
 
 			args: args{
-				ctx: context.Background(),
+				ctx: t.Context(),
 				gvk: schema.GroupVersionKind{
 					Group:   "example.org",
 					Version: "v1",
@@ -80,7 +79,7 @@ func TestTypeConverter_GVKToGVR(t *testing.T) {
 				},
 			},
 			args: args{
-				ctx: context.Background(),
+				ctx: t.Context(),
 				gvk: schema.GroupVersionKind{
 					Group:   "example.org",
 					Version: "v1",
@@ -99,7 +98,7 @@ func TestTypeConverter_GVKToGVR(t *testing.T) {
 			reason:    "Should return error when discovery fails",
 			resources: []*metav1.APIResourceList{},
 			args: args{
-				ctx: context.Background(),
+				ctx: t.Context(),
 				gvk: schema.GroupVersionKind{
 					Group:   "example.org",
 					Version: "v1",
@@ -125,7 +124,7 @@ func TestTypeConverter_GVKToGVR(t *testing.T) {
 				},
 			},
 			args: args{
-				ctx: context.Background(),
+				ctx: t.Context(),
 				gvk: schema.GroupVersionKind{
 					Group:   "example.org",
 					Version: "v1",
@@ -211,7 +210,7 @@ func TestTypeConverter_GetResourceNameForGVK(t *testing.T) {
 				},
 			},
 			args: args{
-				ctx: context.Background(),
+				ctx: t.Context(),
 				gvk: schema.GroupVersionKind{
 					Group:   "example.org",
 					Version: "v1",
@@ -237,7 +236,7 @@ func TestTypeConverter_GetResourceNameForGVK(t *testing.T) {
 				},
 			},
 			args: args{
-				ctx: context.Background(),
+				ctx: t.Context(),
 				gvk: schema.GroupVersionKind{
 					Group:   "example.org",
 					Version: "v1",
@@ -268,7 +267,7 @@ func TestTypeConverter_GetResourceNameForGVK(t *testing.T) {
 				},
 			},
 			args: args{
-				ctx: context.Background(),
+				ctx: t.Context(),
 				gvk: schema.GroupVersionKind{
 					Group:   "example.org",
 					Version: "v1",
@@ -284,7 +283,7 @@ func TestTypeConverter_GetResourceNameForGVK(t *testing.T) {
 			resources: []*metav1.APIResourceList{},
 
 			args: args{
-				ctx: context.Background(),
+				ctx: t.Context(),
 				gvk: schema.GroupVersionKind{
 					Group:   "example.org",
 					Version: "v1",
@@ -310,7 +309,7 @@ func TestTypeConverter_GetResourceNameForGVK(t *testing.T) {
 				},
 			},
 			args: args{
-				ctx: context.Background(),
+				ctx: t.Context(),
 				gvk: schema.GroupVersionKind{
 					Group:   "example.org",
 					Version: "v1",

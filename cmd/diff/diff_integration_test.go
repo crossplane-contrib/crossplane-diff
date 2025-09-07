@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/alecthomas/kong"
+	tu "github.com/crossplane-contrib/crossplane-diff/cmd/diff/testutils"
 	extv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	cgoscheme "k8s.io/client-go/kubernetes/scheme"
@@ -21,10 +22,8 @@ import (
 
 	"github.com/crossplane/crossplane-runtime/v2/pkg/logging"
 
-	tu "github.com/crossplane-contrib/crossplane-diff/cmd/diff/testutils"
 	xpextv1 "github.com/crossplane/crossplane/v2/apis/apiextensions/v1"
 	xpextv2 "github.com/crossplane/crossplane/v2/apis/apiextensions/v2"
-
 	pkgv1 "github.com/crossplane/crossplane/v2/apis/pkg/v1"
 )
 
@@ -32,19 +31,19 @@ const (
 	timeout = 60 * time.Second
 )
 
-type XrdApiVersion int
+type XrdAPIVersion int
 
 const (
-	V2 XrdApiVersion = iota // v2 comes first so that this is the default value
+	V2 XrdAPIVersion = iota // v2 comes first so that this is the default value
 	V1
 )
 
-var versionNames = map[XrdApiVersion]string{
+var versionNames = map[XrdAPIVersion]string{
 	V1: "apiextensions.crossplane.io/v1",
 	V2: "apiextensions.crossplane.io/v2",
 }
 
-func (s XrdApiVersion) String() string {
+func (s XrdAPIVersion) String() string {
 	return versionNames[s]
 }
 
@@ -96,7 +95,9 @@ func TestDiffIntegration(t *testing.T) {
 		expectedError           bool
 		expectedErrorContains   string
 		noColor                 bool
-		xrdApiVersion           XrdApiVersion
+		xrdAPIVersion           XrdAPIVersion
+		skip                    bool
+		skipReason              string
 	}{
 		"New resource shows color diff": {
 			inputFiles: []string{"testdata/diff/new-xr.yaml"},
@@ -107,6 +108,43 @@ func TestDiffIntegration(t *testing.T) {
 				// we don't need to worry about upgrading providers or anything.
 				"testdata/diff/resources/xrd.yaml",
 				"testdata/diff/resources/composition.yaml",
+				"testdata/diff/resources/functions.yaml",
+			},
+			expectedOutput: strings.Join([]string{
+				`+++ XDownstreamResource/test-resource
+`, tu.Green(`+ apiVersion: ns.nop.example.org/v1alpha1
++ kind: XDownstreamResource
++ metadata:
++   annotations:
++     crossplane.io/composition-resource-name: nop-resource
++   labels:
++     crossplane.io/composite: test-resource
++   name: test-resource
++   namespace: default
++ spec:
++   forProvider:
++     configData: new-value
+`), `
+---
++++ XNopResource/test-resource
+`, tu.Green(`+ apiVersion: ns.diff.example.org/v1alpha1
++ kind: XNopResource
++ metadata:
++   name: test-resource
++   namespace: default
++ spec:
++   coolField: new-value
+`), `
+---
+`,
+			}, ""),
+			expectedError: false,
+		},
+		"Automatic namespace propagation for namespaced managed resources": {
+			inputFiles: []string{"testdata/diff/new-xr.yaml"},
+			setupFiles: []string{
+				"testdata/diff/resources/xrd.yaml",
+				"testdata/diff/resources/composition-no-namespace-patch.yaml",
 				"testdata/diff/resources/functions.yaml",
 			},
 			expectedOutput: strings.Join([]string{
@@ -363,8 +401,59 @@ func TestDiffIntegration(t *testing.T) {
 			expectedError: false,
 			noColor:       true,
 		},
+		"Cross-namespace resource dependencies via fn-external-resources": {
+			// Skip this test until function-extra-resources supports the namespace field
+			// This test documents the intended cross-namespace functionality and will work
+			// once function-extra-resources is updated to support Crossplane v2 namespace specification
+			setupFiles: []string{
+				"testdata/diff/resources/xrd.yaml",
+				"testdata/diff/resources/functions.yaml",
+				"testdata/diff/resources/cross-namespace-configmap.yaml",
+				"testdata/diff/resources/cross-namespace-fn-composition.yaml",
+				"testdata/diff/resources/existing-cross-ns-xr.yaml",
+				"testdata/diff/resources/existing-cross-ns-downstream.yaml",
+				"testdata/diff/resources/external-named-clusterrole.yaml",
+			},
+			inputFiles: []string{"testdata/diff/modified-cross-ns-xr.yaml"},
+			expectedOutput: `
+~~~ XDownstreamResource/test-cross-ns-resource
+  apiVersion: ns.nop.example.org/v1alpha1
+  kind: XDownstreamResource
+  metadata:
+    annotations:
+      crossplane.io/composition-resource-name: cross-ns-resource
+    generateName: test-cross-ns-resource-
+    labels:
+      crossplane.io/composite: test-cross-ns-resource
+    name: test-cross-ns-resource
+    namespace: default
+  spec:
+    forProvider:
+-     configData: existing-cross-ns-data-existing-named-data-old-cross-ns-role
++     configData: cross-namespace-data-another-cross-namespace-data-external-named-clusterrole
+
+---
+~~~ XNopResource/test-cross-ns-resource
+  apiVersion: ns.diff.example.org/v1alpha1
+  kind: XNopResource
+  metadata:
+    name: test-cross-ns-resource
+    namespace: default
+  spec:
+-   coolField: existing-cross-ns-value
++   coolField: modified-cross-ns-value
+-   environment: staging
++   environment: production
+
+---
+`,
+			expectedError: false,
+			noColor:       true,
+			skip:          true,
+			skipReason:    "function-extra-resources does not yet support namespace field for cross-namespace resource access",
+		},
 		"Resource removal detection with hierarchy (v1 style resourceRefs; cluster scoped downstreams)": {
-			xrdApiVersion: V1,
+			xrdAPIVersion: V1,
 			setupFilesWithOwnerRefs: []HierarchicalOwnershipRelation{
 				{
 					OwnerFile: "testdata/diff/resources/existing-legacy-xr.yaml",
@@ -978,17 +1067,23 @@ Summary: 2 modified`,
 
 	tu.SetupKubeTestLogger(t)
 
-	//version := V2
+	// version := V2
 
 	for name, tt := range tests {
-		//if tt.crdVersions == nil || len(tt.crdVersions) == 0 {
+		// if tt.crdVersions == nil || len(tt.crdVersions) == 0 {
 		//	// Default to testing against v2 CRDs if not specified.  claims still exist in v2, though deprecated.
 		//	// old style XRDs are still supported, too.
 		//	tt.crdVersions = []XrdApiVersion{V2}
 		//}
 
-		//for _, version := range tt.crdVersions {
+		// for _, version := range tt.crdVersions {
 		t.Run(name /*fmt.Sprintf("%s (%s)", name, version.String()) */, func(t *testing.T) {
+			// Skip test if requested
+			if tt.skip {
+				t.Skip(tt.skipReason)
+				return
+			}
+
 			// Setup a brand new test environment for each test case
 			_, thisFile, _, _ := run.Caller(0)
 			thisDir := filepath.Dir(thisFile)
@@ -1021,7 +1116,7 @@ Summary: 2 modified`,
 				t.Fatalf("failed to create client: %v", err)
 			}
 
-			ctx, cancel := context.WithTimeout(context.Background(), timeout)
+			ctx, cancel := context.WithTimeout(t.Context(), timeout)
 			defer cancel()
 
 			// Apply the setup resources
@@ -1030,14 +1125,14 @@ Summary: 2 modified`,
 			}
 
 			// Default to v2 API version for XR resources unless otherwise specified
-			xrdApiVersion := V2
-			if tt.xrdApiVersion != V2 {
-				xrdApiVersion = tt.xrdApiVersion
+			xrdAPIVersion := V2
+			if tt.xrdAPIVersion != V2 {
+				xrdAPIVersion = tt.xrdAPIVersion
 			}
 
 			// Apply resources with owner references
 			if len(tt.setupFilesWithOwnerRefs) > 0 {
-				if err := applyHierarchicalOwnership(ctx, tu.TestLogger(t, false), k8sClient, xrdApiVersion, tt.setupFilesWithOwnerRefs); err != nil {
+				if err := applyHierarchicalOwnership(ctx, tu.TestLogger(t, false), k8sClient, xrdAPIVersion, tt.setupFilesWithOwnerRefs); err != nil {
 					t.Fatalf("failed to setup owner references: %v", err)
 				}
 			}

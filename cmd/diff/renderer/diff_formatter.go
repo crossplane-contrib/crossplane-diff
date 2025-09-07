@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 
+	t "github.com/crossplane-contrib/crossplane-diff/cmd/diff/renderer/types"
 	"github.com/sergi/go-diff/diffmatchpatch"
 	"k8s.io/apimachinery/pkg/api/equality"
 	un "k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -13,8 +14,6 @@ import (
 
 	"github.com/crossplane/crossplane-runtime/v2/pkg/errors"
 	"github.com/crossplane/crossplane-runtime/v2/pkg/logging"
-
-	t "github.com/crossplane-contrib/crossplane-diff/cmd/diff/renderer/types"
 )
 
 // DiffOptions holds configuration options for the diff output.

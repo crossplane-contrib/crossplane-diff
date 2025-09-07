@@ -1,11 +1,11 @@
 package diffprocessor
 
 import (
-	"github.com/crossplane/crossplane-runtime/v2/pkg/logging"
-
 	xp "github.com/crossplane-contrib/crossplane-diff/cmd/diff/client/crossplane"
 	k8 "github.com/crossplane-contrib/crossplane-diff/cmd/diff/client/kubernetes"
 	"github.com/crossplane-contrib/crossplane-diff/cmd/diff/renderer"
+
+	"github.com/crossplane/crossplane-runtime/v2/pkg/logging"
 )
 
 // ProcessorConfig contains configuration for the DiffProcessor.

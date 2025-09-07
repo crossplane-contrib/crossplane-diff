@@ -4,18 +4,18 @@ import (
 	"context"
 	"testing"
 
+	tu "github.com/crossplane-contrib/crossplane-diff/cmd/diff/testutils"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	un "k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 
 	"github.com/crossplane/crossplane-runtime/v2/pkg/errors"
 
-	tu "github.com/crossplane-contrib/crossplane-diff/cmd/diff/testutils"
 	v1 "github.com/crossplane/crossplane/v2/proto/fn/v1"
 )
 
 func TestRequirementsProvider_ProvideRequirements(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 
 	// Create resources for testing
 	configMap := tu.NewResource("v1", "ConfigMap", "config1").Build()
@@ -32,7 +32,12 @@ func TestRequirementsProvider_ProvideRequirements(t *testing.T) {
 		"EmptyRequirements": {
 			requirements: map[string]v1.Requirements{},
 			setupResourceClient: func() *tu.MockResourceClient {
-				return tu.NewMockResourceClient().Build()
+				return tu.NewMockResourceClient().
+					WithNamespacedResource(
+						schema.GroupVersionKind{Group: "", Version: "v1", Kind: "ConfigMap"},
+						schema.GroupVersionKind{Group: "", Version: "v1", Kind: "Secret"},
+					).
+					Build()
 			},
 			setupEnvironmentClient: func() *tu.MockEnvironmentClient {
 				return tu.NewMockEnvironmentClient().
@@ -58,6 +63,9 @@ func TestRequirementsProvider_ProvideRequirements(t *testing.T) {
 			},
 			setupResourceClient: func() *tu.MockResourceClient {
 				return tu.NewMockResourceClient().
+					WithNamespacedResource(
+						schema.GroupVersionKind{Group: "", Version: "v1", Kind: "ConfigMap"},
+					).
 					WithGetResource(func(_ context.Context, gvk schema.GroupVersionKind, _, name string) (*un.Unstructured, error) {
 						if gvk.Kind == "ConfigMap" && name == "config1" {
 							return configMap, nil
@@ -95,6 +103,9 @@ func TestRequirementsProvider_ProvideRequirements(t *testing.T) {
 			},
 			setupResourceClient: func() *tu.MockResourceClient {
 				return tu.NewMockResourceClient().
+					WithNamespacedResource(
+						schema.GroupVersionKind{Group: "", Version: "v1", Kind: "ConfigMap"},
+					).
 					WithGetResourcesByLabel(func(_ context.Context, _ schema.GroupVersionKind, _ string, sel metav1.LabelSelector) ([]*un.Unstructured, error) {
 						// Return resources for label-based selectors
 						if sel.MatchLabels["app"] == "test-app" {
@@ -136,6 +147,10 @@ func TestRequirementsProvider_ProvideRequirements(t *testing.T) {
 			},
 			setupResourceClient: func() *tu.MockResourceClient {
 				return tu.NewMockResourceClient().
+					WithNamespacedResource(
+						schema.GroupVersionKind{Group: "", Version: "v1", Kind: "ConfigMap"},
+						schema.GroupVersionKind{Group: "", Version: "v1", Kind: "Secret"},
+					).
 					WithGetResource(func(_ context.Context, gvk schema.GroupVersionKind, _, name string) (*un.Unstructured, error) {
 						if gvk.Kind == "ConfigMap" && name == "config1" {
 							return configMap, nil
@@ -172,6 +187,9 @@ func TestRequirementsProvider_ProvideRequirements(t *testing.T) {
 			},
 			setupResourceClient: func() *tu.MockResourceClient {
 				return tu.NewMockResourceClient().
+					WithNamespacedResource(
+						schema.GroupVersionKind{Group: "", Version: "v1", Kind: "ConfigMap"},
+					).
 					WithResourceNotFound().
 					Build()
 			},
@@ -199,6 +217,9 @@ func TestRequirementsProvider_ProvideRequirements(t *testing.T) {
 			setupResourceClient: func() *tu.MockResourceClient {
 				// This resource client should not be called because the resource is in the env configs
 				return tu.NewMockResourceClient().
+					WithNamespacedResource(
+						schema.GroupVersionKind{Group: "", Version: "v1", Kind: "ConfigMap"},
+					).
 					WithGetResource(func(_ context.Context, _ schema.GroupVersionKind, _, _ string) (*un.Unstructured, error) {
 						return nil, errors.New("should not be called")
 					}).
@@ -235,7 +256,7 @@ func TestRequirementsProvider_ProvideRequirements(t *testing.T) {
 			}
 
 			// Call the method being tested
-			resources, err := provider.ProvideRequirements(ctx, tt.requirements)
+			resources, err := provider.ProvideRequirements(ctx, tt.requirements, "default")
 
 			// Check error cases
 			if tt.wantErr {

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 
+	k8 "github.com/crossplane-contrib/crossplane-diff/cmd/diff/client/kubernetes"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	un "k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -13,8 +14,6 @@ import (
 
 	"github.com/crossplane/crossplane-runtime/v2/pkg/errors"
 	"github.com/crossplane/crossplane-runtime/v2/pkg/logging"
-
-	k8 "github.com/crossplane-contrib/crossplane-diff/cmd/diff/client/kubernetes"
 )
 
 // ResourceManager handles resource-related operations like fetching, updating owner refs,

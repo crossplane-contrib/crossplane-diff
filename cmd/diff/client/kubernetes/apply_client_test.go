@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	tu "github.com/crossplane-contrib/crossplane-diff/cmd/diff/testutils"
 	"github.com/google/go-cmp/cmp"
 	un "k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -14,8 +15,6 @@ import (
 	kt "k8s.io/client-go/testing"
 
 	"github.com/crossplane/crossplane-runtime/v2/pkg/errors"
-
-	tu "github.com/crossplane-contrib/crossplane-diff/cmd/diff/testutils"
 )
 
 var _ ApplyClient = (*tu.MockApplyClient)(nil)
@@ -70,7 +69,7 @@ func TestApplyClient_DryRunApply(t *testing.T) {
 				return dynamicClient, mockConverter
 			},
 			args: args{
-				ctx: context.Background(),
+				ctx: t.Context(),
 				obj: tu.NewResource("example.org/v1", "ExampleResource", "test-resource").
 					InNamespace("test-namespace").
 					WithSpecField("property", "new-value").
@@ -113,7 +112,7 @@ func TestApplyClient_DryRunApply(t *testing.T) {
 				return dynamicClient, mockConverter
 			},
 			args: args{
-				ctx: context.Background(),
+				ctx: t.Context(),
 				obj: tu.NewResource("example.org/v1", "ClusterResource", "test-cluster-resource").
 					WithSpecField("property", "new-value").
 					Build(),
@@ -138,7 +137,7 @@ func TestApplyClient_DryRunApply(t *testing.T) {
 				return dynamicClient, mockConverter
 			},
 			args: args{
-				ctx: context.Background(),
+				ctx: t.Context(),
 				obj: tu.NewResource("example.org/v1", "ExampleResource", "test-resource").
 					InNamespace("test-namespace").
 					WithSpecField("property", "new-value").
@@ -170,7 +169,7 @@ func TestApplyClient_DryRunApply(t *testing.T) {
 				return dynamicClient, mockConverter
 			},
 			args: args{
-				ctx: context.Background(),
+				ctx: t.Context(),
 				obj: tu.NewResource("example.org/v1", "ExampleResource", "test-resource").
 					InNamespace("test-namespace").
 					WithSpecField("property", "new-value").

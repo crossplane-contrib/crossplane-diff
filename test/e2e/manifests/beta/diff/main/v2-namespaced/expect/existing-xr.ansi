@@ -15,6 +15,7 @@
     labels:
       crossplane.io/composite: existing-resource
     name: existing-resource-czpjg
+    namespace: default
   spec:
     deletionPolicy: Delete
     forProvider:
@@ -37,14 +38,16 @@
     labels:
       crossplane.io/composite: existing-resource
     name: existing-resource
+    namespace: default
   spec:
-    compositionRef:
-      name: xnopresources.diff.example.org
-    compositionRevisionRef:
-      name: xnopresources.diff.example.org-acd5cd1
-    compositionUpdatePolicy: Automatic
 [31m-   coolField: I'm existing![0m
 [32m+   coolField: I'm modified![0m
+    crossplane:
+      compositionRef:
+        name: xnopresources.diff.example.org
+      compositionRevisionRef:
+        name: xnopresources.diff.example.org-acd5cd1
+      compositionUpdatePolicy: Automatic
     parameters:
       config:
 [31m-       setting1: original[0m

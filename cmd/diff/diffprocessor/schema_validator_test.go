@@ -5,6 +5,8 @@ import (
 	"strings"
 	"testing"
 
+	xp "github.com/crossplane-contrib/crossplane-diff/cmd/diff/client/crossplane"
+	tu "github.com/crossplane-contrib/crossplane-diff/cmd/diff/testutils"
 	extv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	un "k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -13,28 +15,28 @@ import (
 
 	"github.com/crossplane/crossplane-runtime/v2/pkg/errors"
 	cpd "github.com/crossplane/crossplane-runtime/v2/pkg/resource/unstructured/composed"
-
-	xp "github.com/crossplane-contrib/crossplane-diff/cmd/diff/client/crossplane"
-	tu "github.com/crossplane-contrib/crossplane-diff/cmd/diff/testutils"
 )
 
 var _ SchemaValidator = (*tu.MockSchemaValidator)(nil)
 
 func TestDefaultSchemaValidator_ValidateResources(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 
 	// Create a sample XR and cpd resources for validation
 	xr := tu.NewResource("example.org/v1", "XR", "test-xr").
+		InNamespace("default").
 		WithSpecField("field", "value").
 		Build()
 
 	composedResource1 := tu.NewResource("cpd.org/v1", "ComposedResource", "resource1").
+		InNamespace("default").
 		WithCompositeOwner("test-xr").
 		WithCompositionResourceName("resource1").
 		WithSpecField("field", "value").
 		BuildUComposed()
 
 	composedResource2 := tu.NewResource("cpd.org/v1", "ComposedResource", "resource2").
+		InNamespace("default").
 		WithCompositeOwner("test-xr").
 		WithCompositionResourceName("resource2").
 		WithSpecField("field", "value").
@@ -163,6 +165,7 @@ func TestDefaultSchemaValidator_ValidateResources(t *testing.T) {
 				return sch, def
 			},
 			xr: tu.NewResource("example.org/v1", "XR", "test-xr").
+				InNamespace("default").
 				WithSpecField("field", int64(123)).
 				Build(),
 			composed:       []cpd.Unstructured{*composedResource1, *composedResource2},
@@ -209,11 +212,11 @@ func TestDefaultSchemaValidator_ValidateResources(t *testing.T) {
 }
 
 func TestDefaultSchemaValidator_EnsureComposedResourceCRDs(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 
 	// Create sample resources
-	xr := tu.NewResource("example.org/v1", "XR", "test-xr").Build()
-	cmpd := tu.NewResource("cpd.org/v1", "ComposedResource", "resource1").Build()
+	xr := tu.NewResource("example.org/v1", "XR", "test-xr").InNamespace("default").Build()
+	cmpd := tu.NewResource("cpd.org/v1", "ComposedResource", "resource1").InNamespace("default").Build()
 
 	// Create sample CRDs
 	xrCRD := makeCRD("xrs.example.org", "XR", "example.org", "v1")
@@ -295,7 +298,7 @@ func TestDefaultSchemaValidator_EnsureComposedResourceCRDs(t *testing.T) {
 }
 
 func TestDefaultSchemaValidator_LoadCRDs(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 
 	// Create sample CRDs as un
 	xrdUn := tu.NewResource("apiextensions.crossplane.io/v1", "CompositeResourceDefinition", "xrd1").
@@ -451,4 +454,242 @@ type xrdCountingClient struct {
 func (c *xrdCountingClient) GetXRDs(ctx context.Context) ([]*un.Unstructured, error) {
 	c.getXRDsCallCount++
 	return c.MockDefinitionClient.GetXRDs(ctx)
+}
+
+func TestDefaultSchemaValidator_ValidateScopeConstraints(t *testing.T) {
+	ctx := t.Context()
+
+	// Create CRDs with different scopes
+	namespacedCRD := makeCRD("namespacedresources.example.org", "NamespacedResource", "example.org", "v1")
+	namespacedCRD.Spec.Scope = extv1.NamespaceScoped
+
+	clusterCRD := makeCRD("clusterresources.example.org", "ClusterResource", "example.org", "v1")
+	clusterCRD.Spec.Scope = extv1.ClusterScoped
+
+	tests := map[string]struct {
+		setupClient       func() *tu.MockSchemaClient
+		preloadedCRDs     []*extv1.CustomResourceDefinition
+		resource          *un.Unstructured
+		expectedNamespace string
+		isClaimRoot       bool
+		expectedErr       bool
+		expectedErrMsg    string
+	}{
+		"NamespacedResourceValidNamespace": {
+			setupClient: func() *tu.MockSchemaClient {
+				return tu.NewMockSchemaClient().Build()
+			},
+			preloadedCRDs: []*extv1.CustomResourceDefinition{namespacedCRD},
+			resource: tu.NewResource("example.org/v1", "NamespacedResource", "test-resource").
+				InNamespace("default").
+				Build(),
+			expectedNamespace: "default",
+			isClaimRoot:       false,
+			expectedErr:       false,
+		},
+		"NamespacedResourceMissingNamespace": {
+			setupClient: func() *tu.MockSchemaClient {
+				return tu.NewMockSchemaClient().Build()
+			},
+			preloadedCRDs: []*extv1.CustomResourceDefinition{namespacedCRD},
+			resource: tu.NewResource("example.org/v1", "NamespacedResource", "test-resource").
+				Build(), // No namespace
+			expectedNamespace: "default",
+			isClaimRoot:       false,
+			expectedErr:       true,
+			expectedErrMsg:    "namespaced resource NamespacedResource/test-resource must have a namespace",
+		},
+		"NamespacedResourceWrongNamespace": {
+			setupClient: func() *tu.MockSchemaClient {
+				return tu.NewMockSchemaClient().Build()
+			},
+			preloadedCRDs: []*extv1.CustomResourceDefinition{namespacedCRD},
+			resource: tu.NewResource("example.org/v1", "NamespacedResource", "test-resource").
+				InNamespace("wrong").
+				Build(),
+			expectedNamespace: "default",
+			isClaimRoot:       false,
+			expectedErr:       true,
+			expectedErrMsg:    "cross-namespace references not supported",
+		},
+		"ClusterResourceValidNoNamespace": {
+			setupClient: func() *tu.MockSchemaClient {
+				return tu.NewMockSchemaClient().Build()
+			},
+			preloadedCRDs: []*extv1.CustomResourceDefinition{clusterCRD},
+			resource: tu.NewResource("example.org/v1", "ClusterResource", "test-resource").
+				Build(), // No namespace - correct for cluster-scoped
+			expectedNamespace: "",
+			isClaimRoot:       false,
+			expectedErr:       false,
+		},
+		"ClusterResourceInvalidNamespace": {
+			setupClient: func() *tu.MockSchemaClient {
+				return tu.NewMockSchemaClient().Build()
+			},
+			preloadedCRDs: []*extv1.CustomResourceDefinition{clusterCRD},
+			resource: tu.NewResource("example.org/v1", "ClusterResource", "test-resource").
+				InNamespace("default").
+				Build(),
+			expectedNamespace: "",
+			isClaimRoot:       false,
+			expectedErr:       true,
+			expectedErrMsg:    "cluster-scoped resource ClusterResource/test-resource cannot have a namespace",
+		},
+		"ClusterResourceFromNamespacedXR": {
+			setupClient: func() *tu.MockSchemaClient {
+				return tu.NewMockSchemaClient().Build()
+			},
+			preloadedCRDs: []*extv1.CustomResourceDefinition{clusterCRD},
+			resource: tu.NewResource("example.org/v1", "ClusterResource", "test-resource").
+				Build(),
+			expectedNamespace: "default", // XR is namespaced
+			isClaimRoot:       false,
+			expectedErr:       true,
+			expectedErrMsg:    "namespaced XR cannot own cluster-scoped managed resource",
+		},
+		"ClusterResourceFromNamespacedClaim": {
+			setupClient: func() *tu.MockSchemaClient {
+				return tu.NewMockSchemaClient().Build()
+			},
+			preloadedCRDs: []*extv1.CustomResourceDefinition{clusterCRD},
+			resource: tu.NewResource("example.org/v1", "ClusterResource", "test-resource").
+				Build(),
+			expectedNamespace: "default", // Claim is namespaced
+			isClaimRoot:       true,      // But it's a claim, so allowed
+			expectedErr:       false,
+		},
+		"CRDNotFound": {
+			setupClient: func() *tu.MockSchemaClient {
+				return tu.NewMockSchemaClient().
+					WithGetCRD(func(_ context.Context, _ schema.GroupVersionKind) (*un.Unstructured, error) {
+						return nil, errors.New("CRD not found")
+					}).
+					Build()
+			},
+			preloadedCRDs: []*extv1.CustomResourceDefinition{},
+			resource: tu.NewResource("example.org/v1", "UnknownResource", "test-resource").
+				Build(),
+			expectedNamespace: "default",
+			isClaimRoot:       false,
+			expectedErr:       true,
+			expectedErrMsg:    "cannot determine scope",
+		},
+	}
+
+	for name, tt := range tests {
+		t.Run(name, func(t *testing.T) {
+			schemaClient := tt.setupClient()
+			logger := tu.TestLogger(t, false)
+
+			// Create the schema validator
+			validator := NewSchemaValidator(schemaClient, tu.NewMockDefinitionClient().Build(), logger)
+			validator.(*DefaultSchemaValidator).SetCRDs(tt.preloadedCRDs)
+
+			// Call the function under test
+			err := validator.ValidateScopeConstraints(ctx, tt.resource, tt.expectedNamespace, tt.isClaimRoot)
+
+			// Check error expectations
+			if tt.expectedErr {
+				if err == nil {
+					t.Errorf("ValidateScopeConstraints() expected error but got none")
+					return
+				}
+				if tt.expectedErrMsg != "" && !strings.Contains(err.Error(), tt.expectedErrMsg) {
+					t.Errorf("ValidateScopeConstraints() error %q doesn't contain expected message %q",
+						err.Error(), tt.expectedErrMsg)
+				}
+				return
+			}
+
+			if err != nil {
+				t.Errorf("ValidateScopeConstraints() unexpected error: %v", err)
+			}
+		})
+	}
+}
+
+func TestDefaultSchemaValidator_IsClaimResource(t *testing.T) {
+	ctx := t.Context()
+
+	tests := map[string]struct {
+		setupClient func() *tu.MockDefinitionClient
+		resource    *un.Unstructured
+		expected    bool
+	}{
+		"ResourceIsClaim": {
+			setupClient: func() *tu.MockDefinitionClient {
+				// Create a mock XRD that defines this as a claim
+				claimXRD := tu.NewResource("apiextensions.crossplane.io/v1", "CompositeResourceDefinition", "testclaims.example.org").
+					WithSpecField("group", "example.org").
+					WithSpecField("names", map[string]interface{}{
+						"kind":     "TestClaim",
+						"plural":   "testclaims",
+						"singular": "testclaim",
+					}).
+					WithSpecField("claimNames", map[string]interface{}{
+						"kind":     "TestClaim",
+						"plural":   "testclaims",
+						"singular": "testclaim",
+					}).
+					Build()
+
+				return tu.NewMockDefinitionClient().
+					WithGetXRDForClaim(func(_ context.Context, gvk schema.GroupVersionKind) (*un.Unstructured, error) {
+						if gvk.Group == "example.org" && gvk.Kind == "TestClaim" {
+							return claimXRD, nil
+						}
+						return nil, errors.New("no XRD found that defines claim type")
+					}).
+					Build()
+			},
+			resource: tu.NewResource("example.org/v1", "TestClaim", "test-claim").
+				InNamespace("default").
+				Build(),
+			expected: true,
+		},
+		"ResourceIsNotClaim": {
+			setupClient: func() *tu.MockDefinitionClient {
+				return tu.NewMockDefinitionClient().
+					WithGetXRDForClaim(func(_ context.Context, _ schema.GroupVersionKind) (*un.Unstructured, error) {
+						return nil, errors.New("no XRD found that defines claim type")
+					}).
+					Build()
+			},
+			resource: tu.NewResource("example.org/v1", "TestXR", "test-xr").
+				InNamespace("default").
+				Build(),
+			expected: false,
+		},
+		"GetXRDForClaimError": {
+			setupClient: func() *tu.MockDefinitionClient {
+				return tu.NewMockDefinitionClient().
+					WithGetXRDForClaim(func(_ context.Context, _ schema.GroupVersionKind) (*un.Unstructured, error) {
+						return nil, errors.New("failed to fetch XRDs")
+					}).
+					Build()
+			},
+			resource: tu.NewResource("example.org/v1", "TestResource", "test-resource").
+				Build(),
+			expected: false, // Should return false on error
+		},
+	}
+
+	for name, tt := range tests {
+		t.Run(name, func(t *testing.T) {
+			defClient := tt.setupClient()
+			logger := tu.TestLogger(t, false)
+
+			// Create the schema validator
+			validator := NewSchemaValidator(tu.NewMockSchemaClient().Build(), defClient, logger)
+
+			// Call the function under test
+			result := validator.IsClaimResource(ctx, tt.resource)
+
+			// Check the result
+			if result != tt.expected {
+				t.Errorf("IsClaimResource() = %v, want %v", result, tt.expected)
+			}
+		})
+	}
 }

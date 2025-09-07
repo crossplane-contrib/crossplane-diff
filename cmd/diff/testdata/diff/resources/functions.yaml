@@ -5,7 +5,7 @@ kind: Function
 metadata:
   name: function-go-templating
 spec:
-  package: xpkg.upbound.io/crossplane-contrib/function-go-templating:v0.9.0
+  package: xpkg.upbound.io/crossplane-contrib/function-go-templating:v0.11.0
 ---
 apiVersion: pkg.crossplane.io/v1beta1
 kind: Function
@@ -19,11 +19,11 @@ kind: Function
 metadata:
   name: function-environment-configs
 spec:
-  package: xpkg.upbound.io/crossplane-contrib/function-environment-configs:v0.3.0
+  package: xpkg.upbound.io/crossplane-contrib/function-environment-configs:v0.4.0
 ---
 apiVersion: pkg.crossplane.io/v1beta1
 kind: Function
 metadata:
   name: function-extra-resources
 spec:
-  package: xpkg.upbound.io/crossplane-contrib/function-extra-resources:v0.0.3
+  package: xpkg.upbound.io/crossplane-contrib/function-extra-resources:v0.1.0

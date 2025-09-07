@@ -8,17 +8,18 @@ import (
 	"reflect"
 
 	"dario.cat/mergo"
+	xp "github.com/crossplane-contrib/crossplane-diff/cmd/diff/client/crossplane"
+	k8 "github.com/crossplane-contrib/crossplane-diff/cmd/diff/client/kubernetes"
+	"github.com/crossplane-contrib/crossplane-diff/cmd/diff/renderer"
+	dt "github.com/crossplane-contrib/crossplane-diff/cmd/diff/renderer/types"
 	un "k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 
 	"github.com/crossplane/crossplane-runtime/v2/pkg/errors"
 	"github.com/crossplane/crossplane-runtime/v2/pkg/logging"
+	cpd "github.com/crossplane/crossplane-runtime/v2/pkg/resource/unstructured/composed"
 	cmp "github.com/crossplane/crossplane-runtime/v2/pkg/resource/unstructured/composite"
 
-	xp "github.com/crossplane-contrib/crossplane-diff/cmd/diff/client/crossplane"
-	k8 "github.com/crossplane-contrib/crossplane-diff/cmd/diff/client/kubernetes"
-	"github.com/crossplane-contrib/crossplane-diff/cmd/diff/renderer"
-	dt "github.com/crossplane-contrib/crossplane-diff/cmd/diff/renderer/types"
 	apiextensionsv1 "github.com/crossplane/crossplane/v2/apis/apiextensions/v1"
 	pkgv1 "github.com/crossplane/crossplane/v2/apis/pkg/v1"
 	"github.com/crossplane/crossplane/v2/cmd/crank/render"
@@ -218,6 +219,16 @@ func (p *DefaultDiffProcessor) DiffSingleResource(ctx context.Context, res *un.U
 		return nil, errors.Wrap(err, "cannot merge input XR with result of rendered XR")
 	}
 
+	// WORKAROUND for https://github.com/crossplane/crossplane/issues/6782
+	// Propagate namespace from XR to namespaced managed resources
+	// For claims (v1 compatibility), skip namespace propagation entirely as all managed resources are cluster-scoped
+	isClaimRoot := p.schemaValidator.IsClaimResource(ctx, xrUnstructured)
+	if !isClaimRoot {
+		p.propagateNamespacesToManagedResources(ctx, xrUnstructured, desired.ComposedResources)
+	} else {
+		p.config.Logger.Debug("Skipping namespace propagation for claim (v1 compatibility)", "resource", resourceID)
+	}
+
 	// Validate the resources
 	if err := p.schemaValidator.ValidateResources(ctx, xrUnstructured, desired.ComposedResources); err != nil {
 		p.config.Logger.Debug("Resource validation failed", "resource", resourceID, "error", err)
@@ -272,6 +283,13 @@ func mergeUnstructured(dest *un.Unstructured, src *un.Unstructured) (*un.Unstruc
 	if err := mergo.Merge(&result.Object, src.Object, mergo.WithOverride); err != nil {
 		return nil, errors.Wrap(err, "cannot merge unstructured objects")
 	}
+
+	// WORKAROUND for https://github.com/crossplane/crossplane/issues/6782
+	// Crossplane render strips namespace from XRs - restore it from the original
+	if src.GetNamespace() != "" && result.GetNamespace() == "" {
+		result.SetNamespace(src.GetNamespace())
+	}
+
 	return result, nil
 }
 
@@ -361,7 +379,7 @@ func (p *DefaultDiffProcessor) RenderWithRequirements(
 			"iteration", iteration,
 			"requirementCount", len(output.Requirements))
 
-		additionalResources, err := p.requirementsProvider.ProvideRequirements(ctx, output.Requirements)
+		additionalResources, err := p.requirementsProvider.ProvideRequirements(ctx, output.Requirements, xr.GetNamespace())
 		if err != nil {
 			return render.Outputs{}, errors.Wrap(err, "failed to process requirements")
 		}
@@ -424,4 +442,42 @@ func (p *DefaultDiffProcessor) RenderWithRequirements(
 		"iterations", iteration)
 
 	return lastOutput, lastRenderErr
+}
+
+// propagateNamespacesToManagedResources propagates namespace from XR to managed resources
+// that don't already have a namespace set. This is a workaround for
+// https://github.com/crossplane/crossplane/issues/6782
+func (p *DefaultDiffProcessor) propagateNamespacesToManagedResources(_ context.Context, xr *un.Unstructured, composedResources []cpd.Unstructured) {
+	xrNamespace := xr.GetNamespace()
+	if xrNamespace == "" {
+		// XR has no namespace, nothing to propagate
+		p.config.Logger.Debug("XR has no namespace, skipping namespace propagation")
+		return
+	}
+
+	p.config.Logger.Debug("Propagating namespace to managed resources",
+		"xrNamespace", xrNamespace,
+		"composedCount", len(composedResources))
+
+	for i := range composedResources {
+		resource := &un.Unstructured{Object: composedResources[i].UnstructuredContent()}
+
+		// Skip if resource already has a namespace - validation will catch mismatches
+		if resource.GetNamespace() != "" {
+			continue
+		}
+
+		resourceID := fmt.Sprintf("%s/%s", resource.GetKind(), resource.GetName())
+		if resource.GetName() == "" && resource.GetGenerateName() != "" {
+			resourceID = fmt.Sprintf("%s/%s*", resource.GetKind(), resource.GetGenerateName())
+		}
+
+		p.config.Logger.Debug("Propagating namespace to managed resource",
+			"resource", resourceID,
+			"namespace", xrNamespace)
+		resource.SetNamespace(xrNamespace)
+
+		// Update the composed resource with the modified content
+		composedResources[i].SetUnstructuredContent(resource.Object)
+	}
 }

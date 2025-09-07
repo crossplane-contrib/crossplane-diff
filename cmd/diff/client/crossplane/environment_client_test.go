@@ -5,13 +5,12 @@ import (
 	"strings"
 	"testing"
 
+	tu "github.com/crossplane-contrib/crossplane-diff/cmd/diff/testutils"
 	"github.com/google/go-cmp/cmp"
 	un "k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 
 	"github.com/crossplane/crossplane-runtime/v2/pkg/errors"
-
-	tu "github.com/crossplane-contrib/crossplane-diff/cmd/diff/testutils"
 )
 
 var _ EnvironmentClient = (*tu.MockEnvironmentClient)(nil)
@@ -29,7 +28,7 @@ var EnvConfigV1beta1GVK = schema.GroupVersionKind{
 }
 
 func TestDefaultEnvironmentClient_GetEnvironmentConfigs(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 
 	// Create test environment configurations
 	envConfig1 := tu.NewResource("apiextensions.crossplane.io/v1alpha1", "EnvironmentConfig", "env-config-1").
@@ -165,7 +164,7 @@ func TestDefaultEnvironmentClient_GetEnvironmentConfigs(t *testing.T) {
 }
 
 func TestDefaultEnvironmentClient_GetEnvironmentConfig(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 
 	// Create test environment configuration
 	envConfig := tu.NewResource("apiextensions.crossplane.io/v1alpha1", "EnvironmentConfig", "test-env-config").
@@ -292,7 +291,7 @@ func TestDefaultEnvironmentClient_GetEnvironmentConfig(t *testing.T) {
 }
 
 func TestDefaultEnvironmentClient_Initialize(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 
 	// Create test environment configurations
 	envConfig1 := tu.NewResource("apiextensions.crossplane.io/v1alpha1", "EnvironmentConfig", "env-config-1").Build()

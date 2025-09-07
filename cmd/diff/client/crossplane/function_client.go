@@ -4,14 +4,14 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/crossplane-contrib/crossplane-diff/cmd/diff/client/core"
+	"github.com/crossplane-contrib/crossplane-diff/cmd/diff/client/kubernetes"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 
 	"github.com/crossplane/crossplane-runtime/v2/pkg/errors"
 	"github.com/crossplane/crossplane-runtime/v2/pkg/logging"
 
-	"github.com/crossplane-contrib/crossplane-diff/cmd/diff/client/core"
-	"github.com/crossplane-contrib/crossplane-diff/cmd/diff/client/kubernetes"
 	apiextensionsv1 "github.com/crossplane/crossplane/v2/apis/apiextensions/v1"
 	pkgv1 "github.com/crossplane/crossplane/v2/apis/pkg/v1"
 )

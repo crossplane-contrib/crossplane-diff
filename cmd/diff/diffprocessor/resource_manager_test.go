@@ -5,18 +5,17 @@ import (
 	"strings"
 	"testing"
 
+	tu "github.com/crossplane-contrib/crossplane-diff/cmd/diff/testutils"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	un "k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 
 	"github.com/crossplane/crossplane-runtime/v2/pkg/errors"
-
-	tu "github.com/crossplane-contrib/crossplane-diff/cmd/diff/testutils"
 )
 
 func TestDefaultResourceManager_FetchCurrentObject(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 
 	// Create test resources
 	existingResource := tu.NewResource("example.org/v1", "TestResource", "existing-resource").
