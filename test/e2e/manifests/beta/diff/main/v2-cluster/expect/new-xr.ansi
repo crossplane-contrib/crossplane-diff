@@ -23,7 +23,7 @@
 
 ---
 +++ XNopResource/new-resource
-[32m+ apiVersion: diff.example.org/v1alpha1[0m
+[32m+ apiVersion: cluster.diff.example.org/v1alpha1[0m
 [32m+ kind: XNopResource[0m
 [32m+ metadata:[0m
 [32m+   name: new-resource[0m

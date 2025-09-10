@@ -113,7 +113,15 @@ func (p *RequirementsProvider) processAllSteps(ctx context.Context, requirements
 
 	// Process each step's requirements
 	for stepName := range requirements {
-		stepResources, stepNewlyFetched, err := p.processStepSelectors(ctx, stepName, requirements[stepName].GetResources(), requirements[stepName].GetExtraResources(), xrNamespace) //nolint:staticcheck // ExtraResources is deprecated but we need backward compatibility
+		stepResources, stepNewlyFetched, err := p.processStepSelectors(
+			ctx,
+			stepName,
+			requirements[stepName].Resources, //nolint:protogetter // Direct field access required for protobuf struct values
+			// to avoid copying mutexes.  also, we need to keep using ExtraResources since we aren't guaranteed that all
+			// functions in our pipeline have been upgraded to v2.
+			requirements[stepName].ExtraResources, //nolint:staticcheck,protogetter // ExtraResources deprecated but needed for backward compatibility
+			xrNamespace,
+		)
 		if err != nil {
 			return nil, nil, err
 		}

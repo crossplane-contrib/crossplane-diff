@@ -29,7 +29,7 @@
 
 ---
 ~~~ XNopResource/existing-resource
-  apiVersion: diff.example.org/v1alpha1
+  apiVersion: legacy.diff.example.org/v1alpha1
   kind: XNopResource
   metadata:
     finalizers:
@@ -39,9 +39,9 @@
     name: existing-resource
   spec:
     compositionRef:
-      name: xnopresources.diff.example.org
+      name: xnopresources.legacy.diff.example.org
     compositionRevisionRef:
-      name: xnopresources.diff.example.org-acd5cd1
+      name: xnopresources.legacy.diff.example.org-acd5cd1
     compositionUpdatePolicy: Automatic
 [31m-   coolField: I'm existing![0m
 [32m+   coolField: I'm modified![0m

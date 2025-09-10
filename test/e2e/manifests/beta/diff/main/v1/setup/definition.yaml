@@ -1,9 +1,11 @@
 apiVersion: apiextensions.crossplane.io/v1
 kind: CompositeResourceDefinition
 metadata:
-  name: xnopresources.diff.example.org
+  # we have to use a different GVK because upgrading in place doesn't work; you have to restart the controller.
+  # https://github.com/crossplane/crossplane/issues/6736
+  name: xnopresources.legacy.diff.example.org
 spec:
-  group: diff.example.org
+  group: legacy.diff.example.org
   names:
     kind: XNopResource
     plural: xnopresources

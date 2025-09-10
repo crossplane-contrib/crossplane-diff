@@ -80,11 +80,11 @@ e2e-matrix:
 e2e:
   ARG TARGETARCH
   ARG TARGETOS
-  ARG CROSSPLANE_IMAGE_TAG=release-1.20
+  ARG CROSSPLANE_IMAGE_TAG=main
   ARG SAVE_LOCALLY=true
   ARG GOARCH=${TARGETARCH}
   ARG GOOS=${TARGETOS}
-  ARG FLAGS="-test-suite=base"
+  ARG FLAGS="-test-suite=base -labels=crossplane-version=${CROSSPLANE_IMAGE_TAG}"
   # Using earthly image to allow compatibility with different development environments e.g. WSL
   FROM earthly/dind:alpine-3.20-docker-26.1.5-r0
   RUN wget https://dl.google.com/go/go${GO_VERSION}.${GOOS}-${GOARCH}.tar.gz

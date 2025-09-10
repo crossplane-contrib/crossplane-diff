@@ -29,7 +29,7 @@
 
 ---
 ~~~ XNopResource/existing-resource
-  apiVersion: diff.example.org/v1alpha1
+  apiVersion: cluster.diff.example.org/v1alpha1
   kind: XNopResource
   metadata:
     finalizers:
@@ -42,9 +42,9 @@
 [32m+   coolField: I'm modified![0m
     crossplane:
       compositionRef:
-        name: xnopresources.diff.example.org
+        name: xnopresources.cluster.diff.example.org
       compositionRevisionRef:
-        name: xnopresources.diff.example.org-acd5cd1
+        name: xnopresources.cluster.diff.example.org-acd5cd1
       compositionUpdatePolicy: Automatic
     parameters:
       config:

@@ -13,6 +13,7 @@ require (
 	github.com/crossplane/crossplane/v2 v2.0.2
 	github.com/google/go-cmp v0.7.0
 	github.com/sergi/go-diff v1.3.2-0.20230802210424-5b0b94c5c0d3
+	k8s.io/api v0.33.0
 	k8s.io/apiextensions-apiserver v0.33.0
 	k8s.io/apimachinery v0.33.0
 	k8s.io/client-go v0.33.0
@@ -70,7 +71,6 @@ require (
 	google.golang.org/protobuf v1.36.6 // indirect
 	gopkg.in/evanphx/json-patch.v4 v4.12.0 // indirect
 	gotest.tools/v3 v3.1.0 // indirect
-	k8s.io/api v0.33.0 // indirect
 	k8s.io/apiserver v0.33.0 // indirect
 	k8s.io/cli-runtime v0.29.1 // indirect
 	k8s.io/code-generator v0.33.0 // indirect

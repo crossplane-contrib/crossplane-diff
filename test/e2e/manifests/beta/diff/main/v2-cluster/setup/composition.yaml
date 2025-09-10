@@ -1,10 +1,10 @@
 apiVersion: apiextensions.crossplane.io/v1
 kind: Composition
 metadata:
-  name: xnopresources.diff.example.org
+  name: xnopresources.cluster.diff.example.org
 spec:
   compositeTypeRef:
-    apiVersion: diff.example.org/v1alpha1
+    apiVersion: cluster.diff.example.org/v1alpha1
     kind: XNopResource
   mode: Pipeline
   pipeline:

@@ -1,10 +1,10 @@
 apiVersion: apiextensions.crossplane.io/v1
 kind: Composition
 metadata:
-  name: xnopresources.diff.example.org
+  name: xnopresources.legacy.diff.example.org
 spec:
   compositeTypeRef:
-    apiVersion: diff.example.org/v1alpha1
+    apiVersion: legacy.diff.example.org/v1alpha1
     kind: XNopResource
   mode: Pipeline
   pipeline:
@@ -26,6 +26,12 @@ spec:
                       conditionStatus: "True"
                       time: 0s
             patches:
+              # TODO:  this shouldn't be necessary on a v1 XRD?  possible upstream bug?
+              # but on main it fails without, saying:
+              # "cannot add composite resource finalizer: cannot update object: an empty namespace may not be set when a resource name is provided"
+              - type: FromCompositeFieldPath
+                fromFieldPath: metadata.namespace
+                toFieldPath: metadata.namespace
               - type: FromCompositeFieldPath
                 fromFieldPath: spec.coolField
                 toFieldPath: metadata.annotations[cool-field]

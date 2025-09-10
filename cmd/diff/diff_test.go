@@ -949,3 +949,101 @@ spec:
 		})
 	}
 }
+
+func TestGetRestConfig(t *testing.T) {
+	tests := map[string]struct {
+		kubeconfigPath string
+		setupFile      func() string
+		expectError    bool
+		errorContains  string
+	}{
+		"EmptyKubeconfigEnvVar": {
+			kubeconfigPath: "",
+			expectError:    true, // Will error when no in-cluster config is available
+			errorContains:  "no configuration has been provided",
+		},
+		"ValidKubeconfigPath": {
+			setupFile: func() string {
+				// Create a valid temporary kubeconfig file
+				tempDir := t.TempDir()
+				tempFile := filepath.Join(tempDir, "kubeconfig")
+				content := `
+apiVersion: v1
+kind: Config
+clusters:
+- cluster:
+    server: https://localhost:8443
+  name: test-cluster
+contexts:
+- context:
+    cluster: test-cluster
+    user: test-user
+  name: test-context
+current-context: test-context
+users:
+- name: test-user
+  user:
+    token: test-token
+`
+				if err := os.WriteFile(tempFile, []byte(content), 0o600); err != nil {
+					t.Fatalf("Failed to write temp kubeconfig: %v", err)
+				}
+				return tempFile
+			},
+			expectError: false, // Should not error with valid kubeconfig
+		},
+		"InvalidKubeconfigPath": {
+			kubeconfigPath: "/invalid/nonexistent/path",
+			expectError:    true, // Will error when file doesn't exist
+			errorContains:  "no such file or directory",
+		},
+	}
+
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			// Set the KUBECONFIG environment variable for this test
+			originalKubeconfig := os.Getenv("KUBECONFIG")
+			defer func() {
+				if originalKubeconfig != "" {
+					t.Setenv("KUBECONFIG", originalKubeconfig)
+				} else {
+					os.Unsetenv("KUBECONFIG")
+				}
+			}()
+
+			// Setup file if needed
+			kubeconfigPath := tc.kubeconfigPath
+			if tc.setupFile != nil {
+				kubeconfigPath = tc.setupFile()
+			}
+
+			if kubeconfigPath != "" {
+				t.Setenv("KUBECONFIG", kubeconfigPath)
+			} else {
+				os.Unsetenv("KUBECONFIG")
+			}
+
+			// Call the function
+			config, err := getRestConfig()
+
+			// Check error expectations
+			if tc.expectError && err == nil {
+				t.Errorf("Expected error but got none")
+				return
+			}
+			if !tc.expectError && err != nil {
+				t.Errorf("Expected no error, got: %v", err)
+				return
+			}
+			if tc.errorContains != "" && !strings.Contains(err.Error(), tc.errorContains) {
+				t.Errorf("Expected error containing %q, got: %v", tc.errorContains, err)
+				return
+			}
+
+			// If no error expected, config should not be nil
+			if !tc.expectError && config == nil {
+				t.Errorf("Expected config to be non-nil when no error")
+			}
+		})
+	}
+}
