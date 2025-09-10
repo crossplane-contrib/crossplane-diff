@@ -5,16 +5,15 @@ import (
 	"fmt"
 	"strings"
 
+	t "github.com/crossplane-contrib/crossplane-diff/cmd/diff/renderer/types"
 	"github.com/sergi/go-diff/diffmatchpatch"
 	"k8s.io/apimachinery/pkg/api/equality"
 	un "k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	sigsyaml "sigs.k8s.io/yaml"
 
-	"github.com/crossplane/crossplane-runtime/pkg/errors"
-	"github.com/crossplane/crossplane-runtime/pkg/logging"
-
-	t "github.com/crossplane-contrib/crossplane-diff/cmd/diff/renderer/types"
+	"github.com/crossplane/crossplane-runtime/v2/pkg/errors"
+	"github.com/crossplane/crossplane-runtime/v2/pkg/logging"
 )
 
 // DiffOptions holds configuration options for the diff output.
@@ -495,6 +494,7 @@ func cleanupForDiff(obj *un.Unstructured, logger logging.Logger) *un.Unstructure
 	}
 
 	// Remove resourceRefs field from spec if it exists
+	// TODO:  remove spec.crossplane entirely, or only spec.crossplane.resourceRefs?
 	spec, found, _ := un.NestedMap(obj.Object, "spec")
 	if found && spec != nil {
 		if _, exists := spec["resourceRefs"]; exists {
@@ -503,6 +503,24 @@ func cleanupForDiff(obj *un.Unstructured, logger logging.Logger) *un.Unstructure
 		}
 
 		_ = un.SetNestedMap(obj.Object, spec, "spec")
+	}
+
+	crossplane, found, _ := un.NestedMap(obj.Object, "spec", "crossplane")
+	if found && crossplane != nil {
+		if _, exists := crossplane["resourceRefs"]; exists {
+			delete(crossplane, "resourceRefs")
+			modifications = append(modifications, "resourceRefs from spec.crossplane")
+		}
+
+		_ = un.SetNestedMap(obj.Object, crossplane, "spec", "crossplane")
+
+		if len(crossplane) == 0 {
+			// If spec.crossplane is empty after removing resourceRefs, remove the entire field
+			delete(spec, "crossplane")
+			_ = un.SetNestedMap(obj.Object, spec, "spec")
+
+			modifications = append(modifications, "empty spec.crossplane field")
+		}
 	}
 
 	// Remove status field as we're focused on spec changes

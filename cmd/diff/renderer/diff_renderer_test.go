@@ -5,11 +5,10 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/sergi/go-diff/diffmatchpatch"
-	"k8s.io/apimachinery/pkg/runtime/schema"
-
 	dt "github.com/crossplane-contrib/crossplane-diff/cmd/diff/renderer/types"
 	tu "github.com/crossplane-contrib/crossplane-diff/cmd/diff/testutils"
+	"github.com/sergi/go-diff/diffmatchpatch"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 )
 
 func TestDefaultDiffRenderer_RenderDiffs(t *testing.T) {

@@ -8,26 +8,26 @@ import (
 	"strings"
 	"testing"
 
+	xp "github.com/crossplane-contrib/crossplane-diff/cmd/diff/client/crossplane"
+	k8 "github.com/crossplane-contrib/crossplane-diff/cmd/diff/client/kubernetes"
+	"github.com/crossplane-contrib/crossplane-diff/cmd/diff/renderer"
+	dt "github.com/crossplane-contrib/crossplane-diff/cmd/diff/renderer/types"
+	tu "github.com/crossplane-contrib/crossplane-diff/cmd/diff/testutils"
 	gcmp "github.com/google/go-cmp/cmp"
 	"github.com/sergi/go-diff/diffmatchpatch"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	un "k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 
-	"github.com/crossplane/crossplane-runtime/pkg/errors"
-	"github.com/crossplane/crossplane-runtime/pkg/logging"
-	cpd "github.com/crossplane/crossplane-runtime/pkg/resource/unstructured/composed"
-	cmp "github.com/crossplane/crossplane-runtime/pkg/resource/unstructured/composite"
+	"github.com/crossplane/crossplane-runtime/v2/pkg/errors"
+	"github.com/crossplane/crossplane-runtime/v2/pkg/logging"
+	cpd "github.com/crossplane/crossplane-runtime/v2/pkg/resource/unstructured/composed"
+	cmp "github.com/crossplane/crossplane-runtime/v2/pkg/resource/unstructured/composite"
 
-	xp "github.com/crossplane-contrib/crossplane-diff/cmd/diff/client/crossplane"
-	k8 "github.com/crossplane-contrib/crossplane-diff/cmd/diff/client/kubernetes"
-	"github.com/crossplane-contrib/crossplane-diff/cmd/diff/renderer"
-	dt "github.com/crossplane-contrib/crossplane-diff/cmd/diff/renderer/types"
-	tu "github.com/crossplane-contrib/crossplane-diff/cmd/diff/testutils"
-	apiextensionsv1 "github.com/crossplane/crossplane/apis/apiextensions/v1"
-	pkgv1 "github.com/crossplane/crossplane/apis/pkg/v1"
-	"github.com/crossplane/crossplane/cmd/crank/render"
-	v1 "github.com/crossplane/crossplane/proto/fn/v1"
+	apiextensionsv1 "github.com/crossplane/crossplane/v2/apis/apiextensions/v1"
+	pkgv1 "github.com/crossplane/crossplane/v2/apis/pkg/v1"
+	"github.com/crossplane/crossplane/v2/cmd/crank/render"
+	v1 "github.com/crossplane/crossplane/v2/proto/fn/v1"
 )
 
 // Ensure MockDiffProcessor implements the DiffProcessor interface.
@@ -35,7 +35,7 @@ var _ DiffProcessor = &tu.MockDiffProcessor{}
 
 func TestDefaultDiffProcessor_PerformDiff(t *testing.T) {
 	// Setup test context
-	ctx := context.Background()
+	ctx := t.Context()
 
 	// Create test resources
 	resource1 := tu.NewResource("example.org/v1", "XR1", "my-xr-1").
@@ -479,7 +479,7 @@ func TestDefaultDiffProcessor_PerformDiff(t *testing.T) {
 
 func TestDefaultDiffProcessor_Initialize(t *testing.T) {
 	// Setup test context
-	ctx := context.Background()
+	ctx := t.Context()
 
 	// Create test resources
 	xrd1 := tu.NewResource("apiextensions.crossplane.io/v1", "CompositeResourceDefinition", "xrd1").
@@ -628,7 +628,7 @@ func TestDefaultDiffProcessor_Initialize(t *testing.T) {
 }
 
 func TestDefaultDiffProcessor_RenderWithRequirements(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 
 	// Create test resources
 	xr := tu.NewResource("example.org/v1", "XR", "test-xr").BuildUComposite()
@@ -716,6 +716,9 @@ func TestDefaultDiffProcessor_RenderWithRequirements(t *testing.T) {
 			resourceID:  "XR/test-xr",
 			setupResourceClient: func() *tu.MockResourceClient {
 				return tu.NewMockResourceClient().
+					WithNamespacedResource(
+						schema.GroupVersionKind{Group: "", Version: "v1", Kind: "ConfigMap"},
+					).
 					WithGetResource(func(_ context.Context, gvk schema.GroupVersionKind, _, name string) (*un.Unstructured, error) {
 						if gvk.Kind == ConfigMap && name == ConfigMapName {
 							return configMap, nil
@@ -781,6 +784,10 @@ func TestDefaultDiffProcessor_RenderWithRequirements(t *testing.T) {
 			resourceID:  "XR/test-xr",
 			setupResourceClient: func() *tu.MockResourceClient {
 				return tu.NewMockResourceClient().
+					WithNamespacedResource(
+						schema.GroupVersionKind{Group: "", Version: "v1", Kind: "ConfigMap"},
+						schema.GroupVersionKind{Group: "", Version: "v1", Kind: "Secret"},
+					).
 					WithGetResource(func(_ context.Context, gvk schema.GroupVersionKind, _, name string) (*un.Unstructured, error) {
 						if gvk.Kind == ConfigMap && name == ConfigMapName {
 							return configMap, nil
@@ -898,6 +905,9 @@ func TestDefaultDiffProcessor_RenderWithRequirements(t *testing.T) {
 			resourceID:  "XR/test-xr",
 			setupResourceClient: func() *tu.MockResourceClient {
 				return tu.NewMockResourceClient().
+					WithNamespacedResource(
+						schema.GroupVersionKind{Group: "", Version: "v1", Kind: "ConfigMap"},
+					).
 					WithGetResource(func(_ context.Context, gvk schema.GroupVersionKind, _, name string) (*un.Unstructured, error) {
 						if gvk.Kind == ConfigMap && name == ConfigMapName {
 							return configMap, nil
@@ -963,6 +973,9 @@ func TestDefaultDiffProcessor_RenderWithRequirements(t *testing.T) {
 			resourceID:  "XR/test-xr",
 			setupResourceClient: func() *tu.MockResourceClient {
 				return tu.NewMockResourceClient().
+					WithNamespacedResource(
+						schema.GroupVersionKind{Group: "", Version: "v1", Kind: "ConfigMap"},
+					).
 					WithResourceNotFound().
 					Build()
 			},

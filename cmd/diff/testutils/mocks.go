@@ -4,6 +4,7 @@ import (
 	"context"
 	"io"
 
+	dt "github.com/crossplane-contrib/crossplane-diff/cmd/diff/renderer/types"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	un "k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -11,15 +12,14 @@ import (
 	"k8s.io/apimachinery/pkg/watch"
 	"k8s.io/client-go/dynamic"
 
-	"github.com/crossplane/crossplane-runtime/pkg/errors"
-	cpd "github.com/crossplane/crossplane-runtime/pkg/resource/unstructured/composed"
-	cmp "github.com/crossplane/crossplane-runtime/pkg/resource/unstructured/composite"
+	"github.com/crossplane/crossplane-runtime/v2/pkg/errors"
+	cpd "github.com/crossplane/crossplane-runtime/v2/pkg/resource/unstructured/composed"
+	cmp "github.com/crossplane/crossplane-runtime/v2/pkg/resource/unstructured/composite"
 
-	dt "github.com/crossplane-contrib/crossplane-diff/cmd/diff/renderer/types"
-	xpextv1 "github.com/crossplane/crossplane/apis/apiextensions/v1"
-	pkgv1 "github.com/crossplane/crossplane/apis/pkg/v1"
-	"github.com/crossplane/crossplane/cmd/crank/foundation/resource"
-	"github.com/crossplane/crossplane/cmd/crank/render"
+	xpextv1 "github.com/crossplane/crossplane/v2/apis/apiextensions/v1"
+	pkgv1 "github.com/crossplane/crossplane/v2/apis/pkg/v1"
+	"github.com/crossplane/crossplane/v2/cmd/crank/common/resource"
+	"github.com/crossplane/crossplane/v2/cmd/crank/render"
 )
 
 // duplicate these interfaces to avoid cyclical dependency:
@@ -266,7 +266,9 @@ func (m *MockDiffProcessor) PerformDiff(ctx context.Context, stdout io.Writer, r
 
 // MockSchemaValidator Mock schema validator.
 type MockSchemaValidator struct {
-	ValidateResourcesFn func(ctx context.Context, xr *un.Unstructured, composed []cpd.Unstructured) error
+	ValidateResourcesFn        func(ctx context.Context, xr *un.Unstructured, composed []cpd.Unstructured) error
+	ValidateScopeConstraintsFn func(ctx context.Context, resource *un.Unstructured, expectedNamespace string, isClaimRoot bool) error
+	IsClaimResourceFn          func(ctx context.Context, resource *un.Unstructured) bool
 }
 
 // ValidateResources validates a set of resources against schemas from the cluster.
@@ -280,6 +282,22 @@ func (m *MockSchemaValidator) ValidateResources(ctx context.Context, xr *un.Unst
 // EnsureComposedResourceCRDs Implement other required methods of the SchemaValidator interface.
 func (m *MockSchemaValidator) EnsureComposedResourceCRDs(_ context.Context, _ []*un.Unstructured) error {
 	return nil
+}
+
+// ValidateScopeConstraints validates that a resource has the appropriate namespace for its scope.
+func (m *MockSchemaValidator) ValidateScopeConstraints(ctx context.Context, resource *un.Unstructured, expectedNamespace string, isClaimRoot bool) error {
+	if m.ValidateScopeConstraintsFn != nil {
+		return m.ValidateScopeConstraintsFn(ctx, resource, expectedNamespace, isClaimRoot)
+	}
+	return nil
+}
+
+// IsClaimResource checks if the root resource is a claim type.
+func (m *MockSchemaValidator) IsClaimResource(ctx context.Context, resource *un.Unstructured) bool {
+	if m.IsClaimResourceFn != nil {
+		return m.IsClaimResourceFn(ctx, resource)
+	}
+	return false
 }
 
 // endregion
@@ -298,6 +316,7 @@ type MockResourceClient struct {
 	GetResourcesByLabelFn     func(ctx context.Context, gvk schema.GroupVersionKind, namespace string, sel metav1.LabelSelector) ([]*un.Unstructured, error)
 	GetAllResourcesByLabelsFn func(ctx context.Context, gvks []schema.GroupVersionKind, selectors []metav1.LabelSelector) ([]*un.Unstructured, error)
 	GetGVKsForGroupKindFn     func(ctx context.Context, group, kind string) ([]schema.GroupVersionKind, error)
+	IsNamespacedResourceFn    func(ctx context.Context, gvk schema.GroupVersionKind) (bool, error)
 }
 
 // Initialize implements kubernetes.ResourceClient.
@@ -346,6 +365,14 @@ func (m *MockResourceClient) GetGVKsForGroupKind(ctx context.Context, group, kin
 		return m.GetGVKsForGroupKindFn(ctx, group, kind)
 	}
 	return nil, errors.New("GetGVKsForGroupKind not implemented")
+}
+
+// IsNamespacedResource implements kubernetes.ResourceClient.
+func (m *MockResourceClient) IsNamespacedResource(ctx context.Context, gvk schema.GroupVersionKind) (bool, error) {
+	if m.IsNamespacedResourceFn != nil {
+		return m.IsNamespacedResourceFn(ctx, gvk)
+	}
+	return false, errors.Errorf("IsNamespacedResource not implemented for %s in mock", gvk.String())
 }
 
 // MockSchemaClient implements the kubernetes.SchemaClient interface.

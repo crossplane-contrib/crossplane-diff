@@ -1,12 +1,14 @@
-apiVersion: apiextensions.crossplane.io/v1
+# This is a v2 XRD so instances of the XR will be namespace scoped.
+apiVersion: apiextensions.crossplane.io/v2
 kind: CompositeResourceDefinition
 metadata:
-  name: xnopresources.diff.example.org
+  name: xnopresources.ns.diff.example.org
 spec:
-  group: diff.example.org
+  group: ns.diff.example.org
   names:
     kind: XNopResource
     plural: xnopresources
+  scope: Namespaced
   versions:
     - name: v1alpha1
       served: true

@@ -4,15 +4,15 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/crossplane/crossplane-runtime/pkg/errors"
-	"github.com/crossplane/crossplane-runtime/pkg/logging"
+	"github.com/crossplane-contrib/crossplane-diff/cmd/diff/client/core"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	un "k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/discovery"
 	"k8s.io/client-go/dynamic"
 
-	"github.com/crossplane-contrib/crossplane-diff/cmd/diff/client/core"
+	"github.com/crossplane/crossplane-runtime/v2/pkg/errors"
+	"github.com/crossplane/crossplane-runtime/v2/pkg/logging"
 )
 
 // ResourceClient handles basic CRUD operations for Kubernetes resources.
@@ -26,10 +26,11 @@ type ResourceClient interface {
 	// GetResourcesByLabel returns resources matching labels in the given namespace
 	GetResourcesByLabel(ctx context.Context, gvk schema.GroupVersionKind, namespace string, sel metav1.LabelSelector) ([]*un.Unstructured, error)
 
-	// GetAllResourcesByLabels gets resources by labels across multiple GVKs
-	GetAllResourcesByLabels(ctx context.Context, gvks []schema.GroupVersionKind, selectors []metav1.LabelSelector) ([]*un.Unstructured, error)
-
+	// GetGVKsForGroupKind retrieves all GroupVersionKinds for a given group and kind
 	GetGVKsForGroupKind(ctx context.Context, group, kind string) ([]schema.GroupVersionKind, error)
+
+	// IsNamespacedResource determines if a given GVK represents a namespaced resource
+	IsNamespacedResource(ctx context.Context, gvk schema.GroupVersionKind) (bool, error)
 }
 
 // DefaultResourceClient implements the ResourceClient interface.
@@ -99,8 +100,8 @@ func (c *DefaultResourceClient) GetResourcesByLabel(ctx context.Context, gvk sch
 	// Perform the list operation
 	list, err := c.dynamicClient.Resource(gvr).Namespace(namespace).List(ctx, opts)
 	if err != nil {
-		c.logger.Debug("Failed to list resources", "gvk", gvk.String(), "labelSelector", opts.LabelSelector, "error", err)
-		return nil, errors.Wrapf(err, "cannot list resources for '%s' matching '%s'", gvk.String(), opts.LabelSelector)
+		c.logger.Debug("Failed to list resources", "gvk", gvk.String(), "namespace", namespace, "labelSelector", opts.LabelSelector, "error", err)
+		return nil, errors.Wrapf(err, "cannot list resources for '%s/%s' matching '%s'", namespace, gvk.String(), opts.LabelSelector)
 	}
 
 	// Convert the list items to a slice of pointers
@@ -141,42 +142,13 @@ func (c *DefaultResourceClient) ListResources(ctx context.Context, gvk schema.Gr
 	return resources, nil
 }
 
-// GetAllResourcesByLabels gets resources by labels across multiple GVKs.
-func (c *DefaultResourceClient) GetAllResourcesByLabels(ctx context.Context, gvks []schema.GroupVersionKind, selectors []metav1.LabelSelector) ([]*un.Unstructured, error) {
-	if len(gvks) != len(selectors) {
-		c.logger.Debug("GVKs and selectors count mismatch", "gvks_count", len(gvks), "selectors_count", len(selectors))
-		return nil, errors.New("number of GVKs must match number of selectors")
-	}
-
-	c.logger.Debug("Fetching resources by labels", "gvks_count", len(gvks))
-
-	var resources []*un.Unstructured
-
-	for i, gvk := range gvks {
-		// List resources matching the selector
-		sel := selectors[i]
-		c.logger.Debug("Getting resources for GVK with selector", "gvk", gvk.String(), "selector", sel.MatchLabels)
-
-		res, err := c.GetResourcesByLabel(ctx, gvk, "", sel)
-		if err != nil {
-			c.logger.Debug("Failed to get resources by label", "gvk", gvk.String(), "error", err)
-			return nil, errors.Wrapf(err, "cannot get all resources")
-		}
-
-		c.logger.Debug("Found resources for GVK", "gvk", gvk.String(), "count", len(res))
-		resources = append(resources, res...)
-	}
-
-	c.logger.Debug("Completed fetching resources by labels", "total_resources", len(resources))
-	return resources, nil
-}
-
-func (c *DefaultResourceClient) GetGVKsForGroupKind(ctx context.Context, group, kind string) ([]schema.GroupVersionKind, error) {
-	// Get discovery client
-	discoveryClient := c.discoveryClient
-
+// GetGVKsForGroupKind returns all available GroupVersionKinds for a given group and kind.
+func (c *DefaultResourceClient) GetGVKsForGroupKind(_ context.Context, group, kind string) ([]schema.GroupVersionKind, error) {
 	// Get all API resources
-	apiResourceLists, err := discoveryClient.ServerPreferredResources()
+
+	// TODO:  is there any way to do this more efficiently than getting all resources?  that can be tremendously expensive
+	// in crossplane envs with tons of CRDs.
+	apiResourceLists, err := c.discoveryClient.ServerPreferredResources()
 	if err != nil {
 		return nil, err
 	}
@@ -208,4 +180,33 @@ func (c *DefaultResourceClient) GetGVKsForGroupKind(ctx context.Context, group, 
 	}
 
 	return gvks, nil
+}
+
+// IsNamespacedResource determines if a given GVK represents a namespaced resource
+// by querying the cluster's discovery API.
+func (c *DefaultResourceClient) IsNamespacedResource(_ context.Context, gvk schema.GroupVersionKind) (bool, error) {
+	// Get the server resources for this group/version
+	groupVersion := gvk.GroupVersion().String()
+	resourceList, err := c.discoveryClient.ServerResourcesForGroupVersion(groupVersion)
+	if err != nil {
+		return false, errors.Wrapf(err, "cannot get server resources for group version %s", groupVersion)
+	}
+
+	// Find the resource matching our kind
+	for _, resource := range resourceList.APIResources {
+		if resource.Kind == gvk.Kind {
+			// The Namespaced field indicates whether the resource is namespaced
+			c.logger.Debug("Determined resource scope from discovery",
+				"gvk", gvk.String(),
+				"namespaced", resource.Namespaced)
+			return resource.Namespaced, nil
+		}
+	}
+
+	// If we can't find the resource, this is an error condition that should fail the diff
+	availableKinds := make([]string, len(resourceList.APIResources))
+	for i, resource := range resourceList.APIResources {
+		availableKinds[i] = resource.Kind
+	}
+	return false, errors.Errorf("resource kind %s not found in discovery API for group version %s (available kinds: %v)", gvk.Kind, groupVersion, availableKinds)
 }

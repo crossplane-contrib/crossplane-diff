@@ -4,15 +4,17 @@ import (
 	"context"
 	"sync"
 
+	"github.com/crossplane-contrib/crossplane-diff/cmd/diff/client/core"
+	"github.com/crossplane-contrib/crossplane-diff/cmd/diff/client/kubernetes"
 	un "k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 
-	"github.com/crossplane/crossplane-runtime/pkg/errors"
-	"github.com/crossplane/crossplane-runtime/pkg/logging"
-
-	"github.com/crossplane-contrib/crossplane-diff/cmd/diff/client/core"
-	"github.com/crossplane-contrib/crossplane-diff/cmd/diff/client/kubernetes"
+	"github.com/crossplane/crossplane-runtime/v2/pkg/errors"
+	"github.com/crossplane/crossplane-runtime/v2/pkg/logging"
 )
+
+// CompositeResourceDefinitionKind is the kind for Composite Resource Definitions.
+const CompositeResourceDefinitionKind = "CompositeResourceDefinition"
 
 // DefinitionClient handles Crossplane definitions (XRDs).
 type DefinitionClient interface {
@@ -53,7 +55,7 @@ func NewDefinitionClient(resourceClient kubernetes.ResourceClient, logger loggin
 func (c *DefaultDefinitionClient) Initialize(ctx context.Context) error {
 	c.logger.Debug("Initializing definition client")
 
-	gvks, err := c.resourceClient.GetGVKsForGroupKind(ctx, "apiextensions.crossplane.io", "CompositeResourceDefinition")
+	gvks, err := c.resourceClient.GetGVKsForGroupKind(ctx, "apiextensions.crossplane.io", CompositeResourceDefinitionKind)
 	if err != nil {
 		return errors.Wrap(err, "cannot get XRD GVKs")
 	}
@@ -93,8 +95,7 @@ func (c *DefaultDefinitionClient) GetXRDs(ctx context.Context) ([]*un.Unstructur
 
 	c.logger.Debug("Fetching XRDs from cluster")
 
-	xrds, err := listMatchingResources(ctx, c.resourceClient, c.gvks)
-
+	xrds, err := listMatchingResources(ctx, c.resourceClient, c.gvks, "" /* XRDs are cluster scoped */)
 	// List all XRDs
 	if err != nil {
 		c.logger.Debug("Failed to list XRDs", "error", err)

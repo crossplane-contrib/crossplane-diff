@@ -5,16 +5,16 @@ import (
 	"strings"
 	"testing"
 
+	tu "github.com/crossplane-contrib/crossplane-diff/cmd/diff/testutils"
 	"github.com/google/go-cmp/cmp"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	un "k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 
-	"github.com/crossplane/crossplane-runtime/pkg/errors"
+	"github.com/crossplane/crossplane-runtime/v2/pkg/errors"
 
-	tu "github.com/crossplane-contrib/crossplane-diff/cmd/diff/testutils"
-	apiextensionsv1 "github.com/crossplane/crossplane/apis/apiextensions/v1"
+	apiextensionsv1 "github.com/crossplane/crossplane/v2/apis/apiextensions/v1"
 )
 
 var _ CompositionClient = (*tu.MockCompositionClient)(nil)
@@ -108,6 +108,7 @@ func TestDefaultCompositionClient_FindMatchingComposition(t *testing.T) {
 			mockDef: *tu.NewMockDefinitionClient().
 				WithSuccessfulInitialize().
 				WithEmptyXRDsFetch().
+				WithV1XRDForXR().
 				Build(),
 			fields: fields{
 				compositions: map[string]*apiextensionsv1.Composition{
@@ -115,7 +116,7 @@ func TestDefaultCompositionClient_FindMatchingComposition(t *testing.T) {
 				},
 			},
 			args: args{
-				ctx: context.Background(),
+				ctx: t.Context(),
 				res: tu.NewResource("example.org/v1", "XR1", "my-xr").Build(),
 			},
 			want: want{
@@ -131,6 +132,7 @@ func TestDefaultCompositionClient_FindMatchingComposition(t *testing.T) {
 			mockDef: *tu.NewMockDefinitionClient().
 				WithSuccessfulInitialize().
 				WithEmptyXRDsFetch().
+				WithV1XRDForXR().
 				Build(),
 			fields: fields{
 				compositions: map[string]*apiextensionsv1.Composition{
@@ -139,7 +141,7 @@ func TestDefaultCompositionClient_FindMatchingComposition(t *testing.T) {
 				},
 			},
 			args: args{
-				ctx: context.Background(),
+				ctx: t.Context(),
 				res: tu.NewResource("example.org/v1", "XR1", "my-xr").Build(),
 			},
 			want: want{
@@ -155,6 +157,7 @@ func TestDefaultCompositionClient_FindMatchingComposition(t *testing.T) {
 			mockDef: *tu.NewMockDefinitionClient().
 				WithSuccessfulInitialize().
 				WithEmptyXRDsFetch().
+				WithV1XRDForXR().
 				Build(),
 			fields: fields{
 				compositions: map[string]*apiextensionsv1.Composition{
@@ -163,7 +166,7 @@ func TestDefaultCompositionClient_FindMatchingComposition(t *testing.T) {
 				},
 			},
 			args: args{
-				ctx: context.Background(),
+				ctx: t.Context(),
 				res: func() *un.Unstructured {
 					xr := tu.NewResource("example.org/v1", "XR1", "my-xr").Build()
 					_ = un.SetNestedField(xr.Object, "referenced-comp", "spec", "compositionRef", "name")
@@ -183,6 +186,7 @@ func TestDefaultCompositionClient_FindMatchingComposition(t *testing.T) {
 			mockDef: *tu.NewMockDefinitionClient().
 				WithSuccessfulInitialize().
 				WithEmptyXRDsFetch().
+				WithV1XRDForXR().
 				Build(),
 			fields: fields{
 				compositions: map[string]*apiextensionsv1.Composition{
@@ -191,7 +195,7 @@ func TestDefaultCompositionClient_FindMatchingComposition(t *testing.T) {
 				},
 			},
 			args: args{
-				ctx: context.Background(),
+				ctx: t.Context(),
 				res: func() *un.Unstructured {
 					xr := tu.NewResource("example.org/v1", "XR1", "my-xr").Build()
 					_ = un.SetNestedField(xr.Object, "incompatible-comp", "spec", "compositionRef", "name")
@@ -211,6 +215,7 @@ func TestDefaultCompositionClient_FindMatchingComposition(t *testing.T) {
 			mockDef: *tu.NewMockDefinitionClient().
 				WithSuccessfulInitialize().
 				WithEmptyXRDsFetch().
+				WithV1XRDForXR().
 				Build(),
 			fields: fields{
 				compositions: map[string]*apiextensionsv1.Composition{
@@ -218,7 +223,7 @@ func TestDefaultCompositionClient_FindMatchingComposition(t *testing.T) {
 				},
 			},
 			args: args{
-				ctx: context.Background(),
+				ctx: t.Context(),
 				res: func() *un.Unstructured {
 					xr := tu.NewResource("example.org/v1", "XR1", "my-xr").Build()
 					_ = un.SetNestedField(xr.Object, "non-existent-comp", "spec", "compositionRef", "name")
@@ -238,6 +243,7 @@ func TestDefaultCompositionClient_FindMatchingComposition(t *testing.T) {
 			mockDef: *tu.NewMockDefinitionClient().
 				WithSuccessfulInitialize().
 				WithEmptyXRDsFetch().
+				WithV1XRDForXR().
 				Build(),
 			fields: fields{
 				compositions: map[string]*apiextensionsv1.Composition{
@@ -246,7 +252,7 @@ func TestDefaultCompositionClient_FindMatchingComposition(t *testing.T) {
 				},
 			},
 			args: args{
-				ctx: context.Background(),
+				ctx: t.Context(),
 				res: func() *un.Unstructured {
 					xr := tu.NewResource("example.org/v1", "XR1", "my-xr").Build()
 					_ = un.SetNestedStringMap(xr.Object, map[string]string{
@@ -268,6 +274,7 @@ func TestDefaultCompositionClient_FindMatchingComposition(t *testing.T) {
 			mockDef: *tu.NewMockDefinitionClient().
 				WithSuccessfulInitialize().
 				WithEmptyXRDsFetch().
+				WithV1XRDForXR().
 				Build(),
 			fields: fields{
 				compositions: map[string]*apiextensionsv1.Composition{
@@ -283,7 +290,7 @@ func TestDefaultCompositionClient_FindMatchingComposition(t *testing.T) {
 				},
 			},
 			args: args{
-				ctx: context.Background(),
+				ctx: t.Context(),
 				res: func() *un.Unstructured {
 					xr := tu.NewResource("example.org/v1", "XR1", "my-xr").Build()
 					_ = un.SetNestedStringMap(xr.Object, map[string]string{
@@ -305,6 +312,7 @@ func TestDefaultCompositionClient_FindMatchingComposition(t *testing.T) {
 			mockDef: *tu.NewMockDefinitionClient().
 				WithSuccessfulInitialize().
 				WithEmptyXRDsFetch().
+				WithV1XRDForXR().
 				Build(),
 			fields: fields{
 				compositions: map[string]*apiextensionsv1.Composition{
@@ -313,7 +321,7 @@ func TestDefaultCompositionClient_FindMatchingComposition(t *testing.T) {
 				},
 			},
 			args: args{
-				ctx: context.Background(),
+				ctx: t.Context(),
 				res: func() *un.Unstructured {
 					xr := tu.NewResource("example.org/v1", "XR1", "my-xr").Build()
 					_ = un.SetNestedStringMap(xr.Object, map[string]string{
@@ -335,12 +343,13 @@ func TestDefaultCompositionClient_FindMatchingComposition(t *testing.T) {
 			mockDef: *tu.NewMockDefinitionClient().
 				WithSuccessfulInitialize().
 				WithEmptyXRDsFetch().
+				WithV1XRDForXR().
 				Build(),
 			fields: fields{
 				compositions: map[string]*apiextensionsv1.Composition{},
 			},
 			args: args{
-				ctx: context.Background(),
+				ctx: t.Context(),
 				res: tu.NewResource("example.org/v1", "XR1", "my-xr").Build(),
 			},
 			want: want{
@@ -356,12 +365,13 @@ func TestDefaultCompositionClient_FindMatchingComposition(t *testing.T) {
 			mockDef: *tu.NewMockDefinitionClient().
 				WithSuccessfulInitialize().
 				WithEmptyXRDsFetch().
+				WithV1XRDForXR().
 				Build(),
 			fields: fields{
 				compositions: map[string]*apiextensionsv1.Composition{},
 			},
 			args: args{
-				ctx: context.Background(),
+				ctx: t.Context(),
 				res: func() *un.Unstructured {
 					xr := tu.NewResource("example.org/v1", "XR1", "my-xr").Build()
 					_ = un.SetNestedField(xr.Object, "referenced-comp", "spec", "compositionRef", "name")
@@ -381,12 +391,13 @@ func TestDefaultCompositionClient_FindMatchingComposition(t *testing.T) {
 			mockDef: *tu.NewMockDefinitionClient().
 				WithSuccessfulInitialize().
 				WithEmptyXRDsFetch().
+				WithV1XRDForXR().
 				Build(),
 			fields: fields{
 				compositions: map[string]*apiextensionsv1.Composition{},
 			},
 			args: args{
-				ctx: context.Background(),
+				ctx: t.Context(),
 				res: func() *un.Unstructured {
 					xr := tu.NewResource("example.org/v1", "XR1", "my-xr").Build()
 					_ = un.SetNestedStringMap(xr.Object, map[string]string{
@@ -407,9 +418,8 @@ func TestDefaultCompositionClient_FindMatchingComposition(t *testing.T) {
 				Build(),
 			mockDef: *tu.NewMockDefinitionClient().
 				WithSuccessfulInitialize().
-				WithGetXRDs(func(context.Context) ([]*un.Unstructured, error) {
-					return []*un.Unstructured{}, nil
-				}).
+				WithEmptyXRDsFetch().
+				WithV1XRDForXR().
 				Build(),
 			fields: fields{
 				compositions: map[string]*apiextensionsv1.Composition{
@@ -418,7 +428,7 @@ func TestDefaultCompositionClient_FindMatchingComposition(t *testing.T) {
 				},
 			},
 			args: args{
-				ctx: context.Background(),
+				ctx: t.Context(),
 				res: tu.NewResource("example.org/v1", "XR1", "my-xr").Build(),
 			},
 			want: want{
@@ -433,9 +443,8 @@ func TestDefaultCompositionClient_FindMatchingComposition(t *testing.T) {
 				Build(),
 			mockDef: *tu.NewMockDefinitionClient().
 				WithSuccessfulInitialize().
-				WithGetXRDs(func(context.Context) ([]*un.Unstructured, error) {
-					return []*un.Unstructured{}, nil
-				}).
+				WithEmptyXRDsFetch().
+				WithV1XRDForXR().
 				Build(),
 			fields: fields{
 				compositions: map[string]*apiextensionsv1.Composition{
@@ -443,7 +452,7 @@ func TestDefaultCompositionClient_FindMatchingComposition(t *testing.T) {
 				},
 			},
 			args: args{
-				ctx: context.Background(),
+				ctx: t.Context(),
 				res: tu.NewResource("example.org/v1", "XR1", "my-xr").Build(),
 			},
 			want: want{
@@ -456,43 +465,33 @@ func TestDefaultCompositionClient_FindMatchingComposition(t *testing.T) {
 				WithSuccessfulInitialize().
 				WithListResources(func(_ context.Context, gvk schema.GroupVersionKind, _ string) ([]*un.Unstructured, error) {
 					// Set up to return XRDs when requested
-					if gvk.Group == CrossplaneAPIExtGroup && gvk.Kind == "CompositeResourceDefinition" {
+					if gvk.Group == CrossplaneAPIExtGroup && gvk.Kind == CompositeResourceDefinitionKind {
 						return []*un.Unstructured{
-							{
-								Object: map[string]interface{}{
-									"apiVersion": CrossplaneAPIExtGroupV1,
-									"kind":       "CompositeResourceDefinition",
-									"metadata": map[string]interface{}{
-										"name": "xexampleresources.example.org",
+							tu.NewResource(CrossplaneAPIExtGroupV1, CompositeResourceDefinitionKind, "xexampleresources.example.org").
+								WithSpecField("group", "example.org").
+								WithSpecField("names", map[string]interface{}{
+									"kind": "XExampleResource",
+								}).
+								WithSpecField("claimNames", map[string]interface{}{
+									"kind": "ExampleResourceClaim",
+								}).
+								WithSpecField("versions", []interface{}{
+									map[string]interface{}{
+										"name":          "v1",
+										"served":        true,
+										"referenceable": false,
 									},
-									"spec": map[string]interface{}{
-										"group": "example.org",
-										"names": map[string]interface{}{
-											"kind": "XExampleResource",
-										},
-										"claimNames": map[string]interface{}{
-											"kind": "ExampleResourceClaim",
-										},
-										"versions": []interface{}{
-											map[string]interface{}{
-												"name":          "v1",
-												"served":        true,
-												"referenceable": false,
-											},
-											map[string]interface{}{
-												"name":          "v2",
-												"served":        true,
-												"referenceable": true, // This is the version compositions should reference
-											},
-											map[string]interface{}{
-												"name":          "v3alpha1",
-												"served":        true,
-												"referenceable": false,
-											},
-										},
+									map[string]interface{}{
+										"name":          "v2",
+										"served":        true,
+										"referenceable": true, // This is the version compositions should reference
 									},
-								},
-							},
+									map[string]interface{}{
+										"name":          "v3alpha1",
+										"served":        true,
+										"referenceable": false,
+									},
+								}).Build(),
 						}, nil
 					}
 					return []*un.Unstructured{}, nil
@@ -500,45 +499,33 @@ func TestDefaultCompositionClient_FindMatchingComposition(t *testing.T) {
 				Build(),
 			mockDef: *tu.NewMockDefinitionClient().
 				WithSuccessfulInitialize().
-				WithGetXRDs(func(context.Context) ([]*un.Unstructured, error) {
-					return []*un.Unstructured{
-						{
-							Object: map[string]interface{}{
-								"apiVersion": CrossplaneAPIExtGroupV1,
-								"kind":       "CompositeResourceDefinition",
-								"metadata": map[string]interface{}{
-									"name": "xexampleresources.example.org",
-								},
-								"spec": map[string]interface{}{
-									"group": "example.org",
-									"names": map[string]interface{}{
-										"kind": "XExampleResource",
-									},
-									"claimNames": map[string]interface{}{
-										"kind": "ExampleResourceClaim",
-									},
-									"versions": []interface{}{
-										map[string]interface{}{
-											"name":          "v1",
-											"served":        true,
-											"referenceable": false,
-										},
-										map[string]interface{}{
-											"name":          "v2",
-											"served":        true,
-											"referenceable": true, // This is the version compositions should reference
-										},
-										map[string]interface{}{
-											"name":          "v3alpha1",
-											"served":        true,
-											"referenceable": false,
-										},
-									},
-								},
+				WithXRDForClaim(
+					tu.NewResource(CrossplaneAPIExtGroupV1, CompositeResourceDefinitionKind, "xexampleresources.example.org").
+						WithSpecField("group", "example.org").
+						WithSpecField("names", map[string]interface{}{
+							"kind": "XExampleResource",
+						}).
+						WithSpecField("claimNames", map[string]interface{}{
+							"kind": "ExampleResourceClaim",
+						}).
+						WithSpecField("versions", []interface{}{
+							map[string]interface{}{
+								"name":          "v1",
+								"served":        true,
+								"referenceable": false,
 							},
-						},
-					}, nil
-				}).
+							map[string]interface{}{
+								"name":          "v2",
+								"served":        true,
+								"referenceable": true, // This is the version compositions should reference
+							},
+							map[string]interface{}{
+								"name":          "v3alpha1",
+								"served":        true,
+								"referenceable": false,
+							},
+						}).Build(),
+				).
 				Build(),
 			fields: fields{
 				compositions: map[string]*apiextensionsv1.Composition{
@@ -556,7 +543,7 @@ func TestDefaultCompositionClient_FindMatchingComposition(t *testing.T) {
 				},
 			},
 			args: args{
-				ctx: context.Background(),
+				ctx: t.Context(),
 				res: tu.NewResource("example.org/v1", "ExampleResourceClaim", "test-claim").
 					WithSpecField("compositionRef", map[string]interface{}{
 						"name": "matching-comp",
@@ -584,38 +571,29 @@ func TestDefaultCompositionClient_FindMatchingComposition(t *testing.T) {
 				WithSuccessfulInitialize().
 				WithListResources(func(_ context.Context, gvk schema.GroupVersionKind, _ string) ([]*un.Unstructured, error) {
 					// Return XRDs when requested - but this one has NO referenceable version
-					if gvk.Group == CrossplaneAPIExtGroup && gvk.Kind == "CompositeResourceDefinition" {
+					if gvk.Group == CrossplaneAPIExtGroup && gvk.Kind == CompositeResourceDefinitionKind {
 						return []*un.Unstructured{
-							{
-								Object: map[string]interface{}{
-									"apiVersion": CrossplaneAPIExtGroupV1,
-									"kind":       "CompositeResourceDefinition",
-									"metadata": map[string]interface{}{
-										"name": "xexampleresources.example.org",
+							tu.NewResource(
+								CrossplaneAPIExtGroupV1, CompositeResourceDefinitionKind, "xexampleresources.example.org").
+								WithSpecField("group", "example.org").
+								WithSpecField("names", map[string]interface{}{
+									"kind": "XExampleResource",
+								}).
+								WithSpecField("claimNames", map[string]interface{}{
+									"kind": "ExampleResourceClaim",
+								}).
+								WithSpecField("versions", []interface{}{
+									map[string]interface{}{
+										"name":          "v1",
+										"served":        true,
+										"referenceable": false, // No referenceable version
 									},
-									"spec": map[string]interface{}{
-										"group": "example.org",
-										"names": map[string]interface{}{
-											"kind": "XExampleResource",
-										},
-										"claimNames": map[string]interface{}{
-											"kind": "ExampleResourceClaim",
-										},
-										"versions": []interface{}{
-											map[string]interface{}{
-												"name":          "v1",
-												"served":        true,
-												"referenceable": false, // No referenceable version
-											},
-											map[string]interface{}{
-												"name":          "v2",
-												"served":        true,
-												"referenceable": false, // No referenceable version
-											},
-										},
+									map[string]interface{}{
+										"name":          "v2",
+										"served":        true,
+										"referenceable": false, // No referenceable version
 									},
-								},
-							},
+								}).Build(),
 						}, nil
 					}
 					return []*un.Unstructured{}, nil
@@ -623,41 +601,29 @@ func TestDefaultCompositionClient_FindMatchingComposition(t *testing.T) {
 				Build(),
 			mockDef: *tu.NewMockDefinitionClient().
 				WithSuccessfulInitialize().
-				WithGetXRDs(func(context.Context) ([]*un.Unstructured, error) {
-					return []*un.Unstructured{
-						{
-							Object: map[string]interface{}{
-								"apiVersion": CrossplaneAPIExtGroupV1,
-								"kind":       "CompositeResourceDefinition",
-								"metadata": map[string]interface{}{
-									"name": "xexampleresources.example.org",
-								},
-								"spec": map[string]interface{}{
-									"group": "example.org",
-									"names": map[string]interface{}{
-										"kind": "XExampleResource",
-									},
-									"claimNames": map[string]interface{}{
-										"kind": "ExampleResourceClaim",
-									},
-									"versions": []interface{}{
-										map[string]interface{}{
-											"name":          "v1",
-											"served":        true,
-											"referenceable": false, // No referenceable version
-										},
-										map[string]interface{}{
-											"name":          "v2",
-											"served":        true,
-											"referenceable": false, // No referenceable version
-										},
-									},
-								},
+				WithXRDForClaim(
+					tu.NewResource(
+						CrossplaneAPIExtGroupV1, CompositeResourceDefinitionKind, "xexampleresources.example.org").
+						WithSpecField("group", "example.org").
+						WithSpecField("names", map[string]interface{}{
+							"kind": "XExampleResource",
+						}).
+						WithSpecField("claimNames", map[string]interface{}{
+							"kind": "ExampleResourceClaim",
+						}).
+						WithSpecField("versions", []interface{}{
+							map[string]interface{}{
+								"name":          "v1",
+								"served":        true,
+								"referenceable": false, // No referenceable version
 							},
-						},
-					}, nil
-				}).
-				Build(),
+							map[string]interface{}{
+								"name":          "v2",
+								"served":        true,
+								"referenceable": false, // No referenceable version
+							},
+						}).Build(),
+				).Build(),
 			fields: fields{
 				compositions: map[string]*apiextensionsv1.Composition{
 					"matching-comp": {
@@ -674,7 +640,7 @@ func TestDefaultCompositionClient_FindMatchingComposition(t *testing.T) {
 				},
 			},
 			args: args{
-				ctx: context.Background(),
+				ctx: t.Context(),
 				res: tu.NewResource("example.org/v1", "ExampleResourceClaim", "test-claim").
 					WithSpecField("compositionRef", map[string]interface{}{
 						"name": "matching-comp",
@@ -686,15 +652,96 @@ func TestDefaultCompositionClient_FindMatchingComposition(t *testing.T) {
 				err:         errors.New("no referenceable version found in XRD"), // Should fail with this error
 			},
 		},
+		// TODO:  add more tests against v2 XRDs
+		"ResourceWithV2XRD": {
+			reason: "Should determine path to compositionRef by determining XR type from XRD",
+			mockResource: *tu.NewMockResourceClient().
+				WithSuccessfulInitialize().
+				WithListResources(func(_ context.Context, gvk schema.GroupVersionKind, _ string) ([]*un.Unstructured, error) {
+					// Set up to return XRDs when requested
+					if gvk.Group == CrossplaneAPIExtGroup && gvk.Kind == CompositeResourceDefinitionKind {
+						return []*un.Unstructured{
+							tu.NewResource(CrossplaneAPIExtGroupV1, CompositeResourceDefinitionKind, "xexampleresources.example.org").
+								WithSpecField("group", "example.org").
+								WithSpecField("names", map[string]interface{}{
+									"kind": "XExampleResource",
+								}).
+								WithSpecField("versions", []interface{}{
+									map[string]interface{}{
+										"name":          "v1",
+										"served":        true,
+										"referenceable": false,
+									},
+									map[string]interface{}{
+										"name":          "v2",
+										"served":        true,
+										"referenceable": true, // This is the version compositions should reference
+									},
+									map[string]interface{}{
+										"name":          "v3alpha1",
+										"served":        true,
+										"referenceable": false,
+									},
+								}).Build(),
+						}, nil
+					}
+					return []*un.Unstructured{}, nil
+				}).
+				Build(),
+			mockDef: *tu.NewMockDefinitionClient().
+				WithSuccessfulInitialize().
+				WithV2XRDForXR().
+				Build(),
+			fields: fields{
+				compositions: map[string]*apiextensionsv1.Composition{
+					"matching-comp": {
+						ObjectMeta: metav1.ObjectMeta{
+							Name: "matching-comp",
+						},
+						Spec: apiextensionsv1.CompositionSpec{
+							CompositeTypeRef: apiextensionsv1.TypeReference{
+								APIVersion: "example.org/v2", // Match the referenceable version v2
+								Kind:       "XExampleResource",
+							},
+						},
+					},
+				},
+			},
+			args: args{
+				ctx: t.Context(),
+				res: tu.NewResource("example.org/v2", "XExampleResource", "my-xr").
+					WithSpecField("crossplane", map[string]interface{}{
+						"compositionRef": map[string]interface{}{
+							"name": "matching-comp",
+						},
+					}).
+					Build(),
+			},
+			want: want{
+				composition: &apiextensionsv1.Composition{
+					ObjectMeta: metav1.ObjectMeta{
+						Name: "matching-comp",
+					},
+					Spec: apiextensionsv1.CompositionSpec{
+						CompositeTypeRef: apiextensionsv1.TypeReference{
+							APIVersion: "example.org/v2",
+							Kind:       "XExampleResource",
+						},
+					},
+				},
+				err: nil,
+			},
+		},
 	}
 
 	for name, tt := range tests {
 		t.Run(name, func(t *testing.T) {
 			// Create the CompositionClient
 			c := &DefaultCompositionClient{
-				resourceClient: &tt.mockResource,
-				logger:         tu.TestLogger(t, false),
-				compositions:   tt.fields.compositions,
+				resourceClient:   &tt.mockResource,
+				definitionClient: &tt.mockDef,
+				logger:           tu.TestLogger(t, false),
+				compositions:     tt.fields.compositions,
 			}
 
 			// Test the FindMatchingComposition method
@@ -732,7 +779,7 @@ func TestDefaultCompositionClient_FindMatchingComposition(t *testing.T) {
 }
 
 func TestDefaultCompositionClient_GetComposition(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 
 	// Create a test composition
 	testComp := tu.NewComposition("test-comp").
@@ -824,7 +871,7 @@ func TestDefaultCompositionClient_GetComposition(t *testing.T) {
 }
 
 func TestDefaultCompositionClient_ListCompositions(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 
 	// Create test compositions
 	comp1 := tu.NewComposition("comp1").
@@ -957,7 +1004,7 @@ func TestDefaultCompositionClient_ListCompositions(t *testing.T) {
 }
 
 func TestDefaultCompositionClient_Initialize(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 
 	tests := map[string]struct {
 		reason       string

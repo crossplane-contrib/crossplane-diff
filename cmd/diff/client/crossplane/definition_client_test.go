@@ -5,25 +5,26 @@ import (
 	"strings"
 	"testing"
 
+	tu "github.com/crossplane-contrib/crossplane-diff/cmd/diff/testutils"
 	"github.com/google/go-cmp/cmp"
 	un "k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 
-	"github.com/crossplane/crossplane-runtime/pkg/errors"
-
-	tu "github.com/crossplane-contrib/crossplane-diff/cmd/diff/testutils"
+	"github.com/crossplane/crossplane-runtime/v2/pkg/errors"
 )
 
 var _ DefinitionClient = (*tu.MockDefinitionClient)(nil)
 
-var XRDv1GVK = schema.GroupVersionKind{Group: CrossplaneAPIExtGroup, Version: "v1", Kind: "CompositeResourceDefinition"}
-var XRDv2GVK = schema.GroupVersionKind{Group: CrossplaneAPIExtGroup, Version: "v2", Kind: "CompositeResourceDefinition"}
+var (
+	XRDv1GVK = schema.GroupVersionKind{Group: CrossplaneAPIExtGroup, Version: "v1", Kind: CompositeResourceDefinitionKind}
+	XRDv2GVK = schema.GroupVersionKind{Group: CrossplaneAPIExtGroup, Version: "v2", Kind: CompositeResourceDefinitionKind}
+)
 
 func TestDefaultDefinitionClient_GetXRDs(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 
 	// Create test XRDs
-	xrd1 := tu.NewResource("apiextensions.crossplane.io/v1", "CompositeResourceDefinition", "xrd1").
+	xrd1 := tu.NewResource("apiextensions.crossplane.io/v1", CompositeResourceDefinitionKind, "xrd1").
 		WithSpecField("group", "example.org").
 		WithSpecField("names", map[string]interface{}{
 			"kind":     "XR1",
@@ -32,7 +33,7 @@ func TestDefaultDefinitionClient_GetXRDs(t *testing.T) {
 		}).
 		Build()
 
-	xrd2 := tu.NewResource("apiextensions.crossplane.io/v1", "CompositeResourceDefinition", "xrd2").
+	xrd2 := tu.NewResource("apiextensions.crossplane.io/v1", CompositeResourceDefinitionKind, "xrd2").
 		WithSpecField("group", "example.org").
 		WithSpecField("names", map[string]interface{}{
 			"kind":     "XR2",
@@ -60,7 +61,7 @@ func TestDefaultDefinitionClient_GetXRDs(t *testing.T) {
 			mockResource: *tu.NewMockResourceClient().
 				WithSuccessfulInitialize().
 				WithListResources(func(_ context.Context, gvk schema.GroupVersionKind, _ string) ([]*un.Unstructured, error) {
-					if gvk.Group == CrossplaneAPIExtGroup && gvk.Kind == "CompositeResourceDefinition" {
+					if gvk.Group == CrossplaneAPIExtGroup && gvk.Kind == CompositeResourceDefinitionKind {
 						return []*un.Unstructured{}, nil
 					}
 					return nil, errors.New("unexpected GVK")
@@ -79,7 +80,7 @@ func TestDefaultDefinitionClient_GetXRDs(t *testing.T) {
 			mockResource: *tu.NewMockResourceClient().
 				WithSuccessfulInitialize().
 				WithListResources(func(_ context.Context, gvk schema.GroupVersionKind, _ string) ([]*un.Unstructured, error) {
-					if gvk.Group == CrossplaneAPIExtGroup && gvk.Kind == "CompositeResourceDefinition" && gvk.Version == "v1" {
+					if gvk.Group == CrossplaneAPIExtGroup && gvk.Kind == CompositeResourceDefinitionKind && gvk.Version == "v1" {
 						return []*un.Unstructured{xrd1, xrd2}, nil
 					}
 					return nil, errors.New("unexpected GVK")
@@ -195,10 +196,10 @@ func TestDefaultDefinitionClient_GetXRDs(t *testing.T) {
 }
 
 func TestDefaultDefinitionClient_GetXRDForClaim(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 
 	// Create test XRDs
-	xrdWithClaimKind := tu.NewResource("apiextensions.crossplane.io/v1", "CompositeResourceDefinition", "xrd-with-claim").
+	xrdWithClaimKind := tu.NewResource("apiextensions.crossplane.io/v1", CompositeResourceDefinitionKind, "xrd-with-claim").
 		WithSpecField("group", "example.org").
 		WithSpecField("names", map[string]interface{}{
 			"kind":     "XExampleResource",
@@ -212,7 +213,7 @@ func TestDefaultDefinitionClient_GetXRDForClaim(t *testing.T) {
 		}).
 		Build()
 
-	xrdWithoutClaimKind := tu.NewResource("apiextensions.crossplane.io/v1", "CompositeResourceDefinition", "xrd-without-claim").
+	xrdWithoutClaimKind := tu.NewResource("apiextensions.crossplane.io/v1", CompositeResourceDefinitionKind, "xrd-without-claim").
 		WithSpecField("group", "example.org").
 		WithSpecField("names", map[string]interface{}{
 			"kind":     "XOtherResource",
@@ -374,10 +375,10 @@ func TestDefaultDefinitionClient_GetXRDForClaim(t *testing.T) {
 }
 
 func TestDefaultDefinitionClient_GetXRDForXR(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 
 	// Create test XRDs
-	xrdForXR1 := tu.NewResource("apiextensions.crossplane.io/v1", "CompositeResourceDefinition", "xrd-for-xr1").
+	xrdForXR1 := tu.NewResource("apiextensions.crossplane.io/v1", CompositeResourceDefinitionKind, "xrd-for-xr1").
 		WithSpecField("group", "example.org").
 		WithSpecField("names", map[string]interface{}{
 			"kind":     "XR1",
@@ -398,7 +399,7 @@ func TestDefaultDefinitionClient_GetXRDForXR(t *testing.T) {
 		}).
 		Build()
 
-	xrdForXR2 := tu.NewResource("apiextensions.crossplane.io/v1", "CompositeResourceDefinition", "xrd-for-xr2").
+	xrdForXR2 := tu.NewResource("apiextensions.crossplane.io/v1", CompositeResourceDefinitionKind, "xrd-for-xr2").
 		WithSpecField("group", "example.org").
 		WithSpecField("names", map[string]interface{}{
 			"kind":     "XR2",
@@ -575,7 +576,7 @@ func TestDefaultDefinitionClient_GetXRDForXR(t *testing.T) {
 }
 
 func TestDefaultDefinitionClient_Initialize(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 
 	tests := map[string]struct {
 		reason       string

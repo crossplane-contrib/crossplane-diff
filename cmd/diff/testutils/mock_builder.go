@@ -13,13 +13,13 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 
-	"github.com/crossplane/crossplane-runtime/pkg/errors"
-	cpd "github.com/crossplane/crossplane-runtime/pkg/resource/unstructured/composed"
-	cmp "github.com/crossplane/crossplane-runtime/pkg/resource/unstructured/composite"
+	"github.com/crossplane/crossplane-runtime/v2/pkg/errors"
+	cpd "github.com/crossplane/crossplane-runtime/v2/pkg/resource/unstructured/composed"
+	cmp "github.com/crossplane/crossplane-runtime/v2/pkg/resource/unstructured/composite"
 
-	xpextv1 "github.com/crossplane/crossplane/apis/apiextensions/v1"
-	pkgv1 "github.com/crossplane/crossplane/apis/pkg/v1"
-	"github.com/crossplane/crossplane/cmd/crank/foundation/resource"
+	xpextv1 "github.com/crossplane/crossplane/v2/apis/apiextensions/v1"
+	pkgv1 "github.com/crossplane/crossplane/v2/apis/pkg/v1"
+	"github.com/crossplane/crossplane/v2/cmd/crank/common/resource"
 )
 
 // MockBuilder provides a fluent API for building mock objects used in testing.
@@ -58,7 +58,7 @@ func (b *MockResourceClientBuilder) WithSuccessfulInitialize() *MockResourceClie
 
 // WithFoundGVKs sets the GetGVKsForGroupKind behavior.
 func (b *MockResourceClientBuilder) WithFoundGVKs(gvks []schema.GroupVersionKind) *MockResourceClientBuilder {
-	b.mock.GetGVKsForGroupKindFn = func(ctx context.Context, group, kind string) ([]schema.GroupVersionKind, error) {
+	b.mock.GetGVKsForGroupKindFn = func(_ context.Context, _, _ string) ([]schema.GroupVersionKind, error) {
 		return gvks, nil
 	}
 	return b
@@ -66,7 +66,7 @@ func (b *MockResourceClientBuilder) WithFoundGVKs(gvks []schema.GroupVersionKind
 
 // WithoutFoundGVKs sets the GetGVKsForGroupKind behavior.
 func (b *MockResourceClientBuilder) WithoutFoundGVKs(err string) *MockResourceClientBuilder {
-	b.mock.GetGVKsForGroupKindFn = func(ctx context.Context, group, kind string) ([]schema.GroupVersionKind, error) {
+	b.mock.GetGVKsForGroupKindFn = func(_ context.Context, _, _ string) ([]schema.GroupVersionKind, error) {
 		return nil, errors.New(err)
 	}
 	return b
@@ -154,6 +154,44 @@ func (b *MockResourceClientBuilder) WithResourcesFoundByLabel(resources []*un.Un
 func (b *MockResourceClientBuilder) WithGetAllResourcesByLabels(fn func(context.Context, []schema.GroupVersionKind, []metav1.LabelSelector) ([]*un.Unstructured, error)) *MockResourceClientBuilder {
 	b.mock.GetAllResourcesByLabelsFn = fn
 	return b
+}
+
+// WithIsNamespacedResource sets the IsNamespacedResource behavior.
+func (b *MockResourceClientBuilder) WithIsNamespacedResource(fn func(context.Context, schema.GroupVersionKind) (bool, error)) *MockResourceClientBuilder {
+	b.mock.IsNamespacedResourceFn = fn
+	return b
+}
+
+// WithNamespacedResource sets specific GVKs to be namespaced.
+func (b *MockResourceClientBuilder) WithNamespacedResource(gvks ...schema.GroupVersionKind) *MockResourceClientBuilder {
+	namespacedGVKs := make(map[schema.GroupVersionKind]bool)
+	for _, gvk := range gvks {
+		namespacedGVKs[gvk] = true
+	}
+
+	return b.WithIsNamespacedResource(func(_ context.Context, gvk schema.GroupVersionKind) (bool, error) {
+		if isNamespaced, exists := namespacedGVKs[gvk]; exists {
+			return isNamespaced, nil
+		}
+		// Default to error for unconfigured resources to make tests explicit
+		return false, errors.Errorf("IsNamespacedResource not configured for %s in mock", gvk.String())
+	})
+}
+
+// WithClusterScopedResource sets specific GVKs to be cluster-scoped.
+func (b *MockResourceClientBuilder) WithClusterScopedResource(gvks ...schema.GroupVersionKind) *MockResourceClientBuilder {
+	clusterGVKs := make(map[schema.GroupVersionKind]bool)
+	for _, gvk := range gvks {
+		clusterGVKs[gvk] = true
+	}
+
+	return b.WithIsNamespacedResource(func(_ context.Context, gvk schema.GroupVersionKind) (bool, error) {
+		if _, exists := clusterGVKs[gvk]; exists {
+			return false, nil
+		}
+		// Default to error for unconfigured resources to make tests explicit
+		return false, errors.Errorf("IsNamespacedResource not configured for %s in mock", gvk.String())
+	})
 }
 
 // Build returns the built mock.
@@ -617,6 +655,42 @@ func (b *MockDefinitionClientBuilder) WithGetXRDForClaim(fn func(context.Context
 func (b *MockDefinitionClientBuilder) WithGetXRDForXR(fn func(context.Context, schema.GroupVersionKind) (*un.Unstructured, error)) *MockDefinitionClientBuilder {
 	b.mock.GetXRDForXRFn = fn
 	return b
+}
+
+// WithV1XRDForXR sets the GetXRDForXR behavior to return a v1 XRD.
+func (b *MockDefinitionClientBuilder) WithV1XRDForXR() *MockDefinitionClientBuilder {
+	return b.WithGetXRDForXR(func(_ context.Context, _ schema.GroupVersionKind) (*un.Unstructured, error) {
+		return &un.Unstructured{
+			Object: map[string]interface{}{
+				"apiVersion": "apiextensions.crossplane.io/v1",
+			},
+		}, nil
+	})
+}
+
+// WithV2XRDForXR sets the GetXRDForXR behavior to return a v1 XRD.
+func (b *MockDefinitionClientBuilder) WithV2XRDForXR() *MockDefinitionClientBuilder {
+	return b.WithGetXRDForXR(func(_ context.Context, _ schema.GroupVersionKind) (*un.Unstructured, error) {
+		return &un.Unstructured{
+			Object: map[string]interface{}{
+				"apiVersion": "apiextensions.crossplane.io/v2",
+			},
+		}, nil
+	})
+}
+
+// WithXRDForXR sets the GetXRDForXR behavior to return the specified XR.
+func (b *MockDefinitionClientBuilder) WithXRDForXR(unstructured *un.Unstructured) *MockDefinitionClientBuilder {
+	return b.WithGetXRDForXR(func(_ context.Context, _ schema.GroupVersionKind) (*un.Unstructured, error) {
+		return unstructured, nil
+	})
+}
+
+// WithXRDForClaim sets the GetXRDForXR behavior to return the specified XR.
+func (b *MockDefinitionClientBuilder) WithXRDForClaim(unstructured *un.Unstructured) *MockDefinitionClientBuilder {
+	return b.WithGetXRDForClaim(func(_ context.Context, _ schema.GroupVersionKind) (*un.Unstructured, error) {
+		return unstructured, nil
+	})
 }
 
 // Build returns the built mock.

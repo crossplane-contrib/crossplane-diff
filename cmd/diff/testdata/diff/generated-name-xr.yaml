@@ -1,7 +1,7 @@
-apiVersion: diff.example.org/v1alpha1
+apiVersion: ns.diff.example.org/v1alpha1
 kind: XNopResource
 metadata:
   generateName: generated-xr-
+  namespace: default
 spec:
-  compositionUpdatePolicy: Automatic
   coolField: "new-value"

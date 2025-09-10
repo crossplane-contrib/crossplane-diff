@@ -5,13 +5,12 @@ import (
 	"strings"
 	"testing"
 
+	tu "github.com/crossplane-contrib/crossplane-diff/cmd/diff/testutils"
 	"github.com/google/go-cmp/cmp"
 	un "k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 
-	"github.com/crossplane/crossplane-runtime/pkg/errors"
-
-	tu "github.com/crossplane-contrib/crossplane-diff/cmd/diff/testutils"
+	"github.com/crossplane/crossplane-runtime/v2/pkg/errors"
 )
 
 var _ EnvironmentClient = (*tu.MockEnvironmentClient)(nil)
@@ -29,7 +28,7 @@ var EnvConfigV1beta1GVK = schema.GroupVersionKind{
 }
 
 func TestDefaultEnvironmentClient_GetEnvironmentConfigs(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 
 	// Create test environment configurations
 	envConfig1 := tu.NewResource("apiextensions.crossplane.io/v1alpha1", "EnvironmentConfig", "env-config-1").
@@ -165,7 +164,7 @@ func TestDefaultEnvironmentClient_GetEnvironmentConfigs(t *testing.T) {
 }
 
 func TestDefaultEnvironmentClient_GetEnvironmentConfig(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 
 	// Create test environment configuration
 	envConfig := tu.NewResource("apiextensions.crossplane.io/v1alpha1", "EnvironmentConfig", "test-env-config").
@@ -198,7 +197,7 @@ func TestDefaultEnvironmentClient_GetEnvironmentConfig(t *testing.T) {
 				}).
 				Build(),
 			cachedConfig: map[string]*un.Unstructured{
-				"cached-config": envConfig,
+				"/cached-config": envConfig,
 			},
 			args: args{
 				name: "cached-config",
@@ -284,7 +283,7 @@ func TestDefaultEnvironmentClient_GetEnvironmentConfig(t *testing.T) {
 			}
 
 			// Verify the config was added to the cache
-			if _, ok := c.envConfigs[tt.args.name]; !ok {
+			if _, ok := c.envConfigs["/"+tt.args.name]; !ok {
 				t.Errorf("\n%s\nGetEnvironmentConfig(): config not added to cache after fetch", tt.reason)
 			}
 		})
@@ -292,7 +291,7 @@ func TestDefaultEnvironmentClient_GetEnvironmentConfig(t *testing.T) {
 }
 
 func TestDefaultEnvironmentClient_Initialize(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 
 	// Create test environment configurations
 	envConfig1 := tu.NewResource("apiextensions.crossplane.io/v1alpha1", "EnvironmentConfig", "env-config-1").Build()
@@ -365,7 +364,7 @@ func TestDefaultEnvironmentClient_Initialize(t *testing.T) {
 			// If no error expected, check the cache state
 			if !tt.wantErr {
 				for name := range tt.wantCached {
-					if _, ok := c.envConfigs[name]; !ok {
+					if _, ok := c.envConfigs["/"+name]; !ok {
 						t.Errorf("\n%s\nInitialize(): expected config %s to be cached, but it's not", tt.reason, name)
 					}
 				}

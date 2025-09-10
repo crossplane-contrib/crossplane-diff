@@ -5,17 +5,17 @@ import (
 	"strings"
 	"testing"
 
+	tu "github.com/crossplane-contrib/crossplane-diff/cmd/diff/testutils"
 	"github.com/google/go-cmp/cmp"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	un "k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 
-	"github.com/crossplane/crossplane-runtime/pkg/errors"
+	"github.com/crossplane/crossplane-runtime/v2/pkg/errors"
 
-	tu "github.com/crossplane-contrib/crossplane-diff/cmd/diff/testutils"
-	apiextensionsv1 "github.com/crossplane/crossplane/apis/apiextensions/v1"
-	pkgv1 "github.com/crossplane/crossplane/apis/pkg/v1"
+	apiextensionsv1 "github.com/crossplane/crossplane/v2/apis/apiextensions/v1"
+	pkgv1 "github.com/crossplane/crossplane/v2/apis/pkg/v1"
 )
 
 var _ FunctionClient = (*tu.MockFunctionClient)(nil)
@@ -64,7 +64,7 @@ func TestDefaultFunctionClient_GetFunctionsFromPipeline(t *testing.T) {
 				err: errors.New("unsupported composition Mode 'NonPipeline'; supported types are [Pipeline]"),
 			},
 		},
-		//"NoModeSpecified": { // illegal state?
+		// "NoModeSpecified": { // illegal state?
 		//	reason: "Should throw an error when composition mode is not specified",
 		//	fields: fields{
 		//		functions: map[string]pkgv1.Function{},
@@ -82,7 +82,7 @@ func TestDefaultFunctionClient_GetFunctionsFromPipeline(t *testing.T) {
 		//	want: want{
 		//		err: errors.New("unsupported Composition; no Mode found"),
 		//	},
-		//},
+		// },
 		"EmptyPipeline": {
 			reason: "Should return empty slice for empty pipeline",
 			fields: fields{
@@ -303,7 +303,7 @@ func TestDefaultFunctionClient_GetFunctionsFromPipeline(t *testing.T) {
 }
 
 func TestDefaultFunctionClient_ListFunctions(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 
 	// Create test functions
 	fn1 := pkgv1.Function{
@@ -478,7 +478,7 @@ func TestDefaultFunctionClient_ListFunctions(t *testing.T) {
 }
 
 func TestDefaultFunctionClient_Initialize(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 
 	// Create test functions
 	fn1 := pkgv1.Function{

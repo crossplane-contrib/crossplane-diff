@@ -1,9 +1,9 @@
 apiVersion: apiextensions.crossplane.io/v1
 kind: CompositeResourceDefinition
 metadata:
-  name: xenvresources.diff.example.org
+  name: xenvresources.ns.diff.example.org
 spec:
-  group: diff.example.org
+  group: ns.diff.example.org
   names:
     kind: XEnvResource
     plural: xenvresources

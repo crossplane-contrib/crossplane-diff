@@ -1,0 +1,12 @@
+apiVersion: legacy.diff.example.org/v1alpha1
+kind: XNopResource
+metadata:
+  name: existing-resource
+spec:
+  compositionUpdatePolicy: Automatic
+  coolField: "I'm modified!"
+  parameters:
+    config:
+      setting1: changed
+      setting2: original
+      setting3: new-value

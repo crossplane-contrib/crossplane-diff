@@ -80,11 +80,11 @@ e2e-matrix:
 e2e:
   ARG TARGETARCH
   ARG TARGETOS
-  ARG CROSSPLANE_IMAGE_TAG=release-1.20
+  ARG CROSSPLANE_IMAGE_TAG=main
   ARG SAVE_LOCALLY=true
   ARG GOARCH=${TARGETARCH}
   ARG GOOS=${TARGETOS}
-  ARG FLAGS="-test-suite=base"
+  ARG FLAGS="-test-suite=base -labels=crossplane-version=${CROSSPLANE_IMAGE_TAG}"
   # Using earthly image to allow compatibility with different development environments e.g. WSL
   FROM earthly/dind:alpine-3.20-docker-26.1.5-r0
   RUN wget https://dl.google.com/go/go${GO_VERSION}.${GOOS}-${GOARCH}.tar.gz
@@ -111,7 +111,8 @@ e2e:
     WITH DOCKER --pull crossplane/crossplane:${CROSSPLANE_IMAGE_TAG}
       # TODO(negz:) Set GITHUB_ACTIONS=true and use RUN --raw-output when
       # https://github.com/earthly/earthly/issues/4143 is fixed.
-      RUN gotestsum --no-color=false --format testname --junitfile e2e-tests.xml --raw-command go tool test2json -t -p E2E ./e2e -test.v -crossplane-image=crossplane/crossplane:${CROSSPLANE_IMAGE_TAG} ${FLAGS}
+      #RUN gotestsum --no-color=false --format testname --junitfile e2e-tests.xml --raw-command go tool test2json -t -p E2E ./e2e -test.v -crossplane-image=crossplane/crossplane:${CROSSPLANE_IMAGE_TAG} ${FLAGS}
+      RUN gotestsum --no-color=false --format standard-verbose --junitfile e2e-tests.xml --raw-command go tool test2json -t -p E2E ./e2e -test.v -crossplane-image=crossplane/crossplane:${CROSSPLANE_IMAGE_TAG} ${FLAGS}
     END
   FINALLY
     SAVE ARTIFACT --if-exists e2e-tests.xml AS LOCAL _output/tests/e2e-tests.xml
@@ -210,7 +211,8 @@ go-build-e2e:
 # go-test runs Go unit tests.
 go-test:
   ARG KUBE_VERSION=1.30.3
-  ARG CROSSPLANE_IMAGE_TAG=release-1.20
+  ARG CROSSPLANE_IMAGE_TAG=main
+  BUILD +fetch-crossplane-cluster
   FROM +go-modules
   DO github.com/earthly/lib+INSTALL_DIND
   CACHE --id go-build --sharing shared /root/.cache/go-build
@@ -220,10 +222,10 @@ go-test:
   COPY --dir +envtest-setup/envtest /usr/local/kubebuilder/bin
   # a bit dirty but preload the cache with the images we use in IT (found in functions.yaml)
   WITH DOCKER \
-    --pull xpkg.upbound.io/crossplane-contrib/function-go-templating:v0.9.0 \
+    --pull xpkg.upbound.io/crossplane-contrib/function-go-templating:v0.11.0 \
     --pull xpkg.upbound.io/crossplane-contrib/function-auto-ready:v0.4.2 \
-    --pull xpkg.upbound.io/crossplane-contrib/function-environment-configs:v0.3.0 \
-    --pull xpkg.upbound.io/crossplane-contrib/function-extra-resources:v0.0.3
+    --pull xpkg.upbound.io/crossplane-contrib/function-environment-configs:v0.4.0 \
+    --pull xpkg.upbound.io/crossplane-contrib/function-extra-resources:v0.1.0
     # this is silly, but we put these files into the default KUBEBUILDER_ASSETS location, because if we set
     # KUBEBUILDER_ASSETS on `go test` to the artifact path, which is perhaps more intuitive, the syntax highlighting
     # in intellij breaks due to the word BUILD in all caps.
@@ -242,10 +244,7 @@ go-lint:
   COPY .golangci.yml .
   COPY --dir cmd/ test/ .
   RUN golangci-lint run --fix
-  SAVE ARTIFACT apis AS LOCAL apis
   SAVE ARTIFACT cmd AS LOCAL cmd
-  SAVE ARTIFACT internal AS LOCAL internal
-  SAVE ARTIFACT pkg AS LOCAL pkg
   SAVE ARTIFACT test AS LOCAL test
 
 # envtest-setup is used by other targets to setup envtest.

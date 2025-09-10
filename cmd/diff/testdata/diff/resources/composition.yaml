@@ -4,7 +4,7 @@ metadata:
   name: xnopresources.diff.example.org
 spec:
   compositeTypeRef:
-    apiVersion: diff.example.org/v1alpha1
+    apiVersion: ns.diff.example.org/v1alpha1
     kind: XNopResource
   mode: Pipeline
   pipeline:
@@ -16,11 +16,13 @@ spec:
         kind: GoTemplate
         source: Inline
         inline:
+          # add namespace to serve v2
           template: |
-            apiVersion: nop.example.org/v1alpha1
+            apiVersion: ns.nop.example.org/v1alpha1
             kind: XDownstreamResource
             metadata:
               name: {{ .observed.composite.resource.metadata.name }}
+              namespace: {{ .observed.composite.resource.metadata.namespace }}
               annotations:
                 gotemplating.fn.crossplane.io/composition-resource-name: nop-resource
             spec:

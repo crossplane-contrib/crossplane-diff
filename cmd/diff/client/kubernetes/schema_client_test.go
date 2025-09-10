@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	tu "github.com/crossplane-contrib/crossplane-diff/cmd/diff/testutils"
 	"github.com/google/go-cmp/cmp"
 	un "k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -13,16 +14,14 @@ import (
 	"k8s.io/client-go/dynamic/fake"
 	kt "k8s.io/client-go/testing"
 
-	"github.com/crossplane/crossplane-runtime/pkg/errors"
-
-	tu "github.com/crossplane-contrib/crossplane-diff/cmd/diff/testutils"
+	"github.com/crossplane/crossplane-runtime/v2/pkg/errors"
 )
 
 var _ SchemaClient = (*tu.MockSchemaClient)(nil)
 
 func TestSchemaClient_IsCRDRequired(t *testing.T) {
 	// Set up context for tests
-	ctx := context.Background()
+	ctx := t.Context()
 
 	tests := map[string]struct {
 		reason         string
@@ -222,7 +221,7 @@ func TestSchemaClient_GetCRD(t *testing.T) {
 				return dynamicClient, mockConverter
 			},
 			args: args{
-				ctx: context.Background(),
+				ctx: t.Context(),
 				gvk: schema.GroupVersionKind{
 					Group:   "example.org",
 					Version: "v1",
@@ -254,7 +253,7 @@ func TestSchemaClient_GetCRD(t *testing.T) {
 				return dynamicClient, mockConverter
 			},
 			args: args{
-				ctx: context.Background(),
+				ctx: t.Context(),
 				gvk: schema.GroupVersionKind{
 					Group:   "example.org",
 					Version: "v1",
@@ -280,7 +279,7 @@ func TestSchemaClient_GetCRD(t *testing.T) {
 				return dynamicClient, mockConverter
 			},
 			args: args{
-				ctx: context.Background(),
+				ctx: t.Context(),
 				gvk: schema.GroupVersionKind{
 					Group:   "example.org",
 					Version: "v1",
@@ -333,7 +332,7 @@ func TestSchemaClient_GetCRD(t *testing.T) {
 }
 
 func TestSchemaClient_ValidateResource(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 
 	testCases := map[string]struct {
 		resource *un.Unstructured

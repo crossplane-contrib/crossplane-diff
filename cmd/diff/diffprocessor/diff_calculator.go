@@ -4,18 +4,18 @@ import (
 	"context"
 	"fmt"
 
-	un "k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
-
-	"github.com/crossplane/crossplane-runtime/pkg/errors"
-	"github.com/crossplane/crossplane-runtime/pkg/logging"
-	cmp "github.com/crossplane/crossplane-runtime/pkg/resource/unstructured/composite"
-
 	xp "github.com/crossplane-contrib/crossplane-diff/cmd/diff/client/crossplane"
 	k8 "github.com/crossplane-contrib/crossplane-diff/cmd/diff/client/kubernetes"
 	"github.com/crossplane-contrib/crossplane-diff/cmd/diff/renderer"
 	dt "github.com/crossplane-contrib/crossplane-diff/cmd/diff/renderer/types"
-	"github.com/crossplane/crossplane/cmd/crank/foundation/resource"
-	"github.com/crossplane/crossplane/cmd/crank/render"
+	un "k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+
+	"github.com/crossplane/crossplane-runtime/v2/pkg/errors"
+	"github.com/crossplane/crossplane-runtime/v2/pkg/logging"
+	cmp "github.com/crossplane/crossplane-runtime/v2/pkg/resource/unstructured/composite"
+
+	"github.com/crossplane/crossplane/v2/cmd/crank/common/resource"
+	"github.com/crossplane/crossplane/v2/cmd/crank/render"
 )
 
 // DiffCalculator calculates differences between resources.
