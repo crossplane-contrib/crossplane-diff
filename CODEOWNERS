@@ -1,0 +1,40 @@
+# This file controls automatic PR reviewer assignment. See the following docs:
+#
+# * https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/customizing-your-repository/about-code-owners
+# * https://docs.github.com/en/organizations/organizing-members-into-teams/managing-code-review-settings-for-your-team
+#
+# The goal of this file is for most PRs to automatically and fairly have 1 to 2
+# maintainers set as PR reviewers. All maintainers have permission to approve
+# and merge PRs. PRs only need 
+#
+# Most lines in this file will assign one subject matter expert and one random
+# maintainer. PRs only need to be approved by one of these people to be merged.
+#
+# This in part depends on how the groups in this file are configured.
+#
+# @crossplane/steering-committee - Assigns 3 members. Admin perms to this repo.
+# @crossplane/crossplane-maintainers - Assigns 1 member. Maintain perms to this repo.
+#
+# Where possible, prefer explicitly specifying a maintainer who is a subject
+# matter expert for a particular part of the codebase rather than using the
+# @crossplane/crossplane-maintainers group.
+#
+# See also OWNERS.md for governance details
+
+# Fallback owners
+*                                   @crossplane/crossplane-maintainers
+
+# Governance owners - steering committee
+/README.md                           @crossplane/steering-committee
+/OWNERS.md                           @crossplane/steering-committee
+/CHARTER.md                          @crossplane/steering-committee
+/CODE_OF_CONDUCT.md                  @crossplane/steering-committee
+/GOVERNANCE.md                       @crossplane/steering-committee
+/ROADMAP.md                          @crossplane/steering-committee
+/LICENSE                             @crossplane/steering-committee
+
+# Design documents
+/design/                             @crossplane/crossplane-maintainers @negz
+
+# Crossplane CLI
+/cmd/crossplane-diff/                          @crossplane/crossplane-maintainers @phisco @jcogilvie

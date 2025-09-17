@@ -1,0 +1,13 @@
+apiVersion: ns.nop.example.org/v1alpha1
+kind: XDownstreamResource
+metadata:
+  name: test-cross-ns-resource
+  namespace: default
+  annotations:
+    crossplane.io/composition-resource-name: cross-ns-resource
+  labels:
+    crossplane.io/composite: test-cross-ns-resource
+  generateName: test-cross-ns-resource-
+spec:
+  forProvider:
+    configData: existing-cross-ns-data-existing-named-data-old-cross-ns-role

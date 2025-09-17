@@ -1,0 +1,11 @@
+apiVersion: ns.diff.example.org/v1alpha1
+kind: XNopResource
+metadata:
+  name: test-resource
+  namespace: default
+spec:
+  coolField: "test-value"
+  crossplane:
+    compositionSelector:
+      matchLabels:
+        provider: aws

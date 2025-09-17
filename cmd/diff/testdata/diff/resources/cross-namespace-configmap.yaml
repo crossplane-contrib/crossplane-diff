@@ -1,0 +1,21 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: cross-namespace-config
+  namespace: kube-system
+  labels:
+    app: cross-namespace-app
+    environment: production
+data:
+  config-data: "cross-namespace-data"
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: another-cross-namespace-config
+  namespace: kube-public
+  labels:
+    app: cross-namespace-app
+    environment: production
+data:
+  config-data: "another-cross-namespace-data"

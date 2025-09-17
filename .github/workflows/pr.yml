@@ -1,0 +1,15 @@
+name: PR
+
+on:
+  pull_request:
+    types: [opened, edited, synchronize]
+
+jobs:
+  checklist-completed:
+    if: github.actor != 'crossplane-renovate[bot]'
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: mheap/require-checklist-action@efef3b1b39d03d12be5ce427c15064f287ba5843 # v2
+        with:
+          # The checklist must _exist_ and be filled out.
+          requireChecklist: true

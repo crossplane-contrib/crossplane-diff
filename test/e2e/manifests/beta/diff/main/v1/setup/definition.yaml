@@ -1,0 +1,40 @@
+apiVersion: apiextensions.crossplane.io/v1
+kind: CompositeResourceDefinition
+metadata:
+  # we have to use a different GVK because upgrading in place doesn't work; you have to restart the controller.
+  # https://github.com/crossplane/crossplane/issues/6736
+  name: xnopresources.legacy.diff.example.org
+spec:
+  group: legacy.diff.example.org
+  names:
+    kind: XNopResource
+    plural: xnopresources
+  claimNames:
+    kind: NopResource
+    plural: nopresources
+  versions:
+    - name: v1alpha1
+      served: true
+      referenceable: true
+      schema:
+        openAPIV3Schema:
+          type: object
+          properties:
+            spec:
+              type: object
+              properties:
+                coolField:
+                  type: string
+                parameters:
+                  type: object
+                  properties:
+                    config:
+                      type: object
+                      x-kubernetes-preserve-unknown-fields: true
+              required:
+                - coolField
+            status:
+              type: object
+              properties:
+                coolerField:
+                  type: string

@@ -1,0 +1,341 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+      - release-*
+  pull_request: {}
+  workflow_dispatch: {}
+
+env:
+  # Common versions
+  EARTHLY_VERSION: '0.8.15'
+
+  # Force Earthly to use color output
+  FORCE_COLOR: "1"
+
+
+jobs:
+  check-diff:
+    runs-on: ubuntu-22.04
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
+
+      - name: Setup Earthly
+        uses: earthly/actions-setup@43211c7a0eae5344d6d79fb4aaf209c8f8866203 # v1.0.13
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          version: ${{ env.EARTHLY_VERSION }}
+
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@9780b0c442fbb1117ed29e0efdff1e18412f7567 # v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Configure Earthly Cache
+        if: github.ref == 'refs/heads/main'
+        run: echo "EARTHLY_MAX_REMOTE_CACHE=true" >> $GITHUB_ENV
+
+      - name: Generate Files
+        run: earthly --strict --remote-cache ghcr.io/crossplane-contrib/crossplane-diff/earthly-cache:${{ github.job }} +generate
+
+      - name: Count Changed Files
+        id: changed_files
+        run: echo "count=$(git status --porcelain | wc -l)" >> $GITHUB_OUTPUT
+
+      - name: Fail if Files Changed
+        if: steps.changed_files.outputs.count != 0
+        uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea # v7
+        with:
+          script: core.setFailed('Found changed files after running earthly +generate.')
+
+  lint:
+    runs-on: ubuntu-22.04
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
+
+      - name: Setup Earthly
+        uses: earthly/actions-setup@43211c7a0eae5344d6d79fb4aaf209c8f8866203 # v1.0.13
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          version: ${{ env.EARTHLY_VERSION }}
+
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@9780b0c442fbb1117ed29e0efdff1e18412f7567 # v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Configure Earthly Cache
+        if: github.ref == 'refs/heads/main'
+        run: echo "EARTHLY_MAX_REMOTE_CACHE=true" >> $GITHUB_ENV
+
+      - name: Lint
+        run: earthly --strict --remote-cache ghcr.io/crossplane-contrib/crossplane-diff/earthly-cache:${{ github.job }} +lint
+
+  codeql:
+    runs-on: ubuntu-22.04
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
+
+      - name: Setup Earthly
+        uses: earthly/actions-setup@43211c7a0eae5344d6d79fb4aaf209c8f8866203 # v1.0.13
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          version: ${{ env.EARTHLY_VERSION }}
+
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@9780b0c442fbb1117ed29e0efdff1e18412f7567 # v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Configure Earthly Cache
+        if: github.ref == 'refs/heads/main'
+        run: echo "EARTHLY_MAX_REMOTE_CACHE=true" >> $GITHUB_ENV
+
+      - name: Run CodeQL
+        run: earthly --strict --remote-cache ghcr.io/crossplane-contrib/crossplane-diff/earthly-cache:${{ github.job }} +ci-codeql
+
+      - name: Upload CodeQL Results to GitHub
+        uses: github/codeql-action/upload-sarif@df409f7d9260372bd5f19e5b04e83cb3c43714ae # v3
+        with:
+          sarif_file: '_output/codeql/go.sarif'
+
+
+  trivy-scan-fs:
+    permissions:
+      contents: read  # for actions/checkout to fetch code
+      security-events: write  # for github/codeql-action/upload-sarif to upload SARIF results
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
+
+      - name: Run Trivy vulnerability scanner in fs mode
+        uses: aquasecurity/trivy-action@18f2510ee396bbf400402947b394f2dd8c87dbb0 # 0.29.0
+        with:
+          scan-type: 'fs'
+          ignore-unfixed: true
+          skip-dirs: design
+          scan-ref: '.'
+          severity: 'CRITICAL,HIGH'
+          format: sarif
+          output: 'trivy-results.sarif'
+
+      - name: Upload Trivy Results to GitHub
+        uses: github/codeql-action/upload-sarif@df409f7d9260372bd5f19e5b04e83cb3c43714ae # v3
+        with:
+          sarif_file: 'trivy-results.sarif'
+
+  unit-tests:
+    runs-on: ubuntu-22.04
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
+
+      - name: Setup Earthly
+        uses: earthly/actions-setup@43211c7a0eae5344d6d79fb4aaf209c8f8866203 # v1.0.13
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          version: ${{ env.EARTHLY_VERSION }}
+
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@9780b0c442fbb1117ed29e0efdff1e18412f7567 # v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Configure Earthly Cache
+        if: github.ref == 'refs/heads/main'
+        run: echo "EARTHLY_MAX_REMOTE_CACHE=true" >> $GITHUB_ENV
+
+      - name: Run Unit Tests
+        run: earthly -P --strict --remote-cache ghcr.io/crossplane-contrib/crossplane-diff/earthly-cache:${{ github.job }} +test
+
+      - name: Publish Unit Test Coverage
+        uses: codecov/codecov-action@b9fd7d16f6d7d1b5d2bec1a2887e65ceed900238 # v4
+        with:
+          flags: unittests
+          file: _output/tests/coverage.txt
+          token: ${{ secrets.CODECOV_TOKEN }}
+
+  e2e-tests:
+    runs-on: ubuntu-22.04
+    strategy:
+      fail-fast: false
+      matrix:
+        test-suite:
+          - base
+          # - package-dependency-updates  # TODO(jcogilvie):  do we need these?
+          # - package-signature-verification
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
+
+      - name: Setup Earthly
+        uses: earthly/actions-setup@43211c7a0eae5344d6d79fb4aaf209c8f8866203 # v1.0.13
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          version: ${{ env.EARTHLY_VERSION }}
+
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@9780b0c442fbb1117ed29e0efdff1e18412f7567 # v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Configure Earthly Cache
+        if: github.ref == 'refs/heads/main'
+        run: echo "EARTHLY_MAX_REMOTE_CACHE=true" >> $GITHUB_ENV
+
+      - name: Set CROSSPLANE_PRIOR_VERSION GitHub Environment Variable
+        # We want to run this for the release branches, and PRs against release branches.
+        if: startsWith(github.ref, 'refs/heads/release-') || startsWith(github.base_ref, 'release-')
+        run: |
+          # Extract the version part from the branch name
+          if [[ "${GITHUB_REF}" == refs/heads/release-* ]]; then
+            VERSION=${GITHUB_REF#refs/heads/release-}
+          elif [[ "${GITHUB_BASE_REF}" == release-* ]]; then
+            VERSION=${GITHUB_BASE_REF#release-}
+          fi
+          # Extract the major and minor parts of the version
+          MAJOR=$(echo "$VERSION" | cut -d. -f1)
+          MINOR=$(echo "$VERSION" | cut -d. -f2)
+          # Decrement the MINOR version
+          if [[ "$MINOR" -gt 0 ]]; then
+            MINOR=$((MINOR - 1))
+          else
+            echo "Error: Minor version cannot be decremented below 0"
+            exit 1
+          fi
+
+          echo "CROSSPLANE_PRIOR_VERSION=$MAJOR.$MINOR" >> $GITHUB_ENV
+
+
+      - name: Run E2E Tests
+        run: |
+          earthly --strict --allow-privileged --remote-cache ghcr.io/crossplane-contrib/crossplane-diff/earthly-cache:${{ github.job }}-${{ matrix.test-suite}} \
+            +e2e --FLAGS="-test.failfast -fail-fast -prior-crossplane-version=${CROSSPLANE_PRIOR_VERSION} --test-suite ${{ matrix.test-suite }}"
+
+      - name: Publish E2E Test Flakes
+        if: '!cancelled()'
+        uses: buildpulse/buildpulse-action@d0d30f53585cf16b2e01811a5a753fd47968654a # v0.11.0
+        with:
+          account: 45158470
+          repository: 147886080
+          key: ${{ secrets.BUILDPULSE_ACCESS_KEY_ID }}
+          secret: ${{ secrets.BUILDPULSE_SECRET_ACCESS_KEY }}
+          path: _output/tests/e2e-tests.xml
+
+  build-artifacts:
+    runs-on: ubuntu-22.04
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Earthly
+        uses: earthly/actions-setup@43211c7a0eae5344d6d79fb4aaf209c8f8866203 # v1.0.13
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          version: ${{ env.EARTHLY_VERSION }}
+
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@9780b0c442fbb1117ed29e0efdff1e18412f7567 # v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Configure Earthly Cache
+        if: github.ref == 'refs/heads/main'
+        run: echo "EARTHLY_MAX_REMOTE_CACHE=true" >> $GITHUB_ENV
+
+      - name: Build CLI Binaries
+        run: earthly --strict --remote-cache ghcr.io/crossplane-contrib/crossplane-diff/earthly-cache:${{ github.job }} +multiplatform-build
+
+      - name: Upload Artifacts to GitHub
+        uses: actions/upload-artifact@6f51ac03b9356f520e9adb1b1b7802705f340c2b # v4
+        with:
+          name: output
+          path: _output/**
+
+#  fuzz-test:
+#    runs-on: ubuntu-22.04
+#
+#    steps:
+#      # TODO(negz): Can we make this use our Go build and dependency cache? It
+#      # seems to build Crossplane inside of a Docker image.
+#      - name: Build Fuzzers
+#        id: build
+#        uses: google/oss-fuzz/infra/cifuzz/actions/build_fuzzers@a2d113bc6b45af6135bc4bdb30916bb7c0aae07b # master
+#        with:
+#          oss-fuzz-project-name: "crossplane"
+#          language: go
+#
+#      - name: Run Fuzzers
+#        uses: google/oss-fuzz/infra/cifuzz/actions/run_fuzzers@a2d113bc6b45af6135bc4bdb30916bb7c0aae07b # master
+#        with:
+#          oss-fuzz-project-name: "crossplane"
+#          fuzz-seconds: 300
+#          language: go
+#
+#      - name: Upload Crash
+#        uses: actions/upload-artifact@6f51ac03b9356f520e9adb1b1b7802705f340c2b # v4
+#        if: failure() && steps.build.outcome == 'success'
+#        with:
+#          name: artifacts
+#          path: ./out/artifacts
+
+# TODO(jcogilvie):  we shouldn't need to publish any proto schemas for diff.
+#  protobuf-schemas:
+#    runs-on: ubuntu-22.04
+#
+#    steps:
+#      - name: Checkout
+#        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
+#
+#      - name: Setup Buf
+#        uses: bufbuild/buf-setup-action@76ddbd1bcb9da6da11cb7c41bd97e47f81c39a39 # v1.37.0
+#        with:
+#          github_token: ${{ secrets.GITHUB_TOKEN }}
+#
+#      - name: Lint Protocol Buffers
+#        uses: bufbuild/buf-lint-action@06f9dd823d873146471cfaaf108a993fe00e5325 # v1.1.1
+#        with:
+#          input: apis
+#
+#      # buf-breaking-action doesn't support branches
+#      # https://github.com/bufbuild/buf-push-action/issues/34
+#      - name: Detect Breaking Changes in Protocol Buffers
+#        uses: bufbuild/buf-breaking-action@a074e988ee34efcd4927079e79c611f428354c01 # v1
+#        # We want to run this for the main branch, and PRs against main.
+#        if: ${{ github.ref == 'refs/heads/main' || github.base_ref == 'main' }}
+#        with:
+#          input: apis
+#          against: "https://github.com/${GITHUB_REPOSITORY}.git#branch=main,subdir=apis"
+#
+#      - name: Push Protocol Buffers to Buf Schema Registry
+#        if: ${{ github.repository == 'crossplane/crossplane' && github.ref == 'refs/heads/main' }}
+#        uses: bufbuild/buf-push-action@a654ff18effe4641ebea4a4ce242c49800728459 # v1.2.0
+#        with:
+#          input: apis
+#          buf_token: ${{ secrets.BUF_TOKEN }}

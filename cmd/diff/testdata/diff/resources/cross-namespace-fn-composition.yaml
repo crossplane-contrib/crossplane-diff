@@ -1,0 +1,72 @@
+apiVersion: apiextensions.crossplane.io/v1
+kind: Composition
+metadata:
+  name: xnopresources.cross-namespace.example.org
+spec:
+  compositeTypeRef:
+    apiVersion: ns.diff.example.org/v1alpha1
+    kind: XNopResource
+  mode: Pipeline
+  pipeline:
+    - step: fetch-cross-namespace-resources
+      functionRef:
+        name: function-extra-resources
+      input:
+        apiVersion: extra-resources.fn.crossplane.io/v1beta1
+        kind: Input
+        spec:
+          extraResources:
+            # Cross-namespace ConfigMap by label selector
+            - apiVersion: v1
+              kind: ConfigMap
+              into: crossNamespaceConfig
+              type: Selector
+              namespace: kube-system
+              selector:
+                matchLabels:
+                  - key: app
+                    type: Value
+                    value: cross-namespace-app
+                  - key: environment
+                    type: Value
+                    value: production
+            # Another cross-namespace ConfigMap by name reference
+            - apiVersion: v1
+              kind: ConfigMap
+              into: namedCrossNamespaceConfig
+              type: Reference
+              namespace: kube-public
+              ref:
+                name: another-cross-namespace-config
+            # Cluster-scoped resource for comparison
+            - apiVersion: rbac.authorization.k8s.io/v1
+              kind: ClusterRole
+              into: namedClusterRole
+              type: Reference
+              ref:
+                name: external-named-clusterrole
+    - step: generate-resources
+      functionRef:
+        name: function-go-templating
+      input:
+        apiVersion: template.fn.crossplane.io/v1beta1
+        kind: GoTemplate
+        source: Inline
+        inline:
+          template: |
+            {{- $crossNsConfig := index .context "apiextensions.crossplane.io/extra-resources" "crossNamespaceConfig" 0 -}}
+            {{- $namedCrossNsConfig := index .context "apiextensions.crossplane.io/extra-resources" "namedCrossNamespaceConfig" 0 -}}
+            {{- $clusterRole := index .context "apiextensions.crossplane.io/extra-resources" "namedClusterRole" 0 -}}
+            apiVersion: ns.nop.example.org/v1alpha1
+            kind: XDownstreamResource
+            metadata:
+              name: {{ .observed.composite.resource.metadata.name }}
+              namespace: {{ .observed.composite.resource.metadata.namespace }}
+              annotations:
+                gotemplating.fn.crossplane.io/composition-resource-name: cross-ns-resource
+            spec:
+              forProvider:
+                configData: {{ index $crossNsConfig "data" "config-data" }}-{{ index $namedCrossNsConfig "data" "config-data" }}-{{ $clusterRole.metadata.name }}
+    - step: automatically-detect-ready-composed-resources
+      functionRef:
+        name: function-auto-ready

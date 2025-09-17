@@ -1,0 +1,88 @@
+package crossplane
+
+import (
+	"context"
+
+	"github.com/crossplane-contrib/crossplane-diff/cmd/diff/client/core"
+	"github.com/crossplane-contrib/crossplane-diff/cmd/diff/client/kubernetes"
+	un "k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime/schema"
+
+	"github.com/crossplane/crossplane-runtime/v2/pkg/errors"
+	"github.com/crossplane/crossplane-runtime/v2/pkg/logging"
+)
+
+// EnvironmentClient handles environment configurations.
+type EnvironmentClient interface {
+	core.Initializable
+
+	// GetEnvironmentConfigs gets all environment configurations
+	GetEnvironmentConfigs(ctx context.Context) ([]*un.Unstructured, error)
+
+	// GetEnvironmentConfig gets a specific environment config by name
+	GetEnvironmentConfig(ctx context.Context, name string) (*un.Unstructured, error)
+}
+
+// DefaultEnvironmentClient implements EnvironmentClient.
+type DefaultEnvironmentClient struct {
+	resourceClient kubernetes.ResourceClient
+	logger         logging.Logger
+
+	// Cache of environment configs
+	envConfigs map[string]*un.Unstructured
+	gvks       []schema.GroupVersionKind
+}
+
+// NewEnvironmentClient creates a new DefaultEnvironmentClient.
+func NewEnvironmentClient(resourceClient kubernetes.ResourceClient, logger logging.Logger) EnvironmentClient {
+	return &DefaultEnvironmentClient{
+		resourceClient: resourceClient,
+		logger:         logger,
+		envConfigs:     make(map[string]*un.Unstructured),
+	}
+}
+
+// Initialize loads environment configs into the cache.
+func (c *DefaultEnvironmentClient) Initialize(ctx context.Context) error {
+	c.logger.Debug("Initializing environment client")
+
+	gvks, err := c.resourceClient.GetGVKsForGroupKind(ctx, "apiextensions.crossplane.io", "EnvironmentConfig")
+	if err != nil {
+		return errors.Wrap(err, "cannot get EnvironmentConfig GVKs")
+	}
+	c.gvks = gvks
+
+	// List environment configs to populate the cache
+	configs, err := c.GetEnvironmentConfigs(ctx)
+	if err != nil {
+		return errors.Wrap(err, "cannot list environment configs")
+	}
+
+	// Store in cache
+	for _, config := range configs {
+		c.envConfigs[cacheKey("", config.GetName())] = config
+	}
+
+	c.logger.Debug("Environment client initialized", "envConfigsCount", len(c.envConfigs))
+	return nil
+}
+
+// GetEnvironmentConfigs gets all environment configurations.
+func (c *DefaultEnvironmentClient) GetEnvironmentConfigs(ctx context.Context) ([]*un.Unstructured, error) {
+	c.logger.Debug("Getting environment configs")
+
+	envConfigs, err := listMatchingResources(ctx, c.resourceClient, c.gvks, "" /* ECs are cluster scoped */)
+	if err != nil {
+		return nil, err
+	}
+
+	c.logger.Debug("Environment configs retrieved", "count", len(envConfigs))
+	return envConfigs, nil
+}
+
+// GetEnvironmentConfig gets a specific environment config by name.
+func (c *DefaultEnvironmentClient) GetEnvironmentConfig(ctx context.Context, name string) (*un.Unstructured, error) {
+	c.logger.Debug("Getting environment config", "name", name)
+
+	return getFirstMatchingResource(ctx, c.resourceClient, c.gvks, name, "" /* ECs are cluster scoped */, c.envConfigs)
+}
