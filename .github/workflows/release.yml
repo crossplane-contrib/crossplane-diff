@@ -4,6 +4,10 @@ on:
   push:
     tags:
       - 'v*'
+  workflow_run:
+    workflows: ["Tag"]
+    types:
+      - completed
 
 env:
   # Common versions
@@ -15,6 +19,8 @@ env:
 jobs:
   release:
     runs-on: ubuntu-22.04
+    # Only run if triggered by tag push OR if tag workflow succeeded
+    if: github.event_name == 'push' || github.event.workflow_run.conclusion == 'success'
     permissions:
       contents: write  # Required for creating releases
 
@@ -39,19 +45,55 @@ jobs:
 
       - name: Extract Version from Tag
         id: version
-        run: echo "VERSION=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
+        run: |
+          if [ "${{ github.event_name }}" == "push" ]; then
+            # Direct tag push - use GITHUB_REF
+            VERSION=${GITHUB_REF#refs/tags/}
+          else
+            # Workflow run trigger - find the most recent tag
+            VERSION=$(git describe --tags --abbrev=0)
+          fi
+          echo "VERSION=$VERSION" >> $GITHUB_OUTPUT
+          echo "Extracted version: $VERSION"
 
       - name: Build Release Artifacts
         run: |
           earthly --strict --remote-cache ghcr.io/crossplane-contrib/crossplane-diff/earthly-cache:release +multiplatform-build \
             --CROSSPLANE_VERSION=${{ steps.version.outputs.VERSION }}
 
+      - name: Prepare Release Artifacts
+        run: |
+          mkdir -p _output/release
+
+          # Copy and rename all artifacts with architecture suffix
+          for dir in _output/{bin,bundle}/*/; do
+            arch=$(basename "$dir")
+            for file in "$dir"*; do
+              if [ -f "$file" ]; then
+                filename=$(basename "$file")
+
+                # Split filename at first dot to get basename and extension
+                if [[ "$filename" == *.* ]]; then
+                  basename="${filename%%.*}"
+                  extension="${filename#*.}"
+                  new_name="${basename}_${arch}.${extension}"
+                else
+                  new_name="${filename}_${arch}"
+                fi
+
+                cp "$file" "_output/release/$new_name"
+              fi
+            done
+          done
+
+          # List what we're about to upload
+          echo "Release artifacts:"
+          ls -la _output/release/
+
       - name: Create Release
         uses: softprops/action-gh-release@c062e08bd532815e2082a85e87e3ef29c3e6d191 # v2.0.8
         with:
-          files: |
-            _output/bin/**/*
-            _output/bundle/**/*
+          files: _output/release/*
           draft: false
           prerelease: ${{ contains(steps.version.outputs.VERSION, 'rc') || contains(steps.version.outputs.VERSION, 'beta') || contains(steps.version.outputs.VERSION, 'alpha') }}
         env:
