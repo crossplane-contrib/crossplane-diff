@@ -160,32 +160,73 @@ may affect results.
 ## Documentation
 
 - **[Design Document](design/design-doc-cli-diff.md)**: Comprehensive technical design and architecture
-- **[CLAUDE.md](CLAUDE.md)**: Development principles and guidelines
+- **[CLAUDE.md](CLAUDE.md)**: Instructions for Claude.  Contains development principles and guidelines for LLMs.
 
 ## Development
 
 ### Local Development Setup
 
-Install required tools:
+**Prerequisites:**
+- Go 1.24+
+- Docker
+- Earthly ([install instructions](https://earthly.dev/get-earthly))
+- kubectl
 
-```bash
-go install sigs.k8s.io/controller-runtime/tools/setup-envtest@release-0.20
-setup-envtest use 1.30.3 # or whatever cluster version we're using now
-```
+**Setup Steps:**
 
-The setup command will download necessary binaries and set `KUBEBUILDER_ASSETS` in your environment.
+1. **Install required tools:**
+   ```bash
+   go install sigs.k8s.io/controller-runtime/tools/setup-envtest@release-0.20
+   setup-envtest use 1.30.3 # or whatever cluster version we're using now
+   ```
 
-Generate test manifests:
+2. **Generate test manifests:**
+   ```bash
+   earthly +go-generate --CROSSPLANE_IMAGE_TAG=main
+   ```
 
-```bash
-earthly +go-generate --CROSSPLANE_IMAGE_TAG=(target crossplane version here)
-```
+3. **Build the project:**
+   ```bash
+   earthly +build
+   ```
 
-Run tests:
+### Running Tests
 
+**Unit and Integration Tests (fast):**
 ```bash
 cd cmd/diff
 go test ./...
+```
+
+**Development Checks (linting, tests, generation):**
+```bash
+# Run before opening any PR
+earthly +reviewable
+```
+
+**End-to-End Tests:**
+```bash
+# Full test matrix against multiple Crossplane versions (slower)
+earthly -P +e2e-matrix
+
+# Single E2E test against specific version
+earthly +e2e --CROSSPLANE_IMAGE_TAG=main
+```
+
+### Build and Development Commands
+
+```bash
+# Build binary
+earthly +build
+
+# Run linting
+earthly +lint
+
+# Generate code/manifests
+earthly +generate
+
+# All available targets
+earthly --help
 ```
 
 ### Architecture
@@ -207,8 +248,17 @@ The project includes comprehensive testing:
 
 ## Contributing
 
-Contributions are welcome! Please see our [contributing guidelines](CONTRIBUTING.md)
-and [code of conduct](CODE_OF_CONDUCT.md).
+Contributions are welcome! Please see our [contributing guidelines](CONTRIBUTING.md) for detailed setup instructions and development workflow.
+
+**Quick Start for Contributors:**
+
+1. Fork and clone the repository
+2. Run setup: `earthly +go-generate --CROSSPLANE_IMAGE_TAG=main`
+3. Make your changes
+4. Test your changes: `earthly +reviewable && earthly -P +e2e-matrix`
+5. Open a pull request
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for complete guidelines and [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md) for community standards.
 
 ## License
 
