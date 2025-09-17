@@ -4,7 +4,7 @@
 
 ### 1.1 Purpose
 
-The `crossplane beta diff` command extends the Crossplane CLI with functionality to visualize the differences between
+The `crossplane-diff diff` command is a standalone tool that visualizes the differences between
 Crossplane resources in a YAML file and their resulting state when applied to a live Kubernetes cluster. This is similar
 to `kubectl diff` but with specific enhancements for Crossplane resources, particularly Composite Resources (XRs) and
 their composed resources.
@@ -21,7 +21,22 @@ downstream resources, and XRDs and CRDs for validation.
 
 There is one exception, however, which is that in order to avoid API throttling, we cache resources on first discovery.
 
-### 1.3 Scope
+### 1.3 Crossplane v2 Support
+
+This tool supports both Crossplane v1 and v2 resource definitions. A key enhancement in Crossplane v2 is the introduction
+of namespaced Composite Resource Definitions (XRDs), which allows XRDs to be scoped to either `Cluster` or `Namespaced`.
+The diff command automatically handles both scopes:
+
+- **Cluster-scoped XRDs**: Traditional cluster-wide resources that exist at the cluster level
+- **Namespaced XRDs**: Resources that are confined to a specific namespace, providing better isolation and multi-tenancy support
+
+The tool reads namespace information directly from the XR definitions in the input YAML files, not from a command-line flag.
+It then:
+- Validates that namespaced resources have appropriate namespace settings
+- Propagates the XR's namespace to managed resources that don't specify one
+- Enforces scope constraints (e.g., namespaced XRs cannot own cluster-scoped managed resources, except for claims)
+
+### 1.4 Scope
 
 The Diff command enables users to:
 
@@ -47,7 +62,7 @@ understand the impact of changes, troubleshoot issues, and confidently apply upd
 
 ### 3.1 Goals
 
-The `crossplane beta diff` command aims to:
+The `crossplane-diff diff` command aims to:
 
 1. Provide a clear, familiar way to preview changes that would be made to external resources before they are applied
 2. Support GitOps workflows by enabling change review within CI/CD pipelines
@@ -225,7 +240,7 @@ described in the following sections is designed to satisfy all these test cases.
 
 ### 5.1 High-Level Overview
 
-The `crossplane beta diff` command shows the changes that would result from applying Crossplane resources to a live
+The `crossplane-diff diff` command shows the changes that would result from applying Crossplane resources to a live
 cluster. The command processes resources from files or stdin, compares them against the current state in the cluster,
 and displays the differences in a familiar format.
 
@@ -557,7 +572,8 @@ The client layer provides interfaces to interact with Kubernetes and Crossplane 
     - The `DiffProcessor` finds the matching composition
     - The `DiffProcessor` renders the resource using the render function
     - The `RequirementsProvider` resolves any requirements
-    - The `SchemaValidator` validates the rendered resources
+    - The `DiffProcessor` propagates namespaces from XR to managed resources (`propagateNamespacesToManagedResources`)
+    - The `SchemaValidator` validates the rendered resources and enforces scope constraints (`ValidateScopeConstraints`)
     - The `DiffCalculator` calculates diffs between current and desired states
     - The `DiffRenderer` formats and displays the diffs
 
@@ -578,7 +594,7 @@ The client layer provides interfaces to interact with Kubernetes and Crossplane 
 The command's basic usage would be:
 
 ```
-crossplane beta diff [FILE]...
+crossplane-diff diff [FILE]...
 ```
 
 Similar to `kubectl diff`, the command will:
@@ -589,16 +605,16 @@ Similar to `kubectl diff`, the command will:
 Examples:
 ```
 # Show changes that would result from applying an XR from a file
-crossplane diff xr.yaml
+crossplane-diff diff xr.yaml
 
 # Show changes from stdin
-cat xr.yaml | crossplane diff -
+cat xr.yaml | crossplane-diff diff -
 
 # Process multiple files
-crossplane diff xr1.yaml xr2.yaml xr3.yaml
+crossplane-diff diff xr1.yaml xr2.yaml xr3.yaml
 
-# Specify namespace
-crossplane diff -n other-namespace xr.yaml
+# Show changes in a compact format with minimal context
+crossplane-diff diff --compact xr.yaml
 ```
 
 ### 8.2 Output Format
@@ -936,6 +952,8 @@ Several potential enhancements could be made to the Diff command:
     least-privilege implementations in restricted environments
 14. **Persona-specific Output Formats**: Provide different output formats optimized for each user persona (e.g.,
     machine-readable JSON for CI, verbose explanations for composition developers, simplified views for end users)
+15. **Namespace Flag Implementation**: The `--namespace` flag is currently defined but unused. Future implementation
+    could use it as a default namespace for XRs that don't specify one, or for looking up cluster resources
 
 These enhancements would expand the utility of the Diff command and make it more accessible to all user personas.
 
@@ -948,7 +966,54 @@ These enhancements would expand the utility of the Diff command and make it more
    potentially be more accurate and efficient, it would be more complex to implement and require changes to both the
    server and the CLI. Isolating our changes to the CLI reduces the blast radius significantly.
 
-## 12. Conclusion
+## 12. Project Structure and Implementation
+
+### 12.1 Standalone Tool Architecture
+
+This tool is implemented as a standalone binary `crossplane-diff` with the following structure:
+
+```
+cmd/
+├── diff/
+│   ├── main.go                    # Main entry point and CLI structure
+│   ├── diff.go                    # Core diff command implementation
+│   ├── app_context.go             # Application context and client initialization
+│   ├── diffprocessor/             # Core diff processing logic
+│   ├── client/                    # Kubernetes and Crossplane client abstractions
+│   │   ├── kubernetes/            # K8s API client implementations
+│   │   └── crossplane/            # Crossplane-specific client implementations
+│   └── renderer/                  # Diff formatting and output rendering
+```
+
+### 12.2 Key Implementation Features
+
+The implementation includes several important features:
+
+1. **Standalone Binary**: The tool is distributed as `crossplane-diff` as an independent utility
+2. **Command Structure**: The command is `crossplane-diff diff [files...]` with subcommand architecture
+3. **Crossplane v2 Support**: Full support for both v1 and v2 XRDs, including namespaced composite resources
+4. **Enhanced Testing**: Comprehensive integration tests using `envtest` for faster, more reliable testing than full e2e tests
+
+### 12.3 Crossplane v2 Namespace Enhancements
+
+The implementation includes full support for Crossplane v2's namespace capabilities:
+
+- **Automatic Detection**: The tool automatically detects whether XRDs are cluster-scoped or namespaced
+- **Namespace Isolation**: Properly handles resources within namespace boundaries for namespaced XRDs
+- **Cross-namespace Dependencies**: Supports references to resources in other namespaces when appropriate
+- **Backward Compatibility**: Maintains full compatibility with Crossplane v1 cluster-scoped resources
+
+### 12.4 Namespace Handling Implementation
+
+The tool implements sophisticated namespace handling:
+
+- **Automatic Detection**: Detects XRD scope (Cluster vs Namespaced) from resource definitions
+- **Namespace Propagation**: Function `propagateNamespacesToManagedResources()` ensures managed resources inherit the XR's namespace when appropriate
+- **Scope Validation**: Function `ValidateScopeConstraints()` enforces namespace rules (e.g., namespaced XRs cannot own cluster-scoped managed resources)
+- **Cross-namespace Protection**: Prevents invalid cross-namespace resource references
+- **Test Coverage**: Separate test suites for v1 (legacy), v2-cluster, and v2-namespaced scenarios
+
+## 13. Conclusion
 
 The Crossplane Diff command provides a powerful tool for visualizing changes to Crossplane resources before they are
 applied to a cluster. The layered architecture with clear separation of concerns makes the code modular, testable, and
@@ -968,7 +1033,7 @@ reducing permission requirements and providing more targeted functionality.
 Overall, the design provides a solid foundation for the Diff command and allows for future enhancements to improve
 usability and functionality across all user personas.
 
-## 13. List of Figures
+## 14. List of Figures
 
 1. Figure 1: Conceptual layers of the Crossplane Diff command architecture and their responsibilities
 2. Figure 2: Clean layered architecture showing the main components in each layer

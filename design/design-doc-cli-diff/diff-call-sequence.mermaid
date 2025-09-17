@@ -37,7 +37,8 @@ sequenceDiagram
                 ReqProv-->>DP: Additional Resources
             end
         end
-        
+
+        DP->>DP: propagateNamespacesToManagedResources(ctx, xr, composed)
         DP->>DP: ValidateResources(ctx, xr, composed)
         
         DP->>DiffCalc: CalculateDiffs(ctx, xr, desired)
