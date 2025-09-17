@@ -14,18 +14,11 @@
   // PLEASE UPDATE THIS WHEN RELEASING.
   baseBranches: [
     'main',
-    'release-1.17',
-    'release-1.18',
-    'release-1.19',
   ],
   ignorePaths: [
     'design/**',
-    // We test upgrades, so leave it on an older version on purpose.
-    "test/e2e/manifests/pkg/provider/provider-initial.yaml",
-    // We test dependencies' upgrades, manifests must remain unchanged to avoid breaking tests.
-    "test/e2e/manifests/pkg/dependency-upgrade/**",
-    // We test packages signature verifications also on upgrades, manifests must remain unchanged to avoid breaking tests.
-    "test/e2e/manifests/pkg/image-config/signature-verification/**"
+    // We test backwards compat with old crossplane, so leave it on an older version on purpose.
+    "test/e2e/manifests/beta/diff/release-1.20/**",
   ],
   postUpdateOptions: [
     'gomodTidy',
@@ -189,26 +182,6 @@
       },
     },
     {
-      description: 'Generate code after upgrading go dependencies (release branch)',
-      matchDatasources: [
-        'go',
-      ],
-      // Currently we only have an Earthfile on main and some release branches, so we only run this on older release branches.
-      matchBaseBranches: [
-        'release-1.16',
-      ],
-      postUpgradeTasks: {
-        // Post-upgrade tasks that are executed before a commit is made by Renovate.
-        commands: [
-          'make go.generate',
-        ],
-        fileFilters: [
-          '**/*',
-        ],
-        executionMode: 'update',
-      },
-    },
-    {
       description: 'Lint code after upgrading golangci-lint (main)',
       matchDepNames: [
         'golangci/golangci-lint',
@@ -221,26 +194,6 @@
         // Post-upgrade tasks that are executed before a commit is made by Renovate.
         commands: [
           'earthly --strict +go-lint',
-        ],
-        fileFilters: [
-          '**/*',
-        ],
-        executionMode: 'update',
-      },
-    },
-    {
-      description: 'Lint code after upgrading golangci-lint (release branch)',
-      matchDepNames: [
-        'golangci/golangci-lint',
-      ],
-      // Currently we only have an Earthfile on main and some release branches, so we only run this on older release branches.
-      matchBaseBranches: [
-        'release-1.16',
-      ],
-      postUpgradeTasks: {
-        // Post-upgrade tasks that are executed before a commit is made by Renovate.
-        commands: [
-          'make go.lint',
         ],
         fileFilters: [
           '**/*',

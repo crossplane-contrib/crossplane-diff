@@ -5,10 +5,6 @@ on:
     branches:
       - main
       - release-*
-      # TODO(negz): Remove this and all references to the v2 branches below
-      # if/when v2 is merged into main. It's a temporary branch for v2 preview
-      # development.
-      - v2 
   pull_request: {}
   workflow_dispatch: {}
 
@@ -18,13 +14,6 @@ env:
 
   # Force Earthly to use color output
   FORCE_COLOR: "1"
-
-  # Common users. We can't run a step 'if secrets.AWS_USR != ""' but we can run
-  # a step 'if env.AWS_USR' != ""', so we copy these to succinctly test whether
-  # credentials have been provided before trying to run steps that need them.
-  DOCKER_USR: ${{ secrets.DOCKER_USR }}
-  AWS_USR: ${{ secrets.AWS_USR }}
-  UPBOUND_MARKETPLACE_PUSH_ROBOT_USR: ${{ secrets.UPBOUND_MARKETPLACE_PUSH_ROBOT_USR }}
 
 
 jobs:
@@ -41,13 +30,6 @@ jobs:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           version: ${{ env.EARTHLY_VERSION }}
 
-      - name: Login to DockerHub
-        uses: docker/login-action@9780b0c442fbb1117ed29e0efdff1e18412f7567 # v3
-        if: env.DOCKER_USR != ''
-        with:
-          username: ${{ secrets.DOCKER_USR }}
-          password: ${{ secrets.DOCKER_PSW }}
-
       - name: Login to GitHub Container Registry
         uses: docker/login-action@9780b0c442fbb1117ed29e0efdff1e18412f7567 # v3
         with:
@@ -55,14 +37,12 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Configure Earthly to Push Cache to GitHub Container Registry
+      - name: Configure Earthly Cache
         if: github.ref == 'refs/heads/main'
-        run: |
-          echo "EARTHLY_PUSH=true" >> $GITHUB_ENV
-          echo "EARTHLY_MAX_REMOTE_CACHE=true" >> $GITHUB_ENV
+        run: echo "EARTHLY_MAX_REMOTE_CACHE=true" >> $GITHUB_ENV
 
       - name: Generate Files
-        run: earthly --strict --remote-cache ghcr.io/crossplane/earthly-cache:${{ github.job }} +generate
+        run: earthly --strict --remote-cache ghcr.io/crossplane-contrib/crossplane-diff/earthly-cache:${{ github.job }} +generate
 
       - name: Count Changed Files
         id: changed_files
@@ -87,13 +67,6 @@ jobs:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           version: ${{ env.EARTHLY_VERSION }}
 
-      - name: Login to DockerHub
-        uses: docker/login-action@9780b0c442fbb1117ed29e0efdff1e18412f7567 # v3
-        if: env.DOCKER_USR != ''
-        with:
-          username: ${{ secrets.DOCKER_USR }}
-          password: ${{ secrets.DOCKER_PSW }}
-
       - name: Login to GitHub Container Registry
         uses: docker/login-action@9780b0c442fbb1117ed29e0efdff1e18412f7567 # v3
         with:
@@ -101,14 +74,12 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Configure Earthly to Push Cache to GitHub Container Registry
+      - name: Configure Earthly Cache
         if: github.ref == 'refs/heads/main'
-        run: |
-          echo "EARTHLY_PUSH=true" >> $GITHUB_ENV
-          echo "EARTHLY_MAX_REMOTE_CACHE=true" >> $GITHUB_ENV
+        run: echo "EARTHLY_MAX_REMOTE_CACHE=true" >> $GITHUB_ENV
 
       - name: Lint
-        run: earthly --strict --remote-cache ghcr.io/crossplane/earthly-cache:${{ github.job }} +lint
+        run: earthly --strict --remote-cache ghcr.io/crossplane-contrib/crossplane-diff/earthly-cache:${{ github.job }} +lint
 
   codeql:
     runs-on: ubuntu-22.04
@@ -123,13 +94,6 @@ jobs:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           version: ${{ env.EARTHLY_VERSION }}
 
-      - name: Login to DockerHub
-        uses: docker/login-action@9780b0c442fbb1117ed29e0efdff1e18412f7567 # v3
-        if: env.DOCKER_USR != ''
-        with:
-          username: ${{ secrets.DOCKER_USR }}
-          password: ${{ secrets.DOCKER_PSW }}
-
       - name: Login to GitHub Container Registry
         uses: docker/login-action@9780b0c442fbb1117ed29e0efdff1e18412f7567 # v3
         with:
@@ -137,14 +101,12 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Configure Earthly to Push Cache to GitHub Container Registry
+      - name: Configure Earthly Cache
         if: github.ref == 'refs/heads/main'
-        run: |
-          echo "EARTHLY_PUSH=true" >> $GITHUB_ENV
-          echo "EARTHLY_MAX_REMOTE_CACHE=true" >> $GITHUB_ENV
+        run: echo "EARTHLY_MAX_REMOTE_CACHE=true" >> $GITHUB_ENV
 
       - name: Run CodeQL
-        run: earthly --strict --remote-cache ghcr.io/crossplane/earthly-cache:${{ github.job }} +ci-codeql
+        run: earthly --strict --remote-cache ghcr.io/crossplane-contrib/crossplane-diff/earthly-cache:${{ github.job }} +ci-codeql
 
       - name: Upload CodeQL Results to GitHub
         uses: github/codeql-action/upload-sarif@df409f7d9260372bd5f19e5b04e83cb3c43714ae # v3
@@ -190,13 +152,6 @@ jobs:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           version: ${{ env.EARTHLY_VERSION }}
 
-      - name: Login to DockerHub
-        uses: docker/login-action@9780b0c442fbb1117ed29e0efdff1e18412f7567 # v3
-        if: env.DOCKER_USR != ''
-        with:
-          username: ${{ secrets.DOCKER_USR }}
-          password: ${{ secrets.DOCKER_PSW }}
-
       - name: Login to GitHub Container Registry
         uses: docker/login-action@9780b0c442fbb1117ed29e0efdff1e18412f7567 # v3
         with:
@@ -204,15 +159,12 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Configure Earthly to Push Cache to GitHub Container Registry
+      - name: Configure Earthly Cache
         if: github.ref == 'refs/heads/main'
-        run: |
-          echo "EARTHLY_PUSH=true" >> $GITHUB_ENV
-          echo "EARTHLY_MAX_REMOTE_CACHE=true" >> $GITHUB_ENV
+        run: echo "EARTHLY_MAX_REMOTE_CACHE=true" >> $GITHUB_ENV
 
       - name: Run Unit Tests
-#        run: earthly -P --strict --remote-cache ghcr.io/crossplane/earthly-cache:${{ github.job }} +test
-        run: earthly -P --strict +test # crossplane remote cache has v2 which fails these tests for now
+        run: earthly -P --strict --remote-cache ghcr.io/crossplane-contrib/crossplane-diff/earthly-cache:${{ github.job }} +test
 
       - name: Publish Unit Test Coverage
         uses: codecov/codecov-action@b9fd7d16f6d7d1b5d2bec1a2887e65ceed900238 # v4
@@ -241,13 +193,6 @@ jobs:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           version: ${{ env.EARTHLY_VERSION }}
 
-      - name: Login to DockerHub
-        uses: docker/login-action@9780b0c442fbb1117ed29e0efdff1e18412f7567 # v3
-        if: env.DOCKER_USR != ''
-        with:
-          username: ${{ secrets.DOCKER_USR }}
-          password: ${{ secrets.DOCKER_PSW }}
-
       - name: Login to GitHub Container Registry
         uses: docker/login-action@9780b0c442fbb1117ed29e0efdff1e18412f7567 # v3
         with:
@@ -255,11 +200,9 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Configure Earthly to Push Cache to GitHub Container Registry
+      - name: Configure Earthly Cache
         if: github.ref == 'refs/heads/main'
-        run: |
-          echo "EARTHLY_PUSH=true" >> $GITHUB_ENV
-          echo "EARTHLY_MAX_REMOTE_CACHE=true" >> $GITHUB_ENV
+        run: echo "EARTHLY_MAX_REMOTE_CACHE=true" >> $GITHUB_ENV
 
       - name: Set CROSSPLANE_PRIOR_VERSION GitHub Environment Variable
         # We want to run this for the release branches, and PRs against release branches.
@@ -287,7 +230,7 @@ jobs:
 
       - name: Run E2E Tests
         run: |
-          earthly --strict --allow-privileged --remote-cache ghcr.io/crossplane/earthly-cache:${{ github.job }}-${{ matrix.test-suite}} \
+          earthly --strict --allow-privileged --remote-cache ghcr.io/crossplane-contrib/crossplane-diff/earthly-cache:${{ github.job }}-${{ matrix.test-suite}} \
             +e2e --FLAGS="-test.failfast -fail-fast -prior-crossplane-version=${CROSSPLANE_PRIOR_VERSION} --test-suite ${{ matrix.test-suite }}"
 
       - name: Publish E2E Test Flakes
@@ -300,24 +243,10 @@ jobs:
           secret: ${{ secrets.BUILDPULSE_SECRET_ACCESS_KEY }}
           path: _output/tests/e2e-tests.xml
 
-  publish-artifacts:
+  build-artifacts:
     runs-on: ubuntu-22.04
 
     steps:
-      - name: Cleanup Disk
-        uses: jlumbroso/free-disk-space@54081f138730dfa15788a46383842cd2f914a1be # v1.3.1
-        with:
-          android: true
-          dotnet: true
-          haskell: true
-          tool-cache: true
-          swap-storage: false
-          # This works, and saves ~5GiB, but takes ~2 minutes to do it.
-          large-packages: false
-          # TODO(negz): Does having these around avoid Earthly needing to pull
-          # large images like golang?
-          docker-images: false
-
       - name: Checkout
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
         with:
@@ -329,21 +258,6 @@ jobs:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           version: ${{ env.EARTHLY_VERSION }}
 
-      - name: Login to DockerHub
-        uses: docker/login-action@9780b0c442fbb1117ed29e0efdff1e18412f7567 # v3
-        if: env.DOCKER_USR != ''
-        with:
-          username: ${{ secrets.DOCKER_USR }}
-          password: ${{ secrets.DOCKER_PSW }}
-
-      - name: Login to Upbound
-        uses: docker/login-action@9780b0c442fbb1117ed29e0efdff1e18412f7567 # v3
-        if: env.UPBOUND_MARKETPLACE_PUSH_ROBOT_USR != ''
-        with:
-          registry: xpkg.upbound.io
-          username: ${{ secrets.UPBOUND_MARKETPLACE_PUSH_ROBOT_USR }}
-          password: ${{ secrets.UPBOUND_MARKETPLACE_PUSH_ROBOT_PSW }}
-
       - name: Login to GitHub Container Registry
         uses: docker/login-action@9780b0c442fbb1117ed29e0efdff1e18412f7567 # v3
         with:
@@ -351,43 +265,12 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Configure Earthly to Push Cache to GitHub Container Registry
+      - name: Configure Earthly Cache
         if: github.ref == 'refs/heads/main'
         run: echo "EARTHLY_MAX_REMOTE_CACHE=true" >> $GITHUB_ENV
 
-      - name: Configure Earthly to Push Artifacts
-        if: (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/v2' || startsWith(github.ref, 'refs/heads/release-')) && env.DOCKER_USR != '' && env.UPBOUND_MARKETPLACE_PUSH_ROBOT_USR != '' && env.AWS_USR != ''
-        run: echo "EARTHLY_PUSH=true" >> $GITHUB_ENV
-
-      - name: Set CROSSPLANE_VERSION GitHub Environment Variable
-        run: earthly +ci-version
-
-      - name: Build and Push Artifacts
-        run: earthly --strict --remote-cache ghcr.io/crossplane/earthly-cache:${{ github.job }} +ci-artifacts --CROSSPLANE_VERSION=${CROSSPLANE_VERSION}
-
-      - name: Push Artifacts to https://releases.crossplane.io/build/
-        if: env.AWS_USR != ''
-        run: |
-          earthly --strict \
-            --secret=AWS_ACCESS_KEY_ID=${{ secrets.AWS_USR }} \
-            --secret=AWS_SECRET_ACCESS_KEY=${{ secrets.AWS_PSW }} \
-            +ci-push-build-artifacts --AWS_DEFAULT_REGION=us-east-1 --CROSSPLANE_VERSION=${CROSSPLANE_VERSION} --BUILD_DIR=${GITHUB_REF##*/}
-
-      - name: Push Artifacts to https://releases.crossplane.io/master/ and https://charts.crossplane.io/master
-        if: env.AWS_USR != '' && github.ref == 'refs/heads/main'
-        run: |
-          earthly --strict \
-            --secret=AWS_ACCESS_KEY_ID=${{ secrets.AWS_USR }} \
-            --secret=AWS_SECRET_ACCESS_KEY=${{ secrets.AWS_PSW }} \
-            +ci-promote-build-artifacts --AWS_DEFAULT_REGION=us-east-1 --CROSSPLANE_VERSION=${CROSSPLANE_VERSION} --BUILD_DIR=${GITHUB_REF##*/} --CHANNEL=master
-
-      - name: Push Artifacts to https://releases.crossplane.io/preview/ and https://charts.crossplane.io/preview
-        if: env.AWS_USR != '' && github.ref == 'refs/heads/v2'
-        run: |
-          earthly --strict \
-            --secret=AWS_ACCESS_KEY_ID=${{ secrets.AWS_USR }} \
-            --secret=AWS_SECRET_ACCESS_KEY=${{ secrets.AWS_PSW }} \
-            +ci-promote-build-artifacts --AWS_DEFAULT_REGION=us-east-1 --CROSSPLANE_VERSION=${CROSSPLANE_VERSION} --BUILD_DIR=${GITHUB_REF##*/} --CHANNEL=preview
+      - name: Build CLI Binaries
+        run: earthly --strict --remote-cache ghcr.io/crossplane-contrib/crossplane-diff/earthly-cache:${{ github.job }} +multiplatform-build
 
       - name: Upload Artifacts to GitHub
         uses: actions/upload-artifact@6f51ac03b9356f520e9adb1b1b7802705f340c2b # v4

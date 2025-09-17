@@ -23,7 +23,6 @@ I have: <!--You MUST either [x] check or [ ] ~strike through~ every item.-->
 - [ ] Added or updated unit tests.
 - [ ] Added or updated e2e tests.
 - [ ] Linked a PR or a [docs tracking issue] to [document this change].
-- [ ] Added `backport release-x.y` labels to auto-backport this PR.
 - [ ] Followed the [API promotion workflow] if this PR introduces, removes, or promotes an API.
 
 Need help with this checklist? See the [cheat sheet].

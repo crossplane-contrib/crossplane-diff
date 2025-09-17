@@ -43,7 +43,7 @@ jobs:
 
       - name: Build Release Artifacts
         run: |
-          earthly --strict --remote-cache ghcr.io/crossplane/earthly-cache:release +multiplatform-build \
+          earthly --strict --remote-cache ghcr.io/crossplane-contrib/crossplane-diff/earthly-cache:release +multiplatform-build \
             --CROSSPLANE_VERSION=${{ steps.version.outputs.VERSION }}
 
       - name: Create Release
