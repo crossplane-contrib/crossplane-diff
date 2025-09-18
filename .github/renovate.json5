@@ -22,6 +22,7 @@
   ],
   postUpdateOptions: [
     'gomodTidy',
+    'gomodUpdateImportPaths'
   ],
   // All PRs should have a label
   labels: [
@@ -163,45 +164,6 @@
   // be at the beginning, high priority at the end
   packageRules: [
     {
-      description: 'Generate code after upgrading go dependencies (main)',
-      matchDatasources: [
-        'go',
-      ],
-      // Currently we only have an Earthfile on main and some release branches, so we ignore the ones we know don't have it.
-      matchBaseBranches: [
-        '!/release-1\.16/',
-      ],
-      postUpgradeTasks: {
-        commands: [
-          'earthly --strict +go-generate',
-        ],
-        fileFilters: [
-          '**/*',
-        ],
-        executionMode: 'update',
-      },
-    },
-    {
-      description: 'Lint code after upgrading golangci-lint (main)',
-      matchDepNames: [
-        'golangci/golangci-lint',
-      ],
-      // Currently we only have an Earthfile on main and some release branches, so we ignore the ones we know don't have it.
-      matchBaseBranches: [
-        '!/release-1\.16/',
-      ],
-      postUpgradeTasks: {
-        // Post-upgrade tasks that are executed before a commit is made by Renovate.
-        commands: [
-          'earthly --strict +go-lint',
-        ],
-        fileFilters: [
-          '**/*',
-        ],
-        executionMode: 'update',
-      },
-    },
-    {
       matchManagers: [
         'crossplane',
       ],
@@ -209,13 +171,6 @@
         'test/e2e/**',
       ],
       groupName: 'e2e-manifests',
-    },
-    {
-      description: 'Ignore non-security related updates to release branches',
-      matchBaseBranches: [
-        '/^release-.*/',
-      ],
-      enabled: false,
     },
     {
       description: 'Still update Docker images on release branches though',

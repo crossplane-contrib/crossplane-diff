@@ -5,12 +5,7 @@ on:
     types: [opened, edited, synchronize]
 
 jobs:
-  who-am-i:
-    runs-on: ubuntu-22.04
-    steps:
-      - name: Who am I?
-        run: |
-          echo "Actor: ${{ github.actor }}"
+
   checklist-completed:
     if: github.actor != 'renovate[bot]'
     runs-on: ubuntu-22.04

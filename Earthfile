@@ -37,6 +37,8 @@ fetch-crossplane-cluster:
     SAVE ARTIFACT crossplane/cluster/${CROSSPLANE_IMAGE_TAG} AS LOCAL cluster/${CROSSPLANE_IMAGE_TAG}
   END
 
+  BUILD +patch-crds --CROSSPLANE_IMAGE_TAG=${CROSSPLANE_IMAGE_TAG}
+
 # reviewable checks that a branch is ready for review. Run it before opening a
 # pull request. It will catch a lot of the things our CI workflow will catch.
 reviewable:
@@ -68,7 +70,6 @@ multiplatform-build:
 # generated, for example when you update an API type.
 generate:
   BUILD +go-modules-tidy
-  BUILD +go-generate
 
 e2e-matrix:
   BUILD +e2e \
@@ -140,8 +141,10 @@ go-modules-tidy:
   SAVE ARTIFACT go.mod AS LOCAL go.mod
   SAVE ARTIFACT go.sum AS LOCAL go.sum
 
-# go-generate runs Go code generation.
-go-generate:
+# patch-crds patches CRDs fetched from crossplane/crossplane.  used to be called go-generate, but we don't actually
+# do any go generation here anymore.  we can't run this under the upper-level +generate target because it generates
+# changes under the /cluster directory, which while gitignored will fail the PR check for changed generated files.
+patch-crds:
   ARG CROSSPLANE_IMAGE_TAG=main
   FROM +go-modules
   CACHE --id go-build --sharing shared /root/.cache/go-build
