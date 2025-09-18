@@ -192,7 +192,7 @@ func (m *DefaultResourceManager) lookupByComposite(ctx context.Context, composit
 	// Determine the appropriate label selector based on whether the composite is a claim
 	var labelSelector metav1.LabelSelector
 	var lookupName string
-	isCompositeAClaim := m.isClaimResource(ctx, composite)
+	isCompositeAClaim := m.defClient.IsClaimResource(ctx, composite)
 
 	if isCompositeAClaim {
 		// For claims, we need to find the XR that was created from this claim
@@ -316,26 +316,6 @@ func (m *DefaultResourceManager) hasMatchingResourceName(annotations map[string]
 	return false
 }
 
-// isClaimResource checks if the resource is a claim type by attempting to find an XRD that defines it as a claim.
-func (m *DefaultResourceManager) isClaimResource(ctx context.Context, resource *un.Unstructured) bool {
-	if m.defClient == nil {
-		// If no definition client is available, assume it's not a claim
-		return false
-	}
-
-	gvk := resource.GroupVersionKind()
-
-	// Try to find an XRD that defines this resource type as a claim
-	_, err := m.defClient.GetXRDForClaim(ctx, gvk)
-	if err != nil {
-		m.logger.Debug("Resource is not a claim type", "gvk", gvk.String(), "error", err)
-		return false
-	}
-
-	m.logger.Debug("Resource is a claim type", "gvk", gvk.String())
-	return true
-}
-
 // UpdateOwnerRefs ensures all OwnerReferences have valid UIDs.
 func (m *DefaultResourceManager) UpdateOwnerRefs(parent *un.Unstructured, child *un.Unstructured) {
 	// if there's no parent, we are the parent.
@@ -424,7 +404,7 @@ func (m *DefaultResourceManager) updateCompositeOwnerLabel(parent, child *un.Uns
 
 	// Check if the parent is a claim
 	ctx := context.Background()
-	isParentAClaim := m.isClaimResource(ctx, parent)
+	isParentAClaim := m.defClient.IsClaimResource(ctx, parent)
 
 	switch {
 	case isParentAClaim:

@@ -693,6 +693,12 @@ func (b *MockDefinitionClientBuilder) WithXRDForClaim(unstructured *un.Unstructu
 	})
 }
 
+// WithIsClaimResource sets the IsClaimResource behavior.
+func (b *MockDefinitionClientBuilder) WithIsClaimResource(fn func(context.Context, *un.Unstructured) bool) *MockDefinitionClientBuilder {
+	b.mock.IsClaimResourceFn = fn
+	return b
+}
+
 // Build returns the built mock.
 func (b *MockDefinitionClientBuilder) Build() *MockDefinitionClient {
 	return b.mock

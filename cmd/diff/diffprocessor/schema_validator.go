@@ -31,9 +31,6 @@ type SchemaValidator interface {
 	// ValidateScopeConstraints validates that a resource has the appropriate namespace for its scope
 	// and that namespaced resources match the expected namespace (no cross-namespace refs)
 	ValidateScopeConstraints(ctx context.Context, resource *un.Unstructured, expectedNamespace string, isClaimRoot bool) error
-
-	// IsClaimResource checks if the root resource is a claim type
-	IsClaimResource(ctx context.Context, resource *un.Unstructured) bool
 }
 
 // DefaultSchemaValidator implements SchemaValidator interface.
@@ -126,7 +123,7 @@ func (v *DefaultSchemaValidator) ValidateResources(ctx context.Context, xr *un.U
 
 	// Additionally validate resource scope constraints (namespace requirements and cross-namespace refs)
 	expectedNamespace := xr.GetNamespace()
-	isClaimRoot := v.IsClaimResource(ctx, xr)
+	isClaimRoot := v.defClient.IsClaimResource(ctx, xr)
 	v.logger.Debug("Performing resource scope validation", "resourceCount", len(resources), "expectedNamespace", expectedNamespace, "isClaimRoot", isClaimRoot)
 	for _, resource := range resources {
 		if err := v.ValidateScopeConstraints(ctx, resource, expectedNamespace, isClaimRoot); err != nil {
@@ -287,19 +284,4 @@ func (v *DefaultSchemaValidator) ValidateScopeConstraints(ctx context.Context, r
 	}
 
 	return nil
-}
-
-// IsClaimResource checks if the resource is a claim type by attempting to find an XRD that defines it as a claim.
-func (v *DefaultSchemaValidator) IsClaimResource(ctx context.Context, resource *un.Unstructured) bool {
-	gvk := resource.GroupVersionKind()
-
-	// Try to find an XRD that defines this resource type as a claim
-	_, err := v.defClient.GetXRDForClaim(ctx, gvk)
-	if err != nil {
-		v.logger.Debug("Resource is not a claim type", "gvk", gvk.String(), "error", err)
-		return false
-	}
-
-	v.logger.Debug("Resource is a claim type", "gvk", gvk.String())
-	return true
 }

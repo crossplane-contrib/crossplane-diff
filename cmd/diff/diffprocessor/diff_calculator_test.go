@@ -83,7 +83,7 @@ func TestDefaultDiffCalculator_CalculateDiff(t *testing.T) {
 					Build()
 
 				// Create resource manager
-				resourceManager := NewResourceManager(resourceClient, nil, tu.TestLogger(t, false))
+				resourceManager := NewResourceManager(resourceClient, tu.NewMockDefinitionClient().Build(), tu.TestLogger(t, false))
 
 				return applyClient, resourceTreeClient, resourceManager
 			},
@@ -113,7 +113,7 @@ func TestDefaultDiffCalculator_CalculateDiff(t *testing.T) {
 					Build()
 
 				// Create resource manager
-				resourceManager := NewResourceManager(resourceClient, nil, tu.TestLogger(t, false))
+				resourceManager := NewResourceManager(resourceClient, tu.NewMockDefinitionClient().Build(), tu.TestLogger(t, false))
 
 				return applyClient, resourceTreeClient, resourceManager
 			},
@@ -144,7 +144,7 @@ func TestDefaultDiffCalculator_CalculateDiff(t *testing.T) {
 					Build()
 
 				// Create resource manager
-				resourceManager := NewResourceManager(resourceClient, nil, tu.TestLogger(t, false))
+				resourceManager := NewResourceManager(resourceClient, tu.NewMockDefinitionClient().Build(), tu.TestLogger(t, false))
 
 				return applyClient, resourceTreeClient, resourceManager
 			},
@@ -182,7 +182,7 @@ func TestDefaultDiffCalculator_CalculateDiff(t *testing.T) {
 					Build()
 
 				// Create resource manager
-				resourceManager := NewResourceManager(resourceClient, nil, tu.TestLogger(t, false))
+				resourceManager := NewResourceManager(resourceClient, tu.NewMockDefinitionClient().Build(), tu.TestLogger(t, false))
 
 				return applyClient, resourceTreeClient, resourceManager
 			},
@@ -212,7 +212,7 @@ func TestDefaultDiffCalculator_CalculateDiff(t *testing.T) {
 					Build()
 
 				// Create resource manager
-				resourceManager := NewResourceManager(resourceClient, nil, tu.TestLogger(t, false))
+				resourceManager := NewResourceManager(resourceClient, tu.NewMockDefinitionClient().Build(), tu.TestLogger(t, false))
 
 				return applyClient, resourceTreeClient, resourceManager
 			},
@@ -238,7 +238,7 @@ func TestDefaultDiffCalculator_CalculateDiff(t *testing.T) {
 					Build()
 
 				// Create resource manager
-				resourceManager := NewResourceManager(resourceClient, nil, tu.TestLogger(t, false))
+				resourceManager := NewResourceManager(resourceClient, tu.NewMockDefinitionClient().Build(), tu.TestLogger(t, false))
 
 				return applyClient, resourceTreeClient, resourceManager
 			},
@@ -309,7 +309,7 @@ func TestDefaultDiffCalculator_CalculateDiff(t *testing.T) {
 					Build()
 
 				// Create resource manager
-				resourceManager := NewResourceManager(resourceClient, nil, tu.TestLogger(t, false))
+				resourceManager := NewResourceManager(resourceClient, tu.NewMockDefinitionClient().Build(), tu.TestLogger(t, false))
 
 				return applyClient, resourceTreeClient, resourceManager
 			},
@@ -455,7 +455,7 @@ func TestDefaultDiffCalculator_CalculateDiffs(t *testing.T) {
 					Build()
 
 				// Create resource manager
-				resourceManager := NewResourceManager(resourceClient, nil, tu.TestLogger(t, false))
+				resourceManager := NewResourceManager(resourceClient, tu.NewMockDefinitionClient().Build(), tu.TestLogger(t, false))
 
 				return applyClient, resourceTreeClient, resourceManager
 			},
@@ -491,7 +491,7 @@ func TestDefaultDiffCalculator_CalculateDiffs(t *testing.T) {
 					Build()
 
 				// Create resource manager
-				resourceManager := NewResourceManager(resourceClient, nil, tu.TestLogger(t, false))
+				resourceManager := NewResourceManager(resourceClient, tu.NewMockDefinitionClient().Build(), tu.TestLogger(t, false))
 
 				return applyClient, resourceTreeClient, resourceManager
 			},
@@ -529,7 +529,7 @@ func TestDefaultDiffCalculator_CalculateDiffs(t *testing.T) {
 					Build()
 
 				// Create resource manager
-				resourceManager := NewResourceManager(resourceClient, nil, tu.TestLogger(t, false))
+				resourceManager := NewResourceManager(resourceClient, tu.NewMockDefinitionClient().Build(), tu.TestLogger(t, false))
 
 				return applyClient, resourceTreeClient, resourceManager
 			},
@@ -572,7 +572,7 @@ func TestDefaultDiffCalculator_CalculateDiffs(t *testing.T) {
 					Build()
 
 				// Create resource manager
-				resourceManager := NewResourceManager(resourceClient, nil, tu.TestLogger(t, false))
+				resourceManager := NewResourceManager(resourceClient, tu.NewMockDefinitionClient().Build(), tu.TestLogger(t, false))
 
 				return applyClient, resourceTreeClient, resourceManager
 			},
@@ -629,7 +629,7 @@ func TestDefaultDiffCalculator_CalculateDiffs(t *testing.T) {
 					Build()
 
 				// Create resource manager
-				resourceManager := NewResourceManager(resourceClient, nil, tu.TestLogger(t, false))
+				resourceManager := NewResourceManager(resourceClient, tu.NewMockDefinitionClient().Build(), tu.TestLogger(t, false))
 
 				return applyClient, resourceTreeClient, resourceManager
 			},
@@ -762,7 +762,7 @@ func TestDefaultDiffCalculator_CalculateRemovedResourceDiffs(t *testing.T) {
 
 				// Create a resource manager (not directly used in this test)
 				resourceClient := tu.NewMockResourceClient().Build()
-				resourceManager := NewResourceManager(resourceClient, nil, tu.TestLogger(t, false))
+				resourceManager := NewResourceManager(resourceClient, tu.NewMockDefinitionClient().Build(), tu.TestLogger(t, false))
 
 				return applyClient, resourceTreeClient, resourceManager
 			},
@@ -791,7 +791,7 @@ func TestDefaultDiffCalculator_CalculateRemovedResourceDiffs(t *testing.T) {
 
 				// Create a resource manager (not directly used in this test)
 				resourceClient := tu.NewMockResourceClient().Build()
-				resourceManager := NewResourceManager(resourceClient, nil, tu.TestLogger(t, false))
+				resourceManager := NewResourceManager(resourceClient, tu.NewMockDefinitionClient().Build(), tu.TestLogger(t, false))
 
 				return applyClient, resourceTreeClient, resourceManager
 			},
@@ -817,7 +817,7 @@ func TestDefaultDiffCalculator_CalculateRemovedResourceDiffs(t *testing.T) {
 
 				// Create a resource manager (not directly used in this test)
 				resourceClient := tu.NewMockResourceClient().Build()
-				resourceManager := NewResourceManager(resourceClient, nil, tu.TestLogger(t, false))
+				resourceManager := NewResourceManager(resourceClient, tu.NewMockDefinitionClient().Build(), tu.TestLogger(t, false))
 
 				return applyClient, resourceTreeClient, resourceManager
 			},
