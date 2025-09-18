@@ -68,6 +68,7 @@ func TestDefaultResourceManager_FetchCurrentObject(t *testing.T) {
 
 	tests := map[string]struct {
 		setupResourceClient func() *tu.MockResourceClient
+		defClient           *tu.MockDefinitionClient
 		composite           *un.Unstructured
 		desired             *un.Unstructured
 		wantIsNew           bool
@@ -80,6 +81,7 @@ func TestDefaultResourceManager_FetchCurrentObject(t *testing.T) {
 					WithResourcesExist(existingResource).
 					Build()
 			},
+			defClient:      tu.NewMockDefinitionClient().Build(),
 			composite:      nil,
 			desired:        existingResource.DeepCopy(),
 			wantIsNew:      false,
@@ -92,6 +94,7 @@ func TestDefaultResourceManager_FetchCurrentObject(t *testing.T) {
 					WithResourceNotFound().
 					Build()
 			},
+			defClient:      tu.NewMockDefinitionClient().Build(),
 			composite:      nil,
 			desired:        tu.NewResource("example.org/v1", "TestResource", "non-existent").Build(),
 			wantIsNew:      true,
@@ -104,6 +107,7 @@ func TestDefaultResourceManager_FetchCurrentObject(t *testing.T) {
 					WithResourceNotFound().
 					Build()
 			},
+			defClient:      tu.NewMockDefinitionClient().Build(),
 			composite:      nil,
 			desired:        tu.NewResource("example.org/v1", "XR", "new-xr").Build(),
 			wantIsNew:      true,
@@ -116,6 +120,7 @@ func TestDefaultResourceManager_FetchCurrentObject(t *testing.T) {
 					WithResourceNotFound().
 					Build()
 			},
+			defClient:      tu.NewMockDefinitionClient().Build(),
 			composite:      nil,
 			desired:        resourceWithGenerateName,
 			wantIsNew:      true,
@@ -144,6 +149,7 @@ func TestDefaultResourceManager_FetchCurrentObject(t *testing.T) {
 					}).
 					Build()
 			},
+			defClient: tu.NewMockDefinitionClient().Build(),
 			composite: parentXR,
 			desired: tu.NewResource("example.org/v1", "TestResource", "").
 				WithLabels(map[string]string{
@@ -172,6 +178,7 @@ func TestDefaultResourceManager_FetchCurrentObject(t *testing.T) {
 					}).
 					Build()
 			},
+			defClient: tu.NewMockDefinitionClient().Build(),
 			composite: parentXR,
 			desired: tu.NewResource("example.org/v1", "ComposedResource", "composed-resource").
 				WithLabels(map[string]string{
@@ -191,6 +198,7 @@ func TestDefaultResourceManager_FetchCurrentObject(t *testing.T) {
 					WithResourceNotFound().
 					Build()
 			},
+			defClient: tu.NewMockDefinitionClient().Build(),
 			composite: parentXR,
 			desired: tu.NewResource("example.org/v1", "Resource", "resource-name").
 				WithLabels(map[string]string{
@@ -223,6 +231,7 @@ func TestDefaultResourceManager_FetchCurrentObject(t *testing.T) {
 					}).
 					Build()
 			},
+			defClient: tu.NewMockDefinitionClient().Build(),
 			composite: parentXR,
 			desired: tu.NewResource("example.org/v1", "TestResource", "").
 				WithLabels(map[string]string{
@@ -246,6 +255,7 @@ func TestDefaultResourceManager_FetchCurrentObject(t *testing.T) {
 					}).
 					Build()
 			},
+			defClient: tu.NewMockDefinitionClient().Build(),
 			composite: parentXR,
 			desired: tu.NewResource("example.org/v1", "ComposedResource", "").
 				WithLabels(map[string]string{
@@ -259,13 +269,62 @@ func TestDefaultResourceManager_FetchCurrentObject(t *testing.T) {
 			wantIsNew: true,  // Fall back to creating a new resource
 			wantErr:   false, // We handle the error gracefully
 		},
+		"ClaimResource_FoundByClaimLabels": {
+			setupResourceClient: func() *tu.MockResourceClient {
+				// Create an existing resource with claim labels
+				existingClaimResource := tu.NewResource("example.org/v1", "ComposedResource", "claim-managed-resource").
+					WithSpecField("field", "value").
+					WithLabels(map[string]string{
+						"crossplane.io/claim-name":      "test-claim",
+						"crossplane.io/claim-namespace": "test-namespace",
+					}).
+					WithAnnotations(map[string]string{
+						"crossplane.io/composition-resource-name": "resource-a",
+					}).
+					Build()
+
+				return tu.NewMockResourceClient().
+					WithResourceNotFound(). // Direct lookup fails
+					WithGetResourcesByLabel(func(_ context.Context, _ schema.GroupVersionKind, _ string, sel metav1.LabelSelector) ([]*un.Unstructured, error) {
+						// Check if looking up by claim labels
+						if claimName, exists := sel.MatchLabels["crossplane.io/claim-name"]; exists && claimName == "test-claim" {
+							if claimNS, exists := sel.MatchLabels["crossplane.io/claim-namespace"]; exists && claimNS == "test-namespace" {
+								return []*un.Unstructured{existingClaimResource}, nil
+							}
+						}
+						return []*un.Unstructured{}, nil
+					}).
+					Build()
+			},
+			defClient: tu.NewMockDefinitionClient().
+				WithIsClaimResource(func(_ context.Context, resource *un.Unstructured) bool {
+					return resource.GetKind() == "TestClaim"
+				}).
+				Build(),
+			composite: tu.NewResource("example.org/v1", "TestClaim", "test-claim").
+				InNamespace("test-namespace").
+				Build(),
+			desired: tu.NewResource("example.org/v1", "ComposedResource", "claim-managed-resource").
+				WithLabels(map[string]string{
+					"crossplane.io/claim-name":      "test-claim",
+					"crossplane.io/claim-namespace": "test-namespace",
+				}).
+				WithAnnotations(map[string]string{
+					"crossplane.io/composition-resource-name": "resource-a",
+				}).
+				Build(),
+			wantIsNew:      false,
+			wantResourceID: "claim-managed-resource",
+			wantErr:        false,
+		},
 	}
 
 	for name, tt := range tests {
 		t.Run(name, func(t *testing.T) {
 			// Create the resource manager
 			resourceClient := tt.setupResourceClient()
-			rm := NewResourceManager(resourceClient, tu.TestLogger(t, false))
+
+			rm := NewResourceManager(resourceClient, tt.defClient, tu.TestLogger(t, false))
 
 			// Call the method under test
 			current, isNew, err := rm.FetchCurrentObject(ctx, tt.composite, tt.desired)
@@ -312,15 +371,17 @@ func TestDefaultResourceManager_UpdateOwnerRefs(t *testing.T) {
 	parentXR.SetUID(ParentUID)
 
 	tests := map[string]struct {
-		parent   *un.Unstructured
-		child    *un.Unstructured
-		validate func(t *testing.T, child *un.Unstructured)
+		parent    *un.Unstructured
+		child     *un.Unstructured
+		defClient *tu.MockDefinitionClient
+		validate  func(t *testing.T, child *un.Unstructured)
 	}{
 		"NilParent_NoChange": {
 			parent: nil,
 			child: tu.NewResource("example.org/v1", "Child", "child-resource").
 				WithOwnerReference("some-api-version", "SomeKind", "some-name", "foobar").
 				Build(),
+			defClient: tu.NewMockDefinitionClient().Build(),
 			validate: func(t *testing.T, child *un.Unstructured) {
 				t.Helper()
 				// Owner refs should be unchanged
@@ -342,6 +403,7 @@ func TestDefaultResourceManager_UpdateOwnerRefs(t *testing.T) {
 			child: tu.NewResource("example.org/v1", "Child", "child-resource").
 				WithOwnerReference("XR", "parent-xr", "example.org/v1", "").
 				Build(),
+			defClient: tu.NewMockDefinitionClient().Build(),
 			validate: func(t *testing.T, child *un.Unstructured) {
 				t.Helper()
 				// Owner reference should be updated with parent's UID
@@ -359,6 +421,7 @@ func TestDefaultResourceManager_UpdateOwnerRefs(t *testing.T) {
 			child: tu.NewResource("example.org/v1", "Child", "child-resource").
 				WithOwnerReference("other-api-version", "OtherKind", "other-name", "").
 				Build(),
+			defClient: tu.NewMockDefinitionClient().Build(),
 			validate: func(t *testing.T, child *un.Unstructured) {
 				t.Helper()
 				// Owner reference should have a UID, but not parent's UID
@@ -403,6 +466,7 @@ func TestDefaultResourceManager_UpdateOwnerRefs(t *testing.T) {
 
 				return child
 			}(),
+			defClient: tu.NewMockDefinitionClient().Build(),
 			validate: func(t *testing.T, child *un.Unstructured) {
 				t.Helper()
 				ownerRefs := child.GetOwnerReferences()
@@ -430,12 +494,72 @@ func TestDefaultResourceManager_UpdateOwnerRefs(t *testing.T) {
 				}
 			},
 		},
+		"ClaimParent_SetsClaimLabels": {
+			parent: tu.NewResource("example.org/v1", "TestClaim", "test-claim").
+				InNamespace("test-namespace").
+				Build(),
+			child: tu.NewResource("example.org/v1", "Child", "child-resource").Build(),
+			defClient: tu.NewMockDefinitionClient().
+				WithIsClaimResource(func(_ context.Context, resource *un.Unstructured) bool {
+					return resource.GetKind() == "TestClaim"
+				}).
+				Build(),
+			validate: func(t *testing.T, child *un.Unstructured) {
+				t.Helper()
+				labels := child.GetLabels()
+				if labels == nil {
+					t.Fatal("Expected labels to be set")
+				}
+
+				// Check claim-specific labels
+				if claimName, exists := labels["crossplane.io/claim-name"]; !exists || claimName != "test-claim" {
+					t.Errorf("Expected crossplane.io/claim-name=test-claim, got %s", claimName)
+				}
+				if claimNS, exists := labels["crossplane.io/claim-namespace"]; !exists || claimNS != "test-namespace" {
+					t.Errorf("Expected crossplane.io/claim-namespace=test-namespace, got %s", claimNS)
+				}
+
+				// Should not have composite label for claims
+				if composite, exists := labels["crossplane.io/composite"]; exists {
+					t.Errorf("Should not have crossplane.io/composite label for claim, but got %s", composite)
+				}
+			},
+		},
+		"XRParent_SetsCompositeLabel": {
+			parent: tu.NewResource("example.org/v1", "XR", "test-xr").Build(),
+			child:  tu.NewResource("example.org/v1", "Child", "child-resource").Build(),
+			defClient: tu.NewMockDefinitionClient().
+				WithIsClaimResource(func(_ context.Context, resource *un.Unstructured) bool {
+					return resource.GetKind() == "TestClaim"
+				}).
+				Build(),
+			validate: func(t *testing.T, child *un.Unstructured) {
+				t.Helper()
+				labels := child.GetLabels()
+				if labels == nil {
+					t.Fatal("Expected labels to be set")
+				}
+
+				// Check composite label
+				if composite, exists := labels["crossplane.io/composite"]; !exists || composite != "test-xr" {
+					t.Errorf("Expected crossplane.io/composite=test-xr, got %s", composite)
+				}
+
+				// Should not have claim-specific labels for XRs
+				if claimName, exists := labels["crossplane.io/claim-name"]; exists {
+					t.Errorf("Should not have crossplane.io/claim-name label for XR, but got %s", claimName)
+				}
+				if claimNS, exists := labels["crossplane.io/claim-namespace"]; exists {
+					t.Errorf("Should not have crossplane.io/claim-namespace label for XR, but got %s", claimNS)
+				}
+			},
+		},
 	}
 
 	for name, tt := range tests {
 		t.Run(name, func(t *testing.T) {
 			// Create the resource manager
-			rm := NewResourceManager(tu.NewMockResourceClient().Build(), tu.TestLogger(t, false))
+			rm := NewResourceManager(tu.NewMockResourceClient().Build(), tt.defClient, tu.TestLogger(t, false))
 
 			// Need to create a copy of the child to avoid modifying test data
 			child := tt.child.DeepCopy()

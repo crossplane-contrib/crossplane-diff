@@ -32,7 +32,7 @@ type ProcessorConfig struct {
 // ComponentFactories contains factory functions for creating processor components.
 type ComponentFactories struct {
 	// ResourceManager creates a ResourceManager
-	ResourceManager func(client k8.ResourceClient, logger logging.Logger) ResourceManager
+	ResourceManager func(client k8.ResourceClient, defClient xp.DefinitionClient, logger logging.Logger) ResourceManager
 
 	// SchemaValidator creates a SchemaValidator
 	SchemaValidator func(schema k8.SchemaClient, def xp.DefinitionClient, logger logging.Logger) SchemaValidator
@@ -86,7 +86,7 @@ func WithRenderFunc(renderFn RenderFunc) ProcessorOption {
 }
 
 // WithResourceManagerFactory sets the ResourceManager factory function.
-func WithResourceManagerFactory(factory func(k8.ResourceClient, logging.Logger) ResourceManager) ProcessorOption {
+func WithResourceManagerFactory(factory func(k8.ResourceClient, xp.DefinitionClient, logging.Logger) ResourceManager) ProcessorOption {
 	return func(config *ProcessorConfig) {
 		config.Factories.ResourceManager = factory
 	}

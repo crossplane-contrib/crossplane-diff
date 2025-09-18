@@ -268,7 +268,6 @@ func (m *MockDiffProcessor) PerformDiff(ctx context.Context, stdout io.Writer, r
 type MockSchemaValidator struct {
 	ValidateResourcesFn        func(ctx context.Context, xr *un.Unstructured, composed []cpd.Unstructured) error
 	ValidateScopeConstraintsFn func(ctx context.Context, resource *un.Unstructured, expectedNamespace string, isClaimRoot bool) error
-	IsClaimResourceFn          func(ctx context.Context, resource *un.Unstructured) bool
 }
 
 // ValidateResources validates a set of resources against schemas from the cluster.
@@ -290,14 +289,6 @@ func (m *MockSchemaValidator) ValidateScopeConstraints(ctx context.Context, reso
 		return m.ValidateScopeConstraintsFn(ctx, resource, expectedNamespace, isClaimRoot)
 	}
 	return nil
-}
-
-// IsClaimResource checks if the root resource is a claim type.
-func (m *MockSchemaValidator) IsClaimResource(ctx context.Context, resource *un.Unstructured) bool {
-	if m.IsClaimResourceFn != nil {
-		return m.IsClaimResourceFn(ctx, resource)
-	}
-	return false
 }
 
 // endregion
@@ -580,10 +571,11 @@ func (m *MockEnvironmentClient) GetEnvironmentConfig(ctx context.Context, name s
 
 // MockDefinitionClient implements the crossplane.DefinitionClient interface.
 type MockDefinitionClient struct {
-	InitializeFn     func(ctx context.Context) error
-	GetXRDsFn        func(ctx context.Context) ([]*un.Unstructured, error)
-	GetXRDForClaimFn func(ctx context.Context, gvk schema.GroupVersionKind) (*un.Unstructured, error)
-	GetXRDForXRFn    func(ctx context.Context, gvk schema.GroupVersionKind) (*un.Unstructured, error)
+	InitializeFn      func(ctx context.Context) error
+	GetXRDsFn         func(ctx context.Context) ([]*un.Unstructured, error)
+	GetXRDForClaimFn  func(ctx context.Context, gvk schema.GroupVersionKind) (*un.Unstructured, error)
+	GetXRDForXRFn     func(ctx context.Context, gvk schema.GroupVersionKind) (*un.Unstructured, error)
+	IsClaimResourceFn func(ctx context.Context, resource *un.Unstructured) bool
 }
 
 // Initialize implements crossplane.DefinitionClient.
@@ -616,6 +608,14 @@ func (m *MockDefinitionClient) GetXRDForXR(ctx context.Context, gvk schema.Group
 		return m.GetXRDForXRFn(ctx, gvk)
 	}
 	return nil, errors.New("GetXRDForXR not implemented")
+}
+
+// IsClaimResource implements crossplane.DefinitionClient.
+func (m *MockDefinitionClient) IsClaimResource(ctx context.Context, resource *un.Unstructured) bool {
+	if m.IsClaimResourceFn != nil {
+		return m.IsClaimResourceFn(ctx, resource)
+	}
+	return false
 }
 
 // MockResourceTreeClient implements the crossplane.ResourceTreeClient interface.

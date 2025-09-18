@@ -28,6 +28,9 @@ type DefinitionClient interface {
 
 	// GetXRDForXR finds the XRD that defines the given XR type
 	GetXRDForXR(ctx context.Context, gvk schema.GroupVersionKind) (*un.Unstructured, error)
+
+	// IsClaimResource checks if the given resource is a claim type
+	IsClaimResource(ctx context.Context, resource *un.Unstructured) bool
 }
 
 // DefaultDefinitionClient implements DefinitionClient.
@@ -209,4 +212,20 @@ func (c *DefaultDefinitionClient) GetXRDForXR(ctx context.Context, gvk schema.Gr
 	}
 
 	return nil, errors.Errorf("no XRD found that defines XR type %s", gvk.String())
+}
+
+// IsClaimResource checks if the given resource is a claim type by attempting
+// to find an XRD that defines it as a claim.
+func (c *DefaultDefinitionClient) IsClaimResource(ctx context.Context, resource *un.Unstructured) bool {
+	gvk := resource.GroupVersionKind()
+
+	// Try to find an XRD that defines this resource type as a claim
+	_, err := c.GetXRDForClaim(ctx, gvk)
+	if err != nil {
+		c.logger.Debug("Resource is not a claim type", "gvk", gvk.String(), "error", err)
+		return false
+	}
+
+	c.logger.Debug("Resource is a claim type", "gvk", gvk.String())
+	return true
 }

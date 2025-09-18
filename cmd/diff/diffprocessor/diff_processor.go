@@ -41,6 +41,7 @@ type DiffProcessor interface {
 type DefaultDiffProcessor struct {
 	fnClient             xp.FunctionClient
 	compClient           xp.CompositionClient
+	defClient            xp.DefinitionClient
 	config               ProcessorConfig
 	schemaValidator      SchemaValidator
 	diffCalculator       DiffCalculator
@@ -71,7 +72,7 @@ func NewDiffProcessor(k8cs k8.Clients, xpcs xp.Clients, opts ...ProcessorOption)
 	diffOpts := config.GetDiffOptions()
 
 	// Create components using factories
-	resourceManager := config.Factories.ResourceManager(k8cs.Resource, config.Logger)
+	resourceManager := config.Factories.ResourceManager(k8cs.Resource, xpcs.Definition, config.Logger)
 	schemaValidator := config.Factories.SchemaValidator(k8cs.Schema, xpcs.Definition, config.Logger)
 	requirementsProvider := config.Factories.RequirementsProvider(k8cs.Resource, xpcs.Environment, config.RenderFunc, config.Logger)
 	diffCalculator := config.Factories.DiffCalculator(k8cs.Apply, xpcs.ResourceTree, resourceManager, config.Logger, diffOpts)
@@ -80,6 +81,7 @@ func NewDiffProcessor(k8cs k8.Clients, xpcs xp.Clients, opts ...ProcessorOption)
 	processor := &DefaultDiffProcessor{
 		fnClient:             xpcs.Function,
 		compClient:           xpcs.Composition,
+		defClient:            xpcs.Definition,
 		config:               config,
 		schemaValidator:      schemaValidator,
 		diffCalculator:       diffCalculator,
@@ -222,7 +224,7 @@ func (p *DefaultDiffProcessor) DiffSingleResource(ctx context.Context, res *un.U
 	// WORKAROUND for https://github.com/crossplane/crossplane/issues/6782
 	// Propagate namespace from XR to namespaced managed resources
 	// For claims (v1 compatibility), skip namespace propagation entirely as all managed resources are cluster-scoped
-	isClaimRoot := p.schemaValidator.IsClaimResource(ctx, xrUnstructured)
+	isClaimRoot := p.defClient.IsClaimResource(ctx, xrUnstructured)
 	if !isClaimRoot {
 		p.propagateNamespacesToManagedResources(ctx, xrUnstructured, desired.ComposedResources)
 	} else {

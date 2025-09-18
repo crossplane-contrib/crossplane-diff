@@ -61,31 +61,6 @@ func TestDiffIntegration(t *testing.T) {
 	_ = pkgv1.AddToScheme(scheme)
 	_ = extv1.AddToScheme(scheme)
 
-	// TODO:  is there a reason to even run this against v1 if everything is backwards compatible?
-	// claims are still here (for now).  we obviously need to keep tests for those.
-	// we've already removed the deprecated environmentconfig version.
-	// I can see running the ITs against v2 since we can test against an old image.  important to IT against v1 image
-	// given changes to move xp specific stuff into spec.crossplane, which will not be reflected in running these tests
-
-	// TODO:  add a test to cover v2 CompositeResourceDefinition (XRD) if running against Crossplane v2
-	// TODO:  add a test to cover namespaced xrds against v2
-	// update:  these ITs don't run against a version of xp besides what they are compiled against.  that'll matter
-	// in the e2es.
-	// we'll want to rig up some way to specify xrd-v1 or xrd-v2 or both in the test cases
-	// but the rub is that the cluster directory containing the crds is pulled from either v1 or v2, so we can't just
-	// run both.
-	// thinking we should just grab the cluster directory for v1 and check it in, since it won't advance anymore once
-	// v2 is out.  v2 we can update at build time.  every test spins up its own envtest with the crd path, so we can
-	// definitely toggle there.
-
-	// the CRDs that support the XRDs will vary based on the Crossplane version, though (namespaced vs cluster scoped),
-	// so we need to bifurcate /testdata/diff/crds accordingly.  although each XRD that we define will have a version
-	// specified inside it which will lead to the generation of that crd.  so maybe it's test specific actually.
-
-	// TODO:  namespaced XRDs cannot compose cluster-scoped resources, so we need to ensure XDownstreamResource definitions
-	// account for that.  maybe we just need to add parallel CRDs for namespace scoped and cluster scoped XRDs that can
-	// coexist.
-
 	// Test cases
 	tests := map[string]struct {
 		setupFiles              []string
@@ -1042,16 +1017,20 @@ Summary: 2 added`,
 +   coolField: modified-value
 
 ---
-~~~ XDownstreamResource/test-claim
+~~~ XDownstreamResource/test-claim-82crv
   apiVersion: nop.example.org/v1alpha1
   kind: XDownstreamResource
   metadata:
     annotations:
       crossplane.io/composition-resource-name: nop-resource
-    generateName: test-claim-
+-   generateName: test-claim-82crv-
     labels:
-      crossplane.io/composite: test-claim
-    name: test-claim
+      crossplane.io/claim-name: test-claim
+      crossplane.io/claim-namespace: existing-namespace
+-     crossplane.io/composite: test-claim-82crv
+-   name: test-claim-82crv
++     crossplane.io/composite: test-claim
++   name: test-claim
   spec:
     forProvider:
 -     configData: existing-value

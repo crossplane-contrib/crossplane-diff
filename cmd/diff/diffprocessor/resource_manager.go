@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 
+	xp "github.com/crossplane-contrib/crossplane-diff/cmd/diff/client/crossplane"
 	k8 "github.com/crossplane-contrib/crossplane-diff/cmd/diff/client/kubernetes"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -28,15 +29,17 @@ type ResourceManager interface {
 
 // DefaultResourceManager implements ResourceManager interface.
 type DefaultResourceManager struct {
-	client k8.ResourceClient
-	logger logging.Logger
+	client    k8.ResourceClient
+	defClient xp.DefinitionClient
+	logger    logging.Logger
 }
 
 // NewResourceManager creates a new DefaultResourceManager.
-func NewResourceManager(client k8.ResourceClient, logger logging.Logger) ResourceManager {
+func NewResourceManager(client k8.ResourceClient, defClient xp.DefinitionClient, logger logging.Logger) ResourceManager {
 	return &DefaultResourceManager{
-		client: client,
-		logger: logger,
+		client:    client,
+		defClient: defClient,
+		logger:    logger,
 	}
 }
 
@@ -186,22 +189,48 @@ func (m *DefaultResourceManager) lookupByComposite(ctx context.Context, composit
 		return nil, false, nil
 	}
 
-	// Create a label selector to find resources managed by this composite
-	labelSelector := metav1.LabelSelector{
-		MatchLabels: map[string]string{
-			"crossplane.io/composite": composite.GetName(),
-		},
+	// Determine the appropriate label selector based on whether the composite is a claim
+	var labelSelector metav1.LabelSelector
+	var lookupName string
+	isCompositeAClaim := m.defClient.IsClaimResource(ctx, composite)
+
+	if isCompositeAClaim {
+		// For claims, we need to find the XR that was created from this claim
+		// The downstream resources will have labels pointing to that XR
+		// We'll use the claim labels to find downstream resources
+		labelSelector = metav1.LabelSelector{
+			MatchLabels: map[string]string{
+				"crossplane.io/claim-name":      composite.GetName(),
+				"crossplane.io/claim-namespace": composite.GetNamespace(),
+			},
+		}
+		lookupName = composite.GetName()
+		m.logger.Debug("Using claim labels for resource lookup",
+			"claim", composite.GetName(),
+			"namespace", composite.GetNamespace())
+	} else {
+		// For XRs, use the composite label
+		labelSelector = metav1.LabelSelector{
+			MatchLabels: map[string]string{
+				"crossplane.io/composite": composite.GetName(),
+			},
+		}
+		lookupName = composite.GetName()
+		m.logger.Debug("Using composite label for resource lookup",
+			"composite", composite.GetName())
 	}
 
-	// Look up resources with the composite label
+	// Look up resources with the appropriate label selector
 	resources, err := m.client.GetResourcesByLabel(ctx, gvk, namespace, labelSelector)
 	if err != nil {
-		return nil, false, errors.Wrapf(err, "cannot list resources for composite %s", composite.GetName())
+		return nil, false, errors.Wrapf(err, "cannot list resources for %s %s",
+			map[bool]string{true: "claim", false: "composite"}[isCompositeAClaim], lookupName)
 	}
 
 	if len(resources) == 0 {
-		m.logger.Debug("No resources found with composite owner label",
-			"composite", composite.GetName())
+		m.logger.Debug("No resources found with owner labels",
+			"lookupName", lookupName,
+			"isClaimLookup", isCompositeAClaim)
 		return nil, false, nil
 	}
 
@@ -349,7 +378,9 @@ func (m *DefaultResourceManager) UpdateOwnerRefs(parent *un.Unstructured, child 
 		"newCount", len(updatedRefs))
 }
 
-// updateCompositeOwnerLabel updates the crossplane.io/composite label on the child.
+// updateCompositeOwnerLabel updates the ownership labels on the child resource.
+// For Claims, it sets claim-name and claim-namespace labels.
+// For XRs, it sets the composite label.
 func (m *DefaultResourceManager) updateCompositeOwnerLabel(parent, child *un.Unstructured) {
 	if parent == nil {
 		return
@@ -361,18 +392,36 @@ func (m *DefaultResourceManager) updateCompositeOwnerLabel(parent, child *un.Uns
 		labels = make(map[string]string)
 	}
 
-	// Set the composite owner label
 	parentName := parent.GetName()
 	if parentName == "" && parent.GetGenerateName() != "" {
 		// For XRs with only generateName, use the generateName prefix
 		parentName = parent.GetGenerateName()
 	}
 
-	if parentName != "" {
+	if parentName == "" {
+		return
+	}
+
+	// Check if the parent is a claim
+	ctx := context.Background()
+	isParentAClaim := m.defClient.IsClaimResource(ctx, parent)
+
+	switch {
+	case isParentAClaim:
+		// For claims, set claim-specific labels (all claims are namespaced)
+		labels["crossplane.io/claim-name"] = parentName
+		labels["crossplane.io/claim-namespace"] = parent.GetNamespace()
+		m.logger.Debug("Updated claim owner labels",
+			"claimName", parentName,
+			"claimNamespace", parent.GetNamespace(),
+			"child", child.GetName())
+	default:
+		// For XRs, set the composite label
 		labels["crossplane.io/composite"] = parentName
-		child.SetLabels(labels)
 		m.logger.Debug("Updated composite owner label",
-			"label", parentName,
+			"composite", parentName,
 			"child", child.GetName())
 	}
+
+	child.SetLabels(labels)
 }

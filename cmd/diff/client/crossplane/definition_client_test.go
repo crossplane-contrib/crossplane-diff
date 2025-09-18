@@ -626,3 +626,119 @@ func TestDefaultDefinitionClient_Initialize(t *testing.T) {
 		})
 	}
 }
+
+func TestDefaultDefinitionClient_IsClaimResource(t *testing.T) {
+	ctx := t.Context()
+
+	tests := map[string]struct {
+		reason       string
+		mockResource tu.MockResourceClient
+		cachedXRDs   []*un.Unstructured
+		resource     *un.Unstructured
+		expected     bool
+	}{
+		"ResourceIsClaim": {
+			reason: "Should return true when resource is a claim type",
+			mockResource: *tu.NewMockResourceClient().
+				WithSuccessfulInitialize().
+				Build(),
+			cachedXRDs: []*un.Unstructured{
+				// Create a mock XRD that defines this as a claim
+				tu.NewResource("apiextensions.crossplane.io/v1", "CompositeResourceDefinition", "testclaims.example.org").
+					WithSpecField("group", "example.org").
+					WithSpecField("names", map[string]interface{}{
+						"kind":     "XTestResource",
+						"plural":   "xtestresources",
+						"singular": "xtestresource",
+					}).
+					WithSpecField("claimNames", map[string]interface{}{
+						"kind":     "TestClaim",
+						"plural":   "testclaims",
+						"singular": "testclaim",
+					}).
+					Build(),
+			},
+			resource: tu.NewResource("example.org/v1", "TestClaim", "test-claim").
+				InNamespace("default").
+				Build(),
+			expected: true,
+		},
+		"ResourceIsNotClaim": {
+			reason: "Should return false when resource is not a claim type",
+			mockResource: *tu.NewMockResourceClient().
+				WithSuccessfulInitialize().
+				Build(),
+			cachedXRDs: []*un.Unstructured{
+				// Create a mock XRD that defines this as an XR (no claimNames)
+				tu.NewResource("apiextensions.crossplane.io/v1", "CompositeResourceDefinition", "testxrs.example.org").
+					WithSpecField("group", "example.org").
+					WithSpecField("names", map[string]interface{}{
+						"kind":     "TestXR",
+						"plural":   "testxrs",
+						"singular": "testxr",
+					}).
+					// No claimNames field
+					Build(),
+			},
+			resource: tu.NewResource("example.org/v1", "TestXR", "test-xr").
+				InNamespace("default").
+				Build(),
+			expected: false,
+		},
+		"GetXRDForClaimError": {
+			reason: "Should return false when GetXRDForClaim fails",
+			mockResource: *tu.NewMockResourceClient().
+				WithSuccessfulInitialize().
+				WithListResourcesFailure("list error").
+				Build(),
+			cachedXRDs: nil, // Force GetXRDs to fail
+			resource: tu.NewResource("example.org/v1", "TestResource", "test-resource").
+				Build(),
+			expected: false, // Should return false on error
+		},
+		"NoMatchingXRD": {
+			reason: "Should return false when no matching XRD exists",
+			mockResource: *tu.NewMockResourceClient().
+				WithSuccessfulInitialize().
+				Build(),
+			cachedXRDs: []*un.Unstructured{
+				// Create an XRD that doesn't match our resource
+				tu.NewResource("apiextensions.crossplane.io/v1", "CompositeResourceDefinition", "otherclaims.example.org").
+					WithSpecField("group", "example.org").
+					WithSpecField("names", map[string]interface{}{
+						"kind":     "XOtherResource",
+						"plural":   "xotherresources",
+						"singular": "xotherresource",
+					}).
+					WithSpecField("claimNames", map[string]interface{}{
+						"kind":     "OtherClaim",
+						"plural":   "otherclaims",
+						"singular": "otherclaim",
+					}).
+					Build(),
+			},
+			resource: tu.NewResource("example.org/v1", "TestClaim", "test-claim").
+				Build(),
+			expected: false,
+		},
+	}
+
+	for name, tt := range tests {
+		t.Run(name, func(t *testing.T) {
+			c := &DefaultDefinitionClient{
+				resourceClient: &tt.mockResource,
+				logger:         tu.TestLogger(t, false),
+				xrds:           tt.cachedXRDs,
+				xrdsLoaded:     tt.cachedXRDs != nil, // Only mark as loaded if we have cached XRDs
+			}
+
+			// Call the function under test
+			result := c.IsClaimResource(ctx, tt.resource)
+
+			// Check the result
+			if result != tt.expected {
+				t.Errorf("\n%s\nIsClaimResource() = %v, want %v", tt.reason, result, tt.expected)
+			}
+		})
+	}
+}
