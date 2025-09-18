@@ -265,7 +265,7 @@ func TestDefaultResourceManager_FetchCurrentObject(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			// Create the resource manager
 			resourceClient := tt.setupResourceClient()
-			rm := NewResourceManager(resourceClient, tu.TestLogger(t, false))
+			rm := NewResourceManager(resourceClient, nil, tu.TestLogger(t, false))
 
 			// Call the method under test
 			current, isNew, err := rm.FetchCurrentObject(ctx, tt.composite, tt.desired)
@@ -435,7 +435,7 @@ func TestDefaultResourceManager_UpdateOwnerRefs(t *testing.T) {
 	for name, tt := range tests {
 		t.Run(name, func(t *testing.T) {
 			// Create the resource manager
-			rm := NewResourceManager(tu.NewMockResourceClient().Build(), tu.TestLogger(t, false))
+			rm := NewResourceManager(tu.NewMockResourceClient().Build(), nil, tu.TestLogger(t, false))
 
 			// Need to create a copy of the child to avoid modifying test data
 			child := tt.child.DeepCopy()

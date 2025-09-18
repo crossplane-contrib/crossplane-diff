@@ -71,7 +71,7 @@ func NewDiffProcessor(k8cs k8.Clients, xpcs xp.Clients, opts ...ProcessorOption)
 	diffOpts := config.GetDiffOptions()
 
 	// Create components using factories
-	resourceManager := config.Factories.ResourceManager(k8cs.Resource, config.Logger)
+	resourceManager := config.Factories.ResourceManager(k8cs.Resource, xpcs.Definition, config.Logger)
 	schemaValidator := config.Factories.SchemaValidator(k8cs.Schema, xpcs.Definition, config.Logger)
 	requirementsProvider := config.Factories.RequirementsProvider(k8cs.Resource, xpcs.Environment, config.RenderFunc, config.Logger)
 	diffCalculator := config.Factories.DiffCalculator(k8cs.Apply, xpcs.ResourceTree, resourceManager, config.Logger, diffOpts)
