@@ -13,7 +13,7 @@ fetch-crossplane-clusters:
 # fetch-crossplane-cluster fetches the cluster directory from crossplane/crossplane
 # at the git revision corresponding to CROSSPLANE_IMAGE_TAG
 fetch-crossplane-cluster:
-  ARG CROSSPLANE_IMAGE_TAG=release-1.20
+  ARG CROSSPLANE_IMAGE_TAG=main
   ARG CROSSPLANE_REPO=https://github.com/crossplane/crossplane.git
   ARG SAVE_LOCALLY=true
   FROM alpine/git:latest
@@ -36,8 +36,6 @@ fetch-crossplane-cluster:
   IF [ "$SAVE_LOCALLY" = "true" ]
     SAVE ARTIFACT crossplane/cluster/${CROSSPLANE_IMAGE_TAG} AS LOCAL cluster/${CROSSPLANE_IMAGE_TAG}
   END
-
-  BUILD +patch-crds --CROSSPLANE_IMAGE_TAG=${CROSSPLANE_IMAGE_TAG}
 
 # reviewable checks that a branch is ready for review. Run it before opening a
 # pull request. It will catch a lot of the things our CI workflow will catch.
@@ -104,6 +102,7 @@ e2e:
   COPY +go-build-e2e/e2e .
   # Fetch the cluster directory from the crossplane repo at the specified tag
   COPY (+fetch-crossplane-cluster/${CROSSPLANE_IMAGE_TAG} --CROSSPLANE_IMAGE_TAG=${CROSSPLANE_IMAGE_TAG} --SAVE_LOCALLY=${SAVE_LOCALLY}) cluster/${CROSSPLANE_IMAGE_TAG}
+  BUILD +patch-crds --CROSSPLANE_IMAGE_TAG=${CROSSPLANE_IMAGE_TAG}
   COPY --dir test .
   TRY
     # Using a static CROSSPLANE_VERSION allows Earthly to cache E2E runs as long
@@ -112,8 +111,8 @@ e2e:
     WITH DOCKER --pull crossplane/crossplane:${CROSSPLANE_IMAGE_TAG}
       # TODO(negz:) Set GITHUB_ACTIONS=true and use RUN --raw-output when
       # https://github.com/earthly/earthly/issues/4143 is fixed.
-      #RUN gotestsum --no-color=false --format testname --junitfile e2e-tests.xml --raw-command go tool test2json -t -p E2E ./e2e -test.v -crossplane-image=crossplane/crossplane:${CROSSPLANE_IMAGE_TAG} ${FLAGS}
-      RUN gotestsum --no-color=false --format standard-verbose --junitfile e2e-tests.xml --raw-command go tool test2json -t -p E2E ./e2e -test.v -crossplane-image=crossplane/crossplane:${CROSSPLANE_IMAGE_TAG} ${FLAGS}
+      RUN gotestsum --no-color=false --format testname --junitfile e2e-tests.xml --raw-command go tool test2json -t -p E2E ./e2e -test.v -crossplane-image=crossplane/crossplane:${CROSSPLANE_IMAGE_TAG} ${FLAGS}
+      #RUN gotestsum --no-color=false --format standard-verbose --junitfile e2e-tests.xml --raw-command go tool test2json -t -p E2E ./e2e -test.v -crossplane-image=crossplane/crossplane:${CROSSPLANE_IMAGE_TAG} ${FLAGS}
     END
   FINALLY
     SAVE ARTIFACT --if-exists e2e-tests.xml AS LOCAL _output/tests/e2e-tests.xml
@@ -216,6 +215,7 @@ go-test:
   ARG KUBE_VERSION=1.30.3
   ARG CROSSPLANE_IMAGE_TAG=main
   BUILD +fetch-crossplane-cluster
+  BUILD +patch-crds
   FROM +go-modules
   DO github.com/earthly/lib+INSTALL_DIND
   CACHE --id go-build --sharing shared /root/.cache/go-build
