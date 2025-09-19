@@ -18,7 +18,7 @@ env:
 
 jobs:
   release:
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-24.04
     # Only run if triggered by tag push OR if tag workflow succeeded
     if: github.event_name == 'push' || github.event.workflow_run.conclusion == 'success'
     permissions:
