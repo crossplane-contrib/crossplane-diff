@@ -7,25 +7,32 @@ import (
 	"sync"
 
 	"github.com/crossplane-contrib/crossplane-diff/cmd/diff/client/core"
+	extv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	un "k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/dynamic"
 
 	"github.com/crossplane/crossplane-runtime/v2/pkg/errors"
 	"github.com/crossplane/crossplane-runtime/v2/pkg/logging"
+
+	"github.com/crossplane/crossplane/v2/cmd/crank/common/crd"
 )
 
 // SchemaClient handles operations related to Kubernetes schemas and CRDs.
 type SchemaClient interface {
 	// GetCRD gets the CustomResourceDefinition for a given GVK
-	GetCRD(ctx context.Context, gvk schema.GroupVersionKind) (*un.Unstructured, error)
+	GetCRD(ctx context.Context, gvk schema.GroupVersionKind) (*extv1.CustomResourceDefinition, error)
 
 	// IsCRDRequired checks if a GVK requires a CRD
 	IsCRDRequired(ctx context.Context, gvk schema.GroupVersionKind) bool
 
-	// ValidateResource validates a resource against its schema
-	ValidateResource(ctx context.Context, resource *un.Unstructured) error
+	// LoadCRDsFromXRDs converts XRDs to CRDs and caches them
+	LoadCRDsFromXRDs(ctx context.Context, xrds []*un.Unstructured) error
+
+	// GetAllCRDs returns all cached CRDs (needed for external validation library)
+	GetAllCRDs() []*extv1.CustomResourceDefinition
 }
 
 // DefaultSchemaClient implements SchemaClient.
@@ -37,6 +44,11 @@ type DefaultSchemaClient struct {
 	// Resource type caching
 	resourceTypeMap map[schema.GroupVersionKind]bool
 	resourceMapMu   sync.RWMutex
+
+	// CRD caching - consolidated from SchemaValidator
+	crds      []*extv1.CustomResourceDefinition
+	crdsMu    sync.RWMutex
+	crdByName map[string]*extv1.CustomResourceDefinition // for fast lookup by name
 }
 
 // NewSchemaClient creates a new DefaultSchemaClient.
@@ -46,21 +58,35 @@ func NewSchemaClient(clients *core.Clients, typeConverter TypeConverter, logger 
 		typeConverter:   typeConverter,
 		logger:          logger,
 		resourceTypeMap: make(map[schema.GroupVersionKind]bool),
+		crds:            []*extv1.CustomResourceDefinition{},
+		crdByName:       make(map[string]*extv1.CustomResourceDefinition),
 	}
 }
 
 // GetCRD gets the CustomResourceDefinition for a given GVK.
-func (c *DefaultSchemaClient) GetCRD(ctx context.Context, gvk schema.GroupVersionKind) (*un.Unstructured, error) {
-	// Get the pluralized resource name
+func (c *DefaultSchemaClient) GetCRD(ctx context.Context, gvk schema.GroupVersionKind) (*extv1.CustomResourceDefinition, error) {
+	// Get the pluralized resource name to construct CRD name
 	resourceName, err := c.typeConverter.GetResourceNameForGVK(ctx, gvk)
 	if err != nil {
 		return nil, errors.Wrapf(err, "cannot determine CRD name for %s", gvk.String())
 	}
 
-	c.logger.Debug("Looking up CRD", "gvk", gvk.String(), "crdName", resourceName)
-
-	// Construct the CRD name using the resource name and group
+	// Construct the full CRD name
 	crdName := fmt.Sprintf("%s.%s", resourceName, gvk.Group)
+
+	// Check cache first
+	c.crdsMu.RLock()
+
+	if cached, ok := c.crdByName[crdName]; ok {
+		c.crdsMu.RUnlock()
+		c.logger.Debug("Using cached CRD", "gvk", gvk.String(), "crdName", crdName)
+
+		return cached, nil
+	}
+
+	c.crdsMu.RUnlock()
+
+	c.logger.Debug("Looking up CRD", "gvk", gvk.String(), "crdName", resourceName)
 
 	// Define the CRD GVR directly to avoid recursion
 	crdGVR := schema.GroupVersionResource{
@@ -69,8 +95,8 @@ func (c *DefaultSchemaClient) GetCRD(ctx context.Context, gvk schema.GroupVersio
 		Resource: "customresourcedefinitions",
 	}
 
-	// Fetch the CRD
-	crd, err := c.dynamicClient.Resource(crdGVR).Get(ctx, crdName, metav1.GetOptions{})
+	// Fetch the CRD from cluster
+	crdObj, err := c.dynamicClient.Resource(crdGVR).Get(ctx, crdName, metav1.GetOptions{})
 	if err != nil {
 		c.logger.Debug("Failed to get CRD", "gvk", gvk.String(), "crdName", crdName, "error", err)
 		return nil, errors.Wrapf(err, "cannot get CRD %s for %s", crdName, gvk.String())
@@ -78,7 +104,17 @@ func (c *DefaultSchemaClient) GetCRD(ctx context.Context, gvk schema.GroupVersio
 
 	c.logger.Debug("Successfully retrieved CRD", "gvk", gvk.String(), "crdName", resourceName)
 
-	return crd, nil
+	// Convert to typed CRD
+	crdTyped := &extv1.CustomResourceDefinition{}
+	if err := runtime.DefaultUnstructuredConverter.FromUnstructured(crdObj.Object, crdTyped); err != nil {
+		c.logger.Debug("Error converting CRD", "gvk", gvk.String(), "crdName", crdName, "error", err)
+		return nil, errors.Wrapf(err, "cannot convert CRD %s to typed", crdName)
+	}
+
+	// Add to cache
+	c.addCRD(crdTyped)
+
+	return crdTyped, nil
 }
 
 // IsCRDRequired checks if a GVK requires a CRD.
@@ -135,17 +171,70 @@ func (c *DefaultSchemaClient) IsCRDRequired(ctx context.Context, gvk schema.Grou
 	return true
 }
 
-// ValidateResource validates a resource against its schema.
-func (c *DefaultSchemaClient) ValidateResource(_ context.Context, resource *un.Unstructured) error {
-	// This would use OpenAPI validation - simplified for now
-	c.logger.Debug("Validating resource", "kind", resource.GetKind(), "name", resource.GetName())
-	return nil
-}
-
 // Helper to cache resource type requirements.
 func (c *DefaultSchemaClient) cacheResourceType(gvk schema.GroupVersionKind, requiresCRD bool) {
 	c.resourceMapMu.Lock()
 	defer c.resourceMapMu.Unlock()
 
 	c.resourceTypeMap[gvk] = requiresCRD
+}
+
+// LoadCRDsFromXRDs converts XRDs to CRDs and caches them.
+func (c *DefaultSchemaClient) LoadCRDsFromXRDs(_ context.Context, xrds []*un.Unstructured) error {
+	c.logger.Debug("Loading CRDs from XRDs", "xrdCount", len(xrds))
+
+	// Convert XRDs to CRDs
+	crds, err := crd.ConvertToCRDs(xrds)
+	if err != nil {
+		c.logger.Debug("Failed to convert XRDs to CRDs", "error", err)
+		return errors.Wrap(err, "cannot convert XRDs to CRDs")
+	}
+
+	// Set the CRDs in our cache
+	c.setCRDs(crds)
+	c.logger.Debug("Loaded CRDs from XRDs", "count", len(crds))
+
+	return nil
+}
+
+// GetAllCRDs returns all cached CRDs.
+func (c *DefaultSchemaClient) GetAllCRDs() []*extv1.CustomResourceDefinition {
+	c.crdsMu.RLock()
+	defer c.crdsMu.RUnlock()
+
+	// Return a copy to prevent external modification
+	result := make([]*extv1.CustomResourceDefinition, len(c.crds))
+	copy(result, c.crds)
+
+	return result
+}
+
+// addCRD adds a CRD to the cache.
+func (c *DefaultSchemaClient) addCRD(crd *extv1.CustomResourceDefinition) {
+	c.crdsMu.Lock()
+	defer c.crdsMu.Unlock()
+
+	// Add to slice
+	c.crds = append(c.crds, crd)
+
+	// Add to name lookup map
+	c.crdByName[crd.Name] = crd
+
+	c.logger.Debug("Added CRD to cache", "crdName", crd.Name)
+}
+
+// setCRDs sets the CRDs directly, used internally for bulk loading.
+func (c *DefaultSchemaClient) setCRDs(crds []*extv1.CustomResourceDefinition) {
+	c.crdsMu.Lock()
+	defer c.crdsMu.Unlock()
+
+	c.crds = crds
+
+	// Rebuild name lookup map
+	c.crdByName = make(map[string]*extv1.CustomResourceDefinition)
+	for _, crd := range crds {
+		c.crdByName[crd.Name] = crd
+	}
+
+	c.logger.Debug("Set CRDs directly", "count", len(crds))
 }

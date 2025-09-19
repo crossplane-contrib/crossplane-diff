@@ -15,6 +15,7 @@ import (
 	tu "github.com/crossplane-contrib/crossplane-diff/cmd/diff/testutils"
 	gcmp "github.com/google/go-cmp/cmp"
 	"github.com/sergi/go-diff/diffmatchpatch"
+	extv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	un "k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -247,6 +248,15 @@ func TestDefaultDiffProcessor_PerformDiff(t *testing.T) {
 						Build(),
 					Schema: tu.NewMockSchemaClient().
 						WithNoResourcesRequiringCRDs().
+						WithGetCRD(func(_ context.Context, gvk schema.GroupVersionKind) (*extv1.CustomResourceDefinition, error) {
+							if gvk.Group == "example.org" && gvk.Kind == "XR1" {
+								return makeTestCRD("xr1s.example.org", "XR1", "example.org", "v1"), nil
+							}
+							if gvk.Group == "cpd.org" && gvk.Kind == "ComposedResource" {
+								return makeTestCRD("composedresources.cpd.org", "ComposedResource", "cpd.org", "v1"), nil
+							}
+							return nil, errors.New("CRD not found")
+						}).
 						Build(),
 					Type: tu.NewMockTypeConverter().Build(),
 				}
@@ -389,6 +399,15 @@ func TestDefaultDiffProcessor_PerformDiff(t *testing.T) {
 						Build(),
 					Schema: tu.NewMockSchemaClient().
 						WithNoResourcesRequiringCRDs().
+						WithGetCRD(func(_ context.Context, gvk schema.GroupVersionKind) (*extv1.CustomResourceDefinition, error) {
+							if gvk.Group == "example.org" && gvk.Kind == "XR1" {
+								return makeTestCRD("xr1s.example.org", "XR1", "example.org", "v1"), nil
+							}
+							if gvk.Group == "cpd.org" && gvk.Kind == "ComposedResource" {
+								return makeTestCRD("composedresources.cpd.org", "ComposedResource", "cpd.org", "v1"), nil
+							}
+							return nil, errors.New("CRD not found")
+						}).
 						Build(),
 					Type: tu.NewMockTypeConverter().Build(),
 				}
@@ -1080,5 +1099,52 @@ func TestDefaultDiffProcessor_RenderWithRequirements(t *testing.T) {
 					len(output.ComposedResources), tt.wantComposedCount)
 			}
 		})
+	}
+}
+
+// Helper function to create a test CRD for the given GVK.
+func makeTestCRD(name string, kind string, group string, version string) *extv1.CustomResourceDefinition {
+	return &extv1.CustomResourceDefinition{
+		TypeMeta: metav1.TypeMeta{
+			APIVersion: "apiextensions.k8s.io/v1",
+			Kind:       "CustomResourceDefinition",
+		},
+		ObjectMeta: metav1.ObjectMeta{
+			Name: name,
+		},
+		Spec: extv1.CustomResourceDefinitionSpec{
+			Group: group,
+			Names: extv1.CustomResourceDefinitionNames{
+				Kind:     kind,
+				ListKind: kind + "List",
+				Plural:   strings.ToLower(kind) + "s",
+				Singular: strings.ToLower(kind),
+			},
+			Scope: extv1.NamespaceScoped,
+			Versions: []extv1.CustomResourceDefinitionVersion{
+				{
+					Name:    version,
+					Served:  true,
+					Storage: true,
+					Schema: &extv1.CustomResourceValidation{
+						OpenAPIV3Schema: &extv1.JSONSchemaProps{
+							Type: "object",
+							Properties: map[string]extv1.JSONSchemaProps{
+								"apiVersion": {Type: "string"},
+								"kind":       {Type: "string"},
+								"metadata":   {Type: "object"},
+								"spec": {
+									Type: "object",
+									Properties: map[string]extv1.JSONSchemaProps{
+										"coolField": {Type: "string"},
+									},
+								},
+								"status": {Type: "object"},
+							},
+						},
+					},
+				},
+			},
+		},
 	}
 }

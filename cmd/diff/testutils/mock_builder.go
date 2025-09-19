@@ -6,6 +6,7 @@ import (
 	"io"
 	"strings"
 
+	extv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	un "k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -222,25 +223,21 @@ func (b *MockSchemaClientBuilder) WithInitialize(fn func(context.Context) error)
 }
 
 // WithGetCRD sets the GetCRD behavior.
-func (b *MockSchemaClientBuilder) WithGetCRD(fn func(context.Context, schema.GroupVersionKind) (*un.Unstructured, error)) *MockSchemaClientBuilder {
+func (b *MockSchemaClientBuilder) WithGetCRD(fn func(context.Context, schema.GroupVersionKind) (*extv1.CustomResourceDefinition, error)) *MockSchemaClientBuilder {
 	b.mock.GetCRDFn = fn
 	return b
 }
 
 // WithCRDNotFound sets GetCRD to return a not found error.
 func (b *MockSchemaClientBuilder) WithCRDNotFound() *MockSchemaClientBuilder {
-	return b.WithGetCRD(func(context.Context, schema.GroupVersionKind) (*un.Unstructured, error) {
+	return b.WithGetCRD(func(context.Context, schema.GroupVersionKind) (*extv1.CustomResourceDefinition, error) {
 		return nil, errors.New("CRD not found")
 	})
 }
 
 // WithSuccessfulCRDFetch sets GetCRD to return a specific CRD.
-func (b *MockSchemaClientBuilder) WithSuccessfulCRDFetch(crd *un.Unstructured) *MockSchemaClientBuilder {
-	return b.WithGetCRD(func(context.Context, schema.GroupVersionKind) (*un.Unstructured, error) {
-		if crd.GetKind() != "CustomResourceDefinition" {
-			return nil, errors.Errorf("setup error: desired return from GetCRD isn't a CRD but a %s", crd.GetKind())
-		}
-
+func (b *MockSchemaClientBuilder) WithSuccessfulCRDFetch(crd *extv1.CustomResourceDefinition) *MockSchemaClientBuilder {
+	return b.WithGetCRD(func(context.Context, schema.GroupVersionKind) (*extv1.CustomResourceDefinition, error) {
 		return crd, nil
 	})
 }
@@ -281,6 +278,113 @@ func (b *MockSchemaClientBuilder) WithNoResourcesRequiringCRDs() *MockSchemaClie
 // WithValidateResource sets the ValidateResource behavior.
 func (b *MockSchemaClientBuilder) WithValidateResource(fn func(context.Context, *un.Unstructured) error) *MockSchemaClientBuilder {
 	b.mock.ValidateResourceFn = fn
+	return b
+}
+
+// WithGetAllCRDs sets the GetAllCRDs behavior.
+func (b *MockSchemaClientBuilder) WithGetAllCRDs(fn func() []*extv1.CustomResourceDefinition) *MockSchemaClientBuilder {
+	b.mock.GetAllCRDsFn = fn
+	return b
+}
+
+// WithCachingBehavior creates a mock that simulates caching CRDs when GetCRD or LoadCRDsFromXRDs is called.
+func (b *MockSchemaClientBuilder) WithCachingBehavior() *MockSchemaClientBuilder {
+	cachedCRDs := make(map[string]*extv1.CustomResourceDefinition)
+
+	// Override GetCRD to track cached CRDs
+	originalGetCRD := b.mock.GetCRDFn
+	b.mock.GetCRDFn = func(ctx context.Context, gvk schema.GroupVersionKind) (*extv1.CustomResourceDefinition, error) {
+		// Check cache first
+		key := gvk.String()
+		if crd, ok := cachedCRDs[key]; ok {
+			return crd, nil
+		}
+
+		// Call original function
+		if originalGetCRD != nil {
+			crd, err := originalGetCRD(ctx, gvk)
+			if err == nil && crd != nil {
+				// Cache the CRD
+				cachedCRDs[key] = crd
+			}
+
+			return crd, err
+		}
+
+		return nil, errors.New("GetCRD not implemented")
+	}
+
+	// Override LoadCRDsFromXRDs to simulate caching CRDs converted from XRDs
+	originalLoadCRDs := b.mock.LoadCRDsFromXRDsFn
+	b.mock.LoadCRDsFromXRDsFn = func(ctx context.Context, xrds []*un.Unstructured) error {
+		// Call original function first
+		if originalLoadCRDs != nil {
+			err := originalLoadCRDs(ctx, xrds)
+			if err != nil {
+				return err
+			}
+		}
+
+		// Simulate caching CRDs converted from XRDs
+		// For test purposes, create a simple CRD from each XRD
+		for _, xrd := range xrds {
+			group, _, _ := un.NestedString(xrd.Object, "spec", "group")
+			if group == "" {
+				continue // Skip invalid XRDs
+			}
+
+			names, ok, _ := un.NestedMap(xrd.Object, "spec", "names")
+			if !ok {
+				continue
+			}
+
+			kind, _ := names["kind"].(string)
+			if kind == "" {
+				continue
+			}
+
+			// Create a simple CRD for this XRD
+			crd := &extv1.CustomResourceDefinition{
+				TypeMeta: metav1.TypeMeta{
+					APIVersion: "apiextensions.k8s.io/v1",
+					Kind:       "CustomResourceDefinition",
+				},
+				ObjectMeta: metav1.ObjectMeta{
+					Name: xrd.GetName(),
+				},
+				Spec: extv1.CustomResourceDefinitionSpec{
+					Group: group,
+					Names: extv1.CustomResourceDefinitionNames{
+						Kind: kind,
+					},
+					Scope: extv1.NamespaceScoped,
+					Versions: []extv1.CustomResourceDefinitionVersion{
+						{
+							Name:    "v1",
+							Served:  true,
+							Storage: true,
+						},
+					},
+				},
+			}
+
+			gvk := schema.GroupVersionKind{Group: group, Version: "v1", Kind: kind}
+			cachedCRDs[gvk.String()] = crd
+		}
+
+		return nil
+	}
+
+	// Override GetAllCRDs to return cached CRDs
+	b.mock.GetAllCRDsFn = func() []*extv1.CustomResourceDefinition {
+		var result []*extv1.CustomResourceDefinition
+		for _, crd := range cachedCRDs {
+			result = append(result, crd)
+		}
+
+		return result
+	}
+
 	return b
 }
 

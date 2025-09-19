@@ -43,6 +43,7 @@ type DefaultDiffProcessor struct {
 	fnClient             xp.FunctionClient
 	compClient           xp.CompositionClient
 	defClient            xp.DefinitionClient
+	schemaClient         k8.SchemaClient
 	config               ProcessorConfig
 	schemaValidator      SchemaValidator
 	diffCalculator       DiffCalculator
@@ -83,6 +84,7 @@ func NewDiffProcessor(k8cs k8.Clients, xpcs xp.Clients, opts ...ProcessorOption)
 		fnClient:             xpcs.Function,
 		compClient:           xpcs.Composition,
 		defClient:            xpcs.Definition,
+		schemaClient:         k8cs.Schema,
 		config:               config,
 		schemaValidator:      schemaValidator,
 		diffCalculator:       diffCalculator,
@@ -528,7 +530,6 @@ func (p *DefaultDiffProcessor) applyXRDDefaults(ctx context.Context, xr *cmp.Uns
 	)
 
 	// Check if this is a claim or an XR
-
 	if p.defClient.IsClaimResource(ctx, xr.GetUnstructured()) {
 		xrd, err = p.defClient.GetXRDForClaim(ctx, gvk)
 	} else {
@@ -541,49 +542,53 @@ func (p *DefaultDiffProcessor) applyXRDDefaults(ctx context.Context, xr *cmp.Uns
 		return nil
 	}
 
-	// Get the CRDs from the schema validator (which already converted XRDs to CRDs)
-	if validator, ok := p.schemaValidator.(*DefaultSchemaValidator); ok {
-		crds := validator.GetCRDs()
+	// Get the CRD that corresponds to this XRD using the XRD name
+	xrdName := xrd.GetName()
 
-		// Find the CRD that corresponds to this XRD
-		var matchingCRD *extv1.CustomResourceDefinition
+	p.config.Logger.Debug("Looking for CRD matching XRD in applyXRDDefaults", "resource", resourceID, "xrdName", xrdName)
 
-		xrdName := xrd.GetName()
+	// Since we can't look up CRDs by name easily with the current interface,
+	// let's get all CRDs and find the matching one
+	allCRDs := p.schemaClient.GetAllCRDs()
 
-		for _, crd := range crds {
-			// The CRD name should match the XRD name
-			if crd.Name == xrdName {
-				matchingCRD = crd
-				break
-			}
+	var crdForDefaults *extv1.CustomResourceDefinition
+
+	p.config.Logger.Debug("Searching through CRDs for XRD match in applyXRDDefaults", "resource", resourceID, "totalCRDs", len(allCRDs))
+
+	for _, crd := range allCRDs {
+		p.config.Logger.Debug("Checking CRD in applyXRDDefaults", "resource", resourceID, "crdName", crd.Name, "xrdName", xrdName)
+
+		if crd.Name == xrdName {
+			crdForDefaults = crd
+			p.config.Logger.Debug("Found matching CRD for XRD in applyXRDDefaults", "resource", resourceID, "crdName", crd.Name)
+
+			break
 		}
-
-		if matchingCRD == nil {
-			p.config.Logger.Debug("No matching CRD found for XRD", "resource", resourceID, "xrdName", xrdName)
-			return nil
-		}
-
-		// Apply defaults using the render.DefaultValues function
-		apiVersion := xr.GetAPIVersion()
-		xrContent := xr.UnstructuredContent()
-
-		p.config.Logger.Debug("Applying defaults to XR",
-			"resource", resourceID,
-			"apiVersion", apiVersion,
-			"crdName", matchingCRD.Name)
-
-		err = render.DefaultValues(xrContent, apiVersion, *matchingCRD)
-		if err != nil {
-			return errors.Wrapf(err, "cannot apply default values for XR %s", resourceID)
-		}
-
-		// Update the XR with the defaulted content
-		xr.SetUnstructuredContent(xrContent)
-
-		p.config.Logger.Debug("Successfully applied XRD defaults", "resource", resourceID)
-	} else {
-		p.config.Logger.Debug("Schema validator is not DefaultSchemaValidator, skipping defaults application", "resource", resourceID)
 	}
+
+	if crdForDefaults == nil {
+		p.config.Logger.Debug("No matching CRD found for XRD in applyXRDDefaults", "resource", resourceID, "xrdName", xrdName)
+		return nil
+	}
+
+	// Apply defaults using the render.DefaultValues function
+	apiVersion := xr.GetAPIVersion()
+	xrContent := xr.UnstructuredContent()
+
+	p.config.Logger.Debug("Applying defaults to XR in applyXRDDefaults",
+		"resource", resourceID,
+		"apiVersion", apiVersion,
+		"crdName", crdForDefaults.Name)
+
+	err = render.DefaultValues(xrContent, apiVersion, *crdForDefaults)
+	if err != nil {
+		return errors.Wrapf(err, "cannot apply default values for XR %s", resourceID)
+	}
+
+	// Update the XR with the defaulted content
+	xr.SetUnstructuredContent(xrContent)
+
+	p.config.Logger.Debug("Successfully applied XRD defaults", "resource", resourceID)
 
 	return nil
 }

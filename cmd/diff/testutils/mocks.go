@@ -5,6 +5,7 @@ import (
 	"io"
 
 	dt "github.com/crossplane-contrib/crossplane-diff/cmd/diff/renderer/types"
+	extv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	un "k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -393,9 +394,11 @@ func (m *MockResourceClient) IsNamespacedResource(ctx context.Context, gvk schem
 // MockSchemaClient implements the kubernetes.SchemaClient interface.
 type MockSchemaClient struct {
 	InitializeFn       func(ctx context.Context) error
-	GetCRDFn           func(ctx context.Context, gvk schema.GroupVersionKind) (*un.Unstructured, error)
+	GetCRDFn           func(ctx context.Context, gvk schema.GroupVersionKind) (*extv1.CustomResourceDefinition, error)
 	IsCRDRequiredFn    func(ctx context.Context, gvk schema.GroupVersionKind) bool
 	ValidateResourceFn func(ctx context.Context, resource *un.Unstructured) error
+	LoadCRDsFromXRDsFn func(ctx context.Context, xrds []*un.Unstructured) error
+	GetAllCRDsFn       func() []*extv1.CustomResourceDefinition
 }
 
 // Initialize implements kubernetes.SchemaClient.
@@ -408,7 +411,7 @@ func (m *MockSchemaClient) Initialize(ctx context.Context) error {
 }
 
 // GetCRD implements kubernetes.SchemaClient.
-func (m *MockSchemaClient) GetCRD(ctx context.Context, gvk schema.GroupVersionKind) (*un.Unstructured, error) {
+func (m *MockSchemaClient) GetCRD(ctx context.Context, gvk schema.GroupVersionKind) (*extv1.CustomResourceDefinition, error) {
 	if m.GetCRDFn != nil {
 		return m.GetCRDFn(ctx, gvk)
 	}
@@ -432,6 +435,24 @@ func (m *MockSchemaClient) ValidateResource(ctx context.Context, resource *un.Un
 	}
 
 	return nil
+}
+
+// LoadCRDsFromXRDs implements kubernetes.SchemaClient.
+func (m *MockSchemaClient) LoadCRDsFromXRDs(ctx context.Context, xrds []*un.Unstructured) error {
+	if m.LoadCRDsFromXRDsFn != nil {
+		return m.LoadCRDsFromXRDsFn(ctx, xrds)
+	}
+
+	return nil
+}
+
+// GetAllCRDs implements kubernetes.SchemaClient.
+func (m *MockSchemaClient) GetAllCRDs() []*extv1.CustomResourceDefinition {
+	if m.GetAllCRDsFn != nil {
+		return m.GetAllCRDsFn()
+	}
+
+	return []*extv1.CustomResourceDefinition{}
 }
 
 // MockApplyClient implements the kubernetes.ApplyClient interface.
