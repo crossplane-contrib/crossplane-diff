@@ -270,6 +270,7 @@ func TestDefaultFunctionClient_GetFunctionsFromPipeline(t *testing.T) {
 				if diff := cmp.Diff(tt.want.err.Error(), err.Error()); diff != "" {
 					t.Errorf("\n%s\nGetFunctionsFromPipeline(...): -want error, +got error:\n%s", tt.reason, diff)
 				}
+
 				return
 			}
 
@@ -282,6 +283,7 @@ func TestDefaultFunctionClient_GetFunctionsFromPipeline(t *testing.T) {
 				if got != nil {
 					t.Errorf("\n%s\nGetFunctionsFromPipeline(...): expected nil functions, got %v", tt.reason, got)
 				}
+
 				return
 			}
 
@@ -294,6 +296,7 @@ func TestDefaultFunctionClient_GetFunctionsFromPipeline(t *testing.T) {
 				if i >= len(got) {
 					break
 				}
+
 				if diff := cmp.Diff(wantFn.GetName(), got[i].GetName()); diff != "" {
 					t.Errorf("\n%s\nGetFunctionsFromPipeline(...): -want function name, +got function name at index %d:\n%s", tt.reason, i, diff)
 				}
@@ -430,9 +433,11 @@ func TestDefaultFunctionClient_ListFunctions(t *testing.T) {
 					t.Errorf("\n%s\nListFunctions(): expected error but got none", tt.reason)
 					return
 				}
+
 				if tt.errSubstring != "" && !strings.Contains(err.Error(), tt.errSubstring) {
 					t.Errorf("\n%s\nListFunctions(): expected error containing %q, got %q", tt.reason, tt.errSubstring, err.Error())
 				}
+
 				return
 			}
 
@@ -587,6 +592,7 @@ func TestDefaultFunctionClient_Initialize(t *testing.T) {
 				if err == nil {
 					t.Errorf("\n%s\nInitialize(): expected error but got none", tt.reason)
 				}
+
 				return
 			}
 

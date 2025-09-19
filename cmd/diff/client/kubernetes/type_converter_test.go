@@ -162,6 +162,7 @@ func TestTypeConverter_GVKToGVR(t *testing.T) {
 					t.Errorf("\n%s\nGVKToGVR(...): expected error containing %q, got %q",
 						tc.reason, tc.want.err.Error(), err.Error())
 				}
+
 				return
 			}
 
@@ -347,6 +348,7 @@ func TestTypeConverter_GetResourceNameForGVK(t *testing.T) {
 					t.Errorf("\n%s\nGetResourceNameForGVK(...): expected error containing %q, got %q",
 						tc.reason, tc.want.err.Error(), err.Error())
 				}
+
 				return
 			}
 

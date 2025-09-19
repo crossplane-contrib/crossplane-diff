@@ -106,12 +106,13 @@ func TestGenerateDiffWithOptions(t *testing.T) {
 	}
 	for name, tt := range tests {
 		t.Run(name, func(t *testing.T) {
-			diff, err := GenerateDiffWithOptions(tt.current, tt.desired, tu.TestLogger(t, false), tt.options)
+			diff, err := GenerateDiffWithOptions(t.Context(), tt.current, tt.desired, tu.TestLogger(t, false), tt.options)
 
 			if tt.wantErr {
 				if err == nil {
 					t.Errorf("GenerateDiffWithOptions() expected error but got none")
 				}
+
 				return
 			}
 
@@ -272,6 +273,7 @@ func TestFormatDiff(t *testing.T) {
 				if expected == "" {
 					continue
 				}
+
 				if !strings.Contains(result, expected) {
 					t.Errorf("FormatDiff() result missing expected content: %q", expected)
 				}
@@ -282,6 +284,7 @@ func TestFormatDiff(t *testing.T) {
 				if excluded == "" {
 					continue
 				}
+
 				if strings.Contains(result, excluded) {
 					t.Errorf("FormatDiff() result contains unexpected content: %q", excluded)
 				}

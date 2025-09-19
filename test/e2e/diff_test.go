@@ -69,11 +69,13 @@ func RunDiff(t *testing.T, c *envconf.Config, binPath string, resourcePaths ...s
 	args := append([]string{"--verbose", "diff", "--timeout=2m", "-n", namespace}, resourcePaths...)
 	t.Logf("Running command: %s %s", binPath, strings.Join(args, " "))
 	cmd := exec.Command(binPath, args...)
+
 	cmd.Env = append(os.Environ(), "KUBECONFIG="+c.KubeconfigFile())
 	t.Logf("ENV: %s KUBECONFIG=%s", binPath, c.KubeconfigFile())
 
 	// Capture standard output and error
 	var stdout, stderr bytes.Buffer
+
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
 
@@ -395,8 +397,10 @@ func normalizeLine(line string) string {
 
 // parseStringContent converts a string to raw and normalized lines.
 func parseStringContent(content string) ([]string, []string) {
-	var rawLines []string
-	var normalizedLines []string
+	var (
+		rawLines        []string
+		normalizedLines []string
+	)
 
 	scanner := bufio.NewScanner(strings.NewReader(content))
 	for scanner.Scan() {
@@ -432,25 +436,31 @@ func assertDiffMatchesFile(t *testing.T, actual, expectedSource, log string) {
 	}
 
 	failed := false
+
 	for i := range maxLines {
 		if i >= len(expectedNormalized) {
 			t.Errorf("Line %d: Extra line in output: %s",
 				i+1, makeStringReadable(actualRaw[i]))
+
 			failed = true
+
 			continue
 		}
+
 		if i >= len(actualNormalized) {
 			t.Errorf("Line %d: Missing line in output: %s",
 				i+1, makeStringReadable(expectedRaw[i]))
+
 			failed = true
+
 			continue
 		}
+
 		if expectedNormalized[i] != actualNormalized[i] {
 			// ignore white space at end of lines
 			// if strings.TrimRight(expectedNormalized[i], " ") == strings.TrimRight(actualNormalized[i], " ") {
 			//	continue
 			//}
-
 			rawExpected := ""
 			if i < len(expectedRaw) {
 				rawExpected = expectedRaw[i]
@@ -470,6 +480,7 @@ func assertDiffMatchesFile(t *testing.T, actual, expectedSource, log string) {
 				actualNormalized[i],
 				makeStringReadable(rawExpected),
 				makeStringReadable(rawActual))
+
 			failed = true
 		}
 	}
@@ -487,6 +498,7 @@ func assertDiffMatchesFile(t *testing.T, actual, expectedSource, log string) {
 // (including ANSI escape codes) are converted to visible escape sequences.
 func makeStringReadable(s string) string {
 	var result strings.Builder
+
 	for _, r := range s {
 		switch {
 		case r == '\x1b':
@@ -505,5 +517,6 @@ func makeStringReadable(s string) string {
 			result.WriteRune(r)
 		}
 	}
+
 	return result.String()
 }

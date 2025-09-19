@@ -290,6 +290,7 @@ func addResourceRef(parent, child *un.Unstructured, xrAPIVersion XrdAPIVersion) 
 	}
 
 	var resourceRefsPath []string
+
 	switch xrAPIVersion {
 	case V1:
 		resourceRefsPath = []string{"spec", "resourceRefs"}
@@ -309,6 +310,7 @@ func addResourceRef(parent, child *un.Unstructured, xrAPIVersion XrdAPIVersion) 
 
 	// Add the new reference and update the parent
 	resourceRefs = append(resourceRefs, ref)
+
 	return un.SetNestedSlice(parent.Object, resourceRefs, resourceRefsPath...)
 }
 
@@ -317,11 +319,13 @@ func addResourceRef(parent, child *un.Unstructured, xrAPIVersion XrdAPIVersion) 
 func applyResourcesFromFiles(ctx context.Context, c client.Client, paths []string) error {
 	// Collect all resources from all files first
 	var allResources []*un.Unstructured
+
 	for _, path := range paths {
 		resources, err := readResourcesFromFile(path)
 		if err != nil {
 			return fmt.Errorf("failed to read resources from %s: %w", path, err)
 		}
+
 		allResources = append(allResources, resources...)
 	}
 
@@ -338,15 +342,18 @@ func readResourcesFromFile(path string) ([]*un.Unstructured, error) {
 
 	// Use a YAML decoder to handle multiple documents
 	decoder := yaml.NewYAMLOrJSONDecoder(bytes.NewReader(data), 4096)
+
 	var resources []*un.Unstructured
 
 	for {
 		resource := &un.Unstructured{}
+
 		err := decoder.Decode(resource)
 		if err != nil {
 			if errors.Is(err, io.EOF) {
 				break
 			}
+
 			return nil, fmt.Errorf("failed to decode YAML document from %s: %w", path, err)
 		}
 
@@ -365,15 +372,18 @@ func readResourcesFromFile(path string) ([]*un.Unstructured, error) {
 // Assumes resources don't already exist - fails if they do.
 func createResources(ctx context.Context, c client.Client, resources []*un.Unstructured) error {
 	for _, resource := range resources {
-		if err := c.Create(ctx, resource.DeepCopy()); err != nil {
+		err := c.Create(ctx, resource.DeepCopy())
+		if err != nil {
 			if apierrors.IsAlreadyExists(err) {
 				return fmt.Errorf("resource %s/%s of kind %s already exists - test setup error",
 					resource.GetNamespace(), resource.GetName(), resource.GetKind())
 			}
+
 			return fmt.Errorf("failed to create resource %s/%s: %w",
 				resource.GetNamespace(), resource.GetName(), err)
 		}
 	}
+
 	return nil
 }
 
@@ -385,12 +395,14 @@ func applyHierarchicalOwnership(ctx context.Context, _ logging.Logger, c client.
 	parentChildRelationships := make(map[string]string) // child file -> parent file
 
 	// First pass: Create all resources and collect parent-child relationships
-	if err := createAllResourcesInHierarchy(ctx, c, hierarchies, createdResources, parentChildRelationships); err != nil {
+	err := createAllResourcesInHierarchy(ctx, c, hierarchies, createdResources, parentChildRelationships)
+	if err != nil {
 		return err
 	}
 
 	// Second pass: Apply all owner references and resource refs between parents and children
-	if err := applyAllRelationships(ctx, c, createdResources, parentChildRelationships, xrdAPIVersion); err != nil {
+	err = applyAllRelationships(ctx, c, createdResources, parentChildRelationships, xrdAPIVersion)
+	if err != nil {
 		return err
 	}
 
@@ -413,6 +425,7 @@ func LogResourcesAsYAML(ctx context.Context, log logging.Logger, c client.Client
 	for filePath := range createdResources {
 		filePaths = append(filePaths, filePath)
 	}
+
 	sort.Strings(filePaths)
 
 	for _, filePath := range filePaths {
@@ -442,6 +455,7 @@ func LogResourcesAsYAML(ctx context.Context, log logging.Logger, c client.Client
 	}
 
 	log.Info("===== END OF RESOURCES =====\n\n")
+
 	return nil
 }
 
@@ -478,8 +492,9 @@ func createAllResourcesInHierarchy(ctx context.Context, c client.Client,
 					},
 				}
 
-				if err := createAllResourcesInHierarchy(ctx, c, childHierarchies,
-					createdResources, parentChildRelationships); err != nil {
+				err := createAllResourcesInHierarchy(ctx, c, childHierarchies,
+					createdResources, parentChildRelationships)
+				if err != nil {
 					return err
 				}
 			}
@@ -517,17 +532,20 @@ func createResourceFromFile(ctx context.Context, c client.Client, path string,
 			existing := &un.Unstructured{}
 			existing.SetGroupVersionKind(resource.GroupVersionKind())
 
-			if err := c.Get(ctx, client.ObjectKey{
+			err := c.Get(ctx, client.ObjectKey{
 				Name:      resource.GetName(),
 				Namespace: resource.GetNamespace(),
-			}, existing); err != nil {
+			}, existing)
+			if err != nil {
 				return nil, fmt.Errorf("failed to get existing resource: %w", err)
 			}
 
 			// Store and return the existing resource
 			createdResources[path] = existing
+
 			return existing, nil
 		}
+
 		return nil, fmt.Errorf("failed to create resource: %w", err)
 	}
 
@@ -544,6 +562,7 @@ func createResourceFromFile(ctx context.Context, c client.Client, path string,
 
 	// Store and return the created resource
 	createdResources[path] = serverResource
+
 	return serverResource, nil
 }
 
@@ -564,12 +583,14 @@ func applyAllRelationships(ctx context.Context, c client.Client,
 		}
 
 		// 1. Set the owner reference in the child's metadata
-		if err := setOwnerReferenceAndUpdate(ctx, c, parentResource, childResource); err != nil {
+		err := setOwnerReferenceAndUpdate(ctx, c, parentResource, childResource)
+		if err != nil {
 			return err
 		}
 
 		// 2. Add the child resource reference to the parent
-		if err := addResourceRefAndUpdate(ctx, c, parentResource, childResource, xrdAPIVersion); err != nil {
+		err = addResourceRefAndUpdate(ctx, c, parentResource, childResource, xrdAPIVersion)
+		if err != nil {
 			return err
 		}
 	}
@@ -585,10 +606,11 @@ func setOwnerReferenceAndUpdate(ctx context.Context, c client.Client,
 	latestChild := &un.Unstructured{}
 	latestChild.SetGroupVersionKind(child.GroupVersionKind())
 
-	if err := c.Get(ctx, client.ObjectKey{
+	err := c.Get(ctx, client.ObjectKey{
 		Name:      child.GetName(),
 		Namespace: child.GetNamespace(),
-	}, latestChild); err != nil {
+	}, latestChild)
+	if err != nil {
 		return fmt.Errorf("failed to get child resource: %w", err)
 	}
 
@@ -596,7 +618,8 @@ func setOwnerReferenceAndUpdate(ctx context.Context, c client.Client,
 	setOwnerReference(latestChild, owner)
 
 	// Update the child
-	if err := c.Update(ctx, latestChild); err != nil {
+	err = c.Update(ctx, latestChild)
+	if err != nil {
 		return fmt.Errorf("failed to update child with owner reference: %w", err)
 	}
 
@@ -611,20 +634,23 @@ func addResourceRefAndUpdate(ctx context.Context, c client.Client,
 	latestOwner := &un.Unstructured{}
 	latestOwner.SetGroupVersionKind(owner.GroupVersionKind())
 
-	if err := c.Get(ctx, client.ObjectKey{
+	err := c.Get(ctx, client.ObjectKey{
 		Name:      owner.GetName(),
 		Namespace: owner.GetNamespace(),
-	}, latestOwner); err != nil {
+	}, latestOwner)
+	if err != nil {
 		return fmt.Errorf("failed to get owner for updating references: %w", err)
 	}
 
 	// Add the resource reference
-	if err := addResourceRef(latestOwner, owned, xrdAPIVersion); err != nil {
+	err = addResourceRef(latestOwner, owned, xrdAPIVersion)
+	if err != nil {
 		return fmt.Errorf("unable to add resource ref: %w", err)
 	}
 
 	// Update the owner with the new reference
-	if err := c.Update(ctx, latestOwner); err != nil {
+	err = c.Update(ctx, latestOwner)
+	if err != nil {
 		return fmt.Errorf("failed to update owner with resource reference: %w", err)
 	}
 

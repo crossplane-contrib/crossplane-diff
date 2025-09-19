@@ -77,6 +77,7 @@ func (c *DefaultSchemaClient) GetCRD(ctx context.Context, gvk schema.GroupVersio
 	}
 
 	c.logger.Debug("Successfully retrieved CRD", "gvk", gvk.String(), "crdName", resourceName)
+
 	return crd, nil
 }
 
@@ -84,10 +85,12 @@ func (c *DefaultSchemaClient) GetCRD(ctx context.Context, gvk schema.GroupVersio
 func (c *DefaultSchemaClient) IsCRDRequired(ctx context.Context, gvk schema.GroupVersionKind) bool {
 	// Check cache first
 	c.resourceMapMu.RLock()
+
 	if val, ok := c.resourceTypeMap[gvk]; ok {
 		c.resourceMapMu.RUnlock()
 		return val
 	}
+
 	c.resourceMapMu.RUnlock()
 
 	// Core API resources never need CRDs
@@ -122,11 +125,13 @@ func (c *DefaultSchemaClient) IsCRDRequired(ctx context.Context, gvk schema.Grou
 			"gvk", gvk.String(),
 			"error", err)
 		c.cacheResourceType(gvk, true)
+
 		return true
 	}
 
 	// Default to requiring a CRD
 	c.cacheResourceType(gvk, true)
+
 	return true
 }
 
@@ -141,5 +146,6 @@ func (c *DefaultSchemaClient) ValidateResource(_ context.Context, resource *un.U
 func (c *DefaultSchemaClient) cacheResourceType(gvk schema.GroupVersionKind, requiresCRD bool) {
 	c.resourceMapMu.Lock()
 	defer c.resourceMapMu.Unlock()
+
 	c.resourceTypeMap[gvk] = requiresCRD
 }

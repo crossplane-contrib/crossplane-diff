@@ -334,8 +334,10 @@ func TestDefaultResourceManager_FetchCurrentObject(t *testing.T) {
 				if err == nil {
 					t.Errorf("FetchCurrentObject() expected error but got none")
 				}
+
 				return
 			}
+
 			if err != nil {
 				t.Fatalf("FetchCurrentObject() unexpected error: %v", err)
 			}
@@ -355,6 +357,7 @@ func TestDefaultResourceManager_FetchCurrentObject(t *testing.T) {
 				if current == nil {
 					t.Fatalf("FetchCurrentObject() returned nil current for existing resource")
 				}
+
 				if current.GetName() != tt.wantResourceID {
 					t.Errorf("FetchCurrentObject() current.GetName() = %v, want %v",
 						current.GetName(), tt.wantResourceID)
@@ -367,6 +370,7 @@ func TestDefaultResourceManager_FetchCurrentObject(t *testing.T) {
 func TestDefaultResourceManager_UpdateOwnerRefs(t *testing.T) {
 	// Create test resources
 	parentXR := tu.NewResource("example.org/v1", "XR", "parent-xr").Build()
+
 	const ParentUID = "parent-uid"
 	parentXR.SetUID(ParentUID)
 

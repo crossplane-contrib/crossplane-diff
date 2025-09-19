@@ -63,6 +63,7 @@ func (m *MockNamespaceableResourceInterface) Namespace(namespace string) dynamic
 	if m.NamespaceFn != nil {
 		return m.NamespaceFn(namespace)
 	}
+
 	return &MockResourceInterface{
 		GetFn:    m.GetFn,
 		ListFn:   m.ListFn,
@@ -78,6 +79,7 @@ func (m *MockNamespaceableResourceInterface) Create(ctx context.Context, obj *un
 	if m.CreateFn != nil {
 		return m.CreateFn(ctx, obj, options, subresources...)
 	}
+
 	return nil, nil
 }
 
@@ -86,6 +88,7 @@ func (m *MockNamespaceableResourceInterface) Update(ctx context.Context, obj *un
 	if m.UpdateFn != nil {
 		return m.UpdateFn(ctx, obj, options, subresources...)
 	}
+
 	return nil, nil
 }
 
@@ -99,6 +102,7 @@ func (m *MockNamespaceableResourceInterface) Delete(ctx context.Context, name st
 	if m.DeleteFn != nil {
 		return m.DeleteFn(ctx, name, options, subresources...)
 	}
+
 	return nil
 }
 
@@ -112,6 +116,7 @@ func (m *MockNamespaceableResourceInterface) Get(ctx context.Context, name strin
 	if m.GetFn != nil {
 		return m.GetFn(ctx, name, options, subresources...)
 	}
+
 	return nil, nil
 }
 
@@ -120,6 +125,7 @@ func (m *MockNamespaceableResourceInterface) List(ctx context.Context, opts meta
 	if m.ListFn != nil {
 		return m.ListFn(ctx, opts)
 	}
+
 	return nil, nil
 }
 
@@ -133,6 +139,7 @@ func (m *MockNamespaceableResourceInterface) Patch(ctx context.Context, name str
 	if m.PatchFn != nil {
 		return m.PatchFn(ctx, name, pt, data, options, subresources...)
 	}
+
 	return nil, nil
 }
 
@@ -165,6 +172,7 @@ func (m *MockResourceInterface) Create(ctx context.Context, obj *un.Unstructured
 	if m.CreateFn != nil {
 		return m.CreateFn(ctx, obj, options, subresources...)
 	}
+
 	return nil, nil
 }
 
@@ -173,6 +181,7 @@ func (m *MockResourceInterface) Update(ctx context.Context, obj *un.Unstructured
 	if m.UpdateFn != nil {
 		return m.UpdateFn(ctx, obj, options, subresources...)
 	}
+
 	return nil, nil
 }
 
@@ -186,6 +195,7 @@ func (m *MockResourceInterface) Delete(ctx context.Context, name string, options
 	if m.DeleteFn != nil {
 		return m.DeleteFn(ctx, name, options, subresources...)
 	}
+
 	return nil
 }
 
@@ -199,6 +209,7 @@ func (m *MockResourceInterface) Get(ctx context.Context, name string, options me
 	if m.GetFn != nil {
 		return m.GetFn(ctx, name, options, subresources...)
 	}
+
 	return nil, nil
 }
 
@@ -207,6 +218,7 @@ func (m *MockResourceInterface) List(ctx context.Context, opts metav1.ListOption
 	if m.ListFn != nil {
 		return m.ListFn(ctx, opts)
 	}
+
 	return nil, nil
 }
 
@@ -220,6 +232,7 @@ func (m *MockResourceInterface) Patch(ctx context.Context, name string, pt types
 	if m.PatchFn != nil {
 		return m.PatchFn(ctx, name, pt, data, options, subresources...)
 	}
+
 	return nil, nil
 }
 
@@ -249,6 +262,7 @@ func (m *MockDiffProcessor) Initialize(ctx context.Context) error {
 	if m.InitializeFn != nil {
 		return m.InitializeFn(ctx)
 	}
+
 	return nil
 }
 
@@ -257,6 +271,7 @@ func (m *MockDiffProcessor) PerformDiff(ctx context.Context, stdout io.Writer, r
 	if m.PerformDiffFn != nil {
 		return m.PerformDiffFn(stdout, ctx, resources)
 	}
+
 	return nil
 }
 
@@ -275,6 +290,7 @@ func (m *MockSchemaValidator) ValidateResources(ctx context.Context, xr *un.Unst
 	if m.ValidateResourcesFn != nil {
 		return m.ValidateResourcesFn(ctx, xr, composed)
 	}
+
 	return nil
 }
 
@@ -288,6 +304,7 @@ func (m *MockSchemaValidator) ValidateScopeConstraints(ctx context.Context, reso
 	if m.ValidateScopeConstraintsFn != nil {
 		return m.ValidateScopeConstraintsFn(ctx, resource, expectedNamespace, isClaimRoot)
 	}
+
 	return nil
 }
 
@@ -315,6 +332,7 @@ func (m *MockResourceClient) Initialize(ctx context.Context) error {
 	if m.InitializeFn != nil {
 		return m.InitializeFn(ctx)
 	}
+
 	return nil
 }
 
@@ -323,6 +341,7 @@ func (m *MockResourceClient) GetResource(ctx context.Context, gvk schema.GroupVe
 	if m.GetResourceFn != nil {
 		return m.GetResourceFn(ctx, gvk, namespace, name)
 	}
+
 	return nil, errors.New("GetResource not implemented")
 }
 
@@ -331,6 +350,7 @@ func (m *MockResourceClient) ListResources(ctx context.Context, gvk schema.Group
 	if m.ListResourcesFn != nil {
 		return m.ListResourcesFn(ctx, gvk, namespace)
 	}
+
 	return nil, errors.New("ListResources not implemented")
 }
 
@@ -339,6 +359,7 @@ func (m *MockResourceClient) GetResourcesByLabel(ctx context.Context, gvk schema
 	if m.GetResourcesByLabelFn != nil {
 		return m.GetResourcesByLabelFn(ctx, gvk, namespace, sel)
 	}
+
 	return nil, errors.New("GetResourcesByLabel not implemented")
 }
 
@@ -347,6 +368,7 @@ func (m *MockResourceClient) GetAllResourcesByLabels(ctx context.Context, gvks [
 	if m.GetAllResourcesByLabelsFn != nil {
 		return m.GetAllResourcesByLabelsFn(ctx, gvks, selectors)
 	}
+
 	return nil, errors.New("GetAllResourcesByLabels not implemented")
 }
 
@@ -355,6 +377,7 @@ func (m *MockResourceClient) GetGVKsForGroupKind(ctx context.Context, group, kin
 	if m.GetGVKsForGroupKindFn != nil {
 		return m.GetGVKsForGroupKindFn(ctx, group, kind)
 	}
+
 	return nil, errors.New("GetGVKsForGroupKind not implemented")
 }
 
@@ -363,6 +386,7 @@ func (m *MockResourceClient) IsNamespacedResource(ctx context.Context, gvk schem
 	if m.IsNamespacedResourceFn != nil {
 		return m.IsNamespacedResourceFn(ctx, gvk)
 	}
+
 	return false, errors.Errorf("IsNamespacedResource not implemented for %s in mock", gvk.String())
 }
 
@@ -379,6 +403,7 @@ func (m *MockSchemaClient) Initialize(ctx context.Context) error {
 	if m.InitializeFn != nil {
 		return m.InitializeFn(ctx)
 	}
+
 	return nil
 }
 
@@ -387,6 +412,7 @@ func (m *MockSchemaClient) GetCRD(ctx context.Context, gvk schema.GroupVersionKi
 	if m.GetCRDFn != nil {
 		return m.GetCRDFn(ctx, gvk)
 	}
+
 	return nil, errors.New("GetCRD not implemented")
 }
 
@@ -395,6 +421,7 @@ func (m *MockSchemaClient) IsCRDRequired(ctx context.Context, gvk schema.GroupVe
 	if m.IsCRDRequiredFn != nil {
 		return m.IsCRDRequiredFn(ctx, gvk)
 	}
+
 	return true // Default to true
 }
 
@@ -403,6 +430,7 @@ func (m *MockSchemaClient) ValidateResource(ctx context.Context, resource *un.Un
 	if m.ValidateResourceFn != nil {
 		return m.ValidateResourceFn(ctx, resource)
 	}
+
 	return nil
 }
 
@@ -418,6 +446,7 @@ func (m *MockApplyClient) Initialize(ctx context.Context) error {
 	if m.InitializeFn != nil {
 		return m.InitializeFn(ctx)
 	}
+
 	return nil
 }
 
@@ -426,6 +455,7 @@ func (m *MockApplyClient) Apply(ctx context.Context, obj *un.Unstructured) (*un.
 	if m.ApplyFn != nil {
 		return m.ApplyFn(ctx, obj)
 	}
+
 	return nil, errors.New("Apply not implemented")
 }
 
@@ -434,6 +464,7 @@ func (m *MockApplyClient) DryRunApply(ctx context.Context, obj *un.Unstructured)
 	if m.DryRunApplyFn != nil {
 		return m.DryRunApplyFn(ctx, obj)
 	}
+
 	return nil, errors.New("DryRunApply not implemented")
 }
 
@@ -448,6 +479,7 @@ func (m *MockTypeConverter) GVKToGVR(ctx context.Context, gvk schema.GroupVersio
 	if m.GVKToGVRFn != nil {
 		return m.GVKToGVRFn(ctx, gvk)
 	}
+
 	return schema.GroupVersionResource{}, errors.New("GVKToGVR not implemented")
 }
 
@@ -456,6 +488,7 @@ func (m *MockTypeConverter) GetResourceNameForGVK(ctx context.Context, gvk schem
 	if m.GetResourceNameForGVKFn != nil {
 		return m.GetResourceNameForGVKFn(ctx, gvk)
 	}
+
 	return "", errors.New("GetResourceNameForGVK not implemented")
 }
 
@@ -480,6 +513,7 @@ func (m *MockCompositionClient) Initialize(ctx context.Context) error {
 	if m.InitializeFn != nil {
 		return m.InitializeFn(ctx)
 	}
+
 	return nil
 }
 
@@ -488,6 +522,7 @@ func (m *MockCompositionClient) FindMatchingComposition(ctx context.Context, res
 	if m.FindMatchingCompositionFn != nil {
 		return m.FindMatchingCompositionFn(ctx, res)
 	}
+
 	return nil, errors.New("FindMatchingComposition not implemented")
 }
 
@@ -496,6 +531,7 @@ func (m *MockCompositionClient) ListCompositions(ctx context.Context) ([]*xpextv
 	if m.ListCompositionsFn != nil {
 		return m.ListCompositionsFn(ctx)
 	}
+
 	return nil, errors.New("ListCompositions not implemented")
 }
 
@@ -504,6 +540,7 @@ func (m *MockCompositionClient) GetComposition(ctx context.Context, name string)
 	if m.GetCompositionFn != nil {
 		return m.GetCompositionFn(ctx, name)
 	}
+
 	return nil, errors.New("GetComposition not implemented")
 }
 
@@ -519,6 +556,7 @@ func (m *MockFunctionClient) Initialize(ctx context.Context) error {
 	if m.InitializeFn != nil {
 		return m.InitializeFn(ctx)
 	}
+
 	return nil
 }
 
@@ -527,6 +565,7 @@ func (m *MockFunctionClient) GetFunctionsFromPipeline(comp *xpextv1.Composition)
 	if m.GetFunctionsFromPipelineFn != nil {
 		return m.GetFunctionsFromPipelineFn(comp)
 	}
+
 	return nil, errors.New("GetFunctionsFromPipeline not implemented")
 }
 
@@ -535,6 +574,7 @@ func (m *MockFunctionClient) ListFunctions(ctx context.Context) ([]pkgv1.Functio
 	if m.ListFunctionsFn != nil {
 		return m.ListFunctionsFn(ctx)
 	}
+
 	return nil, errors.New("ListFunctions not implemented")
 }
 
@@ -550,6 +590,7 @@ func (m *MockEnvironmentClient) Initialize(ctx context.Context) error {
 	if m.InitializeFn != nil {
 		return m.InitializeFn(ctx)
 	}
+
 	return nil
 }
 
@@ -558,6 +599,7 @@ func (m *MockEnvironmentClient) GetEnvironmentConfigs(ctx context.Context) ([]*u
 	if m.GetEnvironmentConfigsFn != nil {
 		return m.GetEnvironmentConfigsFn(ctx)
 	}
+
 	return nil, errors.New("GetEnvironmentConfigs not implemented")
 }
 
@@ -566,6 +608,7 @@ func (m *MockEnvironmentClient) GetEnvironmentConfig(ctx context.Context, name s
 	if m.GetEnvironmentConfigFn != nil {
 		return m.GetEnvironmentConfigFn(ctx, name)
 	}
+
 	return nil, errors.New("GetEnvironmentConfig not implemented")
 }
 
@@ -583,6 +626,7 @@ func (m *MockDefinitionClient) Initialize(ctx context.Context) error {
 	if m.InitializeFn != nil {
 		return m.InitializeFn(ctx)
 	}
+
 	return nil
 }
 
@@ -591,6 +635,7 @@ func (m *MockDefinitionClient) GetXRDs(ctx context.Context) ([]*un.Unstructured,
 	if m.GetXRDsFn != nil {
 		return m.GetXRDsFn(ctx)
 	}
+
 	return nil, errors.New("GetXRDs not implemented")
 }
 
@@ -599,6 +644,7 @@ func (m *MockDefinitionClient) GetXRDForClaim(ctx context.Context, gvk schema.Gr
 	if m.GetXRDForClaimFn != nil {
 		return m.GetXRDForClaimFn(ctx, gvk)
 	}
+
 	return nil, errors.New("GetXRDForClaim not implemented")
 }
 
@@ -607,6 +653,7 @@ func (m *MockDefinitionClient) GetXRDForXR(ctx context.Context, gvk schema.Group
 	if m.GetXRDForXRFn != nil {
 		return m.GetXRDForXRFn(ctx, gvk)
 	}
+
 	return nil, errors.New("GetXRDForXR not implemented")
 }
 
@@ -615,6 +662,7 @@ func (m *MockDefinitionClient) IsClaimResource(ctx context.Context, resource *un
 	if m.IsClaimResourceFn != nil {
 		return m.IsClaimResourceFn(ctx, resource)
 	}
+
 	return false
 }
 
@@ -629,6 +677,7 @@ func (m *MockResourceTreeClient) Initialize(ctx context.Context) error {
 	if m.InitializeFn != nil {
 		return m.InitializeFn(ctx)
 	}
+
 	return nil
 }
 
@@ -637,6 +686,7 @@ func (m *MockResourceTreeClient) GetResourceTree(ctx context.Context, root *un.U
 	if m.GetResourceTreeFn != nil {
 		return m.GetResourceTreeFn(ctx, root)
 	}
+
 	return nil, errors.New("GetResourceTree not implemented")
 }
 
@@ -654,6 +704,7 @@ func (m *MockDiffCalculator) CalculateDiff(ctx context.Context, composite *un.Un
 	if m.CalculateDiffFn != nil {
 		return m.CalculateDiffFn(ctx, composite, desired)
 	}
+
 	return nil, nil
 }
 
@@ -662,6 +713,7 @@ func (m *MockDiffCalculator) CalculateDiffs(ctx context.Context, xr *cmp.Unstruc
 	if m.CalculateDiffsFn != nil {
 		return m.CalculateDiffsFn(ctx, xr, desired)
 	}
+
 	return nil, nil
 }
 
@@ -670,6 +722,7 @@ func (m *MockDiffCalculator) CalculateRemovedResourceDiffs(ctx context.Context, 
 	if m.CalculateRemovedResourceDiffsFn != nil {
 		return m.CalculateRemovedResourceDiffsFn(ctx, xr, renderedResources)
 	}
+
 	return nil, nil
 }
 
@@ -683,5 +736,6 @@ func (m *MockDiffRenderer) RenderDiffs(w io.Writer, diffs map[string]*dt.Resourc
 	if m.RenderDiffsFn != nil {
 		return m.RenderDiffsFn(w, diffs)
 	}
+
 	return nil
 }

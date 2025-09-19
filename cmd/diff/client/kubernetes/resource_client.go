@@ -74,6 +74,7 @@ func (c *DefaultResourceClient) GetResource(ctx context.Context, gvk schema.Grou
 		"resource", resourceID,
 		"uid", res.GetUID(),
 		"resourceVersion", res.GetResourceVersion())
+
 	return res, nil
 }
 
@@ -111,6 +112,7 @@ func (c *DefaultResourceClient) GetResourcesByLabel(ctx context.Context, gvk sch
 	}
 
 	c.logger.Debug("Resources found by label", "count", len(resources), "gvk", gvk.String())
+
 	return resources, nil
 }
 
@@ -139,6 +141,7 @@ func (c *DefaultResourceClient) ListResources(ctx context.Context, gvk schema.Gr
 	}
 
 	c.logger.Debug("Listed resources", "gvk", gvk.String(), "namespace", namespace, "count", len(resources))
+
 	return resources, nil
 }
 
@@ -174,6 +177,7 @@ func (c *DefaultResourceClient) GetGVKsForGroupKind(_ context.Context, group, ki
 					Kind:    kind,
 				}
 				gvks = append(gvks, gvk)
+
 				break // Found the kind in this version, move to next version
 			}
 		}
@@ -187,6 +191,7 @@ func (c *DefaultResourceClient) GetGVKsForGroupKind(_ context.Context, group, ki
 func (c *DefaultResourceClient) IsNamespacedResource(_ context.Context, gvk schema.GroupVersionKind) (bool, error) {
 	// Get the server resources for this group/version
 	groupVersion := gvk.GroupVersion().String()
+
 	resourceList, err := c.discoveryClient.ServerResourcesForGroupVersion(groupVersion)
 	if err != nil {
 		return false, errors.Wrapf(err, "cannot get server resources for group version %s", groupVersion)
@@ -199,6 +204,7 @@ func (c *DefaultResourceClient) IsNamespacedResource(_ context.Context, gvk sche
 			c.logger.Debug("Determined resource scope from discovery",
 				"gvk", gvk.String(),
 				"namespaced", resource.Namespaced)
+
 			return resource.Namespaced, nil
 		}
 	}
@@ -208,5 +214,6 @@ func (c *DefaultResourceClient) IsNamespacedResource(_ context.Context, gvk sche
 	for i, resource := range resourceList.APIResources {
 		availableKinds[i] = resource.Kind
 	}
+
 	return false, errors.Errorf("resource kind %s not found in discovery API for group version %s (available kinds: %v)", gvk.Kind, groupVersion, availableKinds)
 }

@@ -90,6 +90,7 @@ func (r *DefaultDiffRenderer) RenderDiffs(stdout io.Writer, diffs map[string]*dt
 
 		// Format the diff header based on the diff type
 		var header string
+
 		switch diff.DiffType {
 		case dt.DiffTypeAdded:
 			header = fmt.Sprintf("+++ %s", resourceID)
@@ -111,6 +112,7 @@ func (r *DefaultDiffRenderer) RenderDiffs(stdout io.Writer, diffs map[string]*dt
 				r.logger.Debug("Error writing diff to output", "resource", resourceID, "error", err)
 				return errors.Wrap(err, "failed to write diff to output")
 			}
+
 			outputCount++
 		} else {
 			r.logger.Debug("Empty diff content, skipping output", "resource", resourceID)
@@ -132,9 +134,11 @@ func (r *DefaultDiffRenderer) RenderDiffs(stdout io.Writer, diffs map[string]*dt
 		if addedCount > 0 {
 			summary.WriteString(fmt.Sprintf("%d added, ", addedCount))
 		}
+
 		if modifiedCount > 0 {
 			summary.WriteString(fmt.Sprintf("%d modified, ", modifiedCount))
 		}
+
 		if removedCount > 0 {
 			summary.WriteString(fmt.Sprintf("%d removed, ", removedCount))
 		}

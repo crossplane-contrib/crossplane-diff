@@ -63,6 +63,7 @@ func (c *DefaultDiffCalculator) CalculateDiff(ctx context.Context, composite *un
 
 	// Create a resource ID for logging purposes
 	var resourceID string
+
 	switch {
 	case name != "":
 		resourceID = fmt.Sprintf("%s/%s", desired.GetKind(), name)
@@ -118,6 +119,7 @@ func (c *DefaultDiffCalculator) CalculateDiff(ctx context.Context, composite *un
 			"resource", resourceID,
 			"name", desired.GetName(),
 			"desired", desired)
+
 		wouldBeResult, err = c.applyClient.DryRunApply(ctx, desired)
 		if err != nil {
 			c.logger.Debug("Dry-run apply failed", "resource", resourceID, "error", err)
@@ -128,7 +130,7 @@ func (c *DefaultDiffCalculator) CalculateDiff(ctx context.Context, composite *un
 	}
 
 	// Generate diff with the configured options
-	diff, err := renderer.GenerateDiffWithOptions(current, wouldBeResult, c.logger, c.diffOptions)
+	diff, err := renderer.GenerateDiffWithOptions(ctx, current, wouldBeResult, c.logger, c.diffOptions)
 	if err != nil {
 		c.logger.Debug("Failed to generate diff", "resource", resourceID, "error", err)
 		return nil, err
@@ -153,6 +155,7 @@ func (c *DefaultDiffCalculator) CalculateDiffs(ctx context.Context, xr *cmp.Unst
 		"composedCount", len(desired.ComposedResources))
 
 	diffs := make(map[string]*dt.ResourceDiff)
+
 	var errs []error
 
 	// Create a map to track resources that were rendered
@@ -189,6 +192,7 @@ func (c *DefaultDiffCalculator) CalculateDiffs(ctx context.Context, xr *cmp.Unst
 			c.logger.Debug("Skipping resource with empty name and generateName",
 				"kind", kind,
 				"apiVersion", apiVersion)
+
 			continue
 		}
 
@@ -196,6 +200,7 @@ func (c *DefaultDiffCalculator) CalculateDiffs(ctx context.Context, xr *cmp.Unst
 		if err != nil {
 			c.logger.Debug("Error calculating diff for composed resource", "resource", resourceID, "error", err)
 			errs = append(errs, errors.Wrapf(err, "cannot calculate diff for %s", resourceID))
+
 			continue
 		}
 
@@ -210,6 +215,7 @@ func (c *DefaultDiffCalculator) CalculateDiffs(ctx context.Context, xr *cmp.Unst
 	if xrDiff.Current != nil {
 		// it only makes sense to calculate removal of things if we have a current XR.
 		c.logger.Debug("Finding resources to be removed", "xr", xrName)
+
 		removedDiffs, err := c.CalculateRemovedResourceDiffs(ctx, xrDiff.Current, renderedResources)
 		if err != nil {
 			c.logger.Debug("Error calculating removed resources (continuing)", "error", err)
@@ -253,6 +259,7 @@ func (c *DefaultDiffCalculator) CalculateRemovedResourceDiffs(ctx context.Contex
 
 	// Create a handler function to recursively traverse the tree and find composed resources
 	var findRemovedResources func(node *resource.Resource)
+
 	findRemovedResources = func(node *resource.Resource) {
 		// Skip the root (XR) node
 		if _, hasAnno := node.Unstructured.GetAnnotations()["crossplane.io/composition-resource-name"]; hasAnno {
@@ -268,11 +275,12 @@ func (c *DefaultDiffCalculator) CalculateRemovedResourceDiffs(ctx context.Contex
 				// This resource exists but wasn't rendered - it will be removed
 				c.logger.Debug("Resource will be removed", "resource", resourceID)
 
-				diff, err := renderer.GenerateDiffWithOptions(&node.Unstructured, nil, c.logger, c.diffOptions)
+				diff, err := renderer.GenerateDiffWithOptions(ctx, &node.Unstructured, nil, c.logger, c.diffOptions)
 				if err != nil {
 					c.logger.Debug("Cannot calculate removal diff (continuing)",
 						"resource", resourceID,
 						"error", err)
+
 					return
 				}
 
@@ -295,5 +303,6 @@ func (c *DefaultDiffCalculator) CalculateRemovedResourceDiffs(ctx context.Contex
 	}
 
 	c.logger.Debug("Found resources to be removed", "count", len(removedDiffs))
+
 	return removedDiffs, nil
 }

@@ -201,7 +201,7 @@ func TestSchemaClient_GetCRD(t *testing.T) {
 			setup: func() (dynamic.Interface, TypeConverter) {
 				// Set up the dynamic client to return our test CRD
 				dynamicClient := fake.NewSimpleDynamicClient(scheme)
-				dynamicClient.Fake.PrependReactor("get", "customresourcedefinitions", func(action kt.Action) (bool, runtime.Object, error) {
+				dynamicClient.PrependReactor("get", "customresourcedefinitions", func(action kt.Action) (bool, runtime.Object, error) {
 					getAction := action.(kt.GetAction)
 					if getAction.GetName() == "xresources.example.org" {
 						return true, testCRD, nil
@@ -237,7 +237,7 @@ func TestSchemaClient_GetCRD(t *testing.T) {
 			reason: "Should return error when CRD doesn't exist",
 			setup: func() (dynamic.Interface, TypeConverter) {
 				dynamicClient := fake.NewSimpleDynamicClient(scheme)
-				dynamicClient.Fake.PrependReactor("get", "customresourcedefinitions", func(kt.Action) (bool, runtime.Object, error) {
+				dynamicClient.PrependReactor("get", "customresourcedefinitions", func(kt.Action) (bool, runtime.Object, error) {
 					return true, nil, errors.New("CRD not found")
 				})
 
@@ -316,6 +316,7 @@ func TestSchemaClient_GetCRD(t *testing.T) {
 					t.Errorf("\n%s\nGetCRD(...): expected error containing %q, got %q",
 						tc.reason, tc.want.err.Error(), err.Error())
 				}
+
 				return
 			}
 

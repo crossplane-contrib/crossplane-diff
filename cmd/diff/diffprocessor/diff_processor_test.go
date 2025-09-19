@@ -462,6 +462,7 @@ func TestDefaultDiffProcessor_PerformDiff(t *testing.T) {
 				if diff := gcmp.Diff(tt.want.Error(), err.Error()); diff != "" {
 					t.Errorf("PerformDiff(...): -want error, +got error:\n%s", diff)
 				}
+
 				return
 			}
 
@@ -617,6 +618,7 @@ func TestDefaultDiffProcessor_Initialize(t *testing.T) {
 				if diff := gcmp.Diff(tc.want.Error(), err.Error()); diff != "" {
 					t.Errorf("Initialize(...): -want error, +got error:\n%s", diff)
 				}
+
 				return
 			}
 
@@ -654,8 +656,11 @@ func TestDefaultDiffProcessor_RenderWithRequirements(t *testing.T) {
 	}
 
 	// Create test resources for requirements
-	const ConfigMap = "ConfigMap"
-	const ConfigMapName = "config1"
+	const (
+		ConfigMap     = "ConfigMap"
+		ConfigMapName = "config1"
+	)
+
 	configMap := tu.NewResource("v1", ConfigMap, ConfigMapName).Build()
 	secret := tu.NewResource("v1", "Secret", "secret1").Build()
 
@@ -1054,6 +1059,7 @@ func TestDefaultDiffProcessor_RenderWithRequirements(t *testing.T) {
 				if err == nil {
 					t.Errorf("RenderWithRequirements() expected error but got none")
 				}
+
 				return
 			}
 

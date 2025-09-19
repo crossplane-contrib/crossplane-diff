@@ -71,6 +71,7 @@ func (v *DefaultSchemaValidator) LoadCRDs(ctx context.Context) error {
 
 	v.crds = crds
 	v.logger.Debug("Loaded CRDs", "count", len(crds))
+
 	return nil
 }
 
@@ -107,7 +108,8 @@ func (v *DefaultSchemaValidator) ValidateResources(ctx context.Context, xr *un.U
 		"cachedCRDs", len(v.crds),
 		"resourceCount", len(resources))
 
-	if err := v.EnsureComposedResourceCRDs(ctx, resources); err != nil {
+	err := v.EnsureComposedResourceCRDs(ctx, resources)
+	if err != nil {
 		return errors.Wrap(err, "unable to ensure CRDs")
 	}
 
@@ -117,7 +119,9 @@ func (v *DefaultSchemaValidator) ValidateResources(ctx context.Context, xr *un.U
 	// Validate using the CRD schemas
 	// Use skipSuccessLogs=true to avoid cluttering the output with success messages
 	v.logger.Debug("Performing schema validation", "resourceCount", len(resources))
-	if err := validate.SchemaValidation(ctx, resources, v.crds, true, true, loggerWriter); err != nil {
+
+	err = validate.SchemaValidation(ctx, resources, v.crds, true, true, loggerWriter)
+	if err != nil {
 		return errors.Wrap(err, "schema validation failed")
 	}
 
@@ -125,14 +129,17 @@ func (v *DefaultSchemaValidator) ValidateResources(ctx context.Context, xr *un.U
 	expectedNamespace := xr.GetNamespace()
 	isClaimRoot := v.defClient.IsClaimResource(ctx, xr)
 	v.logger.Debug("Performing resource scope validation", "resourceCount", len(resources), "expectedNamespace", expectedNamespace, "isClaimRoot", isClaimRoot)
+
 	for _, resource := range resources {
-		if err := v.ValidateScopeConstraints(ctx, resource, expectedNamespace, isClaimRoot); err != nil {
+		err := v.ValidateScopeConstraints(ctx, resource, expectedNamespace, isClaimRoot)
+		if err != nil {
 			return errors.Wrapf(err, "resource scope validation failed for %s/%s",
 				resource.GetKind(), resource.GetName())
 		}
 	}
 
 	v.logger.Debug("Resources validated successfully")
+
 	return nil
 }
 
@@ -141,6 +148,7 @@ func (v *DefaultSchemaValidator) ValidateResources(ctx context.Context, xr *un.U
 func (v *DefaultSchemaValidator) EnsureComposedResourceCRDs(ctx context.Context, resources []*un.Unstructured) error {
 	// Create a map of existing CRDs by GVK for quick lookup
 	existingCRDs := make(map[schema.GroupVersionKind]bool)
+
 	for _, crd := range v.crds {
 		for _, version := range crd.Spec.Versions {
 			gvk := schema.GroupVersionKind{
@@ -175,6 +183,7 @@ func (v *DefaultSchemaValidator) EnsureComposedResourceCRDs(ctx context.Context,
 		if !v.schemaClient.IsCRDRequired(ctx, gvk) {
 			v.logger.Debug("Skipping built-in resource type, no CRD required",
 				"gvk", gvk.String())
+
 			continue
 		}
 
@@ -184,6 +193,7 @@ func (v *DefaultSchemaValidator) EnsureComposedResourceCRDs(ctx context.Context,
 			v.logger.Debug("CRD not found (continuing)",
 				"gvk", gvk.String(),
 				"error", err)
+
 			return errors.New("unable to find CRD for " + gvk.String())
 		}
 
@@ -193,6 +203,7 @@ func (v *DefaultSchemaValidator) EnsureComposedResourceCRDs(ctx context.Context,
 			v.logger.Debug("Error converting CRD (continuing)",
 				"gvk", gvk.String(),
 				"error", err)
+
 			continue
 		}
 
@@ -202,6 +213,7 @@ func (v *DefaultSchemaValidator) EnsureComposedResourceCRDs(ctx context.Context,
 	}
 
 	v.logger.Debug("Finished ensuring CRDs", "totalCRDs", len(v.crds))
+
 	return nil
 }
 
@@ -217,6 +229,7 @@ func (v *DefaultSchemaValidator) getResourceScope(ctx context.Context, gvk schem
 				crd.Spec.Names.Kind == gvk.Kind {
 				scope := string(crd.Spec.Scope)
 				v.logger.Debug("Found scope in cached CRDs", "gvk", gvk.String(), "scope", scope)
+
 				return scope, nil
 			}
 		}
@@ -263,6 +276,7 @@ func (v *DefaultSchemaValidator) ValidateScopeConstraints(ctx context.Context, r
 		if resourceNamespace == "" {
 			return errors.Errorf("namespaced resource %s must have a namespace", resourceID)
 		}
+
 		if expectedNamespace != "" && resourceNamespace != expectedNamespace {
 			return errors.Errorf("namespaced resource %s has namespace %s but expected %s (cross-namespace references not supported)",
 				resourceID, resourceNamespace, expectedNamespace)
@@ -271,6 +285,7 @@ func (v *DefaultSchemaValidator) ValidateScopeConstraints(ctx context.Context, r
 		if resourceNamespace != "" {
 			return errors.Errorf("cluster-scoped resource %s cannot have a namespace", resourceID)
 		}
+
 		if expectedNamespace != "" && !isClaimRoot {
 			return errors.Errorf("namespaced XR cannot own cluster-scoped managed resource %s", resourceID)
 		}

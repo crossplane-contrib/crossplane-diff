@@ -1,5 +1,5 @@
 // Package types provides types used in the renderer in order to facilitate code reuse in test
-package types
+package types //nolint:revive // types is an appropriate name for a types package
 
 import (
 	"fmt"

@@ -55,10 +55,12 @@ func TestCmd_Run(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to create Kong parser: %v", err)
 	}
+
 	kongCtx, err := parser.Parse([]string{})
 	if err != nil {
 		t.Fatalf("Failed to parse Kong context: %v", err)
 	}
+
 	kongCtx.Stdout = &buf
 	// Create a buffer to capture output
 
@@ -129,7 +131,8 @@ kind: TestResource
 metadata:
   name: test-resource
 `
-				if err := os.WriteFile(tempFile, []byte(content), 0o600); err != nil {
+				err := os.WriteFile(tempFile, []byte(content), 0o600)
+				if err != nil {
 					t.Fatalf("Failed to write temp file: %v", err)
 				}
 
@@ -233,7 +236,8 @@ kind: TestResource
 metadata:
   name: test-resource
 `
-				if err := os.WriteFile(tempFile, []byte(content), 0o600); err != nil {
+				err := os.WriteFile(tempFile, []byte(content), 0o600)
+				if err != nil {
 					t.Fatalf("Failed to write temp file: %v", err)
 				}
 
@@ -268,6 +272,7 @@ metadata:
 				t.Errorf("Run() error = %v, wantErr %v", err, tc.wantErr)
 				return
 			}
+
 			if err != nil && tc.wantErrContains != "" {
 				if !strings.Contains(err.Error(), tc.wantErrContains) {
 					t.Errorf("Run() error = %v, wantErrContains %v", err, tc.wantErrContains)
@@ -450,7 +455,8 @@ spec:
 						func() *un.Unstructured {
 							// Parse the YAML into an unstructured object
 							obj := &un.Unstructured{}
-							if err := yaml.Unmarshal(xrYAML, &obj.Object); err != nil {
+							err := yaml.Unmarshal(xrYAML, &obj.Object)
+							if err != nil {
 								t.Fatalf("Failed to unmarshal test XR: %v", err)
 							}
 							return obj
@@ -526,7 +532,8 @@ spec:
 						func() *un.Unstructured {
 							// Parse the YAML into an unstructured object
 							obj := &un.Unstructured{}
-							if err := yaml.Unmarshal(xrYAML, &obj.Object); err != nil {
+							err := yaml.Unmarshal(xrYAML, &obj.Object)
+							if err != nil {
 								t.Fatalf("Failed to unmarshal test XR: %v", err)
 							}
 							return obj
@@ -630,7 +637,8 @@ spec:
 						func() *un.Unstructured {
 							// Parse the YAML into an unstructured object
 							obj := &un.Unstructured{}
-							if err := yaml.Unmarshal(xrYAML, &obj.Object); err != nil {
+							err := yaml.Unmarshal(xrYAML, &obj.Object)
+							if err != nil {
 								t.Fatalf("Failed to unmarshal test XR: %v", err)
 							}
 							return obj
@@ -736,7 +744,8 @@ spec:
 					Resources: []*un.Unstructured{
 						func() *un.Unstructured {
 							obj := &un.Unstructured{}
-							if err := yaml.Unmarshal(xrYAML, &obj.Object); err != nil {
+							err := yaml.Unmarshal(xrYAML, &obj.Object)
+							if err != nil {
 								t.Fatalf("Failed to unmarshal test XR: %v", err)
 							}
 							return obj
@@ -881,10 +890,12 @@ spec:
 			if err != nil {
 				t.Fatalf("Failed to create Kong parser: %v", err)
 			}
+
 			kongCtx, err := parser.Parse([]string{})
 			if err != nil {
 				t.Fatalf("Failed to parse Kong context: %v", err)
 			}
+
 			kongCtx.Stdout = &buf
 
 			// Create a logger
@@ -916,9 +927,11 @@ spec:
 					t.Errorf("Expected error but got none")
 					return
 				}
+
 				if tt.errorContains != "" && !strings.Contains(err.Error(), tt.errorContains) {
 					t.Errorf("Expected error containing %q, got: %v", tt.errorContains, err)
 				}
+
 				return
 			}
 
@@ -985,7 +998,8 @@ users:
   user:
     token: test-token
 `
-				if err := os.WriteFile(tempFile, []byte(content), 0o600); err != nil {
+				err := os.WriteFile(tempFile, []byte(content), 0o600)
+				if err != nil {
 					t.Fatalf("Failed to write temp kubeconfig: %v", err)
 				}
 				return tempFile
@@ -1003,6 +1017,7 @@ users:
 		t.Run(name, func(t *testing.T) {
 			// Set the KUBECONFIG environment variable for this test
 			originalKubeconfig := os.Getenv("KUBECONFIG")
+
 			defer func() {
 				if originalKubeconfig != "" {
 					t.Setenv("KUBECONFIG", originalKubeconfig)
@@ -1031,10 +1046,12 @@ users:
 				t.Errorf("Expected error but got none")
 				return
 			}
+
 			if !tc.expectError && err != nil {
 				t.Errorf("Expected no error, got: %v", err)
 				return
 			}
+
 			if tc.errorContains != "" && !strings.Contains(err.Error(), tc.errorContains) {
 				t.Errorf("Expected error containing %q, got: %v", tc.errorContains, err)
 				return

@@ -69,6 +69,7 @@ func (m *DefaultResourceManager) FetchCurrentObject(ctx context.Context, composi
 				"resourceVersion", current.GetResourceVersion())
 
 			m.checkCompositeOwnership(current, composite)
+
 			return current, false, nil
 		}
 
@@ -77,6 +78,7 @@ func (m *DefaultResourceManager) FetchCurrentObject(ctx context.Context, composi
 			m.logger.Debug("Error getting resource",
 				"resource", resourceID,
 				"error", err)
+
 			return nil, false, err
 		}
 	}
@@ -92,6 +94,7 @@ func (m *DefaultResourceManager) FetchCurrentObject(ctx context.Context, composi
 				m.logger.Debug("Error during label-based lookup for resource with generateName (treating as new)",
 					"resource", resourceID,
 					"error", err)
+
 				return nil, true, nil
 			}
 
@@ -99,6 +102,7 @@ func (m *DefaultResourceManager) FetchCurrentObject(ctx context.Context, composi
 			m.logger.Debug("Error during label-based lookup",
 				"resource", resourceID,
 				"error", err)
+
 			return nil, false, err
 		}
 
@@ -109,6 +113,7 @@ func (m *DefaultResourceManager) FetchCurrentObject(ctx context.Context, composi
 
 	// We didn't find a matching resource using any strategy
 	m.logger.Debug("No matching resource found", "resource", resourceID)
+
 	return nil, true, nil
 }
 
@@ -119,6 +124,7 @@ func (m *DefaultResourceManager) createResourceID(gvk schema.GroupVersionKind, n
 		if namespace != "" {
 			return fmt.Sprintf("%s/%s/%s", gvk.String(), namespace, name)
 		}
+
 		return fmt.Sprintf("%s/%s", gvk.String(), name)
 	}
 
@@ -127,6 +133,7 @@ func (m *DefaultResourceManager) createResourceID(gvk schema.GroupVersionKind, n
 		if namespace != "" {
 			return fmt.Sprintf("%s/%s/%s*", gvk.String(), namespace, generateName)
 		}
+
 		return fmt.Sprintf("%s/%s*", gvk.String(), generateName)
 	}
 
@@ -167,6 +174,7 @@ func (m *DefaultResourceManager) lookupByComposite(ctx context.Context, composit
 	if annotations == nil {
 		m.logger.Debug("Resource has no annotations, creating new",
 			"resource", resourceID)
+
 		return nil, false, nil
 	}
 
@@ -175,6 +183,7 @@ func (m *DefaultResourceManager) lookupByComposite(ctx context.Context, composit
 	if compResourceName == "" {
 		m.logger.Debug("Resource has no composition-resource-name, creating new",
 			"resource", resourceID)
+
 		return nil, false, nil
 	}
 
@@ -190,8 +199,11 @@ func (m *DefaultResourceManager) lookupByComposite(ctx context.Context, composit
 	}
 
 	// Determine the appropriate label selector based on whether the composite is a claim
-	var labelSelector metav1.LabelSelector
-	var lookupName string
+	var (
+		labelSelector metav1.LabelSelector
+		lookupName    string
+	)
+
 	isCompositeAClaim := m.defClient.IsClaimResource(ctx, composite)
 
 	if isCompositeAClaim {
@@ -231,6 +243,7 @@ func (m *DefaultResourceManager) lookupByComposite(ctx context.Context, composit
 		m.logger.Debug("No resources found with owner labels",
 			"lookupName", lookupName,
 			"isClaimLookup", isCompositeAClaim)
+
 		return nil, false, nil
 	}
 
@@ -283,6 +296,7 @@ func (m *DefaultResourceManager) findMatchingResource(
 				m.logger.Debug("Found resource with matching composition name but wrong generateName prefix",
 					"expectedPrefix", generateName,
 					"actualName", resName)
+
 				continue
 			}
 		}
@@ -291,11 +305,13 @@ func (m *DefaultResourceManager) findMatchingResource(
 		m.logger.Debug("Found resource by label and annotation",
 			"resource", res.GetName(),
 			"compositionResourceName", compResourceName)
+
 		return res, true, nil
 	}
 
 	m.logger.Debug("No matching resource found with composition resource name",
 		"compositionResourceName", compResourceName)
+
 	return nil, false, nil
 }
 

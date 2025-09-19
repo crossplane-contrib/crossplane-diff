@@ -64,10 +64,12 @@ func (c *DefaultApplyClient) DryRunApply(ctx context.Context, obj *un.Unstructur
 	result, err := resourceClient.Apply(ctx, obj.GetName(), obj, applyOptions)
 	if err != nil {
 		c.logger.Debug("Dry-run apply failed", "resource", resourceID, "error", err)
+
 		return nil, errors.Wrapf(err, "failed to apply resource %s/%s",
 			obj.GetNamespace(), obj.GetName())
 	}
 
 	c.logger.Debug("Dry-run apply successful", "resource", resourceID, "resourceVersion", result.GetResourceVersion())
+
 	return result, nil
 }

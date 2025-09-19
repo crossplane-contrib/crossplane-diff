@@ -78,10 +78,12 @@ func (c *Cmd) AfterApply(ctx *kong.Context, log logging.Logger, config *rest.Con
 
 func (c *Cmd) initializeDependencies(ctx *kong.Context, log logging.Logger, config *rest.Config) error {
 	config = c.initRestConfig(config, log)
+
 	appCtx, err := NewAppContext(config, log)
 	if err != nil {
 		return errors.Wrap(err, "cannot create app context")
 	}
+
 	proc := makeDefaultProc(c, appCtx, log)
 
 	loader, err := makeDefaultLoader(c)
@@ -92,6 +94,7 @@ func (c *Cmd) initializeDependencies(ctx *kong.Context, log logging.Logger, conf
 	ctx.Bind(appCtx)
 	ctx.BindTo(proc, (*dp.DiffProcessor)(nil))
 	ctx.BindTo(loader, (*ld.Loader)(nil))
+
 	return nil
 }
 
@@ -133,6 +136,7 @@ func makeDefaultProc(c *Cmd, ctx *AppContext, log logging.Logger) dp.DiffProcess
 		dp.WithColorize(!c.NoColor),
 		dp.WithCompact(c.Compact),
 	}
+
 	return dp.NewDiffProcessor(ctx.K8sClients, ctx.XpClients, options...)
 }
 
@@ -152,7 +156,6 @@ func (c *Cmd) Run(k *kong.Context, log logging.Logger, appCtx *AppContext, proc 
 	// TODO:  diff against upgraded schema that isn't applied yet
 	// TODO:  diff against upgraded composition that isn't applied yet
 	// TODO:  diff against upgraded composition version that is already available
-
 	ctx, cancel := context.WithTimeout(context.Background(), c.Timeout)
 	defer cancel()
 

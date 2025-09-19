@@ -54,6 +54,7 @@ func (c *DefaultFunctionClient) Initialize(ctx context.Context) error {
 	if err != nil {
 		return errors.Wrap(err, "cannot get Function GVKs")
 	}
+
 	c.gvks = gvks
 
 	// List functions to populate the cache
@@ -68,6 +69,7 @@ func (c *DefaultFunctionClient) Initialize(ctx context.Context) error {
 	}
 
 	c.logger.Debug("Function client initialized", "functionsCount", len(c.functions))
+
 	return nil
 }
 
@@ -96,16 +98,21 @@ func (c *DefaultFunctionClient) ListFunctions(ctx context.Context) ([]pkgv1.Func
 	functions := make([]pkgv1.Function, 0, len(unFns))
 	for _, obj := range unFns {
 		fn := pkgv1.Function{}
-		if err := runtime.DefaultUnstructuredConverter.FromUnstructured(obj.Object, &fn); err != nil {
+
+		err := runtime.DefaultUnstructuredConverter.FromUnstructured(obj.Object, &fn)
+		if err != nil {
 			c.logger.Debug("Failed to convert function from unstructured",
 				"name", obj.GetName(),
 				"error", err)
+
 			return nil, errors.Wrap(err, "cannot convert unstructured to Function")
 		}
+
 		functions = append(functions, fn)
 	}
 
 	c.logger.Debug("Successfully retrieved functions", "count", len(functions))
+
 	return functions, nil
 }
 
@@ -120,6 +127,7 @@ func (c *DefaultFunctionClient) GetFunctionsFromPipeline(comp *apiextensionsv1.C
 				// TODO:  there was nil handling here that became invalid; make sure everything works as expected
 				return string(comp.Spec.Mode)
 			}())
+
 		return nil, fmt.Errorf("unsupported composition Mode '%s'; supported types are [%s]", comp.Spec.Mode, apiextensionsv1.CompositionModePipeline)
 		// TODO:  we used to check for nil, and if nil we'd say "no mode found"; is it valid to have no mode?
 	}
@@ -133,8 +141,10 @@ func (c *DefaultFunctionClient) GetFunctionsFromPipeline(comp *apiextensionsv1.C
 			c.logger.Debug("Function not found",
 				"step", step.Step,
 				"function_name", step.FunctionRef.Name)
+
 			return nil, errors.Errorf("function %q referenced in pipeline step %q not found", step.FunctionRef.Name, step.Step)
 		}
+
 		c.logger.Debug("Found function for step",
 			"step", step.Step,
 			"function_name", fn.GetName())
@@ -144,5 +154,6 @@ func (c *DefaultFunctionClient) GetFunctionsFromPipeline(comp *apiextensionsv1.C
 	c.logger.Debug("Retrieved functions from pipeline",
 		"functions_count", len(functions),
 		"composition_name", comp.GetName())
+
 	return functions, nil
 }

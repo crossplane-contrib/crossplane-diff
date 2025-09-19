@@ -245,9 +245,11 @@ func TestGetLineDiff(t *testing.T) {
 			// Check that we have the expected diff types
 			if len(result) != len(tt.expected) {
 				t.Errorf("GetLineDiff() returned %d diffs, want %d", len(result), len(tt.expected))
+
 				for i, diff := range result {
 					t.Logf("Diff %d: Type=%s, Text=%q", i, diff.Type, diff.Text)
 				}
+
 				return
 			}
 

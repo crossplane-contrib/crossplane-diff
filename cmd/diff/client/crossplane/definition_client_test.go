@@ -145,9 +145,11 @@ func TestDefaultDefinitionClient_GetXRDs(t *testing.T) {
 					t.Errorf("\n%s\nGetXRDs(): expected error but got none", tt.reason)
 					return
 				}
+
 				if tt.errSubstring != "" && !strings.Contains(err.Error(), tt.errSubstring) {
 					t.Errorf("\n%s\nGetXRDs(): expected error containing %q, got %q", tt.reason, tt.errSubstring, err.Error())
 				}
+
 				return
 			}
 
@@ -343,9 +345,11 @@ func TestDefaultDefinitionClient_GetXRDForClaim(t *testing.T) {
 					t.Errorf("\n%s\nGetXRDForClaim(): expected error but got none", tt.reason)
 					return
 				}
+
 				if tt.errSubstring != "" && !strings.Contains(err.Error(), tt.errSubstring) {
 					t.Errorf("\n%s\nGetXRDForClaim(): expected error containing %q, got %q", tt.reason, tt.errSubstring, err.Error())
 				}
+
 				return
 			}
 
@@ -550,9 +554,11 @@ func TestDefaultDefinitionClient_GetXRDForXR(t *testing.T) {
 					t.Errorf("\n%s\nGetXRDForXR(): expected error but got none", tt.reason)
 					return
 				}
+
 				if tt.errSubstring != "" && !strings.Contains(err.Error(), tt.errSubstring) {
 					t.Errorf("\n%s\nGetXRDForXR(): expected error containing %q, got %q", tt.reason, tt.errSubstring, err.Error())
 				}
+
 				return
 			}
 

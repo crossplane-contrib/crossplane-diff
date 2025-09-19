@@ -54,7 +54,8 @@ func NewAppContext(config *rest.Config, logger logging.Logger) (*AppContext, err
 // Initialize initializes all clients.
 func (a *AppContext) Initialize(ctx context.Context, logger logging.Logger) error {
 	// Initialize Crossplane client
-	if err := a.XpClients.Initialize(ctx, logger); err != nil {
+	err := a.XpClients.Initialize(ctx, logger)
+	if err != nil {
 		return errors.Wrap(err, "cannot initialize Crossplane client")
 	}
 

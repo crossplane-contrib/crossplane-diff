@@ -62,6 +62,7 @@ func (c *DefaultDefinitionClient) Initialize(ctx context.Context) error {
 	if err != nil {
 		return errors.Wrap(err, "cannot get XRD GVKs")
 	}
+
 	c.gvks = gvks
 
 	// Load XRDs
@@ -71,6 +72,7 @@ func (c *DefaultDefinitionClient) Initialize(ctx context.Context) error {
 	}
 
 	c.logger.Debug("Definition client initialized", "xrdsCount", len(c.xrds))
+
 	return nil
 }
 
@@ -78,12 +80,15 @@ func (c *DefaultDefinitionClient) Initialize(ctx context.Context) error {
 func (c *DefaultDefinitionClient) GetXRDs(ctx context.Context) ([]*un.Unstructured, error) {
 	// Check if XRDs are already loaded
 	c.xrdsMutex.RLock()
+
 	if c.xrdsLoaded {
 		xrds := c.xrds
 		c.xrdsMutex.RUnlock()
 		c.logger.Debug("Using cached XRDs", "count", len(xrds))
+
 		return xrds, nil
 	}
+
 	c.xrdsMutex.RUnlock()
 
 	// Need to load XRDs
@@ -110,6 +115,7 @@ func (c *DefaultDefinitionClient) GetXRDs(ctx context.Context) ([]*un.Unstructur
 	c.xrdsLoaded = true
 
 	c.logger.Debug("Successfully retrieved and cached XRDs", "count", len(xrds))
+
 	return xrds, nil
 }
 
@@ -187,6 +193,7 @@ func (c *DefaultDefinitionClient) GetXRDForXR(ctx context.Context, gvk schema.Gr
 		}
 
 		versionMatches := false
+
 		for _, v := range versions {
 			version, ok := v.(map[string]interface{})
 			if !ok {
@@ -227,5 +234,6 @@ func (c *DefaultDefinitionClient) IsClaimResource(ctx context.Context, resource 
 	}
 
 	c.logger.Debug("Resource is a claim type", "gvk", gvk.String())
+
 	return true
 }
