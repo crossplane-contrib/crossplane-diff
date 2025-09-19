@@ -1,0 +1,19 @@
+apiVersion: ns.diff.example.org/v1alpha1
+kind: XTestDefaultResource
+metadata:
+  name: test-resource-with-overrides
+  namespace: default
+spec:
+  # Override the default region (default: us-east-1)
+  region: "us-west-2"
+  # Override the default size (default: small)
+  size: "xlarge"
+  # Partially override settings (default: {enabled: true, timeout: 30})
+  settings:
+    enabled: false  # Override default true
+    timeout: 60     # Override default 30
+    # retries should get default value of 3
+  # Override default tags (default: {environment: "development"})
+  tags:
+    environment: "production"  # Override default "development"
+    team: "platform"           # New field, no default to override

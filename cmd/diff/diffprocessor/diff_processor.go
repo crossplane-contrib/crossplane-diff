@@ -12,6 +12,7 @@ import (
 	k8 "github.com/crossplane-contrib/crossplane-diff/cmd/diff/client/kubernetes"
 	"github.com/crossplane-contrib/crossplane-diff/cmd/diff/renderer"
 	dt "github.com/crossplane-contrib/crossplane-diff/cmd/diff/renderer/types"
+	extv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	un "k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 
@@ -206,6 +207,13 @@ func (p *DefaultDiffProcessor) DiffSingleResource(ctx context.Context, res *un.U
 	if err != nil {
 		p.config.Logger.Debug("Failed to get functions", "resource", resourceID, "error", err)
 		return nil, errors.Wrap(err, "cannot get functions from pipeline")
+	}
+
+	// Apply XRD defaults before rendering
+	err = p.applyXRDDefaults(ctx, xr, resourceID)
+	if err != nil {
+		p.config.Logger.Debug("Failed to apply XRD defaults", "resource", resourceID, "error", err)
+		return nil, errors.Wrap(err, "cannot apply XRD defaults")
 	}
 
 	// Perform iterative rendering and requirements reconciliation
@@ -504,4 +512,78 @@ func (p *DefaultDiffProcessor) propagateNamespacesToManagedResources(_ context.C
 		// Update the composed resource with the modified content
 		composedResources[i].SetUnstructuredContent(resource.Object)
 	}
+}
+
+// applyXRDDefaults applies default values from the XRD schema to the XR.
+func (p *DefaultDiffProcessor) applyXRDDefaults(ctx context.Context, xr *cmp.Unstructured, resourceID string) error {
+	p.config.Logger.Debug("Applying XRD defaults", "resource", resourceID)
+
+	// Get the XR's GVK
+	gvk := xr.GroupVersionKind()
+
+	// Find the XRD that defines this XR
+	var (
+		xrd *un.Unstructured
+		err error
+	)
+
+	// Check if this is a claim or an XR
+
+	if p.defClient.IsClaimResource(ctx, xr.GetUnstructured()) {
+		xrd, err = p.defClient.GetXRDForClaim(ctx, gvk)
+	} else {
+		xrd, err = p.defClient.GetXRDForXR(ctx, gvk)
+	}
+
+	if err != nil {
+		p.config.Logger.Debug("No XRD found for resource", "resource", resourceID, "gvk", gvk.String(), "error", err)
+		// If we can't find the XRD, we can't apply defaults, but this shouldn't be a fatal error
+		return nil
+	}
+
+	// Get the CRDs from the schema validator (which already converted XRDs to CRDs)
+	if validator, ok := p.schemaValidator.(*DefaultSchemaValidator); ok {
+		crds := validator.GetCRDs()
+
+		// Find the CRD that corresponds to this XRD
+		var matchingCRD *extv1.CustomResourceDefinition
+
+		xrdName := xrd.GetName()
+
+		for _, crd := range crds {
+			// The CRD name should match the XRD name
+			if crd.Name == xrdName {
+				matchingCRD = crd
+				break
+			}
+		}
+
+		if matchingCRD == nil {
+			p.config.Logger.Debug("No matching CRD found for XRD", "resource", resourceID, "xrdName", xrdName)
+			return nil
+		}
+
+		// Apply defaults using the render.DefaultValues function
+		apiVersion := xr.GetAPIVersion()
+		xrContent := xr.UnstructuredContent()
+
+		p.config.Logger.Debug("Applying defaults to XR",
+			"resource", resourceID,
+			"apiVersion", apiVersion,
+			"crdName", matchingCRD.Name)
+
+		err = render.DefaultValues(xrContent, apiVersion, *matchingCRD)
+		if err != nil {
+			return errors.Wrapf(err, "cannot apply default values for XR %s", resourceID)
+		}
+
+		// Update the XR with the defaulted content
+		xr.SetUnstructuredContent(xrContent)
+
+		p.config.Logger.Debug("Successfully applied XRD defaults", "resource", resourceID)
+	} else {
+		p.config.Logger.Debug("Schema validator is not DefaultSchemaValidator, skipping defaults application", "resource", resourceID)
+	}
+
+	return nil
 }
