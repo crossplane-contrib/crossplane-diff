@@ -126,7 +126,7 @@ func TestResourceClient_GetResource(t *testing.T) {
 			reason: "Should return an error when the resource doesn't exist",
 			setup: func() (dynamic.Interface, TypeConverter) {
 				dc := fake.NewSimpleDynamicClient(scheme)
-				dc.Fake.PrependReactor("get", "*", func(kt.Action) (bool, runtime.Object, error) {
+				dc.PrependReactor("get", "*", func(kt.Action) (bool, runtime.Object, error) {
 					return true, nil, errors.New("resource not found")
 				})
 
@@ -209,6 +209,7 @@ func TestResourceClient_GetResource(t *testing.T) {
 					t.Errorf("\n%s\nGetResource(...): expected error containing %q, got %q",
 						tc.reason, tc.want.err.Error(), err.Error())
 				}
+
 				return
 			}
 
@@ -389,7 +390,7 @@ func TestResourceClient_GetResourcesByLabel(t *testing.T) {
 						{Group: "example.org", Version: "v1", Resource: "resources"}: "ResourceList",
 					})
 
-				dc.Fake.PrependReactor("list", "resources", func(kt.Action) (bool, runtime.Object, error) {
+				dc.PrependReactor("list", "resources", func(kt.Action) (bool, runtime.Object, error) {
 					return true, nil, errors.New("list error")
 				})
 
@@ -491,6 +492,7 @@ func TestResourceClient_GetResourcesByLabel(t *testing.T) {
 					t.Errorf("\n%s\nGetResourcesByLabel(...): expected error containing %q, got: %v",
 						tc.reason, tc.want.err.Error(), err)
 				}
+
 				return
 			}
 
@@ -641,7 +643,7 @@ func TestResourceClient_ListResources(t *testing.T) {
 						{Group: "example.org", Version: "v1", Resource: "resources"}: "ResourceList",
 					})
 
-				dc.Fake.PrependReactor("list", "resources", func(kt.Action) (bool, runtime.Object, error) {
+				dc.PrependReactor("list", "resources", func(kt.Action) (bool, runtime.Object, error) {
 					return true, nil, errors.New("list error")
 				})
 
@@ -720,6 +722,7 @@ func TestResourceClient_ListResources(t *testing.T) {
 					t.Errorf("\n%s\nListResources(...): expected error containing %q, got %q",
 						tc.reason, tc.want.err.Error(), err.Error())
 				}
+
 				return
 			}
 
@@ -916,10 +919,12 @@ func TestResourceClient_IsNamespacedResource(t *testing.T) {
 					t.Errorf("\n%s\nIsNamespacedResource(...): expected error but got none", tc.reason)
 					return
 				}
+
 				if tc.errMsg != "" && !strings.Contains(err.Error(), tc.errMsg) {
 					t.Errorf("\n%s\nIsNamespacedResource(...): expected error containing %q, got %q",
 						tc.reason, tc.errMsg, err.Error())
 				}
+
 				return
 			}
 

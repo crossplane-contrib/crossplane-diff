@@ -197,10 +197,12 @@ func TestDefaultSchemaValidator_ValidateResources(t *testing.T) {
 					t.Errorf("ValidateResources() expected error but got none")
 					return
 				}
+
 				if tt.expectedErrMsg != "" && !strings.Contains(err.Error(), tt.expectedErrMsg) {
 					t.Errorf("ValidateResources() error %q doesn't contain expected message %q",
 						err.Error(), tt.expectedErrMsg)
 				}
+
 				return
 			}
 
@@ -367,6 +369,7 @@ func TestDefaultSchemaValidator_LoadCRDs(t *testing.T) {
 				if err == nil {
 					t.Errorf("LoadCRDs() expected error but got none")
 				}
+
 				return
 			}
 
@@ -432,6 +435,7 @@ func createCRDWithStringField(baseCRD *extv1.CustomResourceDefinition) *extv1.Cu
 	crd.Spec.Versions[0].Schema.OpenAPIV3Schema.Properties["spec"].Properties["field"] = extv1.JSONSchemaProps{
 		Type: "string",
 	}
+
 	return crd
 }
 
@@ -441,12 +445,14 @@ func MustToUnstructured(obj interface{}) map[string]interface{} {
 	if err != nil {
 		panic(err)
 	}
+
 	return u
 }
 
 // Helper type to track GetXRDs calls.
 type xrdCountingClient struct {
 	tu.MockDefinitionClient
+
 	getXRDsCallCount int
 }
 
@@ -595,10 +601,12 @@ func TestDefaultSchemaValidator_ValidateScopeConstraints(t *testing.T) {
 					t.Errorf("ValidateScopeConstraints() expected error but got none")
 					return
 				}
+
 				if tt.expectedErrMsg != "" && !strings.Contains(err.Error(), tt.expectedErrMsg) {
 					t.Errorf("ValidateScopeConstraints() error %q doesn't contain expected message %q",
 						err.Error(), tt.expectedErrMsg)
 				}
+
 				return
 			}
 

@@ -50,6 +50,7 @@ func (c *DefaultEnvironmentClient) Initialize(ctx context.Context) error {
 	if err != nil {
 		return errors.Wrap(err, "cannot get EnvironmentConfig GVKs")
 	}
+
 	c.gvks = gvks
 
 	// List environment configs to populate the cache
@@ -64,6 +65,7 @@ func (c *DefaultEnvironmentClient) Initialize(ctx context.Context) error {
 	}
 
 	c.logger.Debug("Environment client initialized", "envConfigsCount", len(c.envConfigs))
+
 	return nil
 }
 
@@ -77,6 +79,7 @@ func (c *DefaultEnvironmentClient) GetEnvironmentConfigs(ctx context.Context) ([
 	}
 
 	c.logger.Debug("Environment configs retrieved", "count", len(envConfigs))
+
 	return envConfigs, nil
 }
 

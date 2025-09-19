@@ -64,6 +64,7 @@ func TestDefaultCompositionClient_FindMatchingComposition(t *testing.T) {
 			"environment": "production",
 			"tier":        "standard",
 		})
+
 		return comp
 	}()
 
@@ -74,6 +75,7 @@ func TestDefaultCompositionClient_FindMatchingComposition(t *testing.T) {
 		comp.SetLabels(map[string]string{
 			"environment": "production",
 		})
+
 		return comp
 	}()
 
@@ -84,6 +86,7 @@ func TestDefaultCompositionClient_FindMatchingComposition(t *testing.T) {
 		comp.SetLabels(map[string]string{
 			"environment": "production",
 		})
+
 		return comp
 	}()
 
@@ -757,6 +760,7 @@ func TestDefaultCompositionClient_FindMatchingComposition(t *testing.T) {
 					t.Errorf("\n%s\nFindMatchingComposition(...): expected error containing %q, got %q",
 						tt.reason, tt.want.err.Error(), err.Error())
 				}
+
 				return
 			}
 
@@ -851,6 +855,7 @@ func TestDefaultCompositionClient_GetComposition(t *testing.T) {
 				if err == nil {
 					t.Errorf("\n%s\nGetComposition(...): expected error but got none", tt.reason)
 				}
+
 				return
 			}
 
@@ -970,6 +975,7 @@ func TestDefaultCompositionClient_ListCompositions(t *testing.T) {
 					t.Errorf("\n%s\nListCompositions(...): expected error containing %q, got %q",
 						tt.reason, tt.errorContains, err.Error())
 				}
+
 				return
 			}
 
@@ -981,12 +987,14 @@ func TestDefaultCompositionClient_ListCompositions(t *testing.T) {
 			if len(comps) != len(tt.expectComps) {
 				t.Errorf("\n%s\nListCompositions(...): expected %d compositions, got %d",
 					tt.reason, len(tt.expectComps), len(comps))
+
 				return
 			}
 
 			// Check that we got the expected compositions
 			for i, expected := range tt.expectComps {
 				found := false
+
 				for _, actual := range comps {
 					if actual.GetName() == expected.GetName() {
 						found = true

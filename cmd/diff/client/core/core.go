@@ -38,10 +38,12 @@ func NewClients(config *rest.Config) (*Clients, error) {
 	if err != nil {
 		return nil, errors.Wrap(err, "cannot create dynamic client")
 	}
+
 	disClient, err := makeDiscoveryClient(config)
 	if err != nil {
 		return nil, errors.Wrap(err, "cannot create discovery client")
 	}
+
 	xrmClient, err := makeXrmClient(config)
 	if err != nil {
 		return nil, errors.Wrap(err, "cannot create xrm client")
@@ -74,6 +76,7 @@ func makeXrmClient(config *rest.Config) (*xrm.Client, error) {
 	if err != nil {
 		return nil, errors.Wrap(err, "cannot create resource tree client")
 	}
+
 	return xrmClient, nil
 }
 
@@ -89,7 +92,8 @@ func InitializeClients(ctx context.Context, logger logging.Logger, clients ...In
 		clientType := reflect.TypeOf(c).String()
 		logger.Debug("Initializing client", "type", clientType)
 
-		if err := c.Initialize(ctx); err != nil {
+		err := c.Initialize(ctx)
+		if err != nil {
 			logger.Debug("Failed to initialize client", "type", clientType, "error", err)
 			errs = append(errs, fmt.Errorf("failed to initialize %s: %w", clientType, err))
 		}
@@ -98,5 +102,6 @@ func InitializeClients(ctx context.Context, logger logging.Logger, clients ...In
 	if len(errs) > 0 {
 		return errors.Join(errs...)
 	}
+
 	return nil
 }

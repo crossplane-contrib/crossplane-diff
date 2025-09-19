@@ -263,8 +263,10 @@ func TestRequirementsProvider_ProvideRequirements(t *testing.T) {
 				if err == nil {
 					t.Errorf("ProvideRequirements() expected error but got none")
 				}
+
 				return
 			}
+
 			if err != nil {
 				t.Fatalf("ProvideRequirements() unexpected error: %v", err)
 			}

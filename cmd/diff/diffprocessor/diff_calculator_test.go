@@ -42,6 +42,7 @@ func TestDefaultDiffCalculator_CalculateDiff(t *testing.T) {
 		Build()
 
 	const ParentXRName = "parent-xr"
+
 	composedResource := tu.NewResource("example.org/v1", "ComposedResource", "cpd-resource").
 		WithSpecField("field", "old-value").
 		WithLabels(map[string]string{
@@ -356,8 +357,10 @@ func TestDefaultDiffCalculator_CalculateDiff(t *testing.T) {
 				if err == nil {
 					t.Errorf("CalculateDiff() expected error but got none")
 				}
+
 				return
 			}
+
 			if err != nil {
 				t.Fatalf("CalculateDiff() unexpected error: %v", err)
 			}
@@ -367,6 +370,7 @@ func TestDefaultDiffCalculator_CalculateDiff(t *testing.T) {
 				if diff != nil {
 					t.Errorf("CalculateDiff() expected nil diff but got: %v", diff)
 				}
+
 				return
 			}
 
@@ -676,8 +680,10 @@ func TestDefaultDiffCalculator_CalculateDiffs(t *testing.T) {
 				if err == nil {
 					t.Errorf("CalculateDiffs() expected error but got none")
 				}
+
 				return
 			}
+
 			if err != nil {
 				t.Fatalf("CalculateDiffs() unexpected error: %v", err)
 			}
@@ -850,6 +856,7 @@ func TestDefaultDiffCalculator_CalculateRemovedResourceDiffs(t *testing.T) {
 				if err == nil {
 					t.Errorf("CalculateRemovedResourceDiffs() expected error but got none")
 				}
+
 				return
 			}
 
@@ -868,18 +875,21 @@ func TestDefaultDiffCalculator_CalculateRemovedResourceDiffs(t *testing.T) {
 				for key := range diffs {
 					t.Logf("Found resource to remove: %s", key)
 				}
+
 				return
 			}
 
 			// Verify each expected removed resource is in the result
 			for _, name := range tt.expectedRemoved {
 				found := false
+
 				for key, diff := range diffs {
 					if strings.Contains(key, name) && diff.DiffType == dt.DiffTypeRemoved {
 						found = true
 						break
 					}
 				}
+
 				if !found {
 					t.Errorf("Expected to find %s marked for removal but did not", name)
 				}

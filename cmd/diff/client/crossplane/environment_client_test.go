@@ -111,9 +111,11 @@ func TestDefaultEnvironmentClient_GetEnvironmentConfigs(t *testing.T) {
 					t.Errorf("\n%s\nGetEnvironmentConfigs(): expected error but got none", tt.reason)
 					return
 				}
+
 				if tt.errSubstring != "" && !strings.Contains(err.Error(), tt.errSubstring) {
 					t.Errorf("\n%s\nGetEnvironmentConfigs(): expected error containing %q, got %q", tt.reason, tt.errSubstring, err.Error())
 				}
+
 				return
 			}
 
@@ -146,6 +148,7 @@ func TestDefaultEnvironmentClient_GetEnvironmentConfigs(t *testing.T) {
 				} else {
 					// Check data field for configs that exist in both lists
 					wantData, _, _ := un.NestedMap(wantCfg.Object, "spec", "data")
+
 					gotData, _, _ := un.NestedMap(gotConfigs[name].Object, "spec", "data")
 					if diff := cmp.Diff(wantData, gotData); diff != "" {
 						t.Errorf("\n%s\nGetEnvironmentConfigs(): config %s data mismatch -want, +got:\n%s", tt.reason, name, diff)
@@ -259,9 +262,11 @@ func TestDefaultEnvironmentClient_GetEnvironmentConfig(t *testing.T) {
 					t.Errorf("\n%s\nGetEnvironmentConfig(): expected error but got none", tt.reason)
 					return
 				}
+
 				if tt.errSubstring != "" && !strings.Contains(err.Error(), tt.errSubstring) {
 					t.Errorf("\n%s\nGetEnvironmentConfig(): expected error containing %q, got %q", tt.reason, tt.errSubstring, err.Error())
 				}
+
 				return
 			}
 
@@ -277,6 +282,7 @@ func TestDefaultEnvironmentClient_GetEnvironmentConfig(t *testing.T) {
 
 			// Check that the data is correct
 			wantData, _, _ := un.NestedMap(tt.want.Object, "spec", "data")
+
 			gotData, _, _ := un.NestedMap(got.Object, "spec", "data")
 			if diff := cmp.Diff(wantData, gotData); diff != "" {
 				t.Errorf("\n%s\nGetEnvironmentConfig(): config data mismatch -want, +got:\n%s", tt.reason, diff)

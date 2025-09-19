@@ -2,6 +2,7 @@
 package renderer
 
 import (
+	"context"
 	"fmt"
 	"strings"
 
@@ -69,6 +70,7 @@ func NewFormatter(compact bool) DiffFormatter {
 	if compact {
 		return &CompactDiffFormatter{}
 	}
+
 	return &FullDiffFormatter{}
 }
 
@@ -129,10 +131,13 @@ func (f *CompactDiffFormatter) Format(diffs []diffmatchpatch.Diff, options DiffO
 		}
 	}
 
-	var changeBlocks []changeBlock
-	var currentBlock *changeBlock
+	var (
+		changeBlocks []changeBlock
+		currentBlock *changeBlock
+	)
 
 	// Identify all the change blocks
+
 	for i, line := range allLines {
 		if line.Type != diffmatchpatch.DiffEqual {
 			// Start a new block if we don't have one
@@ -165,6 +170,7 @@ func (f *CompactDiffFormatter) Format(diffs []diffmatchpatch.Diff, options DiffO
 func (f *CompactDiffFormatter) stringBlocksWithContext(changes []changeBlock, lines []lineItem, opts DiffOptions) string {
 	// Now build compact output with context
 	var builder strings.Builder
+
 	contextLines := opts.ContextLines
 
 	// Keep track of the last line we printed
@@ -185,6 +191,7 @@ func (f *CompactDiffFormatter) stringBlocksWithContext(changes []changeBlock, li
 			if contextStart > prevContextEnd {
 				// Add separator
 				builder.WriteString(fmt.Sprintf("%s\n", opts.ChunkSeparator))
+
 				lastPrintedIdx = -1 // Reset to force printing of context lines
 			} else {
 				// Contexts overlap or are adjacent - adjust the start to avoid duplicate lines
@@ -197,6 +204,7 @@ func (f *CompactDiffFormatter) stringBlocksWithContext(changes []changeBlock, li
 			if i > lastPrintedIdx {
 				builder.WriteString(lines[i].Formatted)
 				builder.WriteString("\n")
+
 				lastPrintedIdx = i
 			}
 		}
@@ -205,6 +213,7 @@ func (f *CompactDiffFormatter) stringBlocksWithContext(changes []changeBlock, li
 		for i := block.StartIdx; i <= block.EndIdx; i++ {
 			builder.WriteString(lines[i].Formatted)
 			builder.WriteString("\n")
+
 			lastPrintedIdx = i
 		}
 
@@ -213,6 +222,7 @@ func (f *CompactDiffFormatter) stringBlocksWithContext(changes []changeBlock, li
 		for i := block.EndIdx + 1; i < contextEnd; i++ {
 			builder.WriteString(lines[i].Formatted)
 			builder.WriteString("\n")
+
 			lastPrintedIdx = i
 		}
 	}
@@ -234,7 +244,7 @@ func GetLineDiff(oldText, newText string) []diffmatchpatch.Diff {
 }
 
 // GenerateDiffWithOptions produces a structured diff between two unstructured objects.
-func GenerateDiffWithOptions(current, desired *un.Unstructured, logger logging.Logger, _ DiffOptions) (*t.ResourceDiff, error) {
+func GenerateDiffWithOptions(_ context.Context, current, desired *un.Unstructured, logger logging.Logger, _ DiffOptions) (*t.ResourceDiff, error) {
 	var diffType t.DiffType
 
 	// Determine resource identifiers upfront
@@ -251,12 +261,15 @@ func GenerateDiffWithOptions(current, desired *un.Unstructured, logger logging.L
 	switch {
 	case current == nil && desired != nil:
 		diffType = t.DiffTypeAdded
+
 		logger.Debug("Diff type: Resource is being added", "resource", resourceKey)
 	case current != nil && desired == nil:
 		diffType = t.DiffTypeRemoved
+
 		logger.Debug("Diff type: Resource is being removed", "resource", resourceKey)
 	case current != nil: // && desired != nil:
 		diffType = t.DiffTypeModified
+
 		logger.Debug("Diff type: Resource is being modified", "resource", resourceKey)
 	default:
 		logger.Debug("Error: both current and desired are nil")
@@ -289,11 +302,14 @@ func GenerateDiffWithOptions(current, desired *un.Unstructured, logger logging.L
 		if obj == nil {
 			return "", nil
 		}
+
 		clean := cleanupForDiff(obj.DeepCopy(), logger)
+
 		yaml, err := sigsyaml.Marshal(clean.Object)
 		if err != nil {
 			return "", err
 		}
+
 		return string(yaml), nil
 	}
 
@@ -317,6 +333,7 @@ func GenerateDiffWithOptions(current, desired *un.Unstructured, logger logging.L
 
 	// Get the line by line diff
 	logger.Debug("Computing line-by-line diff", "resource", resourceKey)
+
 	lineDiffs := GetLineDiff(currentStr, desiredStr)
 
 	if len(lineDiffs) == 0 {
@@ -327,9 +344,12 @@ func GenerateDiffWithOptions(current, desired *un.Unstructured, logger logging.L
 	logger.Debug("Diff calculation complete", "resource", resourceKey, "diff_chunks", len(lineDiffs))
 
 	// Extract resource kind and name
-	var name string
-	var gvk schema.GroupVersionKind
+	var (
+		name string
+		gvk  schema.GroupVersionKind
+	)
 	// For removed resources, use current's kind and name
+
 	if diffType == t.DiffTypeRemoved { // current != nil
 		name = current.GetName()
 		gvk = current.GroupVersionKind()
@@ -401,8 +421,10 @@ func processLines(diff diffmatchpatch.Diff, options DiffOptions) ([]string, bool
 
 // formatLine applies the appropriate prefix and color to a single line.
 func formatLine(line string, diffType diffmatchpatch.Operation, options DiffOptions) string {
-	var prefix string
-	var colorStart, colorEnd string
+	var (
+		prefix               string
+		colorStart, colorEnd string
+	)
 
 	switch diffType {
 	case diffmatchpatch.DiffInsert:
@@ -424,6 +446,7 @@ func formatLine(line string, diffType diffmatchpatch.Operation, options DiffOpti
 	if options.UseColors && colorStart != "" {
 		return fmt.Sprintf("%s%s%s%s", colorStart, prefix, line, colorEnd)
 	}
+
 	return fmt.Sprintf("%s%s", prefix, line)
 }
 
@@ -449,6 +472,7 @@ func cleanupForDiff(obj *un.Unstructured, logger logging.Logger) *un.Unstructure
 			// This is a display name we added for diffing purposes - remove it
 			// since we only added it for diffing but don't want it to show in the actual diff
 			delete(metadata, "name")
+
 			modifications = append(modifications, fmt.Sprintf("removed display name %q", name))
 
 			// Also normalize generateName by removing any "(generated)" suffix
@@ -478,6 +502,7 @@ func cleanupForDiff(obj *un.Unstructured, logger logging.Logger) *un.Unstructure
 
 		// Track which fields were actually removed for debugging
 		var removedFields []string
+
 		for _, field := range fieldsToRemove {
 			if _, exists := metadata[field]; exists {
 				delete(metadata, field)
@@ -499,6 +524,7 @@ func cleanupForDiff(obj *un.Unstructured, logger logging.Logger) *un.Unstructure
 	if found && spec != nil {
 		if _, exists := spec["resourceRefs"]; exists {
 			delete(spec, "resourceRefs")
+
 			modifications = append(modifications, "resourceRefs from spec")
 		}
 
@@ -509,6 +535,7 @@ func cleanupForDiff(obj *un.Unstructured, logger logging.Logger) *un.Unstructure
 	if found && crossplane != nil {
 		if _, exists := crossplane["resourceRefs"]; exists {
 			delete(crossplane, "resourceRefs")
+
 			modifications = append(modifications, "resourceRefs from spec.crossplane")
 		}
 
@@ -526,6 +553,7 @@ func cleanupForDiff(obj *un.Unstructured, logger logging.Logger) *un.Unstructure
 	// Remove status field as we're focused on spec changes
 	if _, exists := obj.Object["status"]; exists {
 		delete(obj.Object, "status")
+
 		modifications = append(modifications, "status field")
 	}
 

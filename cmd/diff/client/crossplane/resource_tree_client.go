@@ -60,6 +60,7 @@ func (c *DefaultResourceTreeClient) GetResourceTree(ctx context.Context, root *u
 			"resource_kind", root.GetKind(),
 			"resource_name", root.GetName(),
 			"error", err)
+
 		return nil, errors.Wrap(err, "failed to get resource tree")
 	}
 

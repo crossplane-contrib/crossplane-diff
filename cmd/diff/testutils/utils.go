@@ -37,6 +37,7 @@ func Green(input string) string {
 			coloredLines = append(coloredLines, "")
 			continue
 		}
+
 		coloredLines = append(coloredLines, ColorGreen+line+ColorReset)
 	}
 
@@ -55,6 +56,7 @@ func Red(input string) string {
 			coloredLines = append(coloredLines, "")
 			continue
 		}
+
 		coloredLines = append(coloredLines, ColorRed+line+ColorReset)
 	}
 
@@ -100,6 +102,7 @@ func TestLogger(t *testing.T, verbose bool) logging.Logger {
 	if verbose {
 		verbosity = 1
 	}
+
 	return logging.NewLogrLogger(testr.NewWithOptions(t, testr.Options{Verbosity: verbosity}))
 }
 
@@ -119,5 +122,6 @@ func CreateFakeDiscoveryClient(resources map[string][]metav1.APIResource) discov
 	}
 
 	fakeDiscovery.Resources = apiResourceLists
+
 	return fakeDiscovery
 }

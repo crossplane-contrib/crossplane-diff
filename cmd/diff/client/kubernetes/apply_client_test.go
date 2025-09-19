@@ -49,7 +49,7 @@ func TestApplyClient_DryRunApply(t *testing.T) {
 				// Create dynamic client that returns the object with a resource version
 				dynamicClient := fake.NewSimpleDynamicClient(scheme)
 				// Add reactor to handle apply operation
-				dynamicClient.Fake.PrependReactor("patch", "exampleresources", func(kt.Action) (bool, runtime.Object, error) {
+				dynamicClient.PrependReactor("patch", "exampleresources", func(kt.Action) (bool, runtime.Object, error) {
 					// For apply, we'd return the "server-modified" version
 					result := obj.DeepCopy()
 					result.SetResourceVersion("1000") // Server would set this
@@ -92,7 +92,7 @@ func TestApplyClient_DryRunApply(t *testing.T) {
 				// Create dynamic client that returns the object with a resource version
 				dynamicClient := fake.NewSimpleDynamicClient(scheme)
 				// Add reactor to handle apply operation
-				dynamicClient.Fake.PrependReactor("patch", "clusterresources", func(kt.Action) (bool, runtime.Object, error) {
+				dynamicClient.PrependReactor("patch", "clusterresources", func(kt.Action) (bool, runtime.Object, error) {
 					// For apply, we'd return the "server-modified" version
 					result := obj.DeepCopy()
 					result.SetResourceVersion("1000") // Server would set this
@@ -152,7 +152,7 @@ func TestApplyClient_DryRunApply(t *testing.T) {
 			setup: func() (dynamic.Interface, TypeConverter) {
 				dynamicClient := fake.NewSimpleDynamicClient(scheme)
 				// Add reactor to make apply fail
-				dynamicClient.Fake.PrependReactor("patch", "exampleresources", func(kt.Action) (bool, runtime.Object, error) {
+				dynamicClient.PrependReactor("patch", "exampleresources", func(kt.Action) (bool, runtime.Object, error) {
 					return true, nil, errors.New("apply failed")
 				})
 
@@ -203,6 +203,7 @@ func TestApplyClient_DryRunApply(t *testing.T) {
 					t.Errorf("\n%s\nDryRunApply(...): expected error containing %q, got %q",
 						tc.reason, tc.want.err.Error(), err.Error())
 				}
+
 				return
 			}
 

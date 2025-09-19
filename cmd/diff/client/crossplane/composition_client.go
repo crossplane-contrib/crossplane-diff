@@ -59,6 +59,7 @@ func (c *DefaultCompositionClient) Initialize(ctx context.Context) error {
 	if err != nil {
 		return errors.Wrap(err, "cannot get Composition GVKs")
 	}
+
 	c.gvks = gvks
 
 	// List compositions to populate the cache
@@ -73,6 +74,7 @@ func (c *DefaultCompositionClient) Initialize(ctx context.Context) error {
 	}
 
 	c.logger.Debug("Composition client initialized", "compositionsCount", len(c.compositions))
+
 	return nil
 }
 
@@ -101,16 +103,21 @@ func (c *DefaultCompositionClient) ListCompositions(ctx context.Context) ([]*api
 	compositions := make([]*apiextensionsv1.Composition, 0, len(unComps))
 	for _, obj := range unComps {
 		comp := &apiextensionsv1.Composition{}
-		if err := runtime.DefaultUnstructuredConverter.FromUnstructured(obj.Object, comp); err != nil {
+
+		err := runtime.DefaultUnstructuredConverter.FromUnstructured(obj.Object, comp)
+		if err != nil {
 			c.logger.Debug("Failed to convert composition from unstructured",
 				"name", obj.GetName(),
 				"error", err)
+
 			return nil, errors.Wrap(err, "cannot convert unstructured to Composition")
 		}
+
 		compositions = append(compositions, comp)
 	}
 
 	c.logger.Debug("Successfully retrieved compositions", "count", len(compositions))
+
 	return compositions, nil
 }
 
@@ -165,6 +172,7 @@ func (c *DefaultCompositionClient) FindMatchingComposition(ctx context.Context, 
 
 	// If it's a claim, we need to find compositions for the corresponding XR type
 	var targetGVK schema.GroupVersionKind
+
 	switch {
 	case xrd != nil:
 		targetGVK, err = c.getXRTypeFromXRD(xrd, resourceID)
@@ -176,6 +184,7 @@ func (c *DefaultCompositionClient) FindMatchingComposition(ctx context.Context, 
 		c.logger.Debug("Resource is not a claim type, looking for XRD for XR",
 			"resource", resourceID,
 			"targetGVK", targetGVK.String())
+
 		xrd, err = c.definitionClient.GetXRDForXR(ctx, gvk)
 		if err != nil {
 			return nil, errors.Wrapf(err, "resource %s requires its XR type to find a composition", resourceID)
@@ -210,6 +219,7 @@ func (c *DefaultCompositionClient) getXRTypeFromXRD(xrdForClaim *un.Unstructured
 
 	// Find the referenceable version - there should be exactly one
 	xrVersion := ""
+
 	versions, versionsFound, _ := un.NestedSlice(xrdForClaim.Object, "spec", "versions")
 	if versionsFound && len(versions) > 0 {
 		// Look for the one version that is marked referenceable
@@ -259,11 +269,13 @@ func (c *DefaultCompositionClient) labelsMatch(labels, selector map[string]strin
 			return false
 		}
 	}
+
 	return true
 }
 
 func makeCrossplaneRefPath(apiVersion string, path ...string) []string {
 	var specCrossplane []string
+
 	switch apiVersion {
 	case "apiextensions.crossplane.io/v1":
 		// Crossplane v1 keeps these under spec.x
@@ -272,6 +284,7 @@ func makeCrossplaneRefPath(apiVersion string, path ...string) []string {
 		// Crossplane v2 keeps these under spec.crossplane.x
 		specCrossplane = []string{"spec", "crossplane"}
 	}
+
 	return append(specCrossplane, path...)
 }
 
@@ -299,8 +312,10 @@ func (c *DefaultCompositionClient) findByDirectReference(ctx context.Context, xr
 		c.logger.Debug("Found composition by direct reference",
 			"resource", resourceID,
 			"composition", comp.GetName())
+
 		return comp, nil
 	}
+
 	return nil, nil // No direct reference found
 }
 
@@ -350,6 +365,7 @@ func (c *DefaultCompositionClient) findByLabelSelector(ctx context.Context, xrd,
 			c.logger.Debug("Found composition by label selector",
 				"resource", resourceID,
 				"composition", matchingCompositions[0].GetName())
+
 			return matchingCompositions[0], nil
 		default:
 			// Multiple matches - this is ambiguous and should fail
@@ -357,6 +373,7 @@ func (c *DefaultCompositionClient) findByLabelSelector(ctx context.Context, xrd,
 			for i, comp := range matchingCompositions {
 				names[i] = comp.GetName()
 			}
+
 			return nil, errors.New("ambiguous composition selection: multiple compositions match")
 		}
 	}
@@ -385,6 +402,7 @@ func (c *DefaultCompositionClient) findByTypeReference(ctx context.Context, _ *u
 	if len(compatibleCompositions) == 0 {
 		c.logger.Debug("No matching composition found",
 			"targetGVK", targetGVK.String())
+
 		return nil, errors.Errorf("no composition found for %s", targetGVK.String())
 	}
 
@@ -395,6 +413,7 @@ func (c *DefaultCompositionClient) findByTypeReference(ctx context.Context, _ *u
 		for i, comp := range compatibleCompositions {
 			names[i] = comp.GetName()
 		}
+
 		return nil, errors.Errorf("ambiguous composition selection: multiple compositions exist for %s", targetGVK.String())
 	}
 
@@ -402,5 +421,6 @@ func (c *DefaultCompositionClient) findByTypeReference(ctx context.Context, _ *u
 	c.logger.Debug("Found matching composition by type reference",
 		"resource_name", resourceID,
 		"composition_name", compatibleCompositions[0].GetName())
+
 	return compatibleCompositions[0], nil
 }

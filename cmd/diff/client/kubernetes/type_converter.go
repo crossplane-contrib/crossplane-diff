@@ -47,10 +47,12 @@ func NewTypeConverter(clients *core.Clients, logger logging.Logger) TypeConverte
 func (c *DefaultTypeConverter) GVKToGVR(ctx context.Context, gvk schema.GroupVersionKind) (schema.GroupVersionResource, error) {
 	// Use the cached mapping if we have it
 	c.gvkToGVRMutex.RLock()
+
 	if gvr, ok := c.gvkToGVRMap[gvk]; ok {
 		c.gvkToGVRMutex.RUnlock()
 		return gvr, nil
 	}
+
 	c.gvkToGVRMutex.RUnlock()
 
 	// Get the resource name

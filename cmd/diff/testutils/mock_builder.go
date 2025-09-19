@@ -61,6 +61,7 @@ func (b *MockResourceClientBuilder) WithFoundGVKs(gvks []schema.GroupVersionKind
 	b.mock.GetGVKsForGroupKindFn = func(_ context.Context, _, _ string) ([]schema.GroupVersionKind, error) {
 		return gvks, nil
 	}
+
 	return b
 }
 
@@ -69,6 +70,7 @@ func (b *MockResourceClientBuilder) WithoutFoundGVKs(err string) *MockResourceCl
 	b.mock.GetGVKsForGroupKindFn = func(_ context.Context, _, _ string) ([]schema.GroupVersionKind, error) {
 		return nil, errors.New(err)
 	}
+
 	return b
 }
 
@@ -95,6 +97,7 @@ func (b *MockResourceClientBuilder) WithResourcesExist(resources ...*un.Unstruct
 		if res, found := resourceMap[key]; found {
 			return res, nil
 		}
+
 		return nil, errors.Errorf("resource %q not found", name)
 	})
 }
@@ -146,6 +149,7 @@ func (b *MockResourceClientBuilder) WithResourcesFoundByLabel(resources []*un.Un
 		if labelValue, exists := selector.MatchLabels[label]; exists && labelValue == value {
 			return resources, nil
 		}
+
 		return []*un.Unstructured{}, nil
 	})
 }
@@ -236,6 +240,7 @@ func (b *MockSchemaClientBuilder) WithSuccessfulCRDFetch(crd *un.Unstructured) *
 		if crd.GetKind() != "CustomResourceDefinition" {
 			return nil, errors.Errorf("setup error: desired return from GetCRD isn't a CRD but a %s", crd.GetKind())
 		}
+
 		return crd, nil
 	})
 }
@@ -413,6 +418,7 @@ func (b *MockCompositionClientBuilder) WithSuccessfulInitialize() *MockCompositi
 	b.mock.InitializeFn = func(context.Context) error {
 		return nil
 	}
+
 	return b
 }
 
@@ -421,6 +427,7 @@ func (b *MockCompositionClientBuilder) WithFailedInitialize(errMsg string) *Mock
 	b.mock.InitializeFn = func(context.Context) error {
 		return errors.New(errMsg)
 	}
+
 	return b
 }
 
@@ -484,6 +491,7 @@ func (b *MockFunctionClientBuilder) WithSuccessfulInitialize() *MockFunctionClie
 	b.mock.InitializeFn = func(context.Context) error {
 		return nil
 	}
+
 	return b
 }
 
@@ -492,6 +500,7 @@ func (b *MockFunctionClientBuilder) WithFailedInitialize(errMsg string) *MockFun
 	b.mock.InitializeFn = func(context.Context) error {
 		return errors.New(errMsg)
 	}
+
 	return b
 }
 
@@ -549,6 +558,7 @@ func (b *MockEnvironmentClientBuilder) WithSuccessfulInitialize() *MockEnvironme
 	b.mock.InitializeFn = func(context.Context) error {
 		return nil
 	}
+
 	return b
 }
 
@@ -557,6 +567,7 @@ func (b *MockEnvironmentClientBuilder) WithFailedInitialize(errMsg string) *Mock
 	b.mock.InitializeFn = func(context.Context) error {
 		return errors.New(errMsg)
 	}
+
 	return b
 }
 
@@ -607,6 +618,7 @@ func (b *MockDefinitionClientBuilder) WithSuccessfulInitialize() *MockDefinition
 	b.mock.InitializeFn = func(context.Context) error {
 		return nil
 	}
+
 	return b
 }
 
@@ -615,6 +627,7 @@ func (b *MockDefinitionClientBuilder) WithFailedInitialize(errMsg string) *MockD
 	b.mock.InitializeFn = func(context.Context) error {
 		return errors.New(errMsg)
 	}
+
 	return b
 }
 
@@ -727,6 +740,7 @@ func (b *MockResourceTreeClientBuilder) WithSuccessfulInitialize() *MockResource
 	b.mock.InitializeFn = func(context.Context) error {
 		return nil
 	}
+
 	return b
 }
 
@@ -735,6 +749,7 @@ func (b *MockResourceTreeClientBuilder) WithFailedInitialize(errMsg string) *Moc
 	b.mock.InitializeFn = func(context.Context) error {
 		return errors.New(errMsg)
 	}
+
 	return b
 }
 
@@ -858,6 +873,7 @@ func (b *DiffProcessorBuilder) WithDiffOutput(output string) *DiffProcessorBuild
 		if stdout != nil {
 			_, _ = io.WriteString(stdout, output)
 		}
+
 		return nil
 	})
 }
@@ -907,6 +923,7 @@ func (b *ResourceBuilder) InNamespace(namespace string) *ResourceBuilder {
 	if namespace != "" {
 		b.resource.SetNamespace(namespace)
 	}
+
 	return b
 }
 
@@ -915,6 +932,7 @@ func (b *ResourceBuilder) WithGenerateName(generateName string) *ResourceBuilder
 	if generateName != "" {
 		b.resource.SetGenerateName(generateName)
 	}
+
 	return b
 }
 
@@ -923,6 +941,7 @@ func (b *ResourceBuilder) WithLabels(labels map[string]string) *ResourceBuilder 
 	if len(labels) > 0 {
 		b.resource.SetLabels(labels)
 	}
+
 	return b
 }
 
@@ -931,6 +950,7 @@ func (b *ResourceBuilder) WithAnnotations(annotations map[string]string) *Resour
 	if len(annotations) > 0 {
 		b.resource.SetAnnotations(annotations)
 	}
+
 	return b
 }
 
@@ -939,6 +959,7 @@ func (b *ResourceBuilder) WithSpec(spec map[string]interface{}) *ResourceBuilder
 	if len(spec) > 0 {
 		_ = un.SetNestedMap(b.resource.Object, spec, "spec")
 	}
+
 	return b
 }
 
@@ -948,8 +969,10 @@ func (b *ResourceBuilder) WithSpecField(name string, value interface{}) *Resourc
 	if spec == nil {
 		spec = map[string]interface{}{}
 	}
+
 	spec[name] = value
 	_ = un.SetNestedMap(b.resource.Object, spec, "spec")
+
 	return b
 }
 
@@ -958,6 +981,7 @@ func (b *ResourceBuilder) WithStatus(status map[string]interface{}) *ResourceBui
 	if len(status) > 0 {
 		_ = un.SetNestedMap(b.resource.Object, status, "status")
 	}
+
 	return b
 }
 
@@ -967,8 +991,10 @@ func (b *ResourceBuilder) WithStatusField(name string, value interface{}) *Resou
 	if status == nil {
 		status = map[string]interface{}{}
 	}
+
 	status[name] = value
 	_ = un.SetNestedMap(b.resource.Object, status, "status")
+
 	return b
 }
 
@@ -1001,6 +1027,7 @@ func (b *ResourceBuilder) WithCompositeOwner(owner string) *ResourceBuilder {
 	if labels == nil {
 		labels = map[string]string{}
 	}
+
 	labels["crossplane.io/composite"] = owner
 	b.resource.SetLabels(labels)
 
@@ -1013,6 +1040,7 @@ func (b *ResourceBuilder) WithCompositionResourceName(name string) *ResourceBuil
 	if annotations == nil {
 		annotations = map[string]string{}
 	}
+
 	annotations["crossplane.io/composition-resource-name"] = name
 	b.resource.SetAnnotations(annotations)
 
@@ -1028,6 +1056,7 @@ func (b *ResourceBuilder) Build() *un.Unstructured {
 func (b *ResourceBuilder) BuildUComposite() *cmp.Unstructured {
 	built := &cmp.Unstructured{}
 	built.SetUnstructuredContent(b.Build().UnstructuredContent())
+
 	return built
 }
 
@@ -1035,6 +1064,7 @@ func (b *ResourceBuilder) BuildUComposite() *cmp.Unstructured {
 func (b *ResourceBuilder) BuildUComposed() *cpd.Unstructured {
 	built := &cpd.Unstructured{}
 	built.SetUnstructuredContent(b.Build().UnstructuredContent())
+
 	return built
 }
 
@@ -1073,6 +1103,7 @@ func (b *CompositionBuilder) WithCompositeTypeRef(apiVersion, kind string) *Comp
 		APIVersion: apiVersion,
 		Kind:       kind,
 	}
+
 	return b
 }
 
@@ -1085,6 +1116,7 @@ func (b *CompositionBuilder) WithPipelineMode() *CompositionBuilder {
 // WithPipelineStep adds a pipeline step to the composition.
 func (b *CompositionBuilder) WithPipelineStep(step, functionName string, input map[string]interface{}) *CompositionBuilder {
 	var rawInput *runtime.RawExtension
+
 	if input != nil {
 		// Properly serialize the map to JSON bytes
 		jsonBytes, err := json.Marshal(input)
@@ -1100,6 +1132,7 @@ func (b *CompositionBuilder) WithPipelineStep(step, functionName string, input m
 		FunctionRef: xpextv1.FunctionReference{Name: functionName},
 		Input:       rawInput,
 	})
+
 	return b
 }
 

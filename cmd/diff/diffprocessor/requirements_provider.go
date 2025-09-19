@@ -61,6 +61,15 @@ func (p *RequirementsProvider) Initialize(ctx context.Context) error {
 	return nil
 }
 
+// ClearCache clears all cached resources.
+func (p *RequirementsProvider) ClearCache() {
+	p.cacheMutex.Lock()
+	defer p.cacheMutex.Unlock()
+
+	p.resourceCache = make(map[string]*un.Unstructured)
+	p.logger.Debug("Resource cache cleared")
+}
+
 // cacheResources adds resources to the cache.
 func (p *RequirementsProvider) cacheResources(resources []*un.Unstructured) {
 	p.cacheMutex.Lock()
@@ -78,6 +87,7 @@ func (p *RequirementsProvider) getCachedResource(apiVersion, kind, name string) 
 	defer p.cacheMutex.RUnlock()
 
 	key := fmt.Sprintf("%s/%s/%s", apiVersion, kind, name)
+
 	return p.resourceCache[key]
 }
 
@@ -108,10 +118,13 @@ func (p *RequirementsProvider) ProvideRequirements(ctx context.Context, requirem
 
 // processAllSteps processes requirements for all steps without copying protobuf structs.
 func (p *RequirementsProvider) processAllSteps(ctx context.Context, requirements map[string]v1.Requirements, xrNamespace string) ([]*un.Unstructured, []*un.Unstructured, error) {
-	var allResources []*un.Unstructured
-	var newlyFetchedResources []*un.Unstructured
+	var (
+		allResources          []*un.Unstructured
+		newlyFetchedResources []*un.Unstructured
+	)
 
 	// Process each step's requirements
+
 	for stepName := range requirements {
 		stepResources, stepNewlyFetched, err := p.processStepSelectors(
 			ctx,
@@ -143,15 +156,19 @@ func (p *RequirementsProvider) processStepSelectors(ctx context.Context, stepNam
 		"extraResources", len(extraResources),
 		"total", totalSelectors)
 
-	var stepResources []*un.Unstructured
-	var newlyFetched []*un.Unstructured
+	var (
+		stepResources []*un.Unstructured
+		newlyFetched  []*un.Unstructured
+	)
 
 	// Process Resources selectors
+
 	for resourceKey, selector := range resources {
 		res, fetched, err := p.processSelector(ctx, stepName, resourceKey, selector, xrNamespace)
 		if err != nil {
 			return nil, nil, err
 		}
+
 		stepResources = append(stepResources, res...)
 		newlyFetched = append(newlyFetched, fetched...)
 	}
@@ -162,6 +179,7 @@ func (p *RequirementsProvider) processStepSelectors(ctx context.Context, stepNam
 		if err != nil {
 			return nil, nil, err
 		}
+
 		stepResources = append(stepResources, res...)
 		newlyFetched = append(newlyFetched, fetched...)
 	}
@@ -175,6 +193,7 @@ func (p *RequirementsProvider) processSelector(ctx context.Context, stepName, re
 		p.logger.Debug("Nil selector in requirements",
 			"step", stepName,
 			"resourceKey", resourceKey)
+
 		return nil, nil, nil
 	}
 
@@ -212,6 +231,7 @@ func (p *RequirementsProvider) processSelector(ctx context.Context, stepName, re
 		p.logger.Debug("Unsupported selector type",
 			"step", stepName,
 			"resourceKey", resourceKey)
+
 		return nil, nil, nil
 	}
 }
@@ -233,15 +253,6 @@ func parseVersionFromAPIVersion(apiVersion string) string {
 	return version
 }
 
-// ClearCache clears all cached resources.
-func (p *RequirementsProvider) ClearCache() {
-	p.cacheMutex.Lock()
-	defer p.cacheMutex.Unlock()
-
-	p.resourceCache = make(map[string]*un.Unstructured)
-	p.logger.Debug("Resource cache cleared")
-}
-
 // resolveNamespace determines the appropriate namespace for a resource based on its scope and selector.
 func (p *RequirementsProvider) resolveNamespace(ctx context.Context, gvk schema.GroupVersionKind, selector *v1.ResourceSelector, xrNamespace, stepName string) (string, error) {
 	isNamespaced, err := p.client.IsNamespacedResource(ctx, gvk)
@@ -256,6 +267,7 @@ func (p *RequirementsProvider) resolveNamespace(ctx context.Context, gvk schema.
 	if selector.GetNamespace() != "" {
 		return selector.GetNamespace(), nil
 	}
+
 	return xrNamespace, nil
 }
 
@@ -269,6 +281,7 @@ func (p *RequirementsProvider) processNameSelector(ctx context.Context, selector
 			"apiVersion", selector.GetApiVersion(),
 			"kind", selector.GetKind(),
 			"name", name)
+
 		return []*un.Unstructured{cached}, nil
 	}
 
@@ -321,5 +334,6 @@ func parseAPIVersion(apiVersion string) (string, string) {
 		// Core case: version only (e.g., "v1")
 		version = apiVersion
 	}
+
 	return group, version
 }

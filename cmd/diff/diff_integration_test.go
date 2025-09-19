@@ -1084,7 +1084,8 @@ Summary: 2 modified`,
 
 			// Ensure we clean up at the end of the test
 			defer func() {
-				if err := testEnv.Stop(); err != nil {
+				err := testEnv.Stop()
+				if err != nil {
 					t.Logf("failed to stop test environment: %v", err)
 				}
 			}()
@@ -1111,26 +1112,31 @@ Summary: 2 modified`,
 
 			// Apply resources with owner references
 			if len(tt.setupFilesWithOwnerRefs) > 0 {
-				if err := applyHierarchicalOwnership(ctx, tu.TestLogger(t, false), k8sClient, xrdAPIVersion, tt.setupFilesWithOwnerRefs); err != nil {
+				err := applyHierarchicalOwnership(ctx, tu.TestLogger(t, false), k8sClient, xrdAPIVersion, tt.setupFilesWithOwnerRefs)
+				if err != nil {
 					t.Fatalf("failed to setup owner references: %v", err)
 				}
 			}
 
 			// Set up the test file
 			tempDir := t.TempDir()
+
 			var testFiles []string
 
 			// Handle any additional input files
 			for i, inputFile := range tt.inputFiles {
 				testFile := filepath.Join(tempDir, fmt.Sprintf("test_%d.yaml", i))
+
 				content, err := os.ReadFile(inputFile)
 				if err != nil {
 					t.Fatalf("failed to read input file: %v", err)
 				}
+
 				err = os.WriteFile(testFile, content, 0o644)
 				if err != nil {
 					t.Fatalf("failed to write test file: %v", err)
 				}
+
 				testFiles = append(testFiles, testFile)
 			}
 
@@ -1175,6 +1181,7 @@ Summary: 2 modified`,
 			if tt.expectedError && err == nil {
 				t.Fatal("expected error but got none")
 			}
+
 			if !tt.expectedError && err != nil {
 				t.Fatalf("expected no error but got: %v", err)
 			}
@@ -1202,11 +1209,13 @@ Summary: 2 modified`,
 				// Strings aren't equal, *including* ansi.  but we can compare ignoring ansi to determine what output to
 				// show for the failure.  if the difference is only in color codes, we'll show escaped ansi codes.
 				out := outputStr
+
 				expect := tt.expectedOutput
 				if tu.CompareIgnoringAnsi(strings.TrimSpace(outputStr), strings.TrimSpace(tt.expectedOutput)) {
 					out = strconv.QuoteToASCII(outputStr)
 					expect = strconv.QuoteToASCII(tt.expectedOutput)
 				}
+
 				t.Fatalf("expected output to contain:\n%s\n\nbut got:\n%s", expect, out)
 			}
 		})

@@ -52,6 +52,7 @@ func getFirstMatchingResource(ctx context.Context, client kubernetes.ResourceCli
 	}
 
 	var errs []error
+
 	for _, gvk := range gvks {
 		// try for this version
 		item, err := client.GetResource(ctx, gvk, namespace, name)
@@ -73,11 +74,13 @@ func getFirstMatchingResource(ctx context.Context, client kubernetes.ResourceCli
 func listMatchingResources(ctx context.Context, client kubernetes.ResourceClient, gvks []schema.GroupVersionKind, namespace string) ([]*un.Unstructured, error) {
 	// List all matching resources for the given GVKs
 	var envConfigs []*un.Unstructured
+
 	for _, gvk := range gvks {
 		ecs, err := client.ListResources(ctx, gvk, namespace)
 		if err != nil {
 			return nil, errors.Wrapf(err, "cannot list items for GVK %s", gvk.String())
 		}
+
 		envConfigs = append(envConfigs, ecs...)
 	}
 

@@ -97,16 +97,19 @@ func (p *DefaultDiffProcessor) Initialize(ctx context.Context) error {
 	p.config.Logger.Debug("Initializing diff processor")
 
 	// Load CRDs (handled by the schema validator)
-	if err := p.initializeSchemaValidator(ctx); err != nil {
+	err := p.initializeSchemaValidator(ctx)
+	if err != nil {
 		return err
 	}
 
 	// Init requirements provider
-	if err := p.requirementsProvider.Initialize(ctx); err != nil {
+	err = p.requirementsProvider.Initialize(ctx)
+	if err != nil {
 		return err
 	}
 
 	p.config.Logger.Debug("Diff processor initialized")
+
 	return nil
 }
 
@@ -114,12 +117,15 @@ func (p *DefaultDiffProcessor) Initialize(ctx context.Context) error {
 func (p *DefaultDiffProcessor) initializeSchemaValidator(ctx context.Context) error {
 	// If the schema validator implements our interface with LoadCRDs, use it
 	if validator, ok := p.schemaValidator.(*DefaultSchemaValidator); ok {
-		if err := validator.LoadCRDs(ctx); err != nil {
+		err := validator.LoadCRDs(ctx)
+		if err != nil {
 			return errors.Wrap(err, "cannot load CRDs")
 		}
+
 		p.config.Logger.Debug("Schema validator initialized with CRDs",
 			"crdCount", len(validator.GetCRDs()))
 	}
+
 	return nil
 }
 
@@ -134,6 +140,7 @@ func (p *DefaultDiffProcessor) PerformDiff(ctx context.Context, stdout io.Writer
 
 	// Collect all diffs across all resources
 	allDiffs := make(map[string]*dt.ResourceDiff)
+
 	var errs []error
 
 	for _, res := range resources {
@@ -154,7 +161,8 @@ func (p *DefaultDiffProcessor) PerformDiff(ctx context.Context, stdout io.Writer
 	// Only render diffs if we found some
 	if len(allDiffs) > 0 {
 		// Render all diffs in a single pass
-		if err := p.diffRenderer.RenderDiffs(stdout, allDiffs); err != nil {
+		err := p.diffRenderer.RenderDiffs(stdout, allDiffs)
+		if err != nil {
 			p.config.Logger.Debug("Failed to render diffs", "error", err)
 			errs = append(errs, errors.Wrap(err, "failed to render diffs"))
 		}
@@ -239,6 +247,7 @@ func (p *DefaultDiffProcessor) DiffSingleResource(ctx context.Context, res *un.U
 
 	// Calculate all diffs
 	p.config.Logger.Debug("Calculating diffs", "resource", resourceID)
+
 	diffs, err := p.diffCalculator.CalculateDiffs(ctx, xr, desired)
 	if err != nil {
 		// We don't fail completely if some diffs couldn't be calculated
@@ -257,7 +266,9 @@ func (p *DefaultDiffProcessor) DiffSingleResource(ctx context.Context, res *un.U
 func (p *DefaultDiffProcessor) SanitizeXR(res *un.Unstructured, resourceID string) (*cmp.Unstructured, bool, error) {
 	// Convert the unstructured resource to a composite unstructured for rendering
 	xr := cmp.New()
-	if err := runtime.DefaultUnstructuredConverter.FromUnstructured(res.UnstructuredContent(), xr); err != nil {
+
+	err := runtime.DefaultUnstructuredConverter.FromUnstructured(res.UnstructuredContent(), xr)
+	if err != nil {
 		p.config.Logger.Debug("Failed to convert resource", "resource", resourceID, "error", err)
 		return nil, true, errors.Wrap(err, "cannot convert XR to composite unstructured")
 	}
@@ -275,6 +286,7 @@ func (p *DefaultDiffProcessor) SanitizeXR(res *un.Unstructured, resourceID strin
 		xrCopy.SetName(displayName)
 		xr = xrCopy
 	}
+
 	return xr, false, nil
 }
 
@@ -282,7 +294,9 @@ func (p *DefaultDiffProcessor) SanitizeXR(res *un.Unstructured, resourceID strin
 func mergeUnstructured(dest *un.Unstructured, src *un.Unstructured) (*un.Unstructured, error) {
 	// Start with a deep copy of the rendered resource
 	result := dest.DeepCopy()
-	if err := mergo.Merge(&result.Object, src.Object, mergo.WithOverride); err != nil {
+
+	err := mergo.Merge(&result.Object, src.Object, mergo.WithOverride)
+	if err != nil {
 		return nil, errors.Wrap(err, "cannot merge unstructured objects")
 	}
 
@@ -314,8 +328,11 @@ func (p *DefaultDiffProcessor) RenderWithRequirements(
 
 	// Set up for iterative discovery
 	const maxIterations = 10 // Prevent infinite loops
-	var lastOutput render.Outputs
-	var lastRenderErr error
+
+	var (
+		lastOutput    render.Outputs
+		lastRenderErr error
+	)
 
 	// Track the number of iterations for logging
 	iteration := 0
@@ -357,6 +374,7 @@ func (p *DefaultDiffProcessor) RenderWithRequirements(
 				"resource", resourceID,
 				"iteration", iteration,
 				"error", renderErr)
+
 			return render.Outputs{}, errors.Wrap(renderErr, "cannot render resources")
 		}
 
@@ -373,6 +391,7 @@ func (p *DefaultDiffProcessor) RenderWithRequirements(
 		if len(output.Requirements) == 0 {
 			p.config.Logger.Debug("No more requirements found, discovery complete",
 				"iteration", iteration)
+
 			break
 		}
 
@@ -390,11 +409,13 @@ func (p *DefaultDiffProcessor) RenderWithRequirements(
 		if len(additionalResources) == 0 {
 			p.config.Logger.Debug("No new resources found from requirements, discovery complete",
 				"iteration", iteration)
+
 			break
 		}
 
 		// Check if we've already discovered these resources
 		newResourcesFound := false
+
 		for _, res := range additionalResources {
 			resourceKey := fmt.Sprintf("%s/%s", res.GetAPIVersion(), res.GetName())
 			if !discoveredResourcesMap[resourceKey] {
@@ -413,6 +434,7 @@ func (p *DefaultDiffProcessor) RenderWithRequirements(
 		if !newResourcesFound {
 			p.config.Logger.Debug("No new unique resources found, discovery complete",
 				"iteration", iteration)
+
 			break
 		}
 
