@@ -8,7 +8,6 @@ import (
 	tu "github.com/crossplane-contrib/crossplane-diff/cmd/diff/testutils"
 	"github.com/google/go-cmp/cmp"
 	extv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	un "k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -17,6 +16,12 @@ import (
 	kt "k8s.io/client-go/testing"
 
 	"github.com/crossplane/crossplane-runtime/v2/pkg/errors"
+)
+
+const (
+	testXResourceKind   = "XResource"
+	testXResourcePlural = "xresources"
+	testExampleOrgGroup = "example.org"
 )
 
 var _ SchemaClient = (*tu.MockSchemaClient)(nil)
@@ -63,16 +68,16 @@ func TestSchemaClient_IsCRDRequired(t *testing.T) {
 				// For custom resources, our converter should return a successful resource name
 				return tu.NewMockTypeConverter().
 					WithGetResourceNameForGVK(func(_ context.Context, gvk schema.GroupVersionKind) (string, error) {
-						if gvk.Group == "example.org" && gvk.Version == "v1" && gvk.Kind == "XResource" {
-							return "xresources", nil
+						if gvk.Group == testExampleOrgGroup && gvk.Version == "v1" && gvk.Kind == testXResourceKind {
+							return testXResourcePlural, nil
 						}
 						return "", errors.New("unexpected GVK in test")
 					}).Build()
 			},
 			gvk: schema.GroupVersionKind{
-				Group:   "example.org",
+				Group:   testExampleOrgGroup,
 				Version: "v1",
-				Kind:    "XResource",
+				Kind:    testXResourceKind,
 			},
 			want: true, // Custom resource should require a CRD
 		},
@@ -124,9 +129,9 @@ func TestSchemaClient_IsCRDRequired(t *testing.T) {
 					}).Build()
 			},
 			gvk: schema.GroupVersionKind{
-				Group:   "example.org",
+				Group:   testExampleOrgGroup,
 				Version: "v1",
-				Kind:    "XResource",
+				Kind:    testXResourceKind,
 			},
 			want: true, // Default to requiring CRD on conversion failure
 		},
@@ -166,31 +171,10 @@ func TestSchemaClient_GetCRD(t *testing.T) {
 	}
 
 	// Create a test CRD as typed object
-	testCRD := &extv1.CustomResourceDefinition{
-		TypeMeta: metav1.TypeMeta{
-			Kind:       "CustomResourceDefinition",
-			APIVersion: "apiextensions.k8s.io/v1",
-		},
-		ObjectMeta: metav1.ObjectMeta{
-			Name: "xresources.example.org",
-		},
-		Spec: extv1.CustomResourceDefinitionSpec{
-			Group: "example.org",
-			Names: extv1.CustomResourceDefinitionNames{
-				Kind:     "XResource",
-				Plural:   "xresources",
-				Singular: "xresource",
-			},
-			Scope: extv1.NamespaceScoped,
-			Versions: []extv1.CustomResourceDefinitionVersion{
-				{
-					Name:    "v1",
-					Served:  true,
-					Storage: true,
-				},
-			},
-		},
-	}
+	testCRD := tu.NewCRD(testXResourcePlural+"."+testExampleOrgGroup, testExampleOrgGroup, testXResourceKind).
+		WithPlural(testXResourcePlural).
+		WithSingular("xresource").
+		Build()
 
 	// Create the same CRD as unstructured for the mock dynamic client
 	testCRDUnstructured := &un.Unstructured{
@@ -198,13 +182,13 @@ func TestSchemaClient_GetCRD(t *testing.T) {
 			"apiVersion": "apiextensions.k8s.io/v1",
 			"kind":       "CustomResourceDefinition",
 			"metadata": map[string]interface{}{
-				"name": "xresources.example.org",
+				"name": testXResourcePlural + ".example.org",
 			},
 			"spec": map[string]interface{}{
-				"group": "example.org",
+				"group": testExampleOrgGroup,
 				"names": map[string]interface{}{
-					"kind":     "XResource",
-					"plural":   "xresources",
+					"kind":     testXResourceKind,
+					"plural":   testXResourcePlural,
 					"singular": "xresource",
 				},
 				"scope": "Namespaced",
@@ -232,7 +216,7 @@ func TestSchemaClient_GetCRD(t *testing.T) {
 				dynamicClient := fake.NewSimpleDynamicClient(scheme)
 				dynamicClient.PrependReactor("get", "customresourcedefinitions", func(action kt.Action) (bool, runtime.Object, error) {
 					getAction := action.(kt.GetAction)
-					if getAction.GetName() == "xresources.example.org" {
+					if getAction.GetName() == testXResourcePlural+".example.org" {
 						return true, testCRDUnstructured, nil
 					}
 					return false, nil, nil
@@ -241,8 +225,8 @@ func TestSchemaClient_GetCRD(t *testing.T) {
 				// Create mock type converter that returns "xresources" for the given GVK
 				mockConverter := tu.NewMockTypeConverter().
 					WithGetResourceNameForGVK(func(_ context.Context, gvk schema.GroupVersionKind) (string, error) {
-						if gvk.Group == "example.org" && gvk.Version == "v1" && gvk.Kind == "XResource" {
-							return "xresources", nil
+						if gvk.Group == testExampleOrgGroup && gvk.Version == "v1" && gvk.Kind == testXResourceKind {
+							return testXResourcePlural, nil
 						}
 						return "", errors.New("unexpected GVK in test")
 					}).Build()
@@ -252,9 +236,9 @@ func TestSchemaClient_GetCRD(t *testing.T) {
 			args: args{
 				ctx: t.Context(),
 				gvk: schema.GroupVersionKind{
-					Group:   "example.org",
+					Group:   testExampleOrgGroup,
 					Version: "v1",
-					Kind:    "XResource",
+					Kind:    testXResourceKind,
 				},
 			},
 			want: want{
@@ -273,7 +257,7 @@ func TestSchemaClient_GetCRD(t *testing.T) {
 				// Create mock type converter that returns "nonexistentresources"
 				mockConverter := tu.NewMockTypeConverter().
 					WithGetResourceNameForGVK(func(_ context.Context, gvk schema.GroupVersionKind) (string, error) {
-						if gvk.Group == "example.org" && gvk.Version == "v1" && gvk.Kind == "NonexistentResource" {
+						if gvk.Group == testExampleOrgGroup && gvk.Version == "v1" && gvk.Kind == "NonexistentResource" {
 							return "nonexistentresources", nil
 						}
 						return "", errors.New("unexpected GVK in test")
@@ -284,7 +268,7 @@ func TestSchemaClient_GetCRD(t *testing.T) {
 			args: args{
 				ctx: t.Context(),
 				gvk: schema.GroupVersionKind{
-					Group:   "example.org",
+					Group:   testExampleOrgGroup,
 					Version: "v1",
 					Kind:    "NonexistentResource",
 				},
@@ -310,9 +294,9 @@ func TestSchemaClient_GetCRD(t *testing.T) {
 			args: args{
 				ctx: t.Context(),
 				gvk: schema.GroupVersionKind{
-					Group:   "example.org",
+					Group:   testExampleOrgGroup,
 					Version: "v1",
-					Kind:    "XResource",
+					Kind:    testXResourceKind,
 				},
 			},
 			want: want{
@@ -365,6 +349,7 @@ func TestSchemaClient_GetCRD(t *testing.T) {
 
 func TestSchemaClient_LoadCRDsFromXRDs(t *testing.T) {
 	ctx := t.Context()
+	scheme := runtime.NewScheme()
 
 	// Create sample XRD with proper schema
 	xrd := &un.Unstructured{
@@ -372,13 +357,13 @@ func TestSchemaClient_LoadCRDsFromXRDs(t *testing.T) {
 			"apiVersion": "apiextensions.crossplane.io/v1",
 			"kind":       "CompositeResourceDefinition",
 			"metadata": map[string]interface{}{
-				"name": "xresources.example.org",
+				"name": testXResourcePlural + ".example.org",
 			},
 			"spec": map[string]interface{}{
-				"group": "example.org",
+				"group": testExampleOrgGroup,
 				"names": map[string]interface{}{
-					"kind":     "XResource",
-					"plural":   "xresources",
+					"kind":     testXResourceKind,
+					"plural":   testXResourcePlural,
 					"singular": "xresource",
 				},
 				"versions": []interface{}{
@@ -409,39 +394,133 @@ func TestSchemaClient_LoadCRDsFromXRDs(t *testing.T) {
 		},
 	}
 
+	// Create corresponding CRD that should exist in cluster
+	correspondingCRD := &un.Unstructured{
+		Object: map[string]interface{}{
+			"apiVersion": "apiextensions.k8s.io/v1",
+			"kind":       "CustomResourceDefinition",
+			"metadata": map[string]interface{}{
+				"name": testXResourcePlural + ".example.org",
+			},
+			"spec": map[string]interface{}{
+				"group": testExampleOrgGroup,
+				"names": map[string]interface{}{
+					"kind":     testXResourceKind,
+					"plural":   testXResourcePlural,
+					"singular": "xresource",
+				},
+			},
+		},
+	}
+
 	tests := map[string]struct {
-		reason    string
-		xrds      []*un.Unstructured
-		expectErr bool
-		errMsg    string
+		reason       string
+		setupClient  func() *DefaultSchemaClient
+		xrds         []*un.Unstructured
+		expectErr    bool
+		errMsg       string
+		expectedCRDs int
 	}{
-		"SuccessfulConversion": {
-			reason:    "Should successfully convert XRDs to CRDs and cache them",
-			xrds:      []*un.Unstructured{xrd},
-			expectErr: false,
+		"SuccessfulFetchFromCluster": {
+			reason: "Should successfully fetch CRDs from cluster for given XRDs",
+			setupClient: func() *DefaultSchemaClient {
+				// Setup dynamic client to return the corresponding CRD
+				dynamicClient := fake.NewSimpleDynamicClient(scheme)
+				dynamicClient.PrependReactor("get", "customresourcedefinitions", func(action kt.Action) (bool, runtime.Object, error) {
+					getAction := action.(kt.GetAction)
+					if getAction.GetName() == testXResourcePlural+".example.org" {
+						return true, correspondingCRD, nil
+					}
+					return false, nil, nil
+				})
+
+				mockConverter := tu.NewMockTypeConverter().
+					WithGetResourceNameForGVK(func(_ context.Context, gvk schema.GroupVersionKind) (string, error) {
+						if gvk.Group == testExampleOrgGroup && gvk.Version == "v1" && gvk.Kind == testXResourceKind {
+							return testXResourcePlural, nil
+						}
+						return "", errors.New("unexpected GVK in test")
+					}).Build()
+
+				return &DefaultSchemaClient{
+					dynamicClient:   dynamicClient,
+					typeConverter:   mockConverter,
+					logger:          tu.TestLogger(t, false),
+					resourceTypeMap: make(map[schema.GroupVersionKind]bool),
+					crds:            []*extv1.CustomResourceDefinition{},
+					crdByName:       make(map[string]*extv1.CustomResourceDefinition),
+				}
+			},
+			xrds:         []*un.Unstructured{xrd},
+			expectErr:    false,
+			expectedCRDs: 1,
 		},
 		"EmptyXRDs": {
-			reason:    "Should handle empty XRD list gracefully",
-			xrds:      []*un.Unstructured{},
-			expectErr: false,
+			reason: "Should handle empty XRD list gracefully",
+			setupClient: func() *DefaultSchemaClient {
+				return &DefaultSchemaClient{
+					logger:          tu.TestLogger(t, false),
+					resourceTypeMap: make(map[schema.GroupVersionKind]bool),
+					crds:            []*extv1.CustomResourceDefinition{},
+					crdByName:       make(map[string]*extv1.CustomResourceDefinition),
+				}
+			},
+			xrds:         []*un.Unstructured{},
+			expectErr:    false,
+			expectedCRDs: 0,
 		},
 		"NilXRDs": {
-			reason:    "Should handle nil XRD list gracefully",
-			xrds:      nil,
-			expectErr: false,
+			reason: "Should handle nil XRD list gracefully",
+			setupClient: func() *DefaultSchemaClient {
+				return &DefaultSchemaClient{
+					logger:          tu.TestLogger(t, false),
+					resourceTypeMap: make(map[schema.GroupVersionKind]bool),
+					crds:            []*extv1.CustomResourceDefinition{},
+					crdByName:       make(map[string]*extv1.CustomResourceDefinition),
+				}
+			},
+			xrds:         nil,
+			expectErr:    false,
+			expectedCRDs: 0,
+		},
+		"CRDNotFoundInCluster": {
+			reason: "Should fail fast when required CRD is not found in cluster",
+			setupClient: func() *DefaultSchemaClient {
+				// Setup dynamic client to return error for CRD requests
+				dynamicClient := fake.NewSimpleDynamicClient(scheme)
+				dynamicClient.PrependReactor("get", "customresourcedefinitions", func(kt.Action) (bool, runtime.Object, error) {
+					return true, nil, errors.New("CRD not found")
+				})
+
+				mockConverter := tu.NewMockTypeConverter().
+					WithGetResourceNameForGVK(func(_ context.Context, gvk schema.GroupVersionKind) (string, error) {
+						if gvk.Group == testExampleOrgGroup && gvk.Version == "v1" && gvk.Kind == testXResourceKind {
+							return testXResourcePlural, nil
+						}
+						return "", errors.New("unexpected GVK in test")
+					}).Build()
+
+				return &DefaultSchemaClient{
+					dynamicClient:   dynamicClient,
+					typeConverter:   mockConverter,
+					logger:          tu.TestLogger(t, false),
+					resourceTypeMap: make(map[schema.GroupVersionKind]bool),
+					crds:            []*extv1.CustomResourceDefinition{},
+					crdByName:       make(map[string]*extv1.CustomResourceDefinition),
+				}
+			},
+			xrds:         []*un.Unstructured{xrd},
+			expectErr:    true,
+			errMsg:       "cannot fetch required CRD",
+			expectedCRDs: 0,
 		},
 	}
 
 	for name, tc := range tests {
 		t.Run(name, func(t *testing.T) {
-			c := &DefaultSchemaClient{
-				logger:          tu.TestLogger(t, false),
-				resourceTypeMap: make(map[schema.GroupVersionKind]bool),
-				crds:            []*extv1.CustomResourceDefinition{},
-				crdByName:       make(map[string]*extv1.CustomResourceDefinition),
-			}
+			client := tc.setupClient()
 
-			err := c.LoadCRDsFromXRDs(ctx, tc.xrds)
+			err := client.LoadCRDsFromXRDs(ctx, tc.xrds)
 
 			if tc.expectErr {
 				if err == nil {
@@ -462,12 +541,11 @@ func TestSchemaClient_LoadCRDsFromXRDs(t *testing.T) {
 				return
 			}
 
-			// Verify CRDs were loaded (for non-empty case)
-			if len(tc.xrds) > 0 {
-				crds := c.GetAllCRDs()
-				if len(crds) == 0 {
-					t.Errorf("\n%s\nLoadCRDsFromXRDs(): expected CRDs to be loaded but got none", tc.reason)
-				}
+			// Verify expected number of CRDs were cached
+			crds := client.GetAllCRDs()
+			if len(crds) != tc.expectedCRDs {
+				t.Errorf("\n%s\nLoadCRDsFromXRDs(): expected %d CRDs to be cached, got %d",
+					tc.reason, tc.expectedCRDs, len(crds))
 			}
 		})
 	}
@@ -475,14 +553,8 @@ func TestSchemaClient_LoadCRDsFromXRDs(t *testing.T) {
 
 func TestSchemaClient_GetAllCRDs(t *testing.T) {
 	// Create test CRDs
-	crd1 := &extv1.CustomResourceDefinition{
-		ObjectMeta: metav1.ObjectMeta{Name: "crd1.example.org"},
-		Spec:       extv1.CustomResourceDefinitionSpec{Group: "example.org"},
-	}
-	crd2 := &extv1.CustomResourceDefinition{
-		ObjectMeta: metav1.ObjectMeta{Name: "crd2.example.org"},
-		Spec:       extv1.CustomResourceDefinitionSpec{Group: "example.org"},
-	}
+	crd1 := tu.NewCRD("crd1."+testExampleOrgGroup, testExampleOrgGroup, "TestKind1").Build()
+	crd2 := tu.NewCRD("crd2."+testExampleOrgGroup, testExampleOrgGroup, "TestKind2").Build()
 
 	tests := map[string]struct {
 		reason    string
@@ -535,95 +607,343 @@ func TestSchemaClient_GetAllCRDs(t *testing.T) {
 	}
 }
 
+func TestExtractGVKsFromXRD(t *testing.T) {
+	tests := map[string]struct {
+		reason       string
+		xrd          *un.Unstructured
+		expectedGVKs []schema.GroupVersionKind
+		expectErr    bool
+		errMsg       string
+	}{
+		"ValidV1XRD": {
+			reason: "Should extract GVKs from a valid v1 XRD with multiple versions",
+			xrd: &un.Unstructured{
+				Object: map[string]interface{}{
+					"apiVersion": "apiextensions.crossplane.io/v1",
+					"kind":       "CompositeResourceDefinition",
+					"metadata": map[string]interface{}{
+						"name": testXResourcePlural + ".example.org",
+					},
+					"spec": map[string]interface{}{
+						"group": testExampleOrgGroup,
+						"names": map[string]interface{}{
+							"kind":     testXResourceKind,
+							"plural":   testXResourcePlural,
+							"singular": "xresource",
+						},
+						"versions": []interface{}{
+							map[string]interface{}{
+								"name":   "v1alpha1",
+								"served": true,
+							},
+							map[string]interface{}{
+								"name":    "v1",
+								"served":  true,
+								"storage": true,
+							},
+						},
+					},
+				},
+			},
+			expectedGVKs: []schema.GroupVersionKind{
+				{Group: testExampleOrgGroup, Version: "v1alpha1", Kind: testXResourceKind},
+				{Group: testExampleOrgGroup, Version: "v1", Kind: testXResourceKind},
+			},
+			expectErr: false,
+		},
+		"ValidV2XRD": {
+			reason: "Should extract GVKs from a valid v2 XRD with multiple versions",
+			xrd: &un.Unstructured{
+				Object: map[string]interface{}{
+					"apiVersion": "apiextensions.crossplane.io/v2",
+					"kind":       "CompositeResourceDefinition",
+					"metadata": map[string]interface{}{
+						"name": testXResourcePlural + ".example.org",
+					},
+					"spec": map[string]interface{}{
+						"group": testExampleOrgGroup,
+						"names": map[string]interface{}{
+							"kind":     testXResourceKind,
+							"plural":   testXResourcePlural,
+							"singular": "xresource",
+						},
+						"versions": []interface{}{
+							map[string]interface{}{
+								"name":   "v1beta1",
+								"served": true,
+							},
+							map[string]interface{}{
+								"name":          "v1",
+								"served":        true,
+								"referenceable": true,
+							},
+						},
+					},
+				},
+			},
+			expectedGVKs: []schema.GroupVersionKind{
+				{Group: testExampleOrgGroup, Version: "v1beta1", Kind: testXResourceKind},
+				{Group: testExampleOrgGroup, Version: "v1", Kind: testXResourceKind},
+			},
+			expectErr: false,
+		},
+
+		"UnsupportedAPIVersion": {
+			reason: "Should fail when XRD has unsupported apiVersion",
+			xrd: &un.Unstructured{
+				Object: map[string]interface{}{
+					"apiVersion": "apiextensions.crossplane.io/v3", // Unsupported version
+					"kind":       "CompositeResourceDefinition",
+					"metadata": map[string]interface{}{
+						"name": "invalid-xrd",
+					},
+					"spec": map[string]interface{}{
+						"group": testExampleOrgGroup,
+						"names": map[string]interface{}{
+							"kind": testXResourceKind,
+						},
+						"versions": []interface{}{
+							map[string]interface{}{
+								"name":   "v1",
+								"served": true,
+							},
+						},
+					},
+				},
+			},
+			expectErr: true,
+			errMsg:    "unsupported XRD apiVersion",
+		},
+		"ConversionError": {
+			reason: "Should fail when XRD cannot be converted to typed object",
+			xrd: &un.Unstructured{
+				Object: map[string]interface{}{
+					"apiVersion": "apiextensions.crossplane.io/v1",
+					"kind":       "CompositeResourceDefinition",
+					"metadata": map[string]interface{}{
+						"name": "invalid-xrd",
+					},
+					"spec": map[string]interface{}{
+						"group": testExampleOrgGroup,
+						"names": "invalid-names-should-be-object", // Invalid structure
+						"versions": []interface{}{
+							map[string]interface{}{
+								"name":   "v1",
+								"served": true,
+							},
+						},
+					},
+				},
+			},
+			expectErr: true,
+			errMsg:    "cannot convert XRD",
+		},
+	}
+
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			gvks, err := extractGVKsFromXRD(tc.xrd)
+
+			if tc.expectErr {
+				if err == nil {
+					t.Errorf("\n%s\nextractGVKsFromXRD(): expected error but got none", tc.reason)
+					return
+				}
+
+				if tc.errMsg != "" && !strings.Contains(err.Error(), tc.errMsg) {
+					t.Errorf("\n%s\nextractGVKsFromXRD(): expected error containing %q, got %q",
+						tc.reason, tc.errMsg, err.Error())
+				}
+
+				return
+			}
+
+			if err != nil {
+				t.Errorf("\n%s\nextractGVKsFromXRD(): unexpected error: %v", tc.reason, err)
+
+				return
+			}
+
+			if diff := cmp.Diff(tc.expectedGVKs, gvks); diff != "" {
+				t.Errorf("\n%s\nextractGVKsFromXRD(): -want, +got:\n%s", tc.reason, diff)
+			}
+		})
+	}
+}
+
 func TestSchemaClient_CachingBehavior(t *testing.T) {
 	ctx := t.Context()
 	scheme := runtime.NewScheme()
 
 	// Create test CRD as unstructured for the mock dynamic client
-
 	testCRDUnstructured := &un.Unstructured{
 		Object: map[string]interface{}{
 			"apiVersion": "apiextensions.k8s.io/v1",
 			"kind":       "CustomResourceDefinition",
 			"metadata": map[string]interface{}{
-				"name": "xresources.example.org",
+				"name": testXResourcePlural + ".example.org",
 			},
 			"spec": map[string]interface{}{
-				"group": "example.org",
+				"group": testExampleOrgGroup,
 				"names": map[string]interface{}{
-					"kind":     "XResource",
-					"plural":   "xresources",
+					"kind":     testXResourceKind,
+					"plural":   testXResourcePlural,
 					"singular": "xresource",
 				},
 			},
 		},
 	}
 
-	// Track number of calls to the dynamic client
-	callCount := 0
-	dynamicClient := fake.NewSimpleDynamicClient(scheme)
-	dynamicClient.PrependReactor("get", "customresourcedefinitions", func(action kt.Action) (bool, runtime.Object, error) {
-		callCount++
+	tests := map[string]struct {
+		reason          string
+		setupClient     func() (*DefaultSchemaClient, *int)
+		gvk             schema.GroupVersionKind
+		expectedCalls   int
+		expectCRDCached bool
+		expectError     bool
+	}{
+		"FirstCallFetchesFromCluster": {
+			reason: "First GetCRD call should fetch from dynamic client",
+			setupClient: func() (*DefaultSchemaClient, *int) {
+				callCount := 0
+				dynamicClient := fake.NewSimpleDynamicClient(scheme)
+				dynamicClient.PrependReactor("get", "customresourcedefinitions", func(action kt.Action) (bool, runtime.Object, error) {
+					callCount++
+					getAction := action.(kt.GetAction)
+					if getAction.GetName() == testXResourcePlural+".example.org" {
+						return true, testCRDUnstructured, nil
+					}
+					return false, nil, nil
+				})
 
-		getAction := action.(kt.GetAction)
-		if getAction.GetName() == "xresources.example.org" {
-			return true, testCRDUnstructured, nil
-		}
+				mockConverter := tu.NewMockTypeConverter().
+					WithGetResourceNameForGVK(func(_ context.Context, gvk schema.GroupVersionKind) (string, error) {
+						if gvk.Group == testExampleOrgGroup && gvk.Version == "v1" && gvk.Kind == testXResourceKind {
+							return testXResourcePlural, nil
+						}
+						return "", errors.New("unexpected GVK in test")
+					}).Build()
 
-		return false, nil, nil
-	})
+				client := &DefaultSchemaClient{
+					dynamicClient:   dynamicClient,
+					typeConverter:   mockConverter,
+					logger:          tu.TestLogger(t, false),
+					resourceTypeMap: make(map[schema.GroupVersionKind]bool),
+					crds:            []*extv1.CustomResourceDefinition{},
+					crdByName:       make(map[string]*extv1.CustomResourceDefinition),
+				}
 
-	mockConverter := tu.NewMockTypeConverter().
-		WithGetResourceNameForGVK(func(_ context.Context, gvk schema.GroupVersionKind) (string, error) {
-			if gvk.Group == "example.org" && gvk.Version == "v1" && gvk.Kind == "XResource" {
-				return "xresources", nil
+				return client, &callCount
+			},
+			gvk: schema.GroupVersionKind{
+				Group:   testExampleOrgGroup,
+				Version: "v1",
+				Kind:    testXResourceKind,
+			},
+			expectedCalls:   1,
+			expectCRDCached: true,
+			expectError:     false,
+		},
+		"SecondCallUsesCache": {
+			reason: "Second GetCRD call should use cache without calling dynamic client",
+			setupClient: func() (*DefaultSchemaClient, *int) {
+				callCount := 0
+				dynamicClient := fake.NewSimpleDynamicClient(scheme)
+				dynamicClient.PrependReactor("get", "customresourcedefinitions", func(action kt.Action) (bool, runtime.Object, error) {
+					callCount++
+					getAction := action.(kt.GetAction)
+					if getAction.GetName() == testXResourcePlural+".example.org" {
+						return true, testCRDUnstructured, nil
+					}
+					return false, nil, nil
+				})
+
+				mockConverter := tu.NewMockTypeConverter().
+					WithGetResourceNameForGVK(func(_ context.Context, gvk schema.GroupVersionKind) (string, error) {
+						if gvk.Group == testExampleOrgGroup && gvk.Version == "v1" && gvk.Kind == testXResourceKind {
+							return testXResourcePlural, nil
+						}
+						return "", errors.New("unexpected GVK in test")
+					}).Build()
+
+				client := &DefaultSchemaClient{
+					dynamicClient:   dynamicClient,
+					typeConverter:   mockConverter,
+					logger:          tu.TestLogger(t, false),
+					resourceTypeMap: make(map[schema.GroupVersionKind]bool),
+					crds:            []*extv1.CustomResourceDefinition{},
+					crdByName:       make(map[string]*extv1.CustomResourceDefinition),
+				}
+
+				// Pre-populate cache by making first call
+				gvk := schema.GroupVersionKind{Group: testExampleOrgGroup, Version: "v1", Kind: testXResourceKind}
+				_, _ = client.GetCRD(ctx, gvk)
+				callCount = 0 // Reset counter after pre-population
+
+				return client, &callCount
+			},
+			gvk: schema.GroupVersionKind{
+				Group:   testExampleOrgGroup,
+				Version: "v1",
+				Kind:    testXResourceKind,
+			},
+			expectedCalls:   0, // Should use cache, no additional calls
+			expectCRDCached: true,
+			expectError:     false,
+		},
+	}
+
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			client, callCountPtr := tc.setupClient()
+
+			// Call GetCRD
+			crd, err := client.GetCRD(ctx, tc.gvk)
+
+			// Check error expectations
+			if tc.expectError {
+				if err == nil {
+					t.Errorf("\n%s\nGetCRD(): expected error but got none", tc.reason)
+				}
+
+				return
 			}
-			return "", errors.New("unexpected GVK in test")
-		}).Build()
 
-	c := &DefaultSchemaClient{
-		dynamicClient:   dynamicClient,
-		typeConverter:   mockConverter,
-		logger:          tu.TestLogger(t, false),
-		resourceTypeMap: make(map[schema.GroupVersionKind]bool),
-		crds:            []*extv1.CustomResourceDefinition{},
-		crdByName:       make(map[string]*extv1.CustomResourceDefinition),
-	}
+			if err != nil {
+				t.Errorf("\n%s\nGetCRD(): unexpected error: %v", tc.reason, err)
+				return
+			}
 
-	gvk := schema.GroupVersionKind{
-		Group:   "example.org",
-		Version: "v1",
-		Kind:    "XResource",
-	}
+			// Verify call count
+			if *callCountPtr != tc.expectedCalls {
+				t.Errorf("\n%s\nExpected %d calls to dynamic client, got %d",
+					tc.reason, tc.expectedCalls, *callCountPtr)
+			}
 
-	// First call should fetch from dynamic client
-	crd1, err := c.GetCRD(ctx, gvk)
-	if err != nil {
-		t.Fatalf("First GetCRD call failed: %v", err)
-	}
+			// Verify CRD was returned
+			if crd == nil {
+				t.Errorf("\n%s\nGetCRD(): expected CRD but got nil", tc.reason)
+				return
+			}
 
-	if callCount != 1 {
-		t.Errorf("Expected 1 call to dynamic client, got %d", callCount)
-	}
+			// Verify caching behavior
+			if tc.expectCRDCached {
+				allCRDs := client.GetAllCRDs()
+				if len(allCRDs) == 0 {
+					t.Errorf("\n%s\nExpected CRD to be cached in GetAllCRDs(), got empty slice", tc.reason)
+				}
 
-	// Second call should use cache
-	crd2, err := c.GetCRD(ctx, gvk)
-	if err != nil {
-		t.Fatalf("Second GetCRD call failed: %v", err)
-	}
+				// Verify consistency between calls
+				crd2, err2 := client.GetCRD(ctx, tc.gvk)
+				if err2 != nil {
+					t.Errorf("\n%s\nSecond GetCRD() call failed: %v", tc.reason, err2)
+					return
+				}
 
-	if callCount != 1 {
-		t.Errorf("Expected cache to be used (1 call total), got %d calls", callCount)
-	}
-
-	// Both calls should return equivalent CRDs
-	if diff := cmp.Diff(crd1, crd2); diff != "" {
-		t.Errorf("Cached CRD differs from original: -want, +got:\n%s", diff)
-	}
-
-	// Verify CRD is in GetAllCRDs result
-	allCRDs := c.GetAllCRDs()
-	if len(allCRDs) != 1 {
-		t.Errorf("Expected 1 CRD in GetAllCRDs(), got %d", len(allCRDs))
+				if diff := cmp.Diff(crd, crd2); diff != "" {
+					t.Errorf("\n%s\nCached CRD differs from original: -want, +got:\n%s", tc.reason, diff)
+				}
+			}
+		})
 	}
 }

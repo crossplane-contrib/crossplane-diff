@@ -8,7 +8,6 @@ import (
 	xp "github.com/crossplane-contrib/crossplane-diff/cmd/diff/client/crossplane"
 	tu "github.com/crossplane-contrib/crossplane-diff/cmd/diff/testutils"
 	extv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	un "k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -388,43 +387,13 @@ func TestDefaultSchemaValidator_LoadCRDs(t *testing.T) {
 
 // Helper function to create a simple CRD.
 func makeCRD(name string, kind string, group string, version string) *extv1.CustomResourceDefinition {
-	return &extv1.CustomResourceDefinition{
-		ObjectMeta: metav1.ObjectMeta{
-			Name: name,
-		},
-		Spec: extv1.CustomResourceDefinitionSpec{
-			Group: group,
-			Names: extv1.CustomResourceDefinitionNames{
-				Kind:     kind,
-				ListKind: kind + "List",
-				Plural:   strings.ToLower(kind) + "s",
-				Singular: strings.ToLower(kind),
-			},
-			Scope: extv1.NamespaceScoped,
-			Versions: []extv1.CustomResourceDefinitionVersion{
-				{
-					Name:    version,
-					Served:  true,
-					Storage: true,
-					Schema: &extv1.CustomResourceValidation{
-						OpenAPIV3Schema: &extv1.JSONSchemaProps{
-							Type: "object",
-							Properties: map[string]extv1.JSONSchemaProps{
-								"spec": {
-									Type: "object",
-									Properties: map[string]extv1.JSONSchemaProps{
-										"field": {
-											Type: "string",
-										},
-									},
-								},
-							},
-						},
-					},
-				},
-			},
-		},
-	}
+	return tu.NewCRD(name, group, kind).
+		WithListKind(kind+"List").
+		WithPlural(strings.ToLower(kind)+"s").
+		WithSingular(strings.ToLower(kind)).
+		WithVersion(version, true, true).
+		WithStringFieldSchema("field").
+		Build()
 }
 
 // Create a CRD with a string field validation.

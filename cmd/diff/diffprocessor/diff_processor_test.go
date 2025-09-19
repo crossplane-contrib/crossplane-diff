@@ -1104,47 +1104,11 @@ func TestDefaultDiffProcessor_RenderWithRequirements(t *testing.T) {
 
 // Helper function to create a test CRD for the given GVK.
 func makeTestCRD(name string, kind string, group string, version string) *extv1.CustomResourceDefinition {
-	return &extv1.CustomResourceDefinition{
-		TypeMeta: metav1.TypeMeta{
-			APIVersion: "apiextensions.k8s.io/v1",
-			Kind:       "CustomResourceDefinition",
-		},
-		ObjectMeta: metav1.ObjectMeta{
-			Name: name,
-		},
-		Spec: extv1.CustomResourceDefinitionSpec{
-			Group: group,
-			Names: extv1.CustomResourceDefinitionNames{
-				Kind:     kind,
-				ListKind: kind + "List",
-				Plural:   strings.ToLower(kind) + "s",
-				Singular: strings.ToLower(kind),
-			},
-			Scope: extv1.NamespaceScoped,
-			Versions: []extv1.CustomResourceDefinitionVersion{
-				{
-					Name:    version,
-					Served:  true,
-					Storage: true,
-					Schema: &extv1.CustomResourceValidation{
-						OpenAPIV3Schema: &extv1.JSONSchemaProps{
-							Type: "object",
-							Properties: map[string]extv1.JSONSchemaProps{
-								"apiVersion": {Type: "string"},
-								"kind":       {Type: "string"},
-								"metadata":   {Type: "object"},
-								"spec": {
-									Type: "object",
-									Properties: map[string]extv1.JSONSchemaProps{
-										"coolField": {Type: "string"},
-									},
-								},
-								"status": {Type: "object"},
-							},
-						},
-					},
-				},
-			},
-		},
-	}
+	return tu.NewCRD(name, group, kind).
+		WithListKind(kind+"List").
+		WithPlural(strings.ToLower(kind)+"s").
+		WithSingular(strings.ToLower(kind)).
+		WithVersion(version, true, true).
+		WithStandardSchema("coolField").
+		Build()
 }

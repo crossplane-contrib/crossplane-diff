@@ -1174,6 +1174,153 @@ func (b *ResourceBuilder) BuildUComposed() *cpd.Unstructured {
 
 // endregion
 
+// region CRD builders
+
+// ======================================================================================
+// CRD Building Helpers
+// ======================================================================================
+
+// CRDBuilder helps construct CRD resources for testing.
+type CRDBuilder struct {
+	crd *extv1.CustomResourceDefinition
+}
+
+// NewCRD creates a new CRDBuilder.
+func NewCRD(name, group, kind string) *CRDBuilder {
+	return &CRDBuilder{
+		crd: &extv1.CustomResourceDefinition{
+			TypeMeta: metav1.TypeMeta{
+				Kind:       "CustomResourceDefinition",
+				APIVersion: "apiextensions.k8s.io/v1",
+			},
+			ObjectMeta: metav1.ObjectMeta{
+				Name: name,
+			},
+			Spec: extv1.CustomResourceDefinitionSpec{
+				Group: group,
+				Names: extv1.CustomResourceDefinitionNames{
+					Kind: kind,
+				},
+				Scope: extv1.NamespaceScoped,
+				Versions: []extv1.CustomResourceDefinitionVersion{
+					{
+						Name:    "v1",
+						Served:  true,
+						Storage: true,
+					},
+				},
+			},
+		},
+	}
+}
+
+// WithPlural sets the plural name for the CRD.
+func (b *CRDBuilder) WithPlural(plural string) *CRDBuilder {
+	b.crd.Spec.Names.Plural = plural
+	return b
+}
+
+// WithSingular sets the singular name for the CRD.
+func (b *CRDBuilder) WithSingular(singular string) *CRDBuilder {
+	b.crd.Spec.Names.Singular = singular
+	return b
+}
+
+// WithScope sets the scope (Namespaced or Cluster) for the CRD.
+func (b *CRDBuilder) WithScope(scope extv1.ResourceScope) *CRDBuilder {
+	b.crd.Spec.Scope = scope
+	return b
+}
+
+// WithClusterScope sets the CRD to be cluster-scoped.
+func (b *CRDBuilder) WithClusterScope() *CRDBuilder {
+	return b.WithScope(extv1.ClusterScoped)
+}
+
+// WithNamespaceScope sets the CRD to be namespace-scoped.
+func (b *CRDBuilder) WithNamespaceScope() *CRDBuilder {
+	return b.WithScope(extv1.NamespaceScoped)
+}
+
+// WithVersion adds a version to the CRD.
+func (b *CRDBuilder) WithVersion(name string, served, storage bool) *CRDBuilder {
+	version := extv1.CustomResourceDefinitionVersion{
+		Name:    name,
+		Served:  served,
+		Storage: storage,
+	}
+	b.crd.Spec.Versions = append(b.crd.Spec.Versions, version)
+
+	return b
+}
+
+// WithSchema adds an OpenAPI v3 schema to the first version.
+func (b *CRDBuilder) WithSchema(schema *extv1.JSONSchemaProps) *CRDBuilder {
+	if len(b.crd.Spec.Versions) > 0 {
+		b.crd.Spec.Versions[0].Schema = &extv1.CustomResourceValidation{
+			OpenAPIV3Schema: schema,
+		}
+	}
+
+	return b
+}
+
+// WithStringFieldSchema adds a simple string field schema to the CRD.
+func (b *CRDBuilder) WithStringFieldSchema(fieldName string) *CRDBuilder {
+	schema := &extv1.JSONSchemaProps{
+		Type: "object",
+		Properties: map[string]extv1.JSONSchemaProps{
+			"spec": {
+				Type: "object",
+				Properties: map[string]extv1.JSONSchemaProps{
+					fieldName: {
+						Type: "string",
+					},
+				},
+			},
+			"status": {
+				Type: "object",
+			},
+		},
+	}
+
+	return b.WithSchema(schema)
+}
+
+// WithStandardSchema adds a standard schema with common Kubernetes fields and a spec field.
+func (b *CRDBuilder) WithStandardSchema(specFieldName string) *CRDBuilder {
+	schema := &extv1.JSONSchemaProps{
+		Type: "object",
+		Properties: map[string]extv1.JSONSchemaProps{
+			"apiVersion": {Type: "string"},
+			"kind":       {Type: "string"},
+			"metadata":   {Type: "object"},
+			"spec": {
+				Type: "object",
+				Properties: map[string]extv1.JSONSchemaProps{
+					specFieldName: {Type: "string"},
+				},
+			},
+			"status": {Type: "object"},
+		},
+	}
+
+	return b.WithSchema(schema)
+}
+
+// WithListKind sets the ListKind name for the CRD.
+func (b *CRDBuilder) WithListKind(listKind string) *CRDBuilder {
+	b.crd.Spec.Names.ListKind = listKind
+	return b
+}
+
+// Build returns the built CRD.
+func (b *CRDBuilder) Build() *extv1.CustomResourceDefinition {
+	return b.crd.DeepCopy()
+}
+
+// endregion
+
 // region Composition builders
 
 // ======================================================================================

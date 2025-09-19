@@ -17,7 +17,8 @@ import (
 	"github.com/crossplane/crossplane-runtime/v2/pkg/errors"
 	"github.com/crossplane/crossplane-runtime/v2/pkg/logging"
 
-	"github.com/crossplane/crossplane/v2/cmd/crank/common/crd"
+	xpextv1 "github.com/crossplane/crossplane/v2/apis/apiextensions/v1"
+	xpextv2 "github.com/crossplane/crossplane/v2/apis/apiextensions/v2"
 )
 
 // SchemaClient handles operations related to Kubernetes schemas and CRDs.
@@ -179,20 +180,102 @@ func (c *DefaultSchemaClient) cacheResourceType(gvk schema.GroupVersionKind, req
 	c.resourceTypeMap[gvk] = requiresCRD
 }
 
-// LoadCRDsFromXRDs converts XRDs to CRDs and caches them.
-func (c *DefaultSchemaClient) LoadCRDsFromXRDs(_ context.Context, xrds []*un.Unstructured) error {
-	c.logger.Debug("Loading CRDs from XRDs", "xrdCount", len(xrds))
+// extractGVKsFromXRD extracts all GroupVersionKinds from an XRD using strongly-typed conversion.
+// This method handles both v1 and v2 XRDs and leverages Kubernetes runtime conversion.
+func extractGVKsFromXRD(xrd *un.Unstructured) ([]schema.GroupVersionKind, error) {
+	apiVersion := xrd.GetAPIVersion()
 
-	// Convert XRDs to CRDs
-	crds, err := crd.ConvertToCRDs(xrds)
-	if err != nil {
-		c.logger.Debug("Failed to convert XRDs to CRDs", "error", err)
-		return errors.Wrap(err, "cannot convert XRDs to CRDs")
+	switch apiVersion {
+	case "apiextensions.crossplane.io/v1":
+		return extractGVKsFromV1XRD(xrd)
+	case "apiextensions.crossplane.io/v2":
+		return extractGVKsFromV2XRD(xrd)
+	default:
+		return nil, errors.Errorf("unsupported XRD apiVersion %s in XRD %s", apiVersion, xrd.GetName())
+	}
+}
+
+// extractGVKsFromV1XRD extracts GVKs from a v1 XRD using strongly-typed conversion.
+func extractGVKsFromV1XRD(xrd *un.Unstructured) ([]schema.GroupVersionKind, error) {
+	typedXRD := &xpextv1.CompositeResourceDefinition{}
+	if err := runtime.DefaultUnstructuredConverter.FromUnstructured(xrd.Object, typedXRD); err != nil {
+		return nil, errors.Wrapf(err, "cannot convert XRD %s to v1 typed object", xrd.GetName())
 	}
 
-	// Set the CRDs in our cache
-	c.setCRDs(crds)
-	c.logger.Debug("Loaded CRDs from XRDs", "count", len(crds))
+	// Extract GVKs for each version - no validation needed since XRDs from server are guaranteed valid
+	gvks := make([]schema.GroupVersionKind, 0, len(typedXRD.Spec.Versions))
+	for _, version := range typedXRD.Spec.Versions {
+		gvks = append(gvks, schema.GroupVersionKind{
+			Group:   typedXRD.Spec.Group,
+			Version: version.Name,
+			Kind:    typedXRD.Spec.Names.Kind,
+		})
+	}
+
+	return gvks, nil
+}
+
+// extractGVKsFromV2XRD extracts GVKs from a v2 XRD using strongly-typed conversion.
+func extractGVKsFromV2XRD(xrd *un.Unstructured) ([]schema.GroupVersionKind, error) {
+	typedXRD := &xpextv2.CompositeResourceDefinition{}
+	if err := runtime.DefaultUnstructuredConverter.FromUnstructured(xrd.Object, typedXRD); err != nil {
+		return nil, errors.Wrapf(err, "cannot convert XRD %s to v2 typed object", xrd.GetName())
+	}
+
+	// Extract GVKs for each version - no validation needed since XRDs from server are guaranteed valid
+	gvks := make([]schema.GroupVersionKind, 0, len(typedXRD.Spec.Versions))
+	for _, version := range typedXRD.Spec.Versions {
+		gvks = append(gvks, schema.GroupVersionKind{
+			Group:   typedXRD.Spec.Group,
+			Version: version.Name,
+			Kind:    typedXRD.Spec.Names.Kind,
+		})
+	}
+
+	return gvks, nil
+}
+
+// LoadCRDsFromXRDs fetches corresponding CRDs from the cluster for the given XRDs and caches them.
+// Instead of converting XRDs to CRDs, this method fetches the actual CRDs that should already
+// exist in the cluster since the Crossplane control plane manages both XRDs and their corresponding CRDs.
+func (c *DefaultSchemaClient) LoadCRDsFromXRDs(ctx context.Context, xrds []*un.Unstructured) error {
+	c.logger.Debug("Loading CRDs from cluster for XRDs", "xrdCount", len(xrds))
+
+	if len(xrds) == 0 {
+		c.logger.Debug("No XRDs provided, nothing to load")
+		return nil
+	}
+
+	// Extract group-version-kinds from XRDs to find corresponding CRDs
+	// Fail fast on any invalid XRD - per repository guidelines: never continue in degraded state
+	var crdsToFetch []schema.GroupVersionKind
+
+	for _, xrd := range xrds {
+		gvks, err := extractGVKsFromXRD(xrd)
+		if err != nil {
+			return err // Error already wrapped with context from extractGVKsFromXRD
+		}
+
+		crdsToFetch = append(crdsToFetch, gvks...)
+	}
+
+	c.logger.Debug("Identified GVKs to fetch CRDs for", "count", len(crdsToFetch))
+
+	// Fetch CRDs from cluster for each GVK - fail fast if any CRD is missing
+	// Per repository guidelines: never continue in a degraded state
+	fetchedCRDs := make([]*extv1.CustomResourceDefinition, 0, len(crdsToFetch))
+
+	for _, gvk := range crdsToFetch {
+		crd, err := c.GetCRD(ctx, gvk)
+		if err != nil {
+			c.logger.Debug("Failed to fetch required CRD for GVK", "gvk", gvk.String(), "error", err)
+			return errors.Wrapf(err, "cannot fetch required CRD for %s", gvk.String())
+		}
+
+		fetchedCRDs = append(fetchedCRDs, crd)
+	}
+
+	c.logger.Debug("Successfully fetched all required CRDs from cluster", "count", len(fetchedCRDs))
 
 	return nil
 }
@@ -221,20 +304,4 @@ func (c *DefaultSchemaClient) addCRD(crd *extv1.CustomResourceDefinition) {
 	c.crdByName[crd.Name] = crd
 
 	c.logger.Debug("Added CRD to cache", "crdName", crd.Name)
-}
-
-// setCRDs sets the CRDs directly, used internally for bulk loading.
-func (c *DefaultSchemaClient) setCRDs(crds []*extv1.CustomResourceDefinition) {
-	c.crdsMu.Lock()
-	defer c.crdsMu.Unlock()
-
-	c.crds = crds
-
-	// Rebuild name lookup map
-	c.crdByName = make(map[string]*extv1.CustomResourceDefinition)
-	for _, crd := range crds {
-		c.crdByName[crd.Name] = crd
-	}
-
-	c.logger.Debug("Set CRDs directly", "count", len(crds))
 }
