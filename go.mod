@@ -8,7 +8,7 @@ toolchain go1.24.5
 
 require (
 	dario.cat/mergo v1.0.2
-	github.com/alecthomas/kong v1.4.0
+	github.com/alecthomas/kong v1.12.1
 	github.com/crossplane/crossplane-runtime/v2 v2.0.0
 	github.com/crossplane/crossplane/v2 v2.0.2
 	github.com/google/go-cmp v0.7.0
