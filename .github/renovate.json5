@@ -140,7 +140,6 @@
       datasourceTemplate: 'github-releases',
       depNameTemplate: 'github/codeql-action',
       extractVersionTemplate: '^codeql-bundle-v(?<version>.*)$',
-      versioning: 'semver',
     },
   ],
   // Renovate doesn't have native Earthfile support, but because Earthfile
