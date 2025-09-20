@@ -6,6 +6,7 @@ import (
 	"io"
 	"strings"
 
+	extv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	un "k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -222,26 +223,76 @@ func (b *MockSchemaClientBuilder) WithInitialize(fn func(context.Context) error)
 }
 
 // WithGetCRD sets the GetCRD behavior.
-func (b *MockSchemaClientBuilder) WithGetCRD(fn func(context.Context, schema.GroupVersionKind) (*un.Unstructured, error)) *MockSchemaClientBuilder {
+func (b *MockSchemaClientBuilder) WithGetCRD(fn func(context.Context, schema.GroupVersionKind) (*extv1.CustomResourceDefinition, error)) *MockSchemaClientBuilder {
 	b.mock.GetCRDFn = fn
 	return b
 }
 
 // WithCRDNotFound sets GetCRD to return a not found error.
 func (b *MockSchemaClientBuilder) WithCRDNotFound() *MockSchemaClientBuilder {
-	return b.WithGetCRD(func(context.Context, schema.GroupVersionKind) (*un.Unstructured, error) {
+	return b.WithGetCRD(func(context.Context, schema.GroupVersionKind) (*extv1.CustomResourceDefinition, error) {
 		return nil, errors.New("CRD not found")
 	})
 }
 
 // WithSuccessfulCRDFetch sets GetCRD to return a specific CRD.
-func (b *MockSchemaClientBuilder) WithSuccessfulCRDFetch(crd *un.Unstructured) *MockSchemaClientBuilder {
-	return b.WithGetCRD(func(context.Context, schema.GroupVersionKind) (*un.Unstructured, error) {
-		if crd.GetKind() != "CustomResourceDefinition" {
-			return nil, errors.Errorf("setup error: desired return from GetCRD isn't a CRD but a %s", crd.GetKind())
+func (b *MockSchemaClientBuilder) WithSuccessfulCRDFetch(crd *extv1.CustomResourceDefinition) *MockSchemaClientBuilder {
+	return b.WithGetCRD(func(context.Context, schema.GroupVersionKind) (*extv1.CustomResourceDefinition, error) {
+		return crd, nil
+	})
+}
+
+// WithFoundCRD sets GetCRD to return a specific CRD when the group and kind match.
+func (b *MockSchemaClientBuilder) WithFoundCRD(group, kind string, crd *extv1.CustomResourceDefinition) *MockSchemaClientBuilder {
+	// If we don't have an existing GetCRD function, create a new one
+	if b.mock.GetCRDFn == nil {
+		return b.WithGetCRD(func(_ context.Context, gvk schema.GroupVersionKind) (*extv1.CustomResourceDefinition, error) {
+			if gvk.Group == group && gvk.Kind == kind {
+				return crd, nil
+			}
+
+			return nil, errors.New("CRD not found")
+		})
+	}
+
+	// If we already have a GetCRD function, wrap it to add this mapping
+	originalFn := b.mock.GetCRDFn
+
+	return b.WithGetCRD(func(ctx context.Context, gvk schema.GroupVersionKind) (*extv1.CustomResourceDefinition, error) {
+		if gvk.Group == group && gvk.Kind == kind {
+			return crd, nil
 		}
 
-		return crd, nil
+		return originalFn(ctx, gvk)
+	})
+}
+
+// WithFoundCRDs sets GetCRD to return specific CRDs when the group and kind match, with a fallback error.
+func (b *MockSchemaClientBuilder) WithFoundCRDs(crdMappings map[schema.GroupKind]*extv1.CustomResourceDefinition) *MockSchemaClientBuilder {
+	return b.WithGetCRD(func(_ context.Context, gvk schema.GroupVersionKind) (*extv1.CustomResourceDefinition, error) {
+		groupKind := schema.GroupKind{Group: gvk.Group, Kind: gvk.Kind}
+		if crd, found := crdMappings[groupKind]; found {
+			return crd, nil
+		}
+
+		return nil, errors.New("CRD not found")
+	})
+}
+
+// WithGetCRDByName sets the GetCRDByName behavior.
+func (b *MockSchemaClientBuilder) WithGetCRDByName(fn func(string) (*extv1.CustomResourceDefinition, error)) *MockSchemaClientBuilder {
+	b.mock.GetCRDByNameFn = fn
+	return b
+}
+
+// WithSuccessfulCRDByNameFetch sets GetCRDByName to return a specific CRD for a given name.
+func (b *MockSchemaClientBuilder) WithSuccessfulCRDByNameFetch(name string, crd *extv1.CustomResourceDefinition) *MockSchemaClientBuilder {
+	return b.WithGetCRDByName(func(searchName string) (*extv1.CustomResourceDefinition, error) {
+		if searchName == name {
+			return crd, nil
+		}
+
+		return nil, errors.Errorf("CRD with name %s not found", searchName)
 	})
 }
 
@@ -281,6 +332,113 @@ func (b *MockSchemaClientBuilder) WithNoResourcesRequiringCRDs() *MockSchemaClie
 // WithValidateResource sets the ValidateResource behavior.
 func (b *MockSchemaClientBuilder) WithValidateResource(fn func(context.Context, *un.Unstructured) error) *MockSchemaClientBuilder {
 	b.mock.ValidateResourceFn = fn
+	return b
+}
+
+// WithGetAllCRDs sets the GetAllCRDs behavior.
+func (b *MockSchemaClientBuilder) WithGetAllCRDs(fn func() []*extv1.CustomResourceDefinition) *MockSchemaClientBuilder {
+	b.mock.GetAllCRDsFn = fn
+	return b
+}
+
+// WithCachingBehavior creates a mock that simulates caching CRDs when GetCRD or LoadCRDsFromXRDs is called.
+func (b *MockSchemaClientBuilder) WithCachingBehavior() *MockSchemaClientBuilder {
+	cachedCRDs := make(map[string]*extv1.CustomResourceDefinition)
+
+	// Override GetCRD to track cached CRDs
+	originalGetCRD := b.mock.GetCRDFn
+	b.mock.GetCRDFn = func(ctx context.Context, gvk schema.GroupVersionKind) (*extv1.CustomResourceDefinition, error) {
+		// Check cache first
+		key := gvk.String()
+		if crd, ok := cachedCRDs[key]; ok {
+			return crd, nil
+		}
+
+		// Call original function
+		if originalGetCRD != nil {
+			crd, err := originalGetCRD(ctx, gvk)
+			if err == nil && crd != nil {
+				// Cache the CRD
+				cachedCRDs[key] = crd
+			}
+
+			return crd, err
+		}
+
+		return nil, errors.New("GetCRD not implemented")
+	}
+
+	// Override LoadCRDsFromXRDs to simulate caching CRDs converted from XRDs
+	originalLoadCRDs := b.mock.LoadCRDsFromXRDsFn
+	b.mock.LoadCRDsFromXRDsFn = func(ctx context.Context, xrds []*un.Unstructured) error {
+		// Call original function first
+		if originalLoadCRDs != nil {
+			err := originalLoadCRDs(ctx, xrds)
+			if err != nil {
+				return err
+			}
+		}
+
+		// Simulate caching CRDs converted from XRDs
+		// For test purposes, create a simple CRD from each XRD
+		for _, xrd := range xrds {
+			group, _, _ := un.NestedString(xrd.Object, "spec", "group")
+			if group == "" {
+				continue // Skip invalid XRDs
+			}
+
+			names, ok, _ := un.NestedMap(xrd.Object, "spec", "names")
+			if !ok {
+				continue
+			}
+
+			kind, _ := names["kind"].(string)
+			if kind == "" {
+				continue
+			}
+
+			// Create a simple CRD for this XRD
+			crd := &extv1.CustomResourceDefinition{
+				TypeMeta: metav1.TypeMeta{
+					APIVersion: "apiextensions.k8s.io/v1",
+					Kind:       "CustomResourceDefinition",
+				},
+				ObjectMeta: metav1.ObjectMeta{
+					Name: xrd.GetName(),
+				},
+				Spec: extv1.CustomResourceDefinitionSpec{
+					Group: group,
+					Names: extv1.CustomResourceDefinitionNames{
+						Kind: kind,
+					},
+					Scope: extv1.NamespaceScoped,
+					Versions: []extv1.CustomResourceDefinitionVersion{
+						{
+							Name:    "v1",
+							Served:  true,
+							Storage: true,
+						},
+					},
+				},
+			}
+
+			gvk := schema.GroupVersionKind{Group: group, Version: "v1", Kind: kind}
+			cachedCRDs[gvk.String()] = crd
+		}
+
+		return nil
+	}
+
+	// Override GetAllCRDs to return cached CRDs
+	b.mock.GetAllCRDsFn = func() []*extv1.CustomResourceDefinition {
+		var result []*extv1.CustomResourceDefinition
+		for _, crd := range cachedCRDs {
+			result = append(result, crd)
+		}
+
+		return result
+	}
+
 	return b
 }
 
@@ -379,6 +537,42 @@ func (b *MockTypeConverterBuilder) WithDefaultGetResourceNameForGVK() *MockTypeC
 	return b.WithGetResourceNameForGVK(func(_ context.Context, gvk schema.GroupVersionKind) (string, error) {
 		// Simple default implementation that converts Kind to lowercase and adds 's'
 		return strings.ToLower(gvk.Kind) + "s", nil
+	})
+}
+
+// WithResourceNameForGVK sets GetResourceNameForGVK to return a specific resource name for a given GVK.
+func (b *MockTypeConverterBuilder) WithResourceNameForGVK(gvk schema.GroupVersionKind, resourceName string) *MockTypeConverterBuilder {
+	// If we don't have an existing GetResourceNameForGVK function, create a new one
+	if b.mock.GetResourceNameForGVKFn == nil {
+		return b.WithGetResourceNameForGVK(func(_ context.Context, testGVK schema.GroupVersionKind) (string, error) {
+			if testGVK.Group == gvk.Group && testGVK.Version == gvk.Version && testGVK.Kind == gvk.Kind {
+				return resourceName, nil
+			}
+
+			return "", errors.New("unexpected GVK in test")
+		})
+	}
+
+	// If we already have a GetResourceNameForGVK function, wrap it to add this mapping
+	originalFn := b.mock.GetResourceNameForGVKFn
+
+	return b.WithGetResourceNameForGVK(func(ctx context.Context, testGVK schema.GroupVersionKind) (string, error) {
+		if testGVK.Group == gvk.Group && testGVK.Version == gvk.Version && testGVK.Kind == gvk.Kind {
+			return resourceName, nil
+		}
+
+		return originalFn(ctx, testGVK)
+	})
+}
+
+// WithResourceNameForGVKs sets GetResourceNameForGVK to return specific resource names for given GVKs, with a fallback error.
+func (b *MockTypeConverterBuilder) WithResourceNameForGVKs(gvkMappings map[schema.GroupVersionKind]string) *MockTypeConverterBuilder {
+	return b.WithGetResourceNameForGVK(func(_ context.Context, gvk schema.GroupVersionKind) (string, error) {
+		if resourceName, found := gvkMappings[gvk]; found {
+			return resourceName, nil
+		}
+
+		return "", errors.New("unexpected GVK in test")
 	})
 }
 
@@ -1066,6 +1260,279 @@ func (b *ResourceBuilder) BuildUComposed() *cpd.Unstructured {
 	built.SetUnstructuredContent(b.Build().UnstructuredContent())
 
 	return built
+}
+
+// endregion
+
+// region CRD builders
+
+// ======================================================================================
+// CRD Building Helpers
+// ======================================================================================
+
+// CRDBuilder helps construct CRD resources for testing.
+type CRDBuilder struct {
+	crd *extv1.CustomResourceDefinition
+}
+
+// NewCRD creates a new CRDBuilder.
+func NewCRD(name, group, kind string) *CRDBuilder {
+	return &CRDBuilder{
+		crd: &extv1.CustomResourceDefinition{
+			TypeMeta: metav1.TypeMeta{
+				Kind:       "CustomResourceDefinition",
+				APIVersion: "apiextensions.k8s.io/v1",
+			},
+			ObjectMeta: metav1.ObjectMeta{
+				Name: name,
+			},
+			Spec: extv1.CustomResourceDefinitionSpec{
+				Group: group,
+				Names: extv1.CustomResourceDefinitionNames{
+					Kind: kind,
+				},
+				Scope: extv1.NamespaceScoped,
+				Versions: []extv1.CustomResourceDefinitionVersion{
+					{
+						Name:    "v1",
+						Served:  true,
+						Storage: true,
+					},
+				},
+			},
+		},
+	}
+}
+
+// WithPlural sets the plural name for the CRD.
+func (b *CRDBuilder) WithPlural(plural string) *CRDBuilder {
+	b.crd.Spec.Names.Plural = plural
+	return b
+}
+
+// WithSingular sets the singular name for the CRD.
+func (b *CRDBuilder) WithSingular(singular string) *CRDBuilder {
+	b.crd.Spec.Names.Singular = singular
+	return b
+}
+
+// WithScope sets the scope (Namespaced or Cluster) for the CRD.
+func (b *CRDBuilder) WithScope(scope extv1.ResourceScope) *CRDBuilder {
+	b.crd.Spec.Scope = scope
+	return b
+}
+
+// WithClusterScope sets the CRD to be cluster-scoped.
+func (b *CRDBuilder) WithClusterScope() *CRDBuilder {
+	return b.WithScope(extv1.ClusterScoped)
+}
+
+// WithNamespaceScope sets the CRD to be namespace-scoped.
+func (b *CRDBuilder) WithNamespaceScope() *CRDBuilder {
+	return b.WithScope(extv1.NamespaceScoped)
+}
+
+// WithVersion adds a version to the CRD.
+func (b *CRDBuilder) WithVersion(name string, served, storage bool) *CRDBuilder {
+	version := extv1.CustomResourceDefinitionVersion{
+		Name:    name,
+		Served:  served,
+		Storage: storage,
+	}
+	b.crd.Spec.Versions = append(b.crd.Spec.Versions, version)
+
+	return b
+}
+
+// WithSchema adds an OpenAPI v3 schema to the first version.
+func (b *CRDBuilder) WithSchema(schema *extv1.JSONSchemaProps) *CRDBuilder {
+	if len(b.crd.Spec.Versions) > 0 {
+		b.crd.Spec.Versions[0].Schema = &extv1.CustomResourceValidation{
+			OpenAPIV3Schema: schema,
+		}
+	}
+
+	return b
+}
+
+// WithStringFieldSchema adds a simple string field schema to the CRD.
+func (b *CRDBuilder) WithStringFieldSchema(fieldName string) *CRDBuilder {
+	schema := &extv1.JSONSchemaProps{
+		Type: "object",
+		Properties: map[string]extv1.JSONSchemaProps{
+			"spec": {
+				Type: "object",
+				Properties: map[string]extv1.JSONSchemaProps{
+					fieldName: {
+						Type: "string",
+					},
+				},
+			},
+			"status": {
+				Type: "object",
+			},
+		},
+	}
+
+	return b.WithSchema(schema)
+}
+
+// WithStandardSchema adds a standard schema with common Kubernetes fields and a spec field.
+func (b *CRDBuilder) WithStandardSchema(specFieldName string) *CRDBuilder {
+	schema := &extv1.JSONSchemaProps{
+		Type: "object",
+		Properties: map[string]extv1.JSONSchemaProps{
+			"apiVersion": {Type: "string"},
+			"kind":       {Type: "string"},
+			"metadata":   {Type: "object"},
+			"spec": {
+				Type: "object",
+				Properties: map[string]extv1.JSONSchemaProps{
+					specFieldName: {Type: "string"},
+				},
+			},
+			"status": {Type: "object"},
+		},
+	}
+
+	return b.WithSchema(schema)
+}
+
+// WithListKind sets the ListKind name for the CRD.
+func (b *CRDBuilder) WithListKind(listKind string) *CRDBuilder {
+	b.crd.Spec.Names.ListKind = listKind
+	return b
+}
+
+// Build returns the built CRD.
+func (b *CRDBuilder) Build() *extv1.CustomResourceDefinition {
+	return b.crd.DeepCopy()
+}
+
+// endregion
+
+// region XRD builders
+
+// ======================================================================================
+// XRD Building Helpers
+// ======================================================================================
+
+// XRDBuilder helps construct XRD resources for testing.
+type XRDBuilder struct {
+	xrd *xpextv1.CompositeResourceDefinition
+}
+
+// NewXRD creates a new XRDBuilder.
+func NewXRD(name, group, kind string) *XRDBuilder {
+	return &XRDBuilder{
+		xrd: &xpextv1.CompositeResourceDefinition{
+			TypeMeta: metav1.TypeMeta{
+				Kind:       "CompositeResourceDefinition",
+				APIVersion: "apiextensions.crossplane.io/v1",
+			},
+			ObjectMeta: metav1.ObjectMeta{
+				Name: name,
+			},
+			Spec: xpextv1.CompositeResourceDefinitionSpec{
+				Group: group,
+				Names: extv1.CustomResourceDefinitionNames{
+					Kind: kind,
+				},
+				Versions: []xpextv1.CompositeResourceDefinitionVersion{
+					{
+						Name:          "v1",
+						Served:        true,
+						Referenceable: true,
+					},
+				},
+			},
+		},
+	}
+}
+
+// WithPlural sets the plural name for the XRD.
+func (b *XRDBuilder) WithPlural(plural string) *XRDBuilder {
+	b.xrd.Spec.Names.Plural = plural
+	return b
+}
+
+// WithSingular sets the singular name for the XRD.
+func (b *XRDBuilder) WithSingular(singular string) *XRDBuilder {
+	b.xrd.Spec.Names.Singular = singular
+	return b
+}
+
+// WithClaimNames sets the claim names for the XRD.
+func (b *XRDBuilder) WithClaimNames(kind, plural string) *XRDBuilder {
+	b.xrd.Spec.ClaimNames = &extv1.CustomResourceDefinitionNames{
+		Kind:   kind,
+		Plural: plural,
+	}
+
+	return b
+}
+
+// WithVersion adds a version to the XRD.
+func (b *XRDBuilder) WithVersion(name string, served, referenceable bool) *XRDBuilder {
+	version := xpextv1.CompositeResourceDefinitionVersion{
+		Name:          name,
+		Served:        served,
+		Referenceable: referenceable,
+	}
+	b.xrd.Spec.Versions = append(b.xrd.Spec.Versions, version)
+
+	return b
+}
+
+// WithSchema adds an OpenAPI v3 schema to the first version.
+func (b *XRDBuilder) WithSchema(schema *extv1.JSONSchemaProps) *XRDBuilder {
+	if len(b.xrd.Spec.Versions) > 0 {
+		// Convert JSONSchemaProps to RawExtension
+		rawBytes, err := json.Marshal(schema)
+		if err != nil {
+			// In tests, this should not happen, but if it does, we'll just skip the schema
+			return b
+		}
+
+		b.xrd.Spec.Versions[0].Schema = &xpextv1.CompositeResourceValidation{
+			OpenAPIV3Schema: runtime.RawExtension{
+				Raw: rawBytes,
+			},
+		}
+	}
+
+	return b
+}
+
+// WithRawSchema adds a raw JSON schema to the first version.
+func (b *XRDBuilder) WithRawSchema(rawJSON []byte) *XRDBuilder {
+	if len(b.xrd.Spec.Versions) > 0 {
+		b.xrd.Spec.Versions[0].Schema = &xpextv1.CompositeResourceValidation{
+			OpenAPIV3Schema: runtime.RawExtension{
+				Raw: rawJSON,
+			},
+		}
+	}
+
+	return b
+}
+
+// Build returns the built XRD.
+func (b *XRDBuilder) Build() *xpextv1.CompositeResourceDefinition {
+	return b.xrd.DeepCopy()
+}
+
+// BuildAsUnstructured returns the built XRD as an unstructured object.
+func (b *XRDBuilder) BuildAsUnstructured() *un.Unstructured {
+	xrd := b.Build()
+
+	obj, err := runtime.DefaultUnstructuredConverter.ToUnstructured(xrd)
+	if err != nil {
+		// This should not happen in tests, but if it does, we'll return an empty unstructured
+		return &un.Unstructured{}
+	}
+
+	return &un.Unstructured{Object: obj}
 }
 
 // endregion

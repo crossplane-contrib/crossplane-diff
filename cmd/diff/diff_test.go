@@ -33,6 +33,7 @@ import (
 	dp "github.com/crossplane-contrib/crossplane-diff/cmd/diff/diffprocessor"
 	tu "github.com/crossplane-contrib/crossplane-diff/cmd/diff/testutils"
 	"github.com/google/go-cmp/cmp"
+	extv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	un "k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -356,7 +357,7 @@ func TestDiffCommand(t *testing.T) {
 
 				schemaClient := tu.NewMockSchemaClient().
 					WithNoResourcesRequiringCRDs().
-					WithGetCRD(func(context.Context, schema.GroupVersionKind) (*un.Unstructured, error) {
+					WithGetCRD(func(context.Context, schema.GroupVersionKind) (*extv1.CustomResourceDefinition, error) {
 						// For this test, we can return nil as it doesn't focus on validation
 						return nil, errors.New("CRD not found")
 					}).

@@ -8,7 +8,6 @@ import (
 	k8 "github.com/crossplane-contrib/crossplane-diff/cmd/diff/client/kubernetes"
 	extv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	un "k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
-	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 
 	"github.com/crossplane/crossplane-runtime/v2/pkg/errors"
@@ -16,7 +15,6 @@ import (
 	cpd "github.com/crossplane/crossplane-runtime/v2/pkg/resource/unstructured/composed"
 
 	"github.com/crossplane/crossplane/v2/cmd/crank/beta/validate"
-	"github.com/crossplane/crossplane/v2/cmd/crank/common/crd"
 	"github.com/crossplane/crossplane/v2/cmd/crank/common/loggerwriter"
 )
 
@@ -38,7 +36,6 @@ type DefaultSchemaValidator struct {
 	defClient    xp.DefinitionClient
 	schemaClient k8.SchemaClient
 	logger       logging.Logger
-	crds         []*extv1.CustomResourceDefinition
 }
 
 // NewSchemaValidator creates a new DefaultSchemaValidator.
@@ -47,7 +44,6 @@ func NewSchemaValidator(sClient k8.SchemaClient, dClient xp.DefinitionClient, lo
 		defClient:    dClient,
 		schemaClient: sClient,
 		logger:       logger,
-		crds:         []*extv1.CustomResourceDefinition{},
 	}
 }
 
@@ -62,28 +58,21 @@ func (v *DefaultSchemaValidator) LoadCRDs(ctx context.Context) error {
 		return errors.Wrap(err, "cannot get XRDs")
 	}
 
-	// Convert XRDs to CRDs
-	crds, err := crd.ConvertToCRDs(xrds)
+	// Use SchemaClient to load CRDs from XRDs
+	err = v.schemaClient.LoadCRDsFromXRDs(ctx, xrds)
 	if err != nil {
-		v.logger.Debug("Failed to convert XRDs to CRDs", "error", err)
-		return errors.Wrap(err, "cannot convert XRDs to CRDs")
+		v.logger.Debug("Failed to load CRDs into schema client", "error", err)
+		return errors.Wrap(err, "cannot load CRDs into schema client")
 	}
 
-	v.crds = crds
-	v.logger.Debug("Loaded CRDs", "count", len(crds))
+	// Logging is handled internally by the schema client
 
 	return nil
 }
 
-// SetCRDs sets the CRDs directly, useful for testing or when CRDs are pre-loaded.
-func (v *DefaultSchemaValidator) SetCRDs(crds []*extv1.CustomResourceDefinition) {
-	v.crds = crds
-	v.logger.Debug("Set CRDs directly", "count", len(crds))
-}
-
 // GetCRDs returns the current CRDs.
 func (v *DefaultSchemaValidator) GetCRDs() []*extv1.CustomResourceDefinition {
-	return v.crds
+	return v.schemaClient.GetAllCRDs()
 }
 
 // ValidateResources validates resources using schema validation.
@@ -105,7 +94,7 @@ func (v *DefaultSchemaValidator) ValidateResources(ctx context.Context, xr *un.U
 
 	// Ensure we have all the required CRDs
 	v.logger.Debug("Ensuring required CRDs for validation",
-		"cachedCRDs", len(v.crds),
+		"cachedCRDs", len(v.schemaClient.GetAllCRDs()),
 		"resourceCount", len(resources))
 
 	err := v.EnsureComposedResourceCRDs(ctx, resources)
@@ -120,7 +109,7 @@ func (v *DefaultSchemaValidator) ValidateResources(ctx context.Context, xr *un.U
 	// Use skipSuccessLogs=true to avoid cluttering the output with success messages
 	v.logger.Debug("Performing schema validation", "resourceCount", len(resources))
 
-	err = validate.SchemaValidation(ctx, resources, v.crds, true, true, loggerWriter)
+	err = validate.SchemaValidation(ctx, resources, v.schemaClient.GetAllCRDs(), true, true, loggerWriter)
 	if err != nil {
 		return errors.Wrap(err, "schema validation failed")
 	}
@@ -146,39 +135,19 @@ func (v *DefaultSchemaValidator) ValidateResources(ctx context.Context, xr *un.U
 // EnsureComposedResourceCRDs checks if we have all the CRDs needed for the cpd resources
 // and fetches any missing ones from the cluster.
 func (v *DefaultSchemaValidator) EnsureComposedResourceCRDs(ctx context.Context, resources []*un.Unstructured) error {
-	// Create a map of existing CRDs by GVK for quick lookup
-	existingCRDs := make(map[schema.GroupVersionKind]bool)
+	v.logger.Debug("Ensuring required CRDs for validation", "resourceCount", len(resources))
 
-	for _, crd := range v.crds {
-		for _, version := range crd.Spec.Versions {
-			gvk := schema.GroupVersionKind{
-				Group:   crd.Spec.Group,
-				Version: version.Name,
-				Kind:    crd.Spec.Names.Kind,
-			}
-			existingCRDs[gvk] = true
-		}
-	}
-
-	// Collect GVKs from resources that aren't already covered
-	missingGVKs := make(map[schema.GroupVersionKind]bool)
+	// Collect unique GVKs from resources
+	uniqueGVKs := make(map[schema.GroupVersionKind]bool)
 	for _, res := range resources {
 		gvk := res.GroupVersionKind()
-		if !existingCRDs[gvk] {
-			missingGVKs[gvk] = true
-		}
+		uniqueGVKs[gvk] = true
 	}
 
-	// If we have all the CRDs already, we're done
-	if len(missingGVKs) == 0 {
-		v.logger.Debug("All required CRDs are already cached")
-		return nil
-	}
+	// Try to fetch each required CRD - GetCRD will use cache if already present
+	var missingCRDs []string
 
-	v.logger.Debug("Fetching additional CRDs", "missingCount", len(missingGVKs))
-
-	// Fetch missing CRDs
-	for gvk := range missingGVKs {
+	for gvk := range uniqueGVKs {
 		// Skip resources that don't require CRDs
 		if !v.schemaClient.IsCRDRequired(ctx, gvk) {
 			v.logger.Debug("Skipping built-in resource type, no CRD required",
@@ -187,32 +156,22 @@ func (v *DefaultSchemaValidator) EnsureComposedResourceCRDs(ctx context.Context,
 			continue
 		}
 
-		// Try to get the CRD using the client's GetCRD method
-		crdObj, err := v.schemaClient.GetCRD(ctx, gvk)
+		// Try to get the CRD using the client's GetCRD method (which will cache it)
+		_, err := v.schemaClient.GetCRD(ctx, gvk)
 		if err != nil {
-			v.logger.Debug("CRD not found (continuing)",
+			v.logger.Debug("CRD not found",
 				"gvk", gvk.String(),
 				"error", err)
-
-			return errors.New("unable to find CRD for " + gvk.String())
+			missingCRDs = append(missingCRDs, gvk.String())
 		}
-
-		// Convert to CRD
-		crd := &extv1.CustomResourceDefinition{}
-		if err := runtime.DefaultUnstructuredConverter.FromUnstructured(crdObj.Object, crd); err != nil {
-			v.logger.Debug("Error converting CRD (continuing)",
-				"gvk", gvk.String(),
-				"error", err)
-
-			continue
-		}
-
-		// Add to our cache
-		v.crds = append(v.crds, crd)
-		v.logger.Debug("Added CRD to cache", "crdName", crd.Name)
 	}
 
-	v.logger.Debug("Finished ensuring CRDs", "totalCRDs", len(v.crds))
+	// If any CRDs are missing, fail
+	if len(missingCRDs) > 0 {
+		return errors.Errorf("unable to find CRDs for: %v", missingCRDs)
+	}
+
+	v.logger.Debug("Finished ensuring CRDs")
 
 	return nil
 }
@@ -221,39 +180,15 @@ func (v *DefaultSchemaValidator) EnsureComposedResourceCRDs(ctx context.Context,
 func (v *DefaultSchemaValidator) getResourceScope(ctx context.Context, gvk schema.GroupVersionKind) (string, error) {
 	v.logger.Debug("Getting resource scope", "gvk", gvk.String())
 
-	// First check if we have the CRD in our cache
-	for _, crd := range v.crds {
-		for _, version := range crd.Spec.Versions {
-			if crd.Spec.Group == gvk.Group &&
-				version.Name == gvk.Version &&
-				crd.Spec.Names.Kind == gvk.Kind {
-				scope := string(crd.Spec.Scope)
-				v.logger.Debug("Found scope in cached CRDs", "gvk", gvk.String(), "scope", scope)
-
-				return scope, nil
-			}
-		}
-	}
-
-	// If not in cache, try to fetch the CRD
-	crdObj, err := v.schemaClient.GetCRD(ctx, gvk)
+	// Get the typed CRD directly
+	crd, err := v.schemaClient.GetCRD(ctx, gvk)
 	if err != nil {
 		v.logger.Debug("Failed to get CRD for scope lookup", "gvk", gvk.String(), "error", err)
 		return "", errors.Wrapf(err, "cannot get CRD for %s to determine scope", gvk.String())
 	}
 
-	// Convert to CRD and extract scope
-	crd := &extv1.CustomResourceDefinition{}
-	if err := runtime.DefaultUnstructuredConverter.FromUnstructured(crdObj.Object, crd); err != nil {
-		v.logger.Debug("Error converting CRD for scope lookup", "gvk", gvk.String(), "error", err)
-		return "", errors.Wrapf(err, "cannot convert CRD for %s", gvk.String())
-	}
-
 	scope := string(crd.Spec.Scope)
 	v.logger.Debug("Retrieved scope from CRD", "gvk", gvk.String(), "scope", scope)
-
-	// Add to our cache for future use
-	v.crds = append(v.crds, crd)
 
 	return scope, nil
 }

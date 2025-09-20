@@ -15,6 +15,7 @@ import (
 	tu "github.com/crossplane-contrib/crossplane-diff/cmd/diff/testutils"
 	gcmp "github.com/google/go-cmp/cmp"
 	"github.com/sergi/go-diff/diffmatchpatch"
+	extv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	un "k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -28,6 +29,17 @@ import (
 	pkgv1 "github.com/crossplane/crossplane/v2/apis/pkg/v1"
 	"github.com/crossplane/crossplane/v2/cmd/crank/render"
 	v1 "github.com/crossplane/crossplane/v2/proto/fn/v1"
+)
+
+// Test constants to avoid duplication.
+const (
+	testGroup      = "example.org"
+	testKind       = "XR1"
+	testPlural     = "xr1s"
+	testSingular   = "xr1"
+	testCRDName    = testPlural + "." + testGroup
+	testXRDName    = testCRDName
+	testAPIVersion = "v1"
 )
 
 // Ensure MockDiffProcessor implements the DiffProcessor interface.
@@ -247,6 +259,16 @@ func TestDefaultDiffProcessor_PerformDiff(t *testing.T) {
 						Build(),
 					Schema: tu.NewMockSchemaClient().
 						WithNoResourcesRequiringCRDs().
+						WithGetCRD(func(_ context.Context, gvk schema.GroupVersionKind) (*extv1.CustomResourceDefinition, error) {
+							if gvk.Group == testGroup && gvk.Kind == testKind {
+								return makeTestCRD(testCRDName, testKind, testGroup, testAPIVersion), nil
+							}
+							if gvk.Group == "cpd.org" && gvk.Kind == "ComposedResource" {
+								return makeTestCRD("composedresources.cpd.org", "ComposedResource", "cpd.org", "v1"), nil
+							}
+							return nil, errors.New("CRD not found")
+						}).
+						WithSuccessfulCRDByNameFetch(testCRDName, makeTestCRD(testCRDName, testKind, testGroup, testAPIVersion)).
 						Build(),
 					Type: tu.NewMockTypeConverter().Build(),
 				}
@@ -258,6 +280,10 @@ func TestDefaultDiffProcessor_PerformDiff(t *testing.T) {
 						Build(),
 					Definition: tu.NewMockDefinitionClient().
 						WithSuccessfulXRDsFetch([]*un.Unstructured{}).
+						WithXRDForXR(tu.NewXRD(testXRDName, testGroup, testKind).
+							WithPlural(testPlural).
+							WithSingular(testSingular).
+							BuildAsUnstructured()).
 						Build(),
 					Environment: tu.NewMockEnvironmentClient().
 						WithSuccessfulEnvironmentConfigsFetch([]*un.Unstructured{}).
@@ -389,6 +415,16 @@ func TestDefaultDiffProcessor_PerformDiff(t *testing.T) {
 						Build(),
 					Schema: tu.NewMockSchemaClient().
 						WithNoResourcesRequiringCRDs().
+						WithGetCRD(func(_ context.Context, gvk schema.GroupVersionKind) (*extv1.CustomResourceDefinition, error) {
+							if gvk.Group == testGroup && gvk.Kind == testKind {
+								return makeTestCRD(testCRDName, testKind, testGroup, testAPIVersion), nil
+							}
+							if gvk.Group == "cpd.org" && gvk.Kind == "ComposedResource" {
+								return makeTestCRD("composedresources.cpd.org", "ComposedResource", "cpd.org", "v1"), nil
+							}
+							return nil, errors.New("CRD not found")
+						}).
+						WithSuccessfulCRDByNameFetch(testCRDName, makeTestCRD(testCRDName, testKind, testGroup, testAPIVersion)).
 						Build(),
 					Type: tu.NewMockTypeConverter().Build(),
 				}
@@ -398,7 +434,12 @@ func TestDefaultDiffProcessor_PerformDiff(t *testing.T) {
 					Composition: tu.NewMockCompositionClient().
 						WithSuccessfulCompositionMatch(composition).
 						Build(),
-					Definition: tu.NewMockDefinitionClient().Build(),
+					Definition: tu.NewMockDefinitionClient().
+						WithXRDForXR(tu.NewXRD(testXRDName, testGroup, testKind).
+							WithPlural(testPlural).
+							WithSingular(testSingular).
+							BuildAsUnstructured()).
+						Build(),
 					Environment: tu.NewMockEnvironmentClient().
 						WithSuccessfulEnvironmentConfigsFetch([]*un.Unstructured{}).
 						Build(),
@@ -1081,4 +1122,15 @@ func TestDefaultDiffProcessor_RenderWithRequirements(t *testing.T) {
 			}
 		})
 	}
+}
+
+// Helper function to create a test CRD for the given GVK.
+func makeTestCRD(name string, kind string, group string, version string) *extv1.CustomResourceDefinition {
+	return tu.NewCRD(name, group, kind).
+		WithListKind(kind+"List").
+		WithPlural(strings.ToLower(kind)+"s").
+		WithSingular(strings.ToLower(kind)).
+		WithVersion(version, true, true).
+		WithStandardSchema("coolField").
+		Build()
 }

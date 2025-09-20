@@ -1,0 +1,79 @@
+apiVersion: apiextensions.crossplane.io/v2
+kind: CompositeResourceDefinition
+metadata:
+  name: xtestdefaultresources.ns.diff.example.org
+spec:
+  group: ns.diff.example.org
+  names:
+    kind: XTestDefaultResource
+    plural: xtestdefaultresources
+  scope: Namespaced
+  versions:
+    - name: v1alpha1
+      served: true
+      referenceable: true
+      schema:
+        openAPIV3Schema:
+          type: object
+          properties:
+            spec:
+              type: object
+              properties:
+                region:
+                  type: string
+                  default: "us-east-1"
+                  description: "AWS region with default value"
+                size:
+                  type: string
+                  default: "small"
+                  description: "Instance size with default"
+                settings:
+                  type: object
+                  default:
+                    enabled: true
+                    timeout: 30
+                  properties:
+                    enabled:
+                      type: boolean
+                      default: true
+                    timeout:
+                      type: integer
+                      default: 30
+                    retries:
+                      type: integer
+                      default: 3
+                tags:
+                  type: object
+                  default:
+                    environment: "development"
+                  properties:
+                    environment:
+                      type: string
+                      default: "development"
+                    team:
+                      type: string
+            status:
+              type: object
+              properties:
+                conditions:
+                  description: Conditions of the resource.
+                  type: array
+                  items:
+                    type: object
+                    required:
+                      - lastTransitionTime
+                      - reason
+                      - status
+                      - type
+                    properties:
+                      lastTransitionTime:
+                        type: string
+                        format: date-time
+                      message:
+                        type: string
+                      reason:
+                        type: string
+                      status:
+                        type: string
+                      type:
+                        type: string
