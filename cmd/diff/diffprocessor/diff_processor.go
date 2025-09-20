@@ -42,6 +42,7 @@ type DefaultDiffProcessor struct {
 	fnClient             xp.FunctionClient
 	compClient           xp.CompositionClient
 	defClient            xp.DefinitionClient
+	schemaClient         k8.SchemaClient
 	config               ProcessorConfig
 	schemaValidator      SchemaValidator
 	diffCalculator       DiffCalculator
@@ -82,6 +83,7 @@ func NewDiffProcessor(k8cs k8.Clients, xpcs xp.Clients, opts ...ProcessorOption)
 		fnClient:             xpcs.Function,
 		compClient:           xpcs.Composition,
 		defClient:            xpcs.Definition,
+		schemaClient:         k8cs.Schema,
 		config:               config,
 		schemaValidator:      schemaValidator,
 		diffCalculator:       diffCalculator,
@@ -206,6 +208,13 @@ func (p *DefaultDiffProcessor) DiffSingleResource(ctx context.Context, res *un.U
 	if err != nil {
 		p.config.Logger.Debug("Failed to get functions", "resource", resourceID, "error", err)
 		return nil, errors.Wrap(err, "cannot get functions from pipeline")
+	}
+
+	// Apply XRD defaults before rendering
+	err = p.applyXRDDefaults(ctx, xr, resourceID)
+	if err != nil {
+		p.config.Logger.Debug("Failed to apply XRD defaults", "resource", resourceID, "error", err)
+		return nil, errors.Wrap(err, "cannot apply XRD defaults")
 	}
 
 	// Perform iterative rendering and requirements reconciliation
@@ -504,4 +513,61 @@ func (p *DefaultDiffProcessor) propagateNamespacesToManagedResources(_ context.C
 		// Update the composed resource with the modified content
 		composedResources[i].SetUnstructuredContent(resource.Object)
 	}
+}
+
+// applyXRDDefaults applies default values from the XRD schema to the XR.
+func (p *DefaultDiffProcessor) applyXRDDefaults(ctx context.Context, xr *cmp.Unstructured, resourceID string) error {
+	p.config.Logger.Debug("Applying XRD defaults", "resource", resourceID)
+
+	// Get the XR's GVK
+	gvk := xr.GroupVersionKind()
+
+	// Find the XRD that defines this XR
+	var (
+		xrd *un.Unstructured
+		err error
+	)
+
+	// Check if this is a claim or an XR
+	if p.defClient.IsClaimResource(ctx, xr.GetUnstructured()) {
+		xrd, err = p.defClient.GetXRDForClaim(ctx, gvk)
+	} else {
+		xrd, err = p.defClient.GetXRDForXR(ctx, gvk)
+	}
+
+	if err != nil {
+		return errors.Wrapf(err, "cannot find XRD for resource %s with GVK %s", resourceID, gvk.String())
+	}
+
+	// Get the CRD that corresponds to this XRD using the XRD name
+	xrdName := xrd.GetName()
+
+	p.config.Logger.Debug("Looking for CRD matching XRD in applyXRDDefaults", "resource", resourceID, "xrdName", xrdName)
+
+	// Use the new GetCRDByName method to directly get the CRD
+	crdForDefaults, err := p.schemaClient.GetCRDByName(xrdName)
+	if err != nil {
+		return errors.Wrapf(err, "cannot find CRD for XRD %s (resource %s)", xrdName, resourceID)
+	}
+
+	// Apply defaults using the render.DefaultValues function
+	apiVersion := xr.GetAPIVersion()
+	xrContent := xr.UnstructuredContent()
+
+	p.config.Logger.Debug("Applying defaults to XR in applyXRDDefaults",
+		"resource", resourceID,
+		"apiVersion", apiVersion,
+		"crdName", crdForDefaults.Name)
+
+	err = render.DefaultValues(xrContent, apiVersion, *crdForDefaults)
+	if err != nil {
+		return errors.Wrapf(err, "cannot apply default values for XR %s", resourceID)
+	}
+
+	// Update the XR with the defaulted content
+	xr.SetUnstructuredContent(xrContent)
+
+	p.config.Logger.Debug("Successfully applied XRD defaults", "resource", resourceID)
+
+	return nil
 }

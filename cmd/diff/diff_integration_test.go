@@ -968,6 +968,7 @@ Summary: 2 added, 2 modified
 +   compositeDeletePolicy: Background
 +   compositionRef:
 +     name: claim-composition
++   compositionUpdatePolicy: Automatic
 +   coolField: new-value
 
 ---
@@ -1013,6 +1014,7 @@ Summary: 2 added`,
     compositeDeletePolicy: Background
     compositionRef:
       name: claim-composition
+    compositionUpdatePolicy: Automatic
 -   coolField: existing-value
 +   coolField: modified-value
 
@@ -1039,6 +1041,69 @@ Summary: 2 added`,
 ---
 
 Summary: 2 modified`,
+			expectedError: false,
+			noColor:       true,
+		},
+		"XRD defaults should be applied to XR before rendering": {
+			inputFiles: []string{"testdata/diff/xr-with-missing-defaults.yaml"},
+			setupFiles: []string{
+				"testdata/diff/resources/xrd-with-defaults.yaml",
+				"testdata/diff/resources/composition-with-defaults.yaml",
+				"testdata/diff/resources/functions.yaml",
+			},
+			expectedOutput: strings.Join([]string{
+				`+++ XTestDefaultResource/test-resource-with-defaults
++ apiVersion: ns.diff.example.org/v1alpha1
++ kind: XTestDefaultResource
++ metadata:
++   name: test-resource-with-defaults
++   namespace: default
++ spec:
++   region: us-east-1
++   settings:
++     enabled: true
++     retries: 3
++     timeout: 30
++   size: large
++   tags:
++     environment: development
+
+---
+
+Summary: 1 added`,
+			}, ""),
+			expectedError: false,
+			noColor:       true,
+		},
+		"XRD defaults should not override user-specified values": {
+			inputFiles: []string{"testdata/diff/xr-with-overridden-defaults.yaml"},
+			setupFiles: []string{
+				"testdata/diff/resources/xrd-with-defaults.yaml",
+				"testdata/diff/resources/composition-with-defaults.yaml",
+				"testdata/diff/resources/functions.yaml",
+			},
+			expectedOutput: strings.Join([]string{
+				`+++ XTestDefaultResource/test-resource-with-overrides
++ apiVersion: ns.diff.example.org/v1alpha1
++ kind: XTestDefaultResource
++ metadata:
++   name: test-resource-with-overrides
++   namespace: default
++ spec:
++   region: us-west-2
++   settings:
++     enabled: false
++     retries: 3
++     timeout: 60
++   size: xlarge
++   tags:
++     environment: production
++     team: platform
+
+---
+
+Summary: 1 added`,
+			}, ""),
 			expectedError: false,
 			noColor:       true,
 		},

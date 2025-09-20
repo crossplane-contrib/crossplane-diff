@@ -1,0 +1,9 @@
+apiVersion: ns.diff.example.org/v1alpha1
+kind: XTestDefaultResource
+metadata:
+  name: test-resource-with-defaults
+  namespace: default
+spec:
+  # Only specify one field, leaving others to use defaults from XRD
+  size: "large"
+  # Note: region, settings, and tags are not specified and should get defaults

@@ -1,7 +1,7 @@
 apiVersion: apiextensions.crossplane.io/v1
 kind: CompositeResourceDefinition
 metadata:
-  name: xnopresources.diff.example.org
+  name: xnopresources2.diff.example.org
 spec:
   group: diff.example.org
   names:
@@ -35,3 +35,38 @@ spec:
                       type: object
                       additionalProperties:
                         type: string
+                compositionUpdatePolicy:
+                  type: string
+                  enum:
+                    - Automatic
+                    - Manual
+                  default: "Automatic"
+                compositeDeletePolicy:
+                  type: string
+                  enum:
+                    - Background
+                    - Foreground
+                  default: "Background"
+                publishConnectionDetailsTo:
+                  type: object
+                  properties:
+                    name:
+                      type: string
+                    configRef:
+                      type: object
+                      properties:
+                        name:
+                          type: string
+                    metadata:
+                      type: object
+                      properties:
+                        labels:
+                          type: object
+                          additionalProperties:
+                            type: string
+                        annotations:
+                          type: object
+                          additionalProperties:
+                            type: string
+                writeConnectionSecretsToNamespace:
+                  type: string

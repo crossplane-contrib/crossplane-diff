@@ -1,0 +1,16 @@
+apiVersion: apiextensions.crossplane.io/v1
+kind: Composition
+metadata:
+  name: xdefaultresources.ns.diff.example.org
+  labels:
+    provider: nop
+    service: nop
+spec:
+  mode: Pipeline
+  compositeTypeRef:
+    apiVersion: ns.diff.example.org/v1alpha1
+    kind: XTestDefaultResource
+  pipeline:
+    - step: auto-ready
+      functionRef:
+        name: function-auto-ready
