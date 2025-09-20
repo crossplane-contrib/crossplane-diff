@@ -548,16 +548,19 @@ func (b *MockTypeConverterBuilder) WithResourceNameForGVK(gvk schema.GroupVersio
 			if testGVK.Group == gvk.Group && testGVK.Version == gvk.Version && testGVK.Kind == gvk.Kind {
 				return resourceName, nil
 			}
+
 			return "", errors.New("unexpected GVK in test")
 		})
 	}
 
 	// If we already have a GetResourceNameForGVK function, wrap it to add this mapping
 	originalFn := b.mock.GetResourceNameForGVKFn
+
 	return b.WithGetResourceNameForGVK(func(ctx context.Context, testGVK schema.GroupVersionKind) (string, error) {
 		if testGVK.Group == gvk.Group && testGVK.Version == gvk.Version && testGVK.Kind == gvk.Kind {
 			return resourceName, nil
 		}
+
 		return originalFn(ctx, testGVK)
 	})
 }
@@ -568,6 +571,7 @@ func (b *MockTypeConverterBuilder) WithResourceNameForGVKs(gvkMappings map[schem
 		if resourceName, found := gvkMappings[gvk]; found {
 			return resourceName, nil
 		}
+
 		return "", errors.New("unexpected GVK in test")
 	})
 }
