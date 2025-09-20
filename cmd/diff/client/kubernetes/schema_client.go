@@ -185,6 +185,22 @@ func (c *DefaultSchemaClient) cacheResourceType(gvk schema.GroupVersionKind, req
 	c.resourceTypeMap[gvk] = requiresCRD
 }
 
+// extractGVKsFromXRDs extracts GVKs from multiple XRDs. This is a pure function with no side effects.
+func extractGVKsFromXRDs(xrds []*un.Unstructured) ([]schema.GroupVersionKind, error) {
+	var allGVKs []schema.GroupVersionKind
+
+	for _, xrd := range xrds {
+		gvks, err := extractGVKsFromXRD(xrd)
+		if err != nil {
+			return nil, errors.Wrapf(err, "failed to extract GVKs from XRD %s", xrd.GetName())
+		}
+
+		allGVKs = append(allGVKs, gvks...)
+	}
+
+	return allGVKs, nil
+}
+
 // extractGVKsFromXRD extracts all GroupVersionKinds from an XRD using strongly-typed conversion.
 // This method handles both v1 and v2 XRDs and leverages Kubernetes runtime conversion.
 func extractGVKsFromXRD(xrd *un.Unstructured) ([]schema.GroupVersionKind, error) {
@@ -251,18 +267,16 @@ func (c *DefaultSchemaClient) LoadCRDsFromXRDs(ctx context.Context, xrds []*un.U
 		return nil
 	}
 
-	// Extract group-version-kinds from XRDs to find corresponding CRDs
-	// Fail fast on any invalid XRD - per repository guidelines: never continue in degraded state
-	var crdsToFetch []schema.GroupVersionKind
+	// Extract GVKs from XRDs using the pure function
+	gvks, err := extractGVKsFromXRDs(xrds)
+	if err != nil {
+		return err // Error already wrapped with context from ExtractGVKsFromXRDs
+	}
 
+	// Build XRD-to-CRD name mappings for later use
 	xrdToCRDMappings := make(map[string]string) // XRD name -> CRD name
 
 	for _, xrd := range xrds {
-		gvks, err := extractGVKsFromXRD(xrd)
-		if err != nil {
-			return err // Error already wrapped with context from extractGVKsFromXRD
-		}
-
 		// Extract the CRD name from XRD spec (format: {plural}.{group})
 		group, _, _ := un.NestedString(xrd.Object, "spec", "group")
 
@@ -273,27 +287,13 @@ func (c *DefaultSchemaClient) LoadCRDsFromXRDs(ctx context.Context, xrds []*un.U
 			xrdToCRDMappings[xrdName] = crdName
 			c.logger.Debug("Mapped XRD to CRD", "xrdName", xrdName, "crdName", crdName)
 		}
-
-		crdsToFetch = append(crdsToFetch, gvks...)
 	}
 
-	c.logger.Debug("Identified GVKs to fetch CRDs for", "count", len(crdsToFetch))
-
-	// Fetch CRDs from cluster for each GVK - fail fast if any CRD is missing
-	// Per repository guidelines: never continue in a degraded state
-	fetchedCRDs := make([]*extv1.CustomResourceDefinition, 0, len(crdsToFetch))
-
-	for _, gvk := range crdsToFetch {
-		crd, err := c.GetCRD(ctx, gvk)
-		if err != nil {
-			c.logger.Debug("Failed to fetch required CRD for GVK", "gvk", gvk.String(), "error", err)
-			return errors.Wrapf(err, "cannot fetch required CRD for %s", gvk.String())
-		}
-
-		fetchedCRDs = append(fetchedCRDs, crd)
+	// Load CRDs from the extracted GVKs
+	err = c.loadCRDsFromGVKs(ctx, gvks)
+	if err != nil {
+		return err // Error already wrapped with context from LoadCRDsFromGVKs
 	}
-
-	c.logger.Debug("Successfully fetched all required CRDs from cluster", "count", len(fetchedCRDs))
 
 	// Store XRD-to-CRD name mappings
 	c.crdsMu.Lock()
@@ -305,6 +305,39 @@ func (c *DefaultSchemaClient) LoadCRDsFromXRDs(ctx context.Context, xrds []*un.U
 	c.crdsMu.Unlock()
 
 	c.logger.Debug("Successfully stored XRD-to-CRD mappings", "count", len(xrdToCRDMappings))
+
+	return nil
+}
+
+// loadCRDsFromGVKs fetches CRDs from the cluster for the given GVKs and caches them.
+// This method fetches the actual CRDs from the cluster for each provided GVK.
+func (c *DefaultSchemaClient) loadCRDsFromGVKs(ctx context.Context, gvks []schema.GroupVersionKind) error {
+	c.logger.Debug("Loading CRDs from cluster for GVKs", "gvkCount", len(gvks))
+
+	if len(gvks) == 0 {
+		c.logger.Debug("No GVKs provided, nothing to load")
+		return nil
+	}
+
+	// TODO: Consider parallel fetching of CRDs to improve performance for large numbers of GVKs.
+	// This could significantly speed up initialization when dealing with many XRDs.
+	// For now, we fetch sequentially to keep the implementation simple.
+
+	// Fetch CRDs from cluster for each GVK - fail fast if any CRD is missing
+	// Per repository guidelines: never continue in a degraded state
+	fetchedCRDs := make([]*extv1.CustomResourceDefinition, 0, len(gvks))
+
+	for _, gvk := range gvks {
+		crd, err := c.GetCRD(ctx, gvk)
+		if err != nil {
+			c.logger.Debug("Failed to fetch required CRD for GVK", "gvk", gvk.String(), "error", err)
+			return errors.Wrapf(err, "cannot fetch required CRD for %s", gvk.String())
+		}
+
+		fetchedCRDs = append(fetchedCRDs, crd)
+	}
+
+	c.logger.Debug("Successfully fetched all required CRDs from cluster", "count", len(fetchedCRDs))
 
 	return nil
 }
@@ -348,6 +381,12 @@ func (c *DefaultSchemaClient) GetAllCRDs() []*extv1.CustomResourceDefinition {
 func (c *DefaultSchemaClient) addCRD(crd *extv1.CustomResourceDefinition) {
 	c.crdsMu.Lock()
 	defer c.crdsMu.Unlock()
+
+	// Check if already cached to avoid duplicates
+	if _, exists := c.crdByName[crd.Name]; exists {
+		c.logger.Debug("CRD already in cache, skipping", "crdName", crd.Name)
+		return
+	}
 
 	// Add to slice
 	c.crds = append(c.crds, crd)
