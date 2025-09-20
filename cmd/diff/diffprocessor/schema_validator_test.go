@@ -63,7 +63,7 @@ func TestDefaultSchemaValidator_ValidateResources(t *testing.T) {
 			setupClients: func() (*tu.MockSchemaClient, *tu.MockDefinitionClient) {
 				sch := tu.NewMockSchemaClient().
 					WithFoundCRDs(map[schema.GroupKind]*extv1.CustomResourceDefinition{
-						{Group: testExampleOrg, Kind: "XR"}:                     xrCRD,
+						{Group: testExampleOrg, Kind: "XR"}:               xrCRD,
 						{Group: testCpdOrg, Kind: "testComposedResource"}: composedCRD,
 					}).
 					WithAllResourcesRequiringCRDs().
@@ -82,7 +82,7 @@ func TestDefaultSchemaValidator_ValidateResources(t *testing.T) {
 				sch := tu.NewMockSchemaClient().
 					// Add GetCRD implementation for typed CRDs
 					WithFoundCRDs(map[schema.GroupKind]*extv1.CustomResourceDefinition{
-						{Group: testExampleOrg, Kind: "XR"}:                     xrCRD,
+						{Group: testExampleOrg, Kind: "XR"}:               xrCRD,
 						{Group: testCpdOrg, Kind: "testComposedResource"}: composedCRD,
 					}).
 					// Implement IsCRDRequired to return true for our test resources

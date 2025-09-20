@@ -250,16 +250,19 @@ func (b *MockSchemaClientBuilder) WithFoundCRD(group, kind string, crd *extv1.Cu
 			if gvk.Group == group && gvk.Kind == kind {
 				return crd, nil
 			}
+
 			return nil, errors.New("CRD not found")
 		})
 	}
 
 	// If we already have a GetCRD function, wrap it to add this mapping
 	originalFn := b.mock.GetCRDFn
+
 	return b.WithGetCRD(func(ctx context.Context, gvk schema.GroupVersionKind) (*extv1.CustomResourceDefinition, error) {
 		if gvk.Group == group && gvk.Kind == kind {
 			return crd, nil
 		}
+
 		return originalFn(ctx, gvk)
 	})
 }
@@ -271,6 +274,7 @@ func (b *MockSchemaClientBuilder) WithFoundCRDs(crdMappings map[schema.GroupKind
 		if crd, found := crdMappings[groupKind]; found {
 			return crd, nil
 		}
+
 		return nil, errors.New("CRD not found")
 	})
 }
