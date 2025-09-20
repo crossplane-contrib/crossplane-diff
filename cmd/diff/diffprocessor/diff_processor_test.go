@@ -31,6 +31,17 @@ import (
 	v1 "github.com/crossplane/crossplane/v2/proto/fn/v1"
 )
 
+// Test constants to avoid duplication.
+const (
+	testGroup      = "example.org"
+	testKind       = "XR1"
+	testPlural     = "xr1s"
+	testSingular   = "xr1"
+	testCRDName    = testPlural + "." + testGroup
+	testXRDName    = testCRDName
+	testAPIVersion = "v1"
+)
+
 // Ensure MockDiffProcessor implements the DiffProcessor interface.
 var _ DiffProcessor = &tu.MockDiffProcessor{}
 
@@ -249,14 +260,15 @@ func TestDefaultDiffProcessor_PerformDiff(t *testing.T) {
 					Schema: tu.NewMockSchemaClient().
 						WithNoResourcesRequiringCRDs().
 						WithGetCRD(func(_ context.Context, gvk schema.GroupVersionKind) (*extv1.CustomResourceDefinition, error) {
-							if gvk.Group == "example.org" && gvk.Kind == "XR1" {
-								return makeTestCRD("xr1s.example.org", "XR1", "example.org", "v1"), nil
+							if gvk.Group == testGroup && gvk.Kind == testKind {
+								return makeTestCRD(testCRDName, testKind, testGroup, testAPIVersion), nil
 							}
 							if gvk.Group == "cpd.org" && gvk.Kind == "ComposedResource" {
 								return makeTestCRD("composedresources.cpd.org", "ComposedResource", "cpd.org", "v1"), nil
 							}
 							return nil, errors.New("CRD not found")
 						}).
+						WithSuccessfulCRDByNameFetch(testCRDName, makeTestCRD(testCRDName, testKind, testGroup, testAPIVersion)).
 						Build(),
 					Type: tu.NewMockTypeConverter().Build(),
 				}
@@ -268,6 +280,10 @@ func TestDefaultDiffProcessor_PerformDiff(t *testing.T) {
 						Build(),
 					Definition: tu.NewMockDefinitionClient().
 						WithSuccessfulXRDsFetch([]*un.Unstructured{}).
+						WithXRDForXR(tu.NewXRD(testXRDName, testGroup, testKind).
+							WithPlural(testPlural).
+							WithSingular(testSingular).
+							BuildAsUnstructured()).
 						Build(),
 					Environment: tu.NewMockEnvironmentClient().
 						WithSuccessfulEnvironmentConfigsFetch([]*un.Unstructured{}).
@@ -400,14 +416,15 @@ func TestDefaultDiffProcessor_PerformDiff(t *testing.T) {
 					Schema: tu.NewMockSchemaClient().
 						WithNoResourcesRequiringCRDs().
 						WithGetCRD(func(_ context.Context, gvk schema.GroupVersionKind) (*extv1.CustomResourceDefinition, error) {
-							if gvk.Group == "example.org" && gvk.Kind == "XR1" {
-								return makeTestCRD("xr1s.example.org", "XR1", "example.org", "v1"), nil
+							if gvk.Group == testGroup && gvk.Kind == testKind {
+								return makeTestCRD(testCRDName, testKind, testGroup, testAPIVersion), nil
 							}
 							if gvk.Group == "cpd.org" && gvk.Kind == "ComposedResource" {
 								return makeTestCRD("composedresources.cpd.org", "ComposedResource", "cpd.org", "v1"), nil
 							}
 							return nil, errors.New("CRD not found")
 						}).
+						WithSuccessfulCRDByNameFetch(testCRDName, makeTestCRD(testCRDName, testKind, testGroup, testAPIVersion)).
 						Build(),
 					Type: tu.NewMockTypeConverter().Build(),
 				}
@@ -417,7 +434,12 @@ func TestDefaultDiffProcessor_PerformDiff(t *testing.T) {
 					Composition: tu.NewMockCompositionClient().
 						WithSuccessfulCompositionMatch(composition).
 						Build(),
-					Definition: tu.NewMockDefinitionClient().Build(),
+					Definition: tu.NewMockDefinitionClient().
+						WithXRDForXR(tu.NewXRD(testXRDName, testGroup, testKind).
+							WithPlural(testPlural).
+							WithSingular(testSingular).
+							BuildAsUnstructured()).
+						Build(),
 					Environment: tu.NewMockEnvironmentClient().
 						WithSuccessfulEnvironmentConfigsFetch([]*un.Unstructured{}).
 						Build(),

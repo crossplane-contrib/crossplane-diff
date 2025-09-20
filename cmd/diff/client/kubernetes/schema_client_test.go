@@ -144,6 +144,7 @@ func TestSchemaClient_IsCRDRequired(t *testing.T) {
 				typeConverter:   tc.setupConverter(),
 				logger:          tu.TestLogger(t, false),
 				resourceTypeMap: make(map[schema.GroupVersionKind]bool),
+				xrdToCRDName:    make(map[string]string),
 			}
 
 			// Call the method under test
@@ -317,6 +318,7 @@ func TestSchemaClient_GetCRD(t *testing.T) {
 				resourceTypeMap: make(map[schema.GroupVersionKind]bool),
 				crds:            []*extv1.CustomResourceDefinition{},
 				crdByName:       make(map[string]*extv1.CustomResourceDefinition),
+				xrdToCRDName:    make(map[string]string),
 			}
 
 			crd, err := c.GetCRD(tc.args.ctx, tc.args.gvk)
@@ -449,6 +451,7 @@ func TestSchemaClient_LoadCRDsFromXRDs(t *testing.T) {
 					resourceTypeMap: make(map[schema.GroupVersionKind]bool),
 					crds:            []*extv1.CustomResourceDefinition{},
 					crdByName:       make(map[string]*extv1.CustomResourceDefinition),
+					xrdToCRDName:    make(map[string]string),
 				}
 			},
 			xrds:         []*un.Unstructured{xrd},
@@ -463,6 +466,7 @@ func TestSchemaClient_LoadCRDsFromXRDs(t *testing.T) {
 					resourceTypeMap: make(map[schema.GroupVersionKind]bool),
 					crds:            []*extv1.CustomResourceDefinition{},
 					crdByName:       make(map[string]*extv1.CustomResourceDefinition),
+					xrdToCRDName:    make(map[string]string),
 				}
 			},
 			xrds:         []*un.Unstructured{},
@@ -477,6 +481,7 @@ func TestSchemaClient_LoadCRDsFromXRDs(t *testing.T) {
 					resourceTypeMap: make(map[schema.GroupVersionKind]bool),
 					crds:            []*extv1.CustomResourceDefinition{},
 					crdByName:       make(map[string]*extv1.CustomResourceDefinition),
+					xrdToCRDName:    make(map[string]string),
 				}
 			},
 			xrds:         nil,
@@ -507,6 +512,7 @@ func TestSchemaClient_LoadCRDsFromXRDs(t *testing.T) {
 					resourceTypeMap: make(map[schema.GroupVersionKind]bool),
 					crds:            []*extv1.CustomResourceDefinition{},
 					crdByName:       make(map[string]*extv1.CustomResourceDefinition),
+					xrdToCRDName:    make(map[string]string),
 				}
 			},
 			xrds:         []*un.Unstructured{xrd},
@@ -551,6 +557,98 @@ func TestSchemaClient_LoadCRDsFromXRDs(t *testing.T) {
 	}
 }
 
+func TestSchemaClient_GetCRDByName(t *testing.T) {
+	// Create test CRDs
+	testCRDName := testXResourcePlural + "." + testExampleOrgGroup
+	testCRD := tu.NewCRD(testCRDName, testExampleOrgGroup, testXResourceKind).
+		WithPlural(testXResourcePlural).
+		WithSingular("xresource").
+		Build()
+
+	tests := map[string]struct {
+		reason      string
+		setupCRDs   []*extv1.CustomResourceDefinition
+		searchName  string
+		expectError bool
+		expectedCRD *extv1.CustomResourceDefinition
+	}{
+		"CRDFound": {
+			reason:      "Should return CRD when it exists in cache",
+			setupCRDs:   []*extv1.CustomResourceDefinition{testCRD},
+			searchName:  testCRDName,
+			expectError: false,
+			expectedCRD: testCRD,
+		},
+		"CRDNotFound": {
+			reason:      "Should return error when CRD doesn't exist in cache",
+			setupCRDs:   []*extv1.CustomResourceDefinition{},
+			searchName:  testCRDName,
+			expectError: true,
+			expectedCRD: nil,
+		},
+		"DifferentCRDInCache": {
+			reason: "Should return error when searching for CRD that doesn't exist",
+			setupCRDs: []*extv1.CustomResourceDefinition{
+				tu.NewCRD("other."+testExampleOrgGroup, testExampleOrgGroup, "OtherKind").Build(),
+			},
+			searchName:  testCRDName,
+			expectError: true,
+			expectedCRD: nil,
+		},
+	}
+
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			// Create schema client with test CRDs
+			client := &DefaultSchemaClient{
+				logger:          tu.TestLogger(t, false),
+				crds:            make([]*extv1.CustomResourceDefinition, 0),
+				crdByName:       make(map[string]*extv1.CustomResourceDefinition),
+				resourceTypeMap: make(map[schema.GroupVersionKind]bool),
+				xrdToCRDName:    make(map[string]string),
+			}
+
+			// Pre-populate cache with test CRDs
+			for _, crd := range tc.setupCRDs {
+				client.addCRD(crd)
+			}
+
+			// Call GetCRDByName
+			crd, err := client.GetCRDByName(tc.searchName)
+
+			// Check error expectations
+			if tc.expectError {
+				if err == nil {
+					t.Errorf("\n%s\nGetCRDByName(): expected error but got none", tc.reason)
+				}
+
+				return
+			}
+
+			if err != nil {
+				t.Errorf("\n%s\nGetCRDByName(): unexpected error: %v", tc.reason, err)
+				return
+			}
+
+			// Verify returned CRD
+			if crd == nil {
+				t.Errorf("\n%s\nGetCRDByName(): expected CRD but got nil", tc.reason)
+				return
+			}
+
+			if crd.Name != tc.expectedCRD.Name {
+				t.Errorf("\n%s\nGetCRDByName(): expected CRD name %s, got %s",
+					tc.reason, tc.expectedCRD.Name, crd.Name)
+			}
+
+			if crd.Spec.Group != tc.expectedCRD.Spec.Group {
+				t.Errorf("\n%s\nGetCRDByName(): expected CRD group %s, got %s",
+					tc.reason, tc.expectedCRD.Spec.Group, crd.Spec.Group)
+			}
+		})
+	}
+}
+
 func TestSchemaClient_GetAllCRDs(t *testing.T) {
 	// Create test CRDs
 	crd1 := tu.NewCRD("crd1."+testExampleOrgGroup, testExampleOrgGroup, "TestKind1").Build()
@@ -580,6 +678,7 @@ func TestSchemaClient_GetAllCRDs(t *testing.T) {
 				resourceTypeMap: make(map[schema.GroupVersionKind]bool),
 				crds:            tc.setupCRDs,
 				crdByName:       make(map[string]*extv1.CustomResourceDefinition),
+				xrdToCRDName:    make(map[string]string),
 			}
 
 			// Add CRDs to name lookup map
@@ -831,6 +930,7 @@ func TestSchemaClient_CachingBehavior(t *testing.T) {
 					resourceTypeMap: make(map[schema.GroupVersionKind]bool),
 					crds:            []*extv1.CustomResourceDefinition{},
 					crdByName:       make(map[string]*extv1.CustomResourceDefinition),
+					xrdToCRDName:    make(map[string]string),
 				}
 
 				return client, &callCount
@@ -873,6 +973,7 @@ func TestSchemaClient_CachingBehavior(t *testing.T) {
 					resourceTypeMap: make(map[schema.GroupVersionKind]bool),
 					crds:            []*extv1.CustomResourceDefinition{},
 					crdByName:       make(map[string]*extv1.CustomResourceDefinition),
+					xrdToCRDName:    make(map[string]string),
 				}
 
 				// Pre-populate cache by making first call

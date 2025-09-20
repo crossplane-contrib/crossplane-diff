@@ -9,8 +9,8 @@ import (
 	"os"
 	"sort"
 
+	tu "github.com/crossplane-contrib/crossplane-diff/cmd/diff/testutils"
 	gyaml "gopkg.in/yaml.v3"
-	extv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	un "k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -116,54 +116,34 @@ func createTestCompositionWithExtraResources() (*xpextv1.Composition, error) {
 
 // createTestXRD creates a test XRD for the XR.
 func createTestXRD() *xpextv1.CompositeResourceDefinition {
-	return &xpextv1.CompositeResourceDefinition{
-		ObjectMeta: metav1.ObjectMeta{
-			Name: "xexampleresources.example.org",
-		},
-		Spec: xpextv1.CompositeResourceDefinitionSpec{
-			Group: "example.org",
-			Names: extv1.CustomResourceDefinitionNames{
-				Kind:     "XExampleResource",
-				Plural:   "xexampleresources",
-				Singular: "xexampleresource",
-			},
-			Versions: []xpextv1.CompositeResourceDefinitionVersion{
-				{
-					Name:          "v1",
-					Served:        true,
-					Referenceable: true,
-					Schema: &xpextv1.CompositeResourceValidation{
-						OpenAPIV3Schema: runtime.RawExtension{
-							Raw: []byte(`{
-								"type": "object",
-								"properties": {
-									"spec": {
-										"type": "object",
-										"properties": {
-											"coolParam": {
-												"type": "string"
-											},
-											"replicas": {
-												"type": "integer"
-											}
-										}
-									},
-									"status": {
-										"type": "object",
-										"properties": {
-											"coolStatus": {
-												"type": "string"
-											}
-										}
-									}
-								}
-							}`),
+	return tu.NewXRD("xexampleresources.example.org", "example.org", "XExampleResource").
+		WithPlural("xexampleresources").
+		WithSingular("xexampleresource").
+		WithRawSchema([]byte(`{
+			"type": "object",
+			"properties": {
+				"spec": {
+					"type": "object",
+					"properties": {
+						"coolParam": {
+							"type": "string"
 						},
-					},
+						"replicas": {
+							"type": "integer"
+						}
+					}
 				},
-			},
-		},
-	}
+				"status": {
+					"type": "object",
+					"properties": {
+						"coolStatus": {
+							"type": "string"
+						}
+					}
+				}
+			}
+		}`)).
+		Build()
 }
 
 // createExtraResource creates a test extra resource.

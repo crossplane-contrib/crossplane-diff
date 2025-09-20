@@ -26,6 +26,9 @@ type SchemaClient interface {
 	// GetCRD gets the CustomResourceDefinition for a given GVK
 	GetCRD(ctx context.Context, gvk schema.GroupVersionKind) (*extv1.CustomResourceDefinition, error)
 
+	// GetCRDByName gets the CustomResourceDefinition by its name
+	GetCRDByName(name string) (*extv1.CustomResourceDefinition, error)
+
 	// IsCRDRequired checks if a GVK requires a CRD
 	IsCRDRequired(ctx context.Context, gvk schema.GroupVersionKind) bool
 
@@ -47,9 +50,10 @@ type DefaultSchemaClient struct {
 	resourceMapMu   sync.RWMutex
 
 	// CRD caching - consolidated from SchemaValidator
-	crds      []*extv1.CustomResourceDefinition
-	crdsMu    sync.RWMutex
-	crdByName map[string]*extv1.CustomResourceDefinition // for fast lookup by name
+	crds         []*extv1.CustomResourceDefinition
+	crdsMu       sync.RWMutex
+	crdByName    map[string]*extv1.CustomResourceDefinition // for fast lookup by name
+	xrdToCRDName map[string]string                          // maps XRD name to CRD name
 }
 
 // NewSchemaClient creates a new DefaultSchemaClient.
@@ -61,6 +65,7 @@ func NewSchemaClient(clients *core.Clients, typeConverter TypeConverter, logger 
 		resourceTypeMap: make(map[schema.GroupVersionKind]bool),
 		crds:            []*extv1.CustomResourceDefinition{},
 		crdByName:       make(map[string]*extv1.CustomResourceDefinition),
+		xrdToCRDName:    make(map[string]string),
 	}
 }
 
@@ -250,10 +255,23 @@ func (c *DefaultSchemaClient) LoadCRDsFromXRDs(ctx context.Context, xrds []*un.U
 	// Fail fast on any invalid XRD - per repository guidelines: never continue in degraded state
 	var crdsToFetch []schema.GroupVersionKind
 
+	xrdToCRDMappings := make(map[string]string) // XRD name -> CRD name
+
 	for _, xrd := range xrds {
 		gvks, err := extractGVKsFromXRD(xrd)
 		if err != nil {
 			return err // Error already wrapped with context from extractGVKsFromXRD
+		}
+
+		// Extract the CRD name from XRD spec (format: {plural}.{group})
+		group, _, _ := un.NestedString(xrd.Object, "spec", "group")
+
+		plural, _, _ := un.NestedString(xrd.Object, "spec", "names", "plural")
+		if group != "" && plural != "" {
+			crdName := plural + "." + group
+			xrdName := xrd.GetName()
+			xrdToCRDMappings[xrdName] = crdName
+			c.logger.Debug("Mapped XRD to CRD", "xrdName", xrdName, "crdName", crdName)
 		}
 
 		crdsToFetch = append(crdsToFetch, gvks...)
@@ -277,7 +295,41 @@ func (c *DefaultSchemaClient) LoadCRDsFromXRDs(ctx context.Context, xrds []*un.U
 
 	c.logger.Debug("Successfully fetched all required CRDs from cluster", "count", len(fetchedCRDs))
 
+	// Store XRD-to-CRD name mappings
+	c.crdsMu.Lock()
+
+	for xrdName, crdName := range xrdToCRDMappings {
+		c.xrdToCRDName[xrdName] = crdName
+	}
+
+	c.crdsMu.Unlock()
+
+	c.logger.Debug("Successfully stored XRD-to-CRD mappings", "count", len(xrdToCRDMappings))
+
 	return nil
+}
+
+// GetCRDByName gets a CRD by its name from the cache.
+// If the name is not found directly, it will also check if it's an XRD name
+// that maps to a different CRD name (e.g., claim XRDs).
+func (c *DefaultSchemaClient) GetCRDByName(name string) (*extv1.CustomResourceDefinition, error) {
+	c.crdsMu.RLock()
+	defer c.crdsMu.RUnlock()
+
+	// First, try direct lookup by CRD name
+	if crd, exists := c.crdByName[name]; exists {
+		return crd, nil
+	}
+
+	// If not found, check if this is an XRD name that maps to a different CRD name
+	if crdName, exists := c.xrdToCRDName[name]; exists {
+		if crd, exists := c.crdByName[crdName]; exists {
+			c.logger.Debug("Found CRD for XRD via name mapping", "xrdName", name, "crdName", crdName)
+			return crd, nil
+		}
+	}
+
+	return nil, errors.Errorf("CRD with name %s not found in cache", name)
 }
 
 // GetAllCRDs returns all cached CRDs.

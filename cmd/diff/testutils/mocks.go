@@ -395,6 +395,7 @@ func (m *MockResourceClient) IsNamespacedResource(ctx context.Context, gvk schem
 type MockSchemaClient struct {
 	InitializeFn       func(ctx context.Context) error
 	GetCRDFn           func(ctx context.Context, gvk schema.GroupVersionKind) (*extv1.CustomResourceDefinition, error)
+	GetCRDByNameFn     func(name string) (*extv1.CustomResourceDefinition, error)
 	IsCRDRequiredFn    func(ctx context.Context, gvk schema.GroupVersionKind) bool
 	ValidateResourceFn func(ctx context.Context, resource *un.Unstructured) error
 	LoadCRDsFromXRDsFn func(ctx context.Context, xrds []*un.Unstructured) error
@@ -417,6 +418,15 @@ func (m *MockSchemaClient) GetCRD(ctx context.Context, gvk schema.GroupVersionKi
 	}
 
 	return nil, errors.New("GetCRD not implemented")
+}
+
+// GetCRDByName implements kubernetes.SchemaClient.
+func (m *MockSchemaClient) GetCRDByName(name string) (*extv1.CustomResourceDefinition, error) {
+	if m.GetCRDByNameFn != nil {
+		return m.GetCRDByNameFn(name)
+	}
+
+	return nil, errors.New("GetCRDByName not implemented")
 }
 
 // IsCRDRequired implements kubernetes.SchemaClient.

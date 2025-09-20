@@ -12,7 +12,6 @@ import (
 	k8 "github.com/crossplane-contrib/crossplane-diff/cmd/diff/client/kubernetes"
 	"github.com/crossplane-contrib/crossplane-diff/cmd/diff/renderer"
 	dt "github.com/crossplane-contrib/crossplane-diff/cmd/diff/renderer/types"
-	extv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	un "k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 
@@ -537,9 +536,7 @@ func (p *DefaultDiffProcessor) applyXRDDefaults(ctx context.Context, xr *cmp.Uns
 	}
 
 	if err != nil {
-		p.config.Logger.Debug("No XRD found for resource", "resource", resourceID, "gvk", gvk.String(), "error", err)
-		// If we can't find the XRD, we can't apply defaults, but this shouldn't be a fatal error
-		return nil
+		return errors.Wrapf(err, "cannot find XRD for resource %s with GVK %s", resourceID, gvk.String())
 	}
 
 	// Get the CRD that corresponds to this XRD using the XRD name
@@ -547,28 +544,10 @@ func (p *DefaultDiffProcessor) applyXRDDefaults(ctx context.Context, xr *cmp.Uns
 
 	p.config.Logger.Debug("Looking for CRD matching XRD in applyXRDDefaults", "resource", resourceID, "xrdName", xrdName)
 
-	// Since we can't look up CRDs by name easily with the current interface,
-	// let's get all CRDs and find the matching one
-	allCRDs := p.schemaClient.GetAllCRDs()
-
-	var crdForDefaults *extv1.CustomResourceDefinition
-
-	p.config.Logger.Debug("Searching through CRDs for XRD match in applyXRDDefaults", "resource", resourceID, "totalCRDs", len(allCRDs))
-
-	for _, crd := range allCRDs {
-		p.config.Logger.Debug("Checking CRD in applyXRDDefaults", "resource", resourceID, "crdName", crd.Name, "xrdName", xrdName)
-
-		if crd.Name == xrdName {
-			crdForDefaults = crd
-			p.config.Logger.Debug("Found matching CRD for XRD in applyXRDDefaults", "resource", resourceID, "crdName", crd.Name)
-
-			break
-		}
-	}
-
-	if crdForDefaults == nil {
-		p.config.Logger.Debug("No matching CRD found for XRD in applyXRDDefaults", "resource", resourceID, "xrdName", xrdName)
-		return nil
+	// Use the new GetCRDByName method to directly get the CRD
+	crdForDefaults, err := p.schemaClient.GetCRDByName(xrdName)
+	if err != nil {
+		return errors.Wrapf(err, "cannot find CRD for XRD %s (resource %s)", xrdName, resourceID)
 	}
 
 	// Apply defaults using the render.DefaultValues function
