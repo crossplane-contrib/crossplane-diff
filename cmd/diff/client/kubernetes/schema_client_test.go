@@ -67,12 +67,11 @@ func TestSchemaClient_IsCRDRequired(t *testing.T) {
 			setupConverter: func() TypeConverter {
 				// For custom resources, our converter should return a successful resource name
 				return tu.NewMockTypeConverter().
-					WithGetResourceNameForGVK(func(_ context.Context, gvk schema.GroupVersionKind) (string, error) {
-						if gvk.Group == testExampleOrgGroup && gvk.Version == "v1" && gvk.Kind == testXResourceKind {
-							return testXResourcePlural, nil
-						}
-						return "", errors.New("unexpected GVK in test")
-					}).Build()
+					WithResourceNameForGVK(schema.GroupVersionKind{
+						Group:   testExampleOrgGroup,
+						Version: "v1",
+						Kind:    testXResourceKind,
+					}, testXResourcePlural).Build()
 			},
 			gvk: schema.GroupVersionKind{
 				Group:   testExampleOrgGroup,
@@ -86,12 +85,11 @@ func TestSchemaClient_IsCRDRequired(t *testing.T) {
 			setupConverter: func() TypeConverter {
 				// For apiextensions resources, our converter should return a successful resource name
 				return tu.NewMockTypeConverter().
-					WithGetResourceNameForGVK(func(_ context.Context, gvk schema.GroupVersionKind) (string, error) {
-						if gvk.Group == "apiextensions.k8s.io" && gvk.Version == "v1" && gvk.Kind == "CustomResourceDefinition" {
-							return "customresourcedefinitions", nil
-						}
-						return "", errors.New("unexpected GVK in test")
-					}).Build()
+					WithResourceNameForGVK(schema.GroupVersionKind{
+						Group:   "apiextensions.k8s.io",
+						Version: "v1",
+						Kind:    "CustomResourceDefinition",
+					}, "customresourcedefinitions").Build()
 			},
 			gvk: schema.GroupVersionKind{
 				Group:   "apiextensions.k8s.io",
@@ -105,12 +103,11 @@ func TestSchemaClient_IsCRDRequired(t *testing.T) {
 			setupConverter: func() TypeConverter {
 				// For networking.k8s.io resources, our converter should return a successful resource name
 				return tu.NewMockTypeConverter().
-					WithGetResourceNameForGVK(func(_ context.Context, gvk schema.GroupVersionKind) (string, error) {
-						if gvk.Group == "networking.k8s.io" && gvk.Version == "v1" && gvk.Kind == "NetworkPolicy" {
-							return "networkpolicies", nil
-						}
-						return "", errors.New("unexpected GVK in test")
-					}).Build()
+					WithResourceNameForGVK(schema.GroupVersionKind{
+						Group:   "networking.k8s.io",
+						Version: "v1",
+						Kind:    "NetworkPolicy",
+					}, "networkpolicies").Build()
 			},
 			gvk: schema.GroupVersionKind{
 				Group:   "networking.k8s.io",
@@ -177,24 +174,14 @@ func TestSchemaClient_GetCRD(t *testing.T) {
 		WithSingular("xresource").
 		Build()
 
-	// Create the same CRD as unstructured for the mock dynamic client using builder
-	testCRDUnstructured := tu.NewResource("apiextensions.k8s.io/v1", "CustomResourceDefinition", testXResourcePlural+".example.org").
-		WithSpec(map[string]interface{}{
-			"group": testExampleOrgGroup,
-			"names": map[string]interface{}{
-				"kind":     testXResourceKind,
-				"plural":   testXResourcePlural,
-				"singular": "xresource",
-			},
-			"scope": "Namespaced",
-			"versions": []interface{}{
-				map[string]interface{}{
-					"name":    "v1",
-					"served":  true,
-					"storage": true,
-				},
-			},
-		}).Build()
+	// Create the same CRD as unstructured for the mock dynamic client using CRD builder
+	testCRDUnstructuredObj, _ := runtime.DefaultUnstructuredConverter.ToUnstructured(
+		tu.NewCRD(testXResourcePlural+".example.org", testExampleOrgGroup, testXResourceKind).
+			WithPlural(testXResourcePlural).
+			WithSingular("xresource").
+			WithNamespaceScope().
+			Build())
+	testCRDUnstructured := &un.Unstructured{Object: testCRDUnstructuredObj}
 
 	tests := map[string]struct {
 		reason string
@@ -217,12 +204,11 @@ func TestSchemaClient_GetCRD(t *testing.T) {
 
 				// Create mock type converter that returns "xresources" for the given GVK
 				mockConverter := tu.NewMockTypeConverter().
-					WithGetResourceNameForGVK(func(_ context.Context, gvk schema.GroupVersionKind) (string, error) {
-						if gvk.Group == testExampleOrgGroup && gvk.Version == "v1" && gvk.Kind == testXResourceKind {
-							return testXResourcePlural, nil
-						}
-						return "", errors.New("unexpected GVK in test")
-					}).Build()
+					WithResourceNameForGVK(schema.GroupVersionKind{
+						Group:   testExampleOrgGroup,
+						Version: "v1",
+						Kind:    testXResourceKind,
+					}, testXResourcePlural).Build()
 
 				return dynamicClient, mockConverter
 			},
@@ -249,12 +235,11 @@ func TestSchemaClient_GetCRD(t *testing.T) {
 
 				// Create mock type converter that returns "nonexistentresources"
 				mockConverter := tu.NewMockTypeConverter().
-					WithGetResourceNameForGVK(func(_ context.Context, gvk schema.GroupVersionKind) (string, error) {
-						if gvk.Group == testExampleOrgGroup && gvk.Version == "v1" && gvk.Kind == "NonexistentResource" {
-							return "nonexistentresources", nil
-						}
-						return "", errors.New("unexpected GVK in test")
-					}).Build()
+					WithResourceNameForGVK(schema.GroupVersionKind{
+						Group:   testExampleOrgGroup,
+						Version: "v1",
+						Kind:    "NonexistentResource",
+					}, "nonexistentresources").Build()
 
 				return dynamicClient, mockConverter
 			},
@@ -367,16 +352,13 @@ func TestSchemaClient_LoadCRDsFromXRDs(t *testing.T) {
 		}`)).
 		BuildAsUnstructured()
 
-	// Create corresponding CRD that should exist in cluster using builder
-	correspondingCRD := tu.NewResource("apiextensions.k8s.io/v1", "CustomResourceDefinition", testXResourcePlural+".example.org").
-		WithSpec(map[string]interface{}{
-			"group": testExampleOrgGroup,
-			"names": map[string]interface{}{
-				"kind":     testXResourceKind,
-				"plural":   testXResourcePlural,
-				"singular": "xresource",
-			},
-		}).Build()
+	// Create corresponding CRD that should exist in cluster using CRD builder
+	correspondingCRDObj, _ := runtime.DefaultUnstructuredConverter.ToUnstructured(
+		tu.NewCRD(testXResourcePlural+".example.org", testExampleOrgGroup, testXResourceKind).
+			WithPlural(testXResourcePlural).
+			WithSingular("xresource").
+			Build())
+	correspondingCRD := &un.Unstructured{Object: correspondingCRDObj}
 
 	tests := map[string]struct {
 		reason       string
@@ -400,12 +382,11 @@ func TestSchemaClient_LoadCRDsFromXRDs(t *testing.T) {
 				})
 
 				mockConverter := tu.NewMockTypeConverter().
-					WithGetResourceNameForGVK(func(_ context.Context, gvk schema.GroupVersionKind) (string, error) {
-						if gvk.Group == testExampleOrgGroup && gvk.Version == "v1" && gvk.Kind == testXResourceKind {
-							return testXResourcePlural, nil
-						}
-						return "", errors.New("unexpected GVK in test")
-					}).Build()
+					WithResourceNameForGVK(schema.GroupVersionKind{
+						Group:   testExampleOrgGroup,
+						Version: "v1",
+						Kind:    testXResourceKind,
+					}, testXResourcePlural).Build()
 
 				return &DefaultSchemaClient{
 					dynamicClient:   dynamicClient,
@@ -461,12 +442,11 @@ func TestSchemaClient_LoadCRDsFromXRDs(t *testing.T) {
 				})
 
 				mockConverter := tu.NewMockTypeConverter().
-					WithGetResourceNameForGVK(func(_ context.Context, gvk schema.GroupVersionKind) (string, error) {
-						if gvk.Group == testExampleOrgGroup && gvk.Version == "v1" && gvk.Kind == testXResourceKind {
-							return testXResourcePlural, nil
-						}
-						return "", errors.New("unexpected GVK in test")
-					}).Build()
+					WithResourceNameForGVK(schema.GroupVersionKind{
+						Group:   testExampleOrgGroup,
+						Version: "v1",
+						Kind:    testXResourceKind,
+					}, testXResourcePlural).Build()
 
 				return &DefaultSchemaClient{
 					dynamicClient:   dynamicClient,
@@ -805,16 +785,13 @@ func TestSchemaClient_CachingBehavior(t *testing.T) {
 	ctx := t.Context()
 	scheme := runtime.NewScheme()
 
-	// Create test CRD as unstructured for the mock dynamic client using builder
-	testCRDUnstructured := tu.NewResource("apiextensions.k8s.io/v1", "CustomResourceDefinition", testXResourcePlural+".example.org").
-		WithSpec(map[string]interface{}{
-			"group": testExampleOrgGroup,
-			"names": map[string]interface{}{
-				"kind":     testXResourceKind,
-				"plural":   testXResourcePlural,
-				"singular": "xresource",
-			},
-		}).Build()
+	// Create test CRD as unstructured for the mock dynamic client using CRD builder
+	testCRDUnstructuredObj, _ := runtime.DefaultUnstructuredConverter.ToUnstructured(
+		tu.NewCRD(testXResourcePlural+".example.org", testExampleOrgGroup, testXResourceKind).
+			WithPlural(testXResourcePlural).
+			WithSingular("xresource").
+			Build())
+	testCRDUnstructured := &un.Unstructured{Object: testCRDUnstructuredObj}
 
 	tests := map[string]struct {
 		reason          string
@@ -839,12 +816,11 @@ func TestSchemaClient_CachingBehavior(t *testing.T) {
 				})
 
 				mockConverter := tu.NewMockTypeConverter().
-					WithGetResourceNameForGVK(func(_ context.Context, gvk schema.GroupVersionKind) (string, error) {
-						if gvk.Group == testExampleOrgGroup && gvk.Version == "v1" && gvk.Kind == testXResourceKind {
-							return testXResourcePlural, nil
-						}
-						return "", errors.New("unexpected GVK in test")
-					}).Build()
+					WithResourceNameForGVK(schema.GroupVersionKind{
+						Group:   testExampleOrgGroup,
+						Version: "v1",
+						Kind:    testXResourceKind,
+					}, testXResourcePlural).Build()
 
 				client := &DefaultSchemaClient{
 					dynamicClient:   dynamicClient,
@@ -882,12 +858,11 @@ func TestSchemaClient_CachingBehavior(t *testing.T) {
 				})
 
 				mockConverter := tu.NewMockTypeConverter().
-					WithGetResourceNameForGVK(func(_ context.Context, gvk schema.GroupVersionKind) (string, error) {
-						if gvk.Group == testExampleOrgGroup && gvk.Version == "v1" && gvk.Kind == testXResourceKind {
-							return testXResourcePlural, nil
-						}
-						return "", errors.New("unexpected GVK in test")
-					}).Build()
+					WithResourceNameForGVK(schema.GroupVersionKind{
+						Group:   testExampleOrgGroup,
+						Version: "v1",
+						Kind:    testXResourceKind,
+					}, testXResourcePlural).Build()
 
 				client := &DefaultSchemaClient{
 					dynamicClient:   dynamicClient,

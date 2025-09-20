@@ -540,6 +540,38 @@ func (b *MockTypeConverterBuilder) WithDefaultGetResourceNameForGVK() *MockTypeC
 	})
 }
 
+// WithResourceNameForGVK sets GetResourceNameForGVK to return a specific resource name for a given GVK.
+func (b *MockTypeConverterBuilder) WithResourceNameForGVK(gvk schema.GroupVersionKind, resourceName string) *MockTypeConverterBuilder {
+	// If we don't have an existing GetResourceNameForGVK function, create a new one
+	if b.mock.GetResourceNameForGVKFn == nil {
+		return b.WithGetResourceNameForGVK(func(_ context.Context, testGVK schema.GroupVersionKind) (string, error) {
+			if testGVK.Group == gvk.Group && testGVK.Version == gvk.Version && testGVK.Kind == gvk.Kind {
+				return resourceName, nil
+			}
+			return "", errors.New("unexpected GVK in test")
+		})
+	}
+
+	// If we already have a GetResourceNameForGVK function, wrap it to add this mapping
+	originalFn := b.mock.GetResourceNameForGVKFn
+	return b.WithGetResourceNameForGVK(func(ctx context.Context, testGVK schema.GroupVersionKind) (string, error) {
+		if testGVK.Group == gvk.Group && testGVK.Version == gvk.Version && testGVK.Kind == gvk.Kind {
+			return resourceName, nil
+		}
+		return originalFn(ctx, testGVK)
+	})
+}
+
+// WithResourceNameForGVKs sets GetResourceNameForGVK to return specific resource names for given GVKs, with a fallback error.
+func (b *MockTypeConverterBuilder) WithResourceNameForGVKs(gvkMappings map[schema.GroupVersionKind]string) *MockTypeConverterBuilder {
+	return b.WithGetResourceNameForGVK(func(_ context.Context, gvk schema.GroupVersionKind) (string, error) {
+		if resourceName, found := gvkMappings[gvk]; found {
+			return resourceName, nil
+		}
+		return "", errors.New("unexpected GVK in test")
+	})
+}
+
 // Build returns the built mock.
 func (b *MockTypeConverterBuilder) Build() *MockTypeConverter {
 	return b.mock
