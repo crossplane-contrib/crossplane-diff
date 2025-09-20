@@ -242,6 +242,39 @@ func (b *MockSchemaClientBuilder) WithSuccessfulCRDFetch(crd *extv1.CustomResour
 	})
 }
 
+// WithFoundCRD sets GetCRD to return a specific CRD when the group and kind match.
+func (b *MockSchemaClientBuilder) WithFoundCRD(group, kind string, crd *extv1.CustomResourceDefinition) *MockSchemaClientBuilder {
+	// If we don't have an existing GetCRD function, create a new one
+	if b.mock.GetCRDFn == nil {
+		return b.WithGetCRD(func(_ context.Context, gvk schema.GroupVersionKind) (*extv1.CustomResourceDefinition, error) {
+			if gvk.Group == group && gvk.Kind == kind {
+				return crd, nil
+			}
+			return nil, errors.New("CRD not found")
+		})
+	}
+
+	// If we already have a GetCRD function, wrap it to add this mapping
+	originalFn := b.mock.GetCRDFn
+	return b.WithGetCRD(func(ctx context.Context, gvk schema.GroupVersionKind) (*extv1.CustomResourceDefinition, error) {
+		if gvk.Group == group && gvk.Kind == kind {
+			return crd, nil
+		}
+		return originalFn(ctx, gvk)
+	})
+}
+
+// WithFoundCRDs sets GetCRD to return specific CRDs when the group and kind match, with a fallback error.
+func (b *MockSchemaClientBuilder) WithFoundCRDs(crdMappings map[schema.GroupKind]*extv1.CustomResourceDefinition) *MockSchemaClientBuilder {
+	return b.WithGetCRD(func(_ context.Context, gvk schema.GroupVersionKind) (*extv1.CustomResourceDefinition, error) {
+		groupKind := schema.GroupKind{Group: gvk.Group, Kind: gvk.Kind}
+		if crd, found := crdMappings[groupKind]; found {
+			return crd, nil
+		}
+		return nil, errors.New("CRD not found")
+	})
+}
+
 // WithGetCRDByName sets the GetCRDByName behavior.
 func (b *MockSchemaClientBuilder) WithGetCRDByName(fn func(string) (*extv1.CustomResourceDefinition, error)) *MockSchemaClientBuilder {
 	b.mock.GetCRDByNameFn = fn

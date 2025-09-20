@@ -177,32 +177,24 @@ func TestSchemaClient_GetCRD(t *testing.T) {
 		WithSingular("xresource").
 		Build()
 
-	// Create the same CRD as unstructured for the mock dynamic client
-	testCRDUnstructured := &un.Unstructured{
-		Object: map[string]interface{}{
-			"apiVersion": "apiextensions.k8s.io/v1",
-			"kind":       "CustomResourceDefinition",
-			"metadata": map[string]interface{}{
-				"name": testXResourcePlural + ".example.org",
+	// Create the same CRD as unstructured for the mock dynamic client using builder
+	testCRDUnstructured := tu.NewResource("apiextensions.k8s.io/v1", "CustomResourceDefinition", testXResourcePlural+".example.org").
+		WithSpec(map[string]interface{}{
+			"group": testExampleOrgGroup,
+			"names": map[string]interface{}{
+				"kind":     testXResourceKind,
+				"plural":   testXResourcePlural,
+				"singular": "xresource",
 			},
-			"spec": map[string]interface{}{
-				"group": testExampleOrgGroup,
-				"names": map[string]interface{}{
-					"kind":     testXResourceKind,
-					"plural":   testXResourcePlural,
-					"singular": "xresource",
-				},
-				"scope": "Namespaced",
-				"versions": []interface{}{
-					map[string]interface{}{
-						"name":    "v1",
-						"served":  true,
-						"storage": true,
-					},
+			"scope": "Namespaced",
+			"versions": []interface{}{
+				map[string]interface{}{
+					"name":    "v1",
+					"served":  true,
+					"storage": true,
 				},
 			},
-		},
-	}
+		}).Build()
 
 	tests := map[string]struct {
 		reason string
@@ -353,67 +345,38 @@ func TestSchemaClient_LoadCRDsFromXRDs(t *testing.T) {
 	ctx := t.Context()
 	scheme := runtime.NewScheme()
 
-	// Create sample XRD with proper schema
-	xrd := &un.Unstructured{
-		Object: map[string]interface{}{
-			"apiVersion": "apiextensions.crossplane.io/v1",
-			"kind":       "CompositeResourceDefinition",
-			"metadata": map[string]interface{}{
-				"name": testXResourcePlural + ".example.org",
-			},
-			"spec": map[string]interface{}{
-				"group": testExampleOrgGroup,
-				"names": map[string]interface{}{
-					"kind":     testXResourceKind,
-					"plural":   testXResourcePlural,
-					"singular": "xresource",
+	// Create sample XRD with proper schema using builder
+	xrd := tu.NewXRD(testXResourcePlural+".example.org", testExampleOrgGroup, testXResourceKind).
+		WithPlural(testXResourcePlural).
+		WithSingular("xresource").
+		WithRawSchema([]byte(`{
+			"type": "object",
+			"properties": {
+				"spec": {
+					"type": "object",
+					"properties": {
+						"field": {
+							"type": "string"
+						}
+					}
 				},
-				"versions": []interface{}{
-					map[string]interface{}{
-						"name":   "v1",
-						"served": true,
-						"schema": map[string]interface{}{
-							"openAPIV3Schema": map[string]interface{}{
-								"type": "object",
-								"properties": map[string]interface{}{
-									"spec": map[string]interface{}{
-										"type": "object",
-										"properties": map[string]interface{}{
-											"field": map[string]interface{}{
-												"type": "string",
-											},
-										},
-									},
-									"status": map[string]interface{}{
-										"type": "object",
-									},
-								},
-							},
-						},
-					},
-				},
-			},
-		},
-	}
+				"status": {
+					"type": "object"
+				}
+			}
+		}`)).
+		BuildAsUnstructured()
 
-	// Create corresponding CRD that should exist in cluster
-	correspondingCRD := &un.Unstructured{
-		Object: map[string]interface{}{
-			"apiVersion": "apiextensions.k8s.io/v1",
-			"kind":       "CustomResourceDefinition",
-			"metadata": map[string]interface{}{
-				"name": testXResourcePlural + ".example.org",
+	// Create corresponding CRD that should exist in cluster using builder
+	correspondingCRD := tu.NewResource("apiextensions.k8s.io/v1", "CustomResourceDefinition", testXResourcePlural+".example.org").
+		WithSpec(map[string]interface{}{
+			"group": testExampleOrgGroup,
+			"names": map[string]interface{}{
+				"kind":     testXResourceKind,
+				"plural":   testXResourcePlural,
+				"singular": "xresource",
 			},
-			"spec": map[string]interface{}{
-				"group": testExampleOrgGroup,
-				"names": map[string]interface{}{
-					"kind":     testXResourceKind,
-					"plural":   testXResourcePlural,
-					"singular": "xresource",
-				},
-			},
-		},
-	}
+		}).Build()
 
 	tests := map[string]struct {
 		reason       string
@@ -716,34 +679,26 @@ func TestExtractGVKsFromXRD(t *testing.T) {
 	}{
 		"ValidV1XRD": {
 			reason: "Should extract GVKs from a valid v1 XRD with multiple versions",
-			xrd: &un.Unstructured{
-				Object: map[string]interface{}{
-					"apiVersion": "apiextensions.crossplane.io/v1",
-					"kind":       "CompositeResourceDefinition",
-					"metadata": map[string]interface{}{
-						"name": testXResourcePlural + ".example.org",
+			xrd: tu.NewResource("apiextensions.crossplane.io/v1", "CompositeResourceDefinition", testXResourcePlural+".example.org").
+				WithSpec(map[string]interface{}{
+					"group": testExampleOrgGroup,
+					"names": map[string]interface{}{
+						"kind":     testXResourceKind,
+						"plural":   testXResourcePlural,
+						"singular": "xresource",
 					},
-					"spec": map[string]interface{}{
-						"group": testExampleOrgGroup,
-						"names": map[string]interface{}{
-							"kind":     testXResourceKind,
-							"plural":   testXResourcePlural,
-							"singular": "xresource",
+					"versions": []interface{}{
+						map[string]interface{}{
+							"name":   "v1alpha1",
+							"served": true,
 						},
-						"versions": []interface{}{
-							map[string]interface{}{
-								"name":   "v1alpha1",
-								"served": true,
-							},
-							map[string]interface{}{
-								"name":    "v1",
-								"served":  true,
-								"storage": true,
-							},
+						map[string]interface{}{
+							"name":          "v1",
+							"served":        true,
+							"referenceable": true,
 						},
 					},
-				},
-			},
+				}).Build(),
 			expectedGVKs: []schema.GroupVersionKind{
 				{Group: testExampleOrgGroup, Version: "v1alpha1", Kind: testXResourceKind},
 				{Group: testExampleOrgGroup, Version: "v1", Kind: testXResourceKind},
@@ -752,34 +707,26 @@ func TestExtractGVKsFromXRD(t *testing.T) {
 		},
 		"ValidV2XRD": {
 			reason: "Should extract GVKs from a valid v2 XRD with multiple versions",
-			xrd: &un.Unstructured{
-				Object: map[string]interface{}{
-					"apiVersion": "apiextensions.crossplane.io/v2",
-					"kind":       "CompositeResourceDefinition",
-					"metadata": map[string]interface{}{
-						"name": testXResourcePlural + ".example.org",
+			xrd: tu.NewResource("apiextensions.crossplane.io/v2", "CompositeResourceDefinition", testXResourcePlural+".example.org").
+				WithSpec(map[string]interface{}{
+					"group": testExampleOrgGroup,
+					"names": map[string]interface{}{
+						"kind":     testXResourceKind,
+						"plural":   testXResourcePlural,
+						"singular": "xresource",
 					},
-					"spec": map[string]interface{}{
-						"group": testExampleOrgGroup,
-						"names": map[string]interface{}{
-							"kind":     testXResourceKind,
-							"plural":   testXResourcePlural,
-							"singular": "xresource",
+					"versions": []interface{}{
+						map[string]interface{}{
+							"name":   "v1beta1",
+							"served": true,
 						},
-						"versions": []interface{}{
-							map[string]interface{}{
-								"name":   "v1beta1",
-								"served": true,
-							},
-							map[string]interface{}{
-								"name":          "v1",
-								"served":        true,
-								"referenceable": true,
-							},
+						map[string]interface{}{
+							"name":          "v1",
+							"served":        true,
+							"referenceable": true,
 						},
 					},
-				},
-			},
+				}).Build(),
 			expectedGVKs: []schema.GroupVersionKind{
 				{Group: testExampleOrgGroup, Version: "v1beta1", Kind: testXResourceKind},
 				{Group: testExampleOrgGroup, Version: "v1", Kind: testXResourceKind},
@@ -789,51 +736,35 @@ func TestExtractGVKsFromXRD(t *testing.T) {
 
 		"UnsupportedAPIVersion": {
 			reason: "Should fail when XRD has unsupported apiVersion",
-			xrd: &un.Unstructured{
-				Object: map[string]interface{}{
-					"apiVersion": "apiextensions.crossplane.io/v3", // Unsupported version
-					"kind":       "CompositeResourceDefinition",
-					"metadata": map[string]interface{}{
-						"name": "invalid-xrd",
+			xrd: tu.NewResource("apiextensions.crossplane.io/v3", "CompositeResourceDefinition", "invalid-xrd"). // Unsupported version
+				WithSpec(map[string]interface{}{
+					"group": testExampleOrgGroup,
+					"names": map[string]interface{}{
+						"kind": testXResourceKind,
 					},
-					"spec": map[string]interface{}{
-						"group": testExampleOrgGroup,
-						"names": map[string]interface{}{
-							"kind": testXResourceKind,
-						},
-						"versions": []interface{}{
-							map[string]interface{}{
-								"name":   "v1",
-								"served": true,
-							},
+					"versions": []interface{}{
+						map[string]interface{}{
+							"name":   "v1",
+							"served": true,
 						},
 					},
-				},
-			},
+				}).Build(),
 			expectErr: true,
 			errMsg:    "unsupported XRD apiVersion",
 		},
 		"ConversionError": {
 			reason: "Should fail when XRD cannot be converted to typed object",
-			xrd: &un.Unstructured{
-				Object: map[string]interface{}{
-					"apiVersion": "apiextensions.crossplane.io/v1",
-					"kind":       "CompositeResourceDefinition",
-					"metadata": map[string]interface{}{
-						"name": "invalid-xrd",
-					},
-					"spec": map[string]interface{}{
-						"group": testExampleOrgGroup,
-						"names": "invalid-names-should-be-object", // Invalid structure
-						"versions": []interface{}{
-							map[string]interface{}{
-								"name":   "v1",
-								"served": true,
-							},
+			xrd: tu.NewResource("apiextensions.crossplane.io/v1", "CompositeResourceDefinition", "invalid-xrd").
+				WithSpec(map[string]interface{}{
+					"group": testExampleOrgGroup,
+					"names": "invalid-names-should-be-object", // Invalid structure
+					"versions": []interface{}{
+						map[string]interface{}{
+							"name":   "v1",
+							"served": true,
 						},
 					},
-				},
-			},
+				}).Build(),
 			expectErr: true,
 			errMsg:    "cannot convert XRD",
 		},
@@ -874,24 +805,16 @@ func TestSchemaClient_CachingBehavior(t *testing.T) {
 	ctx := t.Context()
 	scheme := runtime.NewScheme()
 
-	// Create test CRD as unstructured for the mock dynamic client
-	testCRDUnstructured := &un.Unstructured{
-		Object: map[string]interface{}{
-			"apiVersion": "apiextensions.k8s.io/v1",
-			"kind":       "CustomResourceDefinition",
-			"metadata": map[string]interface{}{
-				"name": testXResourcePlural + ".example.org",
+	// Create test CRD as unstructured for the mock dynamic client using builder
+	testCRDUnstructured := tu.NewResource("apiextensions.k8s.io/v1", "CustomResourceDefinition", testXResourcePlural+".example.org").
+		WithSpec(map[string]interface{}{
+			"group": testExampleOrgGroup,
+			"names": map[string]interface{}{
+				"kind":     testXResourceKind,
+				"plural":   testXResourcePlural,
+				"singular": "xresource",
 			},
-			"spec": map[string]interface{}{
-				"group": testExampleOrgGroup,
-				"names": map[string]interface{}{
-					"kind":     testXResourceKind,
-					"plural":   testXResourcePlural,
-					"singular": "xresource",
-				},
-			},
-		},
-	}
+		}).Build()
 
 	tests := map[string]struct {
 		reason          string

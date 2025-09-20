@@ -62,14 +62,9 @@ func TestDefaultSchemaValidator_ValidateResources(t *testing.T) {
 		"SuccessfulValidationWithPreloadedCRDs": {
 			setupClients: func() (*tu.MockSchemaClient, *tu.MockDefinitionClient) {
 				sch := tu.NewMockSchemaClient().
-					WithGetCRD(func(_ context.Context, gvk schema.GroupVersionKind) (*extv1.CustomResourceDefinition, error) {
-						if gvk.Group == testExampleOrg && gvk.Kind == "XR" {
-							return xrCRD, nil
-						}
-						if gvk.Group == testCpdOrg && gvk.Kind == "testComposedResource" {
-							return composedCRD, nil
-						}
-						return nil, errors.New("CRD not found")
+					WithFoundCRDs(map[schema.GroupKind]*extv1.CustomResourceDefinition{
+						{Group: testExampleOrg, Kind: "XR"}:                     xrCRD,
+						{Group: testCpdOrg, Kind: "testComposedResource"}: composedCRD,
 					}).
 					WithAllResourcesRequiringCRDs().
 					WithCachingBehavior().
@@ -86,14 +81,9 @@ func TestDefaultSchemaValidator_ValidateResources(t *testing.T) {
 			setupClients: func() (*tu.MockSchemaClient, *tu.MockDefinitionClient) {
 				sch := tu.NewMockSchemaClient().
 					// Add GetCRD implementation for typed CRDs
-					WithGetCRD(func(_ context.Context, gvk schema.GroupVersionKind) (*extv1.CustomResourceDefinition, error) {
-						if gvk.Group == testExampleOrg && gvk.Kind == "XR" {
-							return xrCRD, nil
-						}
-						if gvk.Group == testCpdOrg && gvk.Kind == "testComposedResource" {
-							return composedCRD, nil
-						}
-						return nil, errors.New("CRD not found")
+					WithFoundCRDs(map[schema.GroupKind]*extv1.CustomResourceDefinition{
+						{Group: testExampleOrg, Kind: "XR"}:                     xrCRD,
+						{Group: testCpdOrg, Kind: "testComposedResource"}: composedCRD,
 					}).
 					// Implement IsCRDRequired to return true for our test resources
 					WithAllResourcesRequiringCRDs().
@@ -113,13 +103,7 @@ func TestDefaultSchemaValidator_ValidateResources(t *testing.T) {
 			setupClients: func() (*tu.MockSchemaClient, *tu.MockDefinitionClient) {
 				sch := tu.NewMockSchemaClient().
 					// Add GetCRD implementation for typed CRDs
-					WithGetCRD(func(_ context.Context, gvk schema.GroupVersionKind) (*extv1.CustomResourceDefinition, error) {
-						if gvk.Group == testExampleOrg && gvk.Kind == "XR" {
-							return xrCRD, nil
-						}
-						// Return not found for cpd resource CRD
-						return nil, errors.New("CRD not found")
-					}).
+					WithFoundCRD(testExampleOrg, "XR", xrCRD).
 					// Add this line to make only Composed resources require CRDs:
 					WithResourcesRequiringCRDs(
 						schema.GroupVersionKind{Group: testCpdOrg, Version: "v1", Kind: "testComposedResource"},
@@ -243,12 +227,7 @@ func TestDefaultSchemaValidator_EnsureComposedResourceCRDs(t *testing.T) {
 			setupClient: func() *tu.MockSchemaClient {
 				return tu.NewMockSchemaClient().
 					// Use the new GetCRD method with typed CRDs
-					WithGetCRD(func(_ context.Context, gvk schema.GroupVersionKind) (*extv1.CustomResourceDefinition, error) {
-						if gvk.Group == testCpdOrg && gvk.Kind == "testComposedResource" {
-							return composedCRD, nil
-						}
-						return nil, errors.New("CRD not found")
-					}).
+					WithFoundCRD(testCpdOrg, "testComposedResource", composedCRD).
 					// Make sure cpd resources require CRDs
 					WithResourcesRequiringCRDs(
 						schema.GroupVersionKind{Group: testCpdOrg, Version: "v1", Kind: "testComposedResource"},
@@ -452,12 +431,7 @@ func TestDefaultSchemaValidator_ValidateScopeConstraints(t *testing.T) {
 		"NamespacedResourceValidNamespace": {
 			setupClient: func() *tu.MockSchemaClient {
 				return tu.NewMockSchemaClient().
-					WithGetCRD(func(_ context.Context, gvk schema.GroupVersionKind) (*extv1.CustomResourceDefinition, error) {
-						if gvk.Group == testExampleOrg && gvk.Kind == "NamespacedResource" {
-							return namespacedCRD, nil
-						}
-						return nil, errors.New("CRD not found")
-					}).
+					WithFoundCRD(testExampleOrg, "NamespacedResource", namespacedCRD).
 					Build()
 			},
 			preloadedCRDs: []*extv1.CustomResourceDefinition{}, // No longer needed
@@ -471,12 +445,7 @@ func TestDefaultSchemaValidator_ValidateScopeConstraints(t *testing.T) {
 		"NamespacedResourceMissingNamespace": {
 			setupClient: func() *tu.MockSchemaClient {
 				return tu.NewMockSchemaClient().
-					WithGetCRD(func(_ context.Context, gvk schema.GroupVersionKind) (*extv1.CustomResourceDefinition, error) {
-						if gvk.Group == testExampleOrg && gvk.Kind == "NamespacedResource" {
-							return namespacedCRD, nil
-						}
-						return nil, errors.New("CRD not found")
-					}).
+					WithFoundCRD(testExampleOrg, "NamespacedResource", namespacedCRD).
 					Build()
 			},
 			preloadedCRDs: []*extv1.CustomResourceDefinition{namespacedCRD},
@@ -490,12 +459,7 @@ func TestDefaultSchemaValidator_ValidateScopeConstraints(t *testing.T) {
 		"NamespacedResourceWrongNamespace": {
 			setupClient: func() *tu.MockSchemaClient {
 				return tu.NewMockSchemaClient().
-					WithGetCRD(func(_ context.Context, gvk schema.GroupVersionKind) (*extv1.CustomResourceDefinition, error) {
-						if gvk.Group == testExampleOrg && gvk.Kind == "NamespacedResource" {
-							return namespacedCRD, nil
-						}
-						return nil, errors.New("CRD not found")
-					}).
+					WithFoundCRD(testExampleOrg, "NamespacedResource", namespacedCRD).
 					Build()
 			},
 			preloadedCRDs: []*extv1.CustomResourceDefinition{namespacedCRD},
@@ -510,12 +474,7 @@ func TestDefaultSchemaValidator_ValidateScopeConstraints(t *testing.T) {
 		"ClusterResourceValidNoNamespace": {
 			setupClient: func() *tu.MockSchemaClient {
 				return tu.NewMockSchemaClient().
-					WithGetCRD(func(_ context.Context, gvk schema.GroupVersionKind) (*extv1.CustomResourceDefinition, error) {
-						if gvk.Group == testExampleOrg && gvk.Kind == "ClusterResource" {
-							return clusterCRD, nil
-						}
-						return nil, errors.New("CRD not found")
-					}).
+					WithFoundCRD(testExampleOrg, "ClusterResource", clusterCRD).
 					Build()
 			},
 			preloadedCRDs: []*extv1.CustomResourceDefinition{clusterCRD},
@@ -528,12 +487,7 @@ func TestDefaultSchemaValidator_ValidateScopeConstraints(t *testing.T) {
 		"ClusterResourceInvalidNamespace": {
 			setupClient: func() *tu.MockSchemaClient {
 				return tu.NewMockSchemaClient().
-					WithGetCRD(func(_ context.Context, gvk schema.GroupVersionKind) (*extv1.CustomResourceDefinition, error) {
-						if gvk.Group == testExampleOrg && gvk.Kind == "ClusterResource" {
-							return clusterCRD, nil
-						}
-						return nil, errors.New("CRD not found")
-					}).
+					WithFoundCRD(testExampleOrg, "ClusterResource", clusterCRD).
 					Build()
 			},
 			preloadedCRDs: []*extv1.CustomResourceDefinition{clusterCRD},
@@ -548,12 +502,7 @@ func TestDefaultSchemaValidator_ValidateScopeConstraints(t *testing.T) {
 		"ClusterResourceFromNamespacedXR": {
 			setupClient: func() *tu.MockSchemaClient {
 				return tu.NewMockSchemaClient().
-					WithGetCRD(func(_ context.Context, gvk schema.GroupVersionKind) (*extv1.CustomResourceDefinition, error) {
-						if gvk.Group == testExampleOrg && gvk.Kind == "ClusterResource" {
-							return clusterCRD, nil
-						}
-						return nil, errors.New("CRD not found")
-					}).
+					WithFoundCRD(testExampleOrg, "ClusterResource", clusterCRD).
 					Build()
 			},
 			preloadedCRDs: []*extv1.CustomResourceDefinition{clusterCRD},
@@ -567,12 +516,7 @@ func TestDefaultSchemaValidator_ValidateScopeConstraints(t *testing.T) {
 		"ClusterResourceFromNamespacedClaim": {
 			setupClient: func() *tu.MockSchemaClient {
 				return tu.NewMockSchemaClient().
-					WithGetCRD(func(_ context.Context, gvk schema.GroupVersionKind) (*extv1.CustomResourceDefinition, error) {
-						if gvk.Group == testExampleOrg && gvk.Kind == "ClusterResource" {
-							return clusterCRD, nil
-						}
-						return nil, errors.New("CRD not found")
-					}).
+					WithFoundCRD(testExampleOrg, "ClusterResource", clusterCRD).
 					Build()
 			},
 			preloadedCRDs: []*extv1.CustomResourceDefinition{clusterCRD},
