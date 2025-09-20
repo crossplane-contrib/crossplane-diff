@@ -716,8 +716,9 @@ func TestExtractGVKsFromXRD(t *testing.T) {
 
 		"UnsupportedAPIVersion": {
 			reason: "Should fail when XRD has unsupported apiVersion",
-			xrd: tu.NewResource("apiextensions.crossplane.io/v3", "CompositeResourceDefinition", "invalid-xrd"). // Unsupported version
-																WithSpec(map[string]interface{}{
+			// Unsupported version
+			xrd: tu.NewResource("apiextensions.crossplane.io/v3", "CompositeResourceDefinition", "invalid-xrd").
+				WithSpec(map[string]interface{}{
 					"group": testExampleOrgGroup,
 					"names": map[string]interface{}{
 						"kind": testXResourceKind,
