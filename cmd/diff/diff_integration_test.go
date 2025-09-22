@@ -32,11 +32,11 @@ const (
 )
 
 // DiffTestType represents the type of diff test to run.
-type DiffTestType int
+type DiffTestType string
 
 const (
-	XRDiffTest DiffTestType = iota
-	CompositionDiffTest
+	XRDiffTest          DiffTestType = "diff"
+	CompositionDiffTest DiffTestType = "comp"
 )
 
 // IntegrationTestCase represents a common test case structure for both XR and composition diff tests.
@@ -99,17 +99,9 @@ func runIntegrationTest(t *testing.T, testType DiffTestType, tests map[string]In
 			_, thisFile, _, _ := run.Caller(0)
 			thisDir := filepath.Dir(thisFile)
 
-			var crdPaths []string
-			if testType == CompositionDiffTest {
-				crdPaths = []string{
-					filepath.Join(thisDir, "..", "..", "cluster", "main", "crds"),
-					filepath.Join(thisDir, "testdata", "comp", "crds"),
-				}
-			} else {
-				crdPaths = []string{
-					filepath.Join(thisDir, "..", "..", "cluster", "main", "crds"),
-					filepath.Join(thisDir, "testdata", "diff", "crds"),
-				}
+			crdPaths := []string{
+				filepath.Join(thisDir, "..", "..", "cluster", "main", "crds"),
+				filepath.Join(thisDir, "testdata", string(testType), "crds"),
 			}
 
 			testEnv := &envtest.Environment{

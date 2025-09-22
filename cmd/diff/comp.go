@@ -77,7 +77,7 @@ func (c *CompCmd) initializeDependencies(ctx *kong.Context, log logging.Logger, 
 
 	proc := makeDefaultCompProc(c, appCtx, log)
 
-	loader, err := makeDefaultCompLoader(c)
+	loader, err := ld.NewCompositeLoader(c.Files)
 	if err != nil {
 		return errors.Wrap(err, "cannot create composition loader")
 	}
@@ -102,11 +102,7 @@ func makeDefaultCompProc(c *CompCmd, ctx *AppContext, log logging.Logger) dp.Com
 	xrProc := dp.NewDiffProcessor(ctx.K8sClients, ctx.XpClients, opts...)
 
 	// Inject it into composition processor
-	return dp.NewCompDiffProcessor(xrProc, ctx.K8sClients, ctx.XpClients, opts...)
-}
-
-func makeDefaultCompLoader(c *CompCmd) (ld.Loader, error) {
-	return ld.NewCompositeLoader(c.Files)
+	return dp.NewCompDiffProcessor(xrProc, ctx.XpClients.Composition, opts...)
 }
 
 // Run executes the composition diff command.

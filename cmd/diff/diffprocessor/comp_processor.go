@@ -24,7 +24,6 @@ import (
 	"strings"
 
 	xp "github.com/crossplane-contrib/crossplane-diff/cmd/diff/client/crossplane"
-	k8 "github.com/crossplane-contrib/crossplane-diff/cmd/diff/client/kubernetes"
 	"github.com/crossplane-contrib/crossplane-diff/cmd/diff/renderer"
 	dt "github.com/crossplane-contrib/crossplane-diff/cmd/diff/renderer/types"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -46,14 +45,13 @@ type CompDiffProcessor interface {
 
 // DefaultCompDiffProcessor implements CompDiffProcessor.
 type DefaultCompDiffProcessor struct {
-	k8sClients k8.Clients
-	xpClients  xp.Clients
-	config     ProcessorConfig
-	xrProc     DiffProcessor
+	compositionClient xp.CompositionClient
+	config            ProcessorConfig
+	xrProc            DiffProcessor
 }
 
 // NewCompDiffProcessor creates a new DefaultCompDiffProcessor.
-func NewCompDiffProcessor(xrProc DiffProcessor, k8cs k8.Clients, xpcs xp.Clients, opts ...ProcessorOption) CompDiffProcessor {
+func NewCompDiffProcessor(xrProc DiffProcessor, compositionClient xp.CompositionClient, opts ...ProcessorOption) CompDiffProcessor {
 	// Create default configuration
 	config := ProcessorConfig{
 		Namespace:  "",
@@ -69,10 +67,9 @@ func NewCompDiffProcessor(xrProc DiffProcessor, k8cs k8.Clients, xpcs xp.Clients
 	}
 
 	return &DefaultCompDiffProcessor{
-		k8sClients: k8cs,
-		xpClients:  xpcs,
-		config:     config,
-		xrProc:     xrProc,
+		compositionClient: compositionClient,
+		config:            config,
+		xrProc:            xrProc,
 	}
 }
 
@@ -110,20 +107,11 @@ func (p *DefaultCompDiffProcessor) DiffComposition(ctx context.Context, stdout i
 			continue
 		}
 
-		// Convert unstructured to typed composition
-		newComp, err := p.unstructuredToComposition(comp)
-		if err != nil {
-			p.config.Logger.Debug("Failed to convert composition", "composition", compositionID, "error", err)
-			errs = append(errs, errors.Wrapf(err, "cannot convert %s from unstructured", compositionID))
-
-			continue
-		}
-
-		compositionID = newComp.GetName() // Use actual name once we have it
+		compositionID = comp.GetName() // Use actual name from unstructured
 		p.config.Logger.Debug("Processing composition", "name", compositionID)
 
 		// Process this single composition
-		if err := p.processSingleComposition(ctx, stdout, newComp, namespace); err != nil {
+		if err := p.processSingleComposition(ctx, stdout, comp, namespace); err != nil {
 			p.config.Logger.Debug("Failed to process composition", "composition", compositionID, "error", err)
 			errs = append(errs, errors.Wrapf(err, "cannot process composition %s", compositionID))
 
@@ -157,14 +145,14 @@ func (p *DefaultCompDiffProcessor) DiffComposition(ctx context.Context, stdout i
 }
 
 // processSingleComposition processes a single composition and shows its impact on existing XRs.
-func (p *DefaultCompDiffProcessor) processSingleComposition(ctx context.Context, stdout io.Writer, newComp *apiextensionsv1.Composition, namespace string) error {
+func (p *DefaultCompDiffProcessor) processSingleComposition(ctx context.Context, stdout io.Writer, newComp *un.Unstructured, namespace string) error {
 	// First, show the composition diff itself
 	if err := p.displayCompositionDiff(ctx, stdout, newComp); err != nil {
 		return errors.Wrap(err, "cannot display composition diff")
 	}
 
 	// Find all XRs that use this composition
-	affectedXRs, err := p.findXRsUsingComposition(ctx, newComp.GetName(), namespace)
+	affectedXRs, err := p.compositionClient.FindXRsUsingComposition(ctx, newComp.GetName(), namespace)
 	if err != nil {
 		// For net-new compositions, the composition won't exist in the cluster
 		// so findXRsUsingComposition will fail. This is expected behavior.
@@ -193,22 +181,18 @@ func (p *DefaultCompDiffProcessor) processSingleComposition(ctx context.Context,
 
 	// Process affected XRs using the existing XR processor with composition override
 	// List the affected XRs so users can understand the scope of impact
-	if _, err := fmt.Fprintf(stdout, "=== Affected Composite Resources ===\n\n"); err != nil {
-		return errors.Wrap(err, "cannot write affected XRs header")
-	}
-
+	var xrList strings.Builder
 	for _, xr := range affectedXRs {
-		if _, err := fmt.Fprintf(stdout, "- %s/%s (namespace: %s)\n", xr.GetKind(), xr.GetName(), xr.GetNamespace()); err != nil {
-			return errors.Wrap(err, "cannot write affected XR info")
-		}
+		xrList.WriteString(fmt.Sprintf("- %s/%s (namespace: %s)\n", xr.GetKind(), xr.GetName(), xr.GetNamespace()))
 	}
 
-	if _, err := fmt.Fprintf(stdout, "\n=== Impact Analysis ===\n\n"); err != nil {
-		return errors.Wrap(err, "cannot write impact analysis header")
+	if _, err := fmt.Fprintf(stdout, "=== Affected Composite Resources ===\n\n%s\n=== Impact Analysis ===\n\n", xrList.String()); err != nil {
+		return errors.Wrap(err, "cannot write XR list and headers")
 	}
 
 	if err := p.xrProc.PerformDiff(ctx, stdout, affectedXRs, func(context.Context, *un.Unstructured) (*apiextensionsv1.Composition, error) {
-		return newComp, nil
+		// Convert unstructured to structured only when needed by the XR processor
+		return p.unstructuredToComposition(newComp)
 	}); err != nil {
 		return errors.Wrap(err, "cannot process XRs with composition override")
 	}
@@ -216,51 +200,45 @@ func (p *DefaultCompDiffProcessor) processSingleComposition(ctx context.Context,
 	return nil
 }
 
-// findXRsUsingComposition finds all XRs that use the specified composition.
-func (p *DefaultCompDiffProcessor) findXRsUsingComposition(ctx context.Context, compositionName string, namespace string) ([]*un.Unstructured, error) {
-	// Use the composition client to find XRs that reference this composition
-	return p.xpClients.Composition.FindXRsUsingComposition(ctx, compositionName, namespace)
-}
-
 // displayCompositionDiff shows the diff between the cluster composition and the file composition.
-func (p *DefaultCompDiffProcessor) displayCompositionDiff(ctx context.Context, stdout io.Writer, newComp *apiextensionsv1.Composition) error {
+// If the composition doesn't exist in the cluster, it shows it as a new composition.
+func (p *DefaultCompDiffProcessor) displayCompositionDiff(ctx context.Context, stdout io.Writer, newComp *un.Unstructured) error {
 	p.config.Logger.Debug("Displaying composition diff", "composition", newComp.GetName())
 
+	var originalCompUnstructured *un.Unstructured
+
 	// Get the original composition from the cluster
-	originalComp, err := p.xpClients.Composition.GetComposition(ctx, newComp.GetName())
+	originalComp, err := p.compositionClient.GetComposition(ctx, newComp.GetName())
 	if err != nil {
 		p.config.Logger.Debug("Original composition not found in cluster, treating as new composition",
 			"composition", newComp.GetName(), "error", err)
+		// originalCompUnstructured remains nil for new compositions
+	} else {
+		p.config.Logger.Debug("Retrieved original composition from cluster", "name", originalComp.GetName(), "composition", originalComp)
 
-		// Handle case where composition doesn't exist in cluster (net-new composition)
-		return p.displayNewComposition(ctx, stdout, newComp)
+		// Convert original composition to unstructured for comparison
+		originalCompUnstructured, err = p.compositionToUnstructured(originalComp)
+		if err != nil {
+			return errors.Wrap(err, "cannot convert original composition to unstructured")
+		}
 	}
 
-	p.config.Logger.Debug("Retrieved original composition from cluster", "name", originalComp.GetName(), "composition", originalComp)
-
-	// Convert both compositions to unstructured for comparison
-	originalCompUnstructured, err := p.compositionToUnstructured(originalComp)
-	if err != nil {
-		return errors.Wrap(err, "cannot convert original composition to unstructured")
-	}
-
-	newCompUnstructured, err := p.compositionToUnstructured(newComp)
-	if err != nil {
-		return errors.Wrap(err, "cannot convert new composition to unstructured")
-	}
+	newCompUnstructured := newComp
 
 	// Clean up managed fields and other cluster metadata before diff calculation
-	originalCompUnstructured.SetManagedFields(nil)
-	originalCompUnstructured.SetResourceVersion("")
-	originalCompUnstructured.SetUID("")
-	originalCompUnstructured.SetGeneration(0)
-	originalCompUnstructured.SetCreationTimestamp(metav1.Time{})
+	cleanupClusterMetadata := func(obj *un.Unstructured) {
+		if obj == nil {
+			return
+		}
+		obj.SetManagedFields(nil)
+		obj.SetResourceVersion("")
+		obj.SetUID("")
+		obj.SetGeneration(0)
+		obj.SetCreationTimestamp(metav1.Time{})
+	}
 
-	newCompUnstructured.SetManagedFields(nil)
-	newCompUnstructured.SetResourceVersion("")
-	newCompUnstructured.SetUID("")
-	newCompUnstructured.SetGeneration(0)
-	newCompUnstructured.SetCreationTimestamp(metav1.Time{})
+	cleanupClusterMetadata(originalCompUnstructured)
+	cleanupClusterMetadata(newCompUnstructured)
 
 	// Calculate the composition diff directly without dry-run apply
 	// (compositions are static YAML documents that don't need server-side processing)
@@ -275,10 +253,25 @@ func (p *DefaultCompDiffProcessor) displayCompositionDiff(ctx context.Context, s
 
 	p.config.Logger.Debug("Calculated composition diff",
 		"composition", newComp.GetName(),
-		"hasChanges", compDiff != nil)
+		"hasChanges", compDiff != nil,
+		"isNewComposition", originalCompUnstructured == nil)
+
+	// Add header for composition changes (common to all cases)
+	if _, err := fmt.Fprintf(stdout, "=== Composition Changes ===\n\n"); err != nil {
+		return errors.Wrap(err, "cannot write composition changes header")
+	}
 
 	// Display the composition diff if there are changes
-	if compDiff != nil && compDiff.DiffType != dt.DiffTypeEqual {
+	switch compDiff.DiffType {
+	case dt.DiffTypeEqual:
+		// No changes detected (only possible for existing compositions)
+		p.config.Logger.Info("No changes detected in composition", "composition", newComp.GetName())
+
+		if _, err := fmt.Fprintf(stdout, "No changes detected in composition %s\n\n", newComp.GetName()); err != nil {
+			return errors.Wrap(err, "cannot write no changes message")
+		}
+	default:
+		// Changes detected - show the diff
 		// Create a diff renderer with proper options
 		rendererOptions := renderer.DefaultDiffOptions()
 		rendererOptions.UseColors = p.config.Colorize
@@ -290,27 +283,12 @@ func (p *DefaultCompDiffProcessor) displayCompositionDiff(ctx context.Context, s
 			fmt.Sprintf("Composition/%s", newComp.GetName()): compDiff,
 		}
 
-		// Add a header to distinguish composition diff from XR diffs
-		if _, err := fmt.Fprintf(stdout, "=== Composition Changes ===\n\n"); err != nil {
-			return errors.Wrap(err, "cannot write composition changes header")
-		}
-
 		if err := diffRenderer.RenderDiffs(stdout, diffs); err != nil {
 			return errors.Wrap(err, "cannot render composition diff")
 		}
 
 		if _, err := fmt.Fprintf(stdout, "\n"); err != nil {
 			return errors.Wrap(err, "cannot write separator")
-		}
-	} else {
-		p.config.Logger.Info("No changes detected in composition", "composition", newComp.GetName())
-
-		if _, err := fmt.Fprintf(stdout, "=== Composition Changes ===\n\n"); err != nil {
-			return errors.Wrap(err, "cannot write composition changes header")
-		}
-
-		if _, err := fmt.Fprintf(stdout, "No changes detected in composition %s\n\n", newComp.GetName()); err != nil {
-			return errors.Wrap(err, "cannot write no changes message")
 		}
 	}
 
@@ -338,75 +316,4 @@ func (p *DefaultCompDiffProcessor) unstructuredToComposition(u *un.Unstructured)
 	return comp, nil
 }
 
-// displayNewComposition shows a new composition that doesn't exist in the cluster.
-func (p *DefaultCompDiffProcessor) displayNewComposition(ctx context.Context, stdout io.Writer, newComp *apiextensionsv1.Composition) error {
-	p.config.Logger.Debug("Displaying new composition", "composition", newComp.GetName())
 
-	// Convert new composition to unstructured for rendering
-	newCompUnstructured, err := p.compositionToUnstructured(newComp)
-	if err != nil {
-		return errors.Wrap(err, "cannot convert new composition to unstructured")
-	}
-
-	// Clean up managed fields and other cluster metadata
-	newCompUnstructured.SetManagedFields(nil)
-	newCompUnstructured.SetResourceVersion("")
-	newCompUnstructured.SetUID("")
-	newCompUnstructured.SetGeneration(0)
-	newCompUnstructured.SetCreationTimestamp(metav1.Time{})
-
-	// Generate a diff showing the entire composition as new (all additions)
-	diffOptions := renderer.DefaultDiffOptions()
-	diffOptions.UseColors = p.config.Colorize
-	diffOptions.Compact = p.config.Compact
-
-	// Create a diff with empty original (nil) to show everything as additions
-	compDiff, err := renderer.GenerateDiffWithOptions(ctx, nil, newCompUnstructured, p.config.Logger, diffOptions)
-	if err != nil {
-		return errors.Wrap(err, "cannot calculate new composition diff")
-	}
-
-	p.config.Logger.Debug("Calculated new composition diff",
-		"composition", newComp.GetName(),
-		"hasChanges", compDiff != nil)
-
-	// Display the new composition diff
-	if compDiff != nil {
-		// Create a diff renderer with proper options
-		rendererOptions := renderer.DefaultDiffOptions()
-		rendererOptions.UseColors = p.config.Colorize
-		rendererOptions.Compact = p.config.Compact
-		diffRenderer := renderer.NewDiffRenderer(p.config.Logger, rendererOptions)
-
-		// Create a map with the single composition diff
-		diffs := map[string]*dt.ResourceDiff{
-			fmt.Sprintf("Composition/%s", newComp.GetName()): compDiff,
-		}
-
-		// Add a header to distinguish composition diff from XR diffs
-		if _, err := fmt.Fprintf(stdout, "=== Composition Changes ===\n\n"); err != nil {
-			return errors.Wrap(err, "cannot write composition changes header")
-		}
-
-		if err := diffRenderer.RenderDiffs(stdout, diffs); err != nil {
-			return errors.Wrap(err, "cannot render new composition diff")
-		}
-
-		if _, err := fmt.Fprintf(stdout, "\n"); err != nil {
-			return errors.Wrap(err, "cannot write separator")
-		}
-	} else {
-		// This shouldn't happen for a new composition, but handle it gracefully
-		p.config.Logger.Debug("No diff generated for new composition", "composition", newComp.GetName())
-
-		if _, err := fmt.Fprintf(stdout, "=== Composition Changes ===\n\n"); err != nil {
-			return errors.Wrap(err, "cannot write composition changes header")
-		}
-
-		if _, err := fmt.Fprintf(stdout, "New composition %s\n\n", newComp.GetName()); err != nil {
-			return errors.Wrap(err, "cannot write new composition message")
-		}
-	}
-
-	return nil
-}

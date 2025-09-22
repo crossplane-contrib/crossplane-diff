@@ -24,7 +24,6 @@ import (
 	"testing"
 
 	xp "github.com/crossplane-contrib/crossplane-diff/cmd/diff/client/crossplane"
-	k8 "github.com/crossplane-contrib/crossplane-diff/cmd/diff/client/kubernetes"
 	tu "github.com/crossplane-contrib/crossplane-diff/cmd/diff/testutils"
 	"github.com/crossplane-contrib/crossplane-diff/cmd/diff/types"
 	gcmp "github.com/google/go-cmp/cmp"
@@ -127,14 +126,15 @@ func TestDefaultCompDiffProcessor_findXRsUsingComposition(t *testing.T) {
 	for name, tt := range tests {
 		t.Run(name, func(t *testing.T) {
 			// Create processor
+			mocks := tt.setupMocks()
 			processor := &DefaultCompDiffProcessor{
-				xpClients: tt.setupMocks(),
+				compositionClient: mocks.Composition,
 				config: ProcessorConfig{
 					Logger: tu.TestLogger(t, false),
 				},
 			}
 
-			got, err := processor.findXRsUsingComposition(ctx, tt.compositionName, tt.namespace)
+			got, err := processor.compositionClient.FindXRsUsingComposition(ctx, tt.compositionName, tt.namespace)
 
 			if (err != nil) != tt.wantErr {
 				t.Errorf("findXRsUsingComposition() error = %v, wantErr %v", err, tt.wantErr)
@@ -325,7 +325,7 @@ func TestDefaultCompDiffProcessor_DiffComposition(t *testing.T) {
 	tests := map[string]struct {
 		compositions []*un.Unstructured
 		namespace    string
-		setupMocks   func() (k8.Clients, xp.Clients)
+		setupMocks   func() xp.Clients
 		verifyOutput func(t *testing.T, output string)
 		wantErr      bool
 	}{
@@ -349,15 +349,8 @@ func TestDefaultCompDiffProcessor_DiffComposition(t *testing.T) {
 					},
 				},
 			},
-			setupMocks: func() (k8.Clients, xp.Clients) {
-				k8sClients := k8.Clients{
-					Apply:    tu.NewMockApplyClient().Build(),
-					Resource: tu.NewMockResourceClient().Build(),
-					Schema:   tu.NewMockSchemaClient().Build(),
-					Type:     tu.NewMockTypeConverter().Build(),
-				}
-
-				xpClients := xp.Clients{
+			setupMocks: func() xp.Clients {
+				return xp.Clients{
 					Composition: tu.NewMockCompositionClient().
 						WithSuccessfulCompositionFetch(testComp).
 						WithFindXRsUsingComposition(func(_ context.Context, _, _ string) ([]*un.Unstructured, error) {
@@ -369,8 +362,6 @@ func TestDefaultCompDiffProcessor_DiffComposition(t *testing.T) {
 					Function:     tu.NewMockFunctionClient().Build(),
 					ResourceTree: tu.NewMockResourceTreeClient().Build(),
 				}
-
-				return k8sClients, xpClients
 			},
 			verifyOutput: func(t *testing.T, output string) {
 				t.Helper()
@@ -388,8 +379,8 @@ func TestDefaultCompDiffProcessor_DiffComposition(t *testing.T) {
 		"NoCompositions": {
 			namespace:    "default",
 			compositions: []*un.Unstructured{},
-			setupMocks: func() (k8.Clients, xp.Clients) {
-				return k8.Clients{}, xp.Clients{}
+			setupMocks: func() xp.Clients {
+				return xp.Clients{}
 			},
 			wantErr: true,
 		},
@@ -429,14 +420,7 @@ func TestDefaultCompDiffProcessor_DiffComposition(t *testing.T) {
 					},
 				},
 			},
-			setupMocks: func() (k8.Clients, xp.Clients) {
-				k8sClients := k8.Clients{
-					Apply:    tu.NewMockApplyClient().Build(),
-					Resource: tu.NewMockResourceClient().Build(),
-					Schema:   tu.NewMockSchemaClient().Build(),
-					Type:     tu.NewMockTypeConverter().Build(),
-				}
-
+			setupMocks: func() xp.Clients {
 				// Create test compositions for the multi-composition test
 				testComp1 := &apiextensionsv1.Composition{
 					TypeMeta: metav1.TypeMeta{
@@ -472,7 +456,7 @@ func TestDefaultCompDiffProcessor_DiffComposition(t *testing.T) {
 					},
 				}
 
-				xpClients := xp.Clients{
+				return xp.Clients{
 					Composition: tu.NewMockCompositionClient().
 						WithGetComposition(func(_ context.Context, name string) (*apiextensionsv1.Composition, error) {
 							switch name {
@@ -494,8 +478,6 @@ func TestDefaultCompDiffProcessor_DiffComposition(t *testing.T) {
 					Function:     tu.NewMockFunctionClient().Build(),
 					ResourceTree: tu.NewMockResourceTreeClient().Build(),
 				}
-
-				return k8sClients, xpClients
 			},
 			verifyOutput: func(t *testing.T, output string) {
 				t.Helper()
@@ -515,7 +497,7 @@ func TestDefaultCompDiffProcessor_DiffComposition(t *testing.T) {
 
 	for name, tt := range tests {
 		t.Run(name, func(t *testing.T) {
-			k8sClients, xpClients := tt.setupMocks()
+			xpClients := tt.setupMocks()
 
 			// Create mock XR processor
 			mockXRProc := &tu.MockDiffProcessor{
@@ -527,9 +509,8 @@ func TestDefaultCompDiffProcessor_DiffComposition(t *testing.T) {
 
 			// Create processor
 			processor := &DefaultCompDiffProcessor{
-				k8sClients: k8sClients,
-				xpClients:  xpClients,
-				xrProc:     mockXRProc,
+				compositionClient: xpClients.Composition,
+				xrProc:            mockXRProc,
 				config: ProcessorConfig{
 					Namespace: tt.namespace,
 					Colorize:  false,
