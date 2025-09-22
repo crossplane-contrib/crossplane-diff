@@ -5,11 +5,12 @@ import (
 	"io"
 
 	dt "github.com/crossplane-contrib/crossplane-diff/cmd/diff/renderer/types"
+	"github.com/crossplane-contrib/crossplane-diff/cmd/diff/types"
 	extv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	un "k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
-	"k8s.io/apimachinery/pkg/types"
+	k8stypes "k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/watch"
 	"k8s.io/client-go/dynamic"
 
@@ -56,7 +57,7 @@ type MockNamespaceableResourceInterface struct {
 	CreateFn    func(ctx context.Context, obj *un.Unstructured, options metav1.CreateOptions, subresources ...string) (*un.Unstructured, error)
 	UpdateFn    func(ctx context.Context, obj *un.Unstructured, options metav1.UpdateOptions, subresources ...string) (*un.Unstructured, error)
 	DeleteFn    func(ctx context.Context, name string, options metav1.DeleteOptions, subresources ...string) error
-	PatchFn     func(ctx context.Context, name string, pt types.PatchType, data []byte, options metav1.PatchOptions, subresources ...string) (*un.Unstructured, error)
+	PatchFn     func(ctx context.Context, name string, pt k8stypes.PatchType, data []byte, options metav1.PatchOptions, subresources ...string) (*un.Unstructured, error)
 }
 
 // Namespace implements dynamic.NamespaceableResourceInterface.
@@ -136,7 +137,7 @@ func (m *MockNamespaceableResourceInterface) Watch(_ context.Context, _ metav1.L
 }
 
 // Patch implements dynamic.ResourceInterface.
-func (m *MockNamespaceableResourceInterface) Patch(ctx context.Context, name string, pt types.PatchType, data []byte, options metav1.PatchOptions, subresources ...string) (*un.Unstructured, error) {
+func (m *MockNamespaceableResourceInterface) Patch(ctx context.Context, name string, pt k8stypes.PatchType, data []byte, options metav1.PatchOptions, subresources ...string) (*un.Unstructured, error) {
 	if m.PatchFn != nil {
 		return m.PatchFn(ctx, name, pt, data, options, subresources...)
 	}
@@ -165,7 +166,7 @@ type MockResourceInterface struct {
 	CreateFn func(ctx context.Context, obj *un.Unstructured, options metav1.CreateOptions, subresources ...string) (*un.Unstructured, error)
 	UpdateFn func(ctx context.Context, obj *un.Unstructured, options metav1.UpdateOptions, subresources ...string) (*un.Unstructured, error)
 	DeleteFn func(ctx context.Context, name string, options metav1.DeleteOptions, subresources ...string) error
-	PatchFn  func(ctx context.Context, name string, pt types.PatchType, data []byte, options metav1.PatchOptions, subresources ...string) (*un.Unstructured, error)
+	PatchFn  func(ctx context.Context, name string, pt k8stypes.PatchType, data []byte, options metav1.PatchOptions, subresources ...string) (*un.Unstructured, error)
 }
 
 // Create implements dynamic.ResourceInterface.
@@ -229,7 +230,7 @@ func (m *MockResourceInterface) Watch(_ context.Context, _ metav1.ListOptions) (
 }
 
 // Patch implements dynamic.ResourceInterface.
-func (m *MockResourceInterface) Patch(ctx context.Context, name string, pt types.PatchType, data []byte, options metav1.PatchOptions, subresources ...string) (*un.Unstructured, error) {
+func (m *MockResourceInterface) Patch(ctx context.Context, name string, pt k8stypes.PatchType, data []byte, options metav1.PatchOptions, subresources ...string) (*un.Unstructured, error) {
 	if m.PatchFn != nil {
 		return m.PatchFn(ctx, name, pt, data, options, subresources...)
 	}
@@ -255,7 +256,7 @@ func (m *MockResourceInterface) ApplyStatus(_ context.Context, _ string, _ *un.U
 type MockDiffProcessor struct {
 	// Function fields for mocking behavior
 	InitializeFn  func(ctx context.Context) error
-	PerformDiffFn func(stdout io.Writer, ctx context.Context, resources []*un.Unstructured) error
+	PerformDiffFn func(ctx context.Context, stdout io.Writer, resources []*un.Unstructured, compositionProvider types.CompositionProvider) error
 }
 
 // Initialize implements the DiffProcessor interface.
@@ -268,9 +269,9 @@ func (m *MockDiffProcessor) Initialize(ctx context.Context) error {
 }
 
 // PerformDiff implements the DiffProcessor.PerformDiff method.
-func (m *MockDiffProcessor) PerformDiff(ctx context.Context, stdout io.Writer, resources []*un.Unstructured) error {
+func (m *MockDiffProcessor) PerformDiff(ctx context.Context, stdout io.Writer, resources []*un.Unstructured, compositionProvider types.CompositionProvider) error {
 	if m.PerformDiffFn != nil {
-		return m.PerformDiffFn(stdout, ctx, resources)
+		return m.PerformDiffFn(ctx, stdout, resources, compositionProvider)
 	}
 
 	return nil
@@ -537,6 +538,7 @@ type MockCompositionClient struct {
 	FindMatchingCompositionFn func(ctx context.Context, res *un.Unstructured) (*xpextv1.Composition, error)
 	ListCompositionsFn        func(ctx context.Context) ([]*xpextv1.Composition, error)
 	GetCompositionFn          func(ctx context.Context, name string) (*xpextv1.Composition, error)
+	FindXRsUsingCompositionFn func(ctx context.Context, compositionName string, namespace string) ([]*un.Unstructured, error)
 }
 
 // Initialize implements crossplane.CompositionClient.
@@ -573,6 +575,15 @@ func (m *MockCompositionClient) GetComposition(ctx context.Context, name string)
 	}
 
 	return nil, errors.New("GetComposition not implemented")
+}
+
+// FindXRsUsingComposition implements crossplane.CompositionClient.
+func (m *MockCompositionClient) FindXRsUsingComposition(ctx context.Context, compositionName string, namespace string) ([]*un.Unstructured, error) {
+	if m.FindXRsUsingCompositionFn != nil {
+		return m.FindXRsUsingCompositionFn(ctx, compositionName, namespace)
+	}
+
+	return nil, errors.New("FindXRsUsingComposition not implemented")
 }
 
 // MockFunctionClient implements the crossplane.FunctionClient interface.

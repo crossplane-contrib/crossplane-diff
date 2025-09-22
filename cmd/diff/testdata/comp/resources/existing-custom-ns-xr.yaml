@@ -1,0 +1,10 @@
+apiVersion: ns.diff.example.org/v1alpha1
+kind: XNopResource
+metadata:
+  name: custom-namespace-resource
+  namespace: custom-namespace
+spec:
+  coolField: custom-ns-existing-value
+  crossplane:
+    compositionRef:
+      name: xnopresources.diff.example.org

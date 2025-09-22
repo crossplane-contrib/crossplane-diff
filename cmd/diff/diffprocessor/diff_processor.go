@@ -12,6 +12,7 @@ import (
 	k8 "github.com/crossplane-contrib/crossplane-diff/cmd/diff/client/kubernetes"
 	"github.com/crossplane-contrib/crossplane-diff/cmd/diff/renderer"
 	dt "github.com/crossplane-contrib/crossplane-diff/cmd/diff/renderer/types"
+	"github.com/crossplane-contrib/crossplane-diff/cmd/diff/types"
 	un "k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 
@@ -30,8 +31,8 @@ type RenderFunc func(ctx context.Context, log logging.Logger, in render.Inputs) 
 
 // DiffProcessor interface for processing resources.
 type DiffProcessor interface {
-	// PerformDiff processes all resources and produces a diff output
-	PerformDiff(ctx context.Context, stdout io.Writer, resources []*un.Unstructured) error
+	// PerformDiff processes resources using a composition provider function
+	PerformDiff(ctx context.Context, stdout io.Writer, resources []*un.Unstructured, compositionProvider types.CompositionProvider) error
 
 	// Initialize loads required resources like CRDs and environment configs
 	Initialize(ctx context.Context) error
@@ -131,9 +132,9 @@ func (p *DefaultDiffProcessor) initializeSchemaValidator(ctx context.Context) er
 	return nil
 }
 
-// PerformDiff processes all resources and produces a diff output.
-func (p *DefaultDiffProcessor) PerformDiff(ctx context.Context, stdout io.Writer, resources []*un.Unstructured) error {
-	p.config.Logger.Debug("Processing resources", "count", len(resources))
+// PerformDiff processes resources using a composition provider function.
+func (p *DefaultDiffProcessor) PerformDiff(ctx context.Context, stdout io.Writer, resources []*un.Unstructured, compositionProvider types.CompositionProvider) error {
+	p.config.Logger.Debug("Processing resources with composition provider", "count", len(resources))
 
 	if len(resources) == 0 {
 		p.config.Logger.Debug("No resources to process")
@@ -148,7 +149,7 @@ func (p *DefaultDiffProcessor) PerformDiff(ctx context.Context, stdout io.Writer
 	for _, res := range resources {
 		resourceID := fmt.Sprintf("%s/%s", res.GetKind(), res.GetName())
 
-		diffs, err := p.DiffSingleResource(ctx, res)
+		diffs, err := p.DiffSingleResource(ctx, res, compositionProvider)
 		if err != nil {
 			p.config.Logger.Debug("Failed to process resource", "resource", resourceID, "error", err)
 			errs = append(errs, errors.Wrapf(err, "unable to process resource %s", resourceID))
@@ -183,7 +184,8 @@ func (p *DefaultDiffProcessor) PerformDiff(ctx context.Context, stdout io.Writer
 }
 
 // DiffSingleResource handles one resource at a time and returns its diffs.
-func (p *DefaultDiffProcessor) DiffSingleResource(ctx context.Context, res *un.Unstructured) (map[string]*dt.ResourceDiff, error) {
+// The compositionProvider function is called to obtain the composition to use for rendering.
+func (p *DefaultDiffProcessor) DiffSingleResource(ctx context.Context, res *un.Unstructured, compositionProvider types.CompositionProvider) (map[string]*dt.ResourceDiff, error) {
 	resourceID := fmt.Sprintf("%s/%s", res.GetKind(), res.GetName())
 	p.config.Logger.Debug("Processing resource", "resource", resourceID)
 
@@ -192,16 +194,14 @@ func (p *DefaultDiffProcessor) DiffSingleResource(ctx context.Context, res *un.U
 		return nil, err
 	}
 
-	// Find the matching composition
-	comp, err := p.compClient.FindMatchingComposition(ctx, res)
+	// Get the composition using the provided function
+	comp, err := compositionProvider(ctx, res)
 	if err != nil {
-		p.config.Logger.Debug("No matching composition found", "resource", resourceID, "error", err)
-		return nil, errors.Wrap(err, "cannot find matching composition")
+		p.config.Logger.Debug("Failed to get composition", "resource", resourceID, "error", err)
+		return nil, errors.Wrap(err, "cannot get composition")
 	}
 
-	p.config.Logger.Debug("Resource setup complete",
-		"resource", resourceID,
-		"composition", comp.GetName())
+	p.config.Logger.Debug("Resource setup complete", "resource", resourceID, "composition", comp.GetName())
 
 	// Get functions for rendering
 	fns, err := p.fnClient.GetFunctionsFromPipeline(comp)
@@ -254,10 +254,15 @@ func (p *DefaultDiffProcessor) DiffSingleResource(ctx context.Context, res *un.U
 		return nil, errors.Wrap(err, "cannot validate resources")
 	}
 
-	// Calculate all diffs
+	// Calculate diffs
 	p.config.Logger.Debug("Calculating diffs", "resource", resourceID)
 
-	diffs, err := p.diffCalculator.CalculateDiffs(ctx, xr, desired)
+	// Clean the XR for diff calculation - remove managed fields that can cause apply issues
+	cleanXR := xr.DeepCopy()
+	cleanXR.SetManagedFields(nil)
+	cleanXR.SetResourceVersion("")
+
+	diffs, err := p.diffCalculator.CalculateDiffs(ctx, cleanXR, desired)
 	if err != nil {
 		// We don't fail completely if some diffs couldn't be calculated
 		p.config.Logger.Debug("Partial error calculating diffs", "resource", resourceID, "error", err)

@@ -139,7 +139,7 @@ func TestDefaultDiffProcessor_PerformDiff(t *testing.T) {
 			processorOpts: []ProcessorOption{
 				WithLogger(tu.TestLogger(t, false)),
 			},
-			want: errors.New("unable to process resource XR1/my-xr-1: cannot find matching composition: composition not found"),
+			want: errors.New("unable to process resource XR1/my-xr-1: cannot get composition: composition not found"),
 		},
 		"MultipleResourceErrors": {
 			setupMocks: func() (k8.Clients, xp.Clients) {
@@ -170,8 +170,8 @@ func TestDefaultDiffProcessor_PerformDiff(t *testing.T) {
 			processorOpts: []ProcessorOption{
 				WithLogger(tu.TestLogger(t, false)),
 			},
-			want: errors.New("[unable to process resource XR1/my-xr-1: cannot find matching composition: composition not found, " +
-				"unable to process resource XR1/my-xr-2: cannot find matching composition: composition not found]"),
+			want: errors.New("[unable to process resource XR1/my-xr-1: cannot get composition: composition not found, " +
+				"unable to process resource XR1/my-xr-2: cannot get composition: composition not found]"),
 		},
 		"CompositionNotFound": {
 			setupMocks: func() (k8.Clients, xp.Clients) {
@@ -202,7 +202,7 @@ func TestDefaultDiffProcessor_PerformDiff(t *testing.T) {
 			processorOpts: []ProcessorOption{
 				WithLogger(tu.TestLogger(t, false)),
 			},
-			want: errors.New("unable to process resource XR1/my-xr-1: cannot find matching composition: composition not found"),
+			want: errors.New("unable to process resource XR1/my-xr-1: cannot get composition: composition not found"),
 		},
 		"GetFunctionsError": {
 			setupMocks: func() (k8.Clients, xp.Clients) {
@@ -492,7 +492,11 @@ func TestDefaultDiffProcessor_PerformDiff(t *testing.T) {
 			// Create a dummy writer for stdout
 			var stdout bytes.Buffer
 
-			err := processor.PerformDiff(ctx, &stdout, tt.resources)
+			// Create a mock composition provider that uses the same mock composition client
+			compositionProvider := func(ctx context.Context, res *un.Unstructured) (*apiextensionsv1.Composition, error) {
+				return xpClients.Composition.FindMatchingComposition(ctx, res)
+			}
+			err := processor.PerformDiff(ctx, &stdout, tt.resources, compositionProvider)
 
 			if tt.want != nil {
 				if err == nil {
