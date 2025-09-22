@@ -18,7 +18,6 @@ limitations under the License.
 package main
 
 import (
-	"context"
 	"fmt"
 
 	"github.com/alecthomas/kong"
@@ -29,7 +28,6 @@ import (
 	"github.com/crossplane/crossplane-runtime/v2/pkg/logging"
 
 	ld "github.com/crossplane/crossplane/v2/cmd/crank/common/load"
-	"github.com/crossplane/crossplane/v2/cmd/crank/render"
 )
 
 // XRCmd represents the XR diff command.
@@ -91,15 +89,7 @@ func (c *XRCmd) initializeDependencies(ctx *kong.Context, log logging.Logger, co
 }
 
 func makeDefaultXRProc(c *XRCmd, ctx *AppContext, log logging.Logger) dp.DiffProcessor {
-	// Create the options for the processor
-	options := []dp.ProcessorOption{
-		dp.WithNamespace(c.Namespace),
-		dp.WithLogger(log),
-		dp.WithRenderFunc(render.Render),
-		dp.WithColorize(!c.NoColor),
-		dp.WithCompact(c.Compact),
-	}
-
+	options := createProcessorOptions(c.CommonCmdFields, c.Namespace, log)
 	return dp.NewDiffProcessor(ctx.K8sClients, ctx.XpClients, options...)
 }
 
@@ -159,12 +149,11 @@ func (c *XRCmd) Run(k *kong.Context, log logging.Logger, appCtx *AppContext, pro
 	// TODO:  diff against upgraded schema that isn't applied yet
 	// TODO:  diff against upgraded composition that isn't applied yet
 	// TODO:  diff against upgraded composition version that is already available
-	ctx, cancel := context.WithTimeout(context.Background(), c.Timeout)
-	defer cancel()
-
-	if err := appCtx.Initialize(ctx, log); err != nil {
-		return errors.Wrap(err, "cannot initialize client")
+	ctx, cancel, err := initializeAppContext(c.Timeout, appCtx, log)
+	if err != nil {
+		return err
 	}
+	defer cancel()
 
 	resources, err := loader.Load()
 	if err != nil {

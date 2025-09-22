@@ -18,13 +18,17 @@ limitations under the License.
 package main
 
 import (
+	"context"
 	"time"
 
 	"github.com/alecthomas/kong"
+	dp "github.com/crossplane-contrib/crossplane-diff/cmd/diff/diffprocessor"
 	"k8s.io/client-go/rest"
 
 	"github.com/crossplane/crossplane-runtime/v2/pkg/errors"
 	"github.com/crossplane/crossplane-runtime/v2/pkg/logging"
+
+	"github.com/crossplane/crossplane/v2/cmd/crank/render"
 )
 
 // CommonCmdFields contains common fields shared by both XR and Comp commands.
@@ -79,4 +83,27 @@ func initRestConfig(config *rest.Config, logger logging.Logger, fields CommonCmd
 		"final_burst", config.Burst)
 
 	return config
+}
+
+// createProcessorOptions creates the standard processor options from common command fields.
+// Includes all options that may be used by any processor type.
+func createProcessorOptions(fields CommonCmdFields, namespace string, log logging.Logger) []dp.ProcessorOption {
+	return []dp.ProcessorOption{
+		dp.WithNamespace(namespace),
+		dp.WithLogger(log),
+		dp.WithColorize(!fields.NoColor),
+		dp.WithCompact(fields.Compact),
+		dp.WithRenderFunc(render.Render), // Safe to include even if unused
+	}
+}
+
+// initializeAppContext initializes the application context with timeout and error handling.
+func initializeAppContext(timeout time.Duration, appCtx *AppContext, log logging.Logger) (context.Context, context.CancelFunc, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	if err := appCtx.Initialize(ctx, log); err != nil {
+		cancel()
+		return nil, nil, errors.Wrap(err, "cannot initialize client")
+	}
+
+	return ctx, cancel, nil
 }

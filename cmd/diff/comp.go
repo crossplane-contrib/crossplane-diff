@@ -18,8 +18,6 @@ limitations under the License.
 package main
 
 import (
-	"context"
-
 	"github.com/alecthomas/kong"
 	dp "github.com/crossplane-contrib/crossplane-diff/cmd/diff/diffprocessor"
 	"k8s.io/client-go/rest"
@@ -91,19 +89,7 @@ func (c *CompCmd) initializeDependencies(ctx *kong.Context, log logging.Logger, 
 }
 
 func makeDefaultCompProc(c *CompCmd, ctx *AppContext, log logging.Logger) dp.CompDiffProcessor {
-	// Create the options for the processor using the unified ProcessorOption
-	options := []dp.ProcessorOption{
-		dp.WithNamespace(c.Namespace),
-		dp.WithLogger(log),
-		dp.WithColorize(!c.NoColor),
-		dp.WithCompact(c.Compact),
-	}
-
-	// Use explicit type references to make sure imports are used
-	var (
-		_ = ctx.K8sClients
-		_ = ctx.XpClients
-	)
+	options := createProcessorOptions(c.CommonCmdFields, c.Namespace, log)
 
 	return dp.NewCompDiffProcessor(ctx.K8sClients, ctx.XpClients, options...)
 }
@@ -114,14 +100,13 @@ func makeDefaultCompLoader(c *CompCmd) (ld.Loader, error) {
 
 // Run executes the composition diff command.
 func (c *CompCmd) Run(k *kong.Context, log logging.Logger, appCtx *AppContext, proc dp.CompDiffProcessor, loader ld.Loader) error {
-	ctx, cancel := context.WithTimeout(context.Background(), c.Timeout)
+	ctx, cancel, err := initializeAppContext(c.Timeout, appCtx, log)
+	if err != nil {
+		return err
+	}
 	defer cancel()
 
-	if err := appCtx.Initialize(ctx, log); err != nil {
-		return errors.Wrap(err, "cannot initialize client")
-	}
-
-	err := proc.Initialize(ctx)
+	err = proc.Initialize(ctx)
 	if err != nil {
 		return errors.Wrap(err, "cannot initialize composition diff processor")
 	}
