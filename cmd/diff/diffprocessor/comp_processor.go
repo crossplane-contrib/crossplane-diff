@@ -223,6 +223,7 @@ func (p *DefaultCompDiffProcessor) displayCompositionDiff(ctx context.Context, s
 		if err != nil {
 			return errors.Wrap(err, "cannot convert original composition to unstructured")
 		}
+
 		originalCompUnstructured = &un.Unstructured{Object: unstructuredObj}
 	}
 
@@ -298,5 +299,3 @@ func (p *DefaultCompDiffProcessor) displayCompositionDiff(ctx context.Context, s
 
 	return nil
 }
-
-

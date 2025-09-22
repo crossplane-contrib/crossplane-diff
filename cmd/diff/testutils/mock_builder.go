@@ -669,6 +669,22 @@ func (b *MockCompositionClientBuilder) WithSuccessfulCompositionFetch(comp *xpex
 	})
 }
 
+// WithSuccessfulCompositionFetches sets up successful composition fetches for multiple compositions.
+func (b *MockCompositionClientBuilder) WithSuccessfulCompositionFetches(comps []*xpextv1.Composition) *MockCompositionClientBuilder {
+	compositionMap := make(map[string]*xpextv1.Composition)
+	for _, comp := range comps {
+		compositionMap[comp.GetName()] = comp
+	}
+
+	return b.WithGetComposition(func(_ context.Context, name string) (*xpextv1.Composition, error) {
+		if composition, found := compositionMap[name]; found {
+			return composition, nil
+		}
+
+		return nil, errors.New("composition not found")
+	})
+}
+
 // WithFindXRsUsingComposition sets the FindXRsUsingComposition behavior.
 func (b *MockCompositionClientBuilder) WithFindXRsUsingComposition(fn func(context.Context, string, string) ([]*un.Unstructured, error)) *MockCompositionClientBuilder {
 	b.mock.FindXRsUsingCompositionFn = fn
@@ -681,6 +697,7 @@ func (b *MockCompositionClientBuilder) WithXRsForComposition(compositionName, na
 		if compName == compositionName && ns == namespace {
 			return xrs, nil
 		}
+
 		return nil, errors.Errorf("no XRs found for composition %s in namespace %s", compName, ns)
 	})
 }
@@ -1647,6 +1664,19 @@ func (b *CompositionBuilder) WithPipelineStep(step, functionName string, input m
 // Build returns the built Composition.
 func (b *CompositionBuilder) Build() *xpextv1.Composition {
 	return b.composition.DeepCopy()
+}
+
+// BuildAsUnstructured returns the built Composition as an unstructured object.
+func (b *CompositionBuilder) BuildAsUnstructured() *un.Unstructured {
+	comp := b.Build()
+
+	obj, err := runtime.DefaultUnstructuredConverter.ToUnstructured(comp)
+	if err != nil {
+		// This should not happen in tests, but if it does, we'll return an empty unstructured
+		return &un.Unstructured{}
+	}
+
+	return &un.Unstructured{Object: obj}
 }
 
 // endregion

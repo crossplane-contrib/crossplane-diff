@@ -27,10 +27,8 @@ import (
 	tu "github.com/crossplane-contrib/crossplane-diff/cmd/diff/testutils"
 	"github.com/crossplane-contrib/crossplane-diff/cmd/diff/types"
 	gcmp "github.com/google/go-cmp/cmp"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	un "k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 
-	"github.com/crossplane/crossplane-runtime/v2/pkg/errors"
 	"github.com/crossplane/crossplane-runtime/v2/pkg/logging"
 
 	apiextensionsv1 "github.com/crossplane/crossplane/v2/apis/apiextensions/v1"
@@ -134,28 +132,14 @@ func TestDefaultCompDiffProcessor_findXRsUsingComposition(t *testing.T) {
 	}
 }
 
-
-
 func TestDefaultCompDiffProcessor_DiffComposition(t *testing.T) {
 	ctx := context.Background()
 
 	// Create test composition
-	testComp := &apiextensionsv1.Composition{
-		TypeMeta: metav1.TypeMeta{
-			APIVersion: "apiextensions.crossplane.io/v1",
-			Kind:       "Composition",
-		},
-		ObjectMeta: metav1.ObjectMeta{
-			Name: "test-composition",
-		},
-		Spec: apiextensionsv1.CompositionSpec{
-			CompositeTypeRef: apiextensionsv1.TypeReference{
-				APIVersion: "example.org/v1",
-				Kind:       "XResource",
-			},
-			Mode: apiextensionsv1.CompositionModePipeline,
-		},
-	}
+	testComp := tu.NewComposition("test-composition").
+		WithCompositeTypeRef("example.org/v1", "XResource").
+		WithPipelineMode().
+		Build()
 
 	// Create test XR
 	testXR := tu.NewResource("example.org/v1", "XResource", "test-xr").
@@ -172,22 +156,10 @@ func TestDefaultCompDiffProcessor_DiffComposition(t *testing.T) {
 		"SuccessfulDiff": {
 			namespace: "default",
 			compositions: []*un.Unstructured{
-				{
-					Object: map[string]interface{}{
-						"apiVersion": "apiextensions.crossplane.io/v1",
-						"kind":       "Composition",
-						"metadata": map[string]interface{}{
-							"name": "test-composition",
-						},
-						"spec": map[string]interface{}{
-							"compositeTypeRef": map[string]interface{}{
-								"apiVersion": "example.org/v1",
-								"kind":       "XResource",
-							},
-							"mode": "Pipeline",
-						},
-					},
-				},
+				tu.NewComposition("test-composition").
+					WithCompositeTypeRef("example.org/v1", "XResource").
+					WithPipelineMode().
+					BuildAsUnstructured(),
 			},
 			setupMocks: func() xp.Clients {
 				return xp.Clients{
@@ -225,87 +197,30 @@ func TestDefaultCompDiffProcessor_DiffComposition(t *testing.T) {
 		"MultipleCompositions": {
 			namespace: "default",
 			compositions: []*un.Unstructured{
-				{
-					Object: map[string]interface{}{
-						"apiVersion": "apiextensions.crossplane.io/v1",
-						"kind":       "Composition",
-						"metadata": map[string]interface{}{
-							"name": "test-composition-1",
-						},
-						"spec": map[string]interface{}{
-							"compositeTypeRef": map[string]interface{}{
-								"apiVersion": "example.org/v1",
-								"kind":       "XResource",
-							},
-							"mode": "Pipeline",
-						},
-					},
-				},
-				{
-					Object: map[string]interface{}{
-						"apiVersion": "apiextensions.crossplane.io/v1",
-						"kind":       "Composition",
-						"metadata": map[string]interface{}{
-							"name": "test-composition-2",
-						},
-						"spec": map[string]interface{}{
-							"compositeTypeRef": map[string]interface{}{
-								"apiVersion": "example.org/v1",
-								"kind":       "XResource",
-							},
-							"mode": "Pipeline",
-						},
-					},
-				},
+				tu.NewComposition("test-composition-1").
+					WithCompositeTypeRef("example.org/v1", "XResource").
+					WithPipelineMode().
+					BuildAsUnstructured(),
+				tu.NewComposition("test-composition-2").
+					WithCompositeTypeRef("example.org/v1", "XResource").
+					WithPipelineMode().
+					BuildAsUnstructured(),
 			},
 			setupMocks: func() xp.Clients {
 				// Create test compositions for the multi-composition test
-				testComp1 := &apiextensionsv1.Composition{
-					TypeMeta: metav1.TypeMeta{
-						APIVersion: "apiextensions.crossplane.io/v1",
-						Kind:       "Composition",
-					},
-					ObjectMeta: metav1.ObjectMeta{
-						Name: "test-composition-1",
-					},
-					Spec: apiextensionsv1.CompositionSpec{
-						CompositeTypeRef: apiextensionsv1.TypeReference{
-							APIVersion: "example.org/v1",
-							Kind:       "XResource",
-						},
-						Mode: apiextensionsv1.CompositionModePipeline,
-					},
-				}
+				testComp1 := tu.NewComposition("test-composition-1").
+					WithCompositeTypeRef("example.org/v1", "XResource").
+					WithPipelineMode().
+					Build()
 
-				testComp2 := &apiextensionsv1.Composition{
-					TypeMeta: metav1.TypeMeta{
-						APIVersion: "apiextensions.crossplane.io/v1",
-						Kind:       "Composition",
-					},
-					ObjectMeta: metav1.ObjectMeta{
-						Name: "test-composition-2",
-					},
-					Spec: apiextensionsv1.CompositionSpec{
-						CompositeTypeRef: apiextensionsv1.TypeReference{
-							APIVersion: "example.org/v1",
-							Kind:       "XResource",
-						},
-						Mode: apiextensionsv1.CompositionModePipeline,
-					},
-				}
+				testComp2 := tu.NewComposition("test-composition-2").
+					WithCompositeTypeRef("example.org/v1", "XResource").
+					WithPipelineMode().
+					Build()
 
 				return xp.Clients{
 					Composition: tu.NewMockCompositionClient().
-						WithGetComposition(func(_ context.Context, name string) (*apiextensionsv1.Composition, error) {
-							switch name {
-							case "test-composition-1":
-								return testComp1, nil
-							case "test-composition-2":
-								return testComp2, nil
-							default:
-								return nil, errors.New("composition not found")
-							}
-						}).
+						WithSuccessfulCompositionFetches([]*apiextensionsv1.Composition{testComp1, testComp2}).
 						WithXRsForComposition("test-composition-1", "default", []*un.Unstructured{}).
 						WithXRsForComposition("test-composition-2", "default", []*un.Unstructured{}).
 						Build(),
