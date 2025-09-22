@@ -99,15 +99,13 @@ func (p *DefaultCompDiffProcessor) DiffComposition(ctx context.Context, stdout i
 
 	// Process each composition, filtering out non-Composition objects
 	for i, comp := range compositions {
-		compositionID := fmt.Sprintf("composition %d", i+1)
-
 		// Skip non-Composition objects (e.g., GoTemplate objects extracted from pipeline steps)
 		if comp.GetKind() != "Composition" {
 			p.config.Logger.Debug("Skipping non-Composition object", "kind", comp.GetKind(), "apiVersion", comp.GetAPIVersion())
 			continue
 		}
 
-		compositionID = comp.GetName() // Use actual name from unstructured
+		compositionID := comp.GetName() // Use actual name from unstructured
 		p.config.Logger.Debug("Processing composition", "name", compositionID)
 
 		// Process this single composition
@@ -192,7 +190,11 @@ func (p *DefaultCompDiffProcessor) processSingleComposition(ctx context.Context,
 
 	if err := p.xrProc.PerformDiff(ctx, stdout, affectedXRs, func(context.Context, *un.Unstructured) (*apiextensionsv1.Composition, error) {
 		// Convert unstructured to structured only when needed by the XR processor
-		return p.unstructuredToComposition(newComp)
+		comp := &apiextensionsv1.Composition{}
+		if err := runtime.DefaultUnstructuredConverter.FromUnstructured(newComp.Object, comp); err != nil {
+			return nil, errors.Wrap(err, "cannot convert unstructured to Composition")
+		}
+		return comp, nil
 	}); err != nil {
 		return errors.Wrap(err, "cannot process XRs with composition override")
 	}
@@ -217,10 +219,11 @@ func (p *DefaultCompDiffProcessor) displayCompositionDiff(ctx context.Context, s
 		p.config.Logger.Debug("Retrieved original composition from cluster", "name", originalComp.GetName(), "composition", originalComp)
 
 		// Convert original composition to unstructured for comparison
-		originalCompUnstructured, err = p.compositionToUnstructured(originalComp)
+		unstructuredObj, err := runtime.DefaultUnstructuredConverter.ToUnstructured(originalComp)
 		if err != nil {
 			return errors.Wrap(err, "cannot convert original composition to unstructured")
 		}
+		originalCompUnstructured = &un.Unstructured{Object: unstructuredObj}
 	}
 
 	newCompUnstructured := newComp
@@ -230,6 +233,7 @@ func (p *DefaultCompDiffProcessor) displayCompositionDiff(ctx context.Context, s
 		if obj == nil {
 			return
 		}
+
 		obj.SetManagedFields(nil)
 		obj.SetResourceVersion("")
 		obj.SetUID("")
@@ -270,7 +274,7 @@ func (p *DefaultCompDiffProcessor) displayCompositionDiff(ctx context.Context, s
 		if _, err := fmt.Fprintf(stdout, "No changes detected in composition %s\n\n", newComp.GetName()); err != nil {
 			return errors.Wrap(err, "cannot write no changes message")
 		}
-	default:
+	case dt.DiffTypeAdded, dt.DiffTypeRemoved, dt.DiffTypeModified:
 		// Changes detected - show the diff
 		// Create a diff renderer with proper options
 		rendererOptions := renderer.DefaultDiffOptions()
@@ -293,27 +297,6 @@ func (p *DefaultCompDiffProcessor) displayCompositionDiff(ctx context.Context, s
 	}
 
 	return nil
-}
-
-// compositionToUnstructured converts a typed Composition to unstructured for diff calculation.
-func (p *DefaultCompDiffProcessor) compositionToUnstructured(comp *apiextensionsv1.Composition) (*un.Unstructured, error) {
-	// Convert composition to unstructured using runtime conversion
-	unstructuredObj, err := runtime.DefaultUnstructuredConverter.ToUnstructured(comp)
-	if err != nil {
-		return nil, errors.Wrap(err, "cannot convert composition to unstructured map")
-	}
-
-	return &un.Unstructured{Object: unstructuredObj}, nil
-}
-
-// unstructuredToComposition converts an unstructured object to a typed Composition.
-func (p *DefaultCompDiffProcessor) unstructuredToComposition(u *un.Unstructured) (*apiextensionsv1.Composition, error) {
-	comp := &apiextensionsv1.Composition{}
-	if err := runtime.DefaultUnstructuredConverter.FromUnstructured(u.Object, comp); err != nil {
-		return nil, errors.Wrap(err, "cannot convert unstructured to Composition")
-	}
-
-	return comp, nil
 }
 
 

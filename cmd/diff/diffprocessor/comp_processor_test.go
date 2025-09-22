@@ -61,12 +61,7 @@ func TestDefaultCompDiffProcessor_findXRsUsingComposition(t *testing.T) {
 			setupMocks: func() xp.Clients {
 				return xp.Clients{
 					Composition: tu.NewMockCompositionClient().
-						WithFindXRsUsingComposition(func(_ context.Context, compositionName, namespace string) ([]*un.Unstructured, error) {
-							if compositionName == "test-composition" && namespace == "default" {
-								return []*un.Unstructured{xr1}, nil
-							}
-							return nil, errors.New("not found")
-						}).
+						WithXRsForComposition("test-composition", "default", []*un.Unstructured{xr1}).
 						Build(),
 				}
 			},
@@ -79,12 +74,7 @@ func TestDefaultCompDiffProcessor_findXRsUsingComposition(t *testing.T) {
 			setupMocks: func() xp.Clients {
 				return xp.Clients{
 					Composition: tu.NewMockCompositionClient().
-						WithFindXRsUsingComposition(func(_ context.Context, compositionName, namespace string) ([]*un.Unstructured, error) {
-							if compositionName == "test-composition" && namespace == "custom-ns" {
-								return []*un.Unstructured{xr2}, nil
-							}
-							return nil, errors.New("not found")
-						}).
+						WithXRsForComposition("test-composition", "custom-ns", []*un.Unstructured{xr2}).
 						Build(),
 				}
 			},
@@ -97,9 +87,7 @@ func TestDefaultCompDiffProcessor_findXRsUsingComposition(t *testing.T) {
 			setupMocks: func() xp.Clients {
 				return xp.Clients{
 					Composition: tu.NewMockCompositionClient().
-						WithFindXRsUsingComposition(func(_ context.Context, _, _ string) ([]*un.Unstructured, error) {
-							return nil, errors.New("client error")
-						}).
+						WithFindXRsError("client error").
 						Build(),
 				}
 			},
@@ -112,9 +100,7 @@ func TestDefaultCompDiffProcessor_findXRsUsingComposition(t *testing.T) {
 			setupMocks: func() xp.Clients {
 				return xp.Clients{
 					Composition: tu.NewMockCompositionClient().
-						WithFindXRsUsingComposition(func(_ context.Context, _, _ string) ([]*un.Unstructured, error) {
-							return []*un.Unstructured{}, nil
-						}).
+						WithXRsForComposition("test-composition", "default", []*un.Unstructured{}).
 						Build(),
 				}
 			},
@@ -148,153 +134,7 @@ func TestDefaultCompDiffProcessor_findXRsUsingComposition(t *testing.T) {
 	}
 }
 
-func TestDefaultCompDiffProcessor_unstructuredToComposition(t *testing.T) {
-	tests := map[string]struct {
-		unstructured *un.Unstructured
-		want         *apiextensionsv1.Composition
-		wantErr      bool
-	}{
-		"ValidUnstructured": {
-			unstructured: &un.Unstructured{
-				Object: map[string]interface{}{
-					"apiVersion": "apiextensions.crossplane.io/v1",
-					"kind":       "Composition",
-					"metadata": map[string]interface{}{
-						"name": "test-composition",
-					},
-					"spec": map[string]interface{}{
-						"compositeTypeRef": map[string]interface{}{
-							"apiVersion": "example.org/v1",
-							"kind":       "XResource",
-						},
-						"mode": "Pipeline",
-					},
-				},
-			},
-			want: &apiextensionsv1.Composition{
-				TypeMeta: metav1.TypeMeta{
-					APIVersion: "apiextensions.crossplane.io/v1",
-					Kind:       "Composition",
-				},
-				ObjectMeta: metav1.ObjectMeta{
-					Name: "test-composition",
-				},
-				Spec: apiextensionsv1.CompositionSpec{
-					CompositeTypeRef: apiextensionsv1.TypeReference{
-						APIVersion: "example.org/v1",
-						Kind:       "XResource",
-					},
-					Mode: apiextensionsv1.CompositionModePipeline,
-				},
-			},
-			wantErr: false,
-		},
-		"InvalidUnstructured": {
-			unstructured: &un.Unstructured{
-				Object: map[string]interface{}{
-					"apiVersion": "v1",
-					"kind":       "Pod", // Wrong kind
-				},
-			},
-			want: &apiextensionsv1.Composition{
-				TypeMeta: metav1.TypeMeta{
-					APIVersion: "v1",
-					Kind:       "Pod",
-				},
-			},
-			wantErr: false, // Runtime converter doesn't validate, it just converts
-		},
-	}
 
-	for name, tt := range tests {
-		t.Run(name, func(t *testing.T) {
-			// Create processor
-			processor := &DefaultCompDiffProcessor{
-				config: ProcessorConfig{
-					Logger: tu.TestLogger(t, false),
-				},
-			}
-
-			got, err := processor.unstructuredToComposition(tt.unstructured)
-
-			if (err != nil) != tt.wantErr {
-				t.Errorf("unstructuredToComposition() error = %v, wantErr %v", err, tt.wantErr)
-				return
-			}
-
-			if tt.wantErr {
-				return
-			}
-
-			if diff := gcmp.Diff(tt.want, got); diff != "" {
-				t.Errorf("unstructuredToComposition() mismatch (-want +got):\n%s", diff)
-			}
-		})
-	}
-}
-
-func TestDefaultCompDiffProcessor_compositionToUnstructured(t *testing.T) {
-	tests := map[string]struct {
-		composition *apiextensionsv1.Composition
-		wantErr     bool
-	}{
-		"ValidComposition": {
-			composition: &apiextensionsv1.Composition{
-				TypeMeta: metav1.TypeMeta{
-					APIVersion: "apiextensions.crossplane.io/v1",
-					Kind:       "Composition",
-				},
-				ObjectMeta: metav1.ObjectMeta{
-					Name: "test-composition",
-				},
-				Spec: apiextensionsv1.CompositionSpec{
-					CompositeTypeRef: apiextensionsv1.TypeReference{
-						APIVersion: "example.org/v1",
-						Kind:       "XResource",
-					},
-					Mode: apiextensionsv1.CompositionModePipeline,
-				},
-			},
-			wantErr: false,
-		},
-	}
-
-	for name, tt := range tests {
-		t.Run(name, func(t *testing.T) {
-			// Create processor
-			processor := &DefaultCompDiffProcessor{
-				config: ProcessorConfig{
-					Logger: tu.TestLogger(t, false),
-				},
-			}
-
-			got, err := processor.compositionToUnstructured(tt.composition)
-
-			if (err != nil) != tt.wantErr {
-				t.Errorf("compositionToUnstructured() error = %v, wantErr %v", err, tt.wantErr)
-				return
-			}
-
-			if tt.wantErr {
-				return
-			}
-
-			// Basic checks
-			if got == nil {
-				t.Errorf("compositionToUnstructured() returned nil")
-				return
-			}
-
-			if got.GetKind() != "Composition" {
-				t.Errorf("compositionToUnstructured() kind = %v, want Composition", got.GetKind())
-			}
-
-			if got.GetName() != tt.composition.GetName() {
-				t.Errorf("compositionToUnstructured() name = %v, want %v", got.GetName(), tt.composition.GetName())
-			}
-		})
-	}
-}
 
 func TestDefaultCompDiffProcessor_DiffComposition(t *testing.T) {
 	ctx := context.Background()
@@ -353,9 +193,7 @@ func TestDefaultCompDiffProcessor_DiffComposition(t *testing.T) {
 				return xp.Clients{
 					Composition: tu.NewMockCompositionClient().
 						WithSuccessfulCompositionFetch(testComp).
-						WithFindXRsUsingComposition(func(_ context.Context, _, _ string) ([]*un.Unstructured, error) {
-							return []*un.Unstructured{testXR}, nil
-						}).
+						WithXRsForComposition("test-composition", "default", []*un.Unstructured{testXR}).
 						Build(),
 					Definition:   tu.NewMockDefinitionClient().Build(),
 					Environment:  tu.NewMockEnvironmentClient().Build(),
@@ -468,10 +306,8 @@ func TestDefaultCompDiffProcessor_DiffComposition(t *testing.T) {
 								return nil, errors.New("composition not found")
 							}
 						}).
-						WithFindXRsUsingComposition(func(_ context.Context, _, _ string) ([]*un.Unstructured, error) {
-							// Return no XRs for simplicity - just testing that multiple compositions are processed
-							return []*un.Unstructured{}, nil
-						}).
+						WithXRsForComposition("test-composition-1", "default", []*un.Unstructured{}).
+						WithXRsForComposition("test-composition-2", "default", []*un.Unstructured{}).
 						Build(),
 					Definition:   tu.NewMockDefinitionClient().Build(),
 					Environment:  tu.NewMockEnvironmentClient().Build(),

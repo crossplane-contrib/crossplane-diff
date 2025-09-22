@@ -675,6 +675,23 @@ func (b *MockCompositionClientBuilder) WithFindXRsUsingComposition(fn func(conte
 	return b
 }
 
+// WithXRsForComposition sets FindXRsUsingComposition to return specific XRs for a given composition name and namespace.
+func (b *MockCompositionClientBuilder) WithXRsForComposition(compositionName, namespace string, xrs []*un.Unstructured) *MockCompositionClientBuilder {
+	return b.WithFindXRsUsingComposition(func(_ context.Context, compName, ns string) ([]*un.Unstructured, error) {
+		if compName == compositionName && ns == namespace {
+			return xrs, nil
+		}
+		return nil, errors.Errorf("no XRs found for composition %s in namespace %s", compName, ns)
+	})
+}
+
+// WithFindXRsError sets FindXRsUsingComposition to return an error.
+func (b *MockCompositionClientBuilder) WithFindXRsError(errMsg string) *MockCompositionClientBuilder {
+	return b.WithFindXRsUsingComposition(func(context.Context, string, string) ([]*un.Unstructured, error) {
+		return nil, errors.New(errMsg)
+	})
+}
+
 // Build returns the built mock.
 func (b *MockCompositionClientBuilder) Build() *MockCompositionClient {
 	return b.mock
