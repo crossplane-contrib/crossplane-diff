@@ -53,7 +53,7 @@ type DefaultCompDiffProcessor struct {
 }
 
 // NewCompDiffProcessor creates a new DefaultCompDiffProcessor.
-func NewCompDiffProcessor(k8cs k8.Clients, xpcs xp.Clients, opts ...ProcessorOption) CompDiffProcessor {
+func NewCompDiffProcessor(xrProc DiffProcessor, k8cs k8.Clients, xpcs xp.Clients, opts ...ProcessorOption) CompDiffProcessor {
 	// Create default configuration
 	config := ProcessorConfig{
 		Namespace:  "",
@@ -72,6 +72,7 @@ func NewCompDiffProcessor(k8cs k8.Clients, xpcs xp.Clients, opts ...ProcessorOpt
 		k8sClients: k8cs,
 		xpClients:  xpcs,
 		config:     config,
+		xrProc:     xrProc,
 	}
 }
 
@@ -79,18 +80,7 @@ func NewCompDiffProcessor(k8cs k8.Clients, xpcs xp.Clients, opts ...ProcessorOpt
 func (p *DefaultCompDiffProcessor) Initialize(ctx context.Context) error {
 	p.config.Logger.Debug("Initializing composition diff processor")
 
-	// Create an XR diff processor that we'll reuse
-	xrOptions := []ProcessorOption{
-		WithNamespace(p.config.Namespace),
-		WithLogger(p.config.Logger),
-		WithRenderFunc(render.Render),
-		WithColorize(p.config.Colorize),
-		WithCompact(p.config.Compact),
-	}
-
-	p.xrProc = NewDiffProcessor(p.k8sClients, p.xpClients, xrOptions...)
-
-	// Initialize the XR processor
+	// Initialize the injected XR processor
 	if err := p.xrProc.Initialize(ctx); err != nil {
 		return errors.Wrap(err, "cannot initialize XR diff processor")
 	}

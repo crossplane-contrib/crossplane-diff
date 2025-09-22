@@ -85,18 +85,6 @@ func initRestConfig(config *rest.Config, logger logging.Logger, fields CommonCmd
 	return config
 }
 
-// createProcessorOptions creates the standard processor options from common command fields.
-// Includes all options that may be used by any processor type.
-func createProcessorOptions(fields CommonCmdFields, namespace string, log logging.Logger) []dp.ProcessorOption {
-	return []dp.ProcessorOption{
-		dp.WithNamespace(namespace),
-		dp.WithLogger(log),
-		dp.WithColorize(!fields.NoColor),
-		dp.WithCompact(fields.Compact),
-		dp.WithRenderFunc(render.Render), // Safe to include even if unused
-	}
-}
-
 // initializeAppContext initializes the application context with timeout and error handling.
 func initializeAppContext(timeout time.Duration, appCtx *AppContext, log logging.Logger) (context.Context, context.CancelFunc, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
@@ -106,4 +94,14 @@ func initializeAppContext(timeout time.Duration, appCtx *AppContext, log logging
 	}
 
 	return ctx, cancel, nil
+}
+
+// defaultProcessorOptions returns the standard default options used by both XR and composition processors.
+// Call sites can append additional options or override these defaults as needed.
+func defaultProcessorOptions() []dp.ProcessorOption {
+	return []dp.ProcessorOption{
+		dp.WithColorize(true),
+		dp.WithCompact(false),
+		dp.WithRenderFunc(render.Render),
+	}
 }

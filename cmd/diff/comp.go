@@ -89,9 +89,20 @@ func (c *CompCmd) initializeDependencies(ctx *kong.Context, log logging.Logger, 
 }
 
 func makeDefaultCompProc(c *CompCmd, ctx *AppContext, log logging.Logger) dp.CompDiffProcessor {
-	options := createProcessorOptions(c.CommonCmdFields, c.Namespace, log)
+	// Both processors share the same options since they're part of the same command
+	opts := defaultProcessorOptions()
+	opts = append(opts,
+		dp.WithNamespace(c.Namespace),
+		dp.WithLogger(log),
+		dp.WithColorize(!c.NoColor), // Override default if NoColor is set
+		dp.WithCompact(c.Compact),   // Override default if Compact is set
+	)
 
-	return dp.NewCompDiffProcessor(ctx.K8sClients, ctx.XpClients, options...)
+	// Create XR processor first (peer processor)
+	xrProc := dp.NewDiffProcessor(ctx.K8sClients, ctx.XpClients, opts...)
+
+	// Inject it into composition processor
+	return dp.NewCompDiffProcessor(xrProc, ctx.K8sClients, ctx.XpClients, opts...)
 }
 
 func makeDefaultCompLoader(c *CompCmd) (ld.Loader, error) {

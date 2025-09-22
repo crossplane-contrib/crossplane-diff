@@ -89,8 +89,15 @@ func (c *XRCmd) initializeDependencies(ctx *kong.Context, log logging.Logger, co
 }
 
 func makeDefaultXRProc(c *XRCmd, ctx *AppContext, log logging.Logger) dp.DiffProcessor {
-	options := createProcessorOptions(c.CommonCmdFields, c.Namespace, log)
-	return dp.NewDiffProcessor(ctx.K8sClients, ctx.XpClients, options...)
+	opts := defaultProcessorOptions()
+	opts = append(opts,
+		dp.WithNamespace(c.Namespace),
+		dp.WithLogger(log),
+		dp.WithColorize(!c.NoColor), // Override default if NoColor is set
+		dp.WithCompact(c.Compact),   // Override default if Compact is set
+	)
+
+	return dp.NewDiffProcessor(ctx.K8sClients, ctx.XpClients, opts...)
 }
 
 func makeDefaultXRLoader(c *XRCmd) (ld.Loader, error) {
