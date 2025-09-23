@@ -58,15 +58,13 @@ const (
 	CrossplaneVersionRelease120 = "release-1.20"
 )
 
-// RunDiff runs the crossplane diff command on the provided resources.
+// runCrossplaneDiff runs the crossplane diff command with the specified subcommand on the provided resources.
 // It returns the output and any error encountered.
-func RunDiff(t *testing.T, c *envconf.Config, binPath string, resourcePaths ...string) (string, string, error) {
+func runCrossplaneDiff(t *testing.T, c *envconf.Config, binPath, subcommand string, resourcePaths ...string) (string, string, error) {
 	t.Helper()
 
-	var err error
-
 	// Prepare the command to run
-	args := append([]string{"--verbose", "diff", "--timeout=2m", "-n", namespace}, resourcePaths...)
+	args := append([]string{"--verbose", subcommand, "--timeout=2m"}, resourcePaths...)
 	t.Logf("Running command: %s %s", binPath, strings.Join(args, " "))
 	cmd := exec.Command(binPath, args...)
 
@@ -80,9 +78,21 @@ func RunDiff(t *testing.T, c *envconf.Config, binPath string, resourcePaths ...s
 	cmd.Stderr = &stderr
 
 	// Run the command
-	err = cmd.Run()
+	err := cmd.Run()
 
 	return stdout.String(), stderr.String(), err
+}
+
+// RunXRDiff runs the crossplane xr diff command on the provided resources.
+// It returns the output and any error encountered.
+func RunXRDiff(t *testing.T, c *envconf.Config, binPath string, resourcePaths ...string) (string, string, error) {
+	return runCrossplaneDiff(t, c, binPath, "xr", resourcePaths...)
+}
+
+// RunCompDiff runs the crossplane comp diff command on the provided compositions.
+// It returns the output and any error encountered.
+func RunCompDiff(t *testing.T, c *envconf.Config, binPath string, compositionPaths ...string) (string, string, error) {
+	return runCrossplaneDiff(t, c, binPath, "comp", compositionPaths...)
 }
 
 // TestDiffNewResourceV2Cluster tests the crossplane diff command against net-new resources in v2-cluster variant.
@@ -107,7 +117,7 @@ func TestDiffNewResourceV2Cluster(t *testing.T) {
 			Assess("CanDiffNewResource", func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
 				t.Helper()
 
-				output, log, err := RunDiff(t, c, "./crossplane-diff", filepath.Join(manifests, "new-xr.yaml"))
+				output, log, err := RunXRDiff(t, c, "./crossplane-diff", filepath.Join(manifests, "new-xr.yaml"))
 				if err != nil {
 					t.Fatalf("Error running diff command: %v\nLog output:\n%s", err, log)
 				}
@@ -150,7 +160,7 @@ func TestDiffExistingResourceV2Cluster(t *testing.T) {
 			)).
 			Assess("CanDiffExistingResource", func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
 				t.Helper()
-				output, log, err := RunDiff(t, c, "./crossplane-diff", filepath.Join(manifests, "modified-xr.yaml"))
+				output, log, err := RunXRDiff(t, c, "./crossplane-diff", filepath.Join(manifests, "modified-xr.yaml"))
 				if err != nil {
 					t.Fatalf("Error running diff command: %v\nLog output:\n%s", err, log)
 				}
@@ -189,7 +199,7 @@ func TestDiffNewResourceV2Namespaced(t *testing.T) {
 			)).
 			Assess("CanDiffNewResource", func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
 				t.Helper()
-				output, log, err := RunDiff(t, c, "./crossplane-diff", filepath.Join(manifests, "new-xr.yaml"))
+				output, log, err := RunXRDiff(t, c, "./crossplane-diff", filepath.Join(manifests, "new-xr.yaml"))
 				if err != nil {
 					t.Fatalf("Error running diff command: %v\nLog output:\n%s", err, log)
 				}
@@ -236,7 +246,7 @@ func TestDiffExistingResourceV2Namespaced(t *testing.T) {
 			)).
 			Assess("CanDiffExistingResource", func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
 				t.Helper()
-				output, log, err := RunDiff(t, c, "./crossplane-diff", filepath.Join(manifests, "modified-xr.yaml"))
+				output, log, err := RunXRDiff(t, c, "./crossplane-diff", filepath.Join(manifests, "modified-xr.yaml"))
 				if err != nil {
 					t.Fatalf("Error running diff command: %v\nLog output:\n%s", err, log)
 				}
@@ -282,7 +292,7 @@ func TestDiffNewResourceV1(t *testing.T) {
 			)).
 			Assess("CanDiffNewResource", func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
 				t.Helper()
-				output, log, err := RunDiff(t, c, "./crossplane-diff", filepath.Join(manifests, "new-xr.yaml"))
+				output, log, err := RunXRDiff(t, c, "./crossplane-diff", filepath.Join(manifests, "new-xr.yaml"))
 				if err != nil {
 					t.Fatalf("Error running diff command: %v\nLog output:\n%s", err, log)
 				}
@@ -330,7 +340,7 @@ func TestDiffExistingResourceV1(t *testing.T) {
 			)).
 			Assess("CanDiffExistingResource", func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
 				t.Helper()
-				output, log, err := RunDiff(t, c, "./crossplane-diff", filepath.Join(manifests, "modified-xr.yaml"))
+				output, log, err := RunXRDiff(t, c, "./crossplane-diff", filepath.Join(manifests, "modified-xr.yaml"))
 				if err != nil {
 					t.Fatalf("Error running diff command: %v\nLog output:\n%s", err, log)
 				}
@@ -519,4 +529,64 @@ func makeStringReadable(s string) string {
 	}
 
 	return result.String()
+}
+
+// TestDiffExistingComposition tests the crossplane comp diff command against existing XRs in the cluster.
+func TestDiffExistingComposition(t *testing.T) {
+	imageTag := strings.Split(environment.GetCrossplaneImage(), ":")[1]
+	manifests := filepath.Join("test/e2e/manifests/beta/diff", imageTag, "comp")
+	setupPath := filepath.Join(manifests, "setup")
+
+	environment.Test(t,
+		features.New("DiffExistingComposition").
+			WithLabel(e2e.LabelArea, LabelAreaDiff).
+			WithLabel(e2e.LabelSize, e2e.LabelSizeSmall).
+			WithLabel(config.LabelTestSuite, config.TestSuiteDefault).
+			WithLabel(LabelCrossplaneVersion, CrossplaneVersionMain).
+			WithSetup("CreatePrerequisites", funcs.AllOf(
+				funcs.ApplyResources(e2e.FieldManager, setupPath, "*.yaml"),
+				funcs.ResourcesCreatedWithin(30*time.Second, setupPath, "*.yaml"),
+			)).
+			WithSetup("PrerequisitesAreReady", funcs.AllOf(
+				funcs.ResourcesHaveConditionWithin(1*time.Minute, setupPath, "definition.yaml", apiextensionsv1.WatchingComposite()),
+				funcs.ResourcesHaveConditionWithin(2*time.Minute, setupPath, "provider.yaml", pkgv1.Healthy(), pkgv1.Active()),
+			)).
+			WithSetup("CreateExistingXR", funcs.AllOf(
+				funcs.ApplyResources(e2e.FieldManager, manifests, "existing-xr.yaml"),
+				funcs.ResourcesCreatedWithin(30*time.Second, manifests, "existing-xr.yaml"),
+				funcs.ResourcesHaveConditionWithin(2*time.Minute, manifests, "existing-xr.yaml", xpv1.Available()),
+			)).
+			Assess("CanDiffComposition", func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
+				t.Helper()
+				output, log, err := RunCompDiff(t, c, "./crossplane-diff", filepath.Join(manifests, "updated-composition.yaml"))
+				if err != nil {
+					t.Fatalf("Error running comp diff command: %v\nLog output:\n%s", err, log)
+				}
+
+				// Basic validation - ensure we get meaningful output
+				if output == "" {
+					t.Fatalf("Expected non-empty output from comp diff command")
+				}
+
+				// Check that output contains references to our test resource
+				if !strings.Contains(output, "test-comp-resource") {
+					t.Errorf("Expected output to contain reference to test-comp-resource, got: %s", output)
+				}
+
+				// Check that output shows the expected changes
+				if !strings.Contains(output, "resource-tier") || !strings.Contains(output, "config-data") {
+					t.Logf("Output: %s", output)
+					t.Errorf("Expected output to show changes to resource-tier and config-data annotations")
+				}
+
+				t.Logf("Comp diff output:\n%s", output)
+				return ctx
+			}).
+			WithTeardown("DeleteExistingXR", funcs.AllOf(
+				funcs.DeleteResources(manifests, "existing-xr.yaml"),
+				funcs.ResourcesDeletedWithin(2*time.Minute, manifests, "existing-xr.yaml"),
+			)).
+			WithTeardown("DeletePrerequisites", funcs.ResourcesDeletedAfterListedAreGone(3*time.Minute, setupPath, "*.yaml", clusterNopList)).
+			Feature(),
+	)
 }
