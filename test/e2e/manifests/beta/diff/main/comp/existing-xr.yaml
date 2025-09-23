@@ -1,0 +1,9 @@
+apiVersion: compdiff.example.org/v1alpha1
+kind: XCompDiffResource
+metadata:
+  name: test-comp-resource
+spec:
+  coolField: existing-value
+  crossplane:
+    compositionRef:
+      name: xcompdiffresources.compdiff.example.org

@@ -6,13 +6,14 @@ import (
 	"io"
 	"strings"
 
+	"github.com/crossplane-contrib/crossplane-diff/cmd/diff/types"
 	extv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	un "k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
-	"k8s.io/apimachinery/pkg/types"
+	k8stypes "k8s.io/apimachinery/pkg/types"
 
 	"github.com/crossplane/crossplane-runtime/v2/pkg/errors"
 	cpd "github.com/crossplane/crossplane-runtime/v2/pkg/resource/unstructured/composed"
@@ -657,6 +658,57 @@ func (b *MockCompositionClientBuilder) WithGetComposition(fn func(context.Contex
 	return b
 }
 
+// WithSuccessfulCompositionFetch sets up a successful composition fetch.
+func (b *MockCompositionClientBuilder) WithSuccessfulCompositionFetch(comp *xpextv1.Composition) *MockCompositionClientBuilder {
+	return b.WithGetComposition(func(_ context.Context, name string) (*xpextv1.Composition, error) {
+		if name == comp.GetName() {
+			return comp, nil
+		}
+
+		return nil, errors.New("composition not found")
+	})
+}
+
+// WithSuccessfulCompositionFetches sets up successful composition fetches for multiple compositions.
+func (b *MockCompositionClientBuilder) WithSuccessfulCompositionFetches(comps []*xpextv1.Composition) *MockCompositionClientBuilder {
+	compositionMap := make(map[string]*xpextv1.Composition)
+	for _, comp := range comps {
+		compositionMap[comp.GetName()] = comp
+	}
+
+	return b.WithGetComposition(func(_ context.Context, name string) (*xpextv1.Composition, error) {
+		if composition, found := compositionMap[name]; found {
+			return composition, nil
+		}
+
+		return nil, errors.New("composition not found")
+	})
+}
+
+// WithFindXRsUsingComposition sets the FindXRsUsingComposition behavior.
+func (b *MockCompositionClientBuilder) WithFindXRsUsingComposition(fn func(context.Context, string, string) ([]*un.Unstructured, error)) *MockCompositionClientBuilder {
+	b.mock.FindXRsUsingCompositionFn = fn
+	return b
+}
+
+// WithXRsForComposition sets FindXRsUsingComposition to return specific XRs for a given composition name and namespace.
+func (b *MockCompositionClientBuilder) WithXRsForComposition(compositionName, namespace string, xrs []*un.Unstructured) *MockCompositionClientBuilder {
+	return b.WithFindXRsUsingComposition(func(_ context.Context, compName, ns string) ([]*un.Unstructured, error) {
+		if compName == compositionName && ns == namespace {
+			return xrs, nil
+		}
+
+		return nil, errors.Errorf("no XRs found for composition %s in namespace %s", compName, ns)
+	})
+}
+
+// WithFindXRsError sets FindXRsUsingComposition to return an error.
+func (b *MockCompositionClientBuilder) WithFindXRsError(errMsg string) *MockCompositionClientBuilder {
+	return b.WithFindXRsUsingComposition(func(context.Context, string, string) ([]*un.Unstructured, error) {
+		return nil, errors.New(errMsg)
+	})
+}
+
 // Build returns the built mock.
 func (b *MockCompositionClientBuilder) Build() *MockCompositionClient {
 	return b.mock
@@ -1049,21 +1101,21 @@ func (b *DiffProcessorBuilder) WithFailedInitialize(errMsg string) *DiffProcesso
 }
 
 // WithPerformDiff adds an implementation for the PerformDiff method.
-func (b *DiffProcessorBuilder) WithPerformDiff(fn func(io.Writer, context.Context, []*un.Unstructured) error) *DiffProcessorBuilder {
+func (b *DiffProcessorBuilder) WithPerformDiff(fn func(context.Context, io.Writer, []*un.Unstructured, types.CompositionProvider) error) *DiffProcessorBuilder {
 	b.mock.PerformDiffFn = fn
 	return b
 }
 
 // WithSuccessfulPerformDiff sets a successful PerformDiff implementation.
 func (b *DiffProcessorBuilder) WithSuccessfulPerformDiff() *DiffProcessorBuilder {
-	return b.WithPerformDiff(func(io.Writer, context.Context, []*un.Unstructured) error {
+	return b.WithPerformDiff(func(context.Context, io.Writer, []*un.Unstructured, types.CompositionProvider) error {
 		return nil
 	})
 }
 
 // WithDiffOutput sets a PerformDiff implementation that writes a specific output.
 func (b *DiffProcessorBuilder) WithDiffOutput(output string) *DiffProcessorBuilder {
-	return b.WithPerformDiff(func(stdout io.Writer, _ context.Context, _ []*un.Unstructured) error {
+	return b.WithPerformDiff(func(_ context.Context, stdout io.Writer, _ []*un.Unstructured, _ types.CompositionProvider) error {
 		if stdout != nil {
 			_, _ = io.WriteString(stdout, output)
 		}
@@ -1074,7 +1126,7 @@ func (b *DiffProcessorBuilder) WithDiffOutput(output string) *DiffProcessorBuild
 
 // WithFailedPerformDiff sets a failing PerformDiff implementation.
 func (b *DiffProcessorBuilder) WithFailedPerformDiff(errMsg string) *DiffProcessorBuilder {
-	return b.WithPerformDiff(func(io.Writer, context.Context, []*un.Unstructured) error {
+	return b.WithPerformDiff(func(context.Context, io.Writer, []*un.Unstructured, types.CompositionProvider) error {
 		return errors.New(errMsg)
 	})
 }
@@ -1202,7 +1254,7 @@ func (b *ResourceBuilder) WithOwnerReference(kind, name, apiVersion, uid string)
 		APIVersion: apiVersion,
 		Kind:       kind,
 		Name:       name,
-		UID:        types.UID(uid),
+		UID:        k8stypes.UID(uid),
 	}
 
 	// Append the new owner reference
@@ -1238,6 +1290,12 @@ func (b *ResourceBuilder) WithCompositionResourceName(name string) *ResourceBuil
 	annotations["crossplane.io/composition-resource-name"] = name
 	b.resource.SetAnnotations(annotations)
 
+	return b
+}
+
+// WithNamespace sets the namespace for the resource.
+func (b *ResourceBuilder) WithNamespace(namespace string) *ResourceBuilder {
+	b.resource.SetNamespace(namespace)
 	return b
 }
 
@@ -1606,6 +1664,19 @@ func (b *CompositionBuilder) WithPipelineStep(step, functionName string, input m
 // Build returns the built Composition.
 func (b *CompositionBuilder) Build() *xpextv1.Composition {
 	return b.composition.DeepCopy()
+}
+
+// BuildAsUnstructured returns the built Composition as an unstructured object.
+func (b *CompositionBuilder) BuildAsUnstructured() *un.Unstructured {
+	comp := b.Build()
+
+	obj, err := runtime.DefaultUnstructuredConverter.ToUnstructured(comp)
+	if err != nil {
+		// This should not happen in tests, but if it does, we'll return an empty unstructured
+		return &un.Unstructured{}
+	}
+
+	return &un.Unstructured{Object: obj}
 }
 
 // endregion

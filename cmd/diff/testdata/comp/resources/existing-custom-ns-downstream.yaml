@@ -1,0 +1,13 @@
+apiVersion: ns.nop.example.org/v1alpha1
+kind: XDownstreamResource
+metadata:
+  name: custom-namespace-resource
+  namespace: custom-namespace
+  annotations:
+    gotemplating.fn.crossplane.io/composition-resource-name: nop-resource
+  labels:
+    crossplane.io/composite: custom-namespace-resource
+spec:
+  forProvider:
+    configData: custom-ns-existing-value
+    resourceTier: basic

@@ -14,12 +14,11 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-// Package diff contains the diff command.
+// Package main contains the XR diff command.
 package main
 
 import (
-	"context"
-	"time"
+	"fmt"
 
 	"github.com/alecthomas/kong"
 	dp "github.com/crossplane-contrib/crossplane-diff/cmd/diff/diffprocessor"
@@ -29,25 +28,19 @@ import (
 	"github.com/crossplane/crossplane-runtime/v2/pkg/logging"
 
 	ld "github.com/crossplane/crossplane/v2/cmd/crank/common/load"
-	"github.com/crossplane/crossplane/v2/cmd/crank/render"
 )
 
-// Cmd represents the diff command.
-// Cmd represents the diff command.
-type Cmd struct {
+// XRCmd represents the XR diff command.
+type XRCmd struct {
+	// Embed common fields
+	CommonCmdFields
+
 	Namespace string   `default:"crossplane-system" help:"Namespace to compare resources against."             name:"namespace" short:"n"`
 	Files     []string `arg:""                      help:"YAML files containing Crossplane resources to diff." optional:""`
-
-	// Configuration options
-	NoColor bool          `help:"Disable colorized output."                name:"no-color"`
-	Compact bool          `help:"Show compact diffs with minimal context." name:"compact"`
-	Timeout time.Duration `default:"1m"                                    help:"How long to run before timing out."`
-	QPS     float32       `default:"0"                                     help:"Maximum QPS to the API server."`
-	Burst   int           `default:"0"                                     help:"Maximum burst for throttle."`
 }
 
-// Help returns help instructions for the diff command.
-func (c *Cmd) Help() string {
+// Help returns help instructions for the XR diff command.
+func (c *XRCmd) Help() string {
 	return `
 This command returns a diff of the in-cluster resources that would be modified if the provided Crossplane resources were applied.
 
@@ -55,97 +48,104 @@ Similar to kubectl diff, it requires Crossplane to be operating in the live clus
 
 Examples:
   # Show the changes that would result from applying xr.yaml (via file) in the default 'crossplane-system' namespace.
-  crossplane diff xr.yaml
+  crossplane-diff xr xr.yaml
 
   # Show the changes that would result from applying xr.yaml (via stdin) in the default 'crossplane-system' namespace.
-  cat xr.yaml | crossplane diff --
+  cat xr.yaml | crossplane-diff xr --
 
   # Show the changes that would result from applying xr.yaml, xr1.yaml, and xr2.yaml in the default 'crossplane-system' namespace.
-  cat xr.yaml | crossplane diff xr1.yaml xr2.yaml --
+  cat xr.yaml | crossplane-diff xr xr1.yaml xr2.yaml --
 
   # Show the changes that would result from applying xr.yaml (via file) in the 'foobar' namespace with no color output.
-  crossplane diff xr.yaml -n foobar --no-color
+  crossplane-diff xr xr.yaml -n foobar --no-color
 
   # Show the changes in a compact format with minimal context.
-  crossplane diff xr.yaml --compact
+  crossplane-diff xr xr.yaml --compact
 `
 }
 
 // AfterApply implements kong's AfterApply method to bind our dependencies.
-func (c *Cmd) AfterApply(ctx *kong.Context, log logging.Logger, config *rest.Config) error {
+func (c *XRCmd) AfterApply(ctx *kong.Context, log logging.Logger, config *rest.Config) error {
 	return c.initializeDependencies(ctx, log, config)
 }
 
-func (c *Cmd) initializeDependencies(ctx *kong.Context, log logging.Logger, config *rest.Config) error {
-	config = c.initRestConfig(config, log)
-
-	appCtx, err := NewAppContext(config, log)
+func (c *XRCmd) initializeDependencies(ctx *kong.Context, log logging.Logger, config *rest.Config) error {
+	appCtx, err := initializeSharedDependencies(ctx, log, config, c.CommonCmdFields)
 	if err != nil {
-		return errors.Wrap(err, "cannot create app context")
+		return err
 	}
 
-	proc := makeDefaultProc(c, appCtx, log)
+	proc := makeDefaultXRProc(c, appCtx, log)
 
-	loader, err := makeDefaultLoader(c)
+	loader, err := makeDefaultXRLoader(c)
 	if err != nil {
 		return errors.Wrap(err, "cannot create resource loader")
 	}
 
-	ctx.Bind(appCtx)
 	ctx.BindTo(proc, (*dp.DiffProcessor)(nil))
 	ctx.BindTo(loader, (*ld.Loader)(nil))
 
 	return nil
 }
 
-func (c *Cmd) initRestConfig(config *rest.Config, logger logging.Logger) *rest.Config {
-	// Set default QPS and Burst if they are not set in the config
-	// or override with values from options if provided
-	originalQPS := config.QPS
-	originalBurst := config.Burst
-
-	if c.QPS > 0 {
-		config.QPS = c.QPS
-	} else if config.QPS == 0 {
-		config.QPS = 20
-	}
-
-	if c.Burst > 0 {
-		config.Burst = c.Burst
-	} else if config.Burst == 0 {
-		config.Burst = 30
-	}
-
-	logger.Debug("Configured REST client rate limits",
-		"original_qps", originalQPS,
-		"original_burst", originalBurst,
-		"options_qps", c.QPS,
-		"options_burst", c.Burst,
-		"final_qps", config.QPS,
-		"final_burst", config.Burst)
-
-	return config
-}
-
-func makeDefaultProc(c *Cmd, ctx *AppContext, log logging.Logger) dp.DiffProcessor {
-	// Create the options for the processor
-	options := []dp.ProcessorOption{
+func makeDefaultXRProc(c *XRCmd, ctx *AppContext, log logging.Logger) dp.DiffProcessor {
+	opts := defaultProcessorOptions()
+	opts = append(opts,
 		dp.WithNamespace(c.Namespace),
 		dp.WithLogger(log),
-		dp.WithRenderFunc(render.Render),
-		dp.WithColorize(!c.NoColor),
-		dp.WithCompact(c.Compact),
-	}
+		dp.WithColorize(!c.NoColor), // Override default if NoColor is set
+		dp.WithCompact(c.Compact),   // Override default if Compact is set
+	)
 
-	return dp.NewDiffProcessor(ctx.K8sClients, ctx.XpClients, options...)
+	return dp.NewDiffProcessor(ctx.K8sClients, ctx.XpClients, opts...)
 }
 
-func makeDefaultLoader(c *Cmd) (ld.Loader, error) {
+func makeDefaultXRLoader(c *XRCmd) (ld.Loader, error) {
 	return ld.NewCompositeLoader(c.Files)
 }
 
-// Run executes the diff command.
-func (c *Cmd) Run(k *kong.Context, log logging.Logger, appCtx *AppContext, proc dp.DiffProcessor, loader ld.Loader) error {
+// DeprecatedDiffCmd represents the deprecated diff command for backward compatibility.
+type DeprecatedDiffCmd struct {
+	XRCmd
+}
+
+// Help returns help instructions for the deprecated diff command.
+func (c *DeprecatedDiffCmd) Help() string {
+	return `
+This command is deprecated. Please use 'crossplane-diff xr' instead.
+
+This command returns a diff of the in-cluster resources that would be modified if the provided Crossplane resources were applied.
+
+Similar to kubectl diff, it requires Crossplane to be operating in the live cluster found in your kubeconfig.
+
+Examples:
+  # Deprecated usage (still works but will show warning)
+  crossplane-diff diff xr.yaml
+
+  # Preferred usage
+  crossplane-diff xr xr.yaml
+`
+}
+
+// Run executes the deprecated diff command with a deprecation warning.
+func (c *DeprecatedDiffCmd) Run(k *kong.Context, log logging.Logger, appCtx *AppContext, proc dp.DiffProcessor, loader ld.Loader) error {
+	if _, err := fmt.Fprintln(k.Stderr, "Warning: The 'diff' subcommand is deprecated. Please use 'xr' instead."); err != nil {
+		return err
+	}
+
+	if _, err := fmt.Fprintln(k.Stderr, "Example: crossplane-diff xr your-file.yaml"); err != nil {
+		return err
+	}
+
+	if _, err := fmt.Fprintln(k.Stderr); err != nil {
+		return err
+	}
+
+	return c.XRCmd.Run(k, log, appCtx, proc, loader)
+}
+
+// Run executes the XR diff command.
+func (c *XRCmd) Run(k *kong.Context, log logging.Logger, appCtx *AppContext, proc dp.DiffProcessor, loader ld.Loader) error {
 	// the rest config here is provided by a function in main.go that's only invoked for commands that request it
 	// in their arguments.  that means we won't get "can't find kubeconfig" errors for cases where the config isn't asked for.
 
@@ -156,12 +156,11 @@ func (c *Cmd) Run(k *kong.Context, log logging.Logger, appCtx *AppContext, proc 
 	// TODO:  diff against upgraded schema that isn't applied yet
 	// TODO:  diff against upgraded composition that isn't applied yet
 	// TODO:  diff against upgraded composition version that is already available
-	ctx, cancel := context.WithTimeout(context.Background(), c.Timeout)
-	defer cancel()
-
-	if err := appCtx.Initialize(ctx, log); err != nil {
-		return errors.Wrap(err, "cannot initialize client")
+	ctx, cancel, err := initializeAppContext(c.Timeout, appCtx, log)
+	if err != nil {
+		return err
 	}
+	defer cancel()
 
 	resources, err := loader.Load()
 	if err != nil {
@@ -173,7 +172,7 @@ func (c *Cmd) Run(k *kong.Context, log logging.Logger, appCtx *AppContext, proc 
 		return errors.Wrap(err, "cannot initialize diff processor")
 	}
 
-	if err := proc.PerformDiff(ctx, k.Stdout, resources); err != nil {
+	if err := proc.PerformDiff(ctx, k.Stdout, resources, appCtx.XpClients.Composition.FindMatchingComposition); err != nil {
 		return errors.Wrap(err, "unable to process one or more resources")
 	}
 

@@ -31,6 +31,29 @@ const (
 	timeout = 60 * time.Second
 )
 
+// DiffTestType represents the type of diff test to run.
+type DiffTestType string
+
+const (
+	XRDiffTest          DiffTestType = "diff"
+	CompositionDiffTest DiffTestType = "comp"
+)
+
+// IntegrationTestCase represents a common test case structure for both XR and composition diff tests.
+type IntegrationTestCase struct {
+	setupFiles              []string
+	setupFilesWithOwnerRefs []HierarchicalOwnershipRelation
+	inputFiles              []string // Input files to diff (XR YAML files or Composition YAML files)
+	expectedOutput          string
+	expectedError           bool
+	expectedErrorContains   string
+	noColor                 bool
+	namespace               string        // For composition tests (optional)
+	xrdAPIVersion           XrdAPIVersion // For XR tests (optional)
+	skip                    bool
+	skipReason              string
+}
+
 type XrdAPIVersion int
 
 const (
@@ -47,8 +70,9 @@ func (s XrdAPIVersion) String() string {
 	return versionNames[s]
 }
 
-// TestDiffIntegration runs an integration test for the diff command.
-func TestDiffIntegration(t *testing.T) {
+// runIntegrationTest runs a common integration test for both XR and composition diff commands.
+func runIntegrationTest(t *testing.T, testType DiffTestType, tests map[string]IntegrationTestCase) {
+	t.Helper()
 	// Create a scheme with both Kubernetes and Crossplane types
 	scheme := runtime.NewScheme()
 
@@ -61,19 +85,192 @@ func TestDiffIntegration(t *testing.T) {
 	_ = pkgv1.AddToScheme(scheme)
 	_ = extv1.AddToScheme(scheme)
 
-	// Test cases
-	tests := map[string]struct {
-		setupFiles              []string
-		setupFilesWithOwnerRefs []HierarchicalOwnershipRelation
-		inputFiles              []string
-		expectedOutput          string
-		expectedError           bool
-		expectedErrorContains   string
-		noColor                 bool
-		xrdAPIVersion           XrdAPIVersion
-		skip                    bool
-		skipReason              string
-	}{
+	tu.SetupKubeTestLogger(t)
+
+	for name, tt := range tests {
+		t.Run(name, func(t *testing.T) {
+			// Skip test if requested
+			if tt.skip {
+				t.Skip(tt.skipReason)
+				return
+			}
+
+			// Setup a brand new test environment for each test case
+			_, thisFile, _, _ := run.Caller(0)
+			thisDir := filepath.Dir(thisFile)
+
+			crdPaths := []string{
+				filepath.Join(thisDir, "..", "..", "cluster", "main", "crds"),
+				filepath.Join(thisDir, "testdata", string(testType), "crds"),
+			}
+
+			testEnv := &envtest.Environment{
+				CRDDirectoryPaths:     crdPaths,
+				ErrorIfCRDPathMissing: true,
+				Scheme:                scheme,
+			}
+
+			// Start the test environment
+			cfg, err := testEnv.Start()
+			if err != nil {
+				t.Fatalf("failed to start test environment: %v", err)
+			}
+
+			// Ensure we clean up at the end of the test
+			defer func() {
+				err := testEnv.Stop()
+				if err != nil {
+					t.Logf("failed to stop test environment: %v", err)
+				}
+			}()
+
+			// Create a controller-runtime client for setup operations
+			k8sClient, err := client.New(cfg, client.Options{Scheme: scheme})
+			if err != nil {
+				t.Fatalf("failed to create client: %v", err)
+			}
+
+			ctx, cancel := context.WithTimeout(t.Context(), timeout)
+			defer cancel()
+
+			// Apply the setup resources
+			if err := applyResourcesFromFiles(ctx, k8sClient, tt.setupFiles); err != nil {
+				t.Fatalf("failed to setup resources: %v", err)
+			}
+
+			// Default to v2 API version for XR resources unless otherwise specified
+			xrdAPIVersion := V2
+			if tt.xrdAPIVersion != V2 {
+				xrdAPIVersion = tt.xrdAPIVersion
+			}
+
+			// Apply resources with owner references
+			if len(tt.setupFilesWithOwnerRefs) > 0 {
+				err := applyHierarchicalOwnership(ctx, tu.TestLogger(t, false), k8sClient, xrdAPIVersion, tt.setupFilesWithOwnerRefs)
+				if err != nil {
+					t.Fatalf("failed to setup owner references: %v", err)
+				}
+			}
+
+			// Set up the test files
+			tempDir := t.TempDir()
+
+			var testFiles []string
+
+			// Handle any additional input files
+			for i, inputFile := range tt.inputFiles {
+				testFile := filepath.Join(tempDir, fmt.Sprintf("test_%d.yaml", i))
+
+				content, err := os.ReadFile(inputFile)
+				if err != nil {
+					t.Fatalf("failed to read input file: %v", err)
+				}
+
+				err = os.WriteFile(testFile, content, 0o644)
+				if err != nil {
+					t.Fatalf("failed to write test file: %v", err)
+				}
+
+				testFiles = append(testFiles, testFile)
+			}
+
+			// Create a buffer to capture the output
+			var stdout bytes.Buffer
+
+			// Create command line args that match your pre-populated struct
+			args := []string{
+				fmt.Sprintf("--timeout=%s", timeout.String()),
+			}
+
+			// Add namespace if specified (for composition tests)
+			if tt.namespace != "" {
+				args = append(args, fmt.Sprintf("--namespace=%s", tt.namespace))
+			} else if testType == XRDiffTest {
+				// For XR tests, always add default namespace
+				args = append(args, "--namespace=default")
+			}
+
+			// Add no-color flag if true
+			if tt.noColor {
+				args = append(args, "--no-color")
+			}
+
+			// Add files as positional arguments
+			args = append(args, testFiles...)
+
+			// Set up the appropriate command based on test type
+			var cmd interface{}
+			if testType == CompositionDiffTest {
+				cmd = &CompCmd{}
+			} else {
+				cmd = &XRCmd{}
+			}
+
+			logger := tu.TestLogger(t, true)
+			// Create a Kong context with stdout
+			parser, err := kong.New(cmd,
+				kong.Writers(&stdout, &stdout),
+				kong.Bind(cfg),
+				kong.BindTo(logger, (*logging.Logger)(nil)),
+			)
+			if err != nil {
+				t.Fatalf("failed to create kong parser: %v", err)
+			}
+
+			kongCtx, err := parser.Parse(args)
+			if err != nil {
+				t.Fatalf("failed to parse kong context: %v", err)
+			}
+
+			err = kongCtx.Run(cfg)
+
+			if tt.expectedError && err == nil {
+				t.Fatal("expected error but got none")
+			}
+
+			if !tt.expectedError && err != nil {
+				t.Fatalf("expected no error but got: %v", err)
+			}
+
+			// Check for specific error message if expected
+			if err != nil {
+				if tt.expectedErrorContains != "" && strings.Contains(err.Error(), tt.expectedErrorContains) {
+					// This is an expected error with the expected message
+					t.Logf("Got expected error containing: %s", tt.expectedErrorContains)
+				} else {
+					t.Errorf("Expected no error or specific error message, got: %v", err)
+				}
+			}
+
+			// For expected errors with specific messages, we've already checked above
+			if tt.expectedError && tt.expectedErrorContains != "" {
+				// Skip output check for expected error cases
+				return
+			}
+
+			// Check the output
+			outputStr := stdout.String()
+			// Using TrimSpace because the output might have trailing newlines
+			if !strings.Contains(strings.TrimSpace(outputStr), strings.TrimSpace(tt.expectedOutput)) {
+				// Strings aren't equal, *including* ansi.  but we can compare ignoring ansi to determine what output to
+				// show for the failure.  if the difference is only in color codes, we'll show escaped ansi codes.
+				out := outputStr
+
+				expect := tt.expectedOutput
+				if tu.CompareIgnoringAnsi(strings.TrimSpace(outputStr), strings.TrimSpace(tt.expectedOutput)) {
+					out = strconv.QuoteToASCII(outputStr)
+					expect = strconv.QuoteToASCII(tt.expectedOutput)
+				}
+
+				t.Fatalf("expected output to contain:\n%s\n\nbut got:\n%s", expect, out)
+			}
+		})
+	}
+}
+
+// TestDiffIntegration runs an integration test for the diff command.
+func TestDiffIntegration(t *testing.T) {
+	tests := map[string]IntegrationTestCase{
 		"New resource shows color diff": {
 			inputFiles: []string{"testdata/diff/new-xr.yaml"},
 			setupFiles: []string{
@@ -1109,181 +1306,400 @@ Summary: 1 added`,
 		},
 	}
 
-	tu.SetupKubeTestLogger(t)
+	runIntegrationTest(t, XRDiffTest, tests)
+}
 
-	// version := V2
+// TestCompDiffIntegration runs an integration test for the composition diff command.
+func TestCompDiffIntegration(t *testing.T) {
+	tests := map[string]IntegrationTestCase{
+		"Composition change impacts existing XRs": {
+			// Set up existing XRs that use the original composition
+			setupFiles: []string{
+				"testdata/comp/resources/xrd.yaml",
+				"testdata/comp/resources/original-composition.yaml",
+				"testdata/comp/resources/functions.yaml",
+				// Add existing XRs that use the composition
+				"testdata/comp/resources/existing-xr-1.yaml",
+				"testdata/comp/resources/existing-downstream-1.yaml",
+				"testdata/comp/resources/existing-xr-2.yaml",
+				"testdata/comp/resources/existing-downstream-2.yaml",
+			},
+			// New composition files that will be diffed
+			inputFiles: []string{"testdata/comp/updated-composition.yaml"},
+			namespace:  "default",
+			expectedOutput: `
+=== Composition Changes ===
 
-	for name, tt := range tests {
-		// if tt.crdVersions == nil || len(tt.crdVersions) == 0 {
-		//	// Default to testing against v2 CRDs if not specified.  claims still exist in v2, though deprecated.
-		//	// old style XRDs are still supported, too.
-		//	tt.crdVersions = []XrdApiVersion{V2}
-		//}
+~~~ Composition/xnopresources.diff.example.org
+  apiVersion: apiextensions.crossplane.io/v1
+  kind: Composition
+  metadata:
+    name: xnopresources.diff.example.org
+  spec:
+    compositeTypeRef:
+      apiVersion: ns.diff.example.org/v1alpha1
+      kind: XNopResource
+    mode: Pipeline
+    pipeline:
+    - functionRef:
+        name: function-go-templating
+      input:
+        apiVersion: template.fn.crossplane.io/v1beta1
+        inline:
+          template: |
+            apiVersion: ns.nop.example.org/v1alpha1
+            kind: XDownstreamResource
+            metadata:
+              name: {{ .observed.composite.resource.metadata.name }}
+              namespace: {{ .observed.composite.resource.metadata.namespace }}
+              annotations:
+                gotemplating.fn.crossplane.io/composition-resource-name: nop-resource
+            spec:
+              forProvider:
+-               configData: {{ .observed.composite.resource.spec.coolField }}
+-               resourceTier: basic
++               configData: updated-{{ .observed.composite.resource.spec.coolField }}
++               resourceTier: premium
+        kind: GoTemplate
+        source: Inline
+      step: generate-resources
+    - functionRef:
+        name: function-auto-ready
+      step: automatically-detect-ready-composed-resources
 
-		// for _, version := range tt.crdVersions {
-		t.Run(name /*fmt.Sprintf("%s (%s)", name, version.String()) */, func(t *testing.T) {
-			// Skip test if requested
-			if tt.skip {
-				t.Skip(tt.skipReason)
-				return
-			}
+---
 
-			// Setup a brand new test environment for each test case
-			_, thisFile, _, _ := run.Caller(0)
-			thisDir := filepath.Dir(thisFile)
+Summary: 1 modified
 
-			testEnv := &envtest.Environment{
-				CRDDirectoryPaths: []string{
-					filepath.Join(thisDir, "..", "..", "cluster", "main", "crds"),
-					filepath.Join(thisDir, "testdata", "diff", "crds"),
-				},
-				ErrorIfCRDPathMissing: true,
-				Scheme:                scheme,
-			}
+=== Affected Composite Resources ===
 
-			// Start the test environment
-			cfg, err := testEnv.Start()
-			if err != nil {
-				t.Fatalf("failed to start test environment: %v", err)
-			}
+- XNopResource/another-resource (namespace: default)
+- XNopResource/test-resource (namespace: default)
 
-			// Ensure we clean up at the end of the test
-			defer func() {
-				err := testEnv.Stop()
-				if err != nil {
-					t.Logf("failed to stop test environment: %v", err)
-				}
-			}()
+=== Impact Analysis ===
 
-			// Create a controller-runtime client for setup operations
-			k8sClient, err := client.New(cfg, client.Options{Scheme: scheme})
-			if err != nil {
-				t.Fatalf("failed to create client: %v", err)
-			}
+~~~ XDownstreamResource/another-resource
+  apiVersion: ns.nop.example.org/v1alpha1
+  kind: XDownstreamResource
+  metadata:
+    annotations:
++     crossplane.io/composition-resource-name: nop-resource
+      gotemplating.fn.crossplane.io/composition-resource-name: nop-resource
+    labels:
+      crossplane.io/composite: another-resource
+    name: another-resource
+    namespace: default
+  spec:
+    forProvider:
+-     configData: another-existing-value
+-     resourceTier: basic
++     configData: updated-another-existing-value
++     resourceTier: premium
 
-			ctx, cancel := context.WithTimeout(t.Context(), timeout)
-			defer cancel()
+---
+~~~ XDownstreamResource/test-resource
+  apiVersion: ns.nop.example.org/v1alpha1
+  kind: XDownstreamResource
+  metadata:
+    annotations:
++     crossplane.io/composition-resource-name: nop-resource
+      gotemplating.fn.crossplane.io/composition-resource-name: nop-resource
+    labels:
+      crossplane.io/composite: test-resource
+    name: test-resource
+    namespace: default
+  spec:
+    forProvider:
+-     configData: existing-value
+-     resourceTier: basic
++     configData: updated-existing-value
++     resourceTier: premium
 
-			// Apply the setup resources
-			if err := applyResourcesFromFiles(ctx, k8sClient, tt.setupFiles); err != nil {
-				t.Fatalf("failed to setup resources: %v", err)
-			}
+---
 
-			// Default to v2 API version for XR resources unless otherwise specified
-			xrdAPIVersion := V2
-			if tt.xrdAPIVersion != V2 {
-				xrdAPIVersion = tt.xrdAPIVersion
-			}
+Summary: 2 modified`,
+			expectedError: false,
+			noColor:       true,
+		},
+		"Composition diff with custom namespace": {
+			// Set up existing XRs in both custom and default namespaces to validate filtering
+			setupFiles: []string{
+				"testdata/comp/resources/xrd.yaml",
+				"testdata/comp/resources/original-composition.yaml",
+				"testdata/comp/resources/functions.yaml",
+				// Create the custom namespace first
+				"testdata/comp/resources/custom-namespace.yaml",
+				// Add existing XRs in custom namespace (should be included in output)
+				"testdata/comp/resources/existing-custom-ns-xr.yaml",
+				"testdata/comp/resources/existing-custom-ns-downstream.yaml",
+				// Add existing XRs in default namespace (should be filtered out)
+				"testdata/comp/resources/existing-xr-1.yaml",
+				"testdata/comp/resources/existing-downstream-1.yaml",
+			},
+			// New composition files that will be diffed
+			inputFiles: []string{"testdata/comp/updated-composition.yaml"},
+			namespace:  "custom-namespace",
+			// Expected output should only show custom-namespace resources, NOT default namespace resources
+			// This validates that namespace filtering works correctly
+			expectedOutput: `
+=== Composition Changes ===
 
-			// Apply resources with owner references
-			if len(tt.setupFilesWithOwnerRefs) > 0 {
-				err := applyHierarchicalOwnership(ctx, tu.TestLogger(t, false), k8sClient, xrdAPIVersion, tt.setupFilesWithOwnerRefs)
-				if err != nil {
-					t.Fatalf("failed to setup owner references: %v", err)
-				}
-			}
+~~~ Composition/xnopresources.diff.example.org
+  apiVersion: apiextensions.crossplane.io/v1
+  kind: Composition
+  metadata:
+    name: xnopresources.diff.example.org
+  spec:
+    compositeTypeRef:
+      apiVersion: ns.diff.example.org/v1alpha1
+      kind: XNopResource
+    mode: Pipeline
+    pipeline:
+    - functionRef:
+        name: function-go-templating
+      input:
+        apiVersion: template.fn.crossplane.io/v1beta1
+        inline:
+          template: |
+            apiVersion: ns.nop.example.org/v1alpha1
+            kind: XDownstreamResource
+            metadata:
+              name: {{ .observed.composite.resource.metadata.name }}
+              namespace: {{ .observed.composite.resource.metadata.namespace }}
+              annotations:
+                gotemplating.fn.crossplane.io/composition-resource-name: nop-resource
+            spec:
+              forProvider:
+-               configData: {{ .observed.composite.resource.spec.coolField }}
+-               resourceTier: basic
++               configData: updated-{{ .observed.composite.resource.spec.coolField }}
++               resourceTier: premium
+        kind: GoTemplate
+        source: Inline
+      step: generate-resources
+    - functionRef:
+        name: function-auto-ready
+      step: automatically-detect-ready-composed-resources
 
-			// Set up the test file
-			tempDir := t.TempDir()
+---
 
-			var testFiles []string
+Summary: 1 modified
 
-			// Handle any additional input files
-			for i, inputFile := range tt.inputFiles {
-				testFile := filepath.Join(tempDir, fmt.Sprintf("test_%d.yaml", i))
+=== Affected Composite Resources ===
 
-				content, err := os.ReadFile(inputFile)
-				if err != nil {
-					t.Fatalf("failed to read input file: %v", err)
-				}
+- XNopResource/custom-namespace-resource (namespace: custom-namespace)
 
-				err = os.WriteFile(testFile, content, 0o644)
-				if err != nil {
-					t.Fatalf("failed to write test file: %v", err)
-				}
+=== Impact Analysis ===
 
-				testFiles = append(testFiles, testFile)
-			}
+~~~ XDownstreamResource/custom-namespace-resource
+  apiVersion: ns.nop.example.org/v1alpha1
+  kind: XDownstreamResource
+  metadata:
+    annotations:
++     crossplane.io/composition-resource-name: nop-resource
+      gotemplating.fn.crossplane.io/composition-resource-name: nop-resource
+    labels:
+      crossplane.io/composite: custom-namespace-resource
+    name: custom-namespace-resource
+    namespace: custom-namespace
+  spec:
+    forProvider:
+-     configData: custom-ns-existing-value
+-     resourceTier: basic
++     configData: updated-custom-ns-existing-value
++     resourceTier: premium
 
-			// Create a buffer to capture the output
-			var stdout bytes.Buffer
+---
 
-			// Create command line args that match your pre-populated struct
-			args := []string{
-				"--namespace=default",
-				fmt.Sprintf("--timeout=%s", timeout.String()),
-			}
+Summary: 1 modified`,
+			expectedError: false,
+			noColor:       true,
+		},
+		"Multiple composition diff shows impact on existing XRs": {
+			// Set up existing XRs that use both compositions
+			setupFiles: []string{
+				"testdata/comp/resources/xrd.yaml",
+				"testdata/comp/resources/original-composition.yaml",
+				"testdata/comp/resources/original-composition-2.yaml",
+				"testdata/comp/resources/functions.yaml",
+				// Add existing XRs that use the compositions
+				"testdata/comp/resources/existing-xr-1.yaml",
+				"testdata/comp/resources/existing-downstream-1.yaml",
+				"testdata/comp/resources/existing-xr-2.yaml",
+				"testdata/comp/resources/existing-downstream-2.yaml",
+			},
+			// Multiple composition files that will be diffed
+			inputFiles: []string{
+				"testdata/comp/updated-composition.yaml",
+				"testdata/comp/updated-composition-2.yaml",
+			},
+			namespace: "default",
+			expectedOutput: `
+=== Composition Changes ===
 
-			// Add no-color flag if true
-			if tt.noColor {
-				args = append(args, "--no-color")
-			}
+~~~ Composition/xnopresources.diff.example.org
+  apiVersion: apiextensions.crossplane.io/v1
+  kind: Composition
+  metadata:
+    name: xnopresources.diff.example.org
+  spec:
+    compositeTypeRef:
+      apiVersion: ns.diff.example.org/v1alpha1
+      kind: XNopResource
+    mode: Pipeline
+    pipeline:
+    - functionRef:
+        name: function-go-templating
+      input:
+        apiVersion: template.fn.crossplane.io/v1beta1
+        inline:
+          template: |
+            apiVersion: ns.nop.example.org/v1alpha1
+            kind: XDownstreamResource
+            metadata:
+              name: {{ .observed.composite.resource.metadata.name }}
+              namespace: {{ .observed.composite.resource.metadata.namespace }}
+              annotations:
+                gotemplating.fn.crossplane.io/composition-resource-name: nop-resource
+            spec:
+              forProvider:
+-               configData: {{ .observed.composite.resource.spec.coolField }}
+-               resourceTier: basic
++               configData: updated-{{ .observed.composite.resource.spec.coolField }}
++               resourceTier: premium
+        kind: GoTemplate
+        source: Inline
+      step: generate-resources
+    - functionRef:
+        name: function-auto-ready
+      step: automatically-detect-ready-composed-resources
 
-			// Add files as positional arguments
-			args = append(args, testFiles...)
+---
 
-			// Set up the diff command
-			cmd := &Cmd{}
+Summary: 1 modified
 
-			logger := tu.TestLogger(t, true)
-			// Create a Kong context with stdout
-			parser, err := kong.New(cmd,
-				kong.Writers(&stdout, &stdout),
-				kong.Bind(cfg),
-				kong.BindTo(logger, (*logging.Logger)(nil)),
-			)
-			if err != nil {
-				t.Fatalf("failed to create kong parser: %v", err)
-			}
+=== Affected Composite Resources ===
 
-			kongCtx, err := parser.Parse(args)
-			if err != nil {
-				t.Fatalf("failed to parse kong context: %v", err)
-			}
+- XNopResource/another-resource (namespace: default)
+- XNopResource/test-resource (namespace: default)
 
-			err = kongCtx.Run(cfg)
+=== Impact Analysis ===
 
-			if tt.expectedError && err == nil {
-				t.Fatal("expected error but got none")
-			}
+~~~ XDownstreamResource/another-resource
+  apiVersion: ns.nop.example.org/v1alpha1
+  kind: XDownstreamResource
+  metadata:
+    annotations:
++     crossplane.io/composition-resource-name: nop-resource
+      gotemplating.fn.crossplane.io/composition-resource-name: nop-resource
+    labels:
+      crossplane.io/composite: another-resource
+    name: another-resource
+    namespace: default
+  spec:
+    forProvider:
+-     configData: another-existing-value
+-     resourceTier: basic
++     configData: updated-another-existing-value
++     resourceTier: premium
 
-			if !tt.expectedError && err != nil {
-				t.Fatalf("expected no error but got: %v", err)
-			}
+---
+~~~ XDownstreamResource/test-resource
+  apiVersion: ns.nop.example.org/v1alpha1
+  kind: XDownstreamResource
+  metadata:
+    annotations:
++     crossplane.io/composition-resource-name: nop-resource
+      gotemplating.fn.crossplane.io/composition-resource-name: nop-resource
+    labels:
+      crossplane.io/composite: test-resource
+    name: test-resource
+    namespace: default
+  spec:
+    forProvider:
+-     configData: existing-value
+-     resourceTier: basic
++     configData: updated-existing-value
++     resourceTier: premium
 
-			// Check for specific error message if expected
-			if err != nil {
-				if tt.expectedErrorContains != "" && strings.Contains(err.Error(), tt.expectedErrorContains) {
-					// This is an expected error with the expected message
-					t.Logf("Got expected error containing: %s", tt.expectedErrorContains)
-				} else {
-					t.Errorf("Expected no error or specific error message, got: %v", err)
-				}
-			}
+---
 
-			// For expected errors with specific messages, we've already checked above
-			if tt.expectedError && tt.expectedErrorContains != "" {
-				// Skip output check for expected error cases
-				return
-			}
+Summary: 2 modified
 
-			// Check the output
-			outputStr := stdout.String()
-			// Using TrimSpace because the output might have trailing newlines
-			if !strings.Contains(strings.TrimSpace(outputStr), strings.TrimSpace(tt.expectedOutput)) {
-				// Strings aren't equal, *including* ansi.  but we can compare ignoring ansi to determine what output to
-				// show for the failure.  if the difference is only in color codes, we'll show escaped ansi codes.
-				out := outputStr
+================================================================================
 
-				expect := tt.expectedOutput
-				if tu.CompareIgnoringAnsi(strings.TrimSpace(outputStr), strings.TrimSpace(tt.expectedOutput)) {
-					out = strconv.QuoteToASCII(outputStr)
-					expect = strconv.QuoteToASCII(tt.expectedOutput)
-				}
+=== Composition Changes ===
 
-				t.Fatalf("expected output to contain:\n%s\n\nbut got:\n%s", expect, out)
-			}
-		})
+No changes detected in composition xnopresources-v2.diff.example.org
+
+No XRs found using composition xnopresources-v2.diff.example.org`,
+			expectedError: false,
+			noColor:       true,
+		},
+		"Net-new composition with no downstream impact": {
+			// Set up cluster with existing resources but no composition that matches the new one
+			setupFiles: []string{
+				"testdata/comp/resources/xrd.yaml",
+				"testdata/comp/resources/original-composition.yaml",
+				"testdata/comp/resources/functions.yaml",
+				// Add existing XRs that use different compositions (won't be affected)
+				"testdata/comp/resources/existing-xr-1.yaml",
+				"testdata/comp/resources/existing-downstream-1.yaml",
+			},
+			// Net-new composition file that doesn't exist in cluster and targets different XR type
+			inputFiles: []string{"testdata/comp/net-new-composition.yaml"},
+			namespace:  "default",
+			expectedOutput: `
+=== Composition Changes ===
+
++++ Composition/xnewresources.diff.example.org
++ apiVersion: apiextensions.crossplane.io/v1
++ kind: Composition
++ metadata:
++   labels:
++     environment: staging
++     provider: aws
++   name: xnewresources.diff.example.org
++ spec:
++   compositeTypeRef:
++     apiVersion: staging.diff.example.org/v1alpha1
++     kind: XNewResource
++   mode: Pipeline
++   pipeline:
++   - functionRef:
++       name: function-go-templating
++     input:
++       apiVersion: template.fn.crossplane.io/v1beta1
++       inline:
++         template: |
++           apiVersion: staging.nop.example.org/v1alpha1
++           kind: XStagingResource
++           metadata:
++             name: {{ .observed.composite.resource.metadata.name }}
++             namespace: {{ .observed.composite.resource.metadata.namespace }}
++             annotations:
++               gotemplating.fn.crossplane.io/composition-resource-name: staging-resource
++           spec:
++             forProvider:
++               environment: staging
++               configData: new-{{ .observed.composite.resource.spec.newField }}
++               resourceTier: premium
++       kind: GoTemplate
++       source: Inline
++     step: generate-new-resources
++   - functionRef:
++       name: function-auto-ready
++     step: automatically-detect-ready-composed-resources
+
+---
+
+Summary: 1 added
+
+No XRs found using composition xnewresources.diff.example.org`,
+			expectedError: false,
+			noColor:       true,
+		},
 	}
-	//}
+
+	runIntegrationTest(t, CompositionDiffTest, tests)
 }

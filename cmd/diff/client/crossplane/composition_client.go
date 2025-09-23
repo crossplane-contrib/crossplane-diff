@@ -28,6 +28,9 @@ type CompositionClient interface {
 
 	// GetComposition gets a composition by name
 	GetComposition(ctx context.Context, name string) (*apiextensionsv1.Composition, error)
+
+	// FindXRsUsingComposition finds all XRs that use the specified composition
+	FindXRsUsingComposition(ctx context.Context, compositionName string, namespace string) ([]*un.Unstructured, error)
 }
 
 // DefaultCompositionClient implements CompositionClient.
@@ -423,4 +426,79 @@ func (c *DefaultCompositionClient) findByTypeReference(ctx context.Context, _ *u
 		"composition_name", compatibleCompositions[0].GetName())
 
 	return compatibleCompositions[0], nil
+}
+
+// FindXRsUsingComposition finds all XRs that use the specified composition.
+func (c *DefaultCompositionClient) FindXRsUsingComposition(ctx context.Context, compositionName string, namespace string) ([]*un.Unstructured, error) {
+	c.logger.Debug("Finding XRs using composition",
+		"compositionName", compositionName,
+		"namespace", namespace)
+
+	// First, get the composition to understand what XR type it targets
+	comp, err := c.GetComposition(ctx, compositionName)
+	if err != nil {
+		return nil, errors.Wrapf(err, "cannot get composition %s", compositionName)
+	}
+
+	// Get the XR type this composition targets
+	xrAPIVersion := comp.Spec.CompositeTypeRef.APIVersion
+	xrKind := comp.Spec.CompositeTypeRef.Kind
+
+	// Parse the GVK
+	gv, err := schema.ParseGroupVersion(xrAPIVersion)
+	if err != nil {
+		return nil, errors.Wrapf(err, "cannot parse API version %s", xrAPIVersion)
+	}
+
+	xrGVK := schema.GroupVersionKind{
+		Group:   gv.Group,
+		Version: gv.Version,
+		Kind:    xrKind,
+	}
+
+	c.logger.Debug("Composition targets XR type",
+		"gvk", xrGVK.String())
+
+	// List all resources of this XR type in the specified namespace
+	xrs, err := c.resourceClient.ListResources(ctx, xrGVK, namespace)
+	if err != nil {
+		return nil, errors.Wrapf(err, "cannot list XRs of type %s in namespace %s", xrGVK.String(), namespace)
+	}
+
+	c.logger.Debug("Found XRs of target type", "count", len(xrs))
+
+	// Filter XRs that use this specific composition
+	var matchingXRs []*un.Unstructured
+
+	for _, xr := range xrs {
+		if c.xrUsesComposition(xr, compositionName) {
+			matchingXRs = append(matchingXRs, xr)
+		}
+	}
+
+	c.logger.Debug("Found XRs using composition",
+		"compositionName", compositionName,
+		"count", len(matchingXRs))
+
+	return matchingXRs, nil
+}
+
+// xrUsesComposition checks if an XR uses the specified composition.
+func (c *DefaultCompositionClient) xrUsesComposition(xr *un.Unstructured, compositionName string) bool {
+	// Check direct composition reference in spec.compositionRef.name or spec.crossplane.compositionRef.name
+	apiVersion := xr.GetAPIVersion()
+
+	// Try both v1 and v2 paths
+	paths := [][]string{
+		makeCrossplaneRefPath(apiVersion, "compositionRef", "name"),
+		{"spec", "compositionRef", "name"}, // fallback for v1
+	}
+
+	for _, path := range paths {
+		if refName, found, _ := un.NestedString(xr.Object, path...); found && refName == compositionName {
+			return true
+		}
+	}
+
+	return false
 }

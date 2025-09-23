@@ -32,6 +32,7 @@ import (
 	k8 "github.com/crossplane-contrib/crossplane-diff/cmd/diff/client/kubernetes"
 	dp "github.com/crossplane-contrib/crossplane-diff/cmd/diff/diffprocessor"
 	tu "github.com/crossplane-contrib/crossplane-diff/cmd/diff/testutils"
+	"github.com/crossplane-contrib/crossplane-diff/cmd/diff/types"
 	"github.com/google/go-cmp/cmp"
 	extv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -66,10 +67,10 @@ func TestCmd_Run(t *testing.T) {
 	// Create a buffer to capture output
 
 	type fields struct {
+		CommonCmdFields
+
 		Namespace string
 		Files     []string
-		NoColor   bool
-		Compact   bool
 	}
 
 	type args struct {
@@ -109,8 +110,10 @@ func TestCmd_Run(t *testing.T) {
 			fields: fields{
 				Namespace: "default",
 				Files:     []string{},
-				NoColor:   false,
-				Compact:   false,
+				CommonCmdFields: CommonCmdFields{
+					NoColor: false,
+					Compact: false,
+				},
 			},
 			args: args{
 				appContext: appCtx,
@@ -254,11 +257,10 @@ metadata:
 			// Setup test files if needed
 			files := tc.setupFiles()
 
-			c := &Cmd{
-				Namespace: tc.fields.Namespace,
-				Files:     files,
-				NoColor:   tc.fields.NoColor,
-				Compact:   tc.fields.Compact,
+			c := &XRCmd{
+				Namespace:       tc.fields.Namespace,
+				Files:           files,
+				CommonCmdFields: tc.fields.CommonCmdFields,
 			}
 
 			err := c.Run(
@@ -426,7 +428,7 @@ func TestDiffCommand(t *testing.T) {
 			setupProcessor: func() dp.DiffProcessor {
 				return tu.NewMockDiffProcessor().
 					WithSuccessfulInitialize().
-					WithPerformDiff(func(w io.Writer, _ context.Context, _ []*un.Unstructured) error {
+					WithPerformDiff(func(_ context.Context, w io.Writer, _ []*un.Unstructured, _ types.CompositionProvider) error {
 						// Generate a mock diff for our test
 						_, _ = fmt.Fprintf(w, `~ ComposedResource/test-xr-composed-resource
 {
@@ -513,7 +515,7 @@ spec:
 			setupProcessor: func() dp.DiffProcessor {
 				return tu.NewMockDiffProcessor().
 					WithSuccessfulInitialize().
-					WithPerformDiff(func(io.Writer, context.Context, []*un.Unstructured) error {
+					WithPerformDiff(func(_ context.Context, _ io.Writer, _ []*un.Unstructured, _ types.CompositionProvider) error {
 						return errors.New("processing error")
 					}).
 					Build()
@@ -616,7 +618,7 @@ spec:
 			setupProcessor: func() dp.DiffProcessor {
 				return tu.NewMockDiffProcessor().
 					WithSuccessfulInitialize().
-					WithPerformDiff(func(io.Writer, context.Context, []*un.Unstructured) error {
+					WithPerformDiff(func(_ context.Context, _ io.Writer, _ []*un.Unstructured, _ types.CompositionProvider) error {
 						// For matching resources, we don't produce any output
 						return nil
 					}).
@@ -716,7 +718,7 @@ spec:
 			setupProcessor: func() dp.DiffProcessor {
 				return tu.NewMockDiffProcessor().
 					WithSuccessfulInitialize().
-					WithPerformDiff(func(w io.Writer, _ context.Context, _ []*un.Unstructured) error {
+					WithPerformDiff(func(_ context.Context, w io.Writer, _ []*un.Unstructured, _ types.CompositionProvider) error {
 						// Generate output for a new resource
 						_, _ = fmt.Fprintf(w, `+++ ComposedResource/test-xr-composed-resource
 {
@@ -881,9 +883,11 @@ spec:
 			var buf bytes.Buffer
 
 			// Create our command
-			cmd := &Cmd{
+			cmd := &XRCmd{
 				Namespace: "default",
-				Timeout:   time.Second * 30,
+				CommonCmdFields: CommonCmdFields{
+					Timeout: time.Second * 30,
+				},
 			}
 
 			// Create a Kong context
