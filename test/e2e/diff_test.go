@@ -86,12 +86,14 @@ func runCrossplaneDiff(t *testing.T, c *envconf.Config, binPath, subcommand stri
 // RunXRDiff runs the crossplane xr diff command on the provided resources.
 // It returns the output and any error encountered.
 func RunXRDiff(t *testing.T, c *envconf.Config, binPath string, resourcePaths ...string) (string, string, error) {
+	t.Helper()
 	return runCrossplaneDiff(t, c, binPath, "xr", resourcePaths...)
 }
 
 // RunCompDiff runs the crossplane comp diff command on the provided compositions.
 // It returns the output and any error encountered.
 func RunCompDiff(t *testing.T, c *envconf.Config, binPath string, compositionPaths ...string) (string, string, error) {
+	t.Helper()
 	return runCrossplaneDiff(t, c, binPath, "comp", compositionPaths...)
 }
 
