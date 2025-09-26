@@ -135,6 +135,7 @@ kind: TestResource
 metadata:
   name: test-resource
 `
+
 				err := os.WriteFile(tempFile, []byte(content), 0o600)
 				if err != nil {
 					t.Fatalf("Failed to write temp file: %v", err)
@@ -240,6 +241,7 @@ kind: TestResource
 metadata:
   name: test-resource
 `
+
 				err := os.WriteFile(tempFile, []byte(content), 0o600)
 				if err != nil {
 					t.Fatalf("Failed to write temp file: %v", err)
@@ -318,6 +320,7 @@ func TestDiffCommand(t *testing.T) {
 						if name == "test-xr-composed-resource" {
 							return existingResource, nil
 						}
+
 						return nil, errors.Errorf("resource %q not found", name)
 					}).
 					WithGetResourcesByLabel(func(_ context.Context, _ schema.GroupVersionKind, _ string, sel metav1.LabelSelector) ([]*un.Unstructured, error) {
@@ -325,6 +328,7 @@ func TestDiffCommand(t *testing.T) {
 						if sel.MatchLabels["app"] == "test-app" {
 							return []*un.Unstructured{testExtraResource}, nil
 						}
+
 						return []*un.Unstructured{}, nil
 					}).
 					WithGetAllResourcesByLabels(func(_ context.Context, gvks []schema.GroupVersionKind, selectors []metav1.LabelSelector) ([]*un.Unstructured, error) {
@@ -438,6 +442,7 @@ func TestDiffCommand(t *testing.T) {
     "replicas": 3
   }
 }`)
+
 						return nil
 					}).
 					Build()
@@ -453,15 +458,18 @@ spec:
   coolParam: test-value
   replicas: 3
 `)
+
 				return &itu.MockLoader{
 					Resources: []*un.Unstructured{
 						func() *un.Unstructured {
 							// Parse the YAML into an unstructured object
 							obj := &un.Unstructured{}
+
 							err := yaml.Unmarshal(xrYAML, &obj.Object)
 							if err != nil {
 								t.Fatalf("Failed to unmarshal test XR: %v", err)
 							}
+
 							return obj
 						}(),
 					},
@@ -530,15 +538,18 @@ metadata:
 spec:
   coolParam: test-value
 `)
+
 				return &itu.MockLoader{
 					Resources: []*un.Unstructured{
 						func() *un.Unstructured {
 							// Parse the YAML into an unstructured object
 							obj := &un.Unstructured{}
+
 							err := yaml.Unmarshal(xrYAML, &obj.Object)
 							if err != nil {
 								t.Fatalf("Failed to unmarshal test XR: %v", err)
 							}
+
 							return obj
 						}(),
 					},
@@ -562,6 +573,7 @@ spec:
 						if name == "test-xr-composed-resource" {
 							return matchingResource, nil
 						}
+
 						return nil, errors.Errorf("resource %q not found", name)
 					}).
 					Build()
@@ -635,15 +647,18 @@ spec:
   coolParam: test-value
   replicas: 3
 `)
+
 				return &itu.MockLoader{
 					Resources: []*un.Unstructured{
 						func() *un.Unstructured {
 							// Parse the YAML into an unstructured object
 							obj := &un.Unstructured{}
+
 							err := yaml.Unmarshal(xrYAML, &obj.Object)
 							if err != nil {
 								t.Fatalf("Failed to unmarshal test XR: %v", err)
 							}
+
 							return obj
 						}(),
 					},
@@ -728,6 +743,7 @@ spec:
     "replicas": 3
   }
 }`)
+
 						return nil
 					}).
 					Build()
@@ -743,14 +759,17 @@ spec:
   coolParam: test-value
   replicas: 3
 `)
+
 				return &itu.MockLoader{
 					Resources: []*un.Unstructured{
 						func() *un.Unstructured {
 							obj := &un.Unstructured{}
+
 							err := yaml.Unmarshal(xrYAML, &obj.Object)
 							if err != nil {
 								t.Fatalf("Failed to unmarshal test XR: %v", err)
 							}
+
 							return obj
 						}(),
 					},
@@ -1003,10 +1022,12 @@ users:
   user:
     token: test-token
 `
+
 				err := os.WriteFile(tempFile, []byte(content), 0o600)
 				if err != nil {
 					t.Fatalf("Failed to write temp kubeconfig: %v", err)
 				}
+
 				return tempFile
 			},
 			expectError: false, // Should not error with valid kubeconfig

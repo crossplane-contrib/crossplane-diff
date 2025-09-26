@@ -60,6 +60,7 @@ func TestDefaultEnvironmentClient_GetEnvironmentConfigs(t *testing.T) {
 						gvk.Kind == "EnvironmentConfig" {
 						return []*un.Unstructured{}, nil
 					}
+
 					return nil, errors.New("unexpected GVK")
 				}).
 				Build(),
@@ -76,6 +77,7 @@ func TestDefaultEnvironmentClient_GetEnvironmentConfigs(t *testing.T) {
 						gvk.Kind == "EnvironmentConfig" {
 						return []*un.Unstructured{envConfig1, envConfig2}, nil
 					}
+
 					return nil, errors.New("unexpected GVK")
 				}).
 				Build(),
@@ -219,6 +221,7 @@ func TestDefaultEnvironmentClient_GetEnvironmentConfig(t *testing.T) {
 						name == "test-env-config" {
 						return envConfig, nil
 					}
+
 					return nil, errors.New("unexpected resource request")
 				}).
 				Build(),
@@ -320,6 +323,7 @@ func TestDefaultEnvironmentClient_Initialize(t *testing.T) {
 						gvk.Kind == "EnvironmentConfig" {
 						return []*un.Unstructured{envConfig1, envConfig2}, nil
 					}
+
 					return nil, errors.New("unexpected GVK")
 				}).
 				Build(),

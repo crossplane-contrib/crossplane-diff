@@ -263,9 +263,11 @@ func TestDefaultDiffProcessor_PerformDiff(t *testing.T) {
 							if gvk.Group == testGroup && gvk.Kind == testKind {
 								return makeTestCRD(testCRDName, testKind, testGroup, testAPIVersion), nil
 							}
+
 							if gvk.Group == "cpd.org" && gvk.Kind == "ComposedResource" {
 								return makeTestCRD("composedresources.cpd.org", "ComposedResource", "cpd.org", "v1"), nil
 							}
+
 							return nil, errors.New("CRD not found")
 						}).
 						WithSuccessfulCRDByNameFetch(testCRDName, makeTestCRD(testCRDName, testKind, testGroup, testAPIVersion)).
@@ -365,14 +367,17 @@ func TestDefaultDiffProcessor_PerformDiff(t *testing.T) {
 							if err != nil {
 								return err
 							}
+
 							_, err = fmt.Fprintln(w, "- example.org/v1/XR1/test-xr will be modified")
 							if err != nil {
 								return err
 							}
+
 							_, err = fmt.Fprintln(w, "- example.org/v1/ComposedResource/resource-a will be modified")
 							if err != nil {
 								return err
 							}
+
 							_, err = fmt.Fprintln(w, "\nSummary: 0 to create, 2 to modify, 0 to delete")
 
 							return err
@@ -419,9 +424,11 @@ func TestDefaultDiffProcessor_PerformDiff(t *testing.T) {
 							if gvk.Group == testGroup && gvk.Kind == testKind {
 								return makeTestCRD(testCRDName, testKind, testGroup, testAPIVersion), nil
 							}
+
 							if gvk.Group == "cpd.org" && gvk.Kind == "ComposedResource" {
 								return makeTestCRD("composedresources.cpd.org", "ComposedResource", "cpd.org", "v1"), nil
 							}
+
 							return nil, errors.New("CRD not found")
 						}).
 						WithSuccessfulCRDByNameFetch(testCRDName, makeTestCRD(testCRDName, testKind, testGroup, testAPIVersion)).
@@ -737,6 +744,7 @@ func TestDefaultDiffProcessor_RenderWithRequirements(t *testing.T) {
 			},
 			setupRenderFunc: func() RenderFunc {
 				iteration := 0
+
 				return func(_ context.Context, _ logging.Logger, in render.Inputs) (render.Outputs, error) {
 					iteration++
 					// Return a simple output with no requirements
@@ -773,6 +781,7 @@ func TestDefaultDiffProcessor_RenderWithRequirements(t *testing.T) {
 						if gvk.Kind == ConfigMap && name == ConfigMapName {
 							return configMap, nil
 						}
+
 						return nil, errors.New("resource not found")
 					}).
 					Build()
@@ -784,6 +793,7 @@ func TestDefaultDiffProcessor_RenderWithRequirements(t *testing.T) {
 			},
 			setupRenderFunc: func() RenderFunc {
 				iteration := 0
+
 				return func(_ context.Context, _ logging.Logger, in render.Inputs) (render.Outputs, error) {
 					iteration++
 
@@ -842,9 +852,11 @@ func TestDefaultDiffProcessor_RenderWithRequirements(t *testing.T) {
 						if gvk.Kind == ConfigMap && name == ConfigMapName {
 							return configMap, nil
 						}
+
 						if gvk.Kind == "Secret" && name == "secret1" {
 							return secret, nil
 						}
+
 						return nil, errors.New("resource not found")
 					}).
 					Build()
@@ -856,6 +868,7 @@ func TestDefaultDiffProcessor_RenderWithRequirements(t *testing.T) {
 			},
 			setupRenderFunc: func() RenderFunc {
 				iteration := 0
+
 				return func(_ context.Context, _ logging.Logger, in render.Inputs) (render.Outputs, error) {
 					iteration++
 
@@ -867,6 +880,7 @@ func TestDefaultDiffProcessor_RenderWithRequirements(t *testing.T) {
 						if res.GetKind() == ConfigMap && res.GetName() == ConfigMapName {
 							hasConfig = true
 						}
+
 						if res.GetKind() == "Secret" && res.GetName() == "secret1" {
 							hasSecret = true
 						}
@@ -962,6 +976,7 @@ func TestDefaultDiffProcessor_RenderWithRequirements(t *testing.T) {
 						if gvk.Kind == ConfigMap && name == ConfigMapName {
 							return configMap, nil
 						}
+
 						return nil, errors.New("resource not found")
 					}).
 					Build()
@@ -973,6 +988,7 @@ func TestDefaultDiffProcessor_RenderWithRequirements(t *testing.T) {
 			},
 			setupRenderFunc: func() RenderFunc {
 				iteration := 0
+
 				return func(_ context.Context, _ logging.Logger, in render.Inputs) (render.Outputs, error) {
 					iteration++
 

@@ -199,6 +199,7 @@ func TestSchemaClient_GetCRD(t *testing.T) {
 					if getAction.GetName() == testXResourcePlural+".example.org" {
 						return true, testCRDUnstructured, nil
 					}
+
 					return false, nil, nil
 				})
 
@@ -378,6 +379,7 @@ func TestSchemaClient_LoadCRDsFromXRDs(t *testing.T) {
 					if getAction.GetName() == testXResourcePlural+".example.org" {
 						return true, correspondingCRD, nil
 					}
+
 					return false, nil, nil
 				})
 
@@ -809,10 +811,12 @@ func TestSchemaClient_CachingBehavior(t *testing.T) {
 				dynamicClient := fake.NewSimpleDynamicClient(scheme)
 				dynamicClient.PrependReactor("get", "customresourcedefinitions", func(action kt.Action) (bool, runtime.Object, error) {
 					callCount++
+
 					getAction := action.(kt.GetAction)
 					if getAction.GetName() == testXResourcePlural+".example.org" {
 						return true, testCRDUnstructured, nil
 					}
+
 					return false, nil, nil
 				})
 
@@ -851,10 +855,12 @@ func TestSchemaClient_CachingBehavior(t *testing.T) {
 				dynamicClient := fake.NewSimpleDynamicClient(scheme)
 				dynamicClient.PrependReactor("get", "customresourcedefinitions", func(action kt.Action) (bool, runtime.Object, error) {
 					callCount++
+
 					getAction := action.(kt.GetAction)
 					if getAction.GetName() == testXResourcePlural+".example.org" {
 						return true, testCRDUnstructured, nil
 					}
+
 					return false, nil, nil
 				})
 

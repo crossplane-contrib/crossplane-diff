@@ -173,6 +173,7 @@ func TestDefaultCompositionClient_FindMatchingComposition(t *testing.T) {
 				res: func() *un.Unstructured {
 					xr := tu.NewResource("example.org/v1", "XR1", "my-xr").Build()
 					_ = un.SetNestedField(xr.Object, "referenced-comp", "spec", "compositionRef", "name")
+
 					return xr
 				}(),
 			},
@@ -202,6 +203,7 @@ func TestDefaultCompositionClient_FindMatchingComposition(t *testing.T) {
 				res: func() *un.Unstructured {
 					xr := tu.NewResource("example.org/v1", "XR1", "my-xr").Build()
 					_ = un.SetNestedField(xr.Object, "incompatible-comp", "spec", "compositionRef", "name")
+
 					return xr
 				}(),
 			},
@@ -230,6 +232,7 @@ func TestDefaultCompositionClient_FindMatchingComposition(t *testing.T) {
 				res: func() *un.Unstructured {
 					xr := tu.NewResource("example.org/v1", "XR1", "my-xr").Build()
 					_ = un.SetNestedField(xr.Object, "non-existent-comp", "spec", "compositionRef", "name")
+
 					return xr
 				}(),
 			},
@@ -261,6 +264,7 @@ func TestDefaultCompositionClient_FindMatchingComposition(t *testing.T) {
 					_ = un.SetNestedStringMap(xr.Object, map[string]string{
 						"environment": "production",
 					}, "spec", "compositionSelector", "matchLabels")
+
 					return xr
 				}(),
 			},
@@ -288,6 +292,7 @@ func TestDefaultCompositionClient_FindMatchingComposition(t *testing.T) {
 						comp.SetLabels(map[string]string{
 							"environment": "staging",
 						})
+
 						return comp
 					}(),
 				},
@@ -299,6 +304,7 @@ func TestDefaultCompositionClient_FindMatchingComposition(t *testing.T) {
 					_ = un.SetNestedStringMap(xr.Object, map[string]string{
 						"environment": "production",
 					}, "spec", "compositionSelector", "matchLabels")
+
 					return xr
 				}(),
 			},
@@ -330,6 +336,7 @@ func TestDefaultCompositionClient_FindMatchingComposition(t *testing.T) {
 					_ = un.SetNestedStringMap(xr.Object, map[string]string{
 						"environment": "production",
 					}, "spec", "compositionSelector", "matchLabels")
+
 					return xr
 				}(),
 			},
@@ -378,6 +385,7 @@ func TestDefaultCompositionClient_FindMatchingComposition(t *testing.T) {
 				res: func() *un.Unstructured {
 					xr := tu.NewResource("example.org/v1", "XR1", "my-xr").Build()
 					_ = un.SetNestedField(xr.Object, "referenced-comp", "spec", "compositionRef", "name")
+
 					return xr
 				}(),
 			},
@@ -406,6 +414,7 @@ func TestDefaultCompositionClient_FindMatchingComposition(t *testing.T) {
 					_ = un.SetNestedStringMap(xr.Object, map[string]string{
 						"environment": "production",
 					}, "spec", "compositionSelector", "matchLabels")
+
 					return xr
 				}(),
 			},
@@ -497,6 +506,7 @@ func TestDefaultCompositionClient_FindMatchingComposition(t *testing.T) {
 								}).Build(),
 						}, nil
 					}
+
 					return []*un.Unstructured{}, nil
 				}).
 				Build(),
@@ -599,6 +609,7 @@ func TestDefaultCompositionClient_FindMatchingComposition(t *testing.T) {
 								}).Build(),
 						}, nil
 					}
+
 					return []*un.Unstructured{}, nil
 				}).
 				Build(),
@@ -688,6 +699,7 @@ func TestDefaultCompositionClient_FindMatchingComposition(t *testing.T) {
 								}).Build(),
 						}, nil
 					}
+
 					return []*un.Unstructured{}, nil
 				}).
 				Build(),
@@ -798,13 +810,17 @@ func TestDefaultCompositionClient_GetComposition(t *testing.T) {
 				u := &un.Unstructured{}
 				u.SetGroupVersionKind(gvk)
 				u.SetName(name)
+
 				obj, err := runtime.DefaultUnstructuredConverter.ToUnstructured(testComp)
 				if err != nil {
 					return nil, err
 				}
+
 				u.SetUnstructuredContent(obj)
+
 				return u, nil
 			}
+
 			return nil, errors.New("composition not found")
 		}).
 		Build()
@@ -920,6 +936,7 @@ func TestDefaultCompositionClient_ListCompositions(t *testing.T) {
 					if gvk.Group == CrossplaneAPIExtGroup && gvk.Kind == "Composition" {
 						return []*un.Unstructured{u1, u2}, nil
 					}
+
 					return nil, errors.New("unexpected GVK")
 				}).
 				Build(),

@@ -92,6 +92,7 @@ func TestDefaultSchemaValidator_ValidateResources(t *testing.T) {
 				def := tu.NewMockDefinitionClient().
 					WithSuccessfulXRDsFetch([]*un.Unstructured{}).
 					Build()
+
 				return sch, def
 			},
 			xr:            xr,
@@ -113,6 +114,7 @@ func TestDefaultSchemaValidator_ValidateResources(t *testing.T) {
 				def := tu.NewMockDefinitionClient().
 					WithSuccessfulXRDsFetch([]*un.Unstructured{}).
 					Build()
+
 				return sch, def
 			},
 			xr:            xr,
@@ -137,9 +139,11 @@ func TestDefaultSchemaValidator_ValidateResources(t *testing.T) {
 						if gvk.Group == testExampleOrg && gvk.Kind == "XR" {
 							return createCRDWithStringField(xrCRD), nil
 						}
+
 						if gvk.Group == testCpdOrg && gvk.Kind == "testComposedResource" {
 							return composedCRD, nil
 						}
+
 						return nil, errors.New("CRD not found")
 					}).
 					// Setup IsCRDRequired to return true for our test resources
@@ -147,6 +151,7 @@ func TestDefaultSchemaValidator_ValidateResources(t *testing.T) {
 					Build()
 
 				def := tu.NewMockDefinitionClient().Build()
+
 				return sch, def
 			},
 			xr: tu.NewResource(testExampleOrg+"/v1", "XR", "test-xr").
