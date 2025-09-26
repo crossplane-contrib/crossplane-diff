@@ -346,7 +346,7 @@ ci-artifacts:
 ci-codeql-setup:
   ARG CODEQL_VERSION=2.23.1
   FROM curlimages/curl:8.16.0
-  RUN curl -fsSL https://github.com/github/codeql-action/releases/download/codeql-bundle-${CODEQL_VERSION}/codeql-bundle-linux64.tar.gz|tar zx
+  RUN curl -fsSL https://github.com/github/codeql-action/releases/download/codeql-bundle-v${CODEQL_VERSION}/codeql-bundle-linux64.tar.gz|tar zx
   SAVE ARTIFACT codeql
 
 # ci-codeql is used by CI to build Crossplane with CodeQL scanning enabled.
