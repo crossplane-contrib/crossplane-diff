@@ -190,6 +190,7 @@ func TestFormatDiff(t *testing.T) {
 			options: func() DiffOptions {
 				opts := DefaultDiffOptions()
 				opts.UseColors = false
+
 				return opts
 			}(),
 			contains: []string{
@@ -208,6 +209,7 @@ func TestFormatDiff(t *testing.T) {
 			options: func() DiffOptions {
 				opts := DefaultDiffOptions()
 				opts.UseColors = true
+
 				return opts
 			}(),
 			contains: []string{
@@ -227,6 +229,7 @@ func TestFormatDiff(t *testing.T) {
 				opts := DefaultDiffOptions()
 				opts.Compact = true
 				opts.ContextLines = 1
+
 				return opts
 			}(),
 			contains: []string{
@@ -252,6 +255,7 @@ func TestFormatDiff(t *testing.T) {
 				opts.AddPrefix = "ADD "
 				opts.DeletePrefix = "DEL "
 				opts.ContextPrefix = "CTX "
+
 				return opts
 			}(),
 			contains: []string{

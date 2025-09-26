@@ -64,6 +64,7 @@ func TestDefaultDefinitionClient_GetXRDs(t *testing.T) {
 					if gvk.Group == CrossplaneAPIExtGroup && gvk.Kind == CompositeResourceDefinitionKind {
 						return []*un.Unstructured{}, nil
 					}
+
 					return nil, errors.New("unexpected GVK")
 				}).
 				Build(),
@@ -83,6 +84,7 @@ func TestDefaultDefinitionClient_GetXRDs(t *testing.T) {
 					if gvk.Group == CrossplaneAPIExtGroup && gvk.Kind == CompositeResourceDefinitionKind && gvk.Version == "v1" {
 						return []*un.Unstructured{xrd1, xrd2}, nil
 					}
+
 					return nil, errors.New("unexpected GVK")
 				}).
 				Build(),

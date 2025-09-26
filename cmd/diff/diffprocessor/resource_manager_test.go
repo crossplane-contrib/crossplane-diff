@@ -145,6 +145,7 @@ func TestDefaultResourceManager_FetchCurrentObject(t *testing.T) {
 						if owner, exists := sel.MatchLabels["crossplane.io/composite"]; exists && owner == "parent-xr" {
 							return []*un.Unstructured{existingGeneratedResource, existingGeneratedResourceWithDifferentResName}, nil
 						}
+
 						return []*un.Unstructured{}, nil
 					}).
 					Build()
@@ -174,6 +175,7 @@ func TestDefaultResourceManager_FetchCurrentObject(t *testing.T) {
 						if owner, exists := sel.MatchLabels["crossplane.io/composite"]; exists && owner == "parent-xr" {
 							return []*un.Unstructured{composedResource}, nil
 						}
+
 						return []*un.Unstructured{}, nil
 					}).
 					Build()
@@ -227,6 +229,7 @@ func TestDefaultResourceManager_FetchCurrentObject(t *testing.T) {
 						if owner, exists := sel.MatchLabels["crossplane.io/composite"]; exists && owner == "parent-xr" {
 							return []*un.Unstructured{mismatchedResource}, nil
 						}
+
 						return []*un.Unstructured{}, nil
 					}).
 					Build()
@@ -292,6 +295,7 @@ func TestDefaultResourceManager_FetchCurrentObject(t *testing.T) {
 								return []*un.Unstructured{existingClaimResource}, nil
 							}
 						}
+
 						return []*un.Unstructured{}, nil
 					}).
 					Build()
@@ -397,6 +401,7 @@ func TestDefaultResourceManager_UpdateOwnerRefs(t *testing.T) {
 				if ownerRefs[0].UID == ParentUID {
 					t.Errorf("UID should not be parent's UID when parent is nil")
 				}
+
 				if ownerRefs[0].UID == "" {
 					t.Errorf("UID should not be empty")
 				}
@@ -415,6 +420,7 @@ func TestDefaultResourceManager_UpdateOwnerRefs(t *testing.T) {
 				if len(ownerRefs) != 1 {
 					t.Fatalf("Expected 1 owner reference, got %d", len(ownerRefs))
 				}
+
 				if ownerRefs[0].UID != ParentUID {
 					t.Errorf("UID = %s, want %s", ownerRefs[0].UID, ParentUID)
 				}
@@ -433,9 +439,11 @@ func TestDefaultResourceManager_UpdateOwnerRefs(t *testing.T) {
 				if len(ownerRefs) != 1 {
 					t.Fatalf("Expected 1 owner reference, got %d", len(ownerRefs))
 				}
+
 				if ownerRefs[0].UID == ParentUID {
 					t.Errorf("UID should not be parent's UID for non-matching owner ref")
 				}
+
 				if ownerRefs[0].UID == "" {
 					t.Errorf("UID should not be empty")
 				}
@@ -473,6 +481,7 @@ func TestDefaultResourceManager_UpdateOwnerRefs(t *testing.T) {
 			defClient: tu.NewMockDefinitionClient().Build(),
 			validate: func(t *testing.T, child *un.Unstructured) {
 				t.Helper()
+
 				ownerRefs := child.GetOwnerReferences()
 				if len(ownerRefs) != 3 {
 					t.Fatalf("Expected 3 owner references, got %d", len(ownerRefs))
@@ -510,6 +519,7 @@ func TestDefaultResourceManager_UpdateOwnerRefs(t *testing.T) {
 				Build(),
 			validate: func(t *testing.T, child *un.Unstructured) {
 				t.Helper()
+
 				labels := child.GetLabels()
 				if labels == nil {
 					t.Fatal("Expected labels to be set")
@@ -519,6 +529,7 @@ func TestDefaultResourceManager_UpdateOwnerRefs(t *testing.T) {
 				if claimName, exists := labels["crossplane.io/claim-name"]; !exists || claimName != "test-claim" {
 					t.Errorf("Expected crossplane.io/claim-name=test-claim, got %s", claimName)
 				}
+
 				if claimNS, exists := labels["crossplane.io/claim-namespace"]; !exists || claimNS != "test-namespace" {
 					t.Errorf("Expected crossplane.io/claim-namespace=test-namespace, got %s", claimNS)
 				}
@@ -539,6 +550,7 @@ func TestDefaultResourceManager_UpdateOwnerRefs(t *testing.T) {
 				Build(),
 			validate: func(t *testing.T, child *un.Unstructured) {
 				t.Helper()
+
 				labels := child.GetLabels()
 				if labels == nil {
 					t.Fatal("Expected labels to be set")
@@ -553,6 +565,7 @@ func TestDefaultResourceManager_UpdateOwnerRefs(t *testing.T) {
 				if claimName, exists := labels["crossplane.io/claim-name"]; exists {
 					t.Errorf("Should not have crossplane.io/claim-name label for XR, but got %s", claimName)
 				}
+
 				if claimNS, exists := labels["crossplane.io/claim-namespace"]; exists {
 					t.Errorf("Should not have crossplane.io/claim-namespace label for XR, but got %s", claimNS)
 				}

@@ -291,6 +291,7 @@ func TestDefaultDiffCalculator_CalculateDiff(t *testing.T) {
 						if name == "test-resource-abc123" {
 							return existingComposed, nil
 						}
+
 						return nil, apierrors.NewNotFound(
 							schema.GroupResource{
 								Group:    gvk.Group,
@@ -305,6 +306,7 @@ func TestDefaultDiffCalculator_CalculateDiff(t *testing.T) {
 						if owner, exists := sel.MatchLabels["crossplane.io/composite"]; exists && owner == ParentXRName {
 							return []*un.Unstructured{existingComposed}, nil
 						}
+
 						return []*un.Unstructured{}, nil
 					}).
 					Build()
@@ -505,6 +507,7 @@ func TestDefaultDiffCalculator_CalculateDiffs(t *testing.T) {
 					// Create XR with same values (no changes)
 					sameXR := &cmp.Unstructured{}
 					sameXR.SetUnstructuredContent(existingXR.UnstructuredContent())
+
 					return sameXR
 				}(),
 				ComposedResources: []cpd.Unstructured{*composedResource1},

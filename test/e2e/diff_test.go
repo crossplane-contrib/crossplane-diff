@@ -123,7 +123,9 @@ func TestDiffNewResourceV2Cluster(t *testing.T) {
 				if err != nil {
 					t.Fatalf("Error running diff command: %v\nLog output:\n%s", err, log)
 				}
+
 				assertDiffMatchesFile(t, output, filepath.Join(expectPath, "new-xr.ansi"), log)
+
 				return ctx
 			}).
 			WithTeardown("DeletePrerequisites", funcs.AllOf(
@@ -162,11 +164,14 @@ func TestDiffExistingResourceV2Cluster(t *testing.T) {
 			)).
 			Assess("CanDiffExistingResource", func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
 				t.Helper()
+
 				output, log, err := RunXRDiff(t, c, "./crossplane-diff", filepath.Join(manifests, "modified-xr.yaml"))
 				if err != nil {
 					t.Fatalf("Error running diff command: %v\nLog output:\n%s", err, log)
 				}
+
 				assertDiffMatchesFile(t, output, filepath.Join(expectPath, "existing-xr.ansi"), log)
+
 				return ctx
 			}).
 			WithTeardown("DeleteResources", funcs.AllOf(
@@ -201,11 +206,14 @@ func TestDiffNewResourceV2Namespaced(t *testing.T) {
 			)).
 			Assess("CanDiffNewResource", func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
 				t.Helper()
+
 				output, log, err := RunXRDiff(t, c, "./crossplane-diff", filepath.Join(manifests, "new-xr.yaml"))
 				if err != nil {
 					t.Fatalf("Error running diff command: %v\nLog output:\n%s", err, log)
 				}
+
 				assertDiffMatchesFile(t, output, filepath.Join(expectPath, "new-xr.ansi"), log)
+
 				return ctx
 			}).
 			WithTeardown("DeletePrerequisites", funcs.AllOf(
@@ -248,11 +256,14 @@ func TestDiffExistingResourceV2Namespaced(t *testing.T) {
 			)).
 			Assess("CanDiffExistingResource", func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
 				t.Helper()
+
 				output, log, err := RunXRDiff(t, c, "./crossplane-diff", filepath.Join(manifests, "modified-xr.yaml"))
 				if err != nil {
 					t.Fatalf("Error running diff command: %v\nLog output:\n%s", err, log)
 				}
+
 				assertDiffMatchesFile(t, output, filepath.Join(expectPath, "existing-xr.ansi"), log)
+
 				return ctx
 			}).
 			WithTeardown("DeleteResources", funcs.AllOf(
@@ -294,11 +305,14 @@ func TestDiffNewResourceV1(t *testing.T) {
 			)).
 			Assess("CanDiffNewResource", func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
 				t.Helper()
+
 				output, log, err := RunXRDiff(t, c, "./crossplane-diff", filepath.Join(manifests, "new-xr.yaml"))
 				if err != nil {
 					t.Fatalf("Error running diff command: %v\nLog output:\n%s", err, log)
 				}
+
 				assertDiffMatchesFile(t, output, filepath.Join(expectPath, "new-xr.ansi"), log)
+
 				return ctx
 			}).
 			WithTeardown("DeletePrerequisites", funcs.AllOf(
@@ -342,11 +356,14 @@ func TestDiffExistingResourceV1(t *testing.T) {
 			)).
 			Assess("CanDiffExistingResource", func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
 				t.Helper()
+
 				output, log, err := RunXRDiff(t, c, "./crossplane-diff", filepath.Join(manifests, "modified-xr.yaml"))
 				if err != nil {
 					t.Fatalf("Error running diff command: %v\nLog output:\n%s", err, log)
 				}
+
 				assertDiffMatchesFile(t, output, filepath.Join(expectPath, "existing-xr.ansi"), log)
+
 				return ctx
 			}).
 			WithTeardown("DeleteResources", funcs.AllOf(
@@ -560,6 +577,7 @@ func TestDiffExistingComposition(t *testing.T) {
 			)).
 			Assess("CanDiffComposition", func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
 				t.Helper()
+
 				output, log, err := RunCompDiff(t, c, "./crossplane-diff", filepath.Join(manifests, "updated-composition.yaml"))
 				if err != nil {
 					t.Fatalf("Error running comp diff command: %v\nLog output:\n%s", err, log)
@@ -582,6 +600,7 @@ func TestDiffExistingComposition(t *testing.T) {
 				}
 
 				t.Logf("Comp diff output:\n%s", output)
+
 				return ctx
 			}).
 			WithTeardown("DeleteExistingXR", funcs.AllOf(
