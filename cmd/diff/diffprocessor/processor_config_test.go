@@ -50,6 +50,7 @@ func TestDiffOptions(t *testing.T) {
 				opts := renderer.DefaultDiffOptions()
 				opts.UseColors = true
 				opts.Compact = false
+
 				return opts
 			}(),
 		},
@@ -63,6 +64,7 @@ func TestDiffOptions(t *testing.T) {
 				opts := renderer.DefaultDiffOptions()
 				opts.UseColors = false
 				opts.Compact = false
+
 				return opts
 			}(),
 		},
@@ -76,6 +78,7 @@ func TestDiffOptions(t *testing.T) {
 				opts := renderer.DefaultDiffOptions()
 				opts.UseColors = true
 				opts.Compact = true
+
 				return opts
 			}(),
 		},

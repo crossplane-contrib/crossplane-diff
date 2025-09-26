@@ -373,6 +373,7 @@ func TestDefaultFunctionClient_ListFunctions(t *testing.T) {
 					if gvk.Group == "pkg.crossplane.io" && gvk.Kind == "Function" {
 						return []*un.Unstructured{u1, u2}, nil
 					}
+
 					return nil, errors.New("unexpected GVK")
 				}).
 				Build(),
@@ -409,6 +410,7 @@ func TestDefaultFunctionClient_ListFunctions(t *testing.T) {
 					invalid.SetName("invalid")
 					// Put invalid data to force conversion failure
 					invalid.Object["spec"] = 123 // This will cause conversion to fail since spec should be a map
+
 					return []*un.Unstructured{invalid}, nil
 				}).
 				Build(),
@@ -540,6 +542,7 @@ func TestDefaultFunctionClient_Initialize(t *testing.T) {
 					if gvk.Group == "pkg.crossplane.io" && gvk.Kind == "Function" {
 						return []*un.Unstructured{u1, u2}, nil
 					}
+
 					return nil, errors.New("unexpected GVK")
 				}).
 				Build(),

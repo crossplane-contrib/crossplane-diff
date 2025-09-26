@@ -70,6 +70,7 @@ func TestRequirementsProvider_ProvideRequirements(t *testing.T) {
 						if gvk.Kind == "ConfigMap" && name == "config1" {
 							return configMap, nil
 						}
+
 						return nil, errors.New("resource not found")
 					}).
 					Build()
@@ -111,6 +112,7 @@ func TestRequirementsProvider_ProvideRequirements(t *testing.T) {
 						if sel.MatchLabels["app"] == "test-app" {
 							return []*un.Unstructured{configMap}, nil
 						}
+
 						return []*un.Unstructured{}, nil
 					}).
 					Build()
@@ -155,9 +157,11 @@ func TestRequirementsProvider_ProvideRequirements(t *testing.T) {
 						if gvk.Kind == "ConfigMap" && name == "config1" {
 							return configMap, nil
 						}
+
 						if gvk.Kind == "Secret" && name == "secret1" {
 							return secret, nil
 						}
+
 						return nil, errors.New("resource not found")
 					}).
 					Build()

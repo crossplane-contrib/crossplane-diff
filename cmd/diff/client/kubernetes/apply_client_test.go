@@ -53,6 +53,7 @@ func TestApplyClient_DryRunApply(t *testing.T) {
 					// For apply, we'd return the "server-modified" version
 					result := obj.DeepCopy()
 					result.SetResourceVersion("1000") // Server would set this
+
 					return true, result, nil
 				})
 
@@ -96,6 +97,7 @@ func TestApplyClient_DryRunApply(t *testing.T) {
 					// For apply, we'd return the "server-modified" version
 					result := obj.DeepCopy()
 					result.SetResourceVersion("1000") // Server would set this
+
 					return true, result, nil
 				})
 
