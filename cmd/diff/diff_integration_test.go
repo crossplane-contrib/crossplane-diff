@@ -1222,14 +1222,12 @@ Summary: 2 added`,
   metadata:
     annotations:
       crossplane.io/composition-resource-name: nop-resource
--   generateName: test-claim-82crv-
+    generateName: test-claim-82crv-
     labels:
       crossplane.io/claim-name: test-claim
       crossplane.io/claim-namespace: existing-namespace
--     crossplane.io/composite: test-claim-82crv
--   name: test-claim-82crv
-+     crossplane.io/composite: test-claim
-+   name: test-claim
+      crossplane.io/composite: test-claim-82crv
+    name: test-claim-82crv
   spec:
     forProvider:
 -     configData: existing-value

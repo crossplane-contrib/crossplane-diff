@@ -368,6 +368,7 @@ func (p *DefaultDiffProcessor) RenderWithRequirements(
 			RequiredResources: renderResources,
 		})
 
+
 		lastOutput = output
 		lastRenderErr = renderErr
 

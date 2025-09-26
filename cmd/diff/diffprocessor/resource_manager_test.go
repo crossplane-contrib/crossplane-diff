@@ -534,9 +534,44 @@ func TestDefaultResourceManager_UpdateOwnerRefs(t *testing.T) {
 					t.Errorf("Expected crossplane.io/claim-namespace=test-namespace, got %s", claimNS)
 				}
 
-				// Should not have composite label for claims
-				if composite, exists := labels["crossplane.io/composite"]; exists {
-					t.Errorf("Should not have crossplane.io/composite label for claim, but got %s", composite)
+				// Should have composite label pointing to claim for new resources
+				if composite, exists := labels["crossplane.io/composite"]; !exists || composite != "test-claim" {
+					t.Errorf("Expected crossplane.io/composite=test-claim, got %s", composite)
+				}
+			},
+		},
+		"ClaimParent_PreservesExistingCompositeLabel": {
+			parent: tu.NewResource("example.org/v1", "TestClaim", "test-claim").
+				InNamespace("test-namespace").
+				Build(),
+			child: tu.NewResource("example.org/v1", "Child", "child-resource").
+				WithLabels(map[string]string{
+					"crossplane.io/composite": "test-claim-82crv", // Existing composite label
+				}).
+				Build(),
+			defClient: tu.NewMockDefinitionClient().
+				WithIsClaimResource(func(_ context.Context, resource *un.Unstructured) bool {
+					return resource.GetKind() == "TestClaim"
+				}).
+				Build(),
+			validate: func(t *testing.T, child *un.Unstructured) {
+				t.Helper()
+				labels := child.GetLabels()
+				if labels == nil {
+					t.Fatal("Expected labels to be set")
+				}
+
+				// Check claim-specific labels
+				if claimName, exists := labels["crossplane.io/claim-name"]; !exists || claimName != "test-claim" {
+					t.Errorf("Expected crossplane.io/claim-name=test-claim, got %s", claimName)
+				}
+				if claimNS, exists := labels["crossplane.io/claim-namespace"]; !exists || claimNS != "test-namespace" {
+					t.Errorf("Expected crossplane.io/claim-namespace=test-namespace, got %s", claimNS)
+				}
+
+				// Should preserve existing composite label pointing to generated XR
+				if composite, exists := labels["crossplane.io/composite"]; !exists || composite != "test-claim-82crv" {
+					t.Errorf("Expected crossplane.io/composite=test-claim-82crv (preserved), got %s", composite)
 				}
 			},
 		},

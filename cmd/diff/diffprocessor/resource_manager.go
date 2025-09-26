@@ -427,10 +427,25 @@ func (m *DefaultResourceManager) updateCompositeOwnerLabel(parent, child *un.Uns
 		// For claims, set claim-specific labels (all claims are namespaced)
 		labels["crossplane.io/claim-name"] = parentName
 		labels["crossplane.io/claim-namespace"] = parent.GetNamespace()
-		m.logger.Debug("Updated claim owner labels",
-			"claimName", parentName,
-			"claimNamespace", parent.GetNamespace(),
-			"child", child.GetName())
+
+		// For claims, only set the composite label if it doesn't already exist
+		// If it exists, it likely points to a generated XR name which we should preserve
+		existingComposite, hasComposite := labels["crossplane.io/composite"]
+		if !hasComposite {
+			// No existing composite label, set it to the claim name
+			labels["crossplane.io/composite"] = parentName
+			m.logger.Debug("Set composite label for new claim resource",
+				"claimName", parentName,
+				"claimNamespace", parent.GetNamespace(),
+				"child", child.GetName())
+		} else {
+			// Preserve existing composite label (likely a generated XR name)
+			m.logger.Debug("Preserved existing composite label for claim resource",
+				"claimName", parentName,
+				"claimNamespace", parent.GetNamespace(),
+				"existingComposite", existingComposite,
+				"child", child.GetName())
+		}
 	default:
 		// For XRs, set the composite label
 		labels["crossplane.io/composite"] = parentName
