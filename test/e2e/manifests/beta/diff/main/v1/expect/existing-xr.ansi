@@ -1,6 +1,6 @@
-~~~ NopResource/existing-resource-czpjg
+~~~ ClusterNopResource/existing-resource-czpjg
   apiVersion: nop.crossplane.io/v1alpha1
-  kind: NopResource
+  kind: ClusterNopResource
   metadata:
     annotations:
 [31m-     cool-field: I'm existing![0m

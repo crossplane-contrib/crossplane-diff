@@ -1,6 +1,6 @@
-+++ NopResource/new-resource-(generated)
++++ ClusterNopResource/new-resource-(generated)
 [32m+ apiVersion: nop.crossplane.io/v1alpha1[0m
-[32m+ kind: NopResource[0m
+[32m+ kind: ClusterNopResource[0m
 [32m+ metadata:[0m
 [32m+   annotations:[0m
 [32m+     cool-field: I'm new![0m
