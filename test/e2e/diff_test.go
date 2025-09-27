@@ -25,6 +25,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -371,21 +372,14 @@ func TestDiffExistingResourceV1(t *testing.T) {
 				funcs.ResourcesDeletedWithin(2*time.Minute, manifests, "existing-xr.yaml"),
 			)).
 			WithTeardown("DeletePrerequisites", funcs.AllOf(
-				//funcs.ResourcesDeletedAfterListedAreGone(3*time.Minute, setupPath, "*.yaml", v1NopList),
-				//funcs.ResourcesDeletedAfterListedAreGone(3*time.Minute, setupPath, "*.yaml", clusterNopList),
 				func(ctx context.Context, t *testing.T, e *envconf.Config) context.Context {
-					var nopList *composed.UnstructuredList
+					t.Helper()
+					// default to `main` variant
+					nopList := clusterNopList
 
 					// we should only ever be running with one version label
-					for _, version := range e.Labels()[LabelCrossplaneVersion] {
-						// in reality the slice contains a bunch of empty strings too
-						switch version {
-						case CrossplaneVersionRelease120:
-							nopList = v1NopList
-							break
-						default:
-							nopList = clusterNopList
-						}
+					if slices.Contains(e.Labels()[LabelCrossplaneVersion], CrossplaneVersionRelease120) {
+						nopList = v1NopList
 					}
 
 					funcs.ResourcesDeletedAfterListedAreGone(3*time.Minute, setupPath, "*.yaml", nopList)(ctx, t, e)
