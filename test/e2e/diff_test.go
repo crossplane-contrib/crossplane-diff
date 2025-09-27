@@ -25,6 +25,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -371,7 +372,20 @@ func TestDiffExistingResourceV1(t *testing.T) {
 				funcs.ResourcesDeletedWithin(2*time.Minute, manifests, "existing-xr.yaml"),
 			)).
 			WithTeardown("DeletePrerequisites", funcs.AllOf(
-				funcs.ResourcesDeletedAfterListedAreGone(3*time.Minute, setupPath, "*.yaml", v1NopList),
+				func(ctx context.Context, t *testing.T, e *envconf.Config) context.Context {
+					t.Helper()
+					// default to `main` variant
+					nopList := clusterNopList
+
+					// we should only ever be running with one version label
+					if slices.Contains(e.Labels()[LabelCrossplaneVersion], CrossplaneVersionRelease120) {
+						nopList = v1NopList
+					}
+
+					funcs.ResourcesDeletedAfterListedAreGone(3*time.Minute, setupPath, "*.yaml", nopList)(ctx, t, e)
+
+					return ctx
+				},
 				funcs.ResourceDeletedWithin(3*time.Minute, &k8sapiextensionsv1.CustomResourceDefinition{
 					TypeMeta:   metav1.TypeMeta{Kind: "CustomResourceDefinition", APIVersion: "apiextensions.k8s.io/v1"},
 					ObjectMeta: metav1.ObjectMeta{Name: "nopresources.diff.example.org"},
@@ -381,6 +395,12 @@ func TestDiffExistingResourceV1(t *testing.T) {
 	)
 }
 
+// I don't like this merged list here, but we have a weird condition where v1 tests run against v2 providers in the
+// `main` branch case.  so namespaced NopResources don't exist and we have to create cluster ones.  this is fair because
+// v1 XRDs should still work with v2 providers but i don't want to write tests that differ only in the nopList.
+
+// doesn't yet pass -- theory:  we need to figure out how to pass a list of only valid elements instead of a
+// catch-all list?  figure out which variant to run based on... label?
 var v1NopList = composed.NewList(
 	composed.FromReferenceToList(corev1.ObjectReference{
 		APIVersion: "nop.crossplane.io/v1alpha1",
