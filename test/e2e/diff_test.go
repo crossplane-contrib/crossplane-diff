@@ -395,12 +395,6 @@ func TestDiffExistingResourceV1(t *testing.T) {
 	)
 }
 
-// I don't like this merged list here, but we have a weird condition where v1 tests run against v2 providers in the
-// `main` branch case.  so namespaced NopResources don't exist and we have to create cluster ones.  this is fair because
-// v1 XRDs should still work with v2 providers but i don't want to write tests that differ only in the nopList.
-
-// doesn't yet pass -- theory:  we need to figure out how to pass a list of only valid elements instead of a
-// catch-all list?  figure out which variant to run based on... label?
 var v1NopList = composed.NewList(
 	composed.FromReferenceToList(corev1.ObjectReference{
 		APIVersion: "nop.crossplane.io/v1alpha1",
