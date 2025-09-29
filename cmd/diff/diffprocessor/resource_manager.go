@@ -12,6 +12,7 @@ import (
 	un "k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/util/uuid"
+	"k8s.io/utils/ptr"
 
 	"github.com/crossplane/crossplane-runtime/v2/pkg/errors"
 	"github.com/crossplane/crossplane-runtime/v2/pkg/logging"
@@ -24,7 +25,7 @@ type ResourceManager interface {
 	FetchCurrentObject(ctx context.Context, composite *un.Unstructured, desired *un.Unstructured) (*un.Unstructured, bool, error)
 
 	// UpdateOwnerRefs ensures all OwnerReferences have valid UIDs
-	UpdateOwnerRefs(parent *un.Unstructured, child *un.Unstructured)
+	UpdateOwnerRefs(ctx context.Context, parent *un.Unstructured, child *un.Unstructured)
 }
 
 // DefaultResourceManager implements ResourceManager interface.
@@ -333,17 +334,79 @@ func (m *DefaultResourceManager) hasMatchingResourceName(annotations map[string]
 }
 
 // UpdateOwnerRefs ensures all OwnerReferences have valid UIDs.
-func (m *DefaultResourceManager) UpdateOwnerRefs(parent *un.Unstructured, child *un.Unstructured) {
+// It handles Claims and XRs differently according to Crossplane's ownership model:
+// - Claims should never be controller owners of composed resources.
+// - XRs should be controller owners and use their UID for matching references.
+func (m *DefaultResourceManager) UpdateOwnerRefs(ctx context.Context, parent *un.Unstructured, child *un.Unstructured) {
 	// if there's no parent, we are the parent.
 	if parent == nil {
 		m.logger.Debug("No parent provided for owner references update")
 		return
 	}
 
-	uid := parent.GetUID()
+	// Check if the parent is a claim and dispatch to appropriate handler
+	isParentAClaim := m.defClient.IsClaimResource(ctx, parent)
+
+	switch {
+	case isParentAClaim:
+		m.updateOwnerRefsForClaim(parent, child)
+	default:
+		m.updateOwnerRefsForXR(parent, child)
+	}
+
+	// Update composite owner label (common for both Claims and XRs)
+	m.updateCompositeOwnerLabel(ctx, parent, child)
+}
+
+// updateOwnerRefsForClaim handles owner reference updates when the parent is a Claim.
+// Claims should not be controller owners of composed resources per Crossplane's model:
+// Claim -> owns -> XR -> owns -> Composed Resources.
+func (m *DefaultResourceManager) updateOwnerRefsForClaim(claim *un.Unstructured, child *un.Unstructured) {
+	m.logger.Debug("Processing owner references with claim parent",
+		"parentKind", claim.GetKind(),
+		"parentName", claim.GetName(),
+		"childKind", child.GetKind(),
+		"childName", child.GetName())
+
+	// Get the current owner references
+	refs := child.GetOwnerReferences()
+	updatedRefs := make([]metav1.OwnerReference, 0, len(refs))
+
+	for _, ref := range refs {
+		// Generate UIDs for any owner references that don't have them
+		// For Claims, we never use the Claim's UID even for matching refs
+		if ref.UID == "" {
+			ref.UID = uuid.NewUUID()
+			m.logger.Debug("Generated UID for owner reference",
+				"refKind", ref.Kind,
+				"refName", ref.Name,
+				"newUID", ref.UID)
+		}
+
+		// Ensure Claims are never controller owners
+		if ref.Kind == claim.GetKind() && ref.Name == claim.GetName() {
+			if ref.Controller != nil && *ref.Controller {
+				ref.Controller = ptr.To(false)
+				m.logger.Debug("Set Controller to false for claim owner reference",
+					"refKind", ref.Kind,
+					"refName", ref.Name)
+			}
+		}
+
+		updatedRefs = append(updatedRefs, ref)
+	}
+
+	child.SetOwnerReferences(updatedRefs)
+}
+
+// updateOwnerRefsForXR handles owner reference updates when the parent is an XR.
+// XRs should be controller owners of their composed resources and use their UID
+// for matching owner references.
+func (m *DefaultResourceManager) updateOwnerRefsForXR(xr *un.Unstructured, child *un.Unstructured) {
+	uid := xr.GetUID()
 	m.logger.Debug("Updating owner references",
-		"parentKind", parent.GetKind(),
-		"parentName", parent.GetName(),
+		"parentKind", xr.GetKind(),
+		"parentName", xr.GetName(),
 		"parentUID", uid,
 		"childKind", child.GetKind(),
 		"childName", child.GetName())
@@ -359,11 +422,11 @@ func (m *DefaultResourceManager) UpdateOwnerRefs(parent *un.Unstructured, child 
 	for _, ref := range refs {
 		originalUID := ref.UID
 
-		// if there is an owner ref on the dependent that we are pretty sure comes from us,
-		// point the UID to the parent.
-		if ref.Name == parent.GetName() &&
-			ref.APIVersion == parent.GetAPIVersion() &&
-			ref.Kind == parent.GetKind() &&
+		// If there is an owner ref on the dependent that matches the parent XR,
+		// use the parent's UID
+		if ref.Name == xr.GetName() &&
+			ref.APIVersion == xr.GetAPIVersion() &&
+			ref.Kind == xr.GetKind() &&
 			ref.UID == "" {
 			ref.UID = uid
 			m.logger.Debug("Updated matching owner reference with parent UID",
@@ -372,7 +435,7 @@ func (m *DefaultResourceManager) UpdateOwnerRefs(parent *un.Unstructured, child 
 				"newUID", ref.UID)
 		}
 
-		// if we have a non-matching owner ref don't use the parent UID.
+		// For non-matching owner refs, generate a random UID
 		if ref.UID == "" {
 			ref.UID = uuid.NewUUID()
 			m.logger.Debug("Generated new random UID for owner reference",
@@ -387,9 +450,6 @@ func (m *DefaultResourceManager) UpdateOwnerRefs(parent *un.Unstructured, child 
 	// Update the object with the modified owner references
 	child.SetOwnerReferences(updatedRefs)
 
-	// Update composite owner label
-	m.updateCompositeOwnerLabel(parent, child)
-
 	m.logger.Debug("Updated owner references and labels",
 		"newCount", len(updatedRefs))
 }
@@ -397,7 +457,7 @@ func (m *DefaultResourceManager) UpdateOwnerRefs(parent *un.Unstructured, child 
 // updateCompositeOwnerLabel updates the ownership labels on the child resource.
 // For Claims, it sets claim-name and claim-namespace labels.
 // For XRs, it sets the composite label.
-func (m *DefaultResourceManager) updateCompositeOwnerLabel(parent, child *un.Unstructured) {
+func (m *DefaultResourceManager) updateCompositeOwnerLabel(ctx context.Context, parent, child *un.Unstructured) {
 	if parent == nil {
 		return
 	}
@@ -419,7 +479,6 @@ func (m *DefaultResourceManager) updateCompositeOwnerLabel(parent, child *un.Uns
 	}
 
 	// Check if the parent is a claim
-	ctx := context.Background()
 	isParentAClaim := m.defClient.IsClaimResource(ctx, parent)
 
 	switch {

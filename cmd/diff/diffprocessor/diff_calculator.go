@@ -97,7 +97,10 @@ func (c *DefaultDiffCalculator) CalculateDiff(ctx context.Context, composite *un
 	desired = c.preserveExistingResourceIdentity(current, desired, resourceID, name)
 
 	// Update owner references if needed (done after preserving existing labels)
-	c.resourceManager.UpdateOwnerRefs(composite, desired)
+	// IMPORTANT: For composed resources, the owner should be the XR, not a Claim.
+	// When composite is the current XR from the cluster, we use it as the owner.
+	// This ensures composed resources only have the XR as their controller owner.
+	c.resourceManager.UpdateOwnerRefs(ctx, composite, desired)
 
 	// Determine what the resource would look like after application
 	wouldBeResult := desired

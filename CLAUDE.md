@@ -2,3 +2,4 @@
 - The diff command should strive for accuracy above all else, so in cases where errors or guesses may compromise accuracy, we should fail the diff completely.
 - We should not emit partial results for a given XR; if given multiple XRs, it's okay to emit results only for those that pass so long as we call attention to the others that failed.
 - We should always emit useful logging with appropriate contextual objects attached.
+- the earthly `reviewable` command should always be run with a long timeout.  it runs all of our ITs and they can take several minutes.
