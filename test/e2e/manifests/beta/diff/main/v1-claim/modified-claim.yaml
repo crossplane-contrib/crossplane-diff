@@ -1,0 +1,13 @@
+apiVersion: claim.diff.example.org/v1alpha1
+kind: NopClaim
+metadata:
+  name: test-claim
+  namespace: default
+spec:
+  coolField: modified-value
+  compositeDeletePolicy: Background
+  compositionRef:
+    name: xnopclaims.claim.diff.example.org
+  parameters:
+    config:
+      setting1: enabled
