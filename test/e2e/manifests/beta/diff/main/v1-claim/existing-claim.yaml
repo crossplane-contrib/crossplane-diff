@@ -1,0 +1,10 @@
+apiVersion: claim.diff.example.org/v1alpha1
+kind: NopClaim
+metadata:
+  name: test-claim
+  namespace: default
+spec:
+  coolField: existing-value
+  compositeDeletePolicy: Background
+  compositionRef:
+    name: xnopclaims.claim.diff.example.org

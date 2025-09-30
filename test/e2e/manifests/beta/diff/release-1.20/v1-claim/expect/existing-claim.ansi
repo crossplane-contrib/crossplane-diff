@@ -1,0 +1,59 @@
+~~~ NopClaim/test-claim
+  apiVersion: claim.diff.example.org/v1alpha1
+  kind: NopClaim
+  metadata:
+    finalizers:
+    - finalizer.apiextensions.crossplane.io
+    name: test-claim
+    namespace: default
+  spec:
+    compositeDeletePolicy: Background
+    compositionRef:
+      name: xnopclaims.claim.diff.example.org
+    compositionRevisionRef:
+      name: xnopclaims.claim.diff.example.org-xxxxxxx
+[31m-   coolField: existing-value[0m
+[32m+   compositionUpdatePolicy: Automatic[0m
+[32m+   coolField: modified-value[0m
+[32m+   parameters:[0m
+[32m+     config:[0m
+[32m+       setting1: enabled[0m
+    resourceRef:
+      apiVersion: claim.diff.example.org/v1alpha1
+      kind: XNopClaim
+      name: test-claim-xxxxx
+
+---
+~~~ NopResource/test-claim-xxxxx-xxxxx
+  apiVersion: nop.crossplane.io/v1alpha1
+  kind: NopResource
+  metadata:
+    annotations:
+[31m-     cool-field: existing-value[0m
+[32m+     cool-field: modified-value[0m
+      crossplane.io/composition-resource-name: nop-resource
+      crossplane.io/external-name: test-claim-xxxxx-xxxxx
+[32m+     setting: enabled[0m
+    finalizers:
+    - finalizer.managedresource.crossplane.io
+    generateName: test-claim-xxxxx-
+    labels:
+      crossplane.io/claim-name: test-claim
+      crossplane.io/claim-namespace: default
+      crossplane.io/composite: test-claim-xxxxx
+    name: test-claim-xxxxx-xxxxx
+  spec:
+    deletionPolicy: Delete
+    forProvider:
+      conditionAfter:
+      - conditionStatus: "True"
+        conditionType: Ready
+        time: 0s
+    managementPolicies:
+    - '*'
+    providerConfigRef:
+      name: default
+
+---
+
+Summary: 2 modified

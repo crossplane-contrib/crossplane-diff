@@ -93,23 +93,14 @@ func (c *DefaultDiffCalculator) CalculateDiff(ctx context.Context, composite *un
 			"resource", current)
 	}
 
-	// Update owner references if needed
-	c.resourceManager.UpdateOwnerRefs(composite, desired)
+	// Preserve existing resource identity for resources with generateName
+	desired = c.preserveExistingResourceIdentity(current, desired, resourceID, name)
 
-	// If this is an existing resource but our desired object uses generateName,
-	// set the name from the current resource for the dry-run apply
-	if current != nil && name == "" && generateName != "" {
-		currentName := current.GetName()
-		c.logger.Debug("Using existing resource name for desired object with generateName",
-			"resource", resourceID,
-			"currentName", currentName)
-
-		// Create a copy of the desired object and set the name from the current resource
-		// This is needed for server-side apply which requires a name
-		desiredCopy := desired.DeepCopy()
-		desiredCopy.SetName(currentName)
-		desired = desiredCopy
-	}
+	// Update owner references if needed (done after preserving existing labels)
+	// IMPORTANT: For composed resources, the owner should be the XR, not a Claim.
+	// When composite is the current XR from the cluster, we use it as the owner.
+	// This ensures composed resources only have the XR as their controller owner.
+	c.resourceManager.UpdateOwnerRefs(ctx, composite, desired)
 
 	// Determine what the resource would look like after application
 	wouldBeResult := desired
@@ -305,4 +296,51 @@ func (c *DefaultDiffCalculator) CalculateRemovedResourceDiffs(ctx context.Contex
 	c.logger.Debug("Found resources to be removed", "count", len(removedDiffs))
 
 	return removedDiffs, nil
+}
+
+// preserveExistingResourceIdentity preserves the identity (name, generateName, labels) from an existing
+// resource with generateName to ensure dry-run apply works on the correct resource identity.
+// This is critical for claim scenarios where the rendered name differs from the generated name.
+func (c *DefaultDiffCalculator) preserveExistingResourceIdentity(current, desired *un.Unstructured, resourceID, renderedName string) *un.Unstructured {
+	// Only preserve identity for existing resources with both generateName and name
+	if current == nil || current.GetGenerateName() == "" || current.GetName() == "" {
+		return desired
+	}
+
+	currentName := current.GetName()
+	currentGenerateName := current.GetGenerateName()
+
+	c.logger.Debug("Using existing resource identity for dry-run apply",
+		"resource", resourceID,
+		"renderedName", renderedName,
+		"currentName", currentName,
+		"currentGenerateName", currentGenerateName)
+
+	// Create a copy of the desired object and set the identity from the current resource
+	// This ensures dry-run apply works on the correct resource identity
+	desiredCopy := desired.DeepCopy()
+	desiredCopy.SetName(currentName)
+	desiredCopy.SetGenerateName(currentGenerateName)
+
+	// Preserve important labels from the existing resource, particularly the composite label
+	// This ensures the dry-run apply gets the right labels and preserves them correctly
+	currentLabels := current.GetLabels()
+	if currentLabels != nil {
+		desiredLabels := desiredCopy.GetLabels()
+		if desiredLabels == nil {
+			desiredLabels = make(map[string]string)
+		}
+
+		// Preserve the composite label if it exists (critical for claims)
+		if compositeLabel, exists := currentLabels["crossplane.io/composite"]; exists {
+			desiredLabels["crossplane.io/composite"] = compositeLabel
+			c.logger.Debug("Preserved composite label for dry-run apply",
+				"resource", resourceID,
+				"compositeLabel", compositeLabel)
+		}
+
+		desiredCopy.SetLabels(desiredLabels)
+	}
+
+	return desiredCopy
 }

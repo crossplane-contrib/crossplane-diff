@@ -395,12 +395,120 @@ func TestDiffExistingResourceV1(t *testing.T) {
 	)
 }
 
-// I don't like this merged list here, but we have a weird condition where v1 tests run against v2 providers in the
-// `main` branch case.  so namespaced NopResources don't exist and we have to create cluster ones.  this is fair because
-// v1 XRDs should still work with v2 providers but i don't want to write tests that differ only in the nopList.
+// TestDiffNewClaim tests the crossplane diff command against net-new claims with v1 XRDs.
+func TestDiffNewClaim(t *testing.T) {
+	imageTag := strings.Split(environment.GetCrossplaneImage(), ":")[1]
+	manifests := filepath.Join("test/e2e/manifests/beta/diff", imageTag, "v1-claim")
+	setupPath := filepath.Join(manifests, "setup")
+	expectPath := filepath.Join(manifests, "expect")
 
-// doesn't yet pass -- theory:  we need to figure out how to pass a list of only valid elements instead of a
-// catch-all list?  figure out which variant to run based on... label?
+	environment.Test(t,
+		features.New("DiffNewClaim").
+			WithLabel(e2e.LabelArea, LabelAreaDiff).
+			WithLabel(e2e.LabelSize, e2e.LabelSizeSmall).
+			WithLabel(config.LabelTestSuite, config.TestSuiteDefault).
+			WithLabel(LabelCrossplaneVersion, CrossplaneVersionRelease120).
+			WithLabel(LabelCrossplaneVersion, CrossplaneVersionMain).
+			WithSetup("CreatePrerequisites", funcs.AllOf(
+				funcs.ApplyResources(e2e.FieldManager, setupPath, "*.yaml"),
+				funcs.ResourcesCreatedWithin(30*time.Second, setupPath, "*.yaml"),
+			)).
+			WithSetup("PrerequisitesAreReady", funcs.AllOf(
+				funcs.ResourcesHaveConditionWithin(1*time.Minute, setupPath, "definition.yaml", apiextensionsv1.WatchingComposite()),
+				funcs.ResourcesHaveConditionWithin(2*time.Minute, setupPath, "provider.yaml", pkgv1.Healthy(), pkgv1.Active()),
+			)).
+			Assess("CanDiffNewClaim", func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
+				t.Helper()
+
+				output, log, err := RunXRDiff(t, c, "./crossplane-diff", filepath.Join(manifests, "new-claim.yaml"))
+				if err != nil {
+					t.Fatalf("Error running diff command: %v\nLog output:\n%s", err, log)
+				}
+
+				assertDiffMatchesFile(t, output, filepath.Join(expectPath, "new-claim.ansi"), log)
+
+				return ctx
+			}).
+			WithTeardown("DeletePrerequisites", funcs.AllOf(
+				funcs.DeleteResourcesWithPropagationPolicy(setupPath, "*.yaml", metav1.DeletePropagationForeground),
+				funcs.ResourcesDeletedWithin(3*time.Minute, setupPath, "*.yaml"),
+				funcs.ResourceDeletedWithin(3*time.Minute, &k8sapiextensionsv1.CustomResourceDefinition{
+					TypeMeta:   metav1.TypeMeta{Kind: "CustomResourceDefinition", APIVersion: "apiextensions.k8s.io/v1"},
+					ObjectMeta: metav1.ObjectMeta{Name: "nopresources.diff.example.org"},
+				}),
+			)).
+			Feature(),
+	)
+}
+
+// TestDiffExistingClaim tests the crossplane diff command against existing claims with v1 XRDs.
+func TestDiffExistingClaim(t *testing.T) {
+	imageTag := strings.Split(environment.GetCrossplaneImage(), ":")[1]
+	manifests := filepath.Join("test/e2e/manifests/beta/diff", imageTag, "v1-claim")
+	setupPath := filepath.Join(manifests, "setup")
+	expectPath := filepath.Join(manifests, "expect")
+
+	environment.Test(t,
+		features.New("DiffExistingClaim").
+			WithLabel(e2e.LabelArea, LabelAreaDiff).
+			WithLabel(e2e.LabelSize, e2e.LabelSizeSmall).
+			WithLabel(config.LabelTestSuite, config.TestSuiteDefault).
+			WithLabel(LabelCrossplaneVersion, CrossplaneVersionRelease120).
+			WithLabel(LabelCrossplaneVersion, CrossplaneVersionMain).
+			WithSetup("CreatePrerequisites", funcs.AllOf(
+				funcs.ApplyResources(e2e.FieldManager, setupPath, "*.yaml"),
+				funcs.ResourcesCreatedWithin(30*time.Second, setupPath, "*.yaml"),
+			)).
+			WithSetup("PrerequisitesAreReady", funcs.AllOf(
+				funcs.ResourcesHaveConditionWithin(1*time.Minute, setupPath, "definition.yaml", apiextensionsv1.WatchingComposite()),
+				funcs.ResourcesHaveConditionWithin(2*time.Minute, setupPath, "provider.yaml", pkgv1.Healthy(), pkgv1.Active()),
+			)).
+			WithSetup("CreateClaim", funcs.AllOf(
+				funcs.ApplyResources(e2e.FieldManager, manifests, "existing-claim.yaml"),
+				funcs.ResourcesCreatedWithin(30*time.Second, manifests, "existing-claim.yaml"),
+				// Claims get their status from the backing XR, so wait for the XR to be available
+				funcs.ResourcesHaveConditionWithin(2*time.Minute, manifests, "existing-claim.yaml", xpv1.Available()),
+			)).
+			Assess("CanDiffExistingClaim", func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
+				t.Helper()
+
+				output, log, err := RunXRDiff(t, c, "./crossplane-diff", filepath.Join(manifests, "modified-claim.yaml"))
+				if err != nil {
+					t.Fatalf("Error running diff command: %v\nLog output:\n%s", err, log)
+				}
+
+				assertDiffMatchesFile(t, output, filepath.Join(expectPath, "existing-claim.ansi"), log)
+
+				return ctx
+			}).
+			WithTeardown("DeleteClaim", funcs.AllOf(
+				funcs.DeleteResources(manifests, "existing-claim.yaml"),
+				funcs.ResourcesDeletedWithin(2*time.Minute, manifests, "existing-claim.yaml"),
+			)).
+			WithTeardown("DeletePrerequisites", funcs.AllOf(
+				func(ctx context.Context, t *testing.T, e *envconf.Config) context.Context {
+					t.Helper()
+					// default to `main` variant
+					nopList := clusterNopList
+
+					// we should only ever be running with one version label
+					if slices.Contains(e.Labels()[LabelCrossplaneVersion], CrossplaneVersionRelease120) {
+						nopList = v1NopList
+					}
+
+					funcs.ResourcesDeletedAfterListedAreGone(3*time.Minute, setupPath, "*.yaml", nopList)(ctx, t, e)
+
+					return ctx
+				},
+				funcs.ResourceDeletedWithin(3*time.Minute, &k8sapiextensionsv1.CustomResourceDefinition{
+					TypeMeta:   metav1.TypeMeta{Kind: "CustomResourceDefinition", APIVersion: "apiextensions.k8s.io/v1"},
+					ObjectMeta: metav1.ObjectMeta{Name: "nopresources.diff.example.org"},
+				}),
+			)).
+			Feature(),
+	)
+}
+
 var v1NopList = composed.NewList(
 	composed.FromReferenceToList(corev1.ObjectReference{
 		APIVersion: "nop.crossplane.io/v1alpha1",
@@ -422,9 +530,11 @@ var clusterNopList = composed.NewList(composed.FromReferenceToList(corev1.Object
 
 // Regular expressions to match the dynamic parts.
 var (
-	resourceNameRegex        = regexp.MustCompile(`(existing-resource)-[a-z0-9]{5,}(?:-nop-resource)?`)
-	compositionRevisionRegex = regexp.MustCompile(`(xnopresources\.(cluster\.|legacy\.)?diff\.example\.org)-[a-z0-9]{7,}`)
-	ansiEscapeRegex          = regexp.MustCompile(`\x1b\[[0-9;]*m`)
+	resourceNameRegex             = regexp.MustCompile(`(existing-resource)-[a-z0-9]{5,}(?:-nop-resource)?`)
+	claimNameRegex                = regexp.MustCompile(`(test-claim)-[a-z0-9]{5,}(?:-[a-z0-9]{5,})?`)
+	claimCompositionRevisionRegex = regexp.MustCompile(`(xnopclaims\.claim\.diff\.example\.org)-[a-z0-9]{7,}`)
+	compositionRevisionRegex      = regexp.MustCompile(`(xnopresources\.(cluster\.|legacy\.)?diff\.example\.org)-[a-z0-9]{7,}`)
+	ansiEscapeRegex               = regexp.MustCompile(`\x1b\[[0-9;]*m`)
 )
 
 // NormalizeLine replaces dynamic parts with fixed placeholders.
@@ -434,9 +544,11 @@ func normalizeLine(line string) string {
 
 	// Replace resource names with random suffixes
 	line = resourceNameRegex.ReplaceAllString(line, "${1}-XXXXX")
+	line = claimNameRegex.ReplaceAllString(line, "${1}-XXXXX")
 
 	// Replace composition revision refs with random hash
 	line = compositionRevisionRegex.ReplaceAllString(line, "${1}-XXXXXXX")
+	line = claimCompositionRevisionRegex.ReplaceAllString(line, "${1}-XXXXXXX")
 
 	// Trim trailing whitespace
 	line = strings.TrimRight(line, " ")

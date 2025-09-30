@@ -1,0 +1,39 @@
+apiVersion: apiextensions.crossplane.io/v1
+kind: CompositeResourceDefinition
+metadata:
+  # Using 'claim' instead of regular group to avoid conflicts with the v1 XR tests
+  name: xnopclaims.claim.diff.example.org
+spec:
+  group: claim.diff.example.org
+  names:
+    kind: XNopClaim
+    plural: xnopclaims
+  claimNames:
+    kind: NopClaim
+    plural: nopclaims
+  versions:
+    - name: v1alpha1
+      served: true
+      referenceable: true
+      schema:
+        openAPIV3Schema:
+          type: object
+          properties:
+            spec:
+              type: object
+              properties:
+                coolField:
+                  type: string
+                parameters:
+                  type: object
+                  properties:
+                    config:
+                      type: object
+                      x-kubernetes-preserve-unknown-fields: true
+              required:
+                - coolField
+            status:
+              type: object
+              properties:
+                coolerField:
+                  type: string
