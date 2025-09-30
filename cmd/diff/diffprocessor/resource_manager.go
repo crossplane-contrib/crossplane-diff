@@ -290,6 +290,9 @@ func (m *DefaultResourceManager) findMatchingResource(
 			continue
 		}
 
+		// TODO:  is this logic correct?  we should definitely match composition-resource-name, even if the generateName
+		// doesn't match.  maybe as a fallback if we don't have the annotation?
+
 		// If we have a generateName, verify the match has the right prefix
 		if generateName != "" {
 			resName := res.GetName()
