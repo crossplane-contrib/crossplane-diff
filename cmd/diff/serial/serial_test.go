@@ -31,56 +31,86 @@ import (
 	"github.com/crossplane/crossplane/v2/cmd/crank/render"
 )
 
+func TestRenderFunc_Passthrough(t *testing.T) {
+	type ctxKey string
+	key := ctxKey("test")
+	ctx := context.WithValue(t.Context(), key, "test-value")
+	inputs := render.Inputs{Functions: []pkgv1.Function{{}, {}}}
+
+	var mu sync.Mutex
+	mockFunc := func(ctx context.Context, _ logging.Logger, in render.Inputs) (render.Outputs, error) {
+		// Verify context is passed through
+		if ctx.Value(key) != "test-value" {
+			t.Error("context not passed through")
+		}
+		// Verify inputs are passed through
+		if len(in.Functions) != 2 {
+			t.Errorf("expected 2 functions, got %d", len(in.Functions))
+		}
+		return render.Outputs{ComposedResources: []composed.Unstructured{*composed.New(), *composed.New()}}, nil
+	}
+
+	serialized := RenderFunc(mockFunc, &mu)
+	outputs, err := serialized(ctx, logging.NewNopLogger(), inputs)
+
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	// Verify outputs are returned
+	if len(outputs.ComposedResources) != 2 {
+		t.Errorf("expected 2 composed resources, got %d", len(outputs.ComposedResources))
+	}
+}
+
+func TestRenderFunc_Error(t *testing.T) {
+	var mu sync.Mutex
+	expectedErr := errors.New("render failed")
+
+	mockFunc := func(_ context.Context, _ logging.Logger, _ render.Inputs) (render.Outputs, error) {
+		return render.Outputs{}, expectedErr
+	}
+
+	serialized := RenderFunc(mockFunc, &mu)
+	_, err := serialized(t.Context(), logging.NewNopLogger(), render.Inputs{})
+
+	if !errors.Is(err, expectedErr) {
+		t.Errorf("expected error %v, got %v", expectedErr, err)
+	}
+}
+
 func TestRenderFunc_Serialization(t *testing.T) {
 	var mu sync.Mutex
+	var concurrentCount atomic.Int32
+	var maxConcurrent atomic.Int32
 
-	// Track concurrent executions
-	var (
-		concurrentCount atomic.Int32
-		maxConcurrent   atomic.Int32
-	)
-
-	mockRenderFunc := func(_ context.Context, _ logging.Logger, _ render.Inputs) (render.Outputs, error) {
-		// Increment concurrent counter
+	mockFunc := func(_ context.Context, _ logging.Logger, _ render.Inputs) (render.Outputs, error) {
 		current := concurrentCount.Add(1)
 
 		// Update maxConcurrent if needed
 		for {
 			maxVal := maxConcurrent.Load()
-			if current <= maxVal {
-				break
-			}
-
-			if maxConcurrent.CompareAndSwap(maxVal, current) {
+			if current <= maxVal || maxConcurrent.CompareAndSwap(maxVal, current) {
 				break
 			}
 		}
 
-		// Simulate some work
 		time.Sleep(10 * time.Millisecond)
-
-		// Decrement counter
 		concurrentCount.Add(-1)
 
-		return render.Outputs{
-			ComposedResources: []composed.Unstructured{},
-		}, nil
+		return render.Outputs{}, nil
 	}
 
-	serializedFunc := RenderFunc(mockRenderFunc, &mu)
+	serialized := RenderFunc(mockFunc, &mu)
 
 	// Run multiple renders concurrently
 	const numCalls = 10
-
 	var wg sync.WaitGroup
 	wg.Add(numCalls)
 
 	for range numCalls {
 		go func() {
 			defer wg.Done()
-
-			_, err := serializedFunc(context.Background(), logging.NewNopLogger(), render.Inputs{})
-			if err != nil {
+			if _, err := serialized(t.Context(), logging.NewNopLogger(), render.Inputs{}); err != nil {
 				t.Errorf("unexpected error: %v", err)
 			}
 		}()
@@ -91,127 +121,5 @@ func TestRenderFunc_Serialization(t *testing.T) {
 	// Verify that only one render ran at a time
 	if maxVal := maxConcurrent.Load(); maxVal != 1 {
 		t.Errorf("expected max concurrent executions to be 1, got %d", maxVal)
-	}
-}
-
-func TestRenderFunc_ReturnsResults(t *testing.T) {
-	var mu sync.Mutex
-
-	expectedOutputs := render.Outputs{
-		ComposedResources: []composed.Unstructured{*composed.New(), *composed.New()},
-	}
-
-	mockRenderFunc := func(_ context.Context, _ logging.Logger, _ render.Inputs) (render.Outputs, error) {
-		return expectedOutputs, nil
-	}
-
-	serializedFunc := RenderFunc(mockRenderFunc, &mu)
-
-	outputs, err := serializedFunc(context.Background(), logging.NewNopLogger(), render.Inputs{})
-	if err != nil {
-		t.Errorf("unexpected error: %v", err)
-	}
-
-	if len(outputs.ComposedResources) != len(expectedOutputs.ComposedResources) {
-		t.Errorf("expected %d composed resources, got %d",
-			len(expectedOutputs.ComposedResources),
-			len(outputs.ComposedResources))
-	}
-}
-
-func TestRenderFunc_ReturnsErrors(t *testing.T) {
-	var mu sync.Mutex
-
-	expectedErr := errors.New("render failed")
-
-	mockRenderFunc := func(_ context.Context, _ logging.Logger, _ render.Inputs) (render.Outputs, error) {
-		return render.Outputs{}, expectedErr
-	}
-
-	serializedFunc := RenderFunc(mockRenderFunc, &mu)
-
-	_, err := serializedFunc(context.Background(), logging.NewNopLogger(), render.Inputs{})
-
-	if !errors.Is(err, expectedErr) {
-		t.Errorf("expected error %v, got %v", expectedErr, err)
-	}
-}
-
-func TestRenderFunc_IncrementsCalls(t *testing.T) {
-	var mu sync.Mutex
-
-	callCount := 0
-	mockRenderFunc := func(_ context.Context, _ logging.Logger, _ render.Inputs) (render.Outputs, error) {
-		callCount++
-		return render.Outputs{}, nil
-	}
-
-	serializedFunc := RenderFunc(mockRenderFunc, &mu)
-
-	// Call multiple times
-	const numCalls = 5
-	for range numCalls {
-		_, err := serializedFunc(context.Background(), logging.NewNopLogger(), render.Inputs{})
-		if err != nil {
-			t.Errorf("unexpected error: %v", err)
-		}
-	}
-
-	if callCount != numCalls {
-		t.Errorf("expected %d calls, got %d", numCalls, callCount)
-	}
-}
-
-func TestRenderFunc_PassesContext(t *testing.T) {
-	var mu sync.Mutex
-
-	type ctxKey string
-
-	key := ctxKey("test")
-	expectedValue := "test-value"
-	ctx := context.WithValue(context.Background(), key, expectedValue)
-
-	mockRenderFunc := func(ctx context.Context, _ logging.Logger, _ render.Inputs) (render.Outputs, error) {
-		value := ctx.Value(key)
-		if value != expectedValue {
-			t.Errorf("expected context value %v, got %v", expectedValue, value)
-		}
-
-		return render.Outputs{}, nil
-	}
-
-	serializedFunc := RenderFunc(mockRenderFunc, &mu)
-
-	_, err := serializedFunc(ctx, logging.NewNopLogger(), render.Inputs{})
-	if err != nil {
-		t.Errorf("unexpected error: %v", err)
-	}
-}
-
-func TestRenderFunc_PassesInputs(t *testing.T) {
-	var mu sync.Mutex
-
-	expectedInputs := render.Inputs{
-		Functions: []pkgv1.Function{
-			{},
-			{},
-		},
-	}
-
-	mockRenderFunc := func(_ context.Context, _ logging.Logger, in render.Inputs) (render.Outputs, error) {
-		if len(in.Functions) != len(expectedInputs.Functions) {
-			t.Errorf("expected %d functions, got %d",
-				len(expectedInputs.Functions),
-				len(in.Functions))
-		}
-
-		return render.Outputs{}, nil
-	}
-
-	serializedFunc := RenderFunc(mockRenderFunc, &mu)
-
-	_, err := serializedFunc(context.Background(), logging.NewNopLogger(), expectedInputs)
-	if err != nil {
-		t.Errorf("unexpected error: %v", err)
 	}
 }
