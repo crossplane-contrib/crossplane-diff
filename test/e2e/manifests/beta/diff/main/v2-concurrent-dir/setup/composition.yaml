@@ -1,14 +1,14 @@
 apiVersion: apiextensions.crossplane.io/v1
 kind: Composition
 metadata:
-  name: xsqsqueues.platform.example.com
+  name: xqueues.platform.example.com
   labels:
     provider: nop
     service: test
 spec:
   compositeTypeRef:
     apiVersion: platform.example.com/v1alpha1
-    kind: XSQSQueue
+    kind: XQueue
 
   mode: Pipeline
   pipeline:
@@ -53,7 +53,7 @@ spec:
             {{ if $mainQueue }}
             ---
             apiVersion: platform.example.com/v1alpha1
-            kind: XSQSQueue
+            kind: XQueue
             status:
               ready: {{ $mainQueue.resource.status.conditions | len | gt 0 }}
             {{ end }}

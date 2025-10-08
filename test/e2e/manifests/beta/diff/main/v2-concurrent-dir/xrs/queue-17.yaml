@@ -1,11 +1,11 @@
 apiVersion: platform.example.com/v1alpha1
-kind: XSQSQueue
+kind: XQueue
 metadata:
-  name: vgtrace-zuoraamendmentcalloutqueue
-  namespace: vgtrace
+  name: queue-17
+  namespace: test-env
 spec:
   extraTags:
-    Deployment: vgtrace
+    Deployment: test-env
   mainQueue:
     contentBasedDeduplication: false
     fifoQueue: false
@@ -14,5 +14,5 @@ spec:
     sqsManagedSseEnabled: false
     visibilityTimeoutSeconds: 30
   mode: manage
-  name: vgtrace-ZuoraAmendmentCallOutQueue
+  name: test-queue-17
   region: us-west-2

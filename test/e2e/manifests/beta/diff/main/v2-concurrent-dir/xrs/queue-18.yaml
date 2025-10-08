@@ -1,20 +1,20 @@
 apiVersion: platform.example.com/v1alpha1
-kind: XSQSQueue
+kind: XQueue
 metadata:
-  name: vgtrace-subscriptionchangenotificationdlq
-  namespace: vgtrace
+  name: queue-18
+  namespace: test-env
 spec:
   extraTags:
-    Deployment: vgtrace
-    dead-letter-queue: "true"
+    Deployment: test-env
   mainQueue:
-    contentBasedDeduplication: false
-    fifoQueue: true
     fifoThroughputLimit: perQueue
     kmsDataKeyReusePeriodSeconds: 300
+    contentBasedDeduplication: true
+    fifoQueue: true
     messageRetentionSeconds: 345600
     receiveWaitTimeSeconds: 15
+    sqsManagedSseEnabled: false
     visibilityTimeoutSeconds: 30
   mode: manage
-  name: vgtrace-SubscriptionChangeNotificationDLQ
+  name: test-queue-18
   region: us-west-2

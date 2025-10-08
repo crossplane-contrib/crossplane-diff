@@ -1,18 +1,19 @@
 apiVersion: platform.example.com/v1alpha1
-kind: XSQSQueue
+kind: XQueue
 metadata:
-  name: vgtrace-zuoralink
-  namespace: vgtrace
+  name: queue-03
+  namespace: test-env
 spec:
   extraTags:
-    Deployment: vgtrace
+    Deployment: test-env
   mainQueue:
-    contentBasedDeduplication: false
-    fifoQueue: false
+    fifoThroughputLimit: perQueue
+    contentBasedDeduplication: true
+    fifoQueue: true
     messageRetentionSeconds: 345600
     receiveWaitTimeSeconds: 15
     sqsManagedSseEnabled: false
     visibilityTimeoutSeconds: 30
   mode: manage
-  name: vgtrace-ZuoraLink
+  name: test-queue-03
   region: us-west-2

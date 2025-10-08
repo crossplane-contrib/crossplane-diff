@@ -1,12 +1,13 @@
 apiVersion: platform.example.com/v1alpha1
-kind: XSQSQueue
+kind: XQueue
 metadata:
-  name: vgtrace-failedzuoraorgcreator
-  namespace: vgtrace
+  name: queue-02
+  namespace: test-env
 spec:
   extraTags:
-    Deployment: vgtrace
+    Deployment: test-env
   mainQueue:
+    maxMessageSize: 262144
     contentBasedDeduplication: false
     fifoQueue: false
     messageRetentionSeconds: 345600
@@ -14,5 +15,5 @@ spec:
     sqsManagedSseEnabled: false
     visibilityTimeoutSeconds: 30
   mode: manage
-  name: vgtrace-FailedZuoraOrgCreator
+  name: test-queue-02
   region: us-west-2

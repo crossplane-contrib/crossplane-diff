@@ -1,11 +1,11 @@
 apiVersion: platform.example.com/v1alpha1
-kind: XSQSQueue
+kind: XQueue
 metadata:
-  name: vgtrace-ruleengineactions
-  namespace: vgtrace
+  name: queue-11
+  namespace: test-env
 spec:
   extraTags:
-    Deployment: vgtrace
+    Deployment: test-env
   mainQueue:
     contentBasedDeduplication: false
     fifoQueue: false
@@ -14,5 +14,5 @@ spec:
     sqsManagedSseEnabled: false
     visibilityTimeoutSeconds: 30
   mode: manage
-  name: vgtrace-RuleEngineActions
+  name: test-queue-11
   region: us-west-2

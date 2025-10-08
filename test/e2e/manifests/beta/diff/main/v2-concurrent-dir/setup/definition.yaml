@@ -1,12 +1,12 @@
 apiVersion: apiextensions.crossplane.io/v2
 kind: CompositeResourceDefinition
 metadata:
-  name: xsqsqueues.platform.example.com
+  name: xqueues.platform.example.com
 spec:
   group: platform.example.com
   names:
-    kind: XSQSQueue
-    plural: xsqsqueues
+    kind: XQueue
+    plural: xqueues
   versions:
   - name: v1alpha1
     served: true
@@ -20,10 +20,10 @@ spec:
             properties:
               name:
                 type: string
-                description: "Name of the SQS queue"
+                description: "Name of the queue"
               region:
                 type: string
-                description: "AWS region where the queue will be created"
+                description: "Region where the queue will be created"
               mainQueue:
                 type: object
                 description: "Main queue configuration"
@@ -73,7 +73,7 @@ spec:
             properties:
               queueArn:
                 type: string
-                description: "ARN of the created SQS queue"
+                description: "ARN of the created queue"
               queueUrl:
                 type: string
-                description: "URL of the created SQS queue"
+                description: "URL of the created queue"

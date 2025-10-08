@@ -1,11 +1,11 @@
 apiVersion: platform.example.com/v1alpha1
-kind: XSQSQueue
+kind: XQueue
 metadata:
-  name: vgtrace-herokudeprovisionqueue
-  namespace: vgtrace
+  name: queue-21
+  namespace: test-env
 spec:
   extraTags:
-    Deployment: vgtrace
+    Deployment: test-env
   mainQueue:
     contentBasedDeduplication: false
     fifoQueue: false
@@ -14,5 +14,5 @@ spec:
     sqsManagedSseEnabled: false
     visibilityTimeoutSeconds: 30
   mode: manage
-  name: vgtrace-HerokuDeprovisionQueue
+  name: test-queue-21
   region: us-west-2
