@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	tu "github.com/crossplane-contrib/crossplane-diff/cmd/diff/testutils"
+	"github.com/google/go-cmp/cmp"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	un "k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -276,9 +277,8 @@ func TestRequirementsProvider_ProvideRequirements(t *testing.T) {
 			}
 
 			// Check resource count
-			if len(resources) != tt.wantCount {
-				t.Errorf("ProvideRequirements() returned %d resources, want %d",
-					len(resources), tt.wantCount)
+			if diff := cmp.Diff(tt.wantCount, len(resources)); diff != "" {
+				t.Errorf("ProvideRequirements() resource count mismatch (-want +got):\n%s", diff)
 			}
 
 			// Verify expected resource names if specified
