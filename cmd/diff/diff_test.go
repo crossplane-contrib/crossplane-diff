@@ -996,8 +996,8 @@ func TestGetRestConfig(t *testing.T) {
 	}{
 		"EmptyKubeconfigEnvVar": {
 			kubeconfigPath: "",
-			expectError:    true, // Will error when no in-cluster config is available
-			errorContains:  "no configuration has been provided",
+			expectError:    true,
+			errorContains:  "KUBECONFIG environment variable is not set",
 		},
 		"ValidKubeconfigPath": {
 			setupFile: func() string {

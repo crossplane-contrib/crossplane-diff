@@ -25,6 +25,7 @@ import (
 	"k8s.io/client-go/tools/clientcmd"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 
+	"github.com/crossplane/crossplane-runtime/v2/pkg/errors"
 	"github.com/crossplane/crossplane-runtime/v2/pkg/logging"
 
 	"github.com/crossplane/crossplane/v2/cmd/crank/version"
@@ -79,5 +80,9 @@ func main() {
 }
 
 func getRestConfig() (*rest.Config, error) {
-	return clientcmd.BuildConfigFromFlags("", os.Getenv("KUBECONFIG"))
+	kubeconfig := os.Getenv("KUBECONFIG")
+	if kubeconfig == "" {
+		return nil, errors.New("KUBECONFIG environment variable is not set. Please set KUBECONFIG to point to your kubeconfig file")
+	}
+	return clientcmd.BuildConfigFromFlags("", kubeconfig)
 }
