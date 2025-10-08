@@ -1,0 +1,64 @@
+apiVersion: apiextensions.crossplane.io/v1
+kind: Composition
+metadata:
+  name: xsqsqueues.platform.example.com
+  labels:
+    provider: nop
+    service: test
+spec:
+  compositeTypeRef:
+    apiVersion: platform.example.com/v1alpha1
+    kind: XSQSQueue
+
+  mode: Pipeline
+  pipeline:
+    - step: create-queues
+      functionRef:
+        name: function-go-templating
+      input:
+        apiVersion: gotemplating.fn.crossplane.io/v1beta1
+        kind: GoTemplate
+        source: Inline
+        inline:
+          template: |
+            {{ $spec := .observed.composite.resource.spec }}
+            {{ $queueName := $spec.name }}
+            ---
+            apiVersion: nop.crossplane.io/v1alpha1
+            kind: NopResource
+            metadata:
+              name: {{ lower $queueName }}
+              annotations:
+                crossplane.io/external-name: {{ $queueName }}
+                gotemplating.fn.crossplane.io/composition-resource-name: queue
+            spec:
+              forProvider:
+                conditionAfter:
+                  - conditionType: Ready
+                    conditionStatus: "True"
+                    time: 0s
+
+    - step: update-status
+      functionRef:
+        name: function-go-templating
+      input:
+        apiVersion: gotemplating.fn.crossplane.io/v1beta1
+        kind: GoTemplate
+        source: Inline
+        inline:
+          template: |
+            {{ $spec := .observed.composite.resource.spec }}
+            {{ if .observed.resources }}
+            {{ $mainQueue := index .observed.resources "queue" }}
+            {{ if $mainQueue }}
+            ---
+            apiVersion: platform.example.com/v1alpha1
+            kind: XSQSQueue
+            status:
+              ready: {{ $mainQueue.resource.status.conditions | len | gt 0 }}
+            {{ end }}
+            {{ end }}
+
+    - step: automatically-detect-ready-composed-resources
+      functionRef:
+        name: function-auto-ready

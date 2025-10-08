@@ -1,0 +1,19 @@
+apiVersion: platform.example.com/v1alpha1
+kind: XSQSQueue
+metadata:
+  name: vgtrace-createorganizationtasks
+  namespace: vgtrace
+spec:
+  extraTags:
+    Deployment: vgtrace
+  mainQueue:
+    contentBasedDeduplication: false
+    fifoQueue: true
+    fifoThroughputLimit: perQueue
+    messageRetentionSeconds: 345600
+    receiveWaitTimeSeconds: 15
+    sqsManagedSseEnabled: false
+    visibilityTimeoutSeconds: 30
+  mode: manage
+  name: vgtrace-CreateOrganizationTasks
+  region: us-west-2

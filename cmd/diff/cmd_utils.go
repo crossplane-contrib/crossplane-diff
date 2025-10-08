@@ -18,6 +18,7 @@ package main
 
 import (
 	"context"
+	"sync"
 	"time"
 
 	"github.com/alecthomas/kong"
@@ -26,9 +27,14 @@ import (
 
 	"github.com/crossplane/crossplane-runtime/v2/pkg/errors"
 	"github.com/crossplane/crossplane-runtime/v2/pkg/logging"
-
-	"github.com/crossplane/crossplane/v2/cmd/crank/render"
 )
+
+// globalRenderMutex serializes all render operations globally across all diff processors.
+// This prevents concurrent Docker container operations that can overwhelm the Docker daemon
+// when processing multiple XRs with the same functions. See issue #59.
+//
+//nolint:gochecknoglobals // Required for global serialization across processors
+var globalRenderMutex sync.Mutex
 
 // CommonCmdFields contains common fields shared by both XR and Comp commands.
 type CommonCmdFields struct {
@@ -101,6 +107,5 @@ func defaultProcessorOptions() []dp.ProcessorOption {
 	return []dp.ProcessorOption{
 		dp.WithColorize(true),
 		dp.WithCompact(false),
-		dp.WithRenderFunc(render.Render),
 	}
 }

@@ -1,0 +1,19 @@
+apiVersion: platform.example.com/v1alpha1
+kind: XSQSQueue
+metadata:
+  name: vgtrace-awsmarketplacenotification
+  namespace: vgtrace
+spec:
+  extraTags:
+    Deployment: vgtrace
+  mainQueue:
+    contentBasedDeduplication: false
+    fifoQueue: false
+    maxMessageSize: 262144
+    messageRetentionSeconds: 345600
+    receiveWaitTimeSeconds: 0
+    sqsManagedSseEnabled: false
+    visibilityTimeoutSeconds: 120
+  mode: manage
+  name: vgtrace-AwsMarketplaceNotification
+  region: us-west-2

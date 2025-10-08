@@ -12,6 +12,7 @@ import (
 	k8 "github.com/crossplane-contrib/crossplane-diff/cmd/diff/client/kubernetes"
 	"github.com/crossplane-contrib/crossplane-diff/cmd/diff/renderer"
 	dt "github.com/crossplane-contrib/crossplane-diff/cmd/diff/renderer/types"
+	"github.com/crossplane-contrib/crossplane-diff/cmd/diff/serial"
 	"github.com/crossplane-contrib/crossplane-diff/cmd/diff/types"
 	un "k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -69,6 +70,12 @@ func NewDiffProcessor(k8cs k8.Clients, xpcs xp.Clients, opts ...ProcessorOption)
 
 	// Set default factory functions if not provided
 	config.SetDefaultFactories()
+
+	// Wrap the RenderFunc with serialization if a mutex was provided
+	// This transparently handles serialization without requiring callers to worry about it
+	if config.RenderMutex != nil {
+		config.RenderFunc = serial.RenderFunc(config.RenderFunc, config.RenderMutex)
+	}
 
 	// Create the diff options based on configuration
 	diffOpts := config.GetDiffOptions()
@@ -209,6 +216,9 @@ func (p *DefaultDiffProcessor) DiffSingleResource(ctx context.Context, res *un.U
 		p.config.Logger.Debug("Failed to get functions", "resource", resourceID, "error", err)
 		return nil, errors.Wrap(err, "cannot get functions from pipeline")
 	}
+
+	// Note: Serialization mutex prevents concurrent Docker operations.
+	// In e2e tests, named Docker containers (via annotations) reuse containers across renders.
 
 	// Apply XRD defaults before rendering
 	err = p.applyXRDDefaults(ctx, xr, resourceID)

@@ -1,0 +1,18 @@
+apiVersion: platform.example.com/v1alpha1
+kind: XSQSQueue
+metadata:
+  name: vgtrace-subscriptionchangenotification
+  namespace: vgtrace
+spec:
+  extraTags:
+    Deployment: vgtrace
+  mainQueue:
+    contentBasedDeduplication: false
+    fifoQueue: true
+    messageRetentionSeconds: 345600
+    receiveWaitTimeSeconds: 15
+    sqsManagedSseEnabled: true
+    visibilityTimeoutSeconds: 30
+  mode: manage
+  name: vgtrace-SubscriptionChangeNotification
+  region: us-west-2

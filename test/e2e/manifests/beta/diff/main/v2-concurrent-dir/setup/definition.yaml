@@ -1,0 +1,79 @@
+apiVersion: apiextensions.crossplane.io/v2
+kind: CompositeResourceDefinition
+metadata:
+  name: xsqsqueues.platform.example.com
+spec:
+  group: platform.example.com
+  names:
+    kind: XSQSQueue
+    plural: xsqsqueues
+  versions:
+  - name: v1alpha1
+    served: true
+    referenceable: true
+    schema:
+      openAPIV3Schema:
+        type: object
+        properties:
+          spec:
+            type: object
+            properties:
+              name:
+                type: string
+                description: "Name of the SQS queue"
+              region:
+                type: string
+                description: "AWS region where the queue will be created"
+              mainQueue:
+                type: object
+                description: "Main queue configuration"
+                properties:
+                  visibilityTimeoutSeconds:
+                    type: number
+                    default: 30
+                  messageRetentionSeconds:
+                    type: number
+                    default: 345600
+                  delaySeconds:
+                    type: number
+                    default: 0
+                  fifoQueue:
+                    type: boolean
+                  fifoThroughputLimit:
+                    type: string
+                    enum: ["perQueue", "perMessageGroupId"]
+                  contentBasedDeduplication:
+                    type: boolean
+                  receiveWaitTimeSeconds:
+                    type: number
+                    default: 0
+                  maxMessageSize:
+                    type: number
+                    default: 262144
+                  kmsDataKeyReusePeriodSeconds:
+                    type: number
+                    default: 300
+                  sqsManagedSseEnabled:
+                    type: boolean
+              extraTags:
+                type: object
+                additionalProperties:
+                  type: string
+                description: "Additional tags to apply to the resources"
+              mode:
+                type: string
+                enum: ["manage", "observe", "noDelete", "noUpdate"]
+                description: "Resource management mode"
+                default: "manage"
+            required:
+            - name
+            - region
+          status:
+            type: object
+            properties:
+              queueArn:
+                type: string
+                description: "ARN of the created SQS queue"
+              queueUrl:
+                type: string
+                description: "URL of the created SQS queue"

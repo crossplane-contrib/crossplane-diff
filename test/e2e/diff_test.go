@@ -743,3 +743,69 @@ func TestDiffExistingComposition(t *testing.T) {
 			Feature(),
 	)
 }
+
+// TestDiffConcurrentDirectory tests issue #59 - concurrent function startup failures
+// when processing multiple XR files from a directory with a composition using multiple functions.
+func TestDiffConcurrentDirectory(t *testing.T) {
+	imageTag := strings.Split(environment.GetCrossplaneImage(), ":")[1]
+	manifests := filepath.Join("test/e2e/manifests/beta/diff", imageTag, "v2-concurrent-dir")
+	setupPath := filepath.Join(manifests, "setup")
+	xrsPath := filepath.Join(manifests, "xrs")
+
+	environment.Test(t,
+		features.New("TestDiffConcurrentDirectory").
+			WithLabel(e2e.LabelArea, LabelAreaDiff).
+			WithLabel(e2e.LabelSize, e2e.LabelSizeLarge).
+			WithLabel(config.LabelTestSuite, config.TestSuiteDefault).
+			WithLabel(LabelCrossplaneVersion, CrossplaneVersionMain).
+			WithSetup("CreatePrerequisites", funcs.AllOf(
+				funcs.ApplyResources(e2e.FieldManager, setupPath, "*.yaml"),
+				funcs.ResourcesCreatedWithin(30*time.Second, setupPath, "*.yaml"),
+			)).
+			WithSetup("PrerequisitesAreReady", funcs.AllOf(
+				funcs.ResourcesHaveConditionWithin(1*time.Minute, setupPath, "definition.yaml", apiextensionsv1.WatchingComposite()),
+				funcs.ResourcesHaveConditionWithin(2*time.Minute, setupPath, "provider.yaml", pkgv1.Healthy(), pkgv1.Active()),
+				funcs.ResourcesHaveConditionWithin(3*time.Minute, setupPath, "functions.yaml", pkgv1.Healthy(), pkgv1.Active()),
+			)).
+			Assess("CanProcessDirectoryWithMultipleXRs", func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
+				t.Helper()
+
+				// Get all XR files from the directory
+				xrFiles, err := filepath.Glob(filepath.Join(xrsPath, "*.yaml"))
+				if err != nil {
+					t.Fatalf("Failed to find XR files: %v", err)
+				}
+
+				if len(xrFiles) != 21 {
+					t.Fatalf("Expected 21 XR files, found %d", len(xrFiles))
+				}
+
+				// Run diff on all XR files - this tests concurrent function processing
+				output, log, err := RunXRDiff(t, c, "./crossplane-diff", xrFiles...)
+
+				// Always log output for debugging
+				t.Logf("crossplane-diff stdout: %s", output)
+				t.Logf("crossplane-diff stderr: %s", log)
+
+				if err != nil {
+					t.Fatalf("Error running diff command: %v", err)
+				}
+
+				// Verify we processed all XRs - each XR creates 1 NopResource
+				// With 21 XRs, we should see 21 "+++ NopResource/" lines in the output
+				addedCount := strings.Count(output, "+++ NopResource/")
+				if addedCount != 21 {
+					t.Errorf("Expected 21 NopResource additions, found %d", addedCount)
+				}
+
+				return ctx
+			}).
+			WithTeardown("DeletePrerequisites", funcs.AllOf(
+				funcs.DeleteResourcesWithPropagationPolicy(setupPath, "*.yaml", metav1.DeletePropagationForeground),
+				funcs.ResourcesDeletedWithin(3*time.Minute, setupPath, "*.yaml"),
+			)).
+			Feature(),
+	)
+}
+
+// end of file

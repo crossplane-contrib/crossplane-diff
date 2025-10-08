@@ -1,0 +1,8 @@
+apiVersion: concurrent.diff.example.org/v1alpha1
+kind: XConcurrentTest
+metadata:
+  name: concurrent-test-5
+  namespace: default
+spec:
+  config: "test-config-5"
+  dataField: "data-5"

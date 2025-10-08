@@ -95,6 +95,7 @@ func makeDefaultCompProc(c *CompCmd, ctx *AppContext, log logging.Logger) dp.Com
 		dp.WithLogger(log),
 		dp.WithColorize(!c.NoColor), // Override default if NoColor is set
 		dp.WithCompact(c.Compact),   // Override default if Compact is set
+		dp.WithRenderMutex(&globalRenderMutex),
 	)
 
 	// Create XR processor first (peer processor)
