@@ -1,6 +1,8 @@
 package diffprocessor
 
 import (
+	"sync"
+
 	xp "github.com/crossplane-contrib/crossplane-diff/cmd/diff/client/crossplane"
 	k8 "github.com/crossplane-contrib/crossplane-diff/cmd/diff/client/kubernetes"
 	"github.com/crossplane-contrib/crossplane-diff/cmd/diff/renderer"
@@ -24,6 +26,9 @@ type ProcessorConfig struct {
 
 	// RenderFunc is the function to use for rendering resources
 	RenderFunc RenderFunc
+
+	// RenderMutex is the mutex used to serialize render operations (for internal use)
+	RenderMutex *sync.Mutex
 
 	// Factories provide factory functions for creating components
 	Factories ComponentFactories
@@ -82,6 +87,13 @@ func WithLogger(logger logging.Logger) ProcessorOption {
 func WithRenderFunc(renderFn RenderFunc) ProcessorOption {
 	return func(config *ProcessorConfig) {
 		config.RenderFunc = renderFn
+	}
+}
+
+// WithRenderMutex sets the mutex for serializing render operations.
+func WithRenderMutex(mu *sync.Mutex) ProcessorOption {
+	return func(config *ProcessorConfig) {
+		config.RenderMutex = mu
 	}
 }
 

@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"os"
 	"path/filepath"
 	run "runtime"
 	"strconv"
@@ -153,26 +152,12 @@ func runIntegrationTest(t *testing.T, testType DiffTestType, tests map[string]In
 			}
 
 			// Set up the test files
-			tempDir := t.TempDir()
-
 			var testFiles []string
 
 			// Handle any additional input files
-			for i, inputFile := range tt.inputFiles {
-				testFile := filepath.Join(tempDir, fmt.Sprintf("test_%d.yaml", i))
-
-				content, err := os.ReadFile(inputFile)
-				if err != nil {
-					t.Fatalf("failed to read input file: %v", err)
-				}
-
-				err = os.WriteFile(testFile, content, 0o644)
-				if err != nil {
-					t.Fatalf("failed to write test file: %v", err)
-				}
-
-				testFiles = append(testFiles, testFile)
-			}
+			// Note: NewCompositeLoader handles both individual files and directories,
+			// so we can pass paths directly without special handling
+			testFiles = append(testFiles, tt.inputFiles...)
 
 			// Create a buffer to capture the output
 			var stdout bytes.Buffer
@@ -1301,6 +1286,25 @@ Summary: 1 added`,
 			}, ""),
 			expectedError: false,
 			noColor:       true,
+		},
+		"Concurrent rendering with multiple functions and XRs from directory": {
+			// This test reproduces issue #59 - concurrent function startup failures
+			// when processing multiple XR files from a directory
+			inputFiles: []string{
+				"testdata/diff/concurrent-xrs", // Pass the directory containing all XR files
+			},
+			setupFiles: []string{
+				"testdata/diff/resources/xrd-concurrent.yaml",
+				"testdata/diff/resources/composition-multi-functions.yaml",
+				"testdata/diff/resources/functions.yaml",
+			},
+			// We expect successful processing of all 5 XRs
+			// Each XR should produce 3 base resources + 2 additional resources = 5 resources per XR
+			// Plus the XR itself = 6 additions per XR
+			// Total: 5 XRs * 6 additions = 30 additions
+			expectedOutput: "Summary: 30 added",
+			expectedError:  false,
+			noColor:        true,
 		},
 	}
 

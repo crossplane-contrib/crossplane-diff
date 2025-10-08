@@ -1,0 +1,19 @@
+apiVersion: platform.example.com/v1alpha1
+kind: XQueue
+metadata:
+  name: queue-02
+  namespace: test-env
+spec:
+  extraTags:
+    Deployment: test-env
+  mainQueue:
+    maxMessageSize: 262144
+    contentBasedDeduplication: false
+    fifoQueue: false
+    messageRetentionSeconds: 345600
+    receiveWaitTimeSeconds: 15
+    sqsManagedSseEnabled: false
+    visibilityTimeoutSeconds: 30
+  mode: manage
+  name: test-queue-02
+  region: us-west-2

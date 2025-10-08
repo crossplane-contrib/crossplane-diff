@@ -1,0 +1,20 @@
+apiVersion: platform.example.com/v1alpha1
+kind: XQueue
+metadata:
+  name: queue-18
+  namespace: test-env
+spec:
+  extraTags:
+    Deployment: test-env
+  mainQueue:
+    fifoThroughputLimit: perQueue
+    kmsDataKeyReusePeriodSeconds: 300
+    contentBasedDeduplication: true
+    fifoQueue: true
+    messageRetentionSeconds: 345600
+    receiveWaitTimeSeconds: 15
+    sqsManagedSseEnabled: false
+    visibilityTimeoutSeconds: 30
+  mode: manage
+  name: test-queue-18
+  region: us-west-2

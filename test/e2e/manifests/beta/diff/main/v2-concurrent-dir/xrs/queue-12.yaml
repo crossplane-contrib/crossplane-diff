@@ -1,0 +1,18 @@
+apiVersion: platform.example.com/v1alpha1
+kind: XQueue
+metadata:
+  name: queue-12
+  namespace: test-env
+spec:
+  extraTags:
+    Deployment: test-env
+  mainQueue:
+    contentBasedDeduplication: false
+    fifoQueue: false
+    messageRetentionSeconds: 345600
+    receiveWaitTimeSeconds: 15
+    sqsManagedSseEnabled: false
+    visibilityTimeoutSeconds: 30
+  mode: manage
+  name: test-queue-12
+  region: us-west-2

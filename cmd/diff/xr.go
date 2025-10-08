@@ -94,6 +94,7 @@ func makeDefaultXRProc(c *XRCmd, ctx *AppContext, log logging.Logger) dp.DiffPro
 		dp.WithLogger(log),
 		dp.WithColorize(!c.NoColor), // Override default if NoColor is set
 		dp.WithCompact(c.Compact),   // Override default if Compact is set
+		dp.WithRenderMutex(&globalRenderMutex),
 	)
 
 	return dp.NewDiffProcessor(ctx.K8sClients, ctx.XpClients, opts...)
