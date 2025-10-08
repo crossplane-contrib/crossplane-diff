@@ -1,0 +1,8 @@
+# Existing child XR in the cluster (created by parent)
+apiVersion: ns.nested.example.org/v1alpha1
+kind: XChildResource
+metadata:
+  name: test-parent-child
+  namespace: default
+spec:
+  childField: "existing-value"

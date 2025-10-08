@@ -1,0 +1,51 @@
+# Child XRD - this will be created as a composed resource of the parent
+# and then will itself create downstream managed resources
+apiVersion: apiextensions.crossplane.io/v2
+kind: CompositeResourceDefinition
+metadata:
+  name: xchildresources.ns.nested.example.org
+spec:
+  group: ns.nested.example.org
+  names:
+    kind: XChildResource
+    plural: xchildresources
+  scope: Namespaced
+  versions:
+    - name: v1alpha1
+      served: true
+      referenceable: true
+      schema:
+        openAPIV3Schema:
+          type: object
+          properties:
+            spec:
+              type: object
+              properties:
+                childField:
+                  type: string
+                  description: A field for the child resource
+            status:
+              type: object
+              properties:
+                conditions:
+                  description: Conditions of the resource.
+                  type: array
+                  items:
+                    type: object
+                    required:
+                      - lastTransitionTime
+                      - reason
+                      - status
+                      - type
+                    properties:
+                      lastTransitionTime:
+                        type: string
+                        format: date-time
+                      message:
+                        type: string
+                      reason:
+                        type: string
+                      status:
+                        type: string
+                      type:
+                        type: string
