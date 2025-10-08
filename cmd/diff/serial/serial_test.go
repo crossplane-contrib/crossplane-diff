@@ -37,17 +37,17 @@ func TestRenderFunc_Serialization(t *testing.T) {
 	var concurrentCount atomic.Int32
 	var maxConcurrent atomic.Int32
 	
-	mockRenderFunc := func(ctx context.Context, log logging.Logger, in render.Inputs) (render.Outputs, error) {
+	mockRenderFunc := func(_ context.Context, _ logging.Logger, _ render.Inputs) (render.Outputs, error) {
 		// Increment concurrent counter
 		current := concurrentCount.Add(1)
 		
-		// Update max if needed
+		// Update maxConcurrent if needed
 		for {
-			max := maxConcurrent.Load()
-			if current <= max {
+			maxVal := maxConcurrent.Load()
+			if current <= maxVal {
 				break
 			}
-			if maxConcurrent.CompareAndSwap(max, current) {
+			if maxConcurrent.CompareAndSwap(maxVal, current) {
 				break
 			}
 		}
@@ -83,8 +83,8 @@ func TestRenderFunc_Serialization(t *testing.T) {
 	wg.Wait()
 	
 	// Verify that only one render ran at a time
-	if max := maxConcurrent.Load(); max != 1 {
-		t.Errorf("expected max concurrent executions to be 1, got %d", max)
+	if maxVal := maxConcurrent.Load(); maxVal != 1 {
+		t.Errorf("expected max concurrent executions to be 1, got %d", maxVal)
 	}
 }
 
@@ -95,7 +95,7 @@ func TestRenderFunc_ReturnsResults(t *testing.T) {
 		ComposedResources: []composed.Unstructured{*composed.New(), *composed.New()},
 	}
 	
-	mockRenderFunc := func(ctx context.Context, log logging.Logger, in render.Inputs) (render.Outputs, error) {
+	mockRenderFunc := func(_ context.Context, _ logging.Logger, _ render.Inputs) (render.Outputs, error) {
 		return expectedOutputs, nil
 	}
 	
@@ -119,7 +119,7 @@ func TestRenderFunc_ReturnsErrors(t *testing.T) {
 	
 	expectedErr := errors.New("render failed")
 	
-	mockRenderFunc := func(ctx context.Context, log logging.Logger, in render.Inputs) (render.Outputs, error) {
+	mockRenderFunc := func(_ context.Context, _ logging.Logger, _ render.Inputs) (render.Outputs, error) {
 		return render.Outputs{}, expectedErr
 	}
 	
@@ -136,7 +136,7 @@ func TestRenderFunc_IncrementsCalls(t *testing.T) {
 	var mu sync.Mutex
 	
 	callCount := 0
-	mockRenderFunc := func(ctx context.Context, log logging.Logger, in render.Inputs) (render.Outputs, error) {
+	mockRenderFunc := func(_ context.Context, _ logging.Logger, _ render.Inputs) (render.Outputs, error) {
 		callCount++
 		return render.Outputs{}, nil
 	}
@@ -165,7 +165,7 @@ func TestRenderFunc_PassesContext(t *testing.T) {
 	expectedValue := "test-value"
 	ctx := context.WithValue(context.Background(), key, expectedValue)
 	
-	mockRenderFunc := func(ctx context.Context, log logging.Logger, in render.Inputs) (render.Outputs, error) {
+	mockRenderFunc := func(ctx context.Context, _ logging.Logger, _ render.Inputs) (render.Outputs, error) {
 		value := ctx.Value(key)
 		if value != expectedValue {
 			t.Errorf("expected context value %v, got %v", expectedValue, value)
@@ -191,7 +191,7 @@ func TestRenderFunc_PassesInputs(t *testing.T) {
 		},
 	}
 	
-	mockRenderFunc := func(ctx context.Context, log logging.Logger, in render.Inputs) (render.Outputs, error) {
+	mockRenderFunc := func(_ context.Context, _ logging.Logger, in render.Inputs) (render.Outputs, error) {
 		if len(in.Functions) != len(expectedInputs.Functions) {
 			t.Errorf("expected %d functions, got %d", 
 				len(expectedInputs.Functions), 
