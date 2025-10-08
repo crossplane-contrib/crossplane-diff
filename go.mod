@@ -2,7 +2,7 @@ module github.com/crossplane-contrib/crossplane-diff
 
 go 1.24.0
 
-toolchain go1.25.1
+toolchain go1.25.2
 
 //replace github.com/crossplane/crossplane/v2 => /Users/jonathan.ogilvie/workspace/crossplane
 
