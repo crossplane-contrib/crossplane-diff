@@ -84,5 +84,6 @@ func getRestConfig() (*rest.Config, error) {
 	if kubeconfig == "" {
 		return nil, errors.New("KUBECONFIG environment variable is not set. Please set KUBECONFIG to point to your kubeconfig file")
 	}
+
 	return clientcmd.BuildConfigFromFlags("", kubeconfig)
 }
