@@ -3,6 +3,7 @@ package testutils
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"strings"
 
@@ -709,6 +710,11 @@ func (b *MockCompositionClientBuilder) WithFindXRsError(errMsg string) *MockComp
 	})
 }
 
+// WithComposition is an alias for WithSuccessfulCompositionMatch for convenience.
+func (b *MockCompositionClientBuilder) WithComposition(comp *xpextv1.Composition) *MockCompositionClientBuilder {
+	return b.WithSuccessfulCompositionMatch(comp)
+}
+
 // Build returns the built mock.
 func (b *MockCompositionClientBuilder) Build() *MockCompositionClient {
 	return b.mock
@@ -956,6 +962,62 @@ func (b *MockDefinitionClientBuilder) WithXRDForClaim(unstructured *un.Unstructu
 func (b *MockDefinitionClientBuilder) WithIsClaimResource(fn func(context.Context, *un.Unstructured) bool) *MockDefinitionClientBuilder {
 	b.mock.IsClaimResourceFn = fn
 	return b
+}
+
+// WithXRD sets the GetXRDForXR behavior to return the specified XRD for any GVK matching its group/kind.
+func (b *MockDefinitionClientBuilder) WithXRD(xrd *xpextv1.CompositeResourceDefinition) *MockDefinitionClientBuilder {
+	// Convert the typed XRD to unstructured
+	xrdUnstructured, err := runtime.DefaultUnstructuredConverter.ToUnstructured(xrd)
+	if err != nil {
+		// This should never happen in tests, but if it does, we'll panic to make it obvious
+		panic(fmt.Sprintf("failed to convert XRD to unstructured: %v", err))
+	}
+
+	xrdObj := &un.Unstructured{Object: xrdUnstructured}
+
+	return b.WithGetXRDForXR(func(_ context.Context, gvk schema.GroupVersionKind) (*un.Unstructured, error) {
+		// Check if the GVK matches this XRD
+		xrdGroup, _, _ := un.NestedString(xrdObj.Object, "spec", "group")
+		xrdKind, _, _ := un.NestedString(xrdObj.Object, "spec", "names", "kind")
+
+		if xrdGroup == gvk.Group && xrdKind == gvk.Kind {
+			return xrdObj, nil
+		}
+
+		return nil, errors.Errorf("no XRD found that defines XR type %s", gvk.String())
+	})
+}
+
+// WithXRDForXRNotFound sets GetXRDForXR to return not found error for any GVK.
+func (b *MockDefinitionClientBuilder) WithXRDForXRNotFound() *MockDefinitionClientBuilder {
+	return b.WithGetXRDForXR(func(_ context.Context, gvk schema.GroupVersionKind) (*un.Unstructured, error) {
+		return nil, errors.Errorf("no XRD found that defines XR type %s", gvk.String())
+	})
+}
+
+// WithXRDForXRNotFoundForGVK sets GetXRDForXR to return not found for a specific GVK.
+func (b *MockDefinitionClientBuilder) WithXRDForXRNotFoundForGVK(notFoundGVK schema.GroupVersionKind) *MockDefinitionClientBuilder {
+	existingFn := b.mock.GetXRDForXRFn
+
+	return b.WithGetXRDForXR(func(ctx context.Context, gvk schema.GroupVersionKind) (*un.Unstructured, error) {
+		if gvk.Group == notFoundGVK.Group && gvk.Kind == notFoundGVK.Kind {
+			return nil, errors.Errorf("no XRD found that defines XR type %s", gvk.String())
+		}
+
+		// Fall through to existing function if set
+		if existingFn != nil {
+			return existingFn(ctx, gvk)
+		}
+
+		return nil, errors.Errorf("no XRD found that defines XR type %s", gvk.String())
+	})
+}
+
+// WithXRDForXRError sets GetXRDForXR to return the specified error.
+func (b *MockDefinitionClientBuilder) WithXRDForXRError(err error) *MockDefinitionClientBuilder {
+	return b.WithGetXRDForXR(func(_ context.Context, _ schema.GroupVersionKind) (*un.Unstructured, error) {
+		return nil, err
+	})
 }
 
 // Build returns the built mock.
@@ -1349,14 +1411,8 @@ func NewCRD(name, group, kind string) *CRDBuilder {
 				Names: extv1.CustomResourceDefinitionNames{
 					Kind: kind,
 				},
-				Scope: extv1.NamespaceScoped,
-				Versions: []extv1.CustomResourceDefinitionVersion{
-					{
-						Name:    "v1",
-						Served:  true,
-						Storage: true,
-					},
-				},
+				Scope:    extv1.NamespaceScoped,
+				Versions: []extv1.CustomResourceDefinitionVersion{},
 			},
 		},
 	}
@@ -1390,6 +1446,11 @@ func (b *CRDBuilder) WithNamespaceScope() *CRDBuilder {
 	return b.WithScope(extv1.NamespaceScoped)
 }
 
+// WithDefaultVersion adds a default "v1" version to the CRD.
+func (b *CRDBuilder) WithDefaultVersion() *CRDBuilder {
+	return b.WithVersion("v1", true, true)
+}
+
 // WithVersion adds a version to the CRD.
 func (b *CRDBuilder) WithVersion(name string, served, storage bool) *CRDBuilder {
 	version := extv1.CustomResourceDefinitionVersion{
@@ -1402,10 +1463,11 @@ func (b *CRDBuilder) WithVersion(name string, served, storage bool) *CRDBuilder 
 	return b
 }
 
-// WithSchema adds an OpenAPI v3 schema to the first version.
+// WithSchema adds an OpenAPI v3 schema to the last added version.
 func (b *CRDBuilder) WithSchema(schema *extv1.JSONSchemaProps) *CRDBuilder {
 	if len(b.crd.Spec.Versions) > 0 {
-		b.crd.Spec.Versions[0].Schema = &extv1.CustomResourceValidation{
+		lastIdx := len(b.crd.Spec.Versions) - 1
+		b.crd.Spec.Versions[lastIdx].Schema = &extv1.CustomResourceValidation{
 			OpenAPIV3Schema: schema,
 		}
 	}
@@ -1496,13 +1558,7 @@ func NewXRD(name, group, kind string) *XRDBuilder {
 				Names: extv1.CustomResourceDefinitionNames{
 					Kind: kind,
 				},
-				Versions: []xpextv1.CompositeResourceDefinitionVersion{
-					{
-						Name:          "v1",
-						Served:        true,
-						Referenceable: true,
-					},
-				},
+				Versions: []xpextv1.CompositeResourceDefinitionVersion{},
 			},
 		},
 	}
@@ -1530,6 +1586,11 @@ func (b *XRDBuilder) WithClaimNames(kind, plural string) *XRDBuilder {
 	return b
 }
 
+// WithDefaultVersion adds a default "v1" version to the XRD.
+func (b *XRDBuilder) WithDefaultVersion() *XRDBuilder {
+	return b.WithVersion("v1", true, true)
+}
+
 // WithVersion adds a version to the XRD.
 func (b *XRDBuilder) WithVersion(name string, served, referenceable bool) *XRDBuilder {
 	version := xpextv1.CompositeResourceDefinitionVersion{
@@ -1542,7 +1603,7 @@ func (b *XRDBuilder) WithVersion(name string, served, referenceable bool) *XRDBu
 	return b
 }
 
-// WithSchema adds an OpenAPI v3 schema to the first version.
+// WithSchema adds an OpenAPI v3 schema to the last added version.
 func (b *XRDBuilder) WithSchema(schema *extv1.JSONSchemaProps) *XRDBuilder {
 	if len(b.xrd.Spec.Versions) > 0 {
 		// Convert JSONSchemaProps to RawExtension
@@ -1552,7 +1613,8 @@ func (b *XRDBuilder) WithSchema(schema *extv1.JSONSchemaProps) *XRDBuilder {
 			return b
 		}
 
-		b.xrd.Spec.Versions[0].Schema = &xpextv1.CompositeResourceValidation{
+		lastIdx := len(b.xrd.Spec.Versions) - 1
+		b.xrd.Spec.Versions[lastIdx].Schema = &xpextv1.CompositeResourceValidation{
 			OpenAPIV3Schema: runtime.RawExtension{
 				Raw: rawBytes,
 			},
@@ -1562,10 +1624,11 @@ func (b *XRDBuilder) WithSchema(schema *extv1.JSONSchemaProps) *XRDBuilder {
 	return b
 }
 
-// WithRawSchema adds a raw JSON schema to the first version.
+// WithRawSchema adds a raw JSON schema to the last added version.
 func (b *XRDBuilder) WithRawSchema(rawJSON []byte) *XRDBuilder {
 	if len(b.xrd.Spec.Versions) > 0 {
-		b.xrd.Spec.Versions[0].Schema = &xpextv1.CompositeResourceValidation{
+		lastIdx := len(b.xrd.Spec.Versions) - 1
+		b.xrd.Spec.Versions[lastIdx].Schema = &xpextv1.CompositeResourceValidation{
 			OpenAPIV3Schema: runtime.RawExtension{
 				Raw: rawJSON,
 			},

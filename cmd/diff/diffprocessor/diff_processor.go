@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"reflect"
+	"strings"
 
 	"dario.cat/mergo"
 	xp "github.com/crossplane-contrib/crossplane-diff/cmd/diff/client/crossplane"
@@ -278,12 +279,116 @@ func (p *DefaultDiffProcessor) DiffSingleResource(ctx context.Context, res *un.U
 		p.config.Logger.Debug("Partial error calculating diffs", "resource", resourceID, "error", err)
 	}
 
+	// Check for nested XRs in the composed resources and process them recursively
+	p.config.Logger.Debug("Checking for nested XRs", "resource", resourceID, "composedCount", len(desired.ComposedResources))
+
+	nestedDiffs, err := p.ProcessNestedXRs(ctx, desired.ComposedResources, compositionProvider, resourceID, 1)
+	if err != nil {
+		p.config.Logger.Debug("Error processing nested XRs", "resource", resourceID, "error", err)
+		return nil, errors.Wrap(err, "cannot process nested XRs")
+	}
+
+	// Merge nested diffs into our result
+	for k, v := range nestedDiffs {
+		diffs[k] = v
+	}
+
 	p.config.Logger.Debug("Resource processing complete",
 		"resource", resourceID,
 		"diffCount", len(diffs),
+		"nestedDiffCount", len(nestedDiffs),
 		"hasErrors", err != nil)
 
 	return diffs, err
+}
+
+// ProcessNestedXRs recursively processes composed resources that are themselves XRs.
+// It checks each composed resource to see if it's an XR, and if so, processes it through
+// its own composition pipeline to get the full tree of diffs.
+func (p *DefaultDiffProcessor) ProcessNestedXRs(
+	ctx context.Context,
+	composedResources []cpd.Unstructured,
+	compositionProvider types.CompositionProvider,
+	parentResourceID string,
+	depth int,
+) (map[string]*dt.ResourceDiff, error) {
+	const maxDepth = 10
+
+	if depth > maxDepth {
+		p.config.Logger.Debug("Maximum nesting depth exceeded",
+			"parentResource", parentResourceID,
+			"depth", depth,
+			"maxDepth", maxDepth)
+
+		return nil, errors.New("maximum nesting depth exceeded")
+	}
+
+	p.config.Logger.Debug("Processing nested XRs",
+		"parentResource", parentResourceID,
+		"composedResourceCount", len(composedResources),
+		"depth", depth)
+
+	allDiffs := make(map[string]*dt.ResourceDiff)
+
+	for _, composed := range composedResources {
+		un := &un.Unstructured{Object: composed.UnstructuredContent()}
+
+		// Check if this composed resource is itself an XR
+		isXR, _ := p.isCompositeResource(ctx, un)
+
+		if !isXR {
+			// Skip non-XR resources
+			continue
+		}
+
+		nestedResourceID := fmt.Sprintf("%s/%s (nested depth %d)", un.GetKind(), un.GetName(), depth)
+		p.config.Logger.Debug("Found nested XR, processing recursively",
+			"nestedXR", nestedResourceID,
+			"parentXR", parentResourceID,
+			"depth", depth)
+
+		// Recursively process this nested XR
+		nestedDiffs, err := p.DiffSingleResource(ctx, un, compositionProvider)
+		if err != nil {
+			// Check if the error is due to missing composition
+			// Note: It's valid to have an XRD in Crossplane without a composition attached to it.
+			// In such cases, we skip recursive processing of the nested XR but allow the overall
+			// diff operation to continue. The diff for the nested XR itself will still be shown.
+			errMsg := err.Error()
+			if strings.Contains(errMsg, "cannot get composition") && strings.Contains(errMsg, "no composition found") {
+				p.config.Logger.Info("Skipping nested XR processing due to missing composition",
+					"nestedXR", nestedResourceID,
+					"parentXR", parentResourceID,
+					"gvk", un.GroupVersionKind().String())
+				// Continue processing other nested XRs
+				continue
+			}
+
+			// For other errors, fail per CLAUDE.md: "never silently continue in the face of failures"
+			p.config.Logger.Debug("Error processing nested XR",
+				"nestedXR", nestedResourceID,
+				"parentXR", parentResourceID,
+				"error", err)
+
+			return nil, errors.Wrapf(err, "cannot process nested XR %s", nestedResourceID)
+		}
+
+		// Merge diffs from nested XR
+		for k, v := range nestedDiffs {
+			allDiffs[k] = v
+		}
+
+		p.config.Logger.Debug("Nested XR processed successfully",
+			"nestedXR", nestedResourceID,
+			"diffCount", len(nestedDiffs))
+	}
+
+	p.config.Logger.Debug("Finished processing nested XRs",
+		"parentResource", parentResourceID,
+		"totalNestedDiffs", len(allDiffs),
+		"depth", depth)
+
+	return allDiffs, nil
 }
 
 // SanitizeXR makes an XR into a valid unstructured object that we can use in a dry-run apply.
@@ -528,6 +633,43 @@ func (p *DefaultDiffProcessor) propagateNamespacesToManagedResources(_ context.C
 		// Update the composed resource with the modified content
 		composedResources[i].SetUnstructuredContent(resource.Object)
 	}
+}
+
+// isCompositeResource checks if a resource is a Composite Resource (XR) by looking it up in XRDs.
+// Returns true if the resource is an XR, along with its XRD.
+// Returns false if it's not an XR or if there's an error (errors are logged but not returned).
+func (p *DefaultDiffProcessor) isCompositeResource(ctx context.Context, resource *un.Unstructured) (bool, *un.Unstructured) {
+	gvk := resource.GroupVersionKind()
+
+	p.config.Logger.Debug("Checking if resource is a composite resource",
+		"resource", fmt.Sprintf("%s/%s", resource.GetKind(), resource.GetName()),
+		"gvk", gvk.String())
+
+	// Check if there's an XRD that defines this GVK as an XR
+	xrd, err := p.defClient.GetXRDForXR(ctx, gvk)
+	if err == nil && xrd != nil {
+		p.config.Logger.Debug("Resource is a composite resource (XR)",
+			"resource", fmt.Sprintf("%s/%s", resource.GetKind(), resource.GetName()),
+			"xrd", xrd.GetName())
+
+		return true, xrd
+	}
+
+	// Check if there's an XRD that defines this GVK as a claim
+	xrd, err = p.defClient.GetXRDForClaim(ctx, gvk)
+	if err == nil && xrd != nil {
+		p.config.Logger.Debug("Resource is a composite resource (Claim)",
+			"resource", fmt.Sprintf("%s/%s", resource.GetKind(), resource.GetName()),
+			"xrd", xrd.GetName())
+
+		return true, xrd
+	}
+
+	// Not a composite resource
+	p.config.Logger.Debug("Resource is not a composite resource",
+		"resource", fmt.Sprintf("%s/%s", resource.GetKind(), resource.GetName()))
+
+	return false, nil
 }
 
 // applyXRDDefaults applies default values from the XRD schema to the XR.

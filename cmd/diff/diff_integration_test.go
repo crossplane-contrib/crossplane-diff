@@ -1363,8 +1363,6 @@ Summary: 1 added`,
 Summary: 3 added`,
 			expectedError: false,
 			noColor:       true,
-			skip:          true,
-			skipReason:    "nested XR support not yet implemented",
 		},
 		"Modified nested XR propagates changes through child XR to downstream resources": {
 			setupFiles: []string{
@@ -1388,10 +1386,10 @@ Summary: 3 added`,
   apiVersion: ns.nested.example.org/v1alpha1
   kind: XChildResource
   metadata:
-    annotations:
-      crossplane.io/composition-resource-name: child-xr
-    labels:
-      crossplane.io/composite: test-parent
++   annotations:
++     crossplane.io/composition-resource-name: child-xr
++   labels:
++     crossplane.io/composite: test-parent
     name: test-parent-child
     namespace: default
   spec:
@@ -1404,15 +1402,18 @@ Summary: 3 added`,
   kind: XDownstreamResource
   metadata:
     annotations:
-      crossplane.io/composition-resource-name: managed-resource
-    labels:
-      crossplane.io/composite: test-parent-child
+-     gotemplating.fn.crossplane.io/composition-resource-name: managed-resource
++     crossplane.io/composition-resource-name: managed-resource
++     gotemplating.fn.crossplane.io/composition-resource-name: managed-resource
++   labels:
++     crossplane.io/composite: test-parent-child
     name: test-parent-child-managed
     namespace: default
   spec:
     forProvider:
 -     configData: existing-value
 +     configData: modified-value
+  
 
 ---
 ~~~ XParentResource/test-parent
@@ -1430,8 +1431,6 @@ Summary: 3 added`,
 Summary: 3 modified`,
 			expectedError: false,
 			noColor:       true,
-			skip:          true,
-			skipReason:    "nested XR support not yet implemented",
 		},
 	}
 

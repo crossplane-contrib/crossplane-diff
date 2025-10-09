@@ -335,6 +335,7 @@ func TestSchemaClient_LoadCRDsFromXRDs(t *testing.T) {
 	xrd := tu.NewXRD(testXResourcePlural+".example.org", testExampleOrgGroup, testXResourceKind).
 		WithPlural(testXResourcePlural).
 		WithSingular("xresource").
+		WithDefaultVersion().
 		WithRawSchema([]byte(`{
 			"type": "object",
 			"properties": {
@@ -358,6 +359,7 @@ func TestSchemaClient_LoadCRDsFromXRDs(t *testing.T) {
 		tu.NewCRD(testXResourcePlural+".example.org", testExampleOrgGroup, testXResourceKind).
 			WithPlural(testXResourcePlural).
 			WithSingular("xresource").
+			WithDefaultVersion().
 			Build())
 	correspondingCRD := &un.Unstructured{Object: correspondingCRDObj}
 
@@ -508,6 +510,7 @@ func TestSchemaClient_GetCRDByName(t *testing.T) {
 	testCRD := tu.NewCRD(testCRDName, testExampleOrgGroup, testXResourceKind).
 		WithPlural(testXResourcePlural).
 		WithSingular("xresource").
+		WithDefaultVersion().
 		Build()
 
 	tests := map[string]struct {
@@ -534,7 +537,7 @@ func TestSchemaClient_GetCRDByName(t *testing.T) {
 		"DifferentCRDInCache": {
 			reason: "Should return error when searching for CRD that doesn't exist",
 			setupCRDs: []*extv1.CustomResourceDefinition{
-				tu.NewCRD("other."+testExampleOrgGroup, testExampleOrgGroup, "OtherKind").Build(),
+				tu.NewCRD("other."+testExampleOrgGroup, testExampleOrgGroup, "OtherKind").WithDefaultVersion().Build(),
 			},
 			searchName:  testCRDName,
 			expectError: true,
@@ -596,8 +599,8 @@ func TestSchemaClient_GetCRDByName(t *testing.T) {
 
 func TestSchemaClient_GetAllCRDs(t *testing.T) {
 	// Create test CRDs
-	crd1 := tu.NewCRD("crd1."+testExampleOrgGroup, testExampleOrgGroup, "TestKind1").Build()
-	crd2 := tu.NewCRD("crd2."+testExampleOrgGroup, testExampleOrgGroup, "TestKind2").Build()
+	crd1 := tu.NewCRD("crd1."+testExampleOrgGroup, testExampleOrgGroup, "TestKind1").WithDefaultVersion().Build()
+	crd2 := tu.NewCRD("crd2."+testExampleOrgGroup, testExampleOrgGroup, "TestKind2").WithDefaultVersion().Build()
 
 	tests := map[string]struct {
 		reason    string
