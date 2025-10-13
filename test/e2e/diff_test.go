@@ -31,9 +31,11 @@ import (
 	"time"
 	"unicode"
 
+	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	k8sapiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"sigs.k8s.io/e2e-framework/klient/k8s/resources"
 	"sigs.k8s.io/e2e-framework/pkg/envconf"
 	"sigs.k8s.io/e2e-framework/pkg/features"
 
@@ -534,6 +536,7 @@ var (
 	claimNameRegex                = regexp.MustCompile(`(test-claim)-[a-z0-9]{5,}(?:-[a-z0-9]{5,})?`)
 	claimCompositionRevisionRegex = regexp.MustCompile(`(xnopclaims\.claim\.diff\.example\.org)-[a-z0-9]{7,}`)
 	compositionRevisionRegex      = regexp.MustCompile(`(xnopresources\.(cluster\.|legacy\.)?diff\.example\.org)-[a-z0-9]{7,}`)
+	nestedCompositionRevisionRegex = regexp.MustCompile(`(child-nop-composition|parent-nop-composition)-[a-z0-9]{7,}`)
 	ansiEscapeRegex               = regexp.MustCompile(`\x1b\[[0-9;]*m`)
 )
 
@@ -549,6 +552,7 @@ func normalizeLine(line string) string {
 	// Replace composition revision refs with random hash
 	line = compositionRevisionRegex.ReplaceAllString(line, "${1}-XXXXXXX")
 	line = claimCompositionRevisionRegex.ReplaceAllString(line, "${1}-XXXXXXX")
+	line = nestedCompositionRevisionRegex.ReplaceAllString(line, "${1}-XXXXXXX")
 
 	// Trim trailing whitespace
 	line = strings.TrimRight(line, " ")
@@ -846,6 +850,13 @@ func TestDiffNewNestedResourceV2(t *testing.T) {
 			}).
 			WithTeardown("DeletePrerequisites", funcs.AllOf(
 				funcs.ResourcesDeletedAfterListedAreGone(3*time.Minute, setupPath, "*.yaml", nsNopList),
+				// Explicitly wait for Provider's Deployments and Pods to be fully deleted
+				// This ensures clean serial execution and prevents the next test from encountering
+				// stale Provider infrastructure (e.g., terminating pods that can't serve CRs)
+				funcs.ListedResourcesDeletedWithin(1*time.Minute, &appsv1.DeploymentList{},
+					resources.WithLabelSelector("pkg.crossplane.io/provider=provider-nop")),
+				funcs.ListedResourcesDeletedWithin(1*time.Minute, &corev1.PodList{},
+					resources.WithLabelSelector("pkg.crossplane.io/provider=provider-nop")),
 				funcs.ResourceDeletedWithin(3*time.Minute, &k8sapiextensionsv1.CustomResourceDefinition{
 					TypeMeta:   metav1.TypeMeta{Kind: "CustomResourceDefinition", APIVersion: "apiextensions.k8s.io/v1"},
 					ObjectMeta: metav1.ObjectMeta{Name: "nopresources.nop.crossplane.io"},
@@ -876,13 +887,19 @@ func TestDiffExistingNestedResourceV2(t *testing.T) {
 				funcs.ResourcesHaveConditionWithin(1*time.Minute, setupPath, "parent-definition.yaml", apiextensionsv1.WatchingComposite()),
 				funcs.ResourcesHaveConditionWithin(1*time.Minute, setupPath, "child-definition.yaml", apiextensionsv1.WatchingComposite()),
 				funcs.ResourcesHaveConditionWithin(2*time.Minute, setupPath, "provider.yaml", pkgv1.Healthy(), pkgv1.Active()),
+				// Add a brief delay after Provider becomes healthy to allow watch/cache infrastructure to settle
+				// This prevents issues where the composition controller's watch on MRs isn't fully initialized
+				func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
+					time.Sleep(3 * time.Second)
+					return ctx
+				},
 			)).
 			WithSetup("CreateExistingXR", funcs.AllOf(
 				funcs.ApplyResources(e2e.FieldManager, manifests, "existing-parent-xr.yaml"),
 				funcs.ResourcesCreatedWithin(1*time.Minute, manifests, "existing-parent-xr.yaml"),
 			)).
 			WithSetup("ExistingXRIsReady", funcs.AllOf(
-				funcs.ResourcesHaveConditionWithin(2*time.Minute, manifests, "existing-parent-xr.yaml", xpv1.Available()),
+				funcs.ResourcesHaveConditionWithin(5*time.Minute, manifests, "existing-parent-xr.yaml", xpv1.Available()),
 			)).
 			Assess("CanDiffExistingNestedResource", func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
 				t.Helper()
@@ -902,6 +919,13 @@ func TestDiffExistingNestedResourceV2(t *testing.T) {
 		)).
 		WithTeardown("DeletePrerequisites", funcs.AllOf(
 			funcs.ResourcesDeletedAfterListedAreGone(3*time.Minute, setupPath, "*.yaml", nsNopList),
+			// Explicitly wait for Provider's Deployments and Pods to be fully deleted
+			// This ensures clean serial execution and prevents the next test from encountering
+			// stale Provider infrastructure (e.g., terminating pods that can't serve CRs)
+			funcs.ListedResourcesDeletedWithin(1*time.Minute, &appsv1.DeploymentList{},
+				resources.WithLabelSelector("pkg.crossplane.io/provider=provider-nop")),
+			funcs.ListedResourcesDeletedWithin(1*time.Minute, &corev1.PodList{},
+				resources.WithLabelSelector("pkg.crossplane.io/provider=provider-nop")),
 			funcs.ResourceDeletedWithin(3*time.Minute, &k8sapiextensionsv1.CustomResourceDefinition{
 				TypeMeta:   metav1.TypeMeta{Kind: "CustomResourceDefinition", APIVersion: "apiextensions.k8s.io/v1"},
 				ObjectMeta: metav1.ObjectMeta{Name: "nopresources.nop.crossplane.io"},

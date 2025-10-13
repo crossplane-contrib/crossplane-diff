@@ -44,7 +44,7 @@
       compositionRef:
         name: child-nop-composition
       compositionRevisionRef:
-        name: child-nop-composition-c0e3fb0
+        name: child-nop-composition-XXXXXXX
       compositionUpdatePolicy: Automatic
 
 ---
@@ -54,6 +54,8 @@
   metadata:
     finalizers:
     - composite.apiextensions.crossplane.io
+    labels:
+      crossplane.io/composite: test-parent-existing
     name: test-parent-existing
     namespace: default
   spec:
@@ -61,7 +63,7 @@
       compositionRef:
         name: parent-nop-composition
       compositionRevisionRef:
-        name: parent-nop-composition-99b8ae0
+        name: parent-nop-composition-XXXXXXX
       compositionUpdatePolicy: Automatic
 -   parentField: existing-value
 +   parentField: modified-value

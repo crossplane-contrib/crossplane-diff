@@ -26,3 +26,6 @@ spec:
                 gotemplating.fn.crossplane.io/composition-resource-name: child-xr
             spec:
               childField: {{ .observed.composite.resource.spec.parentField }}
+    - step: auto-ready
+      functionRef:
+        name: function-auto-ready

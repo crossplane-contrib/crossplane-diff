@@ -29,3 +29,6 @@ spec:
                   - conditionType: Ready
                     conditionStatus: "True"
                     time: 0s
+    - step: auto-ready
+      functionRef:
+        name: function-auto-ready
