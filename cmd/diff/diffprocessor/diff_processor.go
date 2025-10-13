@@ -56,10 +56,9 @@ type DefaultDiffProcessor struct {
 // NewDiffProcessor creates a new DefaultDiffProcessor with the provided options.
 func NewDiffProcessor(k8cs k8.Clients, xpcs xp.Clients, opts ...ProcessorOption) DiffProcessor {
 	// Create default configuration
+	// Note: Behavior defaults (Namespace, Colorize, Compact, MaxNestedDepth) are intentionally
+	// not set here. They should be provided via ProcessorOptions from the CLI layer.
 	config := ProcessorConfig{
-		Namespace:  "default",
-		Colorize:   true,
-		Compact:    false,
 		Logger:     logging.NewNopLogger(),
 		RenderFunc: render.Render,
 	}
@@ -312,13 +311,11 @@ func (p *DefaultDiffProcessor) ProcessNestedXRs(
 	parentResourceID string,
 	depth int,
 ) (map[string]*dt.ResourceDiff, error) {
-	const maxDepth = 10
-
-	if depth > maxDepth {
+	if depth > p.config.MaxNestedDepth {
 		p.config.Logger.Debug("Maximum nesting depth exceeded",
 			"parentResource", parentResourceID,
 			"depth", depth,
-			"maxDepth", maxDepth)
+			"maxDepth", p.config.MaxNestedDepth)
 
 		return nil, errors.New("maximum nesting depth exceeded")
 	}

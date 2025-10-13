@@ -1,0 +1,71 @@
+~~~ NopResource/test-parent-existing-child-nop
+  apiVersion: nop.crossplane.io/v1alpha1
+  kind: NopResource
+  metadata:
+    annotations:
+      crossplane.io/composition-resource-name: nop-resource
+      crossplane.io/external-name: test-parent-existing-child-nop
+    finalizers:
+    - finalizer.managedresource.crossplane.io
+    labels:
+-     crossplane.io/composite: test-parent-existing
++     crossplane.io/composite: test-parent-existing-child
+    name: test-parent-existing-child-nop
+    namespace: default
+  spec:
+    deletionPolicy: Delete
+    forProvider:
+      conditionAfter:
+      - conditionStatus: "True"
+        conditionType: Ready
+        time: 0s
+    managementPolicies:
+    - '*'
+    providerConfigRef:
+      name: default
+
+---
+~~~ XChildNop/test-parent-existing-child
+  apiVersion: nested.diff.example.org/v1alpha1
+  kind: XChildNop
+  metadata:
+    annotations:
+      crossplane.io/composition-resource-name: child-xr
+    finalizers:
+    - composite.apiextensions.crossplane.io
+    labels:
+      crossplane.io/composite: test-parent-existing
+    name: test-parent-existing-child
+    namespace: default
+  spec:
+-   childField: existing-value
++   childField: modified-value
+    crossplane:
+      compositionRef:
+        name: child-nop-composition
+      compositionRevisionRef:
+        name: child-nop-composition-c0e3fb0
+      compositionUpdatePolicy: Automatic
+
+---
+~~~ XParentNop/test-parent-existing
+  apiVersion: nested.diff.example.org/v1alpha1
+  kind: XParentNop
+  metadata:
+    finalizers:
+    - composite.apiextensions.crossplane.io
+    name: test-parent-existing
+    namespace: default
+  spec:
+    crossplane:
+      compositionRef:
+        name: parent-nop-composition
+      compositionRevisionRef:
+        name: parent-nop-composition-99b8ae0
+      compositionUpdatePolicy: Automatic
+-   parentField: existing-value
++   parentField: modified-value
+
+---
+
+Summary: 3 modified

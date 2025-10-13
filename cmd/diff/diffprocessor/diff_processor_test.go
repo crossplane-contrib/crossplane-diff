@@ -45,6 +45,18 @@ const (
 // Ensure MockDiffProcessor implements the DiffProcessor interface.
 var _ DiffProcessor = &tu.MockDiffProcessor{}
 
+// testProcessorOptions returns sensible default options for tests.
+// Tests can append additional options or override these as needed.
+func testProcessorOptions() []ProcessorOption {
+	return []ProcessorOption{
+		WithNamespace("default"),
+		WithColorize(false),
+		WithCompact(false),
+		WithMaxNestedDepth(10),
+		WithLogger(tu.TestLogger(nil, false)),
+	}
+}
+
 func TestDefaultDiffProcessor_PerformDiff(t *testing.T) {
 	// Setup test context
 	ctx := t.Context()
@@ -104,11 +116,9 @@ func TestDefaultDiffProcessor_PerformDiff(t *testing.T) {
 
 				return k8sClients, xpClients
 			},
-			resources: []*un.Unstructured{},
-			processorOpts: []ProcessorOption{
-				WithLogger(tu.TestLogger(t, false)),
-			},
-			want: nil,
+			resources:     []*un.Unstructured{},
+			processorOpts: testProcessorOptions(),
+			want:          nil,
 		},
 		"DiffSingleResourceError": {
 			setupMocks: func() (k8.Clients, xp.Clients) {
@@ -135,11 +145,9 @@ func TestDefaultDiffProcessor_PerformDiff(t *testing.T) {
 
 				return k8sClients, xpClients
 			},
-			resources: []*un.Unstructured{resource1},
-			processorOpts: []ProcessorOption{
-				WithLogger(tu.TestLogger(t, false)),
-			},
-			want: errors.New("unable to process resource XR1/my-xr-1: cannot get composition: composition not found"),
+			resources:     []*un.Unstructured{resource1},
+			processorOpts: testProcessorOptions(),
+			want:          errors.New("unable to process resource XR1/my-xr-1: cannot get composition: composition not found"),
 		},
 		"MultipleResourceErrors": {
 			setupMocks: func() (k8.Clients, xp.Clients) {
@@ -166,10 +174,8 @@ func TestDefaultDiffProcessor_PerformDiff(t *testing.T) {
 
 				return k8sClients, xpClients
 			},
-			resources: []*un.Unstructured{resource1, resource2},
-			processorOpts: []ProcessorOption{
-				WithLogger(tu.TestLogger(t, false)),
-			},
+			resources:     []*un.Unstructured{resource1, resource2},
+			processorOpts: testProcessorOptions(),
 			want: errors.New("[unable to process resource XR1/my-xr-1: cannot get composition: composition not found, " +
 				"unable to process resource XR1/my-xr-2: cannot get composition: composition not found]"),
 		},
@@ -198,11 +204,9 @@ func TestDefaultDiffProcessor_PerformDiff(t *testing.T) {
 
 				return k8sClients, xpClients
 			},
-			resources: []*un.Unstructured{resource1},
-			processorOpts: []ProcessorOption{
-				WithLogger(tu.TestLogger(t, false)),
-			},
-			want: errors.New("unable to process resource XR1/my-xr-1: cannot get composition: composition not found"),
+			resources:     []*un.Unstructured{resource1},
+			processorOpts: testProcessorOptions(),
+			want:          errors.New("unable to process resource XR1/my-xr-1: cannot get composition: composition not found"),
 		},
 		"GetFunctionsError": {
 			setupMocks: func() (k8.Clients, xp.Clients) {
@@ -231,11 +235,9 @@ func TestDefaultDiffProcessor_PerformDiff(t *testing.T) {
 
 				return k8sClients, xpClients
 			},
-			resources: []*un.Unstructured{resource1},
-			processorOpts: []ProcessorOption{
-				WithLogger(tu.TestLogger(t, false)),
-			},
-			want: errors.New("unable to process resource XR1/my-xr-1: cannot get functions from pipeline: function not found"),
+			resources:     []*un.Unstructured{resource1},
+			processorOpts: testProcessorOptions(),
+			want:          errors.New("unable to process resource XR1/my-xr-1: cannot get functions from pipeline: function not found"),
 		},
 		"SuccessfulDiff": {
 			setupMocks: func() (k8.Clients, xp.Clients) {
@@ -361,7 +363,7 @@ func TestDefaultDiffProcessor_PerformDiff(t *testing.T) {
 				return k8sClients, xpClients
 			},
 			resources: []*un.Unstructured{resource1},
-			processorOpts: []ProcessorOption{
+			processorOpts: append(testProcessorOptions(),
 				WithLogger(tu.TestLogger(t, false)),
 				WithRenderFunc(func(_ context.Context, _ logging.Logger, in render.Inputs) (render.Outputs, error) {
 					// Only return composed resources for the main XR, not for nested XRs
@@ -452,7 +454,7 @@ func TestDefaultDiffProcessor_PerformDiff(t *testing.T) {
 						},
 					}
 				}),
-			},
+			),
 			verifyOutput: func(t *testing.T, output string) {
 				t.Helper()
 				// We should have some output from the diff
@@ -527,7 +529,7 @@ func TestDefaultDiffProcessor_PerformDiff(t *testing.T) {
 				return k8sClients, xpClients
 			},
 			resources: []*un.Unstructured{resource1},
-			processorOpts: []ProcessorOption{
+			processorOpts: append(testProcessorOptions(),
 				WithLogger(tu.TestLogger(t, false)),
 				WithRenderFunc(func(_ context.Context, _ logging.Logger, in render.Inputs) (render.Outputs, error) {
 					// Return valid render outputs
@@ -550,7 +552,7 @@ func TestDefaultDiffProcessor_PerformDiff(t *testing.T) {
 						},
 					}
 				}),
-			},
+			),
 			want:            errors.New("unable to process resource XR1/my-xr-1: cannot validate resources: validation error"),
 			validationError: true,
 		},
@@ -643,10 +645,8 @@ func TestDefaultDiffProcessor_Initialize(t *testing.T) {
 
 				return k8sClients, xpClients
 			},
-			processorOpts: []ProcessorOption{
-				WithLogger(tu.TestLogger(t, false)),
-			},
-			want: errors.Wrap(errors.Wrap(errors.New("XRD not found"), "cannot get XRDs"), "cannot load CRDs"),
+			processorOpts: testProcessorOptions(),
+			want:          errors.Wrap(errors.Wrap(errors.New("XRD not found"), "cannot get XRDs"), "cannot load CRDs"),
 		},
 		"EnvConfigsError": {
 			setupMocks: func() (k8.Clients, xp.Clients) {
@@ -675,10 +675,8 @@ func TestDefaultDiffProcessor_Initialize(t *testing.T) {
 
 				return k8sClients, xpClients
 			},
-			processorOpts: []ProcessorOption{
-				WithLogger(tu.TestLogger(t, false)),
-			},
-			want: errors.Wrap(errors.New("env configs not found"), "cannot get environment configs"),
+			processorOpts: testProcessorOptions(),
+			want:          errors.Wrap(errors.New("env configs not found"), "cannot get environment configs"),
 		},
 		"Success": {
 			setupMocks: func() (k8.Clients, xp.Clients) {
@@ -707,10 +705,8 @@ func TestDefaultDiffProcessor_Initialize(t *testing.T) {
 
 				return k8sClients, xpClients
 			},
-			processorOpts: []ProcessorOption{
-				WithLogger(tu.TestLogger(t, false)),
-			},
-			want: nil,
+			processorOpts: testProcessorOptions(),
+			want:          nil,
 		},
 	}
 
@@ -1172,13 +1168,16 @@ func TestDefaultDiffProcessor_RenderWithRequirements(t *testing.T) {
 			)
 
 			// Build processor options
-			processor := NewDiffProcessor(k8.Clients{}, xp.Clients{},
+			baseOpts := testProcessorOptions()
+			customOpts := []ProcessorOption{
 				WithLogger(logger),
 				WithRenderFunc(countingRenderFunc),
 				WithRequirementsProviderFactory(func(k8.ResourceClient, xp.EnvironmentClient, RenderFunc, logging.Logger) *RequirementsProvider {
 					return requirementsProvider
 				}),
-			)
+			}
+			baseOpts = append(baseOpts, customOpts...)
+			processor := NewDiffProcessor(k8.Clients{}, xp.Clients{}, baseOpts...)
 
 			// Call the method under test
 			output, err := processor.(*DefaultDiffProcessor).RenderWithRequirements(ctx, tt.xr, tt.composition, tt.functions, tt.resourceID)
@@ -1516,7 +1515,7 @@ func TestDefaultDiffProcessor_ProcessNestedXRs(t *testing.T) {
 				{Unstructured: *childXR},
 			},
 			parentResourceID: "XParentResource/test-parent",
-			depth:            11, // Exceeds maxDepth of 10
+			depth:            11, // Exceeds default maxDepth of 10
 			wantDiffCount:    0,
 			wantErr:          true,
 			wantErrContain:   "maximum nesting depth exceeded",
@@ -1604,9 +1603,9 @@ func TestDefaultDiffProcessor_ProcessNestedXRs(t *testing.T) {
 			// Setup mocks
 			xpClients, k8sClients := tt.setupMocks()
 
-			// Create processor
-			processor := NewDiffProcessor(k8sClients, xpClients,
-				WithLogger(tu.TestLogger(t, false)),
+			// Create processor with behavior defaults + custom options
+			baseOpts := testProcessorOptions()
+			customOpts := []ProcessorOption{
 				WithSchemaValidatorFactory(func(k8.SchemaClient, xp.DefinitionClient, logging.Logger) SchemaValidator {
 					return &tu.MockSchemaValidator{
 						ValidateResourcesFn: func(context.Context, *un.Unstructured, []cpd.Unstructured) error {
@@ -1631,7 +1630,9 @@ func TestDefaultDiffProcessor_ProcessNestedXRs(t *testing.T) {
 						},
 					}
 				}),
-			).(*DefaultDiffProcessor)
+			}
+			baseOpts = append(baseOpts, customOpts...)
+			processor := NewDiffProcessor(k8sClients, xpClients, baseOpts...).(*DefaultDiffProcessor)
 
 			// Initialize if needed
 			if len(tt.composedResources) > 0 {

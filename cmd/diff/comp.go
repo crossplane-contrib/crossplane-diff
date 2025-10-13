@@ -88,13 +88,16 @@ func (c *CompCmd) initializeDependencies(ctx *kong.Context, log logging.Logger, 
 }
 
 func makeDefaultCompProc(c *CompCmd, ctx *AppContext, log logging.Logger) dp.CompDiffProcessor {
+	// Use provided namespace or default to "default"
+	namespace := c.Namespace
+	if namespace == "" {
+		namespace = "default"
+	}
+
 	// Both processors share the same options since they're part of the same command
-	opts := defaultProcessorOptions()
+	opts := defaultProcessorOptions(c.CommonCmdFields, namespace)
 	opts = append(opts,
-		dp.WithNamespace(c.Namespace),
 		dp.WithLogger(log),
-		dp.WithColorize(!c.NoColor), // Override default if NoColor is set
-		dp.WithCompact(c.Compact),   // Override default if Compact is set
 		dp.WithRenderMutex(&globalRenderMutex),
 	)
 
