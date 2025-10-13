@@ -845,8 +845,7 @@ func TestDiffNewNestedResourceV2(t *testing.T) {
 				return ctx
 			}).
 			WithTeardown("DeletePrerequisites", funcs.AllOf(
-				funcs.DeleteResourcesWithPropagationPolicy(setupPath, "*.yaml", metav1.DeletePropagationForeground),
-				funcs.ResourcesDeletedWithin(3*time.Minute, setupPath, "*.yaml"),
+				funcs.ResourcesDeletedAfterListedAreGone(3*time.Minute, setupPath, "*.yaml", nsNopList),
 				funcs.ResourceDeletedWithin(3*time.Minute, &k8sapiextensionsv1.CustomResourceDefinition{
 					TypeMeta:   metav1.TypeMeta{Kind: "CustomResourceDefinition", APIVersion: "apiextensions.k8s.io/v1"},
 					ObjectMeta: metav1.ObjectMeta{Name: "nopresources.nop.crossplane.io"},
@@ -896,15 +895,18 @@ func TestDiffExistingNestedResourceV2(t *testing.T) {
 				assertDiffMatchesFile(t, output, filepath.Join(expectPath, "existing-parent-xr.ansi"), log)
 
 				return ctx
-			}).
-			WithTeardown("DeletePrerequisites", funcs.AllOf(
-				funcs.DeleteResourcesWithPropagationPolicy(setupPath, "*.yaml", metav1.DeletePropagationForeground),
-				funcs.ResourcesDeletedWithin(3*time.Minute, setupPath, "*.yaml"),
-				funcs.ResourceDeletedWithin(3*time.Minute, &k8sapiextensionsv1.CustomResourceDefinition{
-					TypeMeta:   metav1.TypeMeta{Kind: "CustomResourceDefinition", APIVersion: "apiextensions.k8s.io/v1"},
-					ObjectMeta: metav1.ObjectMeta{Name: "nopresources.nop.crossplane.io"},
-				}),
-			)).
-			Feature(),
+		}).
+		WithTeardown("DeleteResources", funcs.AllOf(
+			funcs.DeleteResources(manifests, "existing-parent-xr.yaml"),
+			funcs.ResourcesDeletedWithin(2*time.Minute, manifests, "existing-parent-xr.yaml"),
+		)).
+		WithTeardown("DeletePrerequisites", funcs.AllOf(
+			funcs.ResourcesDeletedAfterListedAreGone(3*time.Minute, setupPath, "*.yaml", nsNopList),
+			funcs.ResourceDeletedWithin(3*time.Minute, &k8sapiextensionsv1.CustomResourceDefinition{
+				TypeMeta:   metav1.TypeMeta{Kind: "CustomResourceDefinition", APIVersion: "apiextensions.k8s.io/v1"},
+				ObjectMeta: metav1.ObjectMeta{Name: "nopresources.nop.crossplane.io"},
+			}),
+		)).
+		Feature(),
 	)
 }
