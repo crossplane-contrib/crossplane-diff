@@ -36,16 +36,6 @@ import (
 //nolint:gochecknoglobals // Required for global serialization across processors
 var globalRenderMutex sync.Mutex
 
-// CommonCmdFields contains common fields shared by both XR and Comp commands.
-type CommonCmdFields struct {
-	// Configuration options
-	NoColor bool          `help:"Disable colorized output."                name:"no-color"`
-	Compact bool          `help:"Show compact diffs with minimal context." name:"compact"`
-	Timeout time.Duration `default:"1m"                                    help:"How long to run before timing out."`
-	QPS     float32       `default:"0"                                     help:"Maximum QPS to the API server."`
-	Burst   int           `default:"0"                                     help:"Maximum burst for throttle."`
-}
-
 // initializeSharedDependencies handles the common initialization logic for both commands.
 func initializeSharedDependencies(ctx *kong.Context, log logging.Logger, config *rest.Config, fields CommonCmdFields) (*AppContext, error) {
 	config = initRestConfig(config, log, fields)
@@ -102,10 +92,12 @@ func initializeAppContext(timeout time.Duration, appCtx *AppContext, log logging
 }
 
 // defaultProcessorOptions returns the standard default options used by both XR and composition processors.
-// Call sites can append additional options or override these defaults as needed.
-func defaultProcessorOptions() []dp.ProcessorOption {
+// This is the single source of truth for behavior defaults in the CLI layer.
+func defaultProcessorOptions(fields CommonCmdFields, namespace string) []dp.ProcessorOption {
 	return []dp.ProcessorOption{
-		dp.WithColorize(true),
-		dp.WithCompact(false),
+		dp.WithNamespace(namespace),
+		dp.WithColorize(!fields.NoColor),
+		dp.WithCompact(fields.Compact),
+		dp.WithMaxNestedDepth(fields.MaxNestedDepth),
 	}
 }

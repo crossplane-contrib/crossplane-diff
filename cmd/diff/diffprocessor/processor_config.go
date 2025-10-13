@@ -21,6 +21,9 @@ type ProcessorConfig struct {
 	// Compact determines whether to show a compact diff format
 	Compact bool
 
+	// MaxNestedDepth is the maximum depth for recursive nested XR processing
+	MaxNestedDepth int
+
 	// Logger is the logger to use
 	Logger logging.Logger
 
@@ -73,6 +76,13 @@ func WithColorize(colorize bool) ProcessorOption {
 func WithCompact(compact bool) ProcessorOption {
 	return func(config *ProcessorConfig) {
 		config.Compact = compact
+	}
+}
+
+// WithMaxNestedDepth sets the maximum depth for recursive nested XR processing.
+func WithMaxNestedDepth(depth int) ProcessorOption {
+	return func(config *ProcessorConfig) {
+		config.MaxNestedDepth = depth
 	}
 }
 

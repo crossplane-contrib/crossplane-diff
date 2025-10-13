@@ -88,12 +88,15 @@ func (c *XRCmd) initializeDependencies(ctx *kong.Context, log logging.Logger, co
 }
 
 func makeDefaultXRProc(c *XRCmd, ctx *AppContext, log logging.Logger) dp.DiffProcessor {
-	opts := defaultProcessorOptions()
+	// Use provided namespace or default to "default"
+	namespace := c.Namespace
+	if namespace == "" {
+		namespace = "default"
+	}
+
+	opts := defaultProcessorOptions(c.CommonCmdFields, namespace)
 	opts = append(opts,
-		dp.WithNamespace(c.Namespace),
 		dp.WithLogger(log),
-		dp.WithColorize(!c.NoColor), // Override default if NoColor is set
-		dp.WithCompact(c.Compact),   // Override default if Compact is set
 		dp.WithRenderMutex(&globalRenderMutex),
 	)
 

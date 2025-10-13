@@ -33,11 +33,13 @@ import (
 
 func TestRenderFunc_Passthrough(t *testing.T) {
 	type ctxKey string
+
 	key := ctxKey("test")
 	ctx := context.WithValue(t.Context(), key, "test-value")
 	inputs := render.Inputs{Functions: []pkgv1.Function{{}, {}}}
 
 	var mu sync.Mutex
+
 	mockFunc := func(ctx context.Context, _ logging.Logger, in render.Inputs) (render.Outputs, error) {
 		// Verify context is passed through
 		if ctx.Value(key) != "test-value" {
@@ -47,12 +49,13 @@ func TestRenderFunc_Passthrough(t *testing.T) {
 		if len(in.Functions) != 2 {
 			t.Errorf("expected 2 functions, got %d", len(in.Functions))
 		}
+
 		return render.Outputs{ComposedResources: []composed.Unstructured{*composed.New(), *composed.New()}}, nil
 	}
 
 	serialized := RenderFunc(mockFunc, &mu)
-	outputs, err := serialized(ctx, logging.NewNopLogger(), inputs)
 
+	outputs, err := serialized(ctx, logging.NewNopLogger(), inputs)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -64,6 +67,7 @@ func TestRenderFunc_Passthrough(t *testing.T) {
 
 func TestRenderFunc_Error(t *testing.T) {
 	var mu sync.Mutex
+
 	expectedErr := errors.New("render failed")
 
 	mockFunc := func(_ context.Context, _ logging.Logger, _ render.Inputs) (render.Outputs, error) {
@@ -79,9 +83,11 @@ func TestRenderFunc_Error(t *testing.T) {
 }
 
 func TestRenderFunc_Serialization(t *testing.T) {
-	var mu sync.Mutex
-	var concurrentCount atomic.Int32
-	var maxConcurrent atomic.Int32
+	var (
+		mu              sync.Mutex
+		concurrentCount atomic.Int32
+		maxConcurrent   atomic.Int32
+	)
 
 	mockFunc := func(_ context.Context, _ logging.Logger, _ render.Inputs) (render.Outputs, error) {
 		current := concurrentCount.Add(1)
@@ -104,12 +110,14 @@ func TestRenderFunc_Serialization(t *testing.T) {
 
 	// Run multiple renders concurrently
 	const numCalls = 10
+
 	var wg sync.WaitGroup
 	wg.Add(numCalls)
 
 	for range numCalls {
 		go func() {
 			defer wg.Done()
+
 			if _, err := serialized(t.Context(), logging.NewNopLogger(), render.Inputs{}); err != nil {
 				t.Errorf("unexpected error: %v", err)
 			}

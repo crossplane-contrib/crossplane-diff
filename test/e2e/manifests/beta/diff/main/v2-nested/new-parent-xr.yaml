@@ -1,0 +1,7 @@
+apiVersion: nested.diff.example.org/v1alpha1
+kind: XParentNop
+metadata:
+  name: test-parent-new
+  namespace: default
+spec:
+  parentField: "new-value"

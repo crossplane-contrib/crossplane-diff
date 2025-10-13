@@ -1,0 +1,8 @@
+# A new parent XR that will create a child XR, which will then create managed resources
+apiVersion: ns.nested.example.org/v1alpha1
+kind: XParentResource
+metadata:
+  name: test-parent
+  namespace: default
+spec:
+  parentField: "parent-value"

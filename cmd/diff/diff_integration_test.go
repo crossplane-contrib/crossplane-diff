@@ -1306,6 +1306,132 @@ Summary: 1 added`,
 			expectedError:  false,
 			noColor:        true,
 		},
+		"New nested XR creates child XR and downstream resources": {
+			setupFiles: []string{
+				// XRDs for parent and child
+				"testdata/diff/resources/nested/parent-xrd.yaml",
+				"testdata/diff/resources/nested/child-xrd.yaml",
+				// Compositions for parent and child
+				"testdata/diff/resources/nested/parent-composition.yaml",
+				"testdata/diff/resources/nested/child-composition.yaml",
+				// XRD for downstream managed resource
+				"testdata/diff/resources/xdownstreamenvresource-xrd.yaml",
+				"testdata/diff/resources/functions.yaml",
+			},
+			inputFiles: []string{"testdata/diff/new-nested-xr.yaml"},
+			expectedOutput: `
++++ XChildResource/test-parent-child
++ apiVersion: ns.nested.example.org/v1alpha1
++ kind: XChildResource
++ metadata:
++   annotations:
++     crossplane.io/composition-resource-name: child-xr
++   labels:
++     crossplane.io/composite: test-parent
++   name: test-parent-child
++   namespace: default
++ spec:
++   childField: parent-value
+
+---
++++ XDownstreamResource/test-parent-child-managed
++ apiVersion: ns.nop.example.org/v1alpha1
++ kind: XDownstreamResource
++ metadata:
++   annotations:
++     crossplane.io/composition-resource-name: managed-resource
++   labels:
++     crossplane.io/composite: test-parent-child
++   name: test-parent-child-managed
++   namespace: default
++ spec:
++   forProvider:
++     configData: parent-value
+
+---
++++ XParentResource/test-parent
++ apiVersion: ns.nested.example.org/v1alpha1
++ kind: XParentResource
++ metadata:
++   name: test-parent
++   namespace: default
++ spec:
++   parentField: parent-value
+
+---
+
+Summary: 3 added`,
+			expectedError: false,
+			noColor:       true,
+		},
+		"Modified nested XR propagates changes through child XR to downstream resources": {
+			setupFiles: []string{
+				// XRDs for parent and child
+				"testdata/diff/resources/nested/parent-xrd.yaml",
+				"testdata/diff/resources/nested/child-xrd.yaml",
+				// Compositions for parent and child
+				"testdata/diff/resources/nested/parent-composition.yaml",
+				"testdata/diff/resources/nested/child-composition.yaml",
+				// XRD for downstream managed resource
+				"testdata/diff/resources/xdownstreamenvresource-xrd.yaml",
+				"testdata/diff/resources/functions.yaml",
+				// Existing resources
+				"testdata/diff/resources/nested/existing-parent-xr.yaml",
+				"testdata/diff/resources/nested/existing-child-xr.yaml",
+				"testdata/diff/resources/nested/existing-managed-resource.yaml",
+			},
+			inputFiles: []string{"testdata/diff/modified-nested-xr.yaml"},
+			expectedOutput: `
+~~~ XChildResource/test-parent-child
+  apiVersion: ns.nested.example.org/v1alpha1
+  kind: XChildResource
+  metadata:
++   annotations:
++     crossplane.io/composition-resource-name: child-xr
++   labels:
++     crossplane.io/composite: test-parent
+    name: test-parent-child
+    namespace: default
+  spec:
+-   childField: existing-value
++   childField: modified-value
+
+---
+~~~ XDownstreamResource/test-parent-child-managed
+  apiVersion: ns.nop.example.org/v1alpha1
+  kind: XDownstreamResource
+  metadata:
+    annotations:
+-     gotemplating.fn.crossplane.io/composition-resource-name: managed-resource
++     crossplane.io/composition-resource-name: managed-resource
++     gotemplating.fn.crossplane.io/composition-resource-name: managed-resource
++   labels:
++     crossplane.io/composite: test-parent-child
+    name: test-parent-child-managed
+    namespace: default
+  spec:
+    forProvider:
+-     configData: existing-value
++     configData: modified-value
+  
+
+---
+~~~ XParentResource/test-parent
+  apiVersion: ns.nested.example.org/v1alpha1
+  kind: XParentResource
+  metadata:
+    name: test-parent
+    namespace: default
+  spec:
+-   parentField: existing-value
++   parentField: modified-value
+
+---
+
+Summary: 3 modified`,
+			expectedError: false,
+			noColor:       true,
+		},
 	}
 
 	runIntegrationTest(t, XRDiffTest, tests)

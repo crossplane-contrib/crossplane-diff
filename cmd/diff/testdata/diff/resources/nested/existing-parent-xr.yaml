@@ -1,0 +1,8 @@
+# Existing parent XR in the cluster
+apiVersion: ns.nested.example.org/v1alpha1
+kind: XParentResource
+metadata:
+  name: test-parent
+  namespace: default
+spec:
+  parentField: "existing-value"

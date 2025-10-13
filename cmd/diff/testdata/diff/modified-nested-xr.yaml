@@ -1,0 +1,8 @@
+# A modified parent XR - value changed from "existing-value" to "modified-value"
+apiVersion: ns.nested.example.org/v1alpha1
+kind: XParentResource
+metadata:
+  name: test-parent
+  namespace: default
+spec:
+  parentField: "modified-value"

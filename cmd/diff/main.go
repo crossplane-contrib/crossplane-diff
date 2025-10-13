@@ -19,6 +19,7 @@ package main
 
 import (
 	"os"
+	"time"
 
 	"github.com/alecthomas/kong"
 	"k8s.io/client-go/rest"
@@ -36,6 +37,17 @@ var _ = kong.Must(&cli{})
 type (
 	verboseFlag bool
 )
+
+// CommonCmdFields contains common fields shared by both XR and Comp commands.
+type CommonCmdFields struct {
+	// Configuration options
+	NoColor        bool          `help:"Disable colorized output."                name:"no-color"`
+	Compact        bool          `help:"Show compact diffs with minimal context." name:"compact"`
+	MaxNestedDepth int           `default:"10"                                    help:"Maximum depth for nested XR recursion." name:"max-nested-depth"`
+	Timeout        time.Duration `default:"1m"                                    help:"How long to run before timing out."`
+	QPS            float32       `default:"0"                                     help:"Maximum QPS to the API server."`
+	Burst          int           `default:"0"                                     help:"Maximum burst for throttle."`
+}
 
 func (v verboseFlag) BeforeApply(ctx *kong.Context) error { //nolint:unparam // BeforeApply requires this signature.
 	logger := logging.NewLogrLogger(zap.New(zap.UseDevMode(true)))

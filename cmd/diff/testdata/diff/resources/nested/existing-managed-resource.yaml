@@ -1,0 +1,11 @@
+# Existing managed resource in the cluster (created by child XR)
+apiVersion: ns.nop.example.org/v1alpha1
+kind: XDownstreamResource
+metadata:
+  name: test-parent-child-managed
+  namespace: default
+  annotations:
+    gotemplating.fn.crossplane.io/composition-resource-name: managed-resource
+spec:
+  forProvider:
+    configData: "existing-value"

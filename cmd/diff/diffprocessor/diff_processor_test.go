@@ -45,6 +45,20 @@ const (
 // Ensure MockDiffProcessor implements the DiffProcessor interface.
 var _ DiffProcessor = &tu.MockDiffProcessor{}
 
+// testProcessorOptions returns sensible default options for tests.
+// Tests can append additional options or override these as needed.
+func testProcessorOptions(t *testing.T) []ProcessorOption {
+	t.Helper()
+
+	return []ProcessorOption{
+		WithNamespace("default"),
+		WithColorize(false),
+		WithCompact(false),
+		WithMaxNestedDepth(10),
+		WithLogger(tu.TestLogger(t, false)),
+	}
+}
+
 func TestDefaultDiffProcessor_PerformDiff(t *testing.T) {
 	// Setup test context
 	ctx := t.Context()
@@ -104,11 +118,9 @@ func TestDefaultDiffProcessor_PerformDiff(t *testing.T) {
 
 				return k8sClients, xpClients
 			},
-			resources: []*un.Unstructured{},
-			processorOpts: []ProcessorOption{
-				WithLogger(tu.TestLogger(t, false)),
-			},
-			want: nil,
+			resources:     []*un.Unstructured{},
+			processorOpts: testProcessorOptions(t),
+			want:          nil,
 		},
 		"DiffSingleResourceError": {
 			setupMocks: func() (k8.Clients, xp.Clients) {
@@ -135,11 +147,9 @@ func TestDefaultDiffProcessor_PerformDiff(t *testing.T) {
 
 				return k8sClients, xpClients
 			},
-			resources: []*un.Unstructured{resource1},
-			processorOpts: []ProcessorOption{
-				WithLogger(tu.TestLogger(t, false)),
-			},
-			want: errors.New("unable to process resource XR1/my-xr-1: cannot get composition: composition not found"),
+			resources:     []*un.Unstructured{resource1},
+			processorOpts: testProcessorOptions(t),
+			want:          errors.New("unable to process resource XR1/my-xr-1: cannot get composition: composition not found"),
 		},
 		"MultipleResourceErrors": {
 			setupMocks: func() (k8.Clients, xp.Clients) {
@@ -166,10 +176,8 @@ func TestDefaultDiffProcessor_PerformDiff(t *testing.T) {
 
 				return k8sClients, xpClients
 			},
-			resources: []*un.Unstructured{resource1, resource2},
-			processorOpts: []ProcessorOption{
-				WithLogger(tu.TestLogger(t, false)),
-			},
+			resources:     []*un.Unstructured{resource1, resource2},
+			processorOpts: testProcessorOptions(t),
 			want: errors.New("[unable to process resource XR1/my-xr-1: cannot get composition: composition not found, " +
 				"unable to process resource XR1/my-xr-2: cannot get composition: composition not found]"),
 		},
@@ -198,11 +206,9 @@ func TestDefaultDiffProcessor_PerformDiff(t *testing.T) {
 
 				return k8sClients, xpClients
 			},
-			resources: []*un.Unstructured{resource1},
-			processorOpts: []ProcessorOption{
-				WithLogger(tu.TestLogger(t, false)),
-			},
-			want: errors.New("unable to process resource XR1/my-xr-1: cannot get composition: composition not found"),
+			resources:     []*un.Unstructured{resource1},
+			processorOpts: testProcessorOptions(t),
+			want:          errors.New("unable to process resource XR1/my-xr-1: cannot get composition: composition not found"),
 		},
 		"GetFunctionsError": {
 			setupMocks: func() (k8.Clients, xp.Clients) {
@@ -231,11 +237,9 @@ func TestDefaultDiffProcessor_PerformDiff(t *testing.T) {
 
 				return k8sClients, xpClients
 			},
-			resources: []*un.Unstructured{resource1},
-			processorOpts: []ProcessorOption{
-				WithLogger(tu.TestLogger(t, false)),
-			},
-			want: errors.New("unable to process resource XR1/my-xr-1: cannot get functions from pipeline: function not found"),
+			resources:     []*un.Unstructured{resource1},
+			processorOpts: testProcessorOptions(t),
+			want:          errors.New("unable to process resource XR1/my-xr-1: cannot get functions from pipeline: function not found"),
 		},
 		"SuccessfulDiff": {
 			setupMocks: func() (k8.Clients, xp.Clients) {
@@ -247,6 +251,10 @@ func TestDefaultDiffProcessor_PerformDiff(t *testing.T) {
 						},
 					},
 				}
+
+				// Create CRDs upfront to avoid recreating them in closures
+				mainCRD := makeTestCRD(testCRDName, testKind, testGroup, testAPIVersion)
+				composedCRD := makeTestCRD("composedresources.cpd.org", "ComposedResource", "cpd.org", "v1")
 
 				// Create Kubernetes client mocks
 				k8sClients := k8.Clients{
@@ -261,19 +269,67 @@ func TestDefaultDiffProcessor_PerformDiff(t *testing.T) {
 						WithNoResourcesRequiringCRDs().
 						WithGetCRD(func(_ context.Context, gvk schema.GroupVersionKind) (*extv1.CustomResourceDefinition, error) {
 							if gvk.Group == testGroup && gvk.Kind == testKind {
-								return makeTestCRD(testCRDName, testKind, testGroup, testAPIVersion), nil
+								return mainCRD, nil
 							}
 
 							if gvk.Group == "cpd.org" && gvk.Kind == "ComposedResource" {
-								return makeTestCRD("composedresources.cpd.org", "ComposedResource", "cpd.org", "v1"), nil
+								return composedCRD, nil
 							}
 
 							return nil, errors.New("CRD not found")
 						}).
-						WithSuccessfulCRDByNameFetch(testCRDName, makeTestCRD(testCRDName, testKind, testGroup, testAPIVersion)).
+						WithGetCRDByName(func(name string) (*extv1.CustomResourceDefinition, error) {
+							if name == testCRDName {
+								return mainCRD, nil
+							}
+
+							if name == "composedresources.cpd.org" {
+								return composedCRD, nil
+							}
+
+							return nil, errors.Errorf("CRD with name %s not found", name)
+						}).
 						Build(),
 					Type: tu.NewMockTypeConverter().Build(),
 				}
+
+				// Create XRD for composed resource
+				composedXRD := tu.NewXRD("composedresources.cpd.org", "cpd.org", "ComposedResource").
+					WithPlural("composedresources").
+					WithSingular("composedresource").
+					WithVersion("v1", true, true).
+					WithSchema(&extv1.JSONSchemaProps{
+						Type: "object",
+						Properties: map[string]extv1.JSONSchemaProps{
+							"spec": {
+								Type: "object",
+								Properties: map[string]extv1.JSONSchemaProps{
+									"param": {Type: "string"},
+								},
+							},
+							"status": {Type: "object"},
+						},
+					}).
+					BuildAsUnstructured()
+
+				// Create main XRD
+				mainXRD := tu.NewXRD(testXRDName, testGroup, testKind).
+					WithPlural(testPlural).
+					WithSingular(testSingular).
+					WithVersion("v1", true, true).
+					WithSchema(&extv1.JSONSchemaProps{
+						Type: "object",
+						Properties: map[string]extv1.JSONSchemaProps{
+							"spec": {
+								Type: "object",
+								Properties: map[string]extv1.JSONSchemaProps{
+									"field": {Type: "string"},
+								},
+							},
+							"status": {Type: "object"},
+						},
+					}).
+					BuildAsUnstructured()
 
 				// Create Crossplane client mocks
 				xpClients := xp.Clients{
@@ -282,10 +338,8 @@ func TestDefaultDiffProcessor_PerformDiff(t *testing.T) {
 						Build(),
 					Definition: tu.NewMockDefinitionClient().
 						WithSuccessfulXRDsFetch([]*un.Unstructured{}).
-						WithXRDForXR(tu.NewXRD(testXRDName, testGroup, testKind).
-							WithPlural(testPlural).
-							WithSingular(testSingular).
-							BuildAsUnstructured()).
+						WithXRDForGVK(schema.GroupVersionKind{Group: testGroup, Version: "v1", Kind: testKind}, mainXRD).
+						WithXRDForGVK(schema.GroupVersionKind{Group: "cpd.org", Version: "v1", Kind: "ComposedResource"}, composedXRD).
 						Build(),
 					Environment: tu.NewMockEnvironmentClient().
 						WithSuccessfulEnvironmentConfigsFetch([]*un.Unstructured{}).
@@ -301,18 +355,25 @@ func TestDefaultDiffProcessor_PerformDiff(t *testing.T) {
 				return k8sClients, xpClients
 			},
 			resources: []*un.Unstructured{resource1},
-			processorOpts: []ProcessorOption{
-				WithLogger(tu.TestLogger(t, false)),
+			processorOpts: append(testProcessorOptions(t),
 				WithRenderFunc(func(_ context.Context, _ logging.Logger, in render.Inputs) (render.Outputs, error) {
-					return render.Outputs{
-						CompositeResource: in.CompositeResource,
-						ComposedResources: []cpd.Unstructured{
-							{
-								Unstructured: un.Unstructured{
-									Object: composedResource.Object,
+					// Only return composed resources for the main XR, not for nested XRs
+					// to avoid infinite recursion
+					if in.CompositeResource.GetKind() == testKind {
+						return render.Outputs{
+							CompositeResource: in.CompositeResource,
+							ComposedResources: []cpd.Unstructured{
+								{
+									Unstructured: un.Unstructured{
+										Object: composedResource.Object,
+									},
 								},
 							},
-						},
+						}, nil
+					}
+					// For nested XRs, just return the XR itself with no composed resources
+					return render.Outputs{
+						CompositeResource: in.CompositeResource,
 					}, nil
 				}),
 				// Override the schema validator factory to use a simple validator
@@ -384,7 +445,7 @@ func TestDefaultDiffProcessor_PerformDiff(t *testing.T) {
 						},
 					}
 				}),
-			},
+			),
 			verifyOutput: func(t *testing.T, output string) {
 				t.Helper()
 				// We should have some output from the diff
@@ -459,8 +520,7 @@ func TestDefaultDiffProcessor_PerformDiff(t *testing.T) {
 				return k8sClients, xpClients
 			},
 			resources: []*un.Unstructured{resource1},
-			processorOpts: []ProcessorOption{
-				WithLogger(tu.TestLogger(t, false)),
+			processorOpts: append(testProcessorOptions(t),
 				WithRenderFunc(func(_ context.Context, _ logging.Logger, in render.Inputs) (render.Outputs, error) {
 					// Return valid render outputs
 					return render.Outputs{
@@ -482,7 +542,7 @@ func TestDefaultDiffProcessor_PerformDiff(t *testing.T) {
 						},
 					}
 				}),
-			},
+			),
 			want:            errors.New("unable to process resource XR1/my-xr-1: cannot validate resources: validation error"),
 			validationError: true,
 		},
@@ -575,10 +635,8 @@ func TestDefaultDiffProcessor_Initialize(t *testing.T) {
 
 				return k8sClients, xpClients
 			},
-			processorOpts: []ProcessorOption{
-				WithLogger(tu.TestLogger(t, false)),
-			},
-			want: errors.Wrap(errors.Wrap(errors.New("XRD not found"), "cannot get XRDs"), "cannot load CRDs"),
+			processorOpts: testProcessorOptions(t),
+			want:          errors.Wrap(errors.Wrap(errors.New("XRD not found"), "cannot get XRDs"), "cannot load CRDs"),
 		},
 		"EnvConfigsError": {
 			setupMocks: func() (k8.Clients, xp.Clients) {
@@ -607,10 +665,8 @@ func TestDefaultDiffProcessor_Initialize(t *testing.T) {
 
 				return k8sClients, xpClients
 			},
-			processorOpts: []ProcessorOption{
-				WithLogger(tu.TestLogger(t, false)),
-			},
-			want: errors.Wrap(errors.New("env configs not found"), "cannot get environment configs"),
+			processorOpts: testProcessorOptions(t),
+			want:          errors.Wrap(errors.New("env configs not found"), "cannot get environment configs"),
 		},
 		"Success": {
 			setupMocks: func() (k8.Clients, xp.Clients) {
@@ -639,10 +695,8 @@ func TestDefaultDiffProcessor_Initialize(t *testing.T) {
 
 				return k8sClients, xpClients
 			},
-			processorOpts: []ProcessorOption{
-				WithLogger(tu.TestLogger(t, false)),
-			},
-			want: nil,
+			processorOpts: testProcessorOptions(t),
+			want:          nil,
 		},
 	}
 
@@ -1104,13 +1158,16 @@ func TestDefaultDiffProcessor_RenderWithRequirements(t *testing.T) {
 			)
 
 			// Build processor options
-			processor := NewDiffProcessor(k8.Clients{}, xp.Clients{},
+			baseOpts := testProcessorOptions(t)
+			customOpts := []ProcessorOption{
 				WithLogger(logger),
 				WithRenderFunc(countingRenderFunc),
 				WithRequirementsProviderFactory(func(k8.ResourceClient, xp.EnvironmentClient, RenderFunc, logging.Logger) *RequirementsProvider {
 					return requirementsProvider
 				}),
-			)
+			}
+			baseOpts = append(baseOpts, customOpts...)
+			processor := NewDiffProcessor(k8.Clients{}, xp.Clients{}, baseOpts...)
 
 			// Call the method under test
 			output, err := processor.(*DefaultDiffProcessor).RenderWithRequirements(ctx, tt.xr, tt.composition, tt.functions, tt.resourceID)
@@ -1153,4 +1210,446 @@ func makeTestCRD(name string, kind string, group string, version string) *extv1.
 		WithVersion(version, true, true).
 		WithStandardSchema("coolField").
 		Build()
+}
+
+func TestDefaultDiffProcessor_getCompositeResourceXRD(t *testing.T) {
+	ctx := t.Context()
+
+	// Create test XRD for parent resources
+	parentXRD := tu.NewXRD("xparentresources.nested.example.org", "nested.example.org", "XParentResource").
+		WithVersion("v1alpha1", true, true).
+		WithSchema(&extv1.JSONSchemaProps{
+			Type: "object",
+			Properties: map[string]extv1.JSONSchemaProps{
+				"spec": {
+					Type: "object",
+					Properties: map[string]extv1.JSONSchemaProps{
+						"parentField": {Type: "string"},
+					},
+				},
+				"status": {Type: "object"},
+			},
+		}).
+		Build()
+
+	// Create test XRD for child resources
+	childXRD := tu.NewXRD("xchildresources.nested.example.org", "nested.example.org", "XChildResource").
+		WithVersion("v1alpha1", true, true).
+		WithSchema(&extv1.JSONSchemaProps{
+			Type: "object",
+			Properties: map[string]extv1.JSONSchemaProps{
+				"spec": {
+					Type: "object",
+					Properties: map[string]extv1.JSONSchemaProps{
+						"childField": {Type: "string"},
+					},
+				},
+				"status": {Type: "object"},
+			},
+		}).
+		Build()
+
+	tests := map[string]struct {
+		defClient   xp.DefinitionClient
+		resource    *un.Unstructured
+		wantIsXR    bool
+		wantXRDName string
+	}{
+		"Managed resource is not an XR": {
+			defClient: tu.NewMockDefinitionClient().
+				WithXRDForXRNotFound().
+				Build(),
+			resource: tu.NewResource("nop.example.org/v1alpha1", "NopResource", "test-managed").
+				WithSpecField("forProvider", map[string]interface{}{
+					"configData": "test-value",
+				}).
+				Build(),
+			wantIsXR:    false,
+			wantXRDName: "",
+		},
+		"Parent XR is correctly identified": {
+			defClient: tu.NewMockDefinitionClient().
+				WithXRD(parentXRD).
+				Build(),
+			resource: tu.NewResource("nested.example.org/v1alpha1", "XParentResource", "test-parent").
+				WithSpecField("parentField", "parent-value").
+				Build(),
+			wantIsXR:    true,
+			wantXRDName: "xparentresources.nested.example.org",
+		},
+		"Child XR is correctly identified": {
+			defClient: tu.NewMockDefinitionClient().
+				WithXRD(childXRD).
+				Build(),
+			resource: tu.NewResource("nested.example.org/v1alpha1", "XChildResource", "test-child").
+				WithSpecField("childField", "child-value").
+				Build(),
+			wantIsXR:    true,
+			wantXRDName: "xchildresources.nested.example.org",
+		},
+		"Error from definition client is handled": {
+			defClient: tu.NewMockDefinitionClient().
+				WithXRDForXRError(errors.New("cluster connection error")).
+				Build(),
+			resource: tu.NewResource("nested.example.org/v1alpha1", "XParentResource", "test-parent").
+				WithSpecField("parentField", "parent-value").
+				Build(),
+			wantIsXR:    false,
+			wantXRDName: "",
+		},
+	}
+
+	for name, tt := range tests {
+		t.Run(name, func(t *testing.T) {
+			// Create processor with mocked definition client
+			defClient := tt.defClient
+
+			processor := &DefaultDiffProcessor{
+				defClient: defClient,
+				config: ProcessorConfig{
+					Logger: tu.TestLogger(t, false),
+				},
+			}
+
+			// Call the method under test
+			isXR, xrd := processor.getCompositeResourceXRD(ctx, tt.resource)
+
+			// Check isXR result
+			if diff := gcmp.Diff(tt.wantIsXR, isXR); diff != "" {
+				t.Errorf("getCompositeResourceXRD() isXR mismatch (-want +got):\n%s", diff)
+			}
+
+			// Check XRD result
+			var gotXRDName string
+			if xrd != nil {
+				gotXRDName = xrd.GetName()
+			}
+
+			if diff := gcmp.Diff(tt.wantXRDName, gotXRDName); diff != "" {
+				t.Errorf("getCompositeResourceXRD() XRD name mismatch (-want +got):\n%s", diff)
+			}
+		})
+	}
+}
+
+func TestDefaultDiffProcessor_ProcessNestedXRs(t *testing.T) {
+	ctx := t.Context()
+
+	// Create test resources
+	childXR := tu.NewResource("nested.example.org/v1alpha1", "XChildResource", "test-parent-child").
+		WithSpecField("childField", "parent-value").
+		WithCompositionResourceName("child-xr").
+		Build()
+
+	managedResource := tu.NewResource("nop.example.org/v1alpha1", "NopResource", "test-managed").
+		WithSpecField("forProvider", map[string]interface{}{
+			"configData": "test-value",
+		}).
+		WithCompositionResourceName("managed-resource").
+		Build()
+
+	childXRD := tu.NewXRD("xchildresources.nested.example.org", "nested.example.org", "XChildResource").
+		WithVersion("v1alpha1", true, true).
+		WithSchema(&extv1.JSONSchemaProps{
+			Type: "object",
+			Properties: map[string]extv1.JSONSchemaProps{
+				"spec": {
+					Type: "object",
+					Properties: map[string]extv1.JSONSchemaProps{
+						"childField": {Type: "string"},
+					},
+				},
+				"status": {Type: "object"},
+			},
+		}).
+		Build()
+
+	childComposition := tu.NewComposition("child-composition").
+		WithCompositeTypeRef("nested.example.org/v1alpha1", "XChildResource").
+		WithPipelineMode().
+		WithPipelineStep("generate-managed", "function-go-templating", map[string]interface{}{
+			"apiVersion": "template.fn.crossplane.io/v1beta1",
+			"kind":       "GoTemplate",
+			"source":     "Inline",
+			"inline": map[string]interface{}{
+				"template": "apiVersion: nop.example.org/v1alpha1\nkind: NopResource\nmetadata:\n  name: test\n  annotations:\n    gotemplating.fn.crossplane.io/composition-resource-name: managed-resource\nspec:\n  forProvider:\n    configData: test",
+			},
+		}).
+		Build()
+
+	tests := map[string]struct {
+		setupMocks        func() (xp.Clients, k8.Clients)
+		composedResources []cpd.Unstructured
+		parentResourceID  string
+		depth             int
+		wantDiffCount     int
+		wantErr           bool
+		wantErrContain    string
+	}{
+		"No composed resources returns empty": {
+			setupMocks: func() (xp.Clients, k8.Clients) {
+				xpClients := xp.Clients{
+					Definition: tu.NewMockDefinitionClient().Build(),
+				}
+				k8sClients := k8.Clients{}
+
+				return xpClients, k8sClients
+			},
+			composedResources: []cpd.Unstructured{},
+			parentResourceID:  "XParentResource/test-parent",
+			depth:             1,
+			wantDiffCount:     0,
+			wantErr:           false,
+		},
+		"Only managed resources returns empty": {
+			setupMocks: func() (xp.Clients, k8.Clients) {
+				xpClients := xp.Clients{
+					Definition: tu.NewMockDefinitionClient().
+						WithXRDForXRNotFound().
+						Build(),
+				}
+				k8sClients := k8.Clients{}
+
+				return xpClients, k8sClients
+			},
+			composedResources: []cpd.Unstructured{
+				{Unstructured: *managedResource},
+			},
+			parentResourceID: "XParentResource/test-parent",
+			depth:            1,
+			wantDiffCount:    0,
+			wantErr:          false,
+		},
+		"Child XR is processed recursively": {
+			setupMocks: func() (xp.Clients, k8.Clients) {
+				// Create functions that the composition references
+				functions := []pkgv1.Function{
+					{
+						ObjectMeta: metav1.ObjectMeta{
+							Name: "function-go-templating",
+						},
+						Spec: pkgv1.FunctionSpec{
+							PackageSpec: pkgv1.PackageSpec{
+								Package: "xpkg.upbound.io/crossplane-contrib/function-go-templating:v0.11.0",
+							},
+						},
+					},
+				}
+
+				xpClients := xp.Clients{
+					Definition: tu.NewMockDefinitionClient().
+						WithXRD(childXRD).
+						Build(),
+					Composition: tu.NewMockCompositionClient().
+						WithComposition(childComposition).
+						Build(),
+					Function: tu.NewMockFunctionClient().
+						WithSuccessfulFunctionsFetch(functions).
+						Build(),
+					Environment: tu.NewMockEnvironmentClient().
+						WithSuccessfulEnvironmentConfigsFetch([]*un.Unstructured{}).
+						Build(),
+				}
+
+				// Create a child CRD with proper schema for childField
+				childCRD := tu.NewCRD("xchildresources.nested.example.org", "nested.example.org", "XChildResource").
+					WithListKind("XChildResourceList").
+					WithPlural("xchildresources").
+					WithSingular("xchildresource").
+					WithVersion("v1alpha1", true, true).
+					WithStandardSchema("childField").
+					Build()
+
+				// Create a CRD for the managed NopResource that the composition creates
+				nopCRD := tu.NewCRD("nopresources.nop.example.org", "nop.example.org", "NopResource").
+					WithListKind("NopResourceList").
+					WithPlural("nopresources").
+					WithSingular("nopresource").
+					WithVersion("v1alpha1", true, true).
+					WithStandardSchema("configData").
+					Build()
+
+				k8sClients := k8.Clients{
+					Apply:    tu.NewMockApplyClient().Build(),
+					Resource: tu.NewMockResourceClient().Build(),
+					Schema: tu.NewMockSchemaClient().
+						WithFoundCRD("nested.example.org", "XChildResource", childCRD).
+						WithFoundCRD("nop.example.org", "NopResource", nopCRD).
+						WithSuccessfulCRDByNameFetch("xchildresources.nested.example.org", childCRD).
+						Build(),
+					Type: tu.NewMockTypeConverter().Build(),
+				}
+
+				return xpClients, k8sClients
+			},
+			composedResources: []cpd.Unstructured{
+				{Unstructured: *childXR},
+			},
+			parentResourceID: "XParentResource/test-parent",
+			depth:            1,
+			wantDiffCount:    1, // Should have diff for the child XR itself
+			wantErr:          false,
+		},
+		"Max depth exceeded returns error": {
+			setupMocks: func() (xp.Clients, k8.Clients) {
+				xpClients := xp.Clients{
+					Definition: tu.NewMockDefinitionClient().
+						WithXRD(childXRD).
+						Build(),
+				}
+				k8sClients := k8.Clients{}
+
+				return xpClients, k8sClients
+			},
+			composedResources: []cpd.Unstructured{
+				{Unstructured: *childXR},
+			},
+			parentResourceID: "XParentResource/test-parent",
+			depth:            11, // Exceeds default maxDepth of 10
+			wantDiffCount:    0,
+			wantErr:          true,
+			wantErrContain:   "maximum nesting depth exceeded",
+		},
+		"Mixed XR and managed resources processes only XRs": {
+			setupMocks: func() (xp.Clients, k8.Clients) {
+				// Create functions that the composition references
+				functions := []pkgv1.Function{
+					{
+						ObjectMeta: metav1.ObjectMeta{
+							Name: "function-go-templating",
+						},
+						Spec: pkgv1.FunctionSpec{
+							PackageSpec: pkgv1.PackageSpec{
+								Package: "xpkg.upbound.io/crossplane-contrib/function-go-templating:v0.11.0",
+							},
+						},
+					},
+				}
+
+				xpClients := xp.Clients{
+					Definition: tu.NewMockDefinitionClient().
+						WithXRD(childXRD).
+						WithXRDForXRNotFoundForGVK(schema.GroupVersionKind{
+							Group:   "nop.example.org",
+							Version: "v1alpha1",
+							Kind:    "NopResource",
+						}).
+						Build(),
+					Composition: tu.NewMockCompositionClient().
+						WithComposition(childComposition).
+						Build(),
+					Function: tu.NewMockFunctionClient().
+						WithSuccessfulFunctionsFetch(functions).
+						Build(),
+					Environment: tu.NewMockEnvironmentClient().
+						WithSuccessfulEnvironmentConfigsFetch([]*un.Unstructured{}).
+						Build(),
+				}
+
+				// Create a child CRD with proper schema for childField
+				childCRD := tu.NewCRD("xchildresources.nested.example.org", "nested.example.org", "XChildResource").
+					WithListKind("XChildResourceList").
+					WithPlural("xchildresources").
+					WithSingular("xchildresource").
+					WithVersion("v1alpha1", true, true).
+					WithStandardSchema("childField").
+					Build()
+
+				// Create a CRD for the managed NopResource that the composition creates
+				nopCRD := tu.NewCRD("nopresources.nop.example.org", "nop.example.org", "NopResource").
+					WithListKind("NopResourceList").
+					WithPlural("nopresources").
+					WithSingular("nopresource").
+					WithVersion("v1alpha1", true, true).
+					WithStandardSchema("configData").
+					Build()
+
+				k8sClients := k8.Clients{
+					Apply:    tu.NewMockApplyClient().Build(),
+					Resource: tu.NewMockResourceClient().Build(),
+					Schema: tu.NewMockSchemaClient().
+						WithFoundCRD("nested.example.org", "XChildResource", childCRD).
+						WithFoundCRD("nop.example.org", "NopResource", nopCRD).
+						WithSuccessfulCRDByNameFetch("xchildresources.nested.example.org", childCRD).
+						Build(),
+					Type: tu.NewMockTypeConverter().Build(),
+				}
+
+				return xpClients, k8sClients
+			},
+			composedResources: []cpd.Unstructured{
+				{Unstructured: *childXR},
+				{Unstructured: *managedResource},
+			},
+			parentResourceID: "XParentResource/test-parent",
+			depth:            1,
+			wantDiffCount:    1, // Only the child XR should be processed
+			wantErr:          false,
+		},
+	}
+
+	for name, tt := range tests {
+		t.Run(name, func(t *testing.T) {
+			// Setup mocks
+			xpClients, k8sClients := tt.setupMocks()
+
+			// Create processor with behavior defaults + custom options
+			baseOpts := testProcessorOptions(t)
+			customOpts := []ProcessorOption{
+				WithSchemaValidatorFactory(func(k8.SchemaClient, xp.DefinitionClient, logging.Logger) SchemaValidator {
+					return &tu.MockSchemaValidator{
+						ValidateResourcesFn: func(context.Context, *un.Unstructured, []cpd.Unstructured) error {
+							return nil
+						},
+					}
+				}),
+				WithDiffCalculatorFactory(func(k8.ApplyClient, xp.ResourceTreeClient, ResourceManager, logging.Logger, renderer.DiffOptions) DiffCalculator {
+					return &tu.MockDiffCalculator{
+						CalculateDiffsFn: func(_ context.Context, xr *cmp.Unstructured, _ render.Outputs) (map[string]*dt.ResourceDiff, error) {
+							// Return a simple diff for the XR to make the test pass
+							diffs := make(map[string]*dt.ResourceDiff)
+							gvk := xr.GroupVersionKind()
+							resourceID := gvk.Kind + "/" + xr.GetName()
+							diffs[resourceID] = &dt.ResourceDiff{
+								Gvk:          gvk,
+								ResourceName: xr.GetName(),
+								DiffType:     dt.DiffTypeAdded,
+							}
+
+							return diffs, nil
+						},
+					}
+				}),
+			}
+			baseOpts = append(baseOpts, customOpts...)
+			processor := NewDiffProcessor(k8sClients, xpClients, baseOpts...).(*DefaultDiffProcessor)
+
+			// Initialize if needed
+			if len(tt.composedResources) > 0 {
+				// Mock composition provider that returns a composition
+				compositionProvider := func(ctx context.Context, res *un.Unstructured) (*apiextensionsv1.Composition, error) {
+					return xpClients.Composition.FindMatchingComposition(ctx, res)
+				}
+
+				// Call the method under test
+				diffs, err := processor.ProcessNestedXRs(ctx, tt.composedResources, compositionProvider, tt.parentResourceID, tt.depth)
+
+				// Check error
+				if (err != nil) != tt.wantErr {
+					t.Errorf("ProcessNestedXRs() error = %v, wantErr %v", err, tt.wantErr)
+					return
+				}
+
+				if tt.wantErr && tt.wantErrContain != "" && !strings.Contains(err.Error(), tt.wantErrContain) {
+					t.Errorf("ProcessNestedXRs() error = %v, want error containing %v", err, tt.wantErrContain)
+					return
+				}
+
+				// Check diff count
+				if diff := gcmp.Diff(tt.wantDiffCount, len(diffs)); diff != "" {
+					t.Errorf("ProcessNestedXRs() diff count mismatch (-want +got):\n%s", diff)
+				}
+			}
+		})
+	}
 }
