@@ -331,7 +331,7 @@ func (p *DefaultDiffProcessor) ProcessNestedXRs(
 		un := &un.Unstructured{Object: composed.UnstructuredContent()}
 
 		// Check if this composed resource is itself an XR
-		isXR, _ := p.isCompositeResource(ctx, un)
+		isXR, _ := p.getCompositeResourceXRD(ctx, un)
 
 		if !isXR {
 			// Skip non-XR resources
@@ -361,7 +361,7 @@ func (p *DefaultDiffProcessor) ProcessNestedXRs(
 				continue
 			}
 
-			// For other errors, fail per CLAUDE.md: "never silently continue in the face of failures"
+			// For other errors, fail per Guiding Principles: "never silently continue in the face of failures"
 			p.config.Logger.Debug("Error processing nested XR",
 				"nestedXR", nestedResourceID,
 				"parentXR", parentResourceID,
@@ -632,10 +632,10 @@ func (p *DefaultDiffProcessor) propagateNamespacesToManagedResources(_ context.C
 	}
 }
 
-// isCompositeResource checks if a resource is a Composite Resource (XR) by looking it up in XRDs.
+// getCompositeResourceXRD checks if a resource is a Composite Resource (XR) by looking it up in XRDs.
 // Returns true if the resource is an XR, along with its XRD.
 // Returns false if it's not an XR or if there's an error (errors are logged but not returned).
-func (p *DefaultDiffProcessor) isCompositeResource(ctx context.Context, resource *un.Unstructured) (bool, *un.Unstructured) {
+func (p *DefaultDiffProcessor) getCompositeResourceXRD(ctx context.Context, resource *un.Unstructured) (bool, *un.Unstructured) {
 	gvk := resource.GroupVersionKind()
 
 	p.config.Logger.Debug("Checking if resource is a composite resource",

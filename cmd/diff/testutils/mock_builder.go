@@ -849,13 +849,15 @@ func (b *MockEnvironmentClientBuilder) Build() *MockEnvironmentClient {
 
 // MockDefinitionClientBuilder helps build crossplane.DefinitionClient mocks.
 type MockDefinitionClientBuilder struct {
-	mock *MockDefinitionClient
+	mock   *MockDefinitionClient
+	xrdMap map[schema.GroupVersionKind]*un.Unstructured
 }
 
 // NewMockDefinitionClient creates a new MockDefinitionClientBuilder.
 func NewMockDefinitionClient() *MockDefinitionClientBuilder {
 	return &MockDefinitionClientBuilder{
-		mock: &MockDefinitionClient{},
+		mock:   &MockDefinitionClient{},
+		xrdMap: make(map[schema.GroupVersionKind]*un.Unstructured),
 	}
 }
 
@@ -951,6 +953,14 @@ func (b *MockDefinitionClientBuilder) WithXRDForXR(unstructured *un.Unstructured
 	})
 }
 
+// WithXRDForGVK adds an XRD to be returned for a specific GVK.
+// This method can be called multiple times to add different XRDs for different GVKs.
+// When Build() is called, GetXRDForXR will use the accumulated XRD mappings.
+func (b *MockDefinitionClientBuilder) WithXRDForGVK(gvk schema.GroupVersionKind, xrd *un.Unstructured) *MockDefinitionClientBuilder {
+	b.xrdMap[gvk] = xrd
+	return b
+}
+
 // WithXRDForClaim sets the GetXRDForXR behavior to return the specified XR.
 func (b *MockDefinitionClientBuilder) WithXRDForClaim(unstructured *un.Unstructured) *MockDefinitionClientBuilder {
 	return b.WithGetXRDForClaim(func(_ context.Context, _ schema.GroupVersionKind) (*un.Unstructured, error) {
@@ -1021,7 +1031,23 @@ func (b *MockDefinitionClientBuilder) WithXRDForXRError(err error) *MockDefiniti
 }
 
 // Build returns the built mock.
+// If WithXRDForGVK was used to add XRD mappings, this will configure GetXRDForXR
+// to use those mappings.
 func (b *MockDefinitionClientBuilder) Build() *MockDefinitionClient {
+	// If there are XRDs in the map and GetXRDForXR hasn't been explicitly set,
+	// configure it to use the map
+	if len(b.xrdMap) > 0 && b.mock.GetXRDForXRFn == nil {
+		// Capture the map in the closure
+		xrdMap := b.xrdMap
+		b.mock.GetXRDForXRFn = func(_ context.Context, gvk schema.GroupVersionKind) (*un.Unstructured, error) {
+			if xrd, found := xrdMap[gvk]; found {
+				return xrd, nil
+			}
+
+			return nil, errors.Errorf("no XRD found that defines XR type %s", gvk.String())
+		}
+	}
+
 	return b.mock
 }
 
