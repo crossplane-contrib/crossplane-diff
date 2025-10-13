@@ -10,6 +10,7 @@ import (
 	"github.com/crossplane-contrib/crossplane-diff/cmd/diff/renderer"
 	dt "github.com/crossplane-contrib/crossplane-diff/cmd/diff/renderer/types"
 	tu "github.com/crossplane-contrib/crossplane-diff/cmd/diff/testutils"
+	gcmp "github.com/google/go-cmp/cmp"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	un "k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -382,16 +383,16 @@ func TestDefaultDiffCalculator_CalculateDiff(t *testing.T) {
 			}
 
 			// Check the basics of the diff
-			if diff.Gvk != tt.wantDiff.Gvk {
-				t.Errorf("Gvk = %v, want %v", diff.Gvk.String(), tt.wantDiff.Gvk.String())
+			if diff := gcmp.Diff(tt.wantDiff.Gvk, diff.Gvk); diff != "" {
+				t.Errorf("Gvk mismatch (-want +got):\n%s", diff)
 			}
 
-			if diff.ResourceName != tt.wantDiff.ResourceName {
-				t.Errorf("ResourceName = %v, want %v", diff.ResourceName, tt.wantDiff.ResourceName)
+			if diff := gcmp.Diff(tt.wantDiff.ResourceName, diff.ResourceName); diff != "" {
+				t.Errorf("ResourceName mismatch (-want +got):\n%s", diff)
 			}
 
-			if diff.DiffType != tt.wantDiff.DiffType {
-				t.Errorf("DiffType = %v, want %v", diff.DiffType, tt.wantDiff.DiffType)
+			if diff := gcmp.Diff(tt.wantDiff.DiffType, diff.DiffType); diff != "" {
+				t.Errorf("DiffType mismatch (-want +got):\n%s", diff)
 			}
 
 			// For modified resources, check that LineDiffs is populated
@@ -692,8 +693,8 @@ func TestDefaultDiffCalculator_CalculateDiffs(t *testing.T) {
 			}
 
 			// Check that we have the expected number of diffs
-			if len(diffs) != len(tt.expectedDiffs) {
-				t.Errorf("CalculateDiffs() returned %d diffs, want %d", len(diffs), len(tt.expectedDiffs))
+			if diff := gcmp.Diff(len(tt.expectedDiffs), len(diffs)); diff != "" {
+				t.Errorf("CalculateDiffs() number of diffs mismatch (-want +got):\n%s", diff)
 
 				// Print what diffs we actually got to help debug
 				for key, diff := range diffs {
@@ -709,9 +710,8 @@ func TestDefaultDiffCalculator_CalculateDiffs(t *testing.T) {
 					continue
 				}
 
-				if diff.DiffType != expectedType {
-					t.Errorf("CalculateDiffs() diff for key %s has type %s, want %s",
-						expectedKey, diff.DiffType, expectedType)
+				if diff := gcmp.Diff(expectedType, diff.DiffType); diff != "" {
+					t.Errorf("CalculateDiffs() diff type for key %s mismatch (-want +got):\n%s", expectedKey, diff)
 				}
 
 				// Check that LineDiffs is not empty for non-nil diffs
@@ -870,9 +870,8 @@ func TestDefaultDiffCalculator_CalculateRemovedResourceDiffs(t *testing.T) {
 			}
 
 			// Check that the correct resources were identified for removal
-			if len(diffs) != len(tt.expectedRemoved) {
-				t.Errorf("CalculateRemovedResourceDiffs() found %d resources to remove, want %d",
-					len(diffs), len(tt.expectedRemoved))
+			if diff := gcmp.Diff(len(tt.expectedRemoved), len(diffs)); diff != "" {
+				t.Errorf("CalculateRemovedResourceDiffs() number of removed resources mismatch (-want +got):\n%s", diff)
 
 				// Log what we found for debugging
 				for key := range diffs {

@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	tu "github.com/crossplane-contrib/crossplane-diff/cmd/diff/testutils"
+	"github.com/google/go-cmp/cmp"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	testdiscovery "k8s.io/client-go/discovery/fake"
@@ -171,9 +172,8 @@ func TestTypeConverter_GVKToGVR(t *testing.T) {
 				return
 			}
 
-			if gvr != tc.want.gvr {
-				t.Errorf("\n%s\nGVKToGVR(...): -want GVR, +got GVR:\n%v vs %v",
-					tc.reason, tc.want.gvr, gvr)
+			if diff := cmp.Diff(tc.want.gvr, gvr); diff != "" {
+				t.Errorf("\n%s\nGVKToGVR(...): -want GVR, +got GVR:\n%s", tc.reason, diff)
 			}
 		})
 	}
@@ -357,9 +357,8 @@ func TestTypeConverter_GetResourceNameForGVK(t *testing.T) {
 				return
 			}
 
-			if resourceName != tc.want.resourceName {
-				t.Errorf("\n%s\nGetResourceNameForGVK(...): want %q, got %q",
-					tc.reason, tc.want.resourceName, resourceName)
+			if diff := cmp.Diff(tc.want.resourceName, resourceName); diff != "" {
+				t.Errorf("\n%s\nGetResourceNameForGVK(...): -want, +got:\n%s", tc.reason, diff)
 			}
 		})
 	}

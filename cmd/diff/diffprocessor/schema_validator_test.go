@@ -7,6 +7,7 @@ import (
 
 	xp "github.com/crossplane-contrib/crossplane-diff/cmd/diff/client/crossplane"
 	tu "github.com/crossplane-contrib/crossplane-diff/cmd/diff/testutils"
+	"github.com/google/go-cmp/cmp"
 	extv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	un "k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -273,9 +274,8 @@ func TestDefaultSchemaValidator_EnsureComposedResourceCRDs(t *testing.T) {
 
 			// Verify the CRD count
 			crds := validator.(*DefaultSchemaValidator).GetCRDs()
-			if len(crds) != tt.expectedCRDLen {
-				t.Errorf("EnsureComposedResourceCRDs() resulted in %d CRDs, want %d",
-					len(crds), tt.expectedCRDLen)
+			if diff := cmp.Diff(tt.expectedCRDLen, len(crds)); diff != "" {
+				t.Errorf("EnsureComposedResourceCRDs() CRD count mismatch (-want +got):\n%s", diff)
 			}
 		})
 	}
