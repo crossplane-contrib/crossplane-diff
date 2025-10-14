@@ -4,8 +4,6 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"os"
-	"os/exec"
 	"path/filepath"
 	run "runtime"
 	"strconv"
@@ -31,42 +29,6 @@ import (
 const (
 	timeout = 60 * time.Second
 )
-
-// TestMain runs before all tests and cleans up after all tests complete.
-func TestMain(m *testing.M) {
-	// Run all tests
-	exitCode := m.Run()
-
-	// Clean up orphaned function containers after tests complete
-	cleanupFunctionContainers()
-
-	// Exit with the test suite's exit code
-	os.Exit(exitCode)
-}
-
-// cleanupFunctionContainers removes the named function containers used by integration tests.
-func cleanupFunctionContainers() {
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-
-	// Use exec.CommandContext to run docker command
-	cmd := exec.CommandContext(ctx, "docker", "ps", "-a", "-q", "--filter", "name=-it$")
-	output, err := cmd.Output()
-	if err != nil {
-		// Docker might not be available or no containers found - that's okay
-		return
-	}
-
-	containerIDs := strings.Fields(string(output))
-	if len(containerIDs) == 0 {
-		return
-	}
-
-	// Remove the containers
-	args := append([]string{"rm", "-f"}, containerIDs...)
-	cleanupCmd := exec.CommandContext(ctx, "docker", args...)
-	_ = cleanupCmd.Run() // Ignore errors during cleanup
-}
 
 // DiffTestType represents the type of diff test to run.
 type DiffTestType string
@@ -135,7 +97,11 @@ func runIntegrationTest(t *testing.T, testType DiffTestType, scheme *runtime.Sch
 	}
 
 	// Setup a brand new test environment for each test case
-	_, thisFile, _, _ := run.Caller(0)
+	_, thisFile, _, ok := run.Caller(0)
+	if !ok {
+		t.Fatal("failed to get caller information")
+	}
+
 	thisDir := filepath.Dir(thisFile)
 
 	crdPaths := []string{

@@ -244,7 +244,7 @@ func (v *DefaultSchemaValidator) ValidateScopeConstraints(ctx context.Context, r
 }
 
 // stripCrossplaneManagedFields creates a copy of the resource with Crossplane-managed fields removed
-// These fields are set by Crossplane controllers and may not be present in the CRD schema
+// These fields are set by Crossplane controllers and may not be present in the CRD schema.
 func (v *DefaultSchemaValidator) stripCrossplaneManagedFields(resource *un.Unstructured) *un.Unstructured {
 	// Create a deep copy to avoid modifying the original
 	sanitized := resource.DeepCopy()

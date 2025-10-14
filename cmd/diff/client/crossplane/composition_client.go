@@ -35,10 +35,10 @@ type CompositionClient interface {
 
 // DefaultCompositionClient implements CompositionClient.
 type DefaultCompositionClient struct {
-	resourceClient         kubernetes.ResourceClient
-	definitionClient       DefinitionClient
-	revisionClient         CompositionRevisionClient
-	logger                 logging.Logger
+	resourceClient   kubernetes.ResourceClient
+	definitionClient DefinitionClient
+	revisionClient   CompositionRevisionClient
+	logger           logging.Logger
 
 	// Cache of compositions
 	compositions map[string]*apiextensionsv1.Composition
@@ -176,6 +176,7 @@ func (c *DefaultCompositionClient) getCompositionUpdatePolicy(xrd, res *un.Unstr
 	if !found || policy == "" {
 		return "Automatic" // Default policy
 	}
+
 	return policy
 }
 
@@ -205,6 +206,7 @@ func (c *DefaultCompositionClient) resolveCompositionFromRevisions(
 			c.logger.Debug("Could not find latest revision, using composition directly",
 				"compositionName", compositionName,
 				"error", err)
+
 			return nil, nil
 		}
 
@@ -213,6 +215,7 @@ func (c *DefaultCompositionClient) resolveCompositionFromRevisions(
 			"resource", resourceID,
 			"revisionName", latest.GetName(),
 			"revisionNumber", latest.Spec.Revision)
+
 		return comp, nil
 	}
 
@@ -228,12 +231,14 @@ func (c *DefaultCompositionClient) resolveCompositionFromRevisions(
 			"resource", resourceID,
 			"revisionName", revisionRefName,
 			"revisionNumber", revision.Spec.Revision)
+
 		return comp, nil
 	}
 
 	// Case 3: Manual policy without revision reference - use composition directly
 	c.logger.Debug("Using composition directly (Manual policy without revision ref)",
 		"resource", resourceID)
+
 	return nil, nil
 }
 
@@ -386,11 +391,13 @@ func (c *DefaultCompositionClient) findByDirectReference(ctx context.Context, xr
 		if err != nil {
 			return nil, err
 		}
+
 		if comp != nil {
 			// Validate that the composition's compositeTypeRef matches the target GVK
 			if !c.isCompositionCompatible(comp, targetGVK) {
 				return nil, errors.Errorf("composition from revision is not compatible with %s", targetGVK.String())
 			}
+
 			return comp, nil
 		}
 

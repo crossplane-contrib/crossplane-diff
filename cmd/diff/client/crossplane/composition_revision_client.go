@@ -16,7 +16,7 @@ import (
 )
 
 const (
-	// LabelCompositionName is the label key for the composition name on CompositionRevisions
+	// LabelCompositionName is the label key for the composition name on CompositionRevisions.
 	LabelCompositionName = "crossplane.io/composition-name"
 )
 
@@ -167,6 +167,7 @@ func (c *DefaultCompositionRevisionClient) GetLatestRevisionForComposition(ctx c
 
 	// Filter revisions for this composition
 	var matchingRevisions []*apiextensionsv1.CompositionRevision
+
 	for _, rev := range c.revisions {
 		if labels := rev.GetLabels(); labels != nil {
 			if labels[LabelCompositionName] == compositionName {

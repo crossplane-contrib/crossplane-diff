@@ -37,7 +37,7 @@ type CompCmd struct {
 	Files []string `arg:"" help:"YAML files containing updated Composition(s)." optional:""`
 
 	// Configuration options
-	Namespace     string `default:"" help:"Namespace to find XRs (empty = all namespaces)." name:"namespace" short:"n"`
+	Namespace     string `default:""      help:"Namespace to find XRs (empty = all namespaces)."                            name:"namespace"      short:"n"`
 	IncludeManual bool   `default:"false" help:"Include XRs with Manual update policy (default: only Automatic policy XRs)" name:"include-manual"`
 }
 
