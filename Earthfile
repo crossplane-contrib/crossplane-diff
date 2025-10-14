@@ -225,10 +225,10 @@ go-test:
   COPY --dir +envtest-setup/envtest /usr/local/kubebuilder/bin
   # a bit dirty but preload the cache with the images we use in IT (found in functions.yaml)
   WITH DOCKER \
-    --pull xpkg.upbound.io/crossplane-contrib/function-go-templating:v0.11.0 \
-    --pull xpkg.upbound.io/crossplane-contrib/function-auto-ready:v0.4.2 \
-    --pull xpkg.upbound.io/crossplane-contrib/function-environment-configs:v0.4.0 \
-    --pull xpkg.upbound.io/crossplane-contrib/function-extra-resources:v0.1.0
+    --pull xpkg.crossplane.io/crossplane-contrib/function-go-templating:v0.11.0 \
+    --pull xpkg.crossplane.io/crossplane-contrib/function-auto-ready:v0.4.2 \
+    --pull xpkg.crossplane.io/crossplane-contrib/function-environment-configs:v0.4.0 \
+    --pull xpkg.crossplane.io/crossplane-contrib/function-extra-resources:v0.2.0
     # this is silly, but we put these files into the default KUBEBUILDER_ASSETS location, because if we set
     # KUBEBUILDER_ASSETS on `go test` to the artifact path, which is perhaps more intuitive, the syntax highlighting
     # in intellij breaks due to the word BUILD in all caps.
@@ -340,7 +340,7 @@ ci-artifacts:
   BUILD +multiplatform-build \
     --CROSSPLANE_REPO=index.docker.io/crossplane-contrib/crossplane-diff \
     --CROSSPLANE_REPO=ghcr.io/crossplane-contrib/crossplane-diff \
-    --CROSSPLANE_REPO=xpkg.upbound.io/crossplane-contrib/crossplane-diff
+    --CROSSPLANE_REPO=xpkg.crossplane.io/crossplane-contrib/crossplane-diff
 
 # ci-codeql-setup sets up CodeQL for the ci-codeql target.
 ci-codeql-setup:
