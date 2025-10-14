@@ -1387,6 +1387,13 @@ func (b *ResourceBuilder) WithNamespace(namespace string) *ResourceBuilder {
 	return b
 }
 
+// WithNestedField sets a field at an arbitrary nested path in the resource.
+// The path is a sequence of field names to traverse (e.g., "spec", "crossplane", "compositionUpdatePolicy").
+func (b *ResourceBuilder) WithNestedField(value interface{}, fields ...string) *ResourceBuilder {
+	_ = un.SetNestedField(b.resource.Object, value, fields...)
+	return b
+}
+
 // Build returns the built unstructured resource.
 func (b *ResourceBuilder) Build() *un.Unstructured {
 	return b.resource.DeepCopy()

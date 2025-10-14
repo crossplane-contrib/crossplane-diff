@@ -24,6 +24,9 @@ type ProcessorConfig struct {
 	// MaxNestedDepth is the maximum depth for recursive nested XR processing
 	MaxNestedDepth int
 
+	// IncludeManual determines whether to include XRs with Manual update policy in composition diffs
+	IncludeManual bool
+
 	// Logger is the logger to use
 	Logger logging.Logger
 
@@ -83,6 +86,13 @@ func WithCompact(compact bool) ProcessorOption {
 func WithMaxNestedDepth(depth int) ProcessorOption {
 	return func(config *ProcessorConfig) {
 		config.MaxNestedDepth = depth
+	}
+}
+
+// WithIncludeManual sets whether to include XRs with Manual update policy in composition diffs.
+func WithIncludeManual(includeManual bool) ProcessorOption {
+	return func(config *ProcessorConfig) {
+		config.IncludeManual = includeManual
 	}
 }
 

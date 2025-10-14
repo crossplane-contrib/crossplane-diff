@@ -1,0 +1,13 @@
+apiVersion: ns.diff.example.org/v1alpha1
+kind: XNopResource
+metadata:
+  name: manual-resource
+  namespace: default
+spec:
+  coolField: manual-existing-value
+  crossplane:
+    compositionRef:
+      name: xnopresources.diff.example.org
+    compositionRevisionRef:
+      name: xnopresources.diff.example.org-abc123
+    compositionUpdatePolicy: Manual

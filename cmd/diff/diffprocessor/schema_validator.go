@@ -105,11 +105,18 @@ func (v *DefaultSchemaValidator) ValidateResources(ctx context.Context, xr *un.U
 	// Create a logger writer to capture output
 	loggerWriter := loggerwriter.NewLoggerWriter(v.logger)
 
+	// Strip Crossplane-managed fields before validation
+	// These fields are set by Crossplane controllers and may not be in the CRD schema
+	sanitizedResources := make([]*un.Unstructured, len(resources))
+	for i, res := range resources {
+		sanitizedResources[i] = v.stripCrossplaneManagedFields(res)
+	}
+
 	// Validate using the CRD schemas
 	// Use skipSuccessLogs=true to avoid cluttering the output with success messages
-	v.logger.Debug("Performing schema validation", "resourceCount", len(resources))
+	v.logger.Debug("Performing schema validation", "resourceCount", len(sanitizedResources))
 
-	err = validate.SchemaValidation(ctx, resources, v.schemaClient.GetAllCRDs(), true, true, loggerWriter)
+	err = validate.SchemaValidation(ctx, sanitizedResources, v.schemaClient.GetAllCRDs(), true, true, loggerWriter)
 	if err != nil {
 		return errors.Wrap(err, "schema validation failed")
 	}
@@ -234,4 +241,22 @@ func (v *DefaultSchemaValidator) ValidateScopeConstraints(ctx context.Context, r
 	}
 
 	return nil
+}
+
+// stripCrossplaneManagedFields creates a copy of the resource with Crossplane-managed fields removed
+// These fields are set by Crossplane controllers and may not be present in the CRD schema
+func (v *DefaultSchemaValidator) stripCrossplaneManagedFields(resource *un.Unstructured) *un.Unstructured {
+	// Create a deep copy to avoid modifying the original
+	sanitized := resource.DeepCopy()
+
+	// Remove compositionRevisionRef from spec.crossplane if it exists
+	// This field is set automatically by Crossplane and may not be in all XRD schemas
+	crossplane, found, err := un.NestedMap(sanitized.Object, "spec", "crossplane")
+	if err == nil && found {
+		delete(crossplane, "compositionRevisionRef")
+		// Set the modified crossplane map back
+		_ = un.SetNestedMap(sanitized.Object, crossplane, "spec", "crossplane")
+	}
+
+	return sanitized
 }

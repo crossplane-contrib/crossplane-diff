@@ -755,6 +755,7 @@ func TestDefaultCompositionClient_FindMatchingComposition(t *testing.T) {
 			c := &DefaultCompositionClient{
 				resourceClient:   &tt.mockResource,
 				definitionClient: &tt.mockDef,
+				revisionClient:   NewCompositionRevisionClient(&tt.mockResource, tu.TestLogger(t, false)),
 				logger:           tu.TestLogger(t, false),
 				compositions:     tt.fields.compositions,
 			}
@@ -861,6 +862,7 @@ func TestDefaultCompositionClient_GetComposition(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			c := &DefaultCompositionClient{
 				resourceClient: mockResource,
+				revisionClient: NewCompositionRevisionClient(mockResource, tu.TestLogger(t, false)),
 				logger:         tu.TestLogger(t, false),
 				compositions:   tt.cache,
 			}
@@ -979,6 +981,7 @@ func TestDefaultCompositionClient_ListCompositions(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			c := &DefaultCompositionClient{
 				resourceClient: tt.mockResource,
+				revisionClient: NewCompositionRevisionClient(tt.mockResource, tu.TestLogger(t, false)),
 				logger:         tu.TestLogger(t, false),
 				compositions:   make(map[string]*apiextensionsv1.Composition),
 			}
@@ -1068,6 +1071,7 @@ func TestDefaultCompositionClient_Initialize(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			c := &DefaultCompositionClient{
 				resourceClient: tt.mockResource,
+				revisionClient: NewCompositionRevisionClient(tt.mockResource, tu.TestLogger(t, false)),
 				logger:         tu.TestLogger(t, false),
 				compositions:   make(map[string]*apiextensionsv1.Composition),
 			}

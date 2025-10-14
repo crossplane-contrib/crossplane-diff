@@ -30,6 +30,11 @@ spec:
                   properties:
                     name:
                       type: string
+                compositionRevisionRef:
+                  type: object
+                  properties:
+                    name:
+                      type: string
                 compositionSelector:
                   type: object
                   properties:

@@ -5,9 +5,7 @@
 # The 'runtime-docker-name' annotation enables container reuse across multiple test cases.
 # The 'runtime-docker-cleanup: Orphan' annotation leaves containers running after render completes,
 # allowing subsequent tests to reuse them instead of creating new ones.
-#
-# IMPORTANT: These containers will persist after test runs. Clean them up manually with:
-#   docker rm -f $(docker ps -a -q --filter "name=function-*-it")
+# Containers are automatically cleaned up after the test suite completes via TestMain.
 apiVersion: pkg.crossplane.io/v1beta1
 kind: Function
 metadata:

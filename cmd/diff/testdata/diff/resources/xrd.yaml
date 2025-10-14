@@ -24,6 +24,31 @@ spec:
                   type: string
                 environment:
                   type: string
+                crossplane:
+                  type: object
+                  properties:
+                    compositionRef:
+                      type: object
+                      properties:
+                        name:
+                          type: string
+                    compositionRevisionRef:
+                      type: object
+                      properties:
+                        name:
+                          type: string
+                    compositionUpdatePolicy:
+                      type: string
+                      enum:
+                        - Automatic
+                        - Manual
+                    compositionSelector:
+                      type: object
+                      properties:
+                        matchLabels:
+                          type: object
+                          additionalProperties:
+                            type: string
             status:
               type: object
               properties:
