@@ -134,7 +134,7 @@ go-modules:
 go-modules-tidy:
   FROM +go-modules
   CACHE --id go-build --sharing shared /root/.cache/go-build
-  COPY --dir cmd/ test/ .
+  COPY --dir cmd/ internal/ test/ .
   RUN go mod tidy
   RUN go mod verify
   SAVE ARTIFACT go.mod AS LOCAL go.mod
@@ -219,7 +219,7 @@ go-test:
   FROM +go-modules
   DO github.com/earthly/lib+INSTALL_DIND
   CACHE --id go-build --sharing shared /root/.cache/go-build
-  COPY --dir cmd/ .
+  COPY --dir cmd/ internal/ .
   # Fetch the cluster directory from the crossplane repo at the specified tag
   COPY (+fetch-crossplane-cluster/${CROSSPLANE_IMAGE_TAG} --CROSSPLANE_IMAGE_TAG=${CROSSPLANE_IMAGE_TAG}) cluster/${CROSSPLANE_IMAGE_TAG}
   COPY --dir +envtest-setup/envtest /usr/local/kubebuilder/bin
@@ -245,9 +245,10 @@ go-lint:
   CACHE --id go-build --sharing shared /root/.cache/go-build
   RUN curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/master/install.sh | sh -s -- -b $(go env GOPATH)/bin ${GOLANGCI_LINT_VERSION}
   COPY .golangci.yml .
-  COPY --dir cmd/ test/ .
+  COPY --dir cmd/ internal/ test/ .
   RUN golangci-lint run --fix
   SAVE ARTIFACT cmd AS LOCAL cmd
+  SAVE ARTIFACT internal AS LOCAL internal
   SAVE ARTIFACT test AS LOCAL test
 
 # envtest-setup is used by other targets to setup envtest.
@@ -362,7 +363,7 @@ ci-codeql:
   END
   COPY --dir +ci-codeql-setup/codeql /codeql
   CACHE --id go-build --sharing shared /root/.cache/go-build
-  COPY --dir cmd/ .
+  COPY --dir cmd/ internal/ .
   RUN /codeql/codeql database create /codeqldb --language=go
   RUN /codeql/codeql database analyze /codeqldb --threads=0 --format=sarif-latest --output=go.sarif --sarif-add-baseline-file-info
   SAVE ARTIFACT go.sarif AS LOCAL _output/codeql/go.sarif
