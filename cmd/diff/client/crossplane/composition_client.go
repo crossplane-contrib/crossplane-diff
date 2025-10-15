@@ -3,6 +3,7 @@ package crossplane
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"github.com/crossplane-contrib/crossplane-diff/cmd/diff/client/core"
 	"github.com/crossplane-contrib/crossplane-diff/cmd/diff/client/kubernetes"
@@ -37,6 +38,7 @@ type CompositionClient interface {
 type DefaultCompositionClient struct {
 	resourceClient   kubernetes.ResourceClient
 	definitionClient DefinitionClient
+	revisionClient   CompositionRevisionClient
 	logger           logging.Logger
 
 	// Cache of compositions
@@ -49,6 +51,7 @@ func NewCompositionClient(resourceClient kubernetes.ResourceClient, definitionCl
 	return &DefaultCompositionClient{
 		resourceClient:   resourceClient,
 		definitionClient: definitionClient,
+		revisionClient:   NewCompositionRevisionClient(resourceClient, logger),
 		logger:           logger,
 		compositions:     make(map[string]*apiextensionsv1.Composition),
 	}
@@ -64,6 +67,11 @@ func (c *DefaultCompositionClient) Initialize(ctx context.Context) error {
 	}
 
 	c.gvks = gvks
+
+	// Initialize revision client
+	if err := c.revisionClient.Initialize(ctx); err != nil {
+		return errors.Wrap(err, "cannot initialize composition revision client")
+	}
 
 	// List compositions to populate the cache
 	comps, err := c.ListCompositions(ctx)
@@ -153,6 +161,132 @@ func (c *DefaultCompositionClient) GetComposition(ctx context.Context, name stri
 	c.compositions[name] = comp
 
 	return comp, nil
+}
+
+// getCompositionRevisionRef reads the compositionRevisionRef from an XR/Claim spec.
+// Returns the revision name and whether it was found.
+func (c *DefaultCompositionClient) getCompositionRevisionRef(xrd, res *un.Unstructured) (string, bool) {
+	revisionRefName, found, _ := un.NestedString(res.Object, makeCrossplaneRefPath(xrd.GetAPIVersion(), "compositionRevisionRef", "name")...)
+	return revisionRefName, found && revisionRefName != ""
+}
+
+// getCompositionUpdatePolicy reads the compositionUpdatePolicy from an XR/Claim.
+// Returns the policy value and whether it was found. Defaults to "Automatic" if not found.
+func (c *DefaultCompositionClient) getCompositionUpdatePolicy(xrd, res *un.Unstructured) string {
+	policy, found, _ := un.NestedString(res.Object, makeCrossplaneRefPath(xrd.GetAPIVersion(), "compositionUpdatePolicy")...)
+	if !found || policy == "" {
+		return "Automatic" // Default policy
+	}
+
+	return policy
+}
+
+// resolveCompositionFromRevisions determines which composition to use based on revision logic.
+// Returns a composition or nil if standard resolution should be used.
+func (c *DefaultCompositionClient) resolveCompositionFromRevisions(
+	ctx context.Context,
+	xrd, res *un.Unstructured,
+	compositionName string,
+	resourceID string,
+) (*apiextensionsv1.Composition, error) {
+	// Check if there's a composition revision reference
+	revisionRefName, hasRevisionRef := c.getCompositionRevisionRef(xrd, res)
+	updatePolicy := c.getCompositionUpdatePolicy(xrd, res)
+
+	c.logger.Debug("Checking revision resolution",
+		"resource", resourceID,
+		"hasRevisionRef", hasRevisionRef,
+		"revisionRef", revisionRefName,
+		"updatePolicy", updatePolicy)
+
+	switch {
+	case updatePolicy == "Automatic":
+		// Case 1: Automatic policy - always use latest revision (if available)
+		latest, err := c.revisionClient.GetLatestRevisionForComposition(ctx, compositionName)
+		if err != nil {
+			// Check if this is a "no revisions found" case (new/unpublished composition)
+			if strings.Contains(err.Error(), "no composition revisions found") {
+				c.logger.Debug("No revisions found for composition (likely unpublished), falling back to composition directly",
+					"compositionName", compositionName,
+					"resource", resourceID)
+
+				// Fall back to using composition directly for unpublished compositions
+				return nil, nil
+			}
+
+			// For other errors, fail the diff to ensure accuracy
+			return nil, errors.Wrapf(err,
+				"cannot resolve latest composition revision for %s with Automatic update policy (composition: %s)",
+				resourceID, compositionName)
+		}
+
+		comp := c.revisionClient.GetCompositionFromRevision(latest)
+		c.logger.Debug("Using latest revision for Automatic policy",
+			"resource", resourceID,
+			"revisionName", latest.GetName(),
+			"revisionNumber", latest.Spec.Revision)
+
+		return comp, nil
+
+	case updatePolicy == "Manual" && hasRevisionRef:
+		// Case 2: Manual policy with revision reference - use that specific revision
+		revision, err := c.revisionClient.GetCompositionRevision(ctx, revisionRefName)
+		if err != nil {
+			return nil, errors.Wrapf(err,
+				"cannot get pinned composition revision %s for %s (composition: %s, policy: Manual)",
+				revisionRefName, resourceID, compositionName)
+		}
+
+		// Validate that revision belongs to the referenced composition
+		if labels := revision.GetLabels(); labels != nil {
+			if revCompName := labels[LabelCompositionName]; revCompName != "" && revCompName != compositionName {
+				return nil, errors.Errorf(
+					"composition revision %s belongs to composition %s, not %s (resource: %s)",
+					revisionRefName, revCompName, compositionName, resourceID)
+			}
+		}
+
+		comp := c.revisionClient.GetCompositionFromRevision(revision)
+		c.logger.Debug("Using pinned revision for Manual policy",
+			"resource", resourceID,
+			"revisionName", revisionRefName,
+			"revisionNumber", revision.Spec.Revision)
+
+		return comp, nil
+
+	default:
+		// Case 3: Manual policy without revision reference in spec
+		// When creating a new XR with Manual policy and no compositionRevisionRef,
+		// Crossplane pins it to the latest revision at creation time.
+		// Use the latest revision to match this behavior.
+		c.logger.Debug("Manual policy without revision ref - using latest revision (will be pinned on creation)",
+			"resource", resourceID,
+			"compositionName", compositionName)
+
+		latest, err := c.revisionClient.GetLatestRevisionForComposition(ctx, compositionName)
+		if err != nil {
+			// Check if this is a "no revisions found" case (new/unpublished composition)
+			if strings.Contains(err.Error(), "no composition revisions found") {
+				c.logger.Debug("No revisions found for composition (likely unpublished), falling back to composition directly",
+					"compositionName", compositionName,
+					"resource", resourceID)
+
+				return nil, nil
+			}
+
+			return nil, errors.Wrapf(err,
+				"cannot resolve latest composition revision for %s with Manual policy (composition: %s)",
+				resourceID, compositionName)
+		}
+
+		comp := c.revisionClient.GetCompositionFromRevision(latest)
+		c.logger.Debug("Using latest revision for Manual policy",
+			"resource", resourceID,
+			"revisionName", latest.GetName(),
+			"revisionNumber", latest.Spec.Revision)
+
+		return comp, nil
+	}
 }
 
 // FindMatchingComposition finds a composition matching the given resource.
@@ -299,8 +433,23 @@ func (c *DefaultCompositionClient) findByDirectReference(ctx context.Context, xr
 			"resource", resourceID,
 			"compositionName", compositionRefName)
 
-		// Look up composition by name
-		comp, err := c.GetComposition(ctx, compositionRefName)
+		// Check if we should use a revision instead
+		comp, err := c.resolveCompositionFromRevisions(ctx, xrd, res, compositionRefName, resourceID)
+		if err != nil {
+			return nil, err
+		}
+
+		if comp != nil {
+			// Validate that the composition's compositeTypeRef matches the target GVK
+			if !c.isCompositionCompatible(comp, targetGVK) {
+				return nil, errors.Errorf("composition from revision is not compatible with %s", targetGVK.String())
+			}
+
+			return comp, nil
+		}
+
+		// No revision-based resolution, use composition directly
+		comp, err = c.GetComposition(ctx, compositionRefName)
 		if err != nil {
 			return nil, errors.Errorf("composition %s referenced in %s not found",
 				compositionRefName, resourceID)

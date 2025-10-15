@@ -1,0 +1,13 @@
+apiVersion: ns.diff.example.org/v1alpha1
+kind: XNopResource
+metadata:
+  name: test-automatic
+  namespace: default
+spec:
+  crossplane:
+    compositionRef:
+      name: xnopresources.diff.example.org
+    compositionRevisionRef:
+      name: xnopresources.diff.example.org-abc123  # Currently on v1, but should auto-upgrade
+    compositionUpdatePolicy: Automatic
+  coolField: existing-value

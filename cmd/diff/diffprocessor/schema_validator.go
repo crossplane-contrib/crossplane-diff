@@ -105,13 +105,20 @@ func (v *DefaultSchemaValidator) ValidateResources(ctx context.Context, xr *un.U
 	// Create a logger writer to capture output
 	loggerWriter := loggerwriter.NewLoggerWriter(v.logger)
 
-	// Validate using the CRD schemas
-	// Use skipSuccessLogs=true to avoid cluttering the output with success messages
+	// Note: SchemaValidation applies defaults IN-PLACE to resources, so we must pass
+	// the original resources (not sanitized copies) to get defaults applied.
+	// We strip Crossplane-managed fields AFTER validation for cleaner error messages.
 	v.logger.Debug("Performing schema validation", "resourceCount", len(resources))
 
 	err = validate.SchemaValidation(ctx, resources, v.schemaClient.GetAllCRDs(), true, true, loggerWriter)
 	if err != nil {
 		return errors.Wrap(err, "schema validation failed")
+	}
+
+	// Strip Crossplane-managed fields from resources after validation
+	// These fields are set by Crossplane controllers and may not be in all XRD schemas
+	for i := range resources {
+		resources[i] = v.stripCrossplaneManagedFields(resources[i])
 	}
 
 	// Additionally validate resource scope constraints (namespace requirements and cross-namespace refs)
@@ -234,4 +241,22 @@ func (v *DefaultSchemaValidator) ValidateScopeConstraints(ctx context.Context, r
 	}
 
 	return nil
+}
+
+// stripCrossplaneManagedFields creates a copy of the resource with Crossplane-managed fields removed
+// These fields are set by Crossplane controllers and may not be present in the CRD schema.
+func (v *DefaultSchemaValidator) stripCrossplaneManagedFields(resource *un.Unstructured) *un.Unstructured {
+	// Create a deep copy to avoid modifying the original
+	sanitized := resource.DeepCopy()
+
+	// Remove compositionRevisionRef from spec.crossplane if it exists
+	// This field is set automatically by Crossplane and may not be in all XRD schemas
+	crossplane, found, err := un.NestedMap(sanitized.Object, "spec", "crossplane")
+	if err == nil && found {
+		delete(crossplane, "compositionRevisionRef")
+		// Set the modified crossplane map back
+		_ = un.SetNestedMap(sanitized.Object, crossplane, "spec", "crossplane")
+	}
+
+	return sanitized
 }

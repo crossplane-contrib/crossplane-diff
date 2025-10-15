@@ -1,0 +1,11 @@
+apiVersion: ns.diff.example.org/v1alpha1
+kind: XNopResource
+metadata:
+  name: test-manual-v1
+  namespace: default
+spec:
+  crossplane:
+    compositionRef:
+      name: xnopresources.diff.example.org
+    compositionUpdatePolicy: Automatic
+  coolField: modified-value

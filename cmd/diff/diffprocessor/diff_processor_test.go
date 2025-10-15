@@ -1430,7 +1430,7 @@ func TestDefaultDiffProcessor_ProcessNestedXRs(t *testing.T) {
 						},
 						Spec: pkgv1.FunctionSpec{
 							PackageSpec: pkgv1.PackageSpec{
-								Package: "xpkg.upbound.io/crossplane-contrib/function-go-templating:v0.11.0",
+								Package: "xpkg.crossplane.io/crossplane-contrib/function-go-templating:v0.11.0",
 							},
 						},
 					},
@@ -1520,7 +1520,7 @@ func TestDefaultDiffProcessor_ProcessNestedXRs(t *testing.T) {
 						},
 						Spec: pkgv1.FunctionSpec{
 							PackageSpec: pkgv1.PackageSpec{
-								Package: "xpkg.upbound.io/crossplane-contrib/function-go-templating:v0.11.0",
+								Package: "xpkg.crossplane.io/crossplane-contrib/function-go-templating:v0.11.0",
 							},
 						},
 					},

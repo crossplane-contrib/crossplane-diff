@@ -509,6 +509,7 @@ func TestDefaultCompositionClient_FindMatchingComposition(t *testing.T) {
 
 					return []*un.Unstructured{}, nil
 				}).
+				WithResourcesFoundByLabel([]*un.Unstructured{}, LabelCompositionName, "matching-comp").
 				Build(),
 			mockDef: *tu.NewMockDefinitionClient().
 				WithSuccessfulInitialize().
@@ -702,6 +703,7 @@ func TestDefaultCompositionClient_FindMatchingComposition(t *testing.T) {
 
 					return []*un.Unstructured{}, nil
 				}).
+				WithResourcesFoundByLabel([]*un.Unstructured{}, LabelCompositionName, "matching-comp").
 				Build(),
 			mockDef: *tu.NewMockDefinitionClient().
 				WithSuccessfulInitialize().
@@ -755,6 +757,7 @@ func TestDefaultCompositionClient_FindMatchingComposition(t *testing.T) {
 			c := &DefaultCompositionClient{
 				resourceClient:   &tt.mockResource,
 				definitionClient: &tt.mockDef,
+				revisionClient:   NewCompositionRevisionClient(&tt.mockResource, tu.TestLogger(t, false)),
 				logger:           tu.TestLogger(t, false),
 				compositions:     tt.fields.compositions,
 			}
@@ -861,6 +864,7 @@ func TestDefaultCompositionClient_GetComposition(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			c := &DefaultCompositionClient{
 				resourceClient: mockResource,
+				revisionClient: NewCompositionRevisionClient(mockResource, tu.TestLogger(t, false)),
 				logger:         tu.TestLogger(t, false),
 				compositions:   tt.cache,
 			}
@@ -979,6 +983,7 @@ func TestDefaultCompositionClient_ListCompositions(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			c := &DefaultCompositionClient{
 				resourceClient: tt.mockResource,
+				revisionClient: NewCompositionRevisionClient(tt.mockResource, tu.TestLogger(t, false)),
 				logger:         tu.TestLogger(t, false),
 				compositions:   make(map[string]*apiextensionsv1.Composition),
 			}
@@ -1068,6 +1073,7 @@ func TestDefaultCompositionClient_Initialize(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			c := &DefaultCompositionClient{
 				resourceClient: tt.mockResource,
+				revisionClient: NewCompositionRevisionClient(tt.mockResource, tu.TestLogger(t, false)),
 				logger:         tu.TestLogger(t, false),
 				compositions:   make(map[string]*apiextensionsv1.Composition),
 			}
@@ -1078,6 +1084,387 @@ func TestDefaultCompositionClient_Initialize(t *testing.T) {
 				t.Errorf("\n%s\nInitialize(): expected error but got none", tt.reason)
 			} else if !tt.expectError && err != nil {
 				t.Errorf("\n%s\nInitialize(): unexpected error: %v", tt.reason, err)
+			}
+		})
+	}
+}
+
+func TestDefaultCompositionClient_ResolveCompositionFromRevisions(t *testing.T) {
+	ctx := t.Context()
+
+	// Create test revisions
+	rev1 := &apiextensionsv1.CompositionRevision{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "test-comp-rev1",
+			Labels: map[string]string{
+				LabelCompositionName: "test-comp",
+			},
+		},
+		Spec: apiextensionsv1.CompositionRevisionSpec{
+			Revision: 1,
+			CompositeTypeRef: apiextensionsv1.TypeReference{
+				APIVersion: "example.org/v1",
+				Kind:       "XR1",
+			},
+		},
+	}
+
+	rev2 := &apiextensionsv1.CompositionRevision{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "test-comp-rev2",
+			Labels: map[string]string{
+				LabelCompositionName: "test-comp",
+			},
+		},
+		Spec: apiextensionsv1.CompositionRevisionSpec{
+			Revision: 2,
+			CompositeTypeRef: apiextensionsv1.TypeReference{
+				APIVersion: "example.org/v1",
+				Kind:       "XR1",
+			},
+		},
+	}
+
+	// Convert revisions to unstructured
+	toUnstructured := func(rev *apiextensionsv1.CompositionRevision) *un.Unstructured {
+		u := &un.Unstructured{}
+		obj, _ := runtime.DefaultUnstructuredConverter.ToUnstructured(rev)
+		u.SetUnstructuredContent(obj)
+		u.SetGroupVersionKind(schema.GroupVersionKind{
+			Group:   CrossplaneAPIExtGroup,
+			Version: "v1",
+			Kind:    "CompositionRevision",
+		})
+
+		return u
+	}
+
+	// Create test XRD
+	v1XRD := tu.NewResource(CrossplaneAPIExtGroupV1, CompositeResourceDefinitionKind, "xr1s.example.org").
+		WithSpecField("group", "example.org").
+		WithSpecField("names", map[string]interface{}{
+			"kind": "XR1",
+		}).
+		WithSpecField("versions", []interface{}{
+			map[string]interface{}{
+				"name":          "v1",
+				"served":        true,
+				"referenceable": true,
+			},
+		}).Build()
+
+	v2XRD := tu.NewResource(CrossplaneAPIExtGroupV1, CompositeResourceDefinitionKind, "xr1s.example.org").
+		WithSpecField("group", "example.org").
+		WithSpecField("names", map[string]interface{}{
+			"kind": "XR1",
+		}).
+		WithSpecField("versions", []interface{}{
+			map[string]interface{}{
+				"name":          "v2",
+				"served":        true,
+				"referenceable": true,
+			},
+		}).Build()
+
+	tests := map[string]struct {
+		reason          string
+		xrd             *un.Unstructured
+		res             *un.Unstructured
+		compositionName string
+		mockResource    *tu.MockResourceClient
+		expectComp      *apiextensionsv1.Composition
+		expectNil       bool
+		expectError     bool
+		errorPattern    string
+	}{
+		"AutomaticPolicyUsesLatestRevision": {
+			reason: "Should use latest revision when update policy is Automatic",
+			xrd:    v1XRD,
+			res: tu.NewResource("example.org/v1", "XR1", "my-xr").
+				WithSpecField("compositionRef", map[string]interface{}{
+					"name": "test-comp",
+				}).
+				WithSpecField("compositionUpdatePolicy", "Automatic").
+				Build(),
+			compositionName: "test-comp",
+			mockResource: tu.NewMockResourceClient().
+				WithSuccessfulInitialize().
+				WithResourcesFoundByLabel([]*un.Unstructured{
+					toUnstructured(rev1), toUnstructured(rev2),
+				}, LabelCompositionName, "test-comp").
+				Build(),
+			expectComp: &apiextensionsv1.Composition{
+				ObjectMeta: metav1.ObjectMeta{
+					Name: "test-comp",
+				},
+				Spec: apiextensionsv1.CompositionSpec{
+					CompositeTypeRef: apiextensionsv1.TypeReference{
+						APIVersion: "example.org/v1",
+						Kind:       "XR1",
+					},
+				},
+			},
+			expectError: false,
+		},
+		"ManualPolicyWithRevisionRefUsesSpecifiedRevision": {
+			reason: "Should use specified revision when update policy is Manual with revision ref",
+			xrd:    v1XRD,
+			res: tu.NewResource("example.org/v1", "XR1", "my-xr").
+				WithSpecField("compositionRef", map[string]interface{}{
+					"name": "test-comp",
+				}).
+				WithSpecField("compositionRevisionRef", map[string]interface{}{
+					"name": "test-comp-rev1",
+				}).
+				WithSpecField("compositionUpdatePolicy", "Manual").
+				Build(),
+			compositionName: "test-comp",
+			mockResource: tu.NewMockResourceClient().
+				WithSuccessfulInitialize().
+				WithGetResource(func(_ context.Context, _ schema.GroupVersionKind, _, name string) (*un.Unstructured, error) {
+					if name == "test-comp-rev1" {
+						return toUnstructured(rev1), nil
+					}
+
+					return nil, errors.New("not found")
+				}).
+				Build(),
+			expectComp: &apiextensionsv1.Composition{
+				ObjectMeta: metav1.ObjectMeta{
+					Name: "test-comp",
+				},
+				Spec: apiextensionsv1.CompositionSpec{
+					CompositeTypeRef: apiextensionsv1.TypeReference{
+						APIVersion: "example.org/v1",
+						Kind:       "XR1",
+					},
+				},
+			},
+			expectError: false,
+		},
+		"ManualPolicyWithoutRevisionRefUsesLatestRevision": {
+			reason: "Should use latest revision when update policy is Manual without revision ref (net new XR case)",
+			xrd:    v1XRD,
+			res: tu.NewResource("example.org/v1", "XR1", "my-xr").
+				WithSpecField("compositionRef", map[string]interface{}{
+					"name": "test-comp",
+				}).
+				WithSpecField("compositionUpdatePolicy", "Manual").
+				Build(),
+			compositionName: "test-comp",
+			mockResource: tu.NewMockResourceClient().
+				WithSuccessfulInitialize().
+				WithResourcesFoundByLabel([]*un.Unstructured{
+					toUnstructured(rev1), toUnstructured(rev2),
+				}, LabelCompositionName, "test-comp").
+				Build(),
+			expectComp: &apiextensionsv1.Composition{
+				ObjectMeta: metav1.ObjectMeta{
+					Name: "test-comp",
+				},
+				Spec: apiextensionsv1.CompositionSpec{
+					CompositeTypeRef: apiextensionsv1.TypeReference{
+						APIVersion: "example.org/v1",
+						Kind:       "XR1",
+					},
+				},
+			},
+			expectError: false,
+		},
+		"V2XRWithAutomaticPolicy": {
+			reason: "Should use latest revision for v2 XR with Automatic policy",
+			xrd:    v2XRD,
+			res: tu.NewResource("example.org/v2", "XR1", "my-xr").
+				WithSpecField("crossplane", map[string]interface{}{
+					"compositionRef": map[string]interface{}{
+						"name": "test-comp",
+					},
+					"compositionUpdatePolicy": "Automatic",
+				}).
+				Build(),
+			compositionName: "test-comp",
+			mockResource: tu.NewMockResourceClient().
+				WithSuccessfulInitialize().
+				WithResourcesFoundByLabel([]*un.Unstructured{
+					toUnstructured(rev1), toUnstructured(rev2),
+				}, LabelCompositionName, "test-comp").
+				Build(),
+			expectComp: &apiextensionsv1.Composition{
+				ObjectMeta: metav1.ObjectMeta{
+					Name: "test-comp",
+				},
+				Spec: apiextensionsv1.CompositionSpec{
+					CompositeTypeRef: apiextensionsv1.TypeReference{
+						APIVersion: "example.org/v1",
+						Kind:       "XR1",
+					},
+				},
+			},
+			expectError: false,
+		},
+		"V2XRWithManualPolicyWithoutRevisionRef": {
+			reason: "Should use latest revision for v2 XR with Manual policy but no revision ref",
+			xrd:    v2XRD,
+			res: tu.NewResource("example.org/v2", "XR1", "my-xr").
+				WithSpecField("crossplane", map[string]interface{}{
+					"compositionRef": map[string]interface{}{
+						"name": "test-comp",
+					},
+					"compositionUpdatePolicy": "Manual",
+				}).
+				Build(),
+			compositionName: "test-comp",
+			mockResource: tu.NewMockResourceClient().
+				WithSuccessfulInitialize().
+				WithResourcesFoundByLabel([]*un.Unstructured{
+					toUnstructured(rev1), toUnstructured(rev2),
+				}, LabelCompositionName, "test-comp").
+				Build(),
+			expectComp: &apiextensionsv1.Composition{
+				ObjectMeta: metav1.ObjectMeta{
+					Name: "test-comp",
+				},
+				Spec: apiextensionsv1.CompositionSpec{
+					CompositeTypeRef: apiextensionsv1.TypeReference{
+						APIVersion: "example.org/v1",
+						Kind:       "XR1",
+					},
+				},
+			},
+			expectError: false,
+		},
+		"NoRevisionsFoundFallsBackToNil": {
+			reason: "Should return nil when no revisions exist (unpublished composition)",
+			xrd:    v1XRD,
+			res: tu.NewResource("example.org/v1", "XR1", "my-xr").
+				WithSpecField("compositionRef", map[string]interface{}{
+					"name": "test-comp",
+				}).
+				WithSpecField("compositionUpdatePolicy", "Automatic").
+				Build(),
+			compositionName: "test-comp",
+			mockResource: tu.NewMockResourceClient().
+				WithSuccessfulInitialize().
+				WithResourcesFoundByLabel([]*un.Unstructured{}, LabelCompositionName, "test-comp").
+				Build(),
+			expectNil:   true,
+			expectError: false,
+		},
+		"ManualPolicyWithNonexistentRevisionRef": {
+			reason: "Should return error when specified revision doesn't exist",
+			xrd:    v1XRD,
+			res: tu.NewResource("example.org/v1", "XR1", "my-xr").
+				WithSpecField("compositionRef", map[string]interface{}{
+					"name": "test-comp",
+				}).
+				WithSpecField("compositionRevisionRef", map[string]interface{}{
+					"name": "nonexistent-rev",
+				}).
+				WithSpecField("compositionUpdatePolicy", "Manual").
+				Build(),
+			compositionName: "test-comp",
+			mockResource: tu.NewMockResourceClient().
+				WithSuccessfulInitialize().
+				WithGetResource(func(_ context.Context, _ schema.GroupVersionKind, _, _ string) (*un.Unstructured, error) {
+					return nil, errors.New("not found")
+				}).
+				Build(),
+			expectError:  true,
+			errorPattern: "cannot get pinned composition revision",
+		},
+		"ManualPolicyWithRevisionFromDifferentComposition": {
+			reason: "Should return error when revision belongs to different composition",
+			xrd:    v1XRD,
+			res: tu.NewResource("example.org/v1", "XR1", "my-xr").
+				WithSpecField("compositionRef", map[string]interface{}{
+					"name": "test-comp",
+				}).
+				WithSpecField("compositionRevisionRef", map[string]interface{}{
+					"name": "other-comp-rev1",
+				}).
+				WithSpecField("compositionUpdatePolicy", "Manual").
+				Build(),
+			compositionName: "test-comp",
+			mockResource: tu.NewMockResourceClient().
+				WithSuccessfulInitialize().
+				WithGetResource(func(_ context.Context, _ schema.GroupVersionKind, _, name string) (*un.Unstructured, error) {
+					if name == "other-comp-rev1" {
+						wrongRev := &apiextensionsv1.CompositionRevision{
+							ObjectMeta: metav1.ObjectMeta{
+								Name: "other-comp-rev1",
+								Labels: map[string]string{
+									LabelCompositionName: "other-comp",
+								},
+							},
+							Spec: apiextensionsv1.CompositionRevisionSpec{
+								Revision: 1,
+								CompositeTypeRef: apiextensionsv1.TypeReference{
+									APIVersion: "example.org/v1",
+									Kind:       "XR1",
+								},
+							},
+						}
+
+						return toUnstructured(wrongRev), nil
+					}
+
+					return nil, errors.New("not found")
+				}).
+				Build(),
+			expectError:  true,
+			errorPattern: "belongs to composition other-comp, not test-comp",
+		},
+	}
+
+	for name, tt := range tests {
+		t.Run(name, func(t *testing.T) {
+			c := &DefaultCompositionClient{
+				resourceClient: tt.mockResource,
+				revisionClient: NewCompositionRevisionClient(tt.mockResource, tu.TestLogger(t, false)),
+				logger:         tu.TestLogger(t, false),
+				compositions:   make(map[string]*apiextensionsv1.Composition),
+			}
+
+			comp, err := c.resolveCompositionFromRevisions(ctx, tt.xrd, tt.res, tt.compositionName, "test-resource-id")
+
+			if tt.expectError {
+				if err == nil {
+					t.Errorf("\n%s\nresolveCompositionFromRevisions(...): expected error but got none", tt.reason)
+					return
+				}
+
+				if tt.errorPattern != "" && !strings.Contains(err.Error(), tt.errorPattern) {
+					t.Errorf("\n%s\nresolveCompositionFromRevisions(...): expected error containing %q, got %q",
+						tt.reason, tt.errorPattern, err.Error())
+				}
+
+				return
+			}
+
+			if err != nil {
+				t.Errorf("\n%s\nresolveCompositionFromRevisions(...): unexpected error: %v", tt.reason, err)
+				return
+			}
+
+			if tt.expectNil {
+				if comp != nil {
+					t.Errorf("\n%s\nresolveCompositionFromRevisions(...): expected nil composition, got %v", tt.reason, comp)
+				}
+
+				return
+			}
+
+			if comp == nil {
+				t.Errorf("\n%s\nresolveCompositionFromRevisions(...): unexpected nil composition", tt.reason)
+				return
+			}
+
+			if diff := cmp.Diff(tt.expectComp.GetName(), comp.GetName()); diff != "" {
+				t.Errorf("\n%s\nresolveCompositionFromRevisions(...): -want name, +got name:\n%s", tt.reason, diff)
+			}
+
+			if diff := cmp.Diff(tt.expectComp.Spec.CompositeTypeRef, comp.Spec.CompositeTypeRef); diff != "" {
+				t.Errorf("\n%s\nresolveCompositionFromRevisions(...): -want type ref, +got type ref:\n%s", tt.reason, diff)
 			}
 		})
 	}

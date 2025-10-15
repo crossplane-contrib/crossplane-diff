@@ -37,7 +37,8 @@ type CompCmd struct {
 	Files []string `arg:"" help:"YAML files containing updated Composition(s)." optional:""`
 
 	// Configuration options
-	Namespace string `default:"" help:"Namespace to find XRs (empty = all namespaces)." name:"namespace" short:"n"`
+	Namespace     string `default:""      help:"Namespace to find XRs (empty = all namespaces)."                            name:"namespace"      short:"n"`
+	IncludeManual bool   `default:"false" help:"Include XRs with Manual update policy (default: only Automatic policy XRs)" name:"include-manual"`
 }
 
 // Help returns help instructions for the composition diff command.
@@ -60,6 +61,9 @@ Examples:
 
   # Show compact diffs with minimal context
   crossplane-diff comp updated-composition.yaml --compact
+
+  # Include XRs with Manual update policy (pinned revisions)
+  crossplane-diff comp updated-composition.yaml --include-manual
 `
 }
 
@@ -99,6 +103,7 @@ func makeDefaultCompProc(c *CompCmd, ctx *AppContext, log logging.Logger) dp.Com
 	opts = append(opts,
 		dp.WithLogger(log),
 		dp.WithRenderMutex(&globalRenderMutex),
+		dp.WithIncludeManual(c.IncludeManual),
 	)
 
 	// Create XR processor first (peer processor)

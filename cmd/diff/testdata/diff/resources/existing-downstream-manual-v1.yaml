@@ -1,0 +1,12 @@
+apiVersion: ns.nop.example.org/v1alpha1
+kind: XDownstreamResource
+metadata:
+  name: test-manual-v1
+  namespace: default
+  annotations:
+    gotemplating.fn.crossplane.io/composition-resource-name: nop-resource
+  labels:
+    crossplane.io/composite: test-manual-v1
+spec:
+  forProvider:
+    configData: v1-existing-value

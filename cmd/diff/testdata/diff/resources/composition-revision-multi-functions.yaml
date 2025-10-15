@@ -1,0 +1,84 @@
+apiVersion: apiextensions.crossplane.io/v1
+kind: CompositionRevision
+metadata:
+  name: xconcurrenttests.diff.example.org-default
+  labels:
+    crossplane.io/composition-name: xconcurrenttests.diff.example.org
+    crossplane.io/composition-hash: default
+spec:
+  revision: 1
+  compositeTypeRef:
+    apiVersion: concurrent.diff.example.org/v1alpha1
+    kind: XConcurrentTest
+  mode: Pipeline
+  pipeline:
+    # Step 1: Generate base resources
+    - step: generate-base-resources
+      functionRef:
+        name: function-go-templating
+      input:
+        apiVersion: template.fn.crossplane.io/v1beta1
+        kind: GoTemplate
+        source: Inline
+        inline:
+          template: |
+            {{- range $i := until 3 }}
+            ---
+            apiVersion: concurrent.nop.example.org/v1alpha1
+            kind: XBaseResource
+            metadata:
+              name: {{ $.observed.composite.resource.metadata.name }}-base-{{ $i }}
+              namespace: {{ $.observed.composite.resource.metadata.namespace }}
+              annotations:
+                gotemplating.fn.crossplane.io/composition-resource-name: base-resource-{{ $i }}
+            spec:
+              forProvider:
+                index: {{ $i }}
+                config: {{ $.observed.composite.resource.spec.config }}
+            {{- end }}
+
+    # Step 2: Apply environment configs
+    - step: apply-environment-configs
+      functionRef:
+        name: function-environment-configs
+      input:
+        apiVersion: environmentconfigs.fn.crossplane.io/v1beta1
+        kind: EnvironmentConfigs
+
+    # Step 3: Generate additional resources
+    - step: generate-additional-resources
+      functionRef:
+        name: function-go-templating
+      input:
+        apiVersion: template.fn.crossplane.io/v1beta1
+        kind: GoTemplate
+        source: Inline
+        inline:
+          template: |
+            {{- range $i := until 2 }}
+            ---
+            apiVersion: concurrent.nop.example.org/v1alpha1
+            kind: XAdditionalResource
+            metadata:
+              name: {{ $.observed.composite.resource.metadata.name }}-additional-{{ $i }}
+              namespace: {{ $.observed.composite.resource.metadata.namespace }}
+              annotations:
+                gotemplating.fn.crossplane.io/composition-resource-name: additional-resource-{{ $i }}
+            spec:
+              forProvider:
+                index: {{ $i }}
+                config: {{ $.observed.composite.resource.spec.config }}
+            {{- end }}
+
+    # Step 4: Fetch extra resources if needed
+    - step: fetch-extra-resources
+      functionRef:
+        name: function-extra-resources
+      input:
+        apiVersion: extraresources.fn.crossplane.io/v1beta1
+        kind: ExtraResources
+
+    # Step 5: Auto-ready
+    - step: automatically-detect-ready-composed-resources
+      functionRef:
+        name: function-auto-ready

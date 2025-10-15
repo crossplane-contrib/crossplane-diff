@@ -28,6 +28,7 @@ func cleanupFunctionContainers() {
 
 	// Use exec.CommandContext to run docker command
 	cmd := exec.CommandContext(ctx, "docker", "ps", "-a", "-q", "--filter", "name=-it$")
+
 	output, err := cmd.Output()
 	if err != nil {
 		// Docker might not be available or no containers found - that's okay

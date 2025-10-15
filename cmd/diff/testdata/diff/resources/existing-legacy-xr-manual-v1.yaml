@@ -1,0 +1,11 @@
+apiVersion: legacycluster.diff.example.org/v1alpha1
+kind: XNopResource
+metadata:
+  name: test-legacy-manual-v1
+spec:
+  compositionRef:
+    name: xlegacynopresources.diff.example.org
+  compositionRevisionRef:
+    name: xlegacynopresources.diff.example.org-abc123
+  compositionUpdatePolicy: Manual
+  coolField: existing-value

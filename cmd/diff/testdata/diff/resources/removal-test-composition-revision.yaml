@@ -1,0 +1,36 @@
+apiVersion: apiextensions.crossplane.io/v1
+kind: CompositionRevision
+metadata:
+  name: removal-test-composition-default
+  labels:
+    crossplane.io/composition-name: removal-test-composition
+    crossplane.io/composition-hash: default
+spec:
+  revision: 1
+  compositeTypeRef:
+    apiVersion: ns.diff.example.org/v1alpha1
+    kind: XNopResource
+  mode: Pipeline
+  pipeline:
+    - step: generate-remaining-resource
+      functionRef:
+        name: function-go-templating
+      input:
+        apiVersion: template.fn.crossplane.io/v1beta1
+        kind: GoTemplate
+        source: Inline
+        inline:
+          template: |
+            apiVersion: ns.nop.example.org/v1alpha1
+            kind: XDownstreamResource
+            metadata:
+              name: resource-to-be-kept
+              namespace: {{ .observed.composite.resource.metadata.namespace }}
+              annotations:
+                gotemplating.fn.crossplane.io/composition-resource-name: resource1
+            spec:
+              forProvider:
+                configData: {{ .observed.composite.resource.spec.coolField }}
+    - step: automatically-detect-ready-composed-resources
+      functionRef:
+        name: function-auto-ready

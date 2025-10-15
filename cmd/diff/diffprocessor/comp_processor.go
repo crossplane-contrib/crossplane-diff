@@ -166,15 +166,40 @@ func (p *DefaultCompDiffProcessor) processSingleComposition(ctx context.Context,
 
 	p.config.Logger.Debug("Found affected XRs", "composition", newComp.GetName(), "count", len(affectedXRs))
 
-	if len(affectedXRs) == 0 {
-		p.config.Logger.Info("No XRs found using composition", "composition", newComp.GetName())
+	// Filter XRs based on IncludeManual flag
+	filteredXRs := p.filterXRsByUpdatePolicy(affectedXRs)
 
-		if _, err := fmt.Fprintf(stdout, "No XRs found using composition %s\n", newComp.GetName()); err != nil {
-			return errors.Wrap(err, "cannot write no XRs message")
+	p.config.Logger.Debug("Filtered XRs by update policy",
+		"composition", newComp.GetName(),
+		"originalCount", len(affectedXRs),
+		"filteredCount", len(filteredXRs),
+		"includeManual", p.config.IncludeManual)
+
+	if len(filteredXRs) == 0 {
+		if !p.config.IncludeManual && len(affectedXRs) > 0 {
+			// XRs exist but were filtered out due to Manual policy
+			p.config.Logger.Info("All XRs using composition have Manual update policy (use --include-manual to see them)",
+				"composition", newComp.GetName(),
+				"filteredCount", len(affectedXRs))
+
+			if _, err := fmt.Fprintf(stdout, "All %d XR(s) using composition %s have Manual update policy (use --include-manual to see them)\n",
+				len(affectedXRs), newComp.GetName()); err != nil {
+				return errors.Wrap(err, "cannot write filtered XRs message")
+			}
+		} else {
+			// No XRs found at all
+			p.config.Logger.Info("No XRs found using composition", "composition", newComp.GetName())
+
+			if _, err := fmt.Fprintf(stdout, "No XRs found using composition %s\n", newComp.GetName()); err != nil {
+				return errors.Wrap(err, "cannot write no XRs message")
+			}
 		}
 
 		return nil
 	}
+
+	// Use filtered XRs for the rest of the processing
+	affectedXRs = filteredXRs
 
 	// Process affected XRs using the existing XR processor with composition override
 	// List the affected XRs so users can understand the scope of impact
@@ -297,4 +322,53 @@ func (p *DefaultCompDiffProcessor) displayCompositionDiff(ctx context.Context, s
 	}
 
 	return nil
+}
+
+// filterXRsByUpdatePolicy filters XRs based on the IncludeManual configuration.
+// By default (IncludeManual=false), only XRs with Automatic policy are included.
+// When IncludeManual=true, all XRs are included regardless of policy.
+func (p *DefaultCompDiffProcessor) filterXRsByUpdatePolicy(xrs []*un.Unstructured) []*un.Unstructured {
+	if p.config.IncludeManual {
+		// Include all XRs when flag is set
+		return xrs
+	}
+
+	// Filter to only include Automatic policy XRs
+	filtered := make([]*un.Unstructured, 0, len(xrs))
+
+	for _, xr := range xrs {
+		policy := p.getCompositionUpdatePolicy(xr)
+
+		p.config.Logger.Debug("Checking XR update policy",
+			"xr", xr.GetName(),
+			"kind", xr.GetKind(),
+			"policy", policy)
+
+		// Include XRs that are not explicitly set to Manual (i.e., Automatic or empty/default)
+		if policy != "Manual" {
+			filtered = append(filtered, xr)
+		}
+	}
+
+	return filtered
+}
+
+// getCompositionUpdatePolicy retrieves the compositionUpdatePolicy from an XR.
+// It checks both v2 (spec.crossplane.compositionUpdatePolicy) and v1 (spec.compositionUpdatePolicy) field paths.
+// Returns "Automatic" as the default if not found (matching Crossplane behavior).
+func (p *DefaultCompDiffProcessor) getCompositionUpdatePolicy(xr *un.Unstructured) string {
+	// Try v2 path first: spec.crossplane.compositionUpdatePolicy
+	policy, found, err := un.NestedString(xr.Object, "spec", "crossplane", "compositionUpdatePolicy")
+	if err == nil && found && policy != "" {
+		return policy
+	}
+
+	// Try v1 path: spec.compositionUpdatePolicy
+	policy, found, err = un.NestedString(xr.Object, "spec", "compositionUpdatePolicy")
+	if err == nil && found && policy != "" {
+		return policy
+	}
+
+	// Default to Automatic if not found (matching Crossplane default behavior)
+	return "Automatic"
 }

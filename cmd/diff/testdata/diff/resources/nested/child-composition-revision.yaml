@@ -1,0 +1,37 @@
+# Child composition revision
+apiVersion: apiextensions.crossplane.io/v1
+kind: CompositionRevision
+metadata:
+  name: xchildresources.nested.example.org-default
+  labels:
+    crossplane.io/composition-name: xchildresources.nested.example.org
+    crossplane.io/composition-hash: default
+spec:
+  revision: 1
+  compositeTypeRef:
+    apiVersion: ns.nested.example.org/v1alpha1
+    kind: XChildResource
+  mode: Pipeline
+  pipeline:
+    - step: generate-managed-resources
+      functionRef:
+        name: function-go-templating
+      input:
+        apiVersion: template.fn.crossplane.io/v1beta1
+        kind: GoTemplate
+        source: Inline
+        inline:
+          template: |
+            apiVersion: ns.nop.example.org/v1alpha1
+            kind: XDownstreamResource
+            metadata:
+              name: {{ .observed.composite.resource.metadata.name }}-managed
+              namespace: {{ .observed.composite.resource.metadata.namespace }}
+              annotations:
+                gotemplating.fn.crossplane.io/composition-resource-name: managed-resource
+            spec:
+              forProvider:
+                configData: {{ .observed.composite.resource.spec.childField }}
+    - step: automatically-detect-ready-composed-resources
+      functionRef:
+        name: function-auto-ready
