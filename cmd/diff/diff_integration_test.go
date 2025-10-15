@@ -1166,6 +1166,7 @@ Summary: 2 added, 2 modified
 +   compositeDeletePolicy: Background
 +   compositionRef:
 +     name: claim-composition
++   compositionUpdatePolicy: Automatic
 +   coolField: new-value
 
 ---

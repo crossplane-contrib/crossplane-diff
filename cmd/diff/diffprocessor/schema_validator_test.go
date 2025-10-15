@@ -474,8 +474,8 @@ func TestDefaultSchemaValidator_ValidateResources_AppliesDefaults(t *testing.T) 
 
 	schemaClient := tu.NewMockSchemaClient().
 		WithFoundCRDs(map[schema.GroupKind]*extv1.CustomResourceDefinition{
-			{Group: "provider.example.org", Kind: "ManagedResource"}:     managedCRD,
-			{Group: "example.org", Kind: "XCompositeResource"}: xrCRD,
+			{Group: "provider.example.org", Kind: "ManagedResource"}: managedCRD,
+			{Group: "example.org", Kind: "XCompositeResource"}:       xrCRD,
 		}).
 		WithAllResourcesRequiringCRDs().
 		WithCachingBehavior().
@@ -506,6 +506,7 @@ func TestDefaultSchemaValidator_ValidateResources_AppliesDefaults(t *testing.T) 
 	if err != nil {
 		t.Fatalf("Failed to get deletionPolicy: %v", err)
 	}
+
 	if !found || deletionPolicy != "Delete" {
 		t.Errorf("Expected deletionPolicy default 'Delete' to be applied, got found=%v, value=%q", found, deletionPolicy)
 	}
@@ -514,6 +515,7 @@ func TestDefaultSchemaValidator_ValidateResources_AppliesDefaults(t *testing.T) 
 	if err != nil {
 		t.Fatalf("Failed to get managementPolicies: %v", err)
 	}
+
 	if !found || len(managementPolicies) != 1 || managementPolicies[0] != "*" {
 		t.Errorf("Expected managementPolicies default ['*'] to be applied, got found=%v, value=%v", found, managementPolicies)
 	}
@@ -522,6 +524,7 @@ func TestDefaultSchemaValidator_ValidateResources_AppliesDefaults(t *testing.T) 
 	if err != nil {
 		t.Fatalf("Failed to get providerConfigRef: %v", err)
 	}
+
 	if !found || providerConfigRef["name"] != "default" {
 		t.Errorf("Expected providerConfigRef.name default 'default' to be applied, got found=%v, value=%v", found, providerConfigRef)
 	}
