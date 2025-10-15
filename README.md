@@ -10,6 +10,7 @@ The `crossplane-diff` tool helps you:
 
 - **Preview changes** before applying Crossplane resources to a cluster
 - **Visualize differences** at multiple levels: both the XR itself and all downstream composed resources
+- **Analyze composition impact** showing how composition changes affect existing XRs in the cluster
 - **Support complex compositions** including functions, requirements, and environment configurations
 - **Handle both Crossplane v1 and v2** resource definitions, including namespaced composite resources
 - **Detect resources that would be removed** by your changes
@@ -30,41 +31,87 @@ go build -o crossplane-diff ./cmd/diff
 
 ## Usage
 
-### Basic Usage
+### XR Diff - Preview Changes to Composite Resources
 
 ```bash
 # Show changes that would result from applying an XR from a file
-crossplane-diff diff xr.yaml
+crossplane-diff xr xr.yaml
 
 # Show changes from stdin
-cat xr.yaml | crossplane-diff diff -
+cat xr.yaml | crossplane-diff xr -
 
 # Process multiple files
-crossplane-diff diff xr1.yaml xr2.yaml xr3.yaml
+crossplane-diff xr xr1.yaml xr2.yaml xr3.yaml
 
 # Show changes in a compact format with minimal context
-crossplane-diff diff --compact xr.yaml
+crossplane-diff xr xr.yaml --compact
 
 # Disable color output
-crossplane-diff diff --no-color xr.yaml
+crossplane-diff xr xr.yaml --no-color
+```
+
+### Composition Diff - Analyze Impact of Composition Changes
+
+```bash
+# Show impact of updated composition on all XRs using it
+crossplane-diff comp updated-composition.yaml
+
+# Show impact of multiple composition changes
+crossplane-diff comp comp1.yaml comp2.yaml comp3.yaml
+
+# Show impact only on XRs in a specific namespace
+crossplane-diff comp updated-composition.yaml -n production
+
+# Include XRs with Manual update policy (pinned revisions)
+crossplane-diff comp updated-composition.yaml --include-manual
 ```
 
 ### Command Options
 
+#### `xr` - Diff Composite Resources
+
 ```
-crossplane-diff diff [<files> ...] [flags]
+crossplane-diff xr [<files> ...] [flags]
 
 Arguments:
   [<files> ...]    YAML files containing Crossplane resources to diff.
 
 Flags:
-  --no-color      Disable colorized output.
-  --compact       Show compact diffs with minimal context.
-  --timeout=1m    How long to run before timing out.
-  --qps=0         Maximum QPS to the API server.
-  --burst=0       Maximum burst for throttle.
-  --verbose       Print verbose logging statements.
+  -h, --help                   Show context-sensitive help.
+      --verbose                Print verbose logging statements.
+      --no-color               Disable colorized output.
+      --compact                Show compact diffs with minimal context.
+      --max-nested-depth=10    Maximum depth for nested XR recursion.
+      --timeout=1m             How long to run before timing out.
+      --qps=0                  Maximum QPS to the API server.
+      --burst=0                Maximum burst for throttle.
 ```
+
+**Note**: XR namespaces are read directly from the YAML files being diffed, not from command-line flags.
+
+#### `comp` - Diff Composition Impact
+
+```
+crossplane-diff comp [<files> ...] [flags]
+
+Arguments:
+  [<files> ...]    YAML files containing updated Composition(s).
+
+Flags:
+  -h, --help                   Show context-sensitive help.
+      --verbose                Print verbose logging statements.
+      --no-color               Disable colorized output.
+      --compact                Show compact diffs with minimal context.
+      --max-nested-depth=10    Maximum depth for nested XR recursion.
+      --timeout=1m             How long to run before timing out.
+      --qps=0                  Maximum QPS to the API server.
+      --burst=0                Maximum burst for throttle.
+  -n, --namespace=""           Namespace to find XRs (empty = all namespaces).
+      --include-manual         Include XRs with Manual update policy (default:
+                               only Automatic policy XRs)
+```
+
+**Note**: The `diff` subcommand is deprecated. Use `xr` instead.
 
 ### Prerequisites
 

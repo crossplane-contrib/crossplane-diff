@@ -173,12 +173,9 @@ func runIntegrationTest(t *testing.T, testType DiffTestType, scheme *runtime.Sch
 		fmt.Sprintf("--timeout=%s", timeout.String()),
 	}
 
-	// Add namespace if specified (for composition tests)
-	if tt.namespace != "" {
+	// Add namespace if specified (for composition tests only)
+	if tt.namespace != "" && testType == CompositionDiffTest {
 		args = append(args, fmt.Sprintf("--namespace=%s", tt.namespace))
-	} else if testType == XRDiffTest {
-		// For XR tests, always add default namespace
-		args = append(args, "--namespace=default")
 	}
 
 	// Add no-color flag if true

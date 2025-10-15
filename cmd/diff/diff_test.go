@@ -69,8 +69,7 @@ func TestCmd_Run(t *testing.T) {
 	type fields struct {
 		CommonCmdFields
 
-		Namespace string
-		Files     []string
+		Files []string
 	}
 
 	type args struct {
@@ -108,8 +107,7 @@ func TestCmd_Run(t *testing.T) {
 	}{
 		"SuccessfulRun": {
 			fields: fields{
-				Namespace: "default",
-				Files:     []string{},
+				Files: []string{},
 				CommonCmdFields: CommonCmdFields{
 					NoColor: false,
 					Compact: false,
@@ -147,8 +145,7 @@ metadata:
 		},
 		"ClientInitializeError": {
 			fields: fields{
-				Namespace: "default",
-				Files:     []string{},
+				Files: []string{},
 			},
 			args: args{
 				appContext: AppContext{
@@ -176,8 +173,7 @@ metadata:
 		},
 		"ProcessorInitializeError": {
 			fields: fields{
-				Namespace: "default",
-				Files:     []string{},
+				Files: []string{},
 			},
 			args: args{
 				appContext: appCtx,
@@ -196,8 +192,7 @@ metadata:
 		},
 		"LoaderError": {
 			fields: fields{
-				Namespace: "default",
-				Files:     []string{},
+				Files: []string{},
 			},
 			args: args{
 				appContext: appCtx,
@@ -216,8 +211,7 @@ metadata:
 		},
 		"ProcessResourcesError": {
 			fields: fields{
-				Namespace: "default",
-				Files:     []string{},
+				Files: []string{},
 			},
 			args: args{
 				appContext: appCtx,
@@ -260,7 +254,6 @@ metadata:
 			files := tc.setupFiles()
 
 			c := &XRCmd{
-				Namespace:       tc.fields.Namespace,
 				Files:           files,
 				CommonCmdFields: tc.fields.CommonCmdFields,
 			}
@@ -903,7 +896,6 @@ spec:
 
 			// Create our command
 			cmd := &XRCmd{
-				Namespace: "default",
 				CommonCmdFields: CommonCmdFields{
 					Timeout: time.Second * 30,
 				},
@@ -928,7 +920,7 @@ spec:
 			// Create options for the DiffProcessor
 			options := []dp.ProcessorOption{
 				dp.WithLogger(logger),
-				dp.WithNamespace(cmd.Namespace),
+				dp.WithNamespace("default"),
 				// Add other options as needed
 			}
 
