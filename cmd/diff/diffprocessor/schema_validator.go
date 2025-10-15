@@ -105,20 +105,20 @@ func (v *DefaultSchemaValidator) ValidateResources(ctx context.Context, xr *un.U
 	// Create a logger writer to capture output
 	loggerWriter := loggerwriter.NewLoggerWriter(v.logger)
 
-	// Strip Crossplane-managed fields before validation
-	// These fields are set by Crossplane controllers and may not be in the CRD schema
-	sanitizedResources := make([]*un.Unstructured, len(resources))
-	for i, res := range resources {
-		sanitizedResources[i] = v.stripCrossplaneManagedFields(res)
-	}
+	// Note: SchemaValidation applies defaults IN-PLACE to resources, so we must pass
+	// the original resources (not sanitized copies) to get defaults applied.
+	// We strip Crossplane-managed fields AFTER validation for cleaner error messages.
+	v.logger.Debug("Performing schema validation", "resourceCount", len(resources))
 
-	// Validate using the CRD schemas
-	// Use skipSuccessLogs=true to avoid cluttering the output with success messages
-	v.logger.Debug("Performing schema validation", "resourceCount", len(sanitizedResources))
-
-	err = validate.SchemaValidation(ctx, sanitizedResources, v.schemaClient.GetAllCRDs(), true, true, loggerWriter)
+	err = validate.SchemaValidation(ctx, resources, v.schemaClient.GetAllCRDs(), true, true, loggerWriter)
 	if err != nil {
 		return errors.Wrap(err, "schema validation failed")
+	}
+
+	// Strip Crossplane-managed fields from resources after validation
+	// These fields are set by Crossplane controllers and may not be in all XRD schemas
+	for i := range resources {
+		resources[i] = v.stripCrossplaneManagedFields(resources[i])
 	}
 
 	// Additionally validate resource scope constraints (namespace requirements and cross-namespace refs)

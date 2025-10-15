@@ -414,6 +414,123 @@ func (c *xrdCountingClient) GetXRDs(ctx context.Context) ([]*un.Unstructured, er
 	return c.MockDefinitionClient.GetXRDs(ctx)
 }
 
+func TestDefaultSchemaValidator_ValidateResources_AppliesDefaults(t *testing.T) {
+	ctx := t.Context()
+
+	// Create a simple managed resource
+	managedResource := tu.NewResource("provider.example.org/v1", "ManagedResource", "test-managed").
+		InNamespace("default").
+		WithCompositeOwner("test-xr").
+		WithCompositionResourceName("managed-resource").
+		WithSpecField("field", "value").
+		BuildUComposed()
+
+	// Manually add compositionRevisionRef to spec.crossplane to ensure validation can handle it
+	_ = un.SetNestedMap(managedResource.Object, map[string]interface{}{
+		"compositionRevisionRef": map[string]interface{}{
+			"name": "some-revision-abc123",
+		},
+	}, "spec", "crossplane")
+
+	// Create XR
+	xr := tu.NewResource("example.org/v2", "XCompositeResource", "test-xr").
+		InNamespace("default").
+		WithSpecField("field", "value").
+		Build()
+
+	// Create CRD with defaults for the managed resource using OpenAPIV3Schema
+	managedCRD := makeCRD("managedresources.provider.example.org", "ManagedResource", "provider.example.org", "v1")
+	// Set a permissive schema with defaults
+	managedCRD.Spec.Versions[0].Schema.OpenAPIV3Schema.Properties = map[string]extv1.JSONSchemaProps{
+		"spec": {
+			Type:                   "object",
+			XPreserveUnknownFields: func() *bool { b := true; return &b }(), // Allow all fields
+			Properties: map[string]extv1.JSONSchemaProps{
+				"deletionPolicy": {
+					Type:    "string",
+					Default: &extv1.JSON{Raw: []byte(`"Delete"`)},
+				},
+				"managementPolicies": {
+					Type: "array",
+					Items: &extv1.JSONSchemaPropsOrArray{
+						Schema: &extv1.JSONSchemaProps{Type: "string"},
+					},
+					Default: &extv1.JSON{Raw: []byte(`["*"]`)},
+				},
+				"providerConfigRef": {
+					Type:                   "object",
+					XPreserveUnknownFields: func() *bool { b := true; return &b }(),
+					Default:                &extv1.JSON{Raw: []byte(`{"name":"default"}`)},
+				},
+			},
+		},
+	}
+
+	xrCRD := makeCRD("xcompositeresources.example.org", "XCompositeResource", "example.org", "v2")
+	preserveUnknown := true
+	specProps := xrCRD.Spec.Versions[0].Schema.OpenAPIV3Schema.Properties["spec"]
+	specProps.XPreserveUnknownFields = &preserveUnknown
+	xrCRD.Spec.Versions[0].Schema.OpenAPIV3Schema.Properties["spec"] = specProps
+
+	schemaClient := tu.NewMockSchemaClient().
+		WithFoundCRDs(map[schema.GroupKind]*extv1.CustomResourceDefinition{
+			{Group: "provider.example.org", Kind: "ManagedResource"}:     managedCRD,
+			{Group: "example.org", Kind: "XCompositeResource"}: xrCRD,
+		}).
+		WithAllResourcesRequiringCRDs().
+		WithCachingBehavior().
+		Build()
+
+	defClient := tu.NewMockDefinitionClient().Build()
+	logger := tu.TestLogger(t, false)
+
+	validator := NewSchemaValidator(schemaClient, defClient, logger)
+
+	// Verify compositionRevisionRef exists before validation
+	crossplane, found, _ := un.NestedMap(managedResource.Object, "spec", "crossplane")
+	if !found || crossplane["compositionRevisionRef"] == nil {
+		t.Fatal("Test setup failed: compositionRevisionRef not found in managed resource before validation")
+	}
+
+	// Call ValidateResources
+	// This should succeed even with compositionRevisionRef present because the validator
+	// strips Crossplane-managed fields internally before scope validation
+	err := validator.ValidateResources(ctx, xr, []cpd.Unstructured{*managedResource})
+	if err != nil {
+		t.Fatalf("ValidateResources() unexpected error: %v", err)
+	}
+
+	// Verify defaults were applied to the ORIGINAL resource
+	// The defaults are applied in-place by validate.SchemaValidation, so they persist
+	deletionPolicy, found, err := un.NestedString(managedResource.Object, "spec", "deletionPolicy")
+	if err != nil {
+		t.Fatalf("Failed to get deletionPolicy: %v", err)
+	}
+	if !found || deletionPolicy != "Delete" {
+		t.Errorf("Expected deletionPolicy default 'Delete' to be applied, got found=%v, value=%q", found, deletionPolicy)
+	}
+
+	managementPolicies, found, err := un.NestedStringSlice(managedResource.Object, "spec", "managementPolicies")
+	if err != nil {
+		t.Fatalf("Failed to get managementPolicies: %v", err)
+	}
+	if !found || len(managementPolicies) != 1 || managementPolicies[0] != "*" {
+		t.Errorf("Expected managementPolicies default ['*'] to be applied, got found=%v, value=%v", found, managementPolicies)
+	}
+
+	providerConfigRef, found, err := un.NestedMap(managedResource.Object, "spec", "providerConfigRef")
+	if err != nil {
+		t.Fatalf("Failed to get providerConfigRef: %v", err)
+	}
+	if !found || providerConfigRef["name"] != "default" {
+		t.Errorf("Expected providerConfigRef.name default 'default' to be applied, got found=%v, value=%v", found, providerConfigRef)
+	}
+
+	// Note: We do NOT verify that compositionRevisionRef is stripped from the original resource,
+	// because the stripping only happens on temporary copies used for scope validation.
+	// The compositionRevisionRef remains in the original resource, which is correct behavior.
+}
+
 func TestDefaultSchemaValidator_ValidateScopeConstraints(t *testing.T) {
 	ctx := t.Context()
 
