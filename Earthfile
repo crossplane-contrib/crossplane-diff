@@ -105,9 +105,9 @@ e2e:
   BUILD +patch-crds --CROSSPLANE_IMAGE_TAG=${CROSSPLANE_IMAGE_TAG}
   COPY --dir test .
   TRY
-    # Using a static CROSSPLANE_VERSION allows Earthly to cache E2E runs as long
-    # as no code changed. If the version contains a git commit (the default) the
-    # build layer cache is invalidated on every commit.
+    # Note: The crossplane-diff binary version (CROSSPLANE_DIFF_VERSION) is not
+    # passed here to allow Earthly to cache E2E runs as long as code doesn't change.
+    # If the version contains a git commit, the cache would be invalidated on every commit.
     WITH DOCKER --pull crossplane/crossplane:${CROSSPLANE_IMAGE_TAG}
       # TODO(negz:) Set GITHUB_ACTIONS=true and use RUN --raw-output when
       # https://github.com/earthly/earthly/issues/4143 is fixed.
@@ -164,12 +164,12 @@ patch-crds:
 go-build:
   ARG EARTHLY_GIT_SHORT_HASH
   ARG EARTHLY_GIT_COMMIT_TIMESTAMP
-  ARG CROSSPLANE_VERSION=v0.0.0-${EARTHLY_GIT_COMMIT_TIMESTAMP}-${EARTHLY_GIT_SHORT_HASH}
+  ARG CROSSPLANE_DIFF_VERSION=v0.0.0-${EARTHLY_GIT_COMMIT_TIMESTAMP}-${EARTHLY_GIT_SHORT_HASH}
   ARG TARGETARCH
   ARG TARGETOS
   ARG GOARCH=${TARGETARCH}
   ARG GOOS=${TARGETOS}
-  ARG GOFLAGS="\"-ldflags=-s -w -X=github.com/crossplane/crossplane/internal/version.version=${CROSSPLANE_VERSION}\""
+  ARG LDFLAGS="-s -w -X=github.com/crossplane-contrib/crossplane-diff/internal/version.version=${CROSSPLANE_DIFF_VERSION}"
   ARG CGO_ENABLED=0
   ARG BIN_NAME=crossplane-diff
   FROM +go-modules
@@ -178,8 +178,8 @@ go-build:
     SET ext = ".exe"
   END
   CACHE --id go-build --sharing shared /root/.cache/go-build
-  COPY --dir cmd/ .
-  RUN go build -o ${BIN_NAME}${ext} ./cmd/diff
+  COPY --dir cmd/ internal/ .
+  RUN go build -ldflags="${LDFLAGS}" -o ${BIN_NAME}${ext} ./cmd/diff
   RUN sha256sum ${BIN_NAME}${ext} | head -c 64 > ${BIN_NAME}${ext}.sha256
   RUN tar -czvf ${BIN_NAME}.tar.gz ${BIN_NAME}${ext} ${BIN_NAME}${ext}.sha256
   RUN sha256sum ${BIN_NAME}.tar.gz | head -c 64 > ${BIN_NAME}.tar.gz.sha256
@@ -354,10 +354,9 @@ ci-codeql:
   ARG CGO_ENABLED=0
   ARG TARGETOS
   ARG TARGETARCH
-  # Using a static CROSSPLANE_VERSION allows Earthly to cache E2E runs as long
-  # as no code changed. If the version contains a git commit (the default) the
-  # build layer cache is invalidated on every commit.
-  FROM +go-modules --CROSSPLANE_VERSION=v0.0.0-codeql
+  # Note: Using a static version for caching. If the version contains a git commit,
+  # the build layer cache would be invalidated on every commit.
+  FROM +go-modules
   IF [ "${TARGETARCH}" = "arm64" ] && [ "${TARGETOS}" = "linux" ]
     RUN --no-cache echo "CodeQL doesn't support Linux on Apple Silicon" && false
   END

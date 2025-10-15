@@ -27,7 +27,7 @@ import (
 
 	"github.com/crossplane/crossplane-runtime/v2/pkg/logging"
 
-	"github.com/crossplane/crossplane/v2/cmd/crank/version"
+	"github.com/crossplane-contrib/crossplane-diff/cmd/diff/version"
 )
 
 var _ = kong.Must(&cli{})
