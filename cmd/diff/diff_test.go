@@ -989,7 +989,9 @@ func TestGetRestConfig(t *testing.T) {
 		"EmptyKubeconfigEnvVar": {
 			kubeconfigPath: "",
 			expectError:    true,
-			errorContains:  "KUBECONFIG environment variable is not set",
+			// With standard loading rules, when KUBECONFIG is empty it tries ~/.kube/config
+			// If that doesn't exist, it returns "invalid configuration"
+			errorContains: "invalid configuration",
 		},
 		"ValidKubeconfigPath": {
 			setupFile: func() string {
@@ -1026,8 +1028,9 @@ users:
 		},
 		"InvalidKubeconfigPath": {
 			kubeconfigPath: "/invalid/nonexistent/path",
-			expectError:    true, // Will error when file doesn't exist
-			errorContains:  "no such file or directory",
+			expectError:    true,
+			// With standard loading rules, invalid path results in "invalid configuration"
+			errorContains: "invalid configuration",
 		},
 	}
 

@@ -18,7 +18,6 @@ limitations under the License.
 package main
 
 import (
-	"os"
 	"time"
 
 	"github.com/alecthomas/kong"
@@ -26,7 +25,6 @@ import (
 	"k8s.io/client-go/tools/clientcmd"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 
-	"github.com/crossplane/crossplane-runtime/v2/pkg/errors"
 	"github.com/crossplane/crossplane-runtime/v2/pkg/logging"
 
 	"github.com/crossplane/crossplane/v2/cmd/crank/version"
@@ -92,10 +90,13 @@ func main() {
 }
 
 func getRestConfig() (*rest.Config, error) {
-	kubeconfig := os.Getenv("KUBECONFIG")
-	if kubeconfig == "" {
-		return nil, errors.New("KUBECONFIG environment variable is not set. Please set KUBECONFIG to point to your kubeconfig file")
-	}
+	// Use the standard client-go loading rules:
+	// 1. If KUBECONFIG env var is set, use that
+	// 2. Otherwise, use ~/.kube/config
+	// 3. Respects current context from the kubeconfig
+	loadingRules := clientcmd.NewDefaultClientConfigLoadingRules()
+	configOverrides := &clientcmd.ConfigOverrides{}
+	kubeConfig := clientcmd.NewNonInteractiveDeferredLoadingClientConfig(loadingRules, configOverrides)
 
-	return clientcmd.BuildConfigFromFlags("", kubeconfig)
+	return kubeConfig.ClientConfig()
 }
