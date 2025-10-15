@@ -6,6 +6,7 @@ import (
 
 	"github.com/crossplane-contrib/crossplane-diff/cmd/diff/client/core"
 	"github.com/crossplane-contrib/crossplane-diff/cmd/diff/client/kubernetes"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 
@@ -42,21 +43,24 @@ type DefaultCompositionRevisionClient struct {
 	resourceClient kubernetes.ResourceClient
 	logger         logging.Logger
 
-	// Cache of composition revisions by name
+	// Cache of composition revisions by name (for individual revision lookups)
 	revisions map[string]*apiextensionsv1.CompositionRevision
-	gvks      []schema.GroupVersionKind
+	// Cache of revisions per composition (lazy-loaded on demand)
+	revisionsByComposition map[string][]*apiextensionsv1.CompositionRevision
+	gvks                   []schema.GroupVersionKind
 }
 
 // NewCompositionRevisionClient creates a new DefaultCompositionRevisionClient.
 func NewCompositionRevisionClient(resourceClient kubernetes.ResourceClient, logger logging.Logger) CompositionRevisionClient {
 	return &DefaultCompositionRevisionClient{
-		resourceClient: resourceClient,
-		logger:         logger,
-		revisions:      make(map[string]*apiextensionsv1.CompositionRevision),
+		resourceClient:         resourceClient,
+		logger:                 logger,
+		revisions:              make(map[string]*apiextensionsv1.CompositionRevision),
+		revisionsByComposition: make(map[string][]*apiextensionsv1.CompositionRevision),
 	}
 }
 
-// Initialize loads composition revisions into the cache.
+// Initialize prepares the composition revision client for use.
 func (c *DefaultCompositionRevisionClient) Initialize(ctx context.Context) error {
 	c.logger.Debug("Initializing composition revision client")
 
@@ -67,20 +71,55 @@ func (c *DefaultCompositionRevisionClient) Initialize(ctx context.Context) error
 
 	c.gvks = gvks
 
-	// List composition revisions to populate the cache
-	revisions, err := c.ListCompositionRevisions(ctx)
-	if err != nil {
-		return errors.Wrap(err, "cannot list composition revisions")
-	}
-
-	// Store in cache
-	for _, rev := range revisions {
-		c.revisions[rev.GetName()] = rev
-	}
-
-	c.logger.Debug("Composition revision client initialized", "revisionsCount", len(c.revisions))
+	c.logger.Debug("Composition revision client initialized")
 
 	return nil
+}
+
+// listCompositionRevisionsForComposition lists composition revisions for a specific composition using label selector.
+func (c *DefaultCompositionRevisionClient) listCompositionRevisionsForComposition(ctx context.Context, compositionName string) ([]*apiextensionsv1.CompositionRevision, error) {
+	c.logger.Debug("Listing composition revisions for composition", "compositionName", compositionName)
+
+	// Define the composition revision GVK
+	gvk := schema.GroupVersionKind{
+		Group:   "apiextensions.crossplane.io",
+		Version: "v1",
+		Kind:    "CompositionRevision",
+	}
+
+	// Use label selector to filter server-side
+	labelSelector := metav1.LabelSelector{
+		MatchLabels: map[string]string{
+			LabelCompositionName: compositionName,
+		},
+	}
+
+	unRevisions, err := c.resourceClient.GetResourcesByLabel(ctx, gvk, "", labelSelector)
+	if err != nil {
+		c.logger.Debug("Failed to list composition revisions", "compositionName", compositionName, "error", err)
+		return nil, errors.Wrapf(err, "cannot list composition revisions for composition %s", compositionName)
+	}
+
+	// Convert unstructured to typed
+	revisions := make([]*apiextensionsv1.CompositionRevision, 0, len(unRevisions))
+	for _, obj := range unRevisions {
+		rev := &apiextensionsv1.CompositionRevision{}
+
+		err := runtime.DefaultUnstructuredConverter.FromUnstructured(obj.Object, rev)
+		if err != nil {
+			c.logger.Debug("Failed to convert composition revision from unstructured",
+				"name", obj.GetName(),
+				"error", err)
+
+			return nil, errors.Wrap(err, "cannot convert unstructured to CompositionRevision")
+		}
+
+		revisions = append(revisions, rev)
+	}
+
+	c.logger.Debug("Successfully retrieved composition revisions", "compositionName", compositionName, "count", len(revisions))
+
+	return revisions, nil
 }
 
 // ListCompositionRevisions lists all composition revisions in the cluster.
@@ -158,22 +197,26 @@ func (c *DefaultCompositionRevisionClient) GetCompositionRevision(ctx context.Co
 func (c *DefaultCompositionRevisionClient) GetLatestRevisionForComposition(ctx context.Context, compositionName string) (*apiextensionsv1.CompositionRevision, error) {
 	c.logger.Debug("Finding latest revision for composition", "compositionName", compositionName)
 
-	// Get all revisions if we haven't loaded them yet
-	if len(c.revisions) == 0 {
-		if _, err := c.ListCompositionRevisions(ctx); err != nil {
+	// Check if we've already loaded revisions for this composition
+	matchingRevisions, cached := c.revisionsByComposition[compositionName]
+	if !cached {
+		// Load revisions for this specific composition using label selector
+		c.logger.Debug("Loading revisions for composition", "compositionName", compositionName)
+
+		revisions, err := c.listCompositionRevisionsForComposition(ctx, compositionName)
+		if err != nil {
 			return nil, errors.Wrap(err, "cannot list composition revisions")
 		}
-	}
 
-	// Filter revisions for this composition
-	var matchingRevisions []*apiextensionsv1.CompositionRevision
+		matchingRevisions = revisions
 
-	for _, rev := range c.revisions {
-		if labels := rev.GetLabels(); labels != nil {
-			if labels[LabelCompositionName] == compositionName {
-				matchingRevisions = append(matchingRevisions, rev)
-			}
+		// Cache by name for individual lookups
+		for _, rev := range matchingRevisions {
+			c.revisions[rev.GetName()] = rev
 		}
+
+		// Cache the filtered list even if empty (to avoid re-querying)
+		c.revisionsByComposition[compositionName] = matchingRevisions
 	}
 
 	if len(matchingRevisions) == 0 {
@@ -186,6 +229,14 @@ func (c *DefaultCompositionRevisionClient) GetLatestRevisionForComposition(ctx c
 	})
 
 	latest := matchingRevisions[0]
+
+	// Validate that we don't have duplicate revision numbers (would indicate a serious error)
+	if len(matchingRevisions) > 1 && matchingRevisions[0].Spec.Revision == matchingRevisions[1].Spec.Revision {
+		return nil, errors.Errorf(
+			"multiple composition revisions found with the same revision number %d for composition %s (revisions: %s, %s) - this indicates a serious error in the Crossplane runtime",
+			latest.Spec.Revision, compositionName, matchingRevisions[0].GetName(), matchingRevisions[1].GetName())
+	}
+
 	c.logger.Debug("Found latest revision",
 		"compositionName", compositionName,
 		"revisionName", latest.GetName(),

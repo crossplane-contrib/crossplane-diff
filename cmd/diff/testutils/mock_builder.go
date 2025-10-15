@@ -127,7 +127,11 @@ func (b *MockResourceClientBuilder) WithListResources(fn func(context.Context, s
 
 // WithEmptyListResources mimics an empty but successful response.
 func (b *MockResourceClientBuilder) WithEmptyListResources() *MockResourceClientBuilder {
-	return b.WithListResources(func(context.Context, schema.GroupVersionKind, string) ([]*un.Unstructured, error) {
+	b.WithListResources(func(context.Context, schema.GroupVersionKind, string) ([]*un.Unstructured, error) {
+		return []*un.Unstructured{}, nil
+	})
+	// Also set up GetResourcesByLabel to return empty (for composition revision queries)
+	return b.WithGetResourcesByLabel(func(context.Context, schema.GroupVersionKind, string, metav1.LabelSelector) ([]*un.Unstructured, error) {
 		return []*un.Unstructured{}, nil
 	})
 }
@@ -145,15 +149,40 @@ func (b *MockResourceClientBuilder) WithGetResourcesByLabel(fn func(context.Cont
 	return b
 }
 
-// WithResourcesFoundByLabel sets GetResourcesByLabel to return resources for a specific label.
+// WithResourcesFoundByLabel sets GetResourcesByLabel to return resources for a specific label value.
+// This method is stateful - multiple calls accumulate mappings for different label values.
+// The label parameter specifies which label key to match on (e.g., "crossplane.io/composition-name").
 func (b *MockResourceClientBuilder) WithResourcesFoundByLabel(resources []*un.Unstructured, label, value string) *MockResourceClientBuilder {
-	return b.WithGetResourcesByLabel(func(_ context.Context, _ schema.GroupVersionKind, _ string, selector metav1.LabelSelector) ([]*un.Unstructured, error) {
-		// Check if the selector matches our expected label
+	// If we don't have an existing GetResourcesByLabel function, create a new one
+	if b.mock.GetResourcesByLabelFn == nil {
+		// Create a map to store resources by label value
+		resourcesByValue := make(map[string][]*un.Unstructured)
+		resourcesByValue[value] = resources
+
+		return b.WithGetResourcesByLabel(func(_ context.Context, _ schema.GroupVersionKind, _ string, selector metav1.LabelSelector) ([]*un.Unstructured, error) {
+			// Check if the selector matches our expected label
+			if labelValue, exists := selector.MatchLabels[label]; exists {
+				if res, found := resourcesByValue[labelValue]; found {
+					return res, nil
+				}
+			}
+
+			return []*un.Unstructured{}, nil
+		})
+	}
+
+	// If we already have a GetResourcesByLabel function, we need to wrap it
+	// This allows multiple calls to accumulate state
+	originalFn := b.mock.GetResourcesByLabelFn
+
+	return b.WithGetResourcesByLabel(func(ctx context.Context, gvk schema.GroupVersionKind, namespace string, selector metav1.LabelSelector) ([]*un.Unstructured, error) {
+		// Check if the selector matches our new label/value pair
 		if labelValue, exists := selector.MatchLabels[label]; exists && labelValue == value {
 			return resources, nil
 		}
 
-		return []*un.Unstructured{}, nil
+		// Fall through to the original function
+		return originalFn(ctx, gvk, namespace, selector)
 	})
 }
 

@@ -3,6 +3,7 @@ package crossplane
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"github.com/crossplane-contrib/crossplane-diff/cmd/diff/client/core"
 	"github.com/crossplane-contrib/crossplane-diff/cmd/diff/client/kubernetes"
@@ -198,16 +199,25 @@ func (c *DefaultCompositionClient) resolveCompositionFromRevisions(
 		"revisionRef", revisionRefName,
 		"updatePolicy", updatePolicy)
 
-	// Case 1: Automatic policy - always use latest revision
-	if updatePolicy == "Automatic" {
+	switch {
+	case updatePolicy == "Automatic":
+		// Case 1: Automatic policy - always use latest revision (if available)
 		latest, err := c.revisionClient.GetLatestRevisionForComposition(ctx, compositionName)
 		if err != nil {
-			// If we can't find revisions, fall back to using the composition directly
-			c.logger.Debug("Could not find latest revision, using composition directly",
-				"compositionName", compositionName,
-				"error", err)
+			// Check if this is a "no revisions found" case (new/unpublished composition)
+			if strings.Contains(err.Error(), "no composition revisions found") {
+				c.logger.Debug("No revisions found for composition (likely unpublished), falling back to composition directly",
+					"compositionName", compositionName,
+					"resource", resourceID)
 
-			return nil, nil
+				// Fall back to using composition directly for unpublished compositions
+				return nil, nil
+			}
+
+			// For other errors, fail the diff to ensure accuracy
+			return nil, errors.Wrapf(err,
+				"cannot resolve latest composition revision for %s with Automatic update policy (composition: %s)",
+				resourceID, compositionName)
 		}
 
 		comp := c.revisionClient.GetCompositionFromRevision(latest)
@@ -217,13 +227,23 @@ func (c *DefaultCompositionClient) resolveCompositionFromRevisions(
 			"revisionNumber", latest.Spec.Revision)
 
 		return comp, nil
-	}
 
-	// Case 2: Manual policy with revision reference - use that specific revision
-	if updatePolicy == "Manual" && hasRevisionRef {
+	case updatePolicy == "Manual" && hasRevisionRef:
+		// Case 2: Manual policy with revision reference - use that specific revision
 		revision, err := c.revisionClient.GetCompositionRevision(ctx, revisionRefName)
 		if err != nil {
-			return nil, errors.Wrapf(err, "cannot get composition revision %s for %s", revisionRefName, resourceID)
+			return nil, errors.Wrapf(err,
+				"cannot get pinned composition revision %s for %s (composition: %s, policy: Manual)",
+				revisionRefName, resourceID, compositionName)
+		}
+
+		// Validate that revision belongs to the referenced composition
+		if labels := revision.GetLabels(); labels != nil {
+			if revCompName := labels[LabelCompositionName]; revCompName != "" && revCompName != compositionName {
+				return nil, errors.Errorf(
+					"composition revision %s belongs to composition %s, not %s (resource: %s)",
+					revisionRefName, revCompName, compositionName, resourceID)
+			}
 		}
 
 		comp := c.revisionClient.GetCompositionFromRevision(revision)
@@ -233,13 +253,14 @@ func (c *DefaultCompositionClient) resolveCompositionFromRevisions(
 			"revisionNumber", revision.Spec.Revision)
 
 		return comp, nil
+
+	default:
+		// Case 3: Manual policy without revision reference - use composition directly
+		c.logger.Debug("Using composition directly (Manual policy without revision ref)",
+			"resource", resourceID)
+
+		return nil, nil
 	}
-
-	// Case 3: Manual policy without revision reference - use composition directly
-	c.logger.Debug("Using composition directly (Manual policy without revision ref)",
-		"resource", resourceID)
-
-	return nil, nil
 }
 
 // FindMatchingComposition finds a composition matching the given resource.

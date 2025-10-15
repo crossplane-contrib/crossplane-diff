@@ -509,6 +509,7 @@ func TestDefaultCompositionClient_FindMatchingComposition(t *testing.T) {
 
 					return []*un.Unstructured{}, nil
 				}).
+				WithResourcesFoundByLabel([]*un.Unstructured{}, LabelCompositionName, "matching-comp").
 				Build(),
 			mockDef: *tu.NewMockDefinitionClient().
 				WithSuccessfulInitialize().
@@ -702,6 +703,7 @@ func TestDefaultCompositionClient_FindMatchingComposition(t *testing.T) {
 
 					return []*un.Unstructured{}, nil
 				}).
+				WithResourcesFoundByLabel([]*un.Unstructured{}, LabelCompositionName, "matching-comp").
 				Build(),
 			mockDef: *tu.NewMockDefinitionClient().
 				WithSuccessfulInitialize().
