@@ -1655,6 +1655,50 @@ Summary: 3 modified`,
 			expectedError: false,
 			noColor:       true,
 		},
+		"v2 Net new XR with Manual policy but no revision ref uses latest revision": {
+			setupFiles: []string{
+				"testdata/diff/resources/xrd.yaml",
+				"testdata/diff/resources/composition-revision-v1.yaml",
+				"testdata/diff/resources/composition-revision-v2.yaml",
+				"testdata/diff/resources/composition-v2.yaml", // Current composition is v2
+				"testdata/diff/resources/functions.yaml",
+			},
+			inputFiles: []string{"testdata/diff/new-xr-manual-no-ref.yaml"},
+			expectedOutput: `
++++ XDownstreamResource/test-manual-no-ref
++ apiVersion: ns.nop.example.org/v1alpha1
++ kind: XDownstreamResource
++ metadata:
++   annotations:
++     crossplane.io/composition-resource-name: nop-resource
++   labels:
++     crossplane.io/composite: test-manual-no-ref
++   name: test-manual-no-ref
++   namespace: default
++ spec:
++   forProvider:
++     configData: v2-new-value
+
+---
++++ XNopResource/test-manual-no-ref
++ apiVersion: ns.diff.example.org/v1alpha1
++ kind: XNopResource
++ metadata:
++   name: test-manual-no-ref
++   namespace: default
++ spec:
++   coolField: new-value
++   crossplane:
++     compositionRef:
++       name: xnopresources.diff.example.org
++     compositionUpdatePolicy: Manual
+
+---
+
+Summary: 2 added`,
+			expectedError: false,
+			noColor:       true,
+		},
 		// Composition Revision tests for v1 XRDs (Crossplane 1.20 compatibility)
 		"v1 XR with Manual update policy changing revision shows upgrade diff": {
 			xrdAPIVersion: V1,

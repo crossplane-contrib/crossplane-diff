@@ -269,13 +269,13 @@ func TestDefaultCompositionRevisionClient_GetLatestRevisionForComposition(t *tes
 	}
 
 	tests := map[string]struct {
-		reason            string
-		compositionName   string
-		mockResource      *tu.MockResourceClient
-		cachedByComp      map[string][]*apiextensionsv1.CompositionRevision
-		expectRev         *apiextensionsv1.CompositionRevision
-		expectError       bool
-		errorPattern      string
+		reason          string
+		compositionName string
+		mockResource    *tu.MockResourceClient
+		cachedByComp    map[string][]*apiextensionsv1.CompositionRevision
+		expectRev       *apiextensionsv1.CompositionRevision
+		expectError     bool
+		errorPattern    string
 	}{
 		"ReturnsLatestRevision": {
 			reason:          "Should return the revision with the highest revision number",
@@ -407,10 +407,10 @@ func TestDefaultCompositionRevisionClient_GetLatestRevisionForComposition(t *tes
 
 func TestDefaultCompositionRevisionClient_GetCompositionFromRevision(t *testing.T) {
 	tests := map[string]struct {
-		reason      string
-		revision    *apiextensionsv1.CompositionRevision
-		expectComp  *apiextensionsv1.Composition
-		expectNil   bool
+		reason     string
+		revision   *apiextensionsv1.CompositionRevision
+		expectComp *apiextensionsv1.Composition
+		expectNil  bool
 	}{
 		"ValidRevision": {
 			reason: "Should extract composition from revision",

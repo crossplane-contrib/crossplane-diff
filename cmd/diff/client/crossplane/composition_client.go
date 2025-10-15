@@ -163,7 +163,7 @@ func (c *DefaultCompositionClient) GetComposition(ctx context.Context, name stri
 	return comp, nil
 }
 
-// getCompositionRevisionRef reads the compositionRevisionRef from an XR/Claim.
+// getCompositionRevisionRef reads the compositionRevisionRef from an XR/Claim spec.
 // Returns the revision name and whether it was found.
 func (c *DefaultCompositionClient) getCompositionRevisionRef(xrd, res *un.Unstructured) (string, bool) {
 	revisionRefName, found, _ := un.NestedString(res.Object, makeCrossplaneRefPath(xrd.GetAPIVersion(), "compositionRevisionRef", "name")...)
@@ -255,11 +255,37 @@ func (c *DefaultCompositionClient) resolveCompositionFromRevisions(
 		return comp, nil
 
 	default:
-		// Case 3: Manual policy without revision reference - use composition directly
-		c.logger.Debug("Using composition directly (Manual policy without revision ref)",
-			"resource", resourceID)
+		// Case 3: Manual policy without revision reference in spec
+		// When creating a new XR with Manual policy and no compositionRevisionRef,
+		// Crossplane pins it to the latest revision at creation time.
+		// Use the latest revision to match this behavior.
+		c.logger.Debug("Manual policy without revision ref - using latest revision (will be pinned on creation)",
+			"resource", resourceID,
+			"compositionName", compositionName)
 
-		return nil, nil
+		latest, err := c.revisionClient.GetLatestRevisionForComposition(ctx, compositionName)
+		if err != nil {
+			// Check if this is a "no revisions found" case (new/unpublished composition)
+			if strings.Contains(err.Error(), "no composition revisions found") {
+				c.logger.Debug("No revisions found for composition (likely unpublished), falling back to composition directly",
+					"compositionName", compositionName,
+					"resource", resourceID)
+
+				return nil, nil
+			}
+
+			return nil, errors.Wrapf(err,
+				"cannot resolve latest composition revision for %s with Manual policy (composition: %s)",
+				resourceID, compositionName)
+		}
+
+		comp := c.revisionClient.GetCompositionFromRevision(latest)
+		c.logger.Debug("Using latest revision for Manual policy",
+			"resource", resourceID,
+			"revisionName", latest.GetName(),
+			"revisionNumber", latest.Spec.Revision)
+
+		return comp, nil
 	}
 }
 
