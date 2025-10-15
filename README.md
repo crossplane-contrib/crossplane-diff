@@ -43,9 +43,6 @@ cat xr.yaml | crossplane-diff xr -
 # Process multiple files
 crossplane-diff xr xr1.yaml xr2.yaml xr3.yaml
 
-# Show changes in a specific namespace
-crossplane-diff xr xr.yaml -n production
-
 # Show changes in a compact format with minimal context
 crossplane-diff xr xr.yaml --compact
 
@@ -88,9 +85,9 @@ Flags:
       --timeout=1m             How long to run before timing out.
       --qps=0                  Maximum QPS to the API server.
       --burst=0                Maximum burst for throttle.
-  -n, --namespace="crossplane-system"
-                               Namespace to compare resources against.
 ```
+
+**Note**: XR namespaces are read directly from the YAML files being diffed, not from command-line flags.
 
 #### `comp` - Diff Composition Impact
 

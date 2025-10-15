@@ -34,8 +34,7 @@ type XRCmd struct {
 	// Embed common fields
 	CommonCmdFields
 
-	Namespace string   `default:"crossplane-system" help:"Namespace to compare resources against."             name:"namespace" short:"n"`
-	Files     []string `arg:""                      help:"YAML files containing Crossplane resources to diff." optional:""`
+	Files []string `arg:"" help:"YAML files containing Crossplane resources to diff." optional:""`
 }
 
 // Help returns help instructions for the XR diff command.
@@ -46,17 +45,18 @@ This command returns a diff of the in-cluster resources that would be modified i
 Similar to kubectl diff, it requires Crossplane to be operating in the live cluster found in your kubeconfig.
 
 Examples:
-  # Show the changes that would result from applying xr.yaml (via file) in the default 'crossplane-system' namespace.
+  # Show the changes that would result from applying xr.yaml (via file).
   crossplane-diff xr xr.yaml
 
-  # Show the changes that would result from applying xr.yaml (via stdin) in the default 'crossplane-system' namespace.
+  # Show the changes that would result from applying xr.yaml (via stdin).
   cat xr.yaml | crossplane-diff xr --
 
-  # Show the changes that would result from applying xr.yaml, xr1.yaml, and xr2.yaml in the default 'crossplane-system' namespace.
+  # Show the changes that would result from applying multiple files.
+  crossplane-diff xr xr1.yaml xr2.yaml
   cat xr.yaml | crossplane-diff xr xr1.yaml xr2.yaml --
 
-  # Show the changes that would result from applying xr.yaml (via file) in the 'foobar' namespace with no color output.
-  crossplane-diff xr xr.yaml -n foobar --no-color
+  # Show the changes with no color output.
+  crossplane-diff xr xr.yaml --no-color
 
   # Show the changes in a compact format with minimal context.
   crossplane-diff xr xr.yaml --compact
@@ -88,11 +88,8 @@ func (c *XRCmd) initializeDependencies(ctx *kong.Context, log logging.Logger, co
 }
 
 func makeDefaultXRProc(c *XRCmd, ctx *AppContext, log logging.Logger) dp.DiffProcessor {
-	// Use provided namespace or default to "default"
-	namespace := c.Namespace
-	if namespace == "" {
-		namespace = "default"
-	}
+	// Use default namespace for processor options (not actually used for XR diffs)
+	namespace := "default"
 
 	opts := defaultProcessorOptions(c.CommonCmdFields, namespace)
 	opts = append(opts,
