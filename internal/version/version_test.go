@@ -136,10 +136,7 @@ func TestVersioner_GetSemVer(t *testing.T) {
 				}
 
 				// semver library strips the 'v' prefix, so we need to do the same for comparison
-				wantVersion := tt.version
-				if strings.HasPrefix(wantVersion, "v") {
-					wantVersion = wantVersion[1:]
-				}
+				wantVersion := strings.TrimPrefix(tt.version, "v")
 
 				if got.String() != wantVersion {
 					t.Errorf("GetSemVer() version = %v, want %v", got.String(), wantVersion)
