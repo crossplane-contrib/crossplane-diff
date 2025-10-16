@@ -90,6 +90,8 @@ func createTestScheme() *runtime.Scheme {
 func runIntegrationTest(t *testing.T, testType DiffTestType, scheme *runtime.Scheme, tt IntegrationTestCase) {
 	t.Helper()
 
+	t.Parallel() // Enable parallel test execution
+
 	// Skip test if requested
 	if tt.skip {
 		t.Skip(tt.skipReason)
@@ -113,6 +115,9 @@ func runIntegrationTest(t *testing.T, testType DiffTestType, scheme *runtime.Sch
 		CRDDirectoryPaths:     crdPaths,
 		ErrorIfCRDPathMissing: true,
 		Scheme:                scheme,
+		// Note: Leaving ControlPlane unset (nil) allows envtest to create its own control plane
+		// with random ports, which enables parallel test execution without port conflicts.
+		// Each test gets its own isolated API server and etcd instance on random available ports.
 	}
 
 	// Start the test environment
@@ -256,6 +261,8 @@ func runIntegrationTest(t *testing.T, testType DiffTestType, scheme *runtime.Sch
 
 // TestDiffIntegration runs an integration test for the diff command.
 func TestDiffIntegration(t *testing.T) {
+	t.Parallel()
+
 	// Set up logger for controller-runtime (global setup, once per test function)
 	tu.SetupKubeTestLogger(t)
 
@@ -1764,6 +1771,8 @@ Summary: 2 added`,
 
 // TestCompDiffIntegration runs an integration test for the composition diff command.
 func TestCompDiffIntegration(t *testing.T) {
+	t.Parallel()
+
 	// Set up logger for controller-runtime (global setup, once per test function)
 	tu.SetupKubeTestLogger(t)
 
