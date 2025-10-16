@@ -261,6 +261,8 @@ func runIntegrationTest(t *testing.T, testType DiffTestType, scheme *runtime.Sch
 
 // TestDiffIntegration runs an integration test for the diff command.
 func TestDiffIntegration(t *testing.T) {
+	t.Parallel()
+
 	// Set up logger for controller-runtime (global setup, once per test function)
 	tu.SetupKubeTestLogger(t)
 
@@ -1769,6 +1771,8 @@ Summary: 2 added`,
 
 // TestCompDiffIntegration runs an integration test for the composition diff command.
 func TestCompDiffIntegration(t *testing.T) {
+	t.Parallel()
+
 	// Set up logger for controller-runtime (global setup, once per test function)
 	tu.SetupKubeTestLogger(t)
 
