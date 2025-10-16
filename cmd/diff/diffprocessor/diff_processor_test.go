@@ -149,7 +149,18 @@ func TestDefaultDiffProcessor_PerformDiff(t *testing.T) {
 			},
 			resources:     []*un.Unstructured{resource1},
 			processorOpts: testProcessorOptions(t),
-			want:          errors.New("unable to process resource XR1/my-xr-1: cannot get composition: composition not found"),
+			verifyOutput: func(t *testing.T, output string) {
+				t.Helper()
+				// Verify that the error message was written to stdout
+				if !strings.Contains(output, "ERROR: Failed to process XR1/my-xr-1") {
+					t.Errorf("Expected stdout to contain error message, got: %s", output)
+				}
+				// Also verify it contains the composition not found error
+				if !strings.Contains(output, "composition not found") {
+					t.Errorf("Expected stdout to contain 'composition not found' error detail, got: %s", output)
+				}
+			},
+			want: errors.New("unable to process resource XR1/my-xr-1: cannot get composition: composition not found"),
 		},
 		"MultipleResourceErrors": {
 			setupMocks: func() (k8.Clients, xp.Clients) {
@@ -178,6 +189,21 @@ func TestDefaultDiffProcessor_PerformDiff(t *testing.T) {
 			},
 			resources:     []*un.Unstructured{resource1, resource2},
 			processorOpts: testProcessorOptions(t),
+			verifyOutput: func(t *testing.T, output string) {
+				t.Helper()
+				// Verify that error messages for both resources were written to stdout
+				if !strings.Contains(output, "ERROR: Failed to process XR1/my-xr-1") {
+					t.Errorf("Expected stdout to contain error message for my-xr-1, got: %s", output)
+				}
+				if !strings.Contains(output, "ERROR: Failed to process XR1/my-xr-2") {
+					t.Errorf("Expected stdout to contain error message for my-xr-2, got: %s", output)
+				}
+				// Both should contain the composition not found error
+				expectedCount := strings.Count(output, "composition not found")
+				if expectedCount < 2 {
+					t.Errorf("Expected stdout to contain 'composition not found' at least twice, found %d times in: %s", expectedCount, output)
+				}
+			},
 			want: errors.New("[unable to process resource XR1/my-xr-1: cannot get composition: composition not found, " +
 				"unable to process resource XR1/my-xr-2: cannot get composition: composition not found]"),
 		},
@@ -565,6 +591,11 @@ func TestDefaultDiffProcessor_PerformDiff(t *testing.T) {
 			}
 			err := processor.PerformDiff(ctx, &stdout, tt.resources, compositionProvider)
 
+			// Check output if verification function is provided (do this first, before error checks)
+			if tt.verifyOutput != nil {
+				tt.verifyOutput(t, stdout.String())
+			}
+
 			if tt.want != nil {
 				if err == nil {
 					t.Errorf("PerformDiff(...): expected error but got none")
@@ -580,11 +611,6 @@ func TestDefaultDiffProcessor_PerformDiff(t *testing.T) {
 
 			if err != nil {
 				t.Errorf("PerformDiff(...): unexpected error: %v", err)
-			}
-
-			// Check output if verification function is provided
-			if tt.verifyOutput != nil {
-				tt.verifyOutput(t, stdout.String())
 			}
 		})
 	}

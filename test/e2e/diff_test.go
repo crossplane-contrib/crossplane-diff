@@ -531,6 +531,7 @@ var clusterNopList = composed.NewList(composed.FromReferenceToList(corev1.Object
 // Regular expressions to match the dynamic parts.
 var (
 	resourceNameRegex              = regexp.MustCompile(`(existing-resource)-[a-z0-9]{5,}(?:-nop-resource)?`)
+	compResourceNameRegex          = regexp.MustCompile(`(test-comp-resource)-[a-z0-9]{5,}`)
 	claimNameRegex                 = regexp.MustCompile(`(test-claim)-[a-z0-9]{5,}(?:-[a-z0-9]{5,})?`)
 	claimCompositionRevisionRegex  = regexp.MustCompile(`(xnopclaims\.claim\.diff\.example\.org)-[a-z0-9]{7,}`)
 	compositionRevisionRegex       = regexp.MustCompile(`(xnopresources\.(cluster\.|legacy\.)?diff\.example\.org)-[a-z0-9]{7,}`)
@@ -545,6 +546,7 @@ func normalizeLine(line string) string {
 
 	// Replace resource names with random suffixes
 	line = resourceNameRegex.ReplaceAllString(line, "${1}-XXXXX")
+	line = compResourceNameRegex.ReplaceAllString(line, "${1}-XXXXX")
 	line = claimNameRegex.ReplaceAllString(line, "${1}-XXXXX")
 
 	// Replace composition revision refs with random hash
@@ -689,6 +691,7 @@ func TestDiffExistingComposition(t *testing.T) {
 	imageTag := strings.Split(environment.GetCrossplaneImage(), ":")[1]
 	manifests := filepath.Join("test/e2e/manifests/beta/diff", imageTag, "comp")
 	setupPath := filepath.Join(manifests, "setup")
+	expectPath := filepath.Join(manifests, "expect")
 
 	environment.Test(t,
 		features.New("DiffExistingComposition").
@@ -717,23 +720,7 @@ func TestDiffExistingComposition(t *testing.T) {
 					t.Fatalf("Error running comp diff command: %v\nLog output:\n%s", err, log)
 				}
 
-				// Basic validation - ensure we get meaningful output
-				if output == "" {
-					t.Fatalf("Expected non-empty output from comp diff command")
-				}
-
-				// Check that output contains references to our test resource
-				if !strings.Contains(output, "test-comp-resource") {
-					t.Errorf("Expected output to contain reference to test-comp-resource, got: %s", output)
-				}
-
-				// Check that output shows the expected changes
-				if !strings.Contains(output, "resource-tier") || !strings.Contains(output, "config-data") {
-					t.Logf("Output: %s", output)
-					t.Errorf("Expected output to show changes to resource-tier and config-data annotations")
-				}
-
-				t.Logf("Comp diff output:\n%s", output)
+				assertDiffMatchesFile(t, output, filepath.Join(expectPath, "existing-xr.ansi"), log)
 
 				return ctx
 			}).

@@ -36,7 +36,7 @@ spec:
                   - type: string
                     string:
                       type: Format
-                      fmt: "basic"
+                      fmt: "basic-%s"
     - step: detect-ready-resources
       functionRef:
         name: function-auto-ready

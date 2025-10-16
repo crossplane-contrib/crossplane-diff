@@ -1,0 +1,94 @@
+=== Composition Changes ===
+
+~~~ Composition/xcompdiffresources.compdiff.example.org
+  apiVersion: apiextensions.crossplane.io/v1
+  kind: Composition
+  metadata:
+    name: xcompdiffresources.compdiff.example.org
+  spec:
+    compositeTypeRef:
+      apiVersion: compdiff.example.org/v1alpha1
+      kind: XCompDiffResource
+    mode: Pipeline
+    pipeline:
+    - functionRef:
+        name: function-patch-and-transform
+      input:
+        apiVersion: pt.fn.crossplane.io/v1beta1
+        kind: Resources
+        resources:
+        - base:
+            apiVersion: nop.crossplane.io/v1alpha1
+            kind: ClusterNopResource
+            spec:
+              forProvider:
+                conditionAfter:
+                - conditionStatus: "True"
+                  conditionType: Ready
+                  time: 0s
+          name: nop-resource
+          patches:
+          - fromFieldPath: spec.coolField
+            toFieldPath: metadata.annotations[config-data]
+[32m+           transforms:[0m
+[32m+           - string:[0m
+[32m+               fmt: updated-%s[0m
+[32m+               type: Format[0m
+[32m+             type: string[0m
+            type: FromCompositeFieldPath
+          - fromFieldPath: spec.coolField
+            toFieldPath: metadata.annotations[resource-tier]
+            transforms:
+            - string:
+[31m-               fmt: basic-%s[0m
+[32m+               fmt: premium-%s[0m
+                type: Format
+              type: string
+            type: FromCompositeFieldPath
+      step: generate-resources
+    - functionRef:
+        name: function-auto-ready
+      step: detect-ready-resources
+
+---
+
+Summary: 1 modified
+
+=== Affected Composite Resources ===
+
+- XCompDiffResource/test-comp-resource (namespace: )
+
+=== Impact Analysis ===
+
+~~~ ClusterNopResource/test-comp-resource-XXXXX
+  apiVersion: nop.crossplane.io/v1alpha1
+  kind: ClusterNopResource
+  metadata:
+    annotations:
+[31m-     config-data: existing-value[0m
+[32m+     config-data: updated-existing-value[0m
+      crossplane.io/composition-resource-name: nop-resource
+      crossplane.io/external-name: test-comp-resource-XXXXX
+[31m-     resource-tier: basic-existing-value[0m
+[32m+     resource-tier: premium-existing-value[0m
+    finalizers:
+    - finalizer.managedresource.crossplane.io
+    generateName: test-comp-resource-
+    labels:
+      crossplane.io/composite: test-comp-resource
+    name: test-comp-resource-XXXXX
+  spec:
+    deletionPolicy: Delete
+    forProvider:
+      conditionAfter:
+      - conditionStatus: "True"
+        conditionType: Ready
+        time: 0s
+    managementPolicies:
+    - '*'
+    providerConfigRef:
+      name: default
+
+---
+
+Summary: 1 modified
