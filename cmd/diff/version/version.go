@@ -23,11 +23,10 @@ import (
 	"time"
 
 	"github.com/alecthomas/kong"
+	"github.com/crossplane-contrib/crossplane-diff/internal/version"
 	"github.com/pkg/errors"
 
 	xpversion "github.com/crossplane/crossplane/v2/cmd/crank/version"
-
-	"github.com/crossplane-contrib/crossplane-diff/internal/version"
 )
 
 const (
