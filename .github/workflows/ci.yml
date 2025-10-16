@@ -6,7 +6,13 @@ on:
       - main
       - release-*
   pull_request: {}
-  workflow_dispatch: {}
+  workflow_dispatch:
+    inputs:
+      build-artifacts:
+        description: 'Build multiplatform artifacts'
+        required: false
+        type: boolean
+        default: false
 
 env:
   # Common versions
@@ -245,6 +251,12 @@ jobs:
 
   build-artifacts:
     runs-on: ubuntu-24.04
+    # Only run when explicitly requested via workflow_dispatch input,
+    # commit message contains [build-artifacts], or PR has build-artifacts label
+    if: |
+      github.event.inputs.build-artifacts == 'true' ||
+      contains(github.event.head_commit.message, '[build-artifacts]') ||
+      contains(github.event.pull_request.labels.*.name, 'build-artifacts')
 
     steps:
       - name: Checkout
@@ -273,7 +285,7 @@ jobs:
         run: earthly --strict --remote-cache ghcr.io/crossplane-contrib/crossplane-diff/earthly-cache:${{ github.job }} +multiplatform-build
 
       - name: Upload Artifacts to GitHub
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        uses: actions/upload-artifact@ea165da8cb2d81d0f1d4f8d90e37c5a4c64c0f28 # v4
         with:
           name: output
           path: _output/**
