@@ -41,7 +41,7 @@ spec:
                   - type: string
                     string:
                       type: Format
-                      fmt: "premium"
+                      fmt: "premium-%s"
     - step: detect-ready-resources
       functionRef:
         name: function-auto-ready

@@ -160,6 +160,12 @@ func (p *DefaultDiffProcessor) PerformDiff(ctx context.Context, stdout io.Writer
 		if err != nil {
 			p.config.Logger.Debug("Failed to process resource", "resource", resourceID, "error", err)
 			errs = append(errs, errors.Wrapf(err, "unable to process resource %s", resourceID))
+
+			// Write error message to stdout so user can see it
+			errMsg := fmt.Sprintf("ERROR: Failed to process %s: %v\n\n", resourceID, err)
+			if _, writeErr := fmt.Fprint(stdout, errMsg); writeErr != nil {
+				p.config.Logger.Debug("Failed to write error message", "error", writeErr)
+			}
 		} else {
 			// Merge the diffs into our combined map
 			for k, v := range diffs {
