@@ -204,8 +204,15 @@ func (p *DefaultCompDiffProcessor) processSingleComposition(ctx context.Context,
 	// Process affected XRs using the existing XR processor with composition override
 	// List the affected XRs so users can understand the scope of impact
 	var xrList strings.Builder
+
 	for _, xr := range affectedXRs {
-		xrList.WriteString(fmt.Sprintf("- %s/%s (namespace: %s)\n", xr.GetKind(), xr.GetName(), xr.GetNamespace()))
+		// Format namespace/scope information
+		scope := fmt.Sprintf("namespace: %s", xr.GetNamespace())
+		if xr.GetNamespace() == "" {
+			scope = "cluster-scoped"
+		}
+
+		xrList.WriteString(fmt.Sprintf("- %s/%s (%s)\n", xr.GetKind(), xr.GetName(), scope))
 	}
 
 	if _, err := fmt.Fprintf(stdout, "=== Affected Composite Resources ===\n\n%s\n=== Impact Analysis ===\n\n", xrList.String()); err != nil {
