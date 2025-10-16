@@ -6,10 +6,12 @@ toolchain go1.25.3
 
 require (
 	dario.cat/mergo v1.0.2
+	github.com/Masterminds/semver v1.5.0
 	github.com/alecthomas/kong v1.12.1
 	github.com/crossplane/crossplane-runtime/v2 v2.1.0-rc.0
 	github.com/crossplane/crossplane/v2 v2.0.2
 	github.com/google/go-cmp v0.7.0
+	github.com/pkg/errors v0.9.1
 	github.com/sergi/go-diff v1.4.0
 	k8s.io/api v0.33.0
 	k8s.io/apiextensions-apiserver v0.33.0
@@ -24,7 +26,6 @@ require (
 require (
 	cel.dev/expr v0.19.1 // indirect
 	github.com/MakeNowJust/heredoc v1.0.0 // indirect
-	github.com/Masterminds/semver v1.5.0 // indirect
 	github.com/antlr4-go/antlr/v4 v4.13.0 // indirect
 	github.com/blang/semver/v4 v4.0.0 // indirect
 	github.com/chai2010/gettext-go v1.0.2 // indirect
@@ -50,7 +51,6 @@ require (
 	github.com/mxk/go-flowrate v0.0.0-20140419014527-cca7078d478f // indirect
 	github.com/nxadm/tail v1.4.11 // indirect
 	github.com/peterbourgon/diskv v2.0.1+incompatible // indirect
-	github.com/pkg/errors v0.9.1 // indirect
 	github.com/sirupsen/logrus v1.9.3 // indirect
 	github.com/spf13/afero v1.12.0 // indirect
 	github.com/stoewer/go-strcase v1.3.0 // indirect

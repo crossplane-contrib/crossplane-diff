@@ -21,13 +21,12 @@ import (
 	"time"
 
 	"github.com/alecthomas/kong"
+	"github.com/crossplane-contrib/crossplane-diff/cmd/diff/version"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 
 	"github.com/crossplane/crossplane-runtime/v2/pkg/logging"
-
-	"github.com/crossplane/crossplane/v2/cmd/crank/version"
 )
 
 var _ = kong.Must(&cli{})
