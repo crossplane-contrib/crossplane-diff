@@ -56,7 +56,7 @@ Summary: 1 modified
 
 === Affected Composite Resources ===
 
-- XCompDiffResource/test-comp-resource (namespace: )
+- XCompDiffResource/test-comp-resource (cluster-scoped)
 
 === Impact Analysis ===
 
