@@ -195,6 +195,7 @@ func TestDefaultDiffProcessor_PerformDiff(t *testing.T) {
 				if !strings.Contains(output, "ERROR: Failed to process XR1/my-xr-1") {
 					t.Errorf("Expected stdout to contain error message for my-xr-1, got: %s", output)
 				}
+
 				if !strings.Contains(output, "ERROR: Failed to process XR1/my-xr-2") {
 					t.Errorf("Expected stdout to contain error message for my-xr-2, got: %s", output)
 				}
