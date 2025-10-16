@@ -90,6 +90,8 @@ func createTestScheme() *runtime.Scheme {
 func runIntegrationTest(t *testing.T, testType DiffTestType, scheme *runtime.Scheme, tt IntegrationTestCase) {
 	t.Helper()
 
+	t.Parallel() // Enable parallel test execution
+
 	// Skip test if requested
 	if tt.skip {
 		t.Skip(tt.skipReason)
@@ -113,6 +115,9 @@ func runIntegrationTest(t *testing.T, testType DiffTestType, scheme *runtime.Sch
 		CRDDirectoryPaths:     crdPaths,
 		ErrorIfCRDPathMissing: true,
 		Scheme:                scheme,
+		// Note: Leaving ControlPlane unset (nil) allows envtest to create its own control plane
+		// with random ports, which enables parallel test execution without port conflicts.
+		// Each test gets its own isolated API server and etcd instance on random available ports.
 	}
 
 	// Start the test environment
