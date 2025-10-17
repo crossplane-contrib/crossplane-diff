@@ -75,8 +75,26 @@ e2e-matrix:
     --CROSSPLANE_IMAGE_TAG=main \
     --SAVE_LOCALLY=false
 
+# e2e-check-host verifies that the host doesn't have kind clusters that would interfere with DIND.
+# The nested containerization (host Docker -> earthly DIND -> kind) has limited cgroup capacity.
+# Existing host kind clusters consume significant resources, preventing DIND from creating its own
+# kind cluster. This particularly affects resource-constrained environments like Rancher Desktop.
+e2e-check-host:
+  LOCALLY
+  RUN if command -v kind >/dev/null 2>&1 && [ -n "$(kind get clusters 2>/dev/null)" ]; then \
+    echo "ERROR: Found existing kind clusters on host."; \
+    echo "These consume cgroup resources needed by earthly DIND to create its own kind cluster."; \
+    echo ""; \
+    echo "Please delete them first:"; \
+    echo "  kind get clusters | xargs -r kind delete cluster --name"; \
+    echo ""; \
+    echo "Note: CI matrix builds work fine because each gets a clean environment."; \
+    exit 1; \
+  fi
+
 # e2e runs end-to-end tests. See test/e2e/README.md for details.
 e2e:
+  BUILD +e2e-check-host
   ARG TARGETARCH
   ARG TARGETOS
   ARG CROSSPLANE_IMAGE_TAG=main
@@ -112,7 +130,6 @@ e2e:
       # TODO(negz:) Set GITHUB_ACTIONS=true and use RUN --raw-output when
       # https://github.com/earthly/earthly/issues/4143 is fixed.
       RUN gotestsum --no-color=false --format testname --junitfile e2e-tests.xml --raw-command go tool test2json -t -p E2E ./e2e -test.v -crossplane-image=crossplane/crossplane:${CROSSPLANE_IMAGE_TAG} ${FLAGS}
-      #RUN gotestsum --no-color=false --format standard-verbose --junitfile e2e-tests.xml --raw-command go tool test2json -t -p E2E ./e2e -test.v -crossplane-image=crossplane/crossplane:${CROSSPLANE_IMAGE_TAG} ${FLAGS}
     END
   FINALLY
     SAVE ARTIFACT --if-exists e2e-tests.xml AS LOCAL _output/tests/e2e-tests.xml
