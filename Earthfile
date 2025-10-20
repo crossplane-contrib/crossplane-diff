@@ -70,7 +70,16 @@ generate:
   BUILD +go-modules-tidy
 
 e2e-matrix:
+  BUILD +e2e-check-host
   BUILD +e2e \
+    --CROSSPLANE_IMAGE_TAG=release-1.20 \
+    --CROSSPLANE_IMAGE_TAG=main \
+    --SAVE_LOCALLY=false
+
+# ci-e2e-matrix is used by CI to run e2e tests without the host cluster check.
+# CI environments always start with a clean state, so the check is unnecessary.
+ci-e2e-matrix:
+  BUILD +ci-e2e \
     --CROSSPLANE_IMAGE_TAG=release-1.20 \
     --CROSSPLANE_IMAGE_TAG=main \
     --SAVE_LOCALLY=false
@@ -93,8 +102,19 @@ e2e-check-host:
   fi
 
 # e2e runs end-to-end tests. See test/e2e/README.md for details.
+# For local use - includes host cluster check.
 e2e:
   BUILD +e2e-check-host
+  BUILD +e2e-internal
+
+# ci-e2e runs end-to-end tests without host cluster check.
+# For CI use only - skips the LOCALLY check to work in strict mode.
+ci-e2e:
+  BUILD +e2e-internal
+
+# e2e-internal contains the actual e2e test implementation.
+# Called by both e2e and ci-e2e targets.
+e2e-internal:
   ARG TARGETARCH
   ARG TARGETOS
   ARG CROSSPLANE_IMAGE_TAG=main
