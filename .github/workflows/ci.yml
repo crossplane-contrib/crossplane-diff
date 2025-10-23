@@ -237,7 +237,7 @@ jobs:
       - name: Run E2E Tests
         run: |
           earthly --strict --allow-privileged --remote-cache ghcr.io/crossplane-contrib/crossplane-diff/earthly-cache:${{ github.job }}-${{ matrix.test-suite}} \
-            +e2e --FLAGS="-test.failfast -fail-fast -prior-crossplane-version=${CROSSPLANE_PRIOR_VERSION} --test-suite ${{ matrix.test-suite }}"
+            +ci-e2e --FLAGS="-test.failfast -fail-fast -prior-crossplane-version=${CROSSPLANE_PRIOR_VERSION} --test-suite ${{ matrix.test-suite }}"
 
       - name: Publish E2E Test Flakes
         if: '!cancelled()'

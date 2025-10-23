@@ -70,13 +70,52 @@ generate:
   BUILD +go-modules-tidy
 
 e2e-matrix:
+  BUILD +e2e-check-host
   BUILD +e2e \
     --CROSSPLANE_IMAGE_TAG=release-1.20 \
     --CROSSPLANE_IMAGE_TAG=main \
     --SAVE_LOCALLY=false
 
+# ci-e2e-matrix is used by CI to run e2e tests without the host cluster check.
+# CI environments always start with a clean state, so the check is unnecessary.
+ci-e2e-matrix:
+  BUILD +ci-e2e \
+    --CROSSPLANE_IMAGE_TAG=release-1.20 \
+    --CROSSPLANE_IMAGE_TAG=main \
+    --SAVE_LOCALLY=false
+
+# e2e-check-host verifies that the host doesn't have kind clusters that would interfere with DIND.
+# The nested containerization (host Docker -> earthly DIND -> kind) has limited cgroup capacity.
+# Existing host kind clusters consume significant resources, preventing DIND from creating its own
+# kind cluster. This particularly affects resource-constrained environments like Rancher Desktop.
+e2e-check-host:
+  LOCALLY
+  RUN if command -v kind >/dev/null 2>&1 && [ -n "$(kind get clusters 2>/dev/null)" ]; then \
+    echo "ERROR: Found existing kind clusters on host."; \
+    echo "These consume cgroup resources needed by earthly DIND to create its own kind cluster."; \
+    echo ""; \
+    echo "Please delete them first:"; \
+    echo "  kind get clusters | xargs -r kind delete cluster --name"; \
+    echo ""; \
+    echo "Note: CI matrix builds work fine because each gets a clean environment."; \
+    exit 1; \
+  fi
+
 # e2e runs end-to-end tests. See test/e2e/README.md for details.
+# For local use - includes host cluster check.
 e2e:
+  ARG TEST_FORMAT=standard-verbose
+  BUILD +e2e-check-host
+  BUILD +e2e-internal
+
+# ci-e2e runs end-to-end tests without host cluster check.
+# For CI use only - skips the LOCALLY check to work in strict mode.
+ci-e2e:
+  BUILD +e2e-internal
+
+# e2e-internal contains the actual e2e test implementation.
+# Called by both e2e and ci-e2e targets.
+e2e-internal:
   ARG TARGETARCH
   ARG TARGETOS
   ARG CROSSPLANE_IMAGE_TAG=main
@@ -84,6 +123,7 @@ e2e:
   ARG GOARCH=${TARGETARCH}
   ARG GOOS=${TARGETOS}
   ARG FLAGS="-test-suite=base -labels=crossplane-version=${CROSSPLANE_IMAGE_TAG}"
+  ARG TEST_FORMAT=testname
   # Using earthly image to allow compatibility with different development environments e.g. WSL
   FROM earthly/dind:alpine-3.20-docker-26.1.5-r0
   RUN wget https://dl.google.com/go/go${GO_VERSION}.${GOOS}-${GOARCH}.tar.gz
@@ -111,8 +151,7 @@ e2e:
     WITH DOCKER --pull crossplane/crossplane:${CROSSPLANE_IMAGE_TAG}
       # TODO(negz:) Set GITHUB_ACTIONS=true and use RUN --raw-output when
       # https://github.com/earthly/earthly/issues/4143 is fixed.
-      RUN gotestsum --no-color=false --format testname --junitfile e2e-tests.xml --raw-command go tool test2json -t -p E2E ./e2e -test.v -crossplane-image=crossplane/crossplane:${CROSSPLANE_IMAGE_TAG} ${FLAGS}
-      #RUN gotestsum --no-color=false --format standard-verbose --junitfile e2e-tests.xml --raw-command go tool test2json -t -p E2E ./e2e -test.v -crossplane-image=crossplane/crossplane:${CROSSPLANE_IMAGE_TAG} ${FLAGS}
+      RUN gotestsum --no-color=false --format ${TEST_FORMAT} --junitfile e2e-tests.xml --raw-command go tool test2json -t -p E2E ./e2e -test.v -crossplane-image=crossplane/crossplane:${CROSSPLANE_IMAGE_TAG} ${FLAGS}
     END
   FINALLY
     SAVE ARTIFACT --if-exists e2e-tests.xml AS LOCAL _output/tests/e2e-tests.xml
