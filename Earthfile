@@ -104,6 +104,7 @@ e2e-check-host:
 # e2e runs end-to-end tests. See test/e2e/README.md for details.
 # For local use - includes host cluster check.
 e2e:
+  ARG TEST_FORMAT=standard-verbose
   BUILD +e2e-check-host
   BUILD +e2e-internal
 
@@ -122,6 +123,7 @@ e2e-internal:
   ARG GOARCH=${TARGETARCH}
   ARG GOOS=${TARGETOS}
   ARG FLAGS="-test-suite=base -labels=crossplane-version=${CROSSPLANE_IMAGE_TAG}"
+  ARG TEST_FORMAT=testname
   # Using earthly image to allow compatibility with different development environments e.g. WSL
   FROM earthly/dind:alpine-3.20-docker-26.1.5-r0
   RUN wget https://dl.google.com/go/go${GO_VERSION}.${GOOS}-${GOARCH}.tar.gz
@@ -149,7 +151,7 @@ e2e-internal:
     WITH DOCKER --pull crossplane/crossplane:${CROSSPLANE_IMAGE_TAG}
       # TODO(negz:) Set GITHUB_ACTIONS=true and use RUN --raw-output when
       # https://github.com/earthly/earthly/issues/4143 is fixed.
-      RUN gotestsum --no-color=false --format testname --junitfile e2e-tests.xml --raw-command go tool test2json -t -p E2E ./e2e -test.v -crossplane-image=crossplane/crossplane:${CROSSPLANE_IMAGE_TAG} ${FLAGS}
+      RUN gotestsum --no-color=false --format ${TEST_FORMAT} --junitfile e2e-tests.xml --raw-command go tool test2json -t -p E2E ./e2e -test.v -crossplane-image=crossplane/crossplane:${CROSSPLANE_IMAGE_TAG} ${FLAGS}
     END
   FINALLY
     SAVE ARTIFACT --if-exists e2e-tests.xml AS LOCAL _output/tests/e2e-tests.xml
