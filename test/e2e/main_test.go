@@ -19,6 +19,7 @@ package e2e
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -144,9 +145,8 @@ func TestMain(m *testing.M) {
 
 	// Install shared functions and providers for all tests in this variant
 	sharedSetupPath := filepath.Join("test/e2e/manifests/beta/diff", imageTag, "_setup")
-	setup = append(setup, func(ctx context.Context, cfg *envconf.Config) (context.Context, error) {
-		fmt.Printf("Installing shared functions and providers from %s\n", sharedSetupPath)
 
+	setup = append(setup, func(ctx context.Context, cfg *envconf.Config) (context.Context, error) {
 		client, err := cfg.NewClient()
 		if err != nil {
 			return ctx, fmt.Errorf("failed to create k8s client: %w", err)
@@ -159,20 +159,22 @@ func TestMain(m *testing.M) {
 		}
 
 		for _, file := range files {
-			fmt.Printf("Applying %s...\n", filepath.Base(file))
 			f, err := os.Open(file)
 			if err != nil {
 				return ctx, fmt.Errorf("failed to open %s: %w", file, err)
 			}
 
 			decoder := yaml.NewYAMLOrJSONDecoder(f, 4096)
+
 			for {
 				obj := &unstructured.Unstructured{}
 				if err := decoder.Decode(obj); err != nil {
-					if err == io.EOF {
+					if errors.Is(err, io.EOF) {
 						break
 					}
+
 					f.Close()
+
 					return ctx, fmt.Errorf("failed to decode %s: %w", file, err)
 				}
 
@@ -181,18 +183,20 @@ func TestMain(m *testing.M) {
 					return ctx, fmt.Errorf("failed to create resource from %s: %w", file, err)
 				}
 			}
+
 			f.Close()
 		}
 
 		// Wait for functions to be ready
-		fmt.Printf("Waiting for shared functions to be ready (timeout: 3m)...\n")
 		functionList := &pkgv1.FunctionList{}
 		if err := wait.For(conditions.New(client.Resources()).ResourcesFound(functionList), wait.WithTimeout(30*time.Second)); err != nil {
 			return ctx, fmt.Errorf("functions not found: %w", err)
 		}
+
 		if err := client.Resources().List(ctx, functionList); err != nil {
 			return ctx, fmt.Errorf("failed to list functions: %w", err)
 		}
+
 		for _, fn := range functionList.Items {
 			obj := fn.DeepCopy()
 			if err := wait.For(conditions.New(client.Resources()).ResourceMatch(obj, func(object k8s.Object) bool {
@@ -203,17 +207,17 @@ func TestMain(m *testing.M) {
 				return ctx, fmt.Errorf("function %s not ready: %w", fn.Name, err)
 			}
 		}
-		fmt.Printf("✓ Shared functions are ready\n")
 
 		// Wait for provider to be ready
-		fmt.Printf("Waiting for shared provider to be ready (timeout: 2m)...\n")
 		providerList := &pkgv1.ProviderList{}
 		if err := wait.For(conditions.New(client.Resources()).ResourcesFound(providerList), wait.WithTimeout(30*time.Second)); err != nil {
 			return ctx, fmt.Errorf("providers not found: %w", err)
 		}
+
 		if err := client.Resources().List(ctx, providerList); err != nil {
 			return ctx, fmt.Errorf("failed to list providers: %w", err)
 		}
+
 		for _, prov := range providerList.Items {
 			obj := prov.DeepCopy()
 			if err := wait.For(conditions.New(client.Resources()).ResourceMatch(obj, func(object k8s.Object) bool {
@@ -224,7 +228,6 @@ func TestMain(m *testing.M) {
 				return ctx, fmt.Errorf("provider %s not ready: %w", prov.Name, err)
 			}
 		}
-		fmt.Printf("✓ Shared provider is ready\n")
 
 		return ctx, nil
 	})
