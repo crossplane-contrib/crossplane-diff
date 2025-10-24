@@ -41,7 +41,6 @@ import (
 	"github.com/crossplane/crossplane-runtime/v2/pkg/resource/unstructured/composed"
 
 	apiextensionsv1 "github.com/crossplane/crossplane/v2/apis/apiextensions/v1"
-	pkgv1 "github.com/crossplane/crossplane/v2/apis/pkg/v1"
 	"github.com/crossplane/crossplane/v2/test/e2e"
 	"github.com/crossplane/crossplane/v2/test/e2e/config"
 	"github.com/crossplane/crossplane/v2/test/e2e/funcs"
@@ -115,7 +114,6 @@ func TestDiffNewResourceV2Cluster(t *testing.T) {
 				funcs.ApplyResources(e2e.FieldManager, setupPath, "*.yaml"),
 				funcs.ResourcesCreatedWithin(30*time.Second, setupPath, "*.yaml"),
 				funcs.ResourcesHaveConditionWithin(1*time.Minute, setupPath, "definition.yaml", apiextensionsv1.WatchingComposite()),
-				funcs.ResourcesHaveConditionWithin(2*time.Minute, setupPath, "provider.yaml", pkgv1.Healthy(), pkgv1.Active()),
 			)).
 			Assess("CanDiffNewResource", func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
 				t.Helper()
@@ -156,7 +154,6 @@ func TestDiffExistingResourceV2Cluster(t *testing.T) {
 			)).
 			WithSetup("PrerequisitesAreReady", funcs.AllOf(
 				funcs.ResourcesHaveConditionWithin(1*time.Minute, setupPath, "definition.yaml", apiextensionsv1.WatchingComposite()),
-				funcs.ResourcesHaveConditionWithin(2*time.Minute, setupPath, "provider.yaml", pkgv1.Healthy(), pkgv1.Active()),
 			)).
 			WithSetup("CreateExistingXR", funcs.AllOf(
 				funcs.ApplyResources(e2e.FieldManager, manifests, "existing-xr.yaml"),
@@ -203,7 +200,6 @@ func TestDiffNewResourceV2Namespaced(t *testing.T) {
 			)).
 			WithSetup("PrerequisitesAreReady", funcs.AllOf(
 				funcs.ResourcesHaveConditionWithin(1*time.Minute, setupPath, "definition.yaml", apiextensionsv1.WatchingComposite()),
-				funcs.ResourcesHaveConditionWithin(2*time.Minute, setupPath, "provider.yaml", pkgv1.Healthy(), pkgv1.Active()),
 			)).
 			Assess("CanDiffNewResource", func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
 				t.Helper()
@@ -248,7 +244,6 @@ func TestDiffExistingResourceV2Namespaced(t *testing.T) {
 			)).
 			WithSetup("PrerequisitesAreReady", funcs.AllOf(
 				funcs.ResourcesHaveConditionWithin(1*time.Minute, setupPath, "definition.yaml", apiextensionsv1.WatchingComposite()),
-				funcs.ResourcesHaveConditionWithin(2*time.Minute, setupPath, "provider.yaml", pkgv1.Healthy(), pkgv1.Active()),
 			)).
 			WithSetup("CreateExistingXR", funcs.AllOf(
 				funcs.ApplyResources(e2e.FieldManager, manifests, "existing-xr.yaml"),
@@ -302,7 +297,6 @@ func TestDiffNewResourceV1(t *testing.T) {
 			)).
 			WithSetup("PrerequisitesAreReady", funcs.AllOf(
 				funcs.ResourcesHaveConditionWithin(1*time.Minute, setupPath, "definition.yaml", apiextensionsv1.WatchingComposite()),
-				funcs.ResourcesHaveConditionWithin(2*time.Minute, setupPath, "provider.yaml", pkgv1.Healthy(), pkgv1.Active()),
 			)).
 			Assess("CanDiffNewResource", func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
 				t.Helper()
@@ -348,7 +342,6 @@ func TestDiffExistingResourceV1(t *testing.T) {
 			)).
 			WithSetup("PrerequisitesAreReady", funcs.AllOf(
 				funcs.ResourcesHaveConditionWithin(1*time.Minute, setupPath, "definition.yaml", apiextensionsv1.WatchingComposite()),
-				funcs.ResourcesHaveConditionWithin(2*time.Minute, setupPath, "provider.yaml", pkgv1.Healthy(), pkgv1.Active()),
 			)).
 			WithSetup("CreateXR", funcs.AllOf(
 				funcs.ApplyResources(e2e.FieldManager, manifests, "existing-xr.yaml"),
@@ -415,7 +408,6 @@ func TestDiffNewClaim(t *testing.T) {
 			)).
 			WithSetup("PrerequisitesAreReady", funcs.AllOf(
 				funcs.ResourcesHaveConditionWithin(1*time.Minute, setupPath, "definition.yaml", apiextensionsv1.WatchingComposite()),
-				funcs.ResourcesHaveConditionWithin(2*time.Minute, setupPath, "provider.yaml", pkgv1.Healthy(), pkgv1.Active()),
 			)).
 			Assess("CanDiffNewClaim", func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
 				t.Helper()
@@ -461,7 +453,6 @@ func TestDiffExistingClaim(t *testing.T) {
 			)).
 			WithSetup("PrerequisitesAreReady", funcs.AllOf(
 				funcs.ResourcesHaveConditionWithin(1*time.Minute, setupPath, "definition.yaml", apiextensionsv1.WatchingComposite()),
-				funcs.ResourcesHaveConditionWithin(2*time.Minute, setupPath, "provider.yaml", pkgv1.Healthy(), pkgv1.Active()),
 			)).
 			WithSetup("CreateClaim", funcs.AllOf(
 				funcs.ApplyResources(e2e.FieldManager, manifests, "existing-claim.yaml"),
@@ -705,7 +696,6 @@ func TestDiffExistingComposition(t *testing.T) {
 			)).
 			WithSetup("PrerequisitesAreReady", funcs.AllOf(
 				funcs.ResourcesHaveConditionWithin(1*time.Minute, setupPath, "definition.yaml", apiextensionsv1.WatchingComposite()),
-				funcs.ResourcesHaveConditionWithin(2*time.Minute, setupPath, "provider.yaml", pkgv1.Healthy(), pkgv1.Active()),
 			)).
 			WithSetup("CreateExistingXR", funcs.AllOf(
 				funcs.ApplyResources(e2e.FieldManager, manifests, "existing-xr.yaml"),
@@ -753,8 +743,6 @@ func TestDiffConcurrentDirectory(t *testing.T) {
 			)).
 			WithSetup("PrerequisitesAreReady", funcs.AllOf(
 				funcs.ResourcesHaveConditionWithin(1*time.Minute, setupPath, "definition.yaml", apiextensionsv1.WatchingComposite()),
-				funcs.ResourcesHaveConditionWithin(2*time.Minute, setupPath, "provider.yaml", pkgv1.Healthy(), pkgv1.Active()),
-				funcs.ResourcesHaveConditionWithin(3*time.Minute, setupPath, "functions.yaml", pkgv1.Healthy(), pkgv1.Active()),
 			)).
 			Assess("CanProcessDirectoryWithMultipleXRs", func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
 				t.Helper()
@@ -819,7 +807,6 @@ func TestDiffNewNestedResourceV2(t *testing.T) {
 			WithSetup("PrerequisitesAreReady", funcs.AllOf(
 				funcs.ResourcesHaveConditionWithin(1*time.Minute, setupPath, "parent-definition.yaml", apiextensionsv1.WatchingComposite()),
 				funcs.ResourcesHaveConditionWithin(1*time.Minute, setupPath, "child-definition.yaml", apiextensionsv1.WatchingComposite()),
-				funcs.ResourcesHaveConditionWithin(2*time.Minute, setupPath, "provider.yaml", pkgv1.Healthy(), pkgv1.Active()),
 			)).
 			Assess("CanDiffNewNestedResource", func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
 				t.Helper()
@@ -835,10 +822,6 @@ func TestDiffNewNestedResourceV2(t *testing.T) {
 			}).
 			WithTeardown("DeletePrerequisites", funcs.AllOf(
 				funcs.ResourcesDeletedAfterListedAreGone(3*time.Minute, setupPath, "*.yaml", nsNopList),
-				funcs.ResourceDeletedWithin(3*time.Minute, &k8sapiextensionsv1.CustomResourceDefinition{
-					TypeMeta:   metav1.TypeMeta{Kind: "CustomResourceDefinition", APIVersion: "apiextensions.k8s.io/v1"},
-					ObjectMeta: metav1.ObjectMeta{Name: "nopresources.nop.crossplane.io"},
-				}),
 			)).
 			Feature(),
 	)
@@ -864,7 +847,6 @@ func TestDiffExistingNestedResourceV2(t *testing.T) {
 			WithSetup("PrerequisitesAreReady", funcs.AllOf(
 				funcs.ResourcesHaveConditionWithin(1*time.Minute, setupPath, "parent-definition.yaml", apiextensionsv1.WatchingComposite()),
 				funcs.ResourcesHaveConditionWithin(1*time.Minute, setupPath, "child-definition.yaml", apiextensionsv1.WatchingComposite()),
-				funcs.ResourcesHaveConditionWithin(2*time.Minute, setupPath, "provider.yaml", pkgv1.Healthy(), pkgv1.Active()),
 			)).
 			WithSetup("CreateExistingXR", funcs.AllOf(
 				funcs.ApplyResources(e2e.FieldManager, manifests, "existing-parent-xr.yaml"),
@@ -891,10 +873,6 @@ func TestDiffExistingNestedResourceV2(t *testing.T) {
 			)).
 			WithTeardown("DeletePrerequisites", funcs.AllOf(
 				funcs.ResourcesDeletedAfterListedAreGone(3*time.Minute, setupPath, "*.yaml", nsNopList),
-				funcs.ResourceDeletedWithin(3*time.Minute, &k8sapiextensionsv1.CustomResourceDefinition{
-					TypeMeta:   metav1.TypeMeta{Kind: "CustomResourceDefinition", APIVersion: "apiextensions.k8s.io/v1"},
-					ObjectMeta: metav1.ObjectMeta{Name: "nopresources.nop.crossplane.io"},
-				}),
 			)).
 			Feature(),
 	)
