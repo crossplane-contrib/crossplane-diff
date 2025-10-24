@@ -442,7 +442,7 @@ ci-push-build-artifacts:
   ARG ARTIFACTS_DIR=_output
   ARG BUCKET_RELEASES=crossplane.releases
   ARG AWS_DEFAULT_REGION
-  FROM amazon/aws-cli:2.31.9
+  FROM amazon/aws-cli:2.31.21
   COPY --dir ${ARTIFACTS_DIR} artifacts
   RUN --push --secret=AWS_ACCESS_KEY_ID --secret=AWS_SECRET_ACCESS_KEY aws s3 sync --delete --only-show-errors artifacts s3://${BUCKET_RELEASES}/build/${BUILD_DIR}/${CROSSPLANE_VERSION}
 
@@ -458,7 +458,7 @@ ci-promote-build-artifacts:
   ARG BUCKET_CHARTS=crossplane.charts
   ARG PRERELEASE=false
   ARG AWS_DEFAULT_REGION
-  FROM amazon/aws-cli:2.31.9
+  FROM amazon/aws-cli:2.31.21
   RUN --secret=AWS_ACCESS_KEY_ID --secret=AWS_SECRET_ACCESS_KEY aws s3 sync --only-show-errors s3://${BUCKET_RELEASES}/build/${BUILD_DIR}/${CROSSPLANE_VERSION}/charts repo
   RUN --push --secret=AWS_ACCESS_KEY_ID --secret=AWS_SECRET_ACCESS_KEY aws s3 sync --delete --only-show-errors s3://${BUCKET_RELEASES}/build/${BUILD_DIR}/${CROSSPLANE_VERSION} s3://${BUCKET_RELEASES}/${CHANNEL}/${CROSSPLANE_VERSION}
   IF [ "${PRERELEASE}" = "false" ]
