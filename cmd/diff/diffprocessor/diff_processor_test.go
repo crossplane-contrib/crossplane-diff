@@ -1282,7 +1282,7 @@ func TestDefaultDiffProcessor_getCompositeResourceXRD(t *testing.T) {
 		wantIsXR    bool
 		wantXRDName string
 	}{
-		"Managed resource is not an XR": {
+		"ManagedResourceIsNotXR": {
 			defClient: tu.NewMockDefinitionClient().
 				WithXRDForXRNotFound().
 				Build(),
@@ -1294,7 +1294,7 @@ func TestDefaultDiffProcessor_getCompositeResourceXRD(t *testing.T) {
 			wantIsXR:    false,
 			wantXRDName: "",
 		},
-		"Parent XR is correctly identified": {
+		"ParentXRCorrectlyIdentified": {
 			defClient: tu.NewMockDefinitionClient().
 				WithXRD(parentXRD).
 				Build(),
@@ -1304,7 +1304,7 @@ func TestDefaultDiffProcessor_getCompositeResourceXRD(t *testing.T) {
 			wantIsXR:    true,
 			wantXRDName: "xparentresources.nested.example.org",
 		},
-		"Child XR is correctly identified": {
+		"ChildXRCorrectlyIdentified": {
 			defClient: tu.NewMockDefinitionClient().
 				WithXRD(childXRD).
 				Build(),
@@ -1314,7 +1314,7 @@ func TestDefaultDiffProcessor_getCompositeResourceXRD(t *testing.T) {
 			wantIsXR:    true,
 			wantXRDName: "xchildresources.nested.example.org",
 		},
-		"Error from definition client is handled": {
+		"ErrorFromDefinitionClientHandled": {
 			defClient: tu.NewMockDefinitionClient().
 				WithXRDForXRError(errors.New("cluster connection error")).
 				Build(),
@@ -1413,7 +1413,7 @@ func TestDefaultDiffProcessor_ProcessNestedXRs(t *testing.T) {
 		wantErr           bool
 		wantErrContain    string
 	}{
-		"No composed resources returns empty": {
+		"NoComposedResourcesReturnsEmpty": {
 			setupMocks: func() (xp.Clients, k8.Clients) {
 				xpClients := xp.Clients{
 					Definition: tu.NewMockDefinitionClient().Build(),
@@ -1428,7 +1428,7 @@ func TestDefaultDiffProcessor_ProcessNestedXRs(t *testing.T) {
 			wantDiffCount:     0,
 			wantErr:           false,
 		},
-		"Only managed resources returns empty": {
+		"OnlyManagedResourcesReturnsEmpty": {
 			setupMocks: func() (xp.Clients, k8.Clients) {
 				xpClients := xp.Clients{
 					Definition: tu.NewMockDefinitionClient().
@@ -1447,7 +1447,7 @@ func TestDefaultDiffProcessor_ProcessNestedXRs(t *testing.T) {
 			wantDiffCount:    0,
 			wantErr:          false,
 		},
-		"Child XR is processed recursively": {
+		"ChildXRProcessedRecursively": {
 			setupMocks: func() (xp.Clients, k8.Clients) {
 				// Create functions that the composition references
 				functions := []pkgv1.Function{
@@ -1517,7 +1517,7 @@ func TestDefaultDiffProcessor_ProcessNestedXRs(t *testing.T) {
 			wantDiffCount:    1, // Should have diff for the child XR itself
 			wantErr:          false,
 		},
-		"Max depth exceeded returns error": {
+		"MaxDepthExceededReturnsError": {
 			setupMocks: func() (xp.Clients, k8.Clients) {
 				xpClients := xp.Clients{
 					Definition: tu.NewMockDefinitionClient().
@@ -1537,7 +1537,7 @@ func TestDefaultDiffProcessor_ProcessNestedXRs(t *testing.T) {
 			wantErr:          true,
 			wantErrContain:   "maximum nesting depth exceeded",
 		},
-		"Mixed XR and managed resources processes only XRs": {
+		"MixedXRAndManagedResourcesProcessesOnlyXRs": {
 			setupMocks: func() (xp.Clients, k8.Clients) {
 				// Create functions that the composition references
 				functions := []pkgv1.Function{
