@@ -248,7 +248,7 @@ func TestDefaultDiffCalculator_CalculateDiff(t *testing.T) {
 			desired:   modifiedResource,
 			wantErr:   true,
 		},
-		"Successfully find and diff resource with generateName": {
+		"FindAndDiffResourceWithGenerateName": {
 			setupMocks: func(t *testing.T) (k8.ApplyClient, xp.ResourceTreeClient, ResourceManager) {
 				t.Helper()
 
@@ -441,7 +441,7 @@ func TestDefaultDiffCalculator_CalculateDiffs(t *testing.T) {
 		expectedDiffs map[string]dt.DiffType // Map of expected keys and their diff types
 		wantErr       bool
 	}{
-		"XR and composed resource modifications": {
+		"XRAndComposedResourceModifications": {
 			setupMocks: func(t *testing.T) (k8.ApplyClient, xp.ResourceTreeClient, ResourceManager) {
 				t.Helper()
 
@@ -477,7 +477,7 @@ func TestDefaultDiffCalculator_CalculateDiffs(t *testing.T) {
 			},
 			wantErr: false,
 		},
-		"XR not modified, composed resource modified": {
+		"XRNotModifiedComposedResourceModified": {
 			setupMocks: func(t *testing.T) (k8.ApplyClient, xp.ResourceTreeClient, ResourceManager) {
 				t.Helper()
 
@@ -518,7 +518,7 @@ func TestDefaultDiffCalculator_CalculateDiffs(t *testing.T) {
 			},
 			wantErr: false,
 		},
-		"Error calculating diff": {
+		"ErrorCalculatingDiff": {
 			setupMocks: func(t *testing.T) (k8.ApplyClient, xp.ResourceTreeClient, ResourceManager) {
 				t.Helper()
 
@@ -549,7 +549,7 @@ func TestDefaultDiffCalculator_CalculateDiffs(t *testing.T) {
 			expectedDiffs: map[string]dt.DiffType{},
 			wantErr:       true,
 		},
-		"Resource tree with potential resources to remove": {
+		"ResourceTreeWithPotentialRemoval": {
 			setupMocks: func(t *testing.T) (k8.ApplyClient, xp.ResourceTreeClient, ResourceManager) {
 				t.Helper()
 
@@ -596,7 +596,7 @@ func TestDefaultDiffCalculator_CalculateDiffs(t *testing.T) {
 			},
 			wantErr: false,
 		},
-		"Resource removal detection": {
+		"ResourceRemovalDetection": {
 			setupMocks: func(t *testing.T) (k8.ApplyClient, xp.ResourceTreeClient, ResourceManager) {
 				t.Helper()
 

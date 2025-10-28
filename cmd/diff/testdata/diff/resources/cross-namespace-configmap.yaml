@@ -15,7 +15,7 @@ metadata:
   name: another-cross-namespace-config
   namespace: kube-public
   labels:
-    app: cross-namespace-app
-    environment: production
+    app: another-cross-namespace-app
+    environment: staging
 data:
   config-data: "another-cross-namespace-data"
