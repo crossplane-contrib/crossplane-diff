@@ -351,7 +351,7 @@ func TestDiffIntegration(t *testing.T) {
 			expectedError: false,
 		},
 		"ModifiedResourceDiff": {
-			reason:     "Shows color diff for modified resources",
+			reason: "Shows color diff for modified resources",
 			setupFiles: []string{
 				"testdata/diff/resources/xrd.yaml",
 				"testdata/diff/resources/composition.yaml",
@@ -396,7 +396,7 @@ Summary: 2 modified`,
 			expectedError: false,
 		},
 		"ModifiedXRCreatesDownstream": {
-			reason:     "Shows color diff when modified XR creates new downstream resource",
+			reason: "Shows color diff when modified XR creates new downstream resource",
 			setupFiles: []string{
 				"testdata/diff/resources/xrd.yaml",
 				"testdata/diff/resources/composition.yaml",
@@ -437,7 +437,7 @@ Summary: 1 added, 1 modified`,
 			expectedError: false,
 		},
 		"EnvironmentConfigIncorporation": {
-			reason:     "Validates EnvironmentConfig (v1beta1) incorporation in diff",
+			reason: "Validates EnvironmentConfig (v1beta1) incorporation in diff",
 			setupFiles: []string{
 				"testdata/diff/resources/xdownstreamenvresource-xrd.yaml",
 				"testdata/diff/resources/env-xrd.yaml",
@@ -536,7 +536,7 @@ Summary: 1 added, 1 modified`,
 			noColor:       true,
 		},
 		"TemplatedExtraResources": {
-			reason:     "Validates diff with templated ExtraResources embedded in go-templating function",
+			reason: "Validates diff with templated ExtraResources embedded in go-templating function",
 			setupFiles: []string{
 				"testdata/diff/resources/xrd.yaml",
 				"testdata/diff/resources/functions.yaml",
@@ -584,7 +584,7 @@ Summary: 1 added, 1 modified`,
 			noColor:       true,
 		},
 		"CrossNamespaceResourceDependencies": {
-			reason:     "Validates cross-namespace resource dependencies via fn-external-resources",
+			reason: "Validates cross-namespace resource dependencies via fn-external-resources",
 			setupFiles: []string{
 				"testdata/diff/resources/xrd.yaml",
 				"testdata/diff/resources/functions.yaml",
@@ -718,7 +718,7 @@ Summary: 2 modified, 2 removed`,
 			noColor:       true,
 		},
 		"ResourceRemovalHierarchyV2Namespaced": {
-			reason:                  "Validates resource removal detection with hierarchy using v2 style resourceRefs and namespaced downstreams",
+			reason: "Validates resource removal detection with hierarchy using v2 style resourceRefs and namespaced downstreams",
 			setupFilesWithOwnerRefs: []HierarchicalOwnershipRelation{
 				{
 					OwnerFile: "testdata/diff/resources/existing-xr.yaml",
@@ -807,7 +807,7 @@ Summary: 2 modified, 2 removed`,
 			noColor:       true,
 		},
 		"ResourceRemovalHierarchyV2ClusterScoped": {
-			reason:                  "Validates resource removal detection with hierarchy using v2 style resourceRefs and cluster scoped downstreams",
+			reason: "Validates resource removal detection with hierarchy using v2 style resourceRefs and cluster scoped downstreams",
 			setupFilesWithOwnerRefs: []HierarchicalOwnershipRelation{
 				{
 					OwnerFile: "testdata/diff/resources/existing-cluster-xr.yaml",
@@ -892,7 +892,7 @@ Summary: 2 modified, 2 removed`,
 			noColor:       true,
 		},
 		"ResourceWithGenerateName": {
-			reason:     "Validates handling of resources with generateName",
+			reason: "Validates handling of resources with generateName",
 			setupFiles: []string{
 				"testdata/diff/resources/xrd.yaml",
 				"testdata/diff/resources/functions.yaml",
@@ -944,7 +944,7 @@ Summary: 2 modified, 2 removed`,
 			noColor:       true,
 		},
 		"NewXRWithGenerateName": {
-			reason:     "Shows diff for new XR with generateName",
+			reason: "Shows diff for new XR with generateName",
 			setupFiles: []string{
 				"testdata/diff/resources/xrd.yaml",
 				"testdata/diff/resources/composition.yaml",
@@ -983,7 +983,7 @@ Summary: 2 modified, 2 removed`,
 			noColor:       true,
 		},
 		"MultipleXRs": {
-			reason:     "Validates diff for multiple XRs",
+			reason: "Validates diff for multiple XRs",
 			setupFiles: []string{
 				"testdata/diff/resources/xrd.yaml",
 				"testdata/diff/resources/composition.yaml",
@@ -1058,7 +1058,7 @@ Summary: 2 added, 2 modified
 			noColor:       true,
 		},
 		"SelectCompositionByDirectReference": {
-			reason:     "Validates composition selection by direct reference",
+			reason: "Validates composition selection by direct reference",
 			setupFiles: []string{
 				"testdata/diff/resources/xrd.yaml",
 				"testdata/diff/resources/functions.yaml",
@@ -1103,7 +1103,7 @@ Summary: 2 added, 2 modified
 			noColor:       true,
 		},
 		"SelectCompositionByLabelSelector": {
-			reason:     "Validates composition selection by label selector",
+			reason: "Validates composition selection by label selector",
 			setupFiles: []string{
 				"testdata/diff/resources/xrd.yaml",
 				"testdata/diff/resources/functions.yaml",
@@ -1151,7 +1151,7 @@ Summary: 2 added, 2 modified
 			noColor:       true,
 		},
 		"AmbiguousCompositionSelection": {
-			reason:     "Validates error on ambiguous composition selection",
+			reason: "Validates error on ambiguous composition selection",
 			setupFiles: []string{
 				"testdata/diff/resources/xrd.yaml",
 				"testdata/diff/resources/functions.yaml",
@@ -1168,7 +1168,7 @@ Summary: 2 added, 2 modified
 			noColor:               true,
 		},
 		"NewClaimShowsDiff": {
-			reason:     "Shows diff for new claim",
+			reason: "Shows diff for new claim",
 			setupFiles: []string{
 				"testdata/diff/resources/existing-namespace.yaml",
 				// Add the necessary CRDs and compositions for claim diffing
@@ -1213,7 +1213,7 @@ Summary: 2 added`,
 			noColor:       true,
 		},
 		"ModifiedClaimShowsDiff": {
-			reason:     "Shows diff for modified claim",
+			reason: "Shows diff for modified claim",
 			setupFiles: []string{
 				"testdata/diff/resources/existing-namespace.yaml",
 				// Add necessary CRDs and composition
@@ -1331,7 +1331,7 @@ Summary: 1 added`,
 			noColor:       true,
 		},
 		"ConcurrentRenderingMultipleXRs": {
-			reason:     "Validates concurrent rendering with multiple functions and XRs from directory",
+			reason: "Validates concurrent rendering with multiple functions and XRs from directory",
 			// This test reproduces issue #59 - concurrent function startup failures
 			// when processing multiple XR files from a directory
 			inputFiles: []string{
@@ -1352,7 +1352,7 @@ Summary: 1 added`,
 			noColor:        true,
 		},
 		"NewNestedXRCreatesChildren": {
-			reason:     "Validates that new nested XR creates child XR and downstream resources",
+			reason: "Validates that new nested XR creates child XR and downstream resources",
 			setupFiles: []string{
 				// XRDs for parent and child
 				"testdata/diff/resources/nested/parent-xrd.yaml",
@@ -1411,7 +1411,7 @@ Summary: 3 added`,
 			noColor:       true,
 		},
 		"ModifiedNestedXRPropagatesChanges": {
-			reason:     "Validates that modified nested XR propagates changes through child XR to downstream resources",
+			reason: "Validates that modified nested XR propagates changes through child XR to downstream resources",
 			setupFiles: []string{
 				// XRDs for parent and child
 				"testdata/diff/resources/nested/parent-xrd.yaml",
@@ -1483,7 +1483,7 @@ Summary: 3 modified`,
 		},
 		// Composition Revision tests for v2 XRDs
 		"V2ManualPolicyPinnedRevision": {
-			reason:        "Validates v2 XR with Manual update policy stays on pinned revision",
+			reason: "Validates v2 XR with Manual update policy stays on pinned revision",
 			setupFiles: []string{
 				"testdata/diff/resources/xrd.yaml",
 				"testdata/diff/resources/composition-revision-v1.yaml",
@@ -1534,7 +1534,7 @@ Summary: 3 modified`,
 			noColor:       true,
 		},
 		"V2AutomaticPolicyLatestRevision": {
-			reason:        "Validates v2 XR with Automatic update policy uses latest revision",
+			reason: "Validates v2 XR with Automatic update policy uses latest revision",
 			setupFiles: []string{
 				"testdata/diff/resources/xrd.yaml",
 				"testdata/diff/resources/composition-revision-v1.yaml",
@@ -1585,7 +1585,7 @@ Summary: 3 modified`,
 			noColor:       true,
 		},
 		"V2ManualRevisionUpgradeDiff": {
-			reason:        "Validates v2 XR changing revision in Manual mode shows upgrade diff",
+			reason: "Validates v2 XR changing revision in Manual mode shows upgrade diff",
 			setupFiles: []string{
 				"testdata/diff/resources/xrd.yaml",
 				"testdata/diff/resources/composition-revision-v1.yaml",
@@ -1637,7 +1637,7 @@ Summary: 3 modified`,
 			noColor:       true,
 		},
 		"V2SwitchManualToAutomatic": {
-			reason:        "Validates v2 XR switching from Manual to Automatic mode uses latest revision",
+			reason: "Validates v2 XR switching from Manual to Automatic mode uses latest revision",
 			setupFiles: []string{
 				"testdata/diff/resources/xrd.yaml",
 				"testdata/diff/resources/composition-revision-v1.yaml",
@@ -1689,7 +1689,7 @@ Summary: 3 modified`,
 			noColor:       true,
 		},
 		"V2NetNewManualNoRevRef": {
-			reason:        "Validates v2 net new XR with Manual policy but no revision ref uses latest revision",
+			reason: "Validates v2 net new XR with Manual policy but no revision ref uses latest revision",
 			setupFiles: []string{
 				"testdata/diff/resources/xrd.yaml",
 				"testdata/diff/resources/composition-revision-v1.yaml",
@@ -1808,7 +1808,7 @@ func TestCompDiffIntegration(t *testing.T) {
 
 	tests := map[string]IntegrationTestCase{
 		"CompositionChangeImpactsXRs": {
-			reason:    "Validates composition change impacts existing XRs",
+			reason: "Validates composition change impacts existing XRs",
 			// Set up existing XRs that use the original composition
 			setupFiles: []string{
 				"testdata/comp/resources/xrd.yaml",
@@ -1918,7 +1918,7 @@ Summary: 2 modified`,
 			noColor:       true,
 		},
 		"CompositionDiffCustomNamespace": {
-			reason:    "Validates composition diff with custom namespace",
+			reason: "Validates composition diff with custom namespace",
 			// Set up existing XRs in both custom and default namespaces to validate filtering
 			setupFiles: []string{
 				"testdata/comp/resources/xrd.yaml",
@@ -2013,7 +2013,7 @@ Summary: 1 modified`,
 			noColor:       true,
 		},
 		"MultipleCompositionDiffImpact": {
-			reason:    "Validates multiple composition diff shows impact on existing XRs",
+			reason: "Validates multiple composition diff shows impact on existing XRs",
 			// Set up existing XRs that use both compositions
 			setupFiles: []string{
 				"testdata/comp/resources/xrd.yaml",
@@ -2135,7 +2135,7 @@ No XRs found using composition xnopresources-v2.diff.example.org`,
 			noColor:       true,
 		},
 		"CompositionDiffFiltersManualXRs": {
-			reason:    "Validates composition diff filters Manual policy XRs by default",
+			reason: "Validates composition diff filters Manual policy XRs by default",
 			// Set up existing XRs - one with Automatic policy and one with Manual policy
 			setupFiles: []string{
 				"testdata/comp/resources/xrd.yaml",
@@ -2228,7 +2228,7 @@ Summary: 1 modified`,
 			noColor:       true,
 		},
 		"NetNewCompositionNoImpact": {
-			reason:    "Validates net-new composition with no downstream impact",
+			reason: "Validates net-new composition with no downstream impact",
 			// Set up cluster with existing resources but no composition that matches the new one
 			setupFiles: []string{
 				"testdata/comp/resources/xrd.yaml",
