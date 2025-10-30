@@ -59,9 +59,8 @@ type cli struct {
 	// order they're specified here. Keep them in alphabetical order.
 
 	// Subcommands.
-	Comp CompCmd           `cmd:"" help:"Show impact of composition changes on existing XRs."`
-	Diff DeprecatedDiffCmd `cmd:"" help:"(Deprecated) Use 'xr' subcommand instead. See what changes will be made against a live cluster when a given Crossplane resource would be applied."`
-	XR   XRCmd             `cmd:"" help:"See what changes will be made against a live cluster when a given Crossplane resource would be applied."`
+	Comp CompCmd `cmd:""         help:"Show impact of composition changes on existing XRs."`
+	XR   XRCmd   `aliases:"diff" cmd:""                                                     help:"See what changes will be made against a live cluster when a given Crossplane resource would be applied."`
 
 	Version version.Cmd `cmd:"" help:"Print the client and server version information for the current context."`
 
