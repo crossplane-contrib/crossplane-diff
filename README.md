@@ -17,16 +17,30 @@ The `crossplane-diff` tool helps you:
 
 ## Installation
 
-### Download Pre-built Binary
+### Installing the CLI
 
-Download the latest release from the [releases page](https://github.com/crossplane-contrib/crossplane-diff/releases).
+You can install the latest version of **crossplane-diff** automatically using the provided install script:
 
-### Build from Source
+```bash
+curl -sL "https://raw.githubusercontent.com/crossplane-contrib/crossplane-diff/main/install.sh" | sh
+```
+
+The script detects your operating system and CPU architecture and downloads the latest release from GitHub.
+
+### Installing the CLI with a specific Version
+
+You can set the VERSION environment variable before running the script:
+
+```bash
+curl -sL "https://raw.githubusercontent.com/crossplane-contrib/crossplane-diff/main/install.sh" | VERSION=v0.3.1 sh
+```
+
+### Building the CLI
 
 ```bash
 git clone https://github.com/crossplane-contrib/crossplane-diff.git
 cd crossplane-diff
-go build -o crossplane-diff ./cmd/diff
+earthly -P +build
 ```
 
 ## Usage
@@ -202,7 +216,7 @@ The tool prioritizes **accuracy above all else**:
 ### Caveats
 
 The tool does not take a snapshot of cluster state before processing, so changes made to the cluster during execution
-may affect results. 
+may affect results.
 
 ## Documentation
 
