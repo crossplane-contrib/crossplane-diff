@@ -17,8 +17,6 @@ limitations under the License.
 package main
 
 import (
-	"fmt"
-
 	"github.com/alecthomas/kong"
 	dp "github.com/crossplane-contrib/crossplane-diff/cmd/diff/diffprocessor"
 	"k8s.io/client-go/rest"
@@ -102,46 +100,6 @@ func makeDefaultXRProc(c *XRCmd, ctx *AppContext, log logging.Logger) dp.DiffPro
 
 func makeDefaultXRLoader(c *XRCmd) (ld.Loader, error) {
 	return ld.NewCompositeLoader(c.Files)
-}
-
-// DeprecatedDiffCmd represents the deprecated diff command for backward compatibility.
-type DeprecatedDiffCmd struct {
-	XRCmd
-}
-
-// Help returns help instructions for the deprecated diff command.
-func (c *DeprecatedDiffCmd) Help() string {
-	return `
-This command is deprecated. Please use 'crossplane-diff xr' instead.
-
-This command returns a diff of the in-cluster resources that would be modified if the provided Crossplane resources were applied.
-
-Similar to kubectl diff, it requires Crossplane to be operating in the live cluster found in your kubeconfig.
-
-Examples:
-  # Deprecated usage (still works but will show warning)
-  crossplane-diff diff xr.yaml
-
-  # Preferred usage
-  crossplane-diff xr xr.yaml
-`
-}
-
-// Run executes the deprecated diff command with a deprecation warning.
-func (c *DeprecatedDiffCmd) Run(k *kong.Context, log logging.Logger, appCtx *AppContext, proc dp.DiffProcessor, loader ld.Loader) error {
-	if _, err := fmt.Fprintln(k.Stderr, "Warning: The 'diff' subcommand is deprecated. Please use 'xr' instead."); err != nil {
-		return err
-	}
-
-	if _, err := fmt.Fprintln(k.Stderr, "Example: crossplane-diff xr your-file.yaml"); err != nil {
-		return err
-	}
-
-	if _, err := fmt.Fprintln(k.Stderr); err != nil {
-		return err
-	}
-
-	return c.XRCmd.Run(k, log, appCtx, proc, loader)
 }
 
 // Run executes the XR diff command.
