@@ -1,0 +1,13 @@
+apiVersion: ns.diff.example.org/v1alpha1
+kind: XNopResource
+metadata:
+  name: test-api-version-xr
+  namespace: default
+spec:
+  crossplane:
+    compositionRef:
+      name: xapimigrateresources.example.org
+    compositionRevisionRef:
+      name: xapimigrateresources.example.org-v2
+    compositionUpdatePolicy: Manual
+  coolField: test-value

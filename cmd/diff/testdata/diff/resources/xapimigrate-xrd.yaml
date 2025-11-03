@@ -1,0 +1,40 @@
+apiVersion: apiextensions.crossplane.io/v2
+kind: CompositeResourceDefinition
+metadata:
+  name: xapimigrateresources.diff.example.org
+spec:
+  group: diff.example.org
+  names:
+    kind: XApiMigrateResource
+    plural: xapimigrateresources
+  versions:
+  - name: v1beta1
+    served: true
+    referenceable: true
+    schema:
+      openAPIV3Schema:
+        type: object
+        properties:
+          spec:
+            type: object
+            properties:
+              forProvider:
+                type: object
+                properties:
+                  configData:
+                    type: string
+  - name: v1beta2
+    served: true
+    referenceable: true
+    schema:
+      openAPIV3Schema:
+        type: object
+        properties:
+          spec:
+            type: object
+            properties:
+              forProvider:
+                type: object
+                properties:
+                  configData:
+                    type: string

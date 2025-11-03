@@ -1,0 +1,12 @@
+apiVersion: diff.example.org/v1beta1
+kind: XApiMigrateResource
+metadata:
+  name: test-api-version-xr-api-resource
+  namespace: default
+  annotations:
+    gotemplating.fn.crossplane.io/composition-resource-name: api-migrate-resource
+  labels:
+    crossplane.io/composite: test-api-version-xr
+spec:
+  forProvider:
+    configData: test-value
