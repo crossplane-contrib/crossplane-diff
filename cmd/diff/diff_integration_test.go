@@ -1636,6 +1636,65 @@ Summary: 3 modified`,
 			expectedError: false,
 			noColor:       true,
 		},
+		"CompositionRevisionUpgradesResourceAPIVersion": {
+			// NOTE: This test validates that resources are correctly matched across API version changes,
+			// avoiding delete/recreate. The composition template changes from v1beta1 to v1beta2, but
+			// Kubernetes automatically converts resources between served API versions. When we query for
+			// the v1beta2 resource, Kubernetes finds the v1beta1 resource and returns it auto-converted
+			// to v1beta2. From Kubernetes' perspective, the resource exists as both versions simultaneously,
+			// so there's no apiVersion field change to show in the diff. The important thing is that the
+			// resource is matched (shown as ~~~, not ---/+++), preventing delete/recreate operations.
+			reason: "Validates XR upgrading composition revision that changes resource API version shows as update not remove/add",
+			setupFiles: []string{
+				"testdata/diff/resources/xrd.yaml",
+				// NOTE: xapimigrate CRD is auto-loaded from testdata/diff/crds/
+				// We don't include xapimigrate-xrd.yaml because XApiMigrateResource is a regular
+				// managed resource (not a composite), and including the XRD would make it composite.
+				"testdata/diff/resources/api-version-composition-revision-v1.yaml",
+				"testdata/diff/resources/api-version-composition-revision-v2.yaml",
+				"testdata/diff/resources/functions.yaml",
+				"testdata/diff/resources/existing-api-version-xr-rev1.yaml",
+				"testdata/diff/resources/existing-api-version-downstream-v1beta1.yaml",
+			},
+			inputFiles: []string{"testdata/diff/modified-api-version-xr-rev2.yaml"},
+			expectedOutput: `
+~~~ XApiMigrateResource/test-api-version-xr-api-resource
+  apiVersion: diff.example.org/v1beta2
+  kind: XApiMigrateResource
+  metadata:
+    annotations:
++     crossplane.io/composition-resource-name: api-migrate-resource
+      gotemplating.fn.crossplane.io/composition-resource-name: api-migrate-resource
+    labels:
+      crossplane.io/composite: test-api-version-xr
+    name: test-api-version-xr-api-resource
+    namespace: default
+  spec:
+    forProvider:
+      configData: test-value
+
+---
+~~~ XNopResource/test-api-version-xr
+  apiVersion: ns.diff.example.org/v1alpha1
+  kind: XNopResource
+  metadata:
+    name: test-api-version-xr
+    namespace: default
+  spec:
+    coolField: test-value
+    crossplane:
+      compositionRef:
+        name: xapimigrateresources.example.org
+      compositionRevisionRef:
+-       name: xapimigrateresources.example.org-v1
++       name: xapimigrateresources.example.org-v2
+      compositionUpdatePolicy: Manual
+
+---
+`,
+			expectedError: false,
+			noColor:       true,
+		},
 		"V2SwitchManualToAutomatic": {
 			reason: "Validates v2 XR switching from Manual to Automatic mode uses latest revision",
 			setupFiles: []string{
@@ -2220,6 +2279,98 @@ Summary: 1 modified
 -     resourceTier: basic
 +     configData: updated-existing-value
 +     resourceTier: premium
+
+---
+
+Summary: 1 modified`,
+			expectedError: false,
+			noColor:       true,
+		},
+		"CompositionUpgradesResourceAPIVersion": {
+			// NOTE: This test validates that resources are correctly matched across API version changes,
+			// avoiding delete/recreate. The composition template changes from v1beta1 to v1beta2, but
+			// Kubernetes automatically converts resources between served API versions. When we query for
+			// the v1beta2 resource, Kubernetes finds the v1beta1 resource and returns it auto-converted
+			// to v1beta2. From Kubernetes' perspective, the resource exists as both versions simultaneously,
+			// so there's no apiVersion field change to show in the diff. The important thing is that the
+			// resource is matched (shown as ~~~, not ---/+++), preventing delete/recreate operations.
+			// The composition diff itself WILL show the template change from v1beta1 to v1beta2.
+			reason: "Validates composition upgrade that changes resource API version shows as update not remove/add",
+			setupFiles: []string{
+				"testdata/comp/resources/xrd.yaml",
+				// NOTE: xapimigrate CRD is auto-loaded from testdata/comp/crds/
+				// We don't include xapimigrate-xrd.yaml because XApiMigrateResource is a regular
+				// managed resource (not a composite), and including the XRD would make it composite,
+				// causing infinite recursion.
+				"testdata/comp/resources/api-version-original-composition.yaml",
+				"testdata/comp/resources/functions.yaml",
+				"testdata/comp/resources/existing-api-version-xr.yaml",
+				"testdata/comp/resources/existing-api-version-downstream-v1beta1.yaml",
+			},
+			inputFiles: []string{"testdata/comp/api-version-updated-composition.yaml"},
+			namespace:  "default",
+			expectedOutput: `
+=== Composition Changes ===
+
+~~~ Composition/xapimigrateresources.example.org
+  apiVersion: apiextensions.crossplane.io/v1
+  kind: Composition
+  metadata:
+    name: xapimigrateresources.example.org
+  spec:
+    compositeTypeRef:
+      apiVersion: ns.diff.example.org/v1alpha1
+      kind: XNopResource
+    mode: Pipeline
+    pipeline:
+    - functionRef:
+        name: function-go-templating
+      input:
+        apiVersion: template.fn.crossplane.io/v1beta1
+        inline:
+          template: |
+-           apiVersion: comp.example.org/v1beta1
++           apiVersion: comp.example.org/v1beta2
+            kind: XApiMigrateResource
+            metadata:
+              name: {{ .observed.composite.resource.metadata.name }}-api-resource
+              namespace: {{ .observed.composite.resource.metadata.namespace }}
+              annotations:
+                gotemplating.fn.crossplane.io/composition-resource-name: api-migrate-resource
+            spec:
+              forProvider:
+                configData: {{ .observed.composite.resource.spec.coolField }}
+        kind: GoTemplate
+        source: Inline
+      step: generate-api-versioned-resources
+    - functionRef:
+        name: function-auto-ready
+      step: automatically-detect-ready-composed-resources
+
+---
+
+Summary: 1 modified
+
+=== Affected Composite Resources ===
+
+- XNopResource/test-api-version (namespace: default)
+
+=== Impact Analysis ===
+
+~~~ XApiMigrateResource/test-api-version-api-resource
+  apiVersion: comp.example.org/v1beta2
+  kind: XApiMigrateResource
+  metadata:
+    annotations:
++     crossplane.io/composition-resource-name: api-migrate-resource
+      gotemplating.fn.crossplane.io/composition-resource-name: api-migrate-resource
+    labels:
+      crossplane.io/composite: test-api-version
+    name: test-api-version-api-resource
+    namespace: default
+  spec:
+    forProvider:
+      configData: test-value
 
 ---
 
