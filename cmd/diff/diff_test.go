@@ -980,11 +980,17 @@ spec:
 }
 
 func TestGetRestConfig(t *testing.T) {
+	// Check if we're in an isolated build environment (Earthly/Docker/CI)
+	// EARTHLY_VERSION is automatically set by Earthly when running in a container
+	isIsolated := os.Getenv("EARTHLY_VERSION") != ""
+
 	tests := map[string]struct {
 		kubeconfigPath string
 		setupFile      func() string
 		expectError    bool
 		errorContains  string
+		skip           bool
+		skipReason     string
 	}{
 		"EmptyKubeconfigEnvVar": {
 			kubeconfigPath: "",
@@ -992,6 +998,9 @@ func TestGetRestConfig(t *testing.T) {
 			// With standard loading rules, when KUBECONFIG is empty it tries ~/.kube/config
 			// If that doesn't exist, it returns "invalid configuration"
 			errorContains: "invalid configuration",
+			// This test only works in isolated environments where ~/.kube/config doesn't exist
+			skip:       !isIsolated,
+			skipReason: "requires isolated environment without ~/.kube/config (run 'earthly +go-test' for full coverage)",
 		},
 		"ValidKubeconfigPath": {
 			setupFile: func() string {
@@ -1036,16 +1045,9 @@ users:
 
 	for name, tc := range tests {
 		t.Run(name, func(t *testing.T) {
-			// Set the KUBECONFIG environment variable for this test
-			originalKubeconfig := os.Getenv("KUBECONFIG")
-
-			defer func() {
-				if originalKubeconfig != "" {
-					t.Setenv("KUBECONFIG", originalKubeconfig)
-				} else {
-					os.Unsetenv("KUBECONFIG")
-				}
-			}()
+			if tc.skip {
+				t.Skip(tc.skipReason)
+			}
 
 			// Setup file if needed
 			kubeconfigPath := tc.kubeconfigPath
@@ -1053,6 +1055,7 @@ users:
 				kubeconfigPath = tc.setupFile()
 			}
 
+			// Set KUBECONFIG environment variable (t.Setenv handles cleanup automatically)
 			if kubeconfigPath != "" {
 				t.Setenv("KUBECONFIG", kubeconfigPath)
 			} else {
@@ -1061,23 +1064,6 @@ users:
 
 			// Call the function
 			config, err := getRestConfig()
-
-			//// Special handling for EmptyKubeconfigEnvVar test case:
-			//// If a default kubeconfig exists at ~/.kube/config, the function won't error
-			// if name == "EmptyKubeconfigEnvVar" && err == nil {
-			//	homeDir, homeErr := os.UserHomeDir()
-			//	if homeErr == nil {
-			//		defaultKubeconfig := filepath.Join(homeDir, ".kube", "config")
-			//		if _, statErr := os.Stat(defaultKubeconfig); statErr == nil {
-			//			// Default kubeconfig exists, so no error is expected
-			//			t.Logf("Default kubeconfig exists at %s, skipping error expectation", defaultKubeconfig)
-			//			if config == nil {
-			//				t.Errorf("Expected config to be non-nil when default kubeconfig exists")
-			//			}
-			//			return
-			//		}
-			//	}
-			//}
 
 			// Check error expectations
 			if tc.expectError && err == nil {
