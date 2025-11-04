@@ -957,7 +957,7 @@ func (b *MockDefinitionClientBuilder) WithGetXRDForXR(fn func(context.Context, s
 func (b *MockDefinitionClientBuilder) WithV1XRDForXR() *MockDefinitionClientBuilder {
 	return b.WithGetXRDForXR(func(_ context.Context, _ schema.GroupVersionKind) (*un.Unstructured, error) {
 		return &un.Unstructured{
-			Object: map[string]interface{}{
+			Object: map[string]any{
 				"apiVersion": "apiextensions.crossplane.io/v1",
 			},
 		}, nil
@@ -968,7 +968,7 @@ func (b *MockDefinitionClientBuilder) WithV1XRDForXR() *MockDefinitionClientBuil
 func (b *MockDefinitionClientBuilder) WithV2XRDForXR() *MockDefinitionClientBuilder {
 	return b.WithGetXRDForXR(func(_ context.Context, _ schema.GroupVersionKind) (*un.Unstructured, error) {
 		return &un.Unstructured{
-			Object: map[string]interface{}{
+			Object: map[string]any{
 				"apiVersion": "apiextensions.crossplane.io/v2",
 			},
 		}, nil
@@ -1270,10 +1270,10 @@ type ResourceBuilder struct {
 func NewResource(apiVersion, kind, name string) *ResourceBuilder {
 	return &ResourceBuilder{
 		resource: &un.Unstructured{
-			Object: map[string]interface{}{
+			Object: map[string]any{
 				"apiVersion": apiVersion,
 				"kind":       kind,
-				"metadata": map[string]interface{}{
+				"metadata": map[string]any{
 					"name": name,
 				},
 			},
@@ -1318,7 +1318,7 @@ func (b *ResourceBuilder) WithAnnotations(annotations map[string]string) *Resour
 }
 
 // WithSpec sets the spec field of the resource.
-func (b *ResourceBuilder) WithSpec(spec map[string]interface{}) *ResourceBuilder {
+func (b *ResourceBuilder) WithSpec(spec map[string]any) *ResourceBuilder {
 	if len(spec) > 0 {
 		_ = un.SetNestedMap(b.resource.Object, spec, "spec")
 	}
@@ -1327,10 +1327,10 @@ func (b *ResourceBuilder) WithSpec(spec map[string]interface{}) *ResourceBuilder
 }
 
 // WithSpecField sets a specific field in the spec.
-func (b *ResourceBuilder) WithSpecField(name string, value interface{}) *ResourceBuilder {
+func (b *ResourceBuilder) WithSpecField(name string, value any) *ResourceBuilder {
 	spec, _, _ := un.NestedMap(b.resource.Object, "spec")
 	if spec == nil {
-		spec = map[string]interface{}{}
+		spec = map[string]any{}
 	}
 
 	spec[name] = value
@@ -1340,7 +1340,7 @@ func (b *ResourceBuilder) WithSpecField(name string, value interface{}) *Resourc
 }
 
 // WithStatus sets the status field of the resource.
-func (b *ResourceBuilder) WithStatus(status map[string]interface{}) *ResourceBuilder {
+func (b *ResourceBuilder) WithStatus(status map[string]any) *ResourceBuilder {
 	if len(status) > 0 {
 		_ = un.SetNestedMap(b.resource.Object, status, "status")
 	}
@@ -1349,10 +1349,10 @@ func (b *ResourceBuilder) WithStatus(status map[string]interface{}) *ResourceBui
 }
 
 // WithStatusField sets a specific field in the status.
-func (b *ResourceBuilder) WithStatusField(name string, value interface{}) *ResourceBuilder {
+func (b *ResourceBuilder) WithStatusField(name string, value any) *ResourceBuilder {
 	status, _, _ := un.NestedMap(b.resource.Object, "status")
 	if status == nil {
-		status = map[string]interface{}{}
+		status = map[string]any{}
 	}
 
 	status[name] = value
@@ -1418,7 +1418,7 @@ func (b *ResourceBuilder) WithNamespace(namespace string) *ResourceBuilder {
 
 // WithNestedField sets a field at an arbitrary nested path in the resource.
 // The path is a sequence of field names to traverse (e.g., "spec", "crossplane", "compositionUpdatePolicy").
-func (b *ResourceBuilder) WithNestedField(value interface{}, fields ...string) *ResourceBuilder {
+func (b *ResourceBuilder) WithNestedField(value any, fields ...string) *ResourceBuilder {
 	_ = un.SetNestedField(b.resource.Object, value, fields...)
 	return b
 }
@@ -1764,7 +1764,7 @@ func (b *CompositionBuilder) WithPipelineMode() *CompositionBuilder {
 }
 
 // WithPipelineStep adds a pipeline step to the composition.
-func (b *CompositionBuilder) WithPipelineStep(step, functionName string, input map[string]interface{}) *CompositionBuilder {
+func (b *CompositionBuilder) WithPipelineStep(step, functionName string, input map[string]any) *CompositionBuilder {
 	var rawInput *runtime.RawExtension
 
 	if input != nil {

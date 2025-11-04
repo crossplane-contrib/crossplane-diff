@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"maps"
 	"reflect"
 	"strings"
 
@@ -168,9 +169,7 @@ func (p *DefaultDiffProcessor) PerformDiff(ctx context.Context, stdout io.Writer
 			}
 		} else {
 			// Merge the diffs into our combined map
-			for k, v := range diffs {
-				allDiffs[k] = v
-			}
+			maps.Copy(allDiffs, diffs)
 		}
 	}
 
@@ -254,14 +253,14 @@ func (p *DefaultDiffProcessor) DiffSingleResource(ctx context.Context, res *un.U
 		return nil, errors.Wrap(err, "cannot merge input XR with result of rendered XR")
 	}
 
-	// WORKAROUND for https://github.com/crossplane/crossplane/issues/6782
-	// Propagate namespace from XR to namespaced managed resources
-	// For claims (v1 compatibility), skip namespace propagation entirely as all managed resources are cluster-scoped
-	isClaimRoot := p.defClient.IsClaimResource(ctx, xrUnstructured)
-	if !isClaimRoot {
-		p.propagateNamespacesToManagedResources(ctx, xrUnstructured, desired.ComposedResources)
-	} else {
-		p.config.Logger.Debug("Skipping namespace propagation for claim (v1 compatibility)", "resource", resourceID)
+	// Clean up namespaces from cluster-scoped resources
+	// Crossplane PR #6812 fixed issue #6782 by making render propagate namespaces from XR to all
+	// composed resources, but it doesn't check if resources are cluster-scoped. This cleanup
+	// removes namespaces from cluster-scoped resources. See removeNamespacesFromClusterScopedResources
+	// for details on the upstream fix needed.
+	if err := p.removeNamespacesFromClusterScopedResources(ctx, desired.ComposedResources); err != nil {
+		p.config.Logger.Debug("Failed to clean up namespaces from cluster-scoped resources", "resource", resourceID, "error", err)
+		return nil, errors.Wrap(err, "cannot clean up namespaces from cluster-scoped resources")
 	}
 
 	// Validate the resources
@@ -294,9 +293,7 @@ func (p *DefaultDiffProcessor) DiffSingleResource(ctx context.Context, res *un.U
 	}
 
 	// Merge nested diffs into our result
-	for k, v := range nestedDiffs {
-		diffs[k] = v
-	}
+	maps.Copy(diffs, nestedDiffs)
 
 	p.config.Logger.Debug("Resource processing complete",
 		"resource", resourceID,
@@ -377,9 +374,7 @@ func (p *DefaultDiffProcessor) ProcessNestedXRs(
 		}
 
 		// Merge diffs from nested XR
-		for k, v := range nestedDiffs {
-			allDiffs[k] = v
-		}
+		maps.Copy(allDiffs, nestedDiffs)
 
 		p.config.Logger.Debug("Nested XR processed successfully",
 			"nestedXR", nestedResourceID,
@@ -600,26 +595,44 @@ func (p *DefaultDiffProcessor) RenderWithRequirements(
 	return lastOutput, lastRenderErr
 }
 
-// propagateNamespacesToManagedResources propagates namespace from XR to managed resources
-// that don't already have a namespace set. This is a workaround for
-// https://github.com/crossplane/crossplane/issues/6782
-func (p *DefaultDiffProcessor) propagateNamespacesToManagedResources(_ context.Context, xr *un.Unstructured, composedResources []cpd.Unstructured) {
-	xrNamespace := xr.GetNamespace()
-	if xrNamespace == "" {
-		// XR has no namespace, nothing to propagate
-		p.config.Logger.Debug("XR has no namespace, skipping namespace propagation")
-		return
-	}
-
-	p.config.Logger.Debug("Propagating namespace to managed resources",
-		"xrNamespace", xrNamespace,
-		"composedCount", len(composedResources))
-
+// removeNamespacesFromClusterScopedResources removes namespaces from cluster-scoped resources.
+//
+// TEMPORARY WORKAROUND: This function exists because Crossplane's render command blindly propagates
+// namespaces from the XR to ALL composed resources without checking if they are cluster-scoped.
+// This was introduced in PR #6812 (https://github.com/crossplane/crossplane/pull/6812) which fixed
+// issue #6782 by adding namespace propagation to SetComposedResourceMetadata.
+//
+// UPSTREAM FIX NEEDED in github.com/crossplane/crossplane/v2:
+// File: cmd/crank/render/render.go
+// Function: SetComposedResourceMetadata (around line 445)
+// Issue: Lines 455-457 blindly set cd.SetNamespace(xr.GetNamespace()) without checking resource scope
+//
+// Proposed Solution:
+// 1. Extend render.Inputs to accept XRDs (similar to how RequiredResources is passed)
+// 2. Pass XRDs through to SetComposedResourceMetadata (modify function signature)
+// 3. Look up the composed resource's GVK in the XRDs to determine if it's cluster-scoped
+// 4. Only call cd.SetNamespace(xr.GetNamespace()) if the resource is namespaced
+//
+// Example fix in SetComposedResourceMetadata:
+//
+//	if xr.GetNamespace() != "" {
+//	    // Look up cd's GVK in XRDs to check scope
+//	    if isNamespaced(cd.GetObjectKind().GroupVersionKind(), xrds) {
+//	        cd.SetNamespace(xr.GetNamespace())
+//	    }
+//	}
+//
+// Once upstream is fixed, this function can be removed along with its call site at line 270.
+//
+// NOTE: render is an offline tool with no cluster access, so it needs XRDs passed explicitly.
+// ExtraResources/RequiredResources are only available to composition functions, not to the
+// core render logic, so a new mechanism is needed to pass schema information.
+func (p *DefaultDiffProcessor) removeNamespacesFromClusterScopedResources(ctx context.Context, composedResources []cpd.Unstructured) error {
 	for i := range composedResources {
 		resource := &un.Unstructured{Object: composedResources[i].UnstructuredContent()}
 
-		// Skip if resource already has a namespace - validation will catch mismatches
-		if resource.GetNamespace() != "" {
+		// Skip if resource has no namespace
+		if resource.GetNamespace() == "" {
 			continue
 		}
 
@@ -628,14 +641,29 @@ func (p *DefaultDiffProcessor) propagateNamespacesToManagedResources(_ context.C
 			resourceID = fmt.Sprintf("%s/%s*", resource.GetKind(), resource.GetGenerateName())
 		}
 
-		p.config.Logger.Debug("Propagating namespace to managed resource",
-			"resource", resourceID,
-			"namespace", xrNamespace)
-		resource.SetNamespace(xrNamespace)
+		// Check if resource is cluster-scoped
+		// We must be able to determine scope to proceed - if we can't get the CRD,
+		// validation will fail anyway, so fail fast with a clear error message.
+		gvk := resource.GroupVersionKind()
 
-		// Update the composed resource with the modified content
-		composedResources[i].SetUnstructuredContent(resource.Object)
+		crd, err := p.schemaClient.GetCRD(ctx, gvk)
+		if err != nil {
+			return errors.Wrapf(err, "cannot determine scope for resource %s (GVK %s): CRD not found", resourceID, gvk.String())
+		}
+
+		if crd.Spec.Scope == "Cluster" {
+			p.config.Logger.Debug("Removing namespace from cluster-scoped resource",
+				"resource", resourceID,
+				"gvk", gvk.String(),
+				"namespace", resource.GetNamespace())
+			resource.SetNamespace("")
+
+			// Update the composed resource with the modified content
+			composedResources[i].SetUnstructuredContent(resource.Object)
+		}
 	}
+
+	return nil
 }
 
 // getCompositeResourceXRD checks if a resource is a Composite Resource (XR) by looking it up in XRDs.

@@ -146,6 +146,7 @@ func (v *DefaultSchemaValidator) EnsureComposedResourceCRDs(ctx context.Context,
 
 	// Collect unique GVKs from resources
 	uniqueGVKs := make(map[schema.GroupVersionKind]bool)
+
 	for _, res := range resources {
 		gvk := res.GroupVersionKind()
 		uniqueGVKs[gvk] = true

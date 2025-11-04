@@ -624,7 +624,7 @@ func TestDefaultDiffProcessor_Initialize(t *testing.T) {
 	// Create test resources
 	xrd1 := tu.NewResource("apiextensions.crossplane.io/v1", "CompositeResourceDefinition", "xrd1").
 		WithSpecField("group", "example.org").
-		WithSpecField("names", map[string]interface{}{
+		WithSpecField("names", map[string]any{
 			"kind":     "XExampleResource",
 			"plural":   "xexampleresources",
 			"singular": "xexampleresource",
@@ -832,10 +832,10 @@ func TestDefaultDiffProcessor_RenderWithRequirements(t *testing.T) {
 					return render.Outputs{
 						CompositeResource: in.CompositeResource,
 						ComposedResources: []cpd.Unstructured{
-							{Unstructured: un.Unstructured{Object: map[string]interface{}{
+							{Unstructured: un.Unstructured{Object: map[string]any{
 								"apiVersion": "example.org/v1",
 								"kind":       "ComposedResource",
-								"metadata": map[string]interface{}{
+								"metadata": map[string]any{
 									"name": "composed1",
 								},
 							}}},
@@ -902,10 +902,10 @@ func TestDefaultDiffProcessor_RenderWithRequirements(t *testing.T) {
 					return render.Outputs{
 						CompositeResource: in.CompositeResource,
 						ComposedResources: []cpd.Unstructured{
-							{Unstructured: un.Unstructured{Object: map[string]interface{}{
+							{Unstructured: un.Unstructured{Object: map[string]any{
 								"apiVersion": "example.org/v1",
 								"kind":       "ComposedResource",
-								"metadata": map[string]interface{}{
+								"metadata": map[string]any{
 									"name": "composed1",
 								},
 							}}},
@@ -1005,10 +1005,10 @@ func TestDefaultDiffProcessor_RenderWithRequirements(t *testing.T) {
 					return render.Outputs{
 						CompositeResource: in.CompositeResource,
 						ComposedResources: []cpd.Unstructured{
-							{Unstructured: un.Unstructured{Object: map[string]interface{}{
+							{Unstructured: un.Unstructured{Object: map[string]any{
 								"apiVersion": "example.org/v1",
 								"kind":       "ComposedResource",
-								"metadata": map[string]interface{}{
+								"metadata": map[string]any{
 									"name": "composed1",
 								},
 							}}},
@@ -1098,10 +1098,10 @@ func TestDefaultDiffProcessor_RenderWithRequirements(t *testing.T) {
 					return render.Outputs{
 						CompositeResource: in.CompositeResource,
 						ComposedResources: []cpd.Unstructured{
-							{Unstructured: un.Unstructured{Object: map[string]interface{}{
+							{Unstructured: un.Unstructured{Object: map[string]any{
 								"apiVersion": "example.org/v1",
 								"kind":       "ComposedResource",
-								"metadata": map[string]interface{}{
+								"metadata": map[string]any{
 									"name": "composed1",
 								},
 							}}},
@@ -1287,7 +1287,7 @@ func TestDefaultDiffProcessor_getCompositeResourceXRD(t *testing.T) {
 				WithXRDForXRNotFound().
 				Build(),
 			resource: tu.NewResource("nop.example.org/v1alpha1", "NopResource", "test-managed").
-				WithSpecField("forProvider", map[string]interface{}{
+				WithSpecField("forProvider", map[string]any{
 					"configData": "test-value",
 				}).
 				Build(),
@@ -1369,7 +1369,7 @@ func TestDefaultDiffProcessor_ProcessNestedXRs(t *testing.T) {
 		Build()
 
 	managedResource := tu.NewResource("nop.example.org/v1alpha1", "NopResource", "test-managed").
-		WithSpecField("forProvider", map[string]interface{}{
+		WithSpecField("forProvider", map[string]any{
 			"configData": "test-value",
 		}).
 		WithCompositionResourceName("managed-resource").
@@ -1394,11 +1394,11 @@ func TestDefaultDiffProcessor_ProcessNestedXRs(t *testing.T) {
 	childComposition := tu.NewComposition("child-composition").
 		WithCompositeTypeRef("nested.example.org/v1alpha1", "XChildResource").
 		WithPipelineMode().
-		WithPipelineStep("generate-managed", "function-go-templating", map[string]interface{}{
+		WithPipelineStep("generate-managed", "function-go-templating", map[string]any{
 			"apiVersion": "template.fn.crossplane.io/v1beta1",
 			"kind":       "GoTemplate",
 			"source":     "Inline",
-			"inline": map[string]interface{}{
+			"inline": map[string]any{
 				"template": "apiVersion: nop.example.org/v1alpha1\nkind: NopResource\nmetadata:\n  name: test\n  annotations:\n    gotemplating.fn.crossplane.io/composition-resource-name: managed-resource\nspec:\n  forProvider:\n    configData: test",
 			},
 		}).

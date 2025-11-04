@@ -586,10 +586,7 @@ func assertDiffMatchesFile(t *testing.T, actual, expectedSource, log string) {
 			len(actualNormalized))
 	}
 
-	maxLines := len(expectedNormalized)
-	if len(actualNormalized) > maxLines {
-		maxLines = len(actualNormalized)
-	}
+	maxLines := max(len(actualNormalized), len(expectedNormalized))
 
 	failed := false
 

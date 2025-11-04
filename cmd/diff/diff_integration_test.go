@@ -193,7 +193,7 @@ func runIntegrationTest(t *testing.T, testType DiffTestType, scheme *runtime.Sch
 	args = append(args, testFiles...)
 
 	// Set up the appropriate command based on test type
-	var cmd interface{}
+	var cmd any
 	if testType == CompositionDiffTest {
 		cmd = &CompCmd{}
 	} else {

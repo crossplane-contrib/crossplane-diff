@@ -287,7 +287,7 @@ func TestDefaultSchemaValidator_LoadCRDs(t *testing.T) {
 	// Create sample CRDs as un
 	xrdUn := tu.NewResource("apiextensions.crossplane.io/v1", "CompositeResourceDefinition", "xrd1").
 		WithSpecField("group", "testExampleOrg").
-		WithSpecField("names", map[string]interface{}{
+		WithSpecField("names", map[string]any{
 			"kind":     "XR",
 			"plural":   "xrs",
 			"singular": "xr",
@@ -392,7 +392,7 @@ func createCRDWithStringField(baseCRD *extv1.CustomResourceDefinition) *extv1.Cu
 }
 
 // Helper function to convert to un.
-func MustToUnstructured(obj interface{}) map[string]interface{} {
+func MustToUnstructured(obj any) map[string]any {
 	u, err := runtime.DefaultUnstructuredConverter.ToUnstructured(obj)
 	if err != nil {
 		panic(err)
@@ -426,8 +426,8 @@ func TestDefaultSchemaValidator_ValidateResources_AppliesDefaults(t *testing.T) 
 		BuildUComposed()
 
 	// Manually add compositionRevisionRef to spec.crossplane to ensure validation can handle it
-	_ = un.SetNestedMap(managedResource.Object, map[string]interface{}{
-		"compositionRevisionRef": map[string]interface{}{
+	_ = un.SetNestedMap(managedResource.Object, map[string]any{
+		"compositionRevisionRef": map[string]any{
 			"name": "some-revision-abc123",
 		},
 	}, "spec", "crossplane")

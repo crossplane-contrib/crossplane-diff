@@ -195,7 +195,7 @@ func (c *DefaultDefinitionClient) GetXRDForXR(ctx context.Context, gvk schema.Gr
 		versionMatches := false
 
 		for _, v := range versions {
-			version, ok := v.(map[string]interface{})
+			version, ok := v.(map[string]any)
 			if !ok {
 				continue
 			}

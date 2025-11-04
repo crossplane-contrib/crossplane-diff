@@ -26,7 +26,7 @@ func TestDefaultDefinitionClient_GetXRDs(t *testing.T) {
 	// Create test XRDs
 	xrd1 := tu.NewResource("apiextensions.crossplane.io/v1", CompositeResourceDefinitionKind, "xrd1").
 		WithSpecField("group", "example.org").
-		WithSpecField("names", map[string]interface{}{
+		WithSpecField("names", map[string]any{
 			"kind":     "XR1",
 			"plural":   "xr1s",
 			"singular": "xr1",
@@ -35,7 +35,7 @@ func TestDefaultDefinitionClient_GetXRDs(t *testing.T) {
 
 	xrd2 := tu.NewResource("apiextensions.crossplane.io/v1", CompositeResourceDefinitionKind, "xrd2").
 		WithSpecField("group", "example.org").
-		WithSpecField("names", map[string]interface{}{
+		WithSpecField("names", map[string]any{
 			"kind":     "XR2",
 			"plural":   "xr2s",
 			"singular": "xr2",
@@ -205,12 +205,12 @@ func TestDefaultDefinitionClient_GetXRDForClaim(t *testing.T) {
 	// Create test XRDs
 	xrdWithClaimKind := tu.NewResource("apiextensions.crossplane.io/v1", CompositeResourceDefinitionKind, "xrd-with-claim").
 		WithSpecField("group", "example.org").
-		WithSpecField("names", map[string]interface{}{
+		WithSpecField("names", map[string]any{
 			"kind":     "XExampleResource",
 			"plural":   "xexampleresources",
 			"singular": "xexampleresource",
 		}).
-		WithSpecField("claimNames", map[string]interface{}{
+		WithSpecField("claimNames", map[string]any{
 			"kind":     "ExampleClaim",
 			"plural":   "exampleclaims",
 			"singular": "exampleclaim",
@@ -219,7 +219,7 @@ func TestDefaultDefinitionClient_GetXRDForClaim(t *testing.T) {
 
 	xrdWithoutClaimKind := tu.NewResource("apiextensions.crossplane.io/v1", CompositeResourceDefinitionKind, "xrd-without-claim").
 		WithSpecField("group", "example.org").
-		WithSpecField("names", map[string]interface{}{
+		WithSpecField("names", map[string]any{
 			"kind":     "XOtherResource",
 			"plural":   "xotherresources",
 			"singular": "xotherresource",
@@ -386,18 +386,18 @@ func TestDefaultDefinitionClient_GetXRDForXR(t *testing.T) {
 	// Create test XRDs
 	xrdForXR1 := tu.NewResource("apiextensions.crossplane.io/v1", CompositeResourceDefinitionKind, "xrd-for-xr1").
 		WithSpecField("group", "example.org").
-		WithSpecField("names", map[string]interface{}{
+		WithSpecField("names", map[string]any{
 			"kind":     "XR1",
 			"plural":   "xr1s",
 			"singular": "xr1",
 		}).
-		WithSpecField("versions", []interface{}{
-			map[string]interface{}{
+		WithSpecField("versions", []any{
+			map[string]any{
 				"name":    "v1",
 				"served":  true,
 				"storage": true,
 			},
-			map[string]interface{}{
+			map[string]any{
 				"name":    "v2",
 				"served":  true,
 				"storage": false,
@@ -407,13 +407,13 @@ func TestDefaultDefinitionClient_GetXRDForXR(t *testing.T) {
 
 	xrdForXR2 := tu.NewResource("apiextensions.crossplane.io/v1", CompositeResourceDefinitionKind, "xrd-for-xr2").
 		WithSpecField("group", "example.org").
-		WithSpecField("names", map[string]interface{}{
+		WithSpecField("names", map[string]any{
 			"kind":     "XR2",
 			"plural":   "xr2s",
 			"singular": "xr2",
 		}).
-		WithSpecField("versions", []interface{}{
-			map[string]interface{}{
+		WithSpecField("versions", []any{
+			map[string]any{
 				"name":    "v1alpha1",
 				"served":  true,
 				"storage": true,
@@ -654,12 +654,12 @@ func TestDefaultDefinitionClient_IsClaimResource(t *testing.T) {
 				// Create a mock XRD that defines this as a claim
 				tu.NewResource("apiextensions.crossplane.io/v1", "CompositeResourceDefinition", "testclaims.example.org").
 					WithSpecField("group", "example.org").
-					WithSpecField("names", map[string]interface{}{
+					WithSpecField("names", map[string]any{
 						"kind":     "XTestResource",
 						"plural":   "xtestresources",
 						"singular": "xtestresource",
 					}).
-					WithSpecField("claimNames", map[string]interface{}{
+					WithSpecField("claimNames", map[string]any{
 						"kind":     "TestClaim",
 						"plural":   "testclaims",
 						"singular": "testclaim",
@@ -680,7 +680,7 @@ func TestDefaultDefinitionClient_IsClaimResource(t *testing.T) {
 				// Create a mock XRD that defines this as an XR (no claimNames)
 				tu.NewResource("apiextensions.crossplane.io/v1", "CompositeResourceDefinition", "testxrs.example.org").
 					WithSpecField("group", "example.org").
-					WithSpecField("names", map[string]interface{}{
+					WithSpecField("names", map[string]any{
 						"kind":     "TestXR",
 						"plural":   "testxrs",
 						"singular": "testxr",
@@ -713,12 +713,12 @@ func TestDefaultDefinitionClient_IsClaimResource(t *testing.T) {
 				// Create an XRD that doesn't match our resource
 				tu.NewResource("apiextensions.crossplane.io/v1", "CompositeResourceDefinition", "otherclaims.example.org").
 					WithSpecField("group", "example.org").
-					WithSpecField("names", map[string]interface{}{
+					WithSpecField("names", map[string]any{
 						"kind":     "XOtherResource",
 						"plural":   "xotherresources",
 						"singular": "xotherresource",
 					}).
-					WithSpecField("claimNames", map[string]interface{}{
+					WithSpecField("claimNames", map[string]any{
 						"kind":     "OtherClaim",
 						"plural":   "otherclaims",
 						"singular": "otherclaim",

@@ -3,6 +3,7 @@ package diffprocessor
 import (
 	"context"
 	"fmt"
+	"maps"
 
 	xp "github.com/crossplane-contrib/crossplane-diff/cmd/diff/client/crossplane"
 	k8 "github.com/crossplane-contrib/crossplane-diff/cmd/diff/client/kubernetes"
@@ -212,9 +213,7 @@ func (c *DefaultDiffCalculator) CalculateDiffs(ctx context.Context, xr *cmp.Unst
 			c.logger.Debug("Error calculating removed resources (continuing)", "error", err)
 		} else if len(removedDiffs) > 0 {
 			// Add removed resources to the diffs map
-			for key, diff := range removedDiffs {
-				diffs[key] = diff
-			}
+			maps.Copy(diffs, removedDiffs)
 		}
 	}
 

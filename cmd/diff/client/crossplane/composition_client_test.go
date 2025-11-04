@@ -481,24 +481,24 @@ func TestDefaultCompositionClient_FindMatchingComposition(t *testing.T) {
 						return []*un.Unstructured{
 							tu.NewResource(CrossplaneAPIExtGroupV1, CompositeResourceDefinitionKind, "xexampleresources.example.org").
 								WithSpecField("group", "example.org").
-								WithSpecField("names", map[string]interface{}{
+								WithSpecField("names", map[string]any{
 									"kind": "XExampleResource",
 								}).
-								WithSpecField("claimNames", map[string]interface{}{
+								WithSpecField("claimNames", map[string]any{
 									"kind": "ExampleResourceClaim",
 								}).
-								WithSpecField("versions", []interface{}{
-									map[string]interface{}{
+								WithSpecField("versions", []any{
+									map[string]any{
 										"name":          "v1",
 										"served":        true,
 										"referenceable": false,
 									},
-									map[string]interface{}{
+									map[string]any{
 										"name":          "v2",
 										"served":        true,
 										"referenceable": true, // This is the version compositions should reference
 									},
-									map[string]interface{}{
+									map[string]any{
 										"name":          "v3alpha1",
 										"served":        true,
 										"referenceable": false,
@@ -516,24 +516,24 @@ func TestDefaultCompositionClient_FindMatchingComposition(t *testing.T) {
 				WithXRDForClaim(
 					tu.NewResource(CrossplaneAPIExtGroupV1, CompositeResourceDefinitionKind, "xexampleresources.example.org").
 						WithSpecField("group", "example.org").
-						WithSpecField("names", map[string]interface{}{
+						WithSpecField("names", map[string]any{
 							"kind": "XExampleResource",
 						}).
-						WithSpecField("claimNames", map[string]interface{}{
+						WithSpecField("claimNames", map[string]any{
 							"kind": "ExampleResourceClaim",
 						}).
-						WithSpecField("versions", []interface{}{
-							map[string]interface{}{
+						WithSpecField("versions", []any{
+							map[string]any{
 								"name":          "v1",
 								"served":        true,
 								"referenceable": false,
 							},
-							map[string]interface{}{
+							map[string]any{
 								"name":          "v2",
 								"served":        true,
 								"referenceable": true, // This is the version compositions should reference
 							},
-							map[string]interface{}{
+							map[string]any{
 								"name":          "v3alpha1",
 								"served":        true,
 								"referenceable": false,
@@ -559,7 +559,7 @@ func TestDefaultCompositionClient_FindMatchingComposition(t *testing.T) {
 			args: args{
 				ctx: t.Context(),
 				res: tu.NewResource("example.org/v1", "ExampleResourceClaim", "test-claim").
-					WithSpecField("compositionRef", map[string]interface{}{
+					WithSpecField("compositionRef", map[string]any{
 						"name": "matching-comp",
 					}).
 					Build(),
@@ -590,19 +590,19 @@ func TestDefaultCompositionClient_FindMatchingComposition(t *testing.T) {
 							tu.NewResource(
 								CrossplaneAPIExtGroupV1, CompositeResourceDefinitionKind, "xexampleresources.example.org").
 								WithSpecField("group", "example.org").
-								WithSpecField("names", map[string]interface{}{
+								WithSpecField("names", map[string]any{
 									"kind": "XExampleResource",
 								}).
-								WithSpecField("claimNames", map[string]interface{}{
+								WithSpecField("claimNames", map[string]any{
 									"kind": "ExampleResourceClaim",
 								}).
-								WithSpecField("versions", []interface{}{
-									map[string]interface{}{
+								WithSpecField("versions", []any{
+									map[string]any{
 										"name":          "v1",
 										"served":        true,
 										"referenceable": false, // No referenceable version
 									},
-									map[string]interface{}{
+									map[string]any{
 										"name":          "v2",
 										"served":        true,
 										"referenceable": false, // No referenceable version
@@ -620,19 +620,19 @@ func TestDefaultCompositionClient_FindMatchingComposition(t *testing.T) {
 					tu.NewResource(
 						CrossplaneAPIExtGroupV1, CompositeResourceDefinitionKind, "xexampleresources.example.org").
 						WithSpecField("group", "example.org").
-						WithSpecField("names", map[string]interface{}{
+						WithSpecField("names", map[string]any{
 							"kind": "XExampleResource",
 						}).
-						WithSpecField("claimNames", map[string]interface{}{
+						WithSpecField("claimNames", map[string]any{
 							"kind": "ExampleResourceClaim",
 						}).
-						WithSpecField("versions", []interface{}{
-							map[string]interface{}{
+						WithSpecField("versions", []any{
+							map[string]any{
 								"name":          "v1",
 								"served":        true,
 								"referenceable": false, // No referenceable version
 							},
-							map[string]interface{}{
+							map[string]any{
 								"name":          "v2",
 								"served":        true,
 								"referenceable": false, // No referenceable version
@@ -657,7 +657,7 @@ func TestDefaultCompositionClient_FindMatchingComposition(t *testing.T) {
 			args: args{
 				ctx: t.Context(),
 				res: tu.NewResource("example.org/v1", "ExampleResourceClaim", "test-claim").
-					WithSpecField("compositionRef", map[string]interface{}{
+					WithSpecField("compositionRef", map[string]any{
 						"name": "matching-comp",
 					}).
 					Build(),
@@ -678,21 +678,21 @@ func TestDefaultCompositionClient_FindMatchingComposition(t *testing.T) {
 						return []*un.Unstructured{
 							tu.NewResource(CrossplaneAPIExtGroupV1, CompositeResourceDefinitionKind, "xexampleresources.example.org").
 								WithSpecField("group", "example.org").
-								WithSpecField("names", map[string]interface{}{
+								WithSpecField("names", map[string]any{
 									"kind": "XExampleResource",
 								}).
-								WithSpecField("versions", []interface{}{
-									map[string]interface{}{
+								WithSpecField("versions", []any{
+									map[string]any{
 										"name":          "v1",
 										"served":        true,
 										"referenceable": false,
 									},
-									map[string]interface{}{
+									map[string]any{
 										"name":          "v2",
 										"served":        true,
 										"referenceable": true, // This is the version compositions should reference
 									},
-									map[string]interface{}{
+									map[string]any{
 										"name":          "v3alpha1",
 										"served":        true,
 										"referenceable": false,
@@ -727,8 +727,8 @@ func TestDefaultCompositionClient_FindMatchingComposition(t *testing.T) {
 			args: args{
 				ctx: t.Context(),
 				res: tu.NewResource("example.org/v2", "XExampleResource", "my-xr").
-					WithSpecField("crossplane", map[string]interface{}{
-						"compositionRef": map[string]interface{}{
+					WithSpecField("crossplane", map[string]any{
+						"compositionRef": map[string]any{
 							"name": "matching-comp",
 						},
 					}).
@@ -1142,11 +1142,11 @@ func TestDefaultCompositionClient_ResolveCompositionFromRevisions(t *testing.T) 
 	// Create test XRD
 	v1XRD := tu.NewResource(CrossplaneAPIExtGroupV1, CompositeResourceDefinitionKind, "xr1s.example.org").
 		WithSpecField("group", "example.org").
-		WithSpecField("names", map[string]interface{}{
+		WithSpecField("names", map[string]any{
 			"kind": "XR1",
 		}).
-		WithSpecField("versions", []interface{}{
-			map[string]interface{}{
+		WithSpecField("versions", []any{
+			map[string]any{
 				"name":          "v1",
 				"served":        true,
 				"referenceable": true,
@@ -1155,11 +1155,11 @@ func TestDefaultCompositionClient_ResolveCompositionFromRevisions(t *testing.T) 
 
 	v2XRD := tu.NewResource(CrossplaneAPIExtGroupV1, CompositeResourceDefinitionKind, "xr1s.example.org").
 		WithSpecField("group", "example.org").
-		WithSpecField("names", map[string]interface{}{
+		WithSpecField("names", map[string]any{
 			"kind": "XR1",
 		}).
-		WithSpecField("versions", []interface{}{
-			map[string]interface{}{
+		WithSpecField("versions", []any{
+			map[string]any{
 				"name":          "v2",
 				"served":        true,
 				"referenceable": true,
@@ -1181,7 +1181,7 @@ func TestDefaultCompositionClient_ResolveCompositionFromRevisions(t *testing.T) 
 			reason: "Should use latest revision when update policy is Automatic",
 			xrd:    v1XRD,
 			res: tu.NewResource("example.org/v1", "XR1", "my-xr").
-				WithSpecField("compositionRef", map[string]interface{}{
+				WithSpecField("compositionRef", map[string]any{
 					"name": "test-comp",
 				}).
 				WithSpecField("compositionUpdatePolicy", "Automatic").
@@ -1210,10 +1210,10 @@ func TestDefaultCompositionClient_ResolveCompositionFromRevisions(t *testing.T) 
 			reason: "Should use specified revision when update policy is Manual with revision ref",
 			xrd:    v1XRD,
 			res: tu.NewResource("example.org/v1", "XR1", "my-xr").
-				WithSpecField("compositionRef", map[string]interface{}{
+				WithSpecField("compositionRef", map[string]any{
 					"name": "test-comp",
 				}).
-				WithSpecField("compositionRevisionRef", map[string]interface{}{
+				WithSpecField("compositionRevisionRef", map[string]any{
 					"name": "test-comp-rev1",
 				}).
 				WithSpecField("compositionUpdatePolicy", "Manual").
@@ -1246,7 +1246,7 @@ func TestDefaultCompositionClient_ResolveCompositionFromRevisions(t *testing.T) 
 			reason: "Should use latest revision when update policy is Manual without revision ref (net new XR case)",
 			xrd:    v1XRD,
 			res: tu.NewResource("example.org/v1", "XR1", "my-xr").
-				WithSpecField("compositionRef", map[string]interface{}{
+				WithSpecField("compositionRef", map[string]any{
 					"name": "test-comp",
 				}).
 				WithSpecField("compositionUpdatePolicy", "Manual").
@@ -1275,8 +1275,8 @@ func TestDefaultCompositionClient_ResolveCompositionFromRevisions(t *testing.T) 
 			reason: "Should use latest revision for v2 XR with Automatic policy",
 			xrd:    v2XRD,
 			res: tu.NewResource("example.org/v2", "XR1", "my-xr").
-				WithSpecField("crossplane", map[string]interface{}{
-					"compositionRef": map[string]interface{}{
+				WithSpecField("crossplane", map[string]any{
+					"compositionRef": map[string]any{
 						"name": "test-comp",
 					},
 					"compositionUpdatePolicy": "Automatic",
@@ -1306,8 +1306,8 @@ func TestDefaultCompositionClient_ResolveCompositionFromRevisions(t *testing.T) 
 			reason: "Should use latest revision for v2 XR with Manual policy but no revision ref",
 			xrd:    v2XRD,
 			res: tu.NewResource("example.org/v2", "XR1", "my-xr").
-				WithSpecField("crossplane", map[string]interface{}{
-					"compositionRef": map[string]interface{}{
+				WithSpecField("crossplane", map[string]any{
+					"compositionRef": map[string]any{
 						"name": "test-comp",
 					},
 					"compositionUpdatePolicy": "Manual",
@@ -1337,7 +1337,7 @@ func TestDefaultCompositionClient_ResolveCompositionFromRevisions(t *testing.T) 
 			reason: "Should return nil when no revisions exist (unpublished composition)",
 			xrd:    v1XRD,
 			res: tu.NewResource("example.org/v1", "XR1", "my-xr").
-				WithSpecField("compositionRef", map[string]interface{}{
+				WithSpecField("compositionRef", map[string]any{
 					"name": "test-comp",
 				}).
 				WithSpecField("compositionUpdatePolicy", "Automatic").
@@ -1354,10 +1354,10 @@ func TestDefaultCompositionClient_ResolveCompositionFromRevisions(t *testing.T) 
 			reason: "Should return error when specified revision doesn't exist",
 			xrd:    v1XRD,
 			res: tu.NewResource("example.org/v1", "XR1", "my-xr").
-				WithSpecField("compositionRef", map[string]interface{}{
+				WithSpecField("compositionRef", map[string]any{
 					"name": "test-comp",
 				}).
-				WithSpecField("compositionRevisionRef", map[string]interface{}{
+				WithSpecField("compositionRevisionRef", map[string]any{
 					"name": "nonexistent-rev",
 				}).
 				WithSpecField("compositionUpdatePolicy", "Manual").
@@ -1376,10 +1376,10 @@ func TestDefaultCompositionClient_ResolveCompositionFromRevisions(t *testing.T) 
 			reason: "Should return error when revision belongs to different composition",
 			xrd:    v1XRD,
 			res: tu.NewResource("example.org/v1", "XR1", "my-xr").
-				WithSpecField("compositionRef", map[string]interface{}{
+				WithSpecField("compositionRef", map[string]any{
 					"name": "test-comp",
 				}).
-				WithSpecField("compositionRevisionRef", map[string]interface{}{
+				WithSpecField("compositionRevisionRef", map[string]any{
 					"name": "other-comp-rev1",
 				}).
 				WithSpecField("compositionUpdatePolicy", "Manual").

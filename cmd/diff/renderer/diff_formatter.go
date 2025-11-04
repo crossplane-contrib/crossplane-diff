@@ -476,10 +476,10 @@ func cleanupForDiff(obj *un.Unstructured, logger logging.Logger) *un.Unstructure
 			modifications = append(modifications, fmt.Sprintf("removed display name %q", name))
 
 			// Also normalize generateName by removing any "(generated)" suffix
-			if strings.HasSuffix(generateName, "(generated)-") {
+			if before, ok := strings.CutSuffix(generateName, "(generated)-"); ok {
 				// For downstream resources that have generateName mangled with the parent's display name
 				// Strip the "(generated)" part to match the original input
-				originalGenName := strings.TrimSuffix(generateName, "(generated)-")
+				originalGenName := before
 				metadata["generateName"] = originalGenName
 				modifications = append(modifications, fmt.Sprintf("normalized generateName from %q to %q", generateName, originalGenName))
 			}
