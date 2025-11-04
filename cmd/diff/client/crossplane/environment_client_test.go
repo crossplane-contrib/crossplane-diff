@@ -32,13 +32,13 @@ func TestDefaultEnvironmentClient_GetEnvironmentConfigs(t *testing.T) {
 
 	// Create test environment configurations
 	envConfig1 := tu.NewResource("apiextensions.crossplane.io/v1alpha1", "EnvironmentConfig", "env-config-1").
-		WithSpecField("data", map[string]interface{}{
+		WithSpecField("data", map[string]any{
 			"key1": "value1",
 		}).
 		Build()
 
 	envConfig2 := tu.NewResource("apiextensions.crossplane.io/v1alpha1", "EnvironmentConfig", "env-config-2").
-		WithSpecField("data", map[string]interface{}{
+		WithSpecField("data", map[string]any{
 			"key2": "value2",
 		}).
 		Build()
@@ -173,7 +173,7 @@ func TestDefaultEnvironmentClient_GetEnvironmentConfig(t *testing.T) {
 
 	// Create test environment configuration
 	envConfig := tu.NewResource("apiextensions.crossplane.io/v1alpha1", "EnvironmentConfig", "test-env-config").
-		WithSpecField("data", map[string]interface{}{
+		WithSpecField("data", map[string]any{
 			"key": "value",
 		}).
 		Build()

@@ -665,19 +665,19 @@ func TestExtractGVKsFromXRD(t *testing.T) {
 		"ValidV1XRD": {
 			reason: "Should extract GVKs from a valid v1 XRD with multiple versions",
 			xrd: tu.NewResource("apiextensions.crossplane.io/v1", "CompositeResourceDefinition", testXResourcePlural+".example.org").
-				WithSpec(map[string]interface{}{
+				WithSpec(map[string]any{
 					"group": testExampleOrgGroup,
-					"names": map[string]interface{}{
+					"names": map[string]any{
 						"kind":     testXResourceKind,
 						"plural":   testXResourcePlural,
 						"singular": "xresource",
 					},
-					"versions": []interface{}{
-						map[string]interface{}{
+					"versions": []any{
+						map[string]any{
 							"name":   "v1alpha1",
 							"served": true,
 						},
-						map[string]interface{}{
+						map[string]any{
 							"name":          "v1",
 							"served":        true,
 							"referenceable": true,
@@ -693,19 +693,19 @@ func TestExtractGVKsFromXRD(t *testing.T) {
 		"ValidV2XRD": {
 			reason: "Should extract GVKs from a valid v2 XRD with multiple versions",
 			xrd: tu.NewResource("apiextensions.crossplane.io/v2", "CompositeResourceDefinition", testXResourcePlural+".example.org").
-				WithSpec(map[string]interface{}{
+				WithSpec(map[string]any{
 					"group": testExampleOrgGroup,
-					"names": map[string]interface{}{
+					"names": map[string]any{
 						"kind":     testXResourceKind,
 						"plural":   testXResourcePlural,
 						"singular": "xresource",
 					},
-					"versions": []interface{}{
-						map[string]interface{}{
+					"versions": []any{
+						map[string]any{
 							"name":   "v1beta1",
 							"served": true,
 						},
-						map[string]interface{}{
+						map[string]any{
 							"name":          "v1",
 							"served":        true,
 							"referenceable": true,
@@ -723,13 +723,13 @@ func TestExtractGVKsFromXRD(t *testing.T) {
 			reason: "Should fail when XRD has unsupported apiVersion",
 			// Unsupported version
 			xrd: tu.NewResource("apiextensions.crossplane.io/v3", "CompositeResourceDefinition", "invalid-xrd").
-				WithSpec(map[string]interface{}{
+				WithSpec(map[string]any{
 					"group": testExampleOrgGroup,
-					"names": map[string]interface{}{
+					"names": map[string]any{
 						"kind": testXResourceKind,
 					},
-					"versions": []interface{}{
-						map[string]interface{}{
+					"versions": []any{
+						map[string]any{
 							"name":   "v1",
 							"served": true,
 						},
@@ -741,11 +741,11 @@ func TestExtractGVKsFromXRD(t *testing.T) {
 		"ConversionError": {
 			reason: "Should fail when XRD cannot be converted to typed object",
 			xrd: tu.NewResource("apiextensions.crossplane.io/v1", "CompositeResourceDefinition", "invalid-xrd").
-				WithSpec(map[string]interface{}{
+				WithSpec(map[string]any{
 					"group": testExampleOrgGroup,
 					"names": "invalid-names-should-be-object", // Invalid structure
-					"versions": []interface{}{
-						map[string]interface{}{
+					"versions": []any{
+						map[string]any{
 							"name":   "v1",
 							"served": true,
 						},

@@ -3,6 +3,8 @@ package kubernetes
 import (
 	"context"
 	"fmt"
+	"maps"
+	"slices"
 	"strings"
 	"sync"
 
@@ -145,11 +147,9 @@ func (c *DefaultSchemaClient) IsCRDRequired(ctx context.Context, gvk schema.Grou
 	builtInGroups := []string{
 		"apps", "batch", "extensions", "policy", "autoscaling",
 	}
-	for _, group := range builtInGroups {
-		if gvk.Group == group {
-			c.cacheResourceType(gvk, false)
-			return false
-		}
+	if slices.Contains(builtInGroups, gvk.Group) {
+		c.cacheResourceType(gvk, false)
+		return false
 	}
 
 	// k8s.io domain suffix groups are typically built-in
@@ -298,9 +298,7 @@ func (c *DefaultSchemaClient) LoadCRDsFromXRDs(ctx context.Context, xrds []*un.U
 	// Store XRD-to-CRD name mappings
 	c.crdsMu.Lock()
 
-	for xrdName, crdName := range xrdToCRDMappings {
-		c.xrdToCRDName[xrdName] = crdName
-	}
+	maps.Copy(c.xrdToCRDName, xrdToCRDMappings)
 
 	c.crdsMu.Unlock()
 

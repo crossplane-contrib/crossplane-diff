@@ -32,16 +32,16 @@ func createTestCompositionWithExtraResources() (*xpextv1.Composition, error) {
 	pipelineMode := xpextv1.CompositionModePipeline
 
 	// Create the extra resources function input
-	extraResourcesInput := map[string]interface{}{
+	extraResourcesInput := map[string]any{
 		"apiVersion": "function.crossplane.io/v1beta1",
 		"kind":       "ExtraResources",
-		"spec": map[string]interface{}{
-			"extraResources": []interface{}{
-				map[string]interface{}{
+		"spec": map[string]any{
+			"extraResources": []any{
+				map[string]any{
 					"apiVersion": "example.org/v1",
 					"kind":       "ExtraResource",
-					"selector": map[string]interface{}{
-						"matchLabels": map[string]interface{}{
+					"selector": map[string]any{
+						"matchLabels": map[string]any{
 							"app": "test-app",
 						},
 					},
@@ -56,23 +56,23 @@ func createTestCompositionWithExtraResources() (*xpextv1.Composition, error) {
 	}
 
 	// Create template function input to create composed resources
-	templateInput := map[string]interface{}{
+	templateInput := map[string]any{
 		"apiVersion": "apiextensions.crossplane.io/v1",
 		"kind":       "Composition",
-		"spec": map[string]interface{}{
-			"resources": []interface{}{
-				map[string]interface{}{
+		"spec": map[string]any{
+			"resources": []any{
+				map[string]any{
 					"name": "composed-resource",
-					"base": map[string]interface{}{
+					"base": map[string]any{
 						"apiVersion": "example.org/v1",
 						"kind":       "ComposedResource",
-						"metadata": map[string]interface{}{
+						"metadata": map[string]any{
 							"name": "test-composed-resource",
-							"labels": map[string]interface{}{
+							"labels": map[string]any{
 								"app": "crossplane",
 							},
 						},
-						"spec": map[string]interface{}{
+						"spec": map[string]any{
 							"coolParam": "{{ .observed.composite.spec.coolParam }}",
 							"replicas":  "{{ .observed.composite.spec.replicas }}",
 							"extraData": "{{ index .observed.resources \"extra-resource-0\" \"spec\" \"data\" }}",
@@ -149,16 +149,16 @@ func createTestXRD() *xpextv1.CompositeResourceDefinition {
 // createExtraResource creates a test extra resource.
 func createExtraResource() *un.Unstructured {
 	return &un.Unstructured{
-		Object: map[string]interface{}{
+		Object: map[string]any{
 			"apiVersion": "example.org/v1",
 			"kind":       "ExtraResource",
-			"metadata": map[string]interface{}{
+			"metadata": map[string]any{
 				"name": "test-extra-resource",
-				"labels": map[string]interface{}{
+				"labels": map[string]any{
 					"app": "test-app",
 				},
 			},
-			"spec": map[string]interface{}{
+			"spec": map[string]any{
 				"data": "extra-resource-data",
 			},
 		},
@@ -168,20 +168,20 @@ func createExtraResource() *un.Unstructured {
 // createExistingComposedResource creates an existing composed resource with different values.
 func createExistingComposedResource() *un.Unstructured {
 	return &un.Unstructured{
-		Object: map[string]interface{}{
+		Object: map[string]any{
 			"apiVersion": "example.org/v1",
 			"kind":       "ComposedResource",
-			"metadata": map[string]interface{}{
+			"metadata": map[string]any{
 				"name": "test-xr-composed-resource",
-				"labels": map[string]interface{}{
+				"labels": map[string]any{
 					"app":                     "crossplane",
 					"crossplane.io/composite": "test-xr",
 				},
-				"annotations": map[string]interface{}{
+				"annotations": map[string]any{
 					"crossplane.io/composition-resource-name": "composed-resource",
 				},
-				"ownerReferences": []interface{}{
-					map[string]interface{}{
+				"ownerReferences": []any{
+					map[string]any{
 						"apiVersion":         "example.org/v1",
 						"kind":               "XExampleResource",
 						"name":               "test-xr",
@@ -190,7 +190,7 @@ func createExistingComposedResource() *un.Unstructured {
 					},
 				},
 			},
-			"spec": map[string]interface{}{
+			"spec": map[string]any{
 				"coolParam": "old-value", // Different from what will be rendered
 				"replicas":  2,           // Different from what will be rendered
 				"extraData": "old-data",  // Different from what will be rendered
@@ -202,20 +202,20 @@ func createExistingComposedResource() *un.Unstructured {
 // createMatchingComposedResource creates a composed resource that matches what would be rendered.
 func createMatchingComposedResource() *un.Unstructured {
 	return &un.Unstructured{
-		Object: map[string]interface{}{
+		Object: map[string]any{
 			"apiVersion": "example.org/v1",
 			"kind":       "ComposedResource",
-			"metadata": map[string]interface{}{
+			"metadata": map[string]any{
 				"name": "test-xr-composed-resource",
-				"labels": map[string]interface{}{
+				"labels": map[string]any{
 					"app":                     "crossplane",
 					"crossplane.io/composite": "test-xr",
 				},
-				"annotations": map[string]interface{}{
+				"annotations": map[string]any{
 					"crossplane.io/composition-resource-name": "composed-resource",
 				},
-				"ownerReferences": []interface{}{
-					map[string]interface{}{
+				"ownerReferences": []any{
+					map[string]any{
 						"apiVersion":         "example.org/v1",
 						"kind":               "XExampleResource",
 						"name":               "test-xr",
@@ -224,7 +224,7 @@ func createMatchingComposedResource() *un.Unstructured {
 					},
 				},
 			},
-			"spec": map[string]interface{}{
+			"spec": map[string]any{
 				"coolParam": "test-value",          // Matches what would be rendered
 				"replicas":  3,                     // Matches what would be rendered
 				"extraData": "extra-resource-data", // Matches what would be rendered
@@ -258,7 +258,7 @@ func setOwnerReference(resource, owner *un.Unstructured) {
 // addResourceRef adds a reference to the child resource in the parent's resourceRefs array.
 func addResourceRef(parent, child *un.Unstructured, xrAPIVersion XrdAPIVersion) error {
 	// Create the resource reference
-	ref := map[string]interface{}{
+	ref := map[string]any{
 		"apiVersion": child.GetAPIVersion(),
 		"kind":       child.GetKind(),
 		"name":       child.GetName(),
@@ -285,7 +285,7 @@ func addResourceRef(parent, child *un.Unstructured, xrAPIVersion XrdAPIVersion) 
 	}
 
 	if !found || resourceRefs == nil {
-		resourceRefs = []interface{}{}
+		resourceRefs = []any{}
 	}
 
 	// Add the new reference and update the parent

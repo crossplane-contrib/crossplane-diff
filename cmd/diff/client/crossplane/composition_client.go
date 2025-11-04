@@ -361,7 +361,7 @@ func (c *DefaultCompositionClient) getXRTypeFromXRD(xrdForClaim *un.Unstructured
 	if versionsFound && len(versions) > 0 {
 		// Look for the one version that is marked referenceable
 		for _, versionObj := range versions {
-			if version, ok := versionObj.(map[string]interface{}); ok {
+			if version, ok := versionObj.(map[string]any); ok {
 				ref, refFound, _ := un.NestedBool(version, "referenceable")
 				if refFound && ref {
 					name, nameFound, _ := un.NestedString(version, "name")
@@ -481,6 +481,7 @@ func (c *DefaultCompositionClient) findByLabelSelector(ctx context.Context, xrd,
 
 		// Convert matchLabels to string map for comparison
 		stringLabels := make(map[string]string)
+
 		for k, v := range matchLabels {
 			if strVal, ok := v.(string); ok {
 				stringLabels[k] = strVal

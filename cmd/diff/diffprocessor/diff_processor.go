@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"maps"
 	"reflect"
 	"strings"
 
@@ -168,9 +169,7 @@ func (p *DefaultDiffProcessor) PerformDiff(ctx context.Context, stdout io.Writer
 			}
 		} else {
 			// Merge the diffs into our combined map
-			for k, v := range diffs {
-				allDiffs[k] = v
-			}
+			maps.Copy(allDiffs, diffs)
 		}
 	}
 
@@ -294,9 +293,7 @@ func (p *DefaultDiffProcessor) DiffSingleResource(ctx context.Context, res *un.U
 	}
 
 	// Merge nested diffs into our result
-	for k, v := range nestedDiffs {
-		diffs[k] = v
-	}
+	maps.Copy(diffs, nestedDiffs)
 
 	p.config.Logger.Debug("Resource processing complete",
 		"resource", resourceID,
@@ -377,9 +374,7 @@ func (p *DefaultDiffProcessor) ProcessNestedXRs(
 		}
 
 		// Merge diffs from nested XR
-		for k, v := range nestedDiffs {
-			allDiffs[k] = v
-		}
+		maps.Copy(allDiffs, nestedDiffs)
 
 		p.config.Logger.Debug("Nested XR processed successfully",
 			"nestedXR", nestedResourceID,
@@ -619,12 +614,13 @@ func (p *DefaultDiffProcessor) RenderWithRequirements(
 // 4. Only call cd.SetNamespace(xr.GetNamespace()) if the resource is namespaced
 //
 // Example fix in SetComposedResourceMetadata:
-//   if xr.GetNamespace() != "" {
-//       // Look up cd's GVK in XRDs to check scope
-//       if isNamespaced(cd.GetObjectKind().GroupVersionKind(), xrds) {
-//           cd.SetNamespace(xr.GetNamespace())
-//       }
-//   }
+//
+//	if xr.GetNamespace() != "" {
+//	    // Look up cd's GVK in XRDs to check scope
+//	    if isNamespaced(cd.GetObjectKind().GroupVersionKind(), xrds) {
+//	        cd.SetNamespace(xr.GetNamespace())
+//	    }
+//	}
 //
 // Once upstream is fixed, this function can be removed along with its call site at line 270.
 //
@@ -649,6 +645,7 @@ func (p *DefaultDiffProcessor) removeNamespacesFromClusterScopedResources(ctx co
 		// We must be able to determine scope to proceed - if we can't get the CRD,
 		// validation will fail anyway, so fail fast with a clear error message.
 		gvk := resource.GroupVersionKind()
+
 		crd, err := p.schemaClient.GetCRD(ctx, gvk)
 		if err != nil {
 			return errors.Wrapf(err, "cannot determine scope for resource %s (GVK %s): CRD not found", resourceID, gvk.String())
@@ -665,6 +662,7 @@ func (p *DefaultDiffProcessor) removeNamespacesFromClusterScopedResources(ctx co
 			composedResources[i].SetUnstructuredContent(resource.Object)
 		}
 	}
+
 	return nil
 }
 
