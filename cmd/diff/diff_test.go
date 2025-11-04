@@ -1062,6 +1062,23 @@ users:
 			// Call the function
 			config, err := getRestConfig()
 
+			// Special handling for EmptyKubeconfigEnvVar test case:
+			// If a default kubeconfig exists at ~/.kube/config, the function won't error
+			if name == "EmptyKubeconfigEnvVar" && err == nil {
+				homeDir, homeErr := os.UserHomeDir()
+				if homeErr == nil {
+					defaultKubeconfig := filepath.Join(homeDir, ".kube", "config")
+					if _, statErr := os.Stat(defaultKubeconfig); statErr == nil {
+						// Default kubeconfig exists, so no error is expected
+						t.Logf("Default kubeconfig exists at %s, skipping error expectation", defaultKubeconfig)
+						if config == nil {
+							t.Errorf("Expected config to be non-nil when default kubeconfig exists")
+						}
+						return
+					}
+				}
+			}
+
 			// Check error expectations
 			if tc.expectError && err == nil {
 				t.Errorf("Expected error but got none")
