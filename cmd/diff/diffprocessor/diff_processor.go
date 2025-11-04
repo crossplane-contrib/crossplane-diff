@@ -259,7 +259,10 @@ func (p *DefaultDiffProcessor) DiffSingleResource(ctx context.Context, res *un.U
 	// composed resources, but it doesn't check if resources are cluster-scoped. This cleanup
 	// removes namespaces from cluster-scoped resources. See removeNamespacesFromClusterScopedResources
 	// for details on the upstream fix needed.
-	p.removeNamespacesFromClusterScopedResources(ctx, desired.ComposedResources)
+	if err := p.removeNamespacesFromClusterScopedResources(ctx, desired.ComposedResources); err != nil {
+		p.config.Logger.Debug("Failed to clean up namespaces from cluster-scoped resources", "resource", resourceID, "error", err)
+		return nil, errors.Wrap(err, "cannot clean up namespaces from cluster-scoped resources")
+	}
 
 	// Validate the resources
 	if err := p.schemaValidator.ValidateResources(ctx, xrUnstructured, desired.ComposedResources); err != nil {
@@ -628,7 +631,7 @@ func (p *DefaultDiffProcessor) RenderWithRequirements(
 // NOTE: render is an offline tool with no cluster access, so it needs XRDs passed explicitly.
 // ExtraResources/RequiredResources are only available to composition functions, not to the
 // core render logic, so a new mechanism is needed to pass schema information.
-func (p *DefaultDiffProcessor) removeNamespacesFromClusterScopedResources(ctx context.Context, composedResources []cpd.Unstructured) {
+func (p *DefaultDiffProcessor) removeNamespacesFromClusterScopedResources(ctx context.Context, composedResources []cpd.Unstructured) error {
 	for i := range composedResources {
 		resource := &un.Unstructured{Object: composedResources[i].UnstructuredContent()}
 
@@ -643,17 +646,15 @@ func (p *DefaultDiffProcessor) removeNamespacesFromClusterScopedResources(ctx co
 		}
 
 		// Check if resource is cluster-scoped
+		// We must be able to determine scope to proceed - if we can't get the CRD,
+		// validation will fail anyway, so fail fast with a clear error message.
 		gvk := resource.GroupVersionKind()
 		crd, err := p.schemaClient.GetCRD(ctx, gvk)
 		if err != nil {
-			p.config.Logger.Debug("Could not retrieve CRD for resource, skipping namespace cleanup",
-				"resource", resourceID,
-				"gvk", gvk.String(),
-				"error", err)
-			continue
+			return errors.Wrapf(err, "cannot determine scope for resource %s (GVK %s): CRD not found", resourceID, gvk.String())
 		}
 
-		if crd != nil && crd.Spec.Scope == "Cluster" {
+		if crd.Spec.Scope == "Cluster" {
 			p.config.Logger.Debug("Removing namespace from cluster-scoped resource",
 				"resource", resourceID,
 				"gvk", gvk.String(),
@@ -664,6 +665,7 @@ func (p *DefaultDiffProcessor) removeNamespacesFromClusterScopedResources(ctx co
 			composedResources[i].SetUnstructuredContent(resource.Object)
 		}
 	}
+	return nil
 }
 
 // getCompositeResourceXRD checks if a resource is a Composite Resource (XR) by looking it up in XRDs.
