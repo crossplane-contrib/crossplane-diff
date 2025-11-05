@@ -8,7 +8,7 @@ require (
 	dario.cat/mergo v1.0.2
 	github.com/Masterminds/semver v1.5.0
 	github.com/alecthomas/kong v1.12.1
-	github.com/crossplane/crossplane-runtime/v2 v2.1.0-rc.1
+	github.com/crossplane/crossplane-runtime/v2 v2.1.0
 	github.com/crossplane/crossplane/v2 v2.1.0-rc.1
 	github.com/google/go-cmp v0.7.0
 	github.com/pkg/errors v0.9.1
