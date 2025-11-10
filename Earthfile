@@ -3,7 +3,7 @@ VERSION --try --raw-output 0.8
 
 PROJECT crossplane-contrib/crossplane-diff
 
-ARG --global GO_VERSION=1.25.3
+ARG --global GO_VERSION=1.25.4
 
 fetch-crossplane-clusters:
   BUILD +fetch-crossplane-cluster \
