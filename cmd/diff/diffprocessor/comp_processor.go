@@ -23,6 +23,7 @@ import (
 	"strings"
 
 	xp "github.com/crossplane-contrib/crossplane-diff/cmd/diff/client/crossplane"
+	k8 "github.com/crossplane-contrib/crossplane-diff/cmd/diff/client/kubernetes"
 	"github.com/crossplane-contrib/crossplane-diff/cmd/diff/renderer"
 	dt "github.com/crossplane-contrib/crossplane-diff/cmd/diff/renderer/types"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -45,12 +46,15 @@ type CompDiffProcessor interface {
 // DefaultCompDiffProcessor implements CompDiffProcessor.
 type DefaultCompDiffProcessor struct {
 	compositionClient xp.CompositionClient
+	fnClient          xp.FunctionClient
+	k8Clients         k8.Clients
+	xpClients         xp.Clients
 	config            ProcessorConfig
-	xrProc            DiffProcessor
+	processorOpts     []ProcessorOption
 }
 
 // NewCompDiffProcessor creates a new DefaultCompDiffProcessor.
-func NewCompDiffProcessor(xrProc DiffProcessor, compositionClient xp.CompositionClient, opts ...ProcessorOption) CompDiffProcessor {
+func NewCompDiffProcessor(k8cs k8.Clients, xpcs xp.Clients, opts ...ProcessorOption) CompDiffProcessor {
 	// Create default configuration
 	config := ProcessorConfig{
 		Namespace:  "",
@@ -66,21 +70,18 @@ func NewCompDiffProcessor(xrProc DiffProcessor, compositionClient xp.Composition
 	}
 
 	return &DefaultCompDiffProcessor{
-		compositionClient: compositionClient,
+		compositionClient: xpcs.Composition,
+		fnClient:          xpcs.Function,
+		k8Clients:         k8cs,
+		xpClients:         xpcs,
 		config:            config,
-		xrProc:            xrProc,
+		processorOpts:     opts,
 	}
 }
 
 // Initialize loads required resources.
-func (p *DefaultCompDiffProcessor) Initialize(ctx context.Context) error {
+func (p *DefaultCompDiffProcessor) Initialize(_ context.Context) error {
 	p.config.Logger.Debug("Initializing composition diff processor")
-
-	// Initialize the injected XR processor
-	if err := p.xrProc.Initialize(ctx); err != nil {
-		return errors.Wrap(err, "cannot initialize XR diff processor")
-	}
-
 	p.config.Logger.Debug("Composition diff processor initialized")
 
 	return nil
@@ -219,12 +220,40 @@ func (p *DefaultCompDiffProcessor) processSingleComposition(ctx context.Context,
 		return errors.Wrap(err, "cannot write XR list and headers")
 	}
 
-	if err := p.xrProc.PerformDiff(ctx, stdout, affectedXRs, func(context.Context, *un.Unstructured) (*apiextensionsv1.Composition, error) {
-		// Convert unstructured to structured only when needed by the XR processor
-		comp := &apiextensionsv1.Composition{}
-		if err := runtime.DefaultUnstructuredConverter.FromUnstructured(newComp.Object, comp); err != nil {
-			return nil, errors.Wrap(err, "cannot convert unstructured to Composition")
+	// Convert unstructured to structured composition
+	comp := &apiextensionsv1.Composition{}
+	if err := runtime.DefaultUnstructuredConverter.FromUnstructured(newComp.Object, comp); err != nil {
+		return errors.Wrap(err, "cannot convert unstructured to Composition")
+	}
+
+	// Create a CachedFunctionProvider factory for this specific composition
+	cachedFnProviderFactory := func(fnClient xp.FunctionClient, logger logging.Logger) FunctionProvider {
+		provider, err := NewCachedFunctionProvider(fnClient, comp, logger)
+		if err != nil {
+			// Log error and fall back to default provider
+			logger.Debug("Failed to create cached function provider, using default", "error", err)
+			return NewDefaultFunctionProvider(fnClient, logger)
 		}
+
+		return provider
+	}
+
+	// Create options with the cached function provider factory
+	// Note: We must append to a copy to avoid mutating the original slice
+	optsWithCache := make([]ProcessorOption, len(p.processorOpts), len(p.processorOpts)+1)
+	copy(optsWithCache, p.processorOpts)
+	optsWithCache = append(optsWithCache, WithFunctionProviderFactory(cachedFnProviderFactory))
+
+	// Create a new XR processor with cached function provider for this composition
+	xrProc := NewDiffProcessor(p.k8Clients, p.xpClients, optsWithCache...)
+
+	// Initialize the processor
+	if err := xrProc.Initialize(ctx); err != nil {
+		return errors.Wrap(err, "cannot initialize XR processor")
+	}
+
+	// Process affected XRs using the new processor with composition override
+	if err := xrProc.PerformDiff(ctx, stdout, affectedXRs, func(context.Context, *un.Unstructured) (*apiextensionsv1.Composition, error) {
 		return comp, nil
 	}); err != nil {
 		return errors.Wrap(err, "cannot process XRs with composition override")

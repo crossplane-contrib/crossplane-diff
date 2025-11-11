@@ -266,7 +266,7 @@ func TestDefaultDiffProcessor_PerformDiff(t *testing.T) {
 			},
 			resources:     []*un.Unstructured{resource1},
 			processorOpts: testProcessorOptions(t),
-			want:          errors.New("unable to process resource XR1/my-xr-1: cannot get functions from pipeline: function not found"),
+			want:          errors.New("unable to process resource XR1/my-xr-1: cannot get functions for composition: cannot get functions from pipeline: function not found"),
 		},
 		"SuccessfulDiff": {
 			setupMocks: func() (k8.Clients, xp.Clients) {

@@ -98,7 +98,7 @@ func makeDefaultCompProc(c *CompCmd, ctx *AppContext, log logging.Logger) dp.Com
 		namespace = "default"
 	}
 
-	// Both processors share the same options since they're part of the same command
+	// Composition processor options
 	opts := defaultProcessorOptions(c.CommonCmdFields, namespace)
 	opts = append(opts,
 		dp.WithLogger(log),
@@ -106,11 +106,8 @@ func makeDefaultCompProc(c *CompCmd, ctx *AppContext, log logging.Logger) dp.Com
 		dp.WithIncludeManual(c.IncludeManual),
 	)
 
-	// Create XR processor first (peer processor)
-	xrProc := dp.NewDiffProcessor(ctx.K8sClients, ctx.XpClients, opts...)
-
-	// Inject it into composition processor
-	return dp.NewCompDiffProcessor(xrProc, ctx.XpClients.Composition, opts...)
+	// Create composition processor with clients
+	return dp.NewCompDiffProcessor(ctx.K8sClients, ctx.XpClients, opts...)
 }
 
 // Run executes the composition diff command.
