@@ -59,6 +59,9 @@ type ComponentFactories struct {
 
 	// FunctionProvider creates a FunctionProvider
 	FunctionProvider func(fnClient xp.FunctionClient, logger logging.Logger) FunctionProvider
+
+	// DiffProcessor creates a DiffProcessor (used by CompDiffProcessor)
+	DiffProcessor func(k8Clients k8.Clients, xpClients xp.Clients, opts []ProcessorOption) DiffProcessor
 }
 
 // ProcessorOption defines a function that can modify a ProcessorConfig.
@@ -159,6 +162,13 @@ func WithRequirementsProviderFactory(factory func(k8.ResourceClient, xp.Environm
 func WithFunctionProviderFactory(factory func(xp.FunctionClient, logging.Logger) FunctionProvider) ProcessorOption {
 	return func(config *ProcessorConfig) {
 		config.Factories.FunctionProvider = factory
+	}
+}
+
+// WithDiffProcessorFactory sets the DiffProcessor factory function.
+func WithDiffProcessorFactory(factory func(k8.Clients, xp.Clients, []ProcessorOption) DiffProcessor) ProcessorOption {
+	return func(config *ProcessorConfig) {
+		config.Factories.DiffProcessor = factory
 	}
 }
 

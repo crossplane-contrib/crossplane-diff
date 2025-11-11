@@ -245,7 +245,8 @@ func (p *DefaultCompDiffProcessor) processSingleComposition(ctx context.Context,
 	optsWithCache = append(optsWithCache, WithFunctionProviderFactory(cachedFnProviderFactory))
 
 	// Create a new XR processor with cached function provider for this composition
-	xrProc := NewDiffProcessor(p.k8Clients, p.xpClients, optsWithCache...)
+	// Factory must be provided via WithDiffProcessorFactory option
+	xrProc := p.config.Factories.DiffProcessor(p.k8Clients, p.xpClients, optsWithCache)
 
 	// Initialize the processor
 	if err := xrProc.Initialize(ctx); err != nil {

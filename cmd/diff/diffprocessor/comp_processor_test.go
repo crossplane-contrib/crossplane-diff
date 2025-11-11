@@ -293,6 +293,9 @@ func TestDefaultCompDiffProcessor_DiffComposition(t *testing.T) {
 					}, nil
 				}),
 				WithMaxNestedDepth(1),
+				WithDiffProcessorFactory(func(k8Clients k8.Clients, xpClients xp.Clients, processorOpts []ProcessorOption) DiffProcessor {
+					return NewDiffProcessor(k8Clients, xpClients, processorOpts...)
+				}),
 			}
 
 			// Create processor using constructor

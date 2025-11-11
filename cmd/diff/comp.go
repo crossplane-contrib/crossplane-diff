@@ -18,6 +18,8 @@ package main
 
 import (
 	"github.com/alecthomas/kong"
+	xp "github.com/crossplane-contrib/crossplane-diff/cmd/diff/client/crossplane"
+	k8 "github.com/crossplane-contrib/crossplane-diff/cmd/diff/client/kubernetes"
 	dp "github.com/crossplane-contrib/crossplane-diff/cmd/diff/diffprocessor"
 	"k8s.io/client-go/rest"
 
@@ -104,6 +106,9 @@ func makeDefaultCompProc(c *CompCmd, ctx *AppContext, log logging.Logger) dp.Com
 		dp.WithLogger(log),
 		dp.WithRenderMutex(&globalRenderMutex),
 		dp.WithIncludeManual(c.IncludeManual),
+		dp.WithDiffProcessorFactory(func(k8Clients k8.Clients, xpClients xp.Clients, processorOpts []dp.ProcessorOption) dp.DiffProcessor {
+			return dp.NewDiffProcessor(k8Clients, xpClients, processorOpts...)
+		}),
 	)
 
 	// Create composition processor with clients
