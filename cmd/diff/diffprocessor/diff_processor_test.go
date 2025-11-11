@@ -1197,7 +1197,7 @@ func TestDefaultDiffProcessor_RenderWithRequirements(t *testing.T) {
 			processor := NewDiffProcessor(k8.Clients{}, xp.Clients{}, baseOpts...)
 
 			// Call the method under test
-			output, err := processor.(*DefaultDiffProcessor).RenderWithRequirements(ctx, tt.xr, tt.composition, tt.functions, tt.resourceID)
+			output, err := processor.(*DefaultDiffProcessor).RenderWithRequirements(ctx, tt.xr, tt.composition, tt.functions, tt.resourceID, nil)
 
 			// Check error expectations
 			if tt.wantErr {

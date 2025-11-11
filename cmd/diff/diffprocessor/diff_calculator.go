@@ -13,6 +13,7 @@ import (
 
 	"github.com/crossplane/crossplane-runtime/v2/pkg/errors"
 	"github.com/crossplane/crossplane-runtime/v2/pkg/logging"
+	cpd "github.com/crossplane/crossplane-runtime/v2/pkg/resource/unstructured/composed"
 	cmp "github.com/crossplane/crossplane-runtime/v2/pkg/resource/unstructured/composite"
 
 	"github.com/crossplane/crossplane/v2/cmd/crank/common/resource"
@@ -29,6 +30,10 @@ type DiffCalculator interface {
 
 	// CalculateRemovedResourceDiffs identifies resources that would be removed and calculates their diffs
 	CalculateRemovedResourceDiffs(ctx context.Context, xr *un.Unstructured, renderedResources map[string]bool) (map[string]*dt.ResourceDiff, error)
+
+	// FetchObservedResources fetches the observed composed resources for the given XR.
+	// Returns a flat slice of composed resources suitable for render.Inputs.ObservedResources.
+	FetchObservedResources(ctx context.Context, xr *cmp.Unstructured) ([]cpd.Unstructured, error)
 }
 
 // DefaultDiffCalculator implements the DiffCalculator interface.
@@ -295,6 +300,67 @@ func (c *DefaultDiffCalculator) CalculateRemovedResourceDiffs(ctx context.Contex
 	c.logger.Debug("Found resources to be removed", "count", len(removedDiffs))
 
 	return removedDiffs, nil
+}
+
+// FetchObservedResources fetches the observed composed resources for the given XR.
+// This returns a flat slice of all composed resources found in the resource tree,
+// which can be directly used for render.Inputs.ObservedResources.
+func (c *DefaultDiffCalculator) FetchObservedResources(ctx context.Context, xr *cmp.Unstructured) ([]cpd.Unstructured, error) {
+	c.logger.Debug("Fetching observed resources for XR",
+		"xr_kind", xr.GetKind(),
+		"xr_name", xr.GetName())
+
+	// Get the resource tree from the cluster
+	tree, err := c.treeClient.GetResourceTree(ctx, &xr.Unstructured)
+	if err != nil {
+		c.logger.Debug("Failed to get resource tree for XR",
+			"xr", xr.GetName(),
+			"error", err)
+
+		return nil, errors.Wrap(err, "cannot get resource tree")
+	}
+
+	// Extract composed resources from the tree
+	observed := extractComposedResources(tree)
+
+	c.logger.Debug("Fetched observed composed resources",
+		"xr", xr.GetName(),
+		"count", len(observed))
+
+	return observed, nil
+}
+
+// extractComposedResources recursively extracts all composed resources from a resource tree.
+// It returns a flat slice of composed resources, suitable for render.Inputs.ObservedResources.
+// Only includes resources with the crossplane.io/composition-resource-name annotation.
+func extractComposedResources(tree *resource.Resource) []cpd.Unstructured {
+	var resources []cpd.Unstructured
+
+	// Recursively collect composed resources from the tree
+	var collectResources func(node *resource.Resource)
+
+	collectResources = func(node *resource.Resource) {
+		// Only include resources that have the composition-resource-name annotation
+		// (this filters out the root XR and non-composed resources)
+		if _, hasAnno := node.Unstructured.GetAnnotations()["crossplane.io/composition-resource-name"]; hasAnno {
+			// Convert to cpd.Unstructured (composed resource)
+			resources = append(resources, cpd.Unstructured{
+				Unstructured: node.Unstructured,
+			})
+		}
+
+		// Recursively process children
+		for _, child := range node.Children {
+			collectResources(child)
+		}
+	}
+
+	// Start from root's children to avoid including the XR itself
+	for _, child := range tree.Children {
+		collectResources(child)
+	}
+
+	return resources
 }
 
 // preserveExistingResourceIdentity preserves the identity (name, generateName, labels) from an existing

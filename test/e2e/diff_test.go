@@ -773,6 +773,65 @@ func TestCompDiffLargeFanout(t *testing.T) {
 	)
 }
 
+// TestDiffCompositionWithGetComposedResource tests the comp diff command with a composition
+// that uses getComposedResource template function to reference observed resources.
+// This test verifies that ObservedResources are correctly populated during rendering.
+func TestDiffCompositionWithGetComposedResource(t *testing.T) {
+	imageTag := strings.Split(environment.GetCrossplaneImage(), ":")[1]
+	manifests := filepath.Join("test/e2e/manifests/beta/diff", imageTag, "comp-getcomposed")
+	setupPath := filepath.Join(manifests, "setup")
+	expectPath := filepath.Join(manifests, "expect")
+
+	environment.Test(t,
+		features.New("DiffCompositionWithGetComposedResource").
+			WithLabel(e2e.LabelArea, LabelAreaDiff).
+			WithLabel(e2e.LabelSize, e2e.LabelSizeSmall).
+			WithLabel(config.LabelTestSuite, config.TestSuiteDefault).
+			WithLabel(LabelCrossplaneVersion, CrossplaneVersionMain).
+			WithSetup("CreatePrerequisites", funcs.AllOf(
+				funcs.ApplyResources(e2e.FieldManager, setupPath, "*.yaml"),
+				funcs.ResourcesCreatedWithin(30*time.Second, setupPath, "*.yaml"),
+			)).
+			WithSetup("PrerequisitesAreReady", funcs.AllOf(
+				funcs.ResourcesHaveConditionWithin(1*time.Minute, setupPath, "definition.yaml", apiextensionsv1.WatchingComposite()),
+			)).
+			WithSetup("CreateExistingXR", funcs.AllOf(
+				funcs.ApplyResources(e2e.FieldManager, manifests, "existing-xr.yaml"),
+				funcs.ResourcesCreatedWithin(30*time.Second, manifests, "existing-xr.yaml"),
+				funcs.ResourcesHaveConditionWithin(2*time.Minute, manifests, "existing-xr.yaml", xpv1.Available()),
+			)).
+			Assess("CanDiffCompositionWithGetComposedResource", func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
+				t.Helper()
+
+				output, log, err := RunCompDiff(t, c, "./crossplane-diff", filepath.Join(manifests, "updated-composition.yaml"))
+				if err != nil {
+					t.Fatalf("Error running comp diff command: %v\nLog output:\n%s", err, log)
+				}
+
+				// The key assertion: bucketRef.name should be populated with actual resource name,
+				// NOT empty. This requires ObservedResources to be passed to render.
+				if !strings.Contains(output, "bucketRef:") {
+					t.Errorf("Expected output to contain bucketRef field, but it was not found.\nOutput:\n%s\nLog:\n%s", output, log)
+				}
+
+				// Check that bucketRef.name is not empty (it should contain the resource name)
+				if strings.Contains(output, "name: \n") || strings.Contains(output, "name: \"\"") {
+					t.Errorf("Expected bucketRef.name to be populated, but it appears empty.\nOutput:\n%s\nLog:\n%s", output, log)
+				}
+
+				assertDiffMatchesFile(t, output, filepath.Join(expectPath, "existing-xr.ansi"), log)
+
+				return ctx
+			}).
+			WithTeardown("DeleteExistingXR", funcs.AllOf(
+				funcs.DeleteResources(manifests, "existing-xr.yaml"),
+				funcs.ResourcesDeletedWithin(2*time.Minute, manifests, "existing-xr.yaml"),
+			)).
+			WithTeardown("DeletePrerequisites", funcs.ResourcesDeletedAfterListedAreGone(3*time.Minute, setupPath, "*.yaml", clusterNopList)).
+			Feature(),
+	)
+}
+
 // TestDiffConcurrentDirectory tests issue #59 - concurrent function startup failures
 // when processing multiple XR files from a directory with a composition using multiple functions.
 func TestDiffConcurrentDirectory(t *testing.T) {

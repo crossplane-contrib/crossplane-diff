@@ -1,0 +1,9 @@
+apiVersion: getcomposed.example.org/v1alpha1
+kind: XGetComposedResource
+metadata:
+  name: test-getcomposed-resource
+spec:
+  bucketName: test-bucket-123
+  crossplane:
+    compositionRef:
+      name: xgetcomposedresources.getcomposed.example.org

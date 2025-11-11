@@ -1,0 +1,85 @@
+=== Composition Changes ===
+
+~~~ Composition/xgetcomposedresources.getcomposed.example.org
+  apiVersion: apiextensions.crossplane.io/v1
+  kind: Composition
+  metadata:
+    name: xgetcomposedresources.getcomposed.example.org
+  spec:
+    compositeTypeRef:
+      apiVersion: getcomposed.example.org/v1alpha1
+      kind: XGetComposedResource
+    mode: Pipeline
+    pipeline:
+    - functionRef:
+        name: function-patch-and-transform
+      input:
+        apiVersion: pt.fn.crossplane.io/v1beta1
+        kind: Resources
+        resources:
+        - base:
+            apiVersion: nop.crossplane.io/v1alpha1
+            kind: ClusterNopResource
+            spec:
+              forProvider:
+                conditionAfter:
+                - conditionStatus: "True"
+                  conditionType: Ready
+                  time: 0s
+          name: test-bucket
+          patches:
+          - fromFieldPath: spec.bucketName
+            toFieldPath: metadata.annotations[bucket-name]
+            type: FromCompositeFieldPath
+        - base:
+            apiVersion: nop.crossplane.io/v1alpha1
+            kind: ClusterNopResource
+            spec:
+              forProvider:
+                conditionAfter:
+                - conditionStatus: "True"
+                  conditionType: Ready
+                  time: 0s
+          name: test-lifecycle
+          patches:
+          - fromFieldPath: spec.bucketName
+            toFieldPath: metadata.annotations[for-bucket]
+            type: FromCompositeFieldPath
+      step: generate-resources
+    - functionRef:
+        name: function-go-templating
+      input:
+        apiVersion: gotemplating.fn.crossplane.io/v1beta1
+        inline:
+          template: |
+            {{ $bucket := getComposedResource "test-bucket" }}
+            ---
+            apiVersion: getcomposed.example.org/v1alpha1
+            kind: XGetComposedResource
+            status:
+              bucketRef:
+                name: {{ $bucket.metadata.name }}
+        kind: GoTemplate
+        source: Inline
+      step: use-getcomposed
+    - functionRef:
+        name: function-auto-ready
+      step: detect-ready-resources
+
+=== Downstream Resource Changes ===
+
+Affected Resources: 1
+
+~~~ XGetComposedResource/test-getcomposed-resource
+  apiVersion: getcomposed.example.org/v1alpha1
+  kind: XGetComposedResource
+  metadata:
+    name: test-getcomposed-resource
+  spec:
+    bucketName: test-bucket-123
+    crossplane:
+      compositionRef:
+        name: xgetcomposedresources.getcomposed.example.org
+  status:
+    bucketRef:
+      name: test-getcomposed-resource-XXXXX

@@ -233,8 +233,21 @@ func (p *DefaultDiffProcessor) DiffSingleResource(ctx context.Context, res *un.U
 		return nil, errors.Wrap(err, "cannot apply XRD defaults")
 	}
 
+	// Fetch observed resources for use in rendering (needed for getComposedResource template function)
+	// For new XRs that don't exist in the cluster yet, this will return an empty list
+	observedResources, err := p.diffCalculator.FetchObservedResources(ctx, xr)
+	if err != nil {
+		// Log the error but continue with empty observed resources
+		// This handles the case where the XR doesn't exist in the cluster yet
+		p.config.Logger.Debug("Could not fetch observed resources (continuing with empty list)",
+			"resource", resourceID,
+			"error", err)
+
+		observedResources = nil
+	}
+
 	// Perform iterative rendering and requirements reconciliation
-	desired, err := p.RenderWithRequirements(ctx, xr, comp, fns, resourceID)
+	desired, err := p.RenderWithRequirements(ctx, xr, comp, fns, resourceID, observedResources)
 	if err != nil {
 		p.config.Logger.Debug("Resource rendering failed", "resource", resourceID, "error", err)
 		return nil, errors.Wrap(err, "cannot render resources with requirements")
@@ -444,6 +457,7 @@ func (p *DefaultDiffProcessor) RenderWithRequirements(
 	comp *apiextensionsv1.Composition,
 	fns []pkgv1.Function,
 	resourceID string,
+	observedResources []cpd.Unstructured,
 ) (render.Outputs, error) {
 	// Start with environment configs as baseline extra resources
 	var renderResources []un.Unstructured
@@ -480,6 +494,7 @@ func (p *DefaultDiffProcessor) RenderWithRequirements(
 			Composition:       comp,
 			Functions:         fns,
 			RequiredResources: renderResources,
+			ObservedResources: observedResources,
 		})
 
 		lastOutput = output
