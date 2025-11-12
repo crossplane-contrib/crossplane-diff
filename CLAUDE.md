@@ -76,6 +76,17 @@ grep -A50 "FAIL" /tmp/test-output.log
 earthly -P +e2e --test_name=TestFoo 2>&1 | grep "FAIL"
 ```
 
+**Debugging Test Failures**: When E2E tests fail, check `_output/tests/e2e-tests.xml` for complete, un-truncated failure output:
+```bash
+# Extract specific test failure from XML (includes full output)
+grep -A 100 "TestDiffCompositionWithGetComposedResource" _output/tests/e2e-tests.xml
+
+# Note: Earthly output quirks
+# - First emits the failure
+# - Then emits the log of the run
+# - Finally repeats the failure with "*failed*" prepended to each line
+```
+
 ### Running the CLI
 
 ```bash

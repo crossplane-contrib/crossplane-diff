@@ -52,7 +52,7 @@ spec:
         source: Inline
         inline:
           template: |
-            {{ $bucket := getComposedResource "test-bucket" }}
+            {{ $bucket := getComposedResource . "test-bucket" }}
             ---
             apiVersion: getcomposed.example.org/v1alpha1
             kind: XGetComposedResource
