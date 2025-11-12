@@ -36,7 +36,7 @@ import (
 )
 
 func TestDefaultCompDiffProcessor_findXRsUsingComposition(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 
 	// Create test XR data
 	xr1 := tu.NewResource("example.org/v1", "XResource", "xr-1").
@@ -133,7 +133,7 @@ func TestDefaultCompDiffProcessor_findXRsUsingComposition(t *testing.T) {
 }
 
 func TestDefaultCompDiffProcessor_DiffComposition(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 
 	// Create test composition
 	testComp := tu.NewComposition("test-composition").

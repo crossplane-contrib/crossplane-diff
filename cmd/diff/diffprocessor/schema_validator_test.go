@@ -91,7 +91,7 @@ func TestDefaultSchemaValidator_ValidateResources(t *testing.T) {
 					WithCachingBehavior().
 					Build()
 				def := tu.NewMockDefinitionClient().
-					WithSuccessfulXRDsFetch([]*un.Unstructured{}).
+					WithEmptyXRDsFetch().
 					Build()
 
 				return sch, def
@@ -113,7 +113,7 @@ func TestDefaultSchemaValidator_ValidateResources(t *testing.T) {
 					WithCachingBehavior().
 					Build()
 				def := tu.NewMockDefinitionClient().
-					WithSuccessfulXRDsFetch([]*un.Unstructured{}).
+					WithEmptyXRDsFetch().
 					Build()
 
 				return sch, def

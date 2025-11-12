@@ -66,6 +66,16 @@ go test -c -o e2e ./test/e2e
 
 **IMPORTANT**: Never interrupt running tests to try a simpler approach. E2E tests take a long time but that's expected. Killing them wastes the effort up to that point.
 
+**Test Output Management**: Tests can take several minutes to run. Always save test output to an intermediate file before processing:
+```bash
+# Good: Save to file first, then query
+earthly -P +e2e --test_name=TestFoo 2>&1 | tee /tmp/test-output.log
+grep -A50 "FAIL" /tmp/test-output.log
+
+# Bad: Pipe directly to grep (wastes test run if you need different info)
+earthly -P +e2e --test_name=TestFoo 2>&1 | grep "FAIL"
+```
+
 ### Running the CLI
 
 ```bash

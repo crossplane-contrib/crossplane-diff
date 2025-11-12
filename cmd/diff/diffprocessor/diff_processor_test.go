@@ -110,7 +110,7 @@ func TestDefaultDiffProcessor_PerformDiff(t *testing.T) {
 					Composition: tu.NewMockCompositionClient().Build(),
 					Definition:  tu.NewMockDefinitionClient().Build(),
 					Environment: tu.NewMockEnvironmentClient().
-						WithSuccessfulEnvironmentConfigsFetch([]*un.Unstructured{}).
+						WithNoEnvironmentConfigs().
 						Build(),
 					Function:     tu.NewMockFunctionClient().Build(),
 					ResourceTree: tu.NewMockResourceTreeClient().Build(),
@@ -139,7 +139,7 @@ func TestDefaultDiffProcessor_PerformDiff(t *testing.T) {
 						Build(),
 					Definition: tu.NewMockDefinitionClient().Build(),
 					Environment: tu.NewMockEnvironmentClient().
-						WithSuccessfulEnvironmentConfigsFetch([]*un.Unstructured{}).
+						WithNoEnvironmentConfigs().
 						Build(),
 					Function:     tu.NewMockFunctionClient().Build(),
 					ResourceTree: tu.NewMockResourceTreeClient().Build(),
@@ -179,7 +179,7 @@ func TestDefaultDiffProcessor_PerformDiff(t *testing.T) {
 						Build(),
 					Definition: tu.NewMockDefinitionClient().Build(),
 					Environment: tu.NewMockEnvironmentClient().
-						WithSuccessfulEnvironmentConfigsFetch([]*un.Unstructured{}).
+						WithNoEnvironmentConfigs().
 						Build(),
 					Function:     tu.NewMockFunctionClient().Build(),
 					ResourceTree: tu.NewMockResourceTreeClient().Build(),
@@ -225,7 +225,7 @@ func TestDefaultDiffProcessor_PerformDiff(t *testing.T) {
 						Build(),
 					Definition: tu.NewMockDefinitionClient().Build(),
 					Environment: tu.NewMockEnvironmentClient().
-						WithSuccessfulEnvironmentConfigsFetch([]*un.Unstructured{}).
+						WithNoEnvironmentConfigs().
 						Build(),
 					Function:     tu.NewMockFunctionClient().Build(),
 					ResourceTree: tu.NewMockResourceTreeClient().Build(),
@@ -254,7 +254,7 @@ func TestDefaultDiffProcessor_PerformDiff(t *testing.T) {
 						Build(),
 					Definition: tu.NewMockDefinitionClient().Build(),
 					Environment: tu.NewMockEnvironmentClient().
-						WithSuccessfulEnvironmentConfigsFetch([]*un.Unstructured{}).
+						WithNoEnvironmentConfigs().
 						Build(),
 					Function: tu.NewMockFunctionClient().
 						WithFailedFunctionsFetch("function not found").
@@ -266,7 +266,7 @@ func TestDefaultDiffProcessor_PerformDiff(t *testing.T) {
 			},
 			resources:     []*un.Unstructured{resource1},
 			processorOpts: testProcessorOptions(t),
-			want:          errors.New("unable to process resource XR1/my-xr-1: cannot get functions from pipeline: function not found"),
+			want:          errors.New("unable to process resource XR1/my-xr-1: cannot get functions for composition: cannot get functions from pipeline: function not found"),
 		},
 		"SuccessfulDiff": {
 			setupMocks: func() (k8.Clients, xp.Clients) {
@@ -364,12 +364,12 @@ func TestDefaultDiffProcessor_PerformDiff(t *testing.T) {
 						WithSuccessfulCompositionMatch(composition).
 						Build(),
 					Definition: tu.NewMockDefinitionClient().
-						WithSuccessfulXRDsFetch([]*un.Unstructured{}).
+						WithEmptyXRDsFetch().
 						WithXRDForGVK(schema.GroupVersionKind{Group: testGroup, Version: "v1", Kind: testKind}, mainXRD).
 						WithXRDForGVK(schema.GroupVersionKind{Group: "cpd.org", Version: "v1", Kind: "ComposedResource"}, composedXRD).
 						Build(),
 					Environment: tu.NewMockEnvironmentClient().
-						WithSuccessfulEnvironmentConfigsFetch([]*un.Unstructured{}).
+						WithNoEnvironmentConfigs().
 						Build(),
 					Function: tu.NewMockFunctionClient().
 						WithSuccessfulFunctionsFetch(functions).
@@ -536,7 +536,7 @@ func TestDefaultDiffProcessor_PerformDiff(t *testing.T) {
 							BuildAsUnstructured()).
 						Build(),
 					Environment: tu.NewMockEnvironmentClient().
-						WithSuccessfulEnvironmentConfigsFetch([]*un.Unstructured{}).
+						WithNoEnvironmentConfigs().
 						Build(),
 					Function: tu.NewMockFunctionClient().
 						WithSuccessfulFunctionsFetch(functions).
@@ -654,7 +654,7 @@ func TestDefaultDiffProcessor_Initialize(t *testing.T) {
 						WithFailedXRDsFetch("XRD not found").
 						Build(),
 					Environment: tu.NewMockEnvironmentClient().
-						WithSuccessfulEnvironmentConfigsFetch([]*un.Unstructured{}).
+						WithNoEnvironmentConfigs().
 						Build(),
 					Function:     tu.NewMockFunctionClient().Build(),
 					ResourceTree: tu.NewMockResourceTreeClient().Build(),
@@ -679,7 +679,7 @@ func TestDefaultDiffProcessor_Initialize(t *testing.T) {
 				xpClients := xp.Clients{
 					Composition: tu.NewMockCompositionClient().Build(),
 					Definition: tu.NewMockDefinitionClient().
-						WithSuccessfulXRDsFetch([]*un.Unstructured{}).
+						WithEmptyXRDsFetch().
 						Build(),
 					Environment: tu.NewMockEnvironmentClient().
 						WithGetEnvironmentConfigs(func(_ context.Context) ([]*un.Unstructured, error) {
@@ -714,7 +714,7 @@ func TestDefaultDiffProcessor_Initialize(t *testing.T) {
 						WithSuccessfulXRDsFetch([]*un.Unstructured{xrd1}).
 						Build(),
 					Environment: tu.NewMockEnvironmentClient().
-						WithSuccessfulEnvironmentConfigsFetch([]*un.Unstructured{}).
+						WithNoEnvironmentConfigs().
 						Build(),
 					Function:     tu.NewMockFunctionClient().Build(),
 					ResourceTree: tu.NewMockResourceTreeClient().Build(),
@@ -820,7 +820,7 @@ func TestDefaultDiffProcessor_RenderWithRequirements(t *testing.T) {
 			},
 			setupEnvironmentClient: func() *tu.MockEnvironmentClient {
 				return tu.NewMockEnvironmentClient().
-					WithSuccessfulEnvironmentConfigsFetch([]*un.Unstructured{}).
+					WithNoEnvironmentConfigs().
 					Build()
 			},
 			setupRenderFunc: func() RenderFunc {
@@ -869,7 +869,7 @@ func TestDefaultDiffProcessor_RenderWithRequirements(t *testing.T) {
 			},
 			setupEnvironmentClient: func() *tu.MockEnvironmentClient {
 				return tu.NewMockEnvironmentClient().
-					WithSuccessfulEnvironmentConfigsFetch([]*un.Unstructured{}).
+					WithNoEnvironmentConfigs().
 					Build()
 			},
 			setupRenderFunc: func() RenderFunc {
@@ -944,7 +944,7 @@ func TestDefaultDiffProcessor_RenderWithRequirements(t *testing.T) {
 			},
 			setupEnvironmentClient: func() *tu.MockEnvironmentClient {
 				return tu.NewMockEnvironmentClient().
-					WithSuccessfulEnvironmentConfigsFetch([]*un.Unstructured{}).
+					WithNoEnvironmentConfigs().
 					Build()
 			},
 			setupRenderFunc: func() RenderFunc {
@@ -1031,7 +1031,7 @@ func TestDefaultDiffProcessor_RenderWithRequirements(t *testing.T) {
 			},
 			setupEnvironmentClient: func() *tu.MockEnvironmentClient {
 				return tu.NewMockEnvironmentClient().
-					WithSuccessfulEnvironmentConfigsFetch([]*un.Unstructured{}).
+					WithNoEnvironmentConfigs().
 					Build()
 			},
 			setupRenderFunc: func() RenderFunc {
@@ -1064,7 +1064,7 @@ func TestDefaultDiffProcessor_RenderWithRequirements(t *testing.T) {
 			},
 			setupEnvironmentClient: func() *tu.MockEnvironmentClient {
 				return tu.NewMockEnvironmentClient().
-					WithSuccessfulEnvironmentConfigsFetch([]*un.Unstructured{}).
+					WithNoEnvironmentConfigs().
 					Build()
 			},
 			setupRenderFunc: func() RenderFunc {
@@ -1128,7 +1128,7 @@ func TestDefaultDiffProcessor_RenderWithRequirements(t *testing.T) {
 			},
 			setupEnvironmentClient: func() *tu.MockEnvironmentClient {
 				return tu.NewMockEnvironmentClient().
-					WithSuccessfulEnvironmentConfigsFetch([]*un.Unstructured{}).
+					WithNoEnvironmentConfigs().
 					Build()
 			},
 			setupRenderFunc: func() RenderFunc {
@@ -1474,7 +1474,7 @@ func TestDefaultDiffProcessor_ProcessNestedXRs(t *testing.T) {
 						WithSuccessfulFunctionsFetch(functions).
 						Build(),
 					Environment: tu.NewMockEnvironmentClient().
-						WithSuccessfulEnvironmentConfigsFetch([]*un.Unstructured{}).
+						WithNoEnvironmentConfigs().
 						Build(),
 				}
 
@@ -1569,7 +1569,7 @@ func TestDefaultDiffProcessor_ProcessNestedXRs(t *testing.T) {
 						WithSuccessfulFunctionsFetch(functions).
 						Build(),
 					Environment: tu.NewMockEnvironmentClient().
-						WithSuccessfulEnvironmentConfigsFetch([]*un.Unstructured{}).
+						WithNoEnvironmentConfigs().
 						Build(),
 				}
 

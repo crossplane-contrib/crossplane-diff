@@ -1,0 +1,962 @@
+=== Composition Changes ===
+
+~~~ Composition/xcompdiffresources.fanout.example.org
+  apiVersion: apiextensions.crossplane.io/v1
+  kind: Composition
+  metadata:
+    name: xcompdiffresources.fanout.example.org
+  spec:
+    compositeTypeRef:
+      apiVersion: fanout.example.org/v1alpha1
+      kind: XCompDiffFanoutResource
+    mode: Pipeline
+    pipeline:
+    - functionRef:
+        name: function-patch-and-transform
+      input:
+        apiVersion: pt.fn.crossplane.io/v1beta1
+        kind: Resources
+        resources:
+        - base:
+            apiVersion: nop.crossplane.io/v1alpha1
+            kind: ClusterNopResource
+            spec:
+              forProvider:
+                conditionAfter:
+                - conditionStatus: "True"
+                  conditionType: Ready
+                  time: 0s
+          name: nop-resource
+          patches:
+          - fromFieldPath: spec.coolField
+            toFieldPath: metadata.annotations[config-data]
+[32m+           transforms:[0m
+[32m+           - string:[0m
+[32m+               fmt: updated-%s[0m
+[32m+               type: Format[0m
+[32m+             type: string[0m
+            type: FromCompositeFieldPath
+          - fromFieldPath: spec.coolField
+            toFieldPath: metadata.annotations[resource-tier]
+            transforms:
+            - string:
+[31m-               fmt: basic-%s[0m
+[32m+               fmt: premium-%s[0m
+                type: Format
+              type: string
+            type: FromCompositeFieldPath
+      step: generate-resources
+    - functionRef:
+        name: function-auto-ready
+      step: detect-ready-resources
+
+---
+
+Summary: 1 modified
+
+=== Affected Composite Resources ===
+
+- XCompDiffFanoutResource/test-fanout-resource-01 (cluster-scoped)
+- XCompDiffFanoutResource/test-fanout-resource-02 (cluster-scoped)
+- XCompDiffFanoutResource/test-fanout-resource-03 (cluster-scoped)
+- XCompDiffFanoutResource/test-fanout-resource-04 (cluster-scoped)
+- XCompDiffFanoutResource/test-fanout-resource-05 (cluster-scoped)
+- XCompDiffFanoutResource/test-fanout-resource-06 (cluster-scoped)
+- XCompDiffFanoutResource/test-fanout-resource-07 (cluster-scoped)
+- XCompDiffFanoutResource/test-fanout-resource-08 (cluster-scoped)
+- XCompDiffFanoutResource/test-fanout-resource-09 (cluster-scoped)
+- XCompDiffFanoutResource/test-fanout-resource-10 (cluster-scoped)
+- XCompDiffFanoutResource/test-fanout-resource-11 (cluster-scoped)
+- XCompDiffFanoutResource/test-fanout-resource-12 (cluster-scoped)
+- XCompDiffFanoutResource/test-fanout-resource-13 (cluster-scoped)
+- XCompDiffFanoutResource/test-fanout-resource-14 (cluster-scoped)
+- XCompDiffFanoutResource/test-fanout-resource-16 (cluster-scoped)
+- XCompDiffFanoutResource/test-fanout-resource-17 (cluster-scoped)
+- XCompDiffFanoutResource/test-fanout-resource-18 (cluster-scoped)
+- XCompDiffFanoutResource/test-fanout-resource-19 (cluster-scoped)
+- XCompDiffFanoutResource/test-fanout-resource-20 (cluster-scoped)
+- XCompDiffFanoutResource/test-fanout-resource-21 (cluster-scoped)
+- XCompDiffFanoutResource/test-fanout-resource-22 (cluster-scoped)
+- XCompDiffFanoutResource/test-fanout-resource-23 (cluster-scoped)
+- XCompDiffFanoutResource/test-fanout-resource-24 (cluster-scoped)
+- XCompDiffFanoutResource/test-fanout-resource-25 (cluster-scoped)
+- XCompDiffFanoutResource/test-fanout-resource-26 (cluster-scoped)
+- XCompDiffFanoutResource/test-fanout-resource-27 (cluster-scoped)
+- XCompDiffFanoutResource/test-fanout-resource-28 (cluster-scoped)
+- XCompDiffFanoutResource/test-fanout-resource-29 (cluster-scoped)
+- XCompDiffFanoutResource/test-fanout-resource-30 (cluster-scoped)
+
+=== Impact Analysis ===
+
+~~~ ClusterNopResource/test-fanout-resource-01-XXXXX
+  apiVersion: nop.crossplane.io/v1alpha1
+  kind: ClusterNopResource
+  metadata:
+    annotations:
+[31m-     config-data: value-01[0m
+[32m+     config-data: updated-value-01[0m
+      crossplane.io/composition-resource-name: nop-resource
+      crossplane.io/external-name: test-fanout-resource-01-XXXXX
+[31m-     resource-tier: basic-value-01[0m
+[32m+     resource-tier: premium-value-01[0m
+    finalizers:
+    - finalizer.managedresource.crossplane.io
+    generateName: test-fanout-resource-01-
+    labels:
+      crossplane.io/composite: test-fanout-resource-01
+    name: test-fanout-resource-01-XXXXX
+  spec:
+    deletionPolicy: Delete
+    forProvider:
+      conditionAfter:
+      - conditionStatus: "True"
+        conditionType: Ready
+        time: 0s
+    managementPolicies:
+    - '*'
+    providerConfigRef:
+      name: default
+
+---
+~~~ ClusterNopResource/test-fanout-resource-02-XXXXX
+  apiVersion: nop.crossplane.io/v1alpha1
+  kind: ClusterNopResource
+  metadata:
+    annotations:
+[31m-     config-data: value-02[0m
+[32m+     config-data: updated-value-02[0m
+      crossplane.io/composition-resource-name: nop-resource
+      crossplane.io/external-name: test-fanout-resource-02-XXXXX
+[31m-     resource-tier: basic-value-02[0m
+[32m+     resource-tier: premium-value-02[0m
+    finalizers:
+    - finalizer.managedresource.crossplane.io
+    generateName: test-fanout-resource-02-
+    labels:
+      crossplane.io/composite: test-fanout-resource-02
+    name: test-fanout-resource-02-XXXXX
+  spec:
+    deletionPolicy: Delete
+    forProvider:
+      conditionAfter:
+      - conditionStatus: "True"
+        conditionType: Ready
+        time: 0s
+    managementPolicies:
+    - '*'
+    providerConfigRef:
+      name: default
+
+---
+~~~ ClusterNopResource/test-fanout-resource-03-XXXXX
+  apiVersion: nop.crossplane.io/v1alpha1
+  kind: ClusterNopResource
+  metadata:
+    annotations:
+[31m-     config-data: value-03[0m
+[32m+     config-data: updated-value-03[0m
+      crossplane.io/composition-resource-name: nop-resource
+      crossplane.io/external-name: test-fanout-resource-03-XXXXX
+[31m-     resource-tier: basic-value-03[0m
+[32m+     resource-tier: premium-value-03[0m
+    finalizers:
+    - finalizer.managedresource.crossplane.io
+    generateName: test-fanout-resource-03-
+    labels:
+      crossplane.io/composite: test-fanout-resource-03
+    name: test-fanout-resource-03-XXXXX
+  spec:
+    deletionPolicy: Delete
+    forProvider:
+      conditionAfter:
+      - conditionStatus: "True"
+        conditionType: Ready
+        time: 0s
+    managementPolicies:
+    - '*'
+    providerConfigRef:
+      name: default
+
+---
+~~~ ClusterNopResource/test-fanout-resource-04-XXXXX
+  apiVersion: nop.crossplane.io/v1alpha1
+  kind: ClusterNopResource
+  metadata:
+    annotations:
+[31m-     config-data: value-04[0m
+[32m+     config-data: updated-value-04[0m
+      crossplane.io/composition-resource-name: nop-resource
+      crossplane.io/external-name: test-fanout-resource-04-XXXXX
+[31m-     resource-tier: basic-value-04[0m
+[32m+     resource-tier: premium-value-04[0m
+    finalizers:
+    - finalizer.managedresource.crossplane.io
+    generateName: test-fanout-resource-04-
+    labels:
+      crossplane.io/composite: test-fanout-resource-04
+    name: test-fanout-resource-04-XXXXX
+  spec:
+    deletionPolicy: Delete
+    forProvider:
+      conditionAfter:
+      - conditionStatus: "True"
+        conditionType: Ready
+        time: 0s
+    managementPolicies:
+    - '*'
+    providerConfigRef:
+      name: default
+
+---
+~~~ ClusterNopResource/test-fanout-resource-05-XXXXX
+  apiVersion: nop.crossplane.io/v1alpha1
+  kind: ClusterNopResource
+  metadata:
+    annotations:
+[31m-     config-data: value-05[0m
+[32m+     config-data: updated-value-05[0m
+      crossplane.io/composition-resource-name: nop-resource
+      crossplane.io/external-name: test-fanout-resource-05-XXXXX
+[31m-     resource-tier: basic-value-05[0m
+[32m+     resource-tier: premium-value-05[0m
+    finalizers:
+    - finalizer.managedresource.crossplane.io
+    generateName: test-fanout-resource-05-
+    labels:
+      crossplane.io/composite: test-fanout-resource-05
+    name: test-fanout-resource-05-XXXXX
+  spec:
+    deletionPolicy: Delete
+    forProvider:
+      conditionAfter:
+      - conditionStatus: "True"
+        conditionType: Ready
+        time: 0s
+    managementPolicies:
+    - '*'
+    providerConfigRef:
+      name: default
+
+---
+~~~ ClusterNopResource/test-fanout-resource-06-XXXXX
+  apiVersion: nop.crossplane.io/v1alpha1
+  kind: ClusterNopResource
+  metadata:
+    annotations:
+[31m-     config-data: value-06[0m
+[32m+     config-data: updated-value-06[0m
+      crossplane.io/composition-resource-name: nop-resource
+      crossplane.io/external-name: test-fanout-resource-06-XXXXX
+[31m-     resource-tier: basic-value-06[0m
+[32m+     resource-tier: premium-value-06[0m
+    finalizers:
+    - finalizer.managedresource.crossplane.io
+    generateName: test-fanout-resource-06-
+    labels:
+      crossplane.io/composite: test-fanout-resource-06
+    name: test-fanout-resource-06-XXXXX
+  spec:
+    deletionPolicy: Delete
+    forProvider:
+      conditionAfter:
+      - conditionStatus: "True"
+        conditionType: Ready
+        time: 0s
+    managementPolicies:
+    - '*'
+    providerConfigRef:
+      name: default
+
+---
+~~~ ClusterNopResource/test-fanout-resource-07-XXXXX
+  apiVersion: nop.crossplane.io/v1alpha1
+  kind: ClusterNopResource
+  metadata:
+    annotations:
+[31m-     config-data: value-07[0m
+[32m+     config-data: updated-value-07[0m
+      crossplane.io/composition-resource-name: nop-resource
+      crossplane.io/external-name: test-fanout-resource-07-XXXXX
+[31m-     resource-tier: basic-value-07[0m
+[32m+     resource-tier: premium-value-07[0m
+    finalizers:
+    - finalizer.managedresource.crossplane.io
+    generateName: test-fanout-resource-07-
+    labels:
+      crossplane.io/composite: test-fanout-resource-07
+    name: test-fanout-resource-07-XXXXX
+  spec:
+    deletionPolicy: Delete
+    forProvider:
+      conditionAfter:
+      - conditionStatus: "True"
+        conditionType: Ready
+        time: 0s
+    managementPolicies:
+    - '*'
+    providerConfigRef:
+      name: default
+
+---
+~~~ ClusterNopResource/test-fanout-resource-08-XXXXX
+  apiVersion: nop.crossplane.io/v1alpha1
+  kind: ClusterNopResource
+  metadata:
+    annotations:
+[31m-     config-data: value-08[0m
+[32m+     config-data: updated-value-08[0m
+      crossplane.io/composition-resource-name: nop-resource
+      crossplane.io/external-name: test-fanout-resource-08-XXXXX
+[31m-     resource-tier: basic-value-08[0m
+[32m+     resource-tier: premium-value-08[0m
+    finalizers:
+    - finalizer.managedresource.crossplane.io
+    generateName: test-fanout-resource-08-
+    labels:
+      crossplane.io/composite: test-fanout-resource-08
+    name: test-fanout-resource-08-XXXXX
+  spec:
+    deletionPolicy: Delete
+    forProvider:
+      conditionAfter:
+      - conditionStatus: "True"
+        conditionType: Ready
+        time: 0s
+    managementPolicies:
+    - '*'
+    providerConfigRef:
+      name: default
+
+---
+~~~ ClusterNopResource/test-fanout-resource-09-XXXXX
+  apiVersion: nop.crossplane.io/v1alpha1
+  kind: ClusterNopResource
+  metadata:
+    annotations:
+[31m-     config-data: value-09[0m
+[32m+     config-data: updated-value-09[0m
+      crossplane.io/composition-resource-name: nop-resource
+      crossplane.io/external-name: test-fanout-resource-09-XXXXX
+[31m-     resource-tier: basic-value-09[0m
+[32m+     resource-tier: premium-value-09[0m
+    finalizers:
+    - finalizer.managedresource.crossplane.io
+    generateName: test-fanout-resource-09-
+    labels:
+      crossplane.io/composite: test-fanout-resource-09
+    name: test-fanout-resource-09-XXXXX
+  spec:
+    deletionPolicy: Delete
+    forProvider:
+      conditionAfter:
+      - conditionStatus: "True"
+        conditionType: Ready
+        time: 0s
+    managementPolicies:
+    - '*'
+    providerConfigRef:
+      name: default
+
+---
+~~~ ClusterNopResource/test-fanout-resource-10-XXXXX
+  apiVersion: nop.crossplane.io/v1alpha1
+  kind: ClusterNopResource
+  metadata:
+    annotations:
+[31m-     config-data: value-10[0m
+[32m+     config-data: updated-value-10[0m
+      crossplane.io/composition-resource-name: nop-resource
+      crossplane.io/external-name: test-fanout-resource-10-XXXXX
+[31m-     resource-tier: basic-value-10[0m
+[32m+     resource-tier: premium-value-10[0m
+    finalizers:
+    - finalizer.managedresource.crossplane.io
+    generateName: test-fanout-resource-10-
+    labels:
+      crossplane.io/composite: test-fanout-resource-10
+    name: test-fanout-resource-10-XXXXX
+  spec:
+    deletionPolicy: Delete
+    forProvider:
+      conditionAfter:
+      - conditionStatus: "True"
+        conditionType: Ready
+        time: 0s
+    managementPolicies:
+    - '*'
+    providerConfigRef:
+      name: default
+
+---
+~~~ ClusterNopResource/test-fanout-resource-11-XXXXX
+  apiVersion: nop.crossplane.io/v1alpha1
+  kind: ClusterNopResource
+  metadata:
+    annotations:
+[31m-     config-data: value-11[0m
+[32m+     config-data: updated-value-11[0m
+      crossplane.io/composition-resource-name: nop-resource
+      crossplane.io/external-name: test-fanout-resource-11-XXXXX
+[31m-     resource-tier: basic-value-11[0m
+[32m+     resource-tier: premium-value-11[0m
+    finalizers:
+    - finalizer.managedresource.crossplane.io
+    generateName: test-fanout-resource-11-
+    labels:
+      crossplane.io/composite: test-fanout-resource-11
+    name: test-fanout-resource-11-XXXXX
+  spec:
+    deletionPolicy: Delete
+    forProvider:
+      conditionAfter:
+      - conditionStatus: "True"
+        conditionType: Ready
+        time: 0s
+    managementPolicies:
+    - '*'
+    providerConfigRef:
+      name: default
+
+---
+~~~ ClusterNopResource/test-fanout-resource-12-XXXXX
+  apiVersion: nop.crossplane.io/v1alpha1
+  kind: ClusterNopResource
+  metadata:
+    annotations:
+[31m-     config-data: value-12[0m
+[32m+     config-data: updated-value-12[0m
+      crossplane.io/composition-resource-name: nop-resource
+      crossplane.io/external-name: test-fanout-resource-12-XXXXX
+[31m-     resource-tier: basic-value-12[0m
+[32m+     resource-tier: premium-value-12[0m
+    finalizers:
+    - finalizer.managedresource.crossplane.io
+    generateName: test-fanout-resource-12-
+    labels:
+      crossplane.io/composite: test-fanout-resource-12
+    name: test-fanout-resource-12-XXXXX
+  spec:
+    deletionPolicy: Delete
+    forProvider:
+      conditionAfter:
+      - conditionStatus: "True"
+        conditionType: Ready
+        time: 0s
+    managementPolicies:
+    - '*'
+    providerConfigRef:
+      name: default
+
+---
+~~~ ClusterNopResource/test-fanout-resource-13-XXXXX
+  apiVersion: nop.crossplane.io/v1alpha1
+  kind: ClusterNopResource
+  metadata:
+    annotations:
+[31m-     config-data: value-13[0m
+[32m+     config-data: updated-value-13[0m
+      crossplane.io/composition-resource-name: nop-resource
+      crossplane.io/external-name: test-fanout-resource-13-XXXXX
+[31m-     resource-tier: basic-value-13[0m
+[32m+     resource-tier: premium-value-13[0m
+    finalizers:
+    - finalizer.managedresource.crossplane.io
+    generateName: test-fanout-resource-13-
+    labels:
+      crossplane.io/composite: test-fanout-resource-13
+    name: test-fanout-resource-13-XXXXX
+  spec:
+    deletionPolicy: Delete
+    forProvider:
+      conditionAfter:
+      - conditionStatus: "True"
+        conditionType: Ready
+        time: 0s
+    managementPolicies:
+    - '*'
+    providerConfigRef:
+      name: default
+
+---
+~~~ ClusterNopResource/test-fanout-resource-14-XXXXX
+  apiVersion: nop.crossplane.io/v1alpha1
+  kind: ClusterNopResource
+  metadata:
+    annotations:
+[31m-     config-data: value-14[0m
+[32m+     config-data: updated-value-14[0m
+      crossplane.io/composition-resource-name: nop-resource
+      crossplane.io/external-name: test-fanout-resource-14-XXXXX
+[31m-     resource-tier: basic-value-14[0m
+[32m+     resource-tier: premium-value-14[0m
+    finalizers:
+    - finalizer.managedresource.crossplane.io
+    generateName: test-fanout-resource-14-
+    labels:
+      crossplane.io/composite: test-fanout-resource-14
+    name: test-fanout-resource-14-XXXXX
+  spec:
+    deletionPolicy: Delete
+    forProvider:
+      conditionAfter:
+      - conditionStatus: "True"
+        conditionType: Ready
+        time: 0s
+    managementPolicies:
+    - '*'
+    providerConfigRef:
+      name: default
+
+---
+~~~ ClusterNopResource/test-fanout-resource-16-XXXXX
+  apiVersion: nop.crossplane.io/v1alpha1
+  kind: ClusterNopResource
+  metadata:
+    annotations:
+[31m-     config-data: value-16[0m
+[32m+     config-data: updated-value-16[0m
+      crossplane.io/composition-resource-name: nop-resource
+      crossplane.io/external-name: test-fanout-resource-16-XXXXX
+[31m-     resource-tier: basic-value-16[0m
+[32m+     resource-tier: premium-value-16[0m
+    finalizers:
+    - finalizer.managedresource.crossplane.io
+    generateName: test-fanout-resource-16-
+    labels:
+      crossplane.io/composite: test-fanout-resource-16
+    name: test-fanout-resource-16-XXXXX
+  spec:
+    deletionPolicy: Delete
+    forProvider:
+      conditionAfter:
+      - conditionStatus: "True"
+        conditionType: Ready
+        time: 0s
+    managementPolicies:
+    - '*'
+    providerConfigRef:
+      name: default
+
+---
+~~~ ClusterNopResource/test-fanout-resource-17-XXXXX
+  apiVersion: nop.crossplane.io/v1alpha1
+  kind: ClusterNopResource
+  metadata:
+    annotations:
+[31m-     config-data: value-17[0m
+[32m+     config-data: updated-value-17[0m
+      crossplane.io/composition-resource-name: nop-resource
+      crossplane.io/external-name: test-fanout-resource-17-XXXXX
+[31m-     resource-tier: basic-value-17[0m
+[32m+     resource-tier: premium-value-17[0m
+    finalizers:
+    - finalizer.managedresource.crossplane.io
+    generateName: test-fanout-resource-17-
+    labels:
+      crossplane.io/composite: test-fanout-resource-17
+    name: test-fanout-resource-17-XXXXX
+  spec:
+    deletionPolicy: Delete
+    forProvider:
+      conditionAfter:
+      - conditionStatus: "True"
+        conditionType: Ready
+        time: 0s
+    managementPolicies:
+    - '*'
+    providerConfigRef:
+      name: default
+
+---
+~~~ ClusterNopResource/test-fanout-resource-18-XXXXX
+  apiVersion: nop.crossplane.io/v1alpha1
+  kind: ClusterNopResource
+  metadata:
+    annotations:
+[31m-     config-data: value-18[0m
+[32m+     config-data: updated-value-18[0m
+      crossplane.io/composition-resource-name: nop-resource
+      crossplane.io/external-name: test-fanout-resource-18-XXXXX
+[31m-     resource-tier: basic-value-18[0m
+[32m+     resource-tier: premium-value-18[0m
+    finalizers:
+    - finalizer.managedresource.crossplane.io
+    generateName: test-fanout-resource-18-
+    labels:
+      crossplane.io/composite: test-fanout-resource-18
+    name: test-fanout-resource-18-XXXXX
+  spec:
+    deletionPolicy: Delete
+    forProvider:
+      conditionAfter:
+      - conditionStatus: "True"
+        conditionType: Ready
+        time: 0s
+    managementPolicies:
+    - '*'
+    providerConfigRef:
+      name: default
+
+---
+~~~ ClusterNopResource/test-fanout-resource-19-XXXXX
+  apiVersion: nop.crossplane.io/v1alpha1
+  kind: ClusterNopResource
+  metadata:
+    annotations:
+[31m-     config-data: value-19[0m
+[32m+     config-data: updated-value-19[0m
+      crossplane.io/composition-resource-name: nop-resource
+      crossplane.io/external-name: test-fanout-resource-19-XXXXX
+[31m-     resource-tier: basic-value-19[0m
+[32m+     resource-tier: premium-value-19[0m
+    finalizers:
+    - finalizer.managedresource.crossplane.io
+    generateName: test-fanout-resource-19-
+    labels:
+      crossplane.io/composite: test-fanout-resource-19
+    name: test-fanout-resource-19-XXXXX
+  spec:
+    deletionPolicy: Delete
+    forProvider:
+      conditionAfter:
+      - conditionStatus: "True"
+        conditionType: Ready
+        time: 0s
+    managementPolicies:
+    - '*'
+    providerConfigRef:
+      name: default
+
+---
+~~~ ClusterNopResource/test-fanout-resource-20-XXXXX
+  apiVersion: nop.crossplane.io/v1alpha1
+  kind: ClusterNopResource
+  metadata:
+    annotations:
+[31m-     config-data: value-20[0m
+[32m+     config-data: updated-value-20[0m
+      crossplane.io/composition-resource-name: nop-resource
+      crossplane.io/external-name: test-fanout-resource-20-XXXXX
+[31m-     resource-tier: basic-value-20[0m
+[32m+     resource-tier: premium-value-20[0m
+    finalizers:
+    - finalizer.managedresource.crossplane.io
+    generateName: test-fanout-resource-20-
+    labels:
+      crossplane.io/composite: test-fanout-resource-20
+    name: test-fanout-resource-20-XXXXX
+  spec:
+    deletionPolicy: Delete
+    forProvider:
+      conditionAfter:
+      - conditionStatus: "True"
+        conditionType: Ready
+        time: 0s
+    managementPolicies:
+    - '*'
+    providerConfigRef:
+      name: default
+
+---
+~~~ ClusterNopResource/test-fanout-resource-21-XXXXX
+  apiVersion: nop.crossplane.io/v1alpha1
+  kind: ClusterNopResource
+  metadata:
+    annotations:
+[31m-     config-data: value-21[0m
+[32m+     config-data: updated-value-21[0m
+      crossplane.io/composition-resource-name: nop-resource
+      crossplane.io/external-name: test-fanout-resource-21-XXXXX
+[31m-     resource-tier: basic-value-21[0m
+[32m+     resource-tier: premium-value-21[0m
+    finalizers:
+    - finalizer.managedresource.crossplane.io
+    generateName: test-fanout-resource-21-
+    labels:
+      crossplane.io/composite: test-fanout-resource-21
+    name: test-fanout-resource-21-XXXXX
+  spec:
+    deletionPolicy: Delete
+    forProvider:
+      conditionAfter:
+      - conditionStatus: "True"
+        conditionType: Ready
+        time: 0s
+    managementPolicies:
+    - '*'
+    providerConfigRef:
+      name: default
+
+---
+~~~ ClusterNopResource/test-fanout-resource-22-XXXXX
+  apiVersion: nop.crossplane.io/v1alpha1
+  kind: ClusterNopResource
+  metadata:
+    annotations:
+[31m-     config-data: value-22[0m
+[32m+     config-data: updated-value-22[0m
+      crossplane.io/composition-resource-name: nop-resource
+      crossplane.io/external-name: test-fanout-resource-22-XXXXX
+[31m-     resource-tier: basic-value-22[0m
+[32m+     resource-tier: premium-value-22[0m
+    finalizers:
+    - finalizer.managedresource.crossplane.io
+    generateName: test-fanout-resource-22-
+    labels:
+      crossplane.io/composite: test-fanout-resource-22
+    name: test-fanout-resource-22-XXXXX
+  spec:
+    deletionPolicy: Delete
+    forProvider:
+      conditionAfter:
+      - conditionStatus: "True"
+        conditionType: Ready
+        time: 0s
+    managementPolicies:
+    - '*'
+    providerConfigRef:
+      name: default
+
+---
+~~~ ClusterNopResource/test-fanout-resource-23-XXXXX
+  apiVersion: nop.crossplane.io/v1alpha1
+  kind: ClusterNopResource
+  metadata:
+    annotations:
+[31m-     config-data: value-23[0m
+[32m+     config-data: updated-value-23[0m
+      crossplane.io/composition-resource-name: nop-resource
+      crossplane.io/external-name: test-fanout-resource-23-XXXXX
+[31m-     resource-tier: basic-value-23[0m
+[32m+     resource-tier: premium-value-23[0m
+    finalizers:
+    - finalizer.managedresource.crossplane.io
+    generateName: test-fanout-resource-23-
+    labels:
+      crossplane.io/composite: test-fanout-resource-23
+    name: test-fanout-resource-23-XXXXX
+  spec:
+    deletionPolicy: Delete
+    forProvider:
+      conditionAfter:
+      - conditionStatus: "True"
+        conditionType: Ready
+        time: 0s
+    managementPolicies:
+    - '*'
+    providerConfigRef:
+      name: default
+
+---
+~~~ ClusterNopResource/test-fanout-resource-24-XXXXX
+  apiVersion: nop.crossplane.io/v1alpha1
+  kind: ClusterNopResource
+  metadata:
+    annotations:
+[31m-     config-data: value-24[0m
+[32m+     config-data: updated-value-24[0m
+      crossplane.io/composition-resource-name: nop-resource
+      crossplane.io/external-name: test-fanout-resource-24-XXXXX
+[31m-     resource-tier: basic-value-24[0m
+[32m+     resource-tier: premium-value-24[0m
+    finalizers:
+    - finalizer.managedresource.crossplane.io
+    generateName: test-fanout-resource-24-
+    labels:
+      crossplane.io/composite: test-fanout-resource-24
+    name: test-fanout-resource-24-XXXXX
+  spec:
+    deletionPolicy: Delete
+    forProvider:
+      conditionAfter:
+      - conditionStatus: "True"
+        conditionType: Ready
+        time: 0s
+    managementPolicies:
+    - '*'
+    providerConfigRef:
+      name: default
+
+---
+~~~ ClusterNopResource/test-fanout-resource-25-XXXXX
+  apiVersion: nop.crossplane.io/v1alpha1
+  kind: ClusterNopResource
+  metadata:
+    annotations:
+[31m-     config-data: value-25[0m
+[32m+     config-data: updated-value-25[0m
+      crossplane.io/composition-resource-name: nop-resource
+      crossplane.io/external-name: test-fanout-resource-25-XXXXX
+[31m-     resource-tier: basic-value-25[0m
+[32m+     resource-tier: premium-value-25[0m
+    finalizers:
+    - finalizer.managedresource.crossplane.io
+    generateName: test-fanout-resource-25-
+    labels:
+      crossplane.io/composite: test-fanout-resource-25
+    name: test-fanout-resource-25-XXXXX
+  spec:
+    deletionPolicy: Delete
+    forProvider:
+      conditionAfter:
+      - conditionStatus: "True"
+        conditionType: Ready
+        time: 0s
+    managementPolicies:
+    - '*'
+    providerConfigRef:
+      name: default
+
+---
+~~~ ClusterNopResource/test-fanout-resource-26-XXXXX
+  apiVersion: nop.crossplane.io/v1alpha1
+  kind: ClusterNopResource
+  metadata:
+    annotations:
+[31m-     config-data: value-26
+[32m+     config-data: updated-value-26[0m
+      crossplane.io/composition-resource-name: nop-resource
+      crossplane.io/external-name: test-fanout-resource-26-XXXXX
+[31m-     resource-tier: basic-value-26[0m
+[32m+     resource-tier: premium-value-26[0m
+    finalizers:
+    - finalizer.managedresource.crossplane.io
+    generateName: test-fanout-resource-26-
+    labels:
+      crossplane.io/composite: test-fanout-resource-26
+    name: test-fanout-resource-26-XXXXX
+  spec:
+    deletionPolicy: Delete
+    forProvider:
+      conditionAfter:
+      - conditionStatus: "True"
+        conditionType: Ready
+        time: 0s
+    managementPolicies:
+    - '*'
+    providerConfigRef:
+      name: default
+
+---
+~~~ ClusterNopResource/test-fanout-resource-27-XXXXX
+  apiVersion: nop.crossplane.io/v1alpha1
+  kind: ClusterNopResource
+  metadata:
+    annotations:
+[31m-     config-data: value-27[0m
+[32m+     config-data: updated-value-27[0m
+      crossplane.io/composition-resource-name: nop-resource
+      crossplane.io/external-name: test-fanout-resource-27-XXXXX
+[31m-     resource-tier: basic-value-27[0m
+[32m+     resource-tier: premium-value-27[0m
+    finalizers:
+    - finalizer.managedresource.crossplane.io
+    generateName: test-fanout-resource-27-
+    labels:
+      crossplane.io/composite: test-fanout-resource-27
+    name: test-fanout-resource-27-XXXXX
+  spec:
+    deletionPolicy: Delete
+    forProvider:
+      conditionAfter:
+      - conditionStatus: "True"
+        conditionType: Ready
+        time: 0s
+    managementPolicies:
+    - '*'
+    providerConfigRef:
+      name: default
+
+---
+~~~ ClusterNopResource/test-fanout-resource-28-XXXXX
+  apiVersion: nop.crossplane.io/v1alpha1
+  kind: ClusterNopResource
+  metadata:
+    annotations:
+[31m-     config-data: value-28[0m
+[32m+     config-data: updated-value-28[0m
+      crossplane.io/composition-resource-name: nop-resource
+      crossplane.io/external-name: test-fanout-resource-28-XXXXX
+[31m-     resource-tier: basic-value-28[0m
+[32m+     resource-tier: premium-value-28[0m
+    finalizers:
+    - finalizer.managedresource.crossplane.io
+    generateName: test-fanout-resource-28-
+    labels:
+      crossplane.io/composite: test-fanout-resource-28
+    name: test-fanout-resource-28-XXXXX
+  spec:
+    deletionPolicy: Delete
+    forProvider:
+      conditionAfter:
+      - conditionStatus: "True"
+        conditionType: Ready
+        time: 0s
+    managementPolicies:
+    - '*'
+    providerConfigRef:
+      name: default
+
+---
+~~~ ClusterNopResource/test-fanout-resource-29-XXXXX
+  apiVersion: nop.crossplane.io/v1alpha1
+  kind: ClusterNopResource
+  metadata:
+    annotations:
+[31m-     config-data: value-29[0m
+[32m+     config-data: updated-value-29[0m
+      crossplane.io/composition-resource-name: nop-resource
+      crossplane.io/external-name: test-fanout-resource-29-XXXXX
+[31m-     resource-tier: basic-value-29[0m
+[32m+     resource-tier: premium-value-29[0m
+    finalizers:
+    - finalizer.managedresource.crossplane.io
+    generateName: test-fanout-resource-29-
+    labels:
+      crossplane.io/composite: test-fanout-resource-29
+    name: test-fanout-resource-29-XXXXX
+  spec:
+    deletionPolicy: Delete
+    forProvider:
+      conditionAfter:
+      - conditionStatus: "True"
+        conditionType: Ready
+        time: 0s
+    managementPolicies:
+    - '*'
+    providerConfigRef:
+      name: default
+
+---
+~~~ ClusterNopResource/test-fanout-resource-30-XXXXX
+  apiVersion: nop.crossplane.io/v1alpha1
+  kind: ClusterNopResource
+  metadata:
+    annotations:
+[31m-     config-data: value-30[0m
+[32m+     config-data: updated-value-30[0m
+      crossplane.io/composition-resource-name: nop-resource
+      crossplane.io/external-name: test-fanout-resource-30-XXXXX
+[31m-     resource-tier: basic-value-30[0m
+[32m+     resource-tier: premium-value-30[0m
+    finalizers:
+    - finalizer.managedresource.crossplane.io
+    generateName: test-fanout-resource-30-
+    labels:
+      crossplane.io/composite: test-fanout-resource-30
+    name: test-fanout-resource-30-XXXXX
+  spec:
+    deletionPolicy: Delete
+    forProvider:
+      conditionAfter:
+      - conditionStatus: "True"
+        conditionType: Ready
+        time: 0s
+    managementPolicies:
+    - '*'
+    providerConfigRef:
+      name: default
+
+---
+
+Summary: 29 modified

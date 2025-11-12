@@ -1,0 +1,43 @@
+apiVersion: apiextensions.crossplane.io/v1
+kind: CompositeResourceDefinition
+metadata:
+  name: xcompdiffresources.fanout.example.org
+spec:
+  group: fanout.example.org
+  names:
+    kind: XCompDiffFanoutResource
+    plural: xcompdiffresources
+  claimNames:
+    kind: CompDiffFanoutResource
+    plural: compdiffresources
+  versions:
+  - name: v1alpha1
+    served: true
+    referenceable: true
+    schema:
+      openAPIV3Schema:
+        type: object
+        properties:
+          spec:
+            type: object
+            properties:
+              coolField:
+                type: string
+              crossplane:
+                type: object
+                properties:
+                  compositionRef:
+                    type: object
+                    properties:
+                      name:
+                        type: string
+          status:
+            type: object
+            properties:
+              downstreamRef:
+                type: object
+                properties:
+                  name:
+                    type: string
+                  namespace:
+                    type: string

@@ -1,0 +1,42 @@
+apiVersion: apiextensions.crossplane.io/v1
+kind: Composition
+metadata:
+  name: xcompdiffresources.fanout.example.org
+spec:
+  compositeTypeRef:
+    apiVersion: fanout.example.org/v1alpha1
+    kind: XCompDiffFanoutResource
+  mode: Pipeline
+  pipeline:
+    - step: generate-resources
+      functionRef:
+        name: function-patch-and-transform
+      input:
+        apiVersion: pt.fn.crossplane.io/v1beta1
+        kind: Resources
+        resources:
+          - name: nop-resource
+            base:
+              apiVersion: nop.crossplane.io/v1alpha1
+              kind: ClusterNopResource
+              spec:
+                forProvider:
+                  conditionAfter:
+                    - conditionType: Ready
+                      conditionStatus: "True"
+                      time: 0s
+            patches:
+              - type: FromCompositeFieldPath
+                fromFieldPath: spec.coolField
+                toFieldPath: metadata.annotations[config-data]
+              - type: FromCompositeFieldPath
+                fromFieldPath: spec.coolField
+                toFieldPath: metadata.annotations[resource-tier]
+                transforms:
+                  - type: string
+                    string:
+                      type: Format
+                      fmt: "basic-%s"
+    - step: detect-ready-resources
+      functionRef:
+        name: function-auto-ready

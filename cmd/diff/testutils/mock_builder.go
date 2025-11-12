@@ -798,6 +798,13 @@ func (b *MockFunctionClientBuilder) WithSuccessfulFunctionsFetch(functions []pkg
 	})
 }
 
+// WithNoFunctions sets GetFunctionsFromPipeline to return an empty function list.
+func (b *MockFunctionClientBuilder) WithNoFunctions() *MockFunctionClientBuilder {
+	return b.WithGetFunctionsFromPipeline(func(*xpextv1.Composition) ([]pkgv1.Function, error) {
+		return []pkgv1.Function{}, nil
+	})
+}
+
 // WithFailedFunctionsFetch sets GetFunctionsFromPipeline to return an error.
 func (b *MockFunctionClientBuilder) WithFailedFunctionsFetch(errMsg string) *MockFunctionClientBuilder {
 	return b.WithGetFunctionsFromPipeline(func(*xpextv1.Composition) ([]pkgv1.Function, error) {
@@ -809,6 +816,14 @@ func (b *MockFunctionClientBuilder) WithFailedFunctionsFetch(errMsg string) *Moc
 func (b *MockFunctionClientBuilder) WithListFunctions(fn func(context.Context) ([]pkgv1.Function, error)) *MockFunctionClientBuilder {
 	b.mock.ListFunctionsFn = fn
 	return b
+}
+
+// WithFunctionsFetchCallback sets a callback that's called when GetFunctionsFromPipeline is invoked.
+// This is useful for testing caching behavior by tracking how many times functions are fetched.
+func (b *MockFunctionClientBuilder) WithFunctionsFetchCallback(callback func() ([]pkgv1.Function, error)) *MockFunctionClientBuilder {
+	return b.WithGetFunctionsFromPipeline(func(*xpextv1.Composition) ([]pkgv1.Function, error) {
+		return callback()
+	})
 }
 
 // Build returns the built mock.
@@ -862,6 +877,13 @@ func (b *MockEnvironmentClientBuilder) WithGetEnvironmentConfigs(fn func(context
 func (b *MockEnvironmentClientBuilder) WithSuccessfulEnvironmentConfigsFetch(configs []*un.Unstructured) *MockEnvironmentClientBuilder {
 	return b.WithGetEnvironmentConfigs(func(context.Context) ([]*un.Unstructured, error) {
 		return configs, nil
+	})
+}
+
+// WithNoEnvironmentConfigs sets GetEnvironmentConfigs to return an empty list.
+func (b *MockEnvironmentClientBuilder) WithNoEnvironmentConfigs() *MockEnvironmentClientBuilder {
+	return b.WithGetEnvironmentConfigs(func(context.Context) ([]*un.Unstructured, error) {
+		return []*un.Unstructured{}, nil
 	})
 }
 

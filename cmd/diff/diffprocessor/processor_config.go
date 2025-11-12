@@ -56,6 +56,9 @@ type ComponentFactories struct {
 
 	// RequirementsProvider creates an ExtraResourceProvider
 	RequirementsProvider func(res k8.ResourceClient, def xp.EnvironmentClient, renderFunc RenderFunc, logger logging.Logger) *RequirementsProvider
+
+	// FunctionProvider creates a FunctionProvider
+	FunctionProvider func(fnClient xp.FunctionClient, logger logging.Logger) FunctionProvider
 }
 
 // ProcessorOption defines a function that can modify a ProcessorConfig.
@@ -152,6 +155,13 @@ func WithRequirementsProviderFactory(factory func(k8.ResourceClient, xp.Environm
 	}
 }
 
+// WithFunctionProviderFactory sets the FunctionProvider factory function.
+func WithFunctionProviderFactory(factory func(xp.FunctionClient, logging.Logger) FunctionProvider) ProcessorOption {
+	return func(config *ProcessorConfig) {
+		config.Factories.FunctionProvider = factory
+	}
+}
+
 // GetDiffOptions returns DiffOptions based on the ProcessorConfig.
 func (c *ProcessorConfig) GetDiffOptions() renderer.DiffOptions {
 	opts := renderer.DefaultDiffOptions()
@@ -181,5 +191,9 @@ func (c *ProcessorConfig) SetDefaultFactories() {
 
 	if c.Factories.RequirementsProvider == nil {
 		c.Factories.RequirementsProvider = NewRequirementsProvider
+	}
+
+	if c.Factories.FunctionProvider == nil {
+		c.Factories.FunctionProvider = NewDefaultFunctionProvider
 	}
 }

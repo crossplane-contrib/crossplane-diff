@@ -1,0 +1,289 @@
+apiVersion: fanout.example.org/v1alpha1
+kind: XCompDiffFanoutResource
+metadata:
+  name: test-fanout-resource-01
+spec:
+  coolField: value-01
+  crossplane:
+    compositionRef:
+      name: xcompdiffresources.fanout.example.org
+---
+apiVersion: fanout.example.org/v1alpha1
+kind: XCompDiffFanoutResource
+metadata:
+  name: test-fanout-resource-02
+spec:
+  coolField: value-02
+  crossplane:
+    compositionRef:
+      name: xcompdiffresources.fanout.example.org
+---
+apiVersion: fanout.example.org/v1alpha1
+kind: XCompDiffFanoutResource
+metadata:
+  name: test-fanout-resource-03
+spec:
+  coolField: value-03
+  crossplane:
+    compositionRef:
+      name: xcompdiffresources.fanout.example.org
+---
+apiVersion: fanout.example.org/v1alpha1
+kind: XCompDiffFanoutResource
+metadata:
+  name: test-fanout-resource-04
+spec:
+  coolField: value-04
+  crossplane:
+    compositionRef:
+      name: xcompdiffresources.fanout.example.org
+---
+apiVersion: fanout.example.org/v1alpha1
+kind: XCompDiffFanoutResource
+metadata:
+  name: test-fanout-resource-05
+spec:
+  coolField: value-05
+  crossplane:
+    compositionRef:
+      name: xcompdiffresources.fanout.example.org
+---
+apiVersion: fanout.example.org/v1alpha1
+kind: XCompDiffFanoutResource
+metadata:
+  name: test-fanout-resource-06
+spec:
+  coolField: value-06
+  crossplane:
+    compositionRef:
+      name: xcompdiffresources.fanout.example.org
+---
+apiVersion: fanout.example.org/v1alpha1
+kind: XCompDiffFanoutResource
+metadata:
+  name: test-fanout-resource-07
+spec:
+  coolField: value-07
+  crossplane:
+    compositionRef:
+      name: xcompdiffresources.fanout.example.org
+---
+apiVersion: fanout.example.org/v1alpha1
+kind: XCompDiffFanoutResource
+metadata:
+  name: test-fanout-resource-08
+spec:
+  coolField: value-08
+  crossplane:
+    compositionRef:
+      name: xcompdiffresources.fanout.example.org
+---
+apiVersion: fanout.example.org/v1alpha1
+kind: XCompDiffFanoutResource
+metadata:
+  name: test-fanout-resource-09
+spec:
+  coolField: value-09
+  crossplane:
+    compositionRef:
+      name: xcompdiffresources.fanout.example.org
+---
+apiVersion: fanout.example.org/v1alpha1
+kind: XCompDiffFanoutResource
+metadata:
+  name: test-fanout-resource-10
+spec:
+  coolField: value-10
+  crossplane:
+    compositionRef:
+      name: xcompdiffresources.fanout.example.org
+---
+apiVersion: fanout.example.org/v1alpha1
+kind: XCompDiffFanoutResource
+metadata:
+  name: test-fanout-resource-11
+spec:
+  coolField: value-11
+  crossplane:
+    compositionRef:
+      name: xcompdiffresources.fanout.example.org
+---
+apiVersion: fanout.example.org/v1alpha1
+kind: XCompDiffFanoutResource
+metadata:
+  name: test-fanout-resource-12
+spec:
+  coolField: value-12
+  crossplane:
+    compositionRef:
+      name: xcompdiffresources.fanout.example.org
+---
+apiVersion: fanout.example.org/v1alpha1
+kind: XCompDiffFanoutResource
+metadata:
+  name: test-fanout-resource-13
+spec:
+  coolField: value-13
+  crossplane:
+    compositionRef:
+      name: xcompdiffresources.fanout.example.org
+---
+apiVersion: fanout.example.org/v1alpha1
+kind: XCompDiffFanoutResource
+metadata:
+  name: test-fanout-resource-14
+spec:
+  coolField: value-14
+  crossplane:
+    compositionRef:
+      name: xcompdiffresources.fanout.example.org
+---
+apiVersion: fanout.example.org/v1alpha1
+kind: XCompDiffFanoutResource
+metadata:
+  name: test-fanout-resource-16
+spec:
+  coolField: value-16
+  crossplane:
+    compositionRef:
+      name: xcompdiffresources.fanout.example.org
+---
+apiVersion: fanout.example.org/v1alpha1
+kind: XCompDiffFanoutResource
+metadata:
+  name: test-fanout-resource-17
+spec:
+  coolField: value-17
+  crossplane:
+    compositionRef:
+      name: xcompdiffresources.fanout.example.org
+---
+apiVersion: fanout.example.org/v1alpha1
+kind: XCompDiffFanoutResource
+metadata:
+  name: test-fanout-resource-18
+spec:
+  coolField: value-18
+  crossplane:
+    compositionRef:
+      name: xcompdiffresources.fanout.example.org
+---
+apiVersion: fanout.example.org/v1alpha1
+kind: XCompDiffFanoutResource
+metadata:
+  name: test-fanout-resource-19
+spec:
+  coolField: value-19
+  crossplane:
+    compositionRef:
+      name: xcompdiffresources.fanout.example.org
+---
+apiVersion: fanout.example.org/v1alpha1
+kind: XCompDiffFanoutResource
+metadata:
+  name: test-fanout-resource-20
+spec:
+  coolField: value-20
+  crossplane:
+    compositionRef:
+      name: xcompdiffresources.fanout.example.org
+---
+apiVersion: fanout.example.org/v1alpha1
+kind: XCompDiffFanoutResource
+metadata:
+  name: test-fanout-resource-21
+spec:
+  coolField: value-21
+  crossplane:
+    compositionRef:
+      name: xcompdiffresources.fanout.example.org
+---
+apiVersion: fanout.example.org/v1alpha1
+kind: XCompDiffFanoutResource
+metadata:
+  name: test-fanout-resource-22
+spec:
+  coolField: value-22
+  crossplane:
+    compositionRef:
+      name: xcompdiffresources.fanout.example.org
+---
+apiVersion: fanout.example.org/v1alpha1
+kind: XCompDiffFanoutResource
+metadata:
+  name: test-fanout-resource-23
+spec:
+  coolField: value-23
+  crossplane:
+    compositionRef:
+      name: xcompdiffresources.fanout.example.org
+---
+apiVersion: fanout.example.org/v1alpha1
+kind: XCompDiffFanoutResource
+metadata:
+  name: test-fanout-resource-24
+spec:
+  coolField: value-24
+  crossplane:
+    compositionRef:
+      name: xcompdiffresources.fanout.example.org
+---
+apiVersion: fanout.example.org/v1alpha1
+kind: XCompDiffFanoutResource
+metadata:
+  name: test-fanout-resource-25
+spec:
+  coolField: value-25
+  crossplane:
+    compositionRef:
+      name: xcompdiffresources.fanout.example.org
+---
+apiVersion: fanout.example.org/v1alpha1
+kind: XCompDiffFanoutResource
+metadata:
+  name: test-fanout-resource-26
+spec:
+  coolField: value-26
+  crossplane:
+    compositionRef:
+      name: xcompdiffresources.fanout.example.org
+---
+apiVersion: fanout.example.org/v1alpha1
+kind: XCompDiffFanoutResource
+metadata:
+  name: test-fanout-resource-27
+spec:
+  coolField: value-27
+  crossplane:
+    compositionRef:
+      name: xcompdiffresources.fanout.example.org
+---
+apiVersion: fanout.example.org/v1alpha1
+kind: XCompDiffFanoutResource
+metadata:
+  name: test-fanout-resource-28
+spec:
+  coolField: value-28
+  crossplane:
+    compositionRef:
+      name: xcompdiffresources.fanout.example.org
+---
+apiVersion: fanout.example.org/v1alpha1
+kind: XCompDiffFanoutResource
+metadata:
+  name: test-fanout-resource-29
+spec:
+  coolField: value-29
+  crossplane:
+    compositionRef:
+      name: xcompdiffresources.fanout.example.org
+---
+apiVersion: fanout.example.org/v1alpha1
+kind: XCompDiffFanoutResource
+metadata:
+  name: test-fanout-resource-30
+spec:
+  coolField: value-30
+  crossplane:
+    compositionRef:
+      name: xcompdiffresources.fanout.example.org

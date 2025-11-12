@@ -43,11 +43,11 @@ type DiffProcessor interface {
 
 // DefaultDiffProcessor implements DiffProcessor with modular components.
 type DefaultDiffProcessor struct {
-	fnClient             xp.FunctionClient
 	compClient           xp.CompositionClient
 	defClient            xp.DefinitionClient
 	schemaClient         k8.SchemaClient
 	config               ProcessorConfig
+	functionProvider     FunctionProvider
 	schemaValidator      SchemaValidator
 	diffCalculator       DiffCalculator
 	diffRenderer         renderer.DiffRenderer
@@ -87,13 +87,14 @@ func NewDiffProcessor(k8cs k8.Clients, xpcs xp.Clients, opts ...ProcessorOption)
 	requirementsProvider := config.Factories.RequirementsProvider(k8cs.Resource, xpcs.Environment, config.RenderFunc, config.Logger)
 	diffCalculator := config.Factories.DiffCalculator(k8cs.Apply, xpcs.ResourceTree, resourceManager, config.Logger, diffOpts)
 	diffRenderer := config.Factories.DiffRenderer(config.Logger, diffOpts)
+	functionProvider := config.Factories.FunctionProvider(xpcs.Function, config.Logger)
 
 	processor := &DefaultDiffProcessor{
-		fnClient:             xpcs.Function,
 		compClient:           xpcs.Composition,
 		defClient:            xpcs.Definition,
 		schemaClient:         k8cs.Schema,
 		config:               config,
+		functionProvider:     functionProvider,
 		schemaValidator:      schemaValidator,
 		diffCalculator:       diffCalculator,
 		diffRenderer:         diffRenderer,
@@ -215,11 +216,11 @@ func (p *DefaultDiffProcessor) DiffSingleResource(ctx context.Context, res *un.U
 
 	p.config.Logger.Debug("Resource setup complete", "resource", resourceID, "composition", comp.GetName())
 
-	// Get functions for rendering
-	fns, err := p.fnClient.GetFunctionsFromPipeline(comp)
+	// Get functions for this composition (provider handles caching internally)
+	fns, err := p.functionProvider.GetFunctionsForComposition(comp)
 	if err != nil {
 		p.config.Logger.Debug("Failed to get functions", "resource", resourceID, "error", err)
-		return nil, errors.Wrap(err, "cannot get functions from pipeline")
+		return nil, errors.Wrap(err, "cannot get functions for composition")
 	}
 
 	// Note: Serialization mutex prevents concurrent Docker operations.
