@@ -407,7 +407,7 @@ func TestDiffCommand(t *testing.T) {
 					Build()
 
 				environmentClient := tu.NewMockEnvironmentClient().
-					WithSuccessfulEnvironmentConfigsFetch([]*un.Unstructured{}).
+					WithNoEnvironmentConfigs().
 					Build()
 
 				resourceTreeClient := tu.NewMockResourceTreeClient().

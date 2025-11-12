@@ -798,6 +798,13 @@ func (b *MockFunctionClientBuilder) WithSuccessfulFunctionsFetch(functions []pkg
 	})
 }
 
+// WithNoFunctions sets GetFunctionsFromPipeline to return an empty function list.
+func (b *MockFunctionClientBuilder) WithNoFunctions() *MockFunctionClientBuilder {
+	return b.WithGetFunctionsFromPipeline(func(*xpextv1.Composition) ([]pkgv1.Function, error) {
+		return []pkgv1.Function{}, nil
+	})
+}
+
 // WithFailedFunctionsFetch sets GetFunctionsFromPipeline to return an error.
 func (b *MockFunctionClientBuilder) WithFailedFunctionsFetch(errMsg string) *MockFunctionClientBuilder {
 	return b.WithGetFunctionsFromPipeline(func(*xpextv1.Composition) ([]pkgv1.Function, error) {
@@ -870,6 +877,13 @@ func (b *MockEnvironmentClientBuilder) WithGetEnvironmentConfigs(fn func(context
 func (b *MockEnvironmentClientBuilder) WithSuccessfulEnvironmentConfigsFetch(configs []*un.Unstructured) *MockEnvironmentClientBuilder {
 	return b.WithGetEnvironmentConfigs(func(context.Context) ([]*un.Unstructured, error) {
 		return configs, nil
+	})
+}
+
+// WithNoEnvironmentConfigs sets GetEnvironmentConfigs to return an empty list.
+func (b *MockEnvironmentClientBuilder) WithNoEnvironmentConfigs() *MockEnvironmentClientBuilder {
+	return b.WithGetEnvironmentConfigs(func(context.Context) ([]*un.Unstructured, error) {
+		return []*un.Unstructured{}, nil
 	})
 }
 

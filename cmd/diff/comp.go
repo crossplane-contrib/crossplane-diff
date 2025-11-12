@@ -132,16 +132,14 @@ func (c *CompCmd) Run(k *kong.Context, log logging.Logger, appCtx *AppContext, p
 	}
 	defer cancel()
 
-	// Cleanup Docker containers if the function provider supports it
-	if cleaner, ok := fnProvider.(dp.ContainerCleaner); ok {
-		defer func() {
-			// Use background context for cleanup since the command context may be cancelled
-			cleanupCtx := context.Background()
-			if err := cleaner.Cleanup(cleanupCtx); err != nil {
-				log.Debug("Failed to cleanup containers", "error", err)
-			}
-		}()
-	}
+	// Cleanup any resources created by the function provider
+	defer func() {
+		// Use background context for cleanup since the command context may be cancelled
+		cleanupCtx := context.Background()
+		if err := fnProvider.Cleanup(cleanupCtx); err != nil {
+			log.Debug("Failed to cleanup function provider resources", "error", err)
+		}
+	}()
 
 	err = proc.Initialize(ctx)
 	if err != nil {

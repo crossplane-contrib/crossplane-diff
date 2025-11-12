@@ -42,7 +42,7 @@ func TestRequirementsProvider_ProvideRequirements(t *testing.T) {
 			},
 			setupEnvironmentClient: func() *tu.MockEnvironmentClient {
 				return tu.NewMockEnvironmentClient().
-					WithSuccessfulEnvironmentConfigsFetch([]*un.Unstructured{}).
+					WithNoEnvironmentConfigs().
 					Build()
 			},
 			wantCount: 0,
@@ -78,7 +78,7 @@ func TestRequirementsProvider_ProvideRequirements(t *testing.T) {
 			},
 			setupEnvironmentClient: func() *tu.MockEnvironmentClient {
 				return tu.NewMockEnvironmentClient().
-					WithSuccessfulEnvironmentConfigsFetch([]*un.Unstructured{}).
+					WithNoEnvironmentConfigs().
 					Build()
 			},
 			wantCount: 1,
@@ -120,7 +120,7 @@ func TestRequirementsProvider_ProvideRequirements(t *testing.T) {
 			},
 			setupEnvironmentClient: func() *tu.MockEnvironmentClient {
 				return tu.NewMockEnvironmentClient().
-					WithSuccessfulEnvironmentConfigsFetch([]*un.Unstructured{}).
+					WithNoEnvironmentConfigs().
 					Build()
 			},
 			wantCount: 1,
@@ -169,7 +169,7 @@ func TestRequirementsProvider_ProvideRequirements(t *testing.T) {
 			},
 			setupEnvironmentClient: func() *tu.MockEnvironmentClient {
 				return tu.NewMockEnvironmentClient().
-					WithSuccessfulEnvironmentConfigsFetch([]*un.Unstructured{}).
+					WithNoEnvironmentConfigs().
 					Build()
 			},
 			wantCount: 2,
@@ -200,7 +200,7 @@ func TestRequirementsProvider_ProvideRequirements(t *testing.T) {
 			},
 			setupEnvironmentClient: func() *tu.MockEnvironmentClient {
 				return tu.NewMockEnvironmentClient().
-					WithSuccessfulEnvironmentConfigsFetch([]*un.Unstructured{}).
+					WithNoEnvironmentConfigs().
 					Build()
 			},
 			wantErr: true,

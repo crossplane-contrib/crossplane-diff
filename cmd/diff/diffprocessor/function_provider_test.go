@@ -73,7 +73,7 @@ func TestDefaultFunctionProvider_GetFunctionsForComposition(t *testing.T) {
 		"NoFunctions": {
 			setupMocks: func() *tu.MockFunctionClientBuilder {
 				return tu.NewMockFunctionClient().
-					WithSuccessfulFunctionsFetch([]pkgv1.Function{})
+					WithNoFunctions()
 			},
 			wantErr:   false,
 			wantCount: 0,
@@ -378,8 +378,8 @@ func TestCachedFunctionProvider_Cleanup(t *testing.T) {
 				logger:         logger,
 			}
 
-			ctx := context.Background()
-			err := provider.Cleanup(ctx)
+			err := provider.Cleanup(t.Context())
+
 			// Cleanup should never return an error (graceful degradation)
 			if err != nil {
 				t.Errorf("Cleanup() returned unexpected error: %v", err)

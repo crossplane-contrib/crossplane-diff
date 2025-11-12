@@ -43,12 +43,9 @@ var containerNamePattern = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_.-]*$`)
 type FunctionProvider interface {
 	// GetFunctionsForComposition returns the functions needed to render a composition.
 	GetFunctionsForComposition(comp *apiextensionsv1.Composition) ([]pkgv1.Function, error)
-}
 
-// ContainerCleaner provides cleanup for Docker containers.
-// This interface is optionally implemented by FunctionProviders that create Docker containers.
-type ContainerCleaner interface {
-	// Cleanup stops and removes Docker containers created during function execution.
+	// Cleanup stops and removes any resources created during function execution.
+	// For providers that don't create resources (like DefaultFunctionProvider), this is a no-op.
 	Cleanup(ctx context.Context) error
 }
 
@@ -79,6 +76,11 @@ func (p *DefaultFunctionProvider) GetFunctionsForComposition(comp *apiextensions
 	p.logger.Debug("Fetched functions from pipeline", "composition", comp.GetName(), "count", len(fns))
 
 	return fns, nil
+}
+
+// Cleanup is a no-op for DefaultFunctionProvider as it doesn't create any resources.
+func (p *DefaultFunctionProvider) Cleanup(ctx context.Context) error {
+	return nil
 }
 
 // CachedFunctionProvider lazy-loads and caches functions with reuse annotations.
@@ -171,7 +173,6 @@ func (p *CachedFunctionProvider) GetFunctionsForComposition(comp *apiextensionsv
 }
 
 // Cleanup stops and removes Docker containers created during function execution.
-// This implements the ContainerCleaner interface.
 func (p *CachedFunctionProvider) Cleanup(ctx context.Context) error {
 	if len(p.containerNames) == 0 {
 		p.logger.Debug("No containers to clean up")
