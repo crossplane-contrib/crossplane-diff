@@ -137,12 +137,14 @@ func (p *CachedFunctionProvider) GetFunctionsForComposition(comp *apiextensionsv
 // Example: xpkg.crossplane.io/crossplane-contrib/function-go-templating:v0.11.0
 // Returns: function-go-templating-v0.11.0-comp.
 func generateContainerName(pkg string) string {
+	// Handle empty package string
+	if pkg == "" {
+		return "unknown-comp"
+	}
+
 	// Split package into path and version
 	// Format: registry/org/name:version
 	parts := strings.Split(pkg, "/")
-	if len(parts) == 0 {
-		return "unknown-comp"
-	}
 
 	// Get the last part (name:version)
 	nameAndVersion := parts[len(parts)-1]

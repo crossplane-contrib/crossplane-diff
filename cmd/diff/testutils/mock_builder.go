@@ -811,6 +811,14 @@ func (b *MockFunctionClientBuilder) WithListFunctions(fn func(context.Context) (
 	return b
 }
 
+// WithFunctionsFetchCallback sets a callback that's called when GetFunctionsFromPipeline is invoked.
+// This is useful for testing caching behavior by tracking how many times functions are fetched.
+func (b *MockFunctionClientBuilder) WithFunctionsFetchCallback(callback func() ([]pkgv1.Function, error)) *MockFunctionClientBuilder {
+	return b.WithGetFunctionsFromPipeline(func(*xpextv1.Composition) ([]pkgv1.Function, error) {
+		return callback()
+	})
+}
+
 // Build returns the built mock.
 func (b *MockFunctionClientBuilder) Build() *MockFunctionClient {
 	return b.mock
