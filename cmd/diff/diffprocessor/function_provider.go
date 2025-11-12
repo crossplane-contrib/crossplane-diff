@@ -79,7 +79,7 @@ func (p *DefaultFunctionProvider) GetFunctionsForComposition(comp *apiextensions
 }
 
 // Cleanup is a no-op for DefaultFunctionProvider as it doesn't create any resources.
-func (p *DefaultFunctionProvider) Cleanup(ctx context.Context) error {
+func (p *DefaultFunctionProvider) Cleanup(_ context.Context) error {
 	return nil
 }
 

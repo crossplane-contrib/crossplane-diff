@@ -17,7 +17,6 @@ limitations under the License.
 package diffprocessor
 
 import (
-	"context"
 	"strings"
 	"testing"
 
@@ -379,7 +378,6 @@ func TestCachedFunctionProvider_Cleanup(t *testing.T) {
 			}
 
 			err := provider.Cleanup(t.Context())
-
 			// Cleanup should never return an error (graceful degradation)
 			if err != nil {
 				t.Errorf("Cleanup() returned unexpected error: %v", err)
