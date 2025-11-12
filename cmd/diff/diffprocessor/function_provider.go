@@ -17,6 +17,9 @@ limitations under the License.
 package diffprocessor
 
 import (
+	"context"
+	"fmt"
+	"os/exec"
 	"strings"
 
 	xp "github.com/crossplane-contrib/crossplane-diff/cmd/diff/client/crossplane"
@@ -33,6 +36,13 @@ import (
 type FunctionProvider interface {
 	// GetFunctionsForComposition returns the functions needed to render a composition.
 	GetFunctionsForComposition(comp *apiextensionsv1.Composition) ([]pkgv1.Function, error)
+}
+
+// ContainerCleaner provides cleanup for Docker containers.
+// This interface is optionally implemented by FunctionProviders that create Docker containers.
+type ContainerCleaner interface {
+	// Cleanup stops and removes Docker containers created during function execution.
+	Cleanup(ctx context.Context) error
 }
 
 // DefaultFunctionProvider fetches functions from the cluster on each call.
@@ -68,17 +78,19 @@ func (p *DefaultFunctionProvider) GetFunctionsForComposition(comp *apiextensions
 // This is appropriate for the comp command where many XRs use the same composition,
 // allowing Docker containers to be reused across renders.
 type CachedFunctionProvider struct {
-	fnClient xp.FunctionClient
-	cache    map[string][]pkgv1.Function
-	logger   logging.Logger
+	fnClient       xp.FunctionClient
+	cache          map[string][]pkgv1.Function
+	containerNames []string // Track container names for cleanup
+	logger         logging.Logger
 }
 
 // NewCachedFunctionProvider creates a new CachedFunctionProvider.
 func NewCachedFunctionProvider(fnClient xp.FunctionClient, logger logging.Logger) FunctionProvider {
 	return &CachedFunctionProvider{
-		fnClient: fnClient,
-		cache:    make(map[string][]pkgv1.Function),
-		logger:   logger,
+		fnClient:       fnClient,
+		cache:          make(map[string][]pkgv1.Function),
+		containerNames: make([]string, 0),
+		logger:         logger,
 	}
 }
 
@@ -120,17 +132,67 @@ func (p *CachedFunctionProvider) GetFunctionsForComposition(comp *apiextensionsv
 		}
 
 		// Add Docker reuse annotations
-		// TODO: Add cleanup mechanism to remove orphaned containers at the end of comp command execution.
-		// These containers are currently left running after the diff completes. We should track the container
-		// names and stop/remove them when the command finishes to avoid accumulation of orphaned containers.
+		// Containers will be cleaned up via Cleanup() method called by comp command
 		fn.Annotations["render.crossplane.io/runtime-docker-name"] = containerName
 		fn.Annotations["render.crossplane.io/runtime-docker-cleanup"] = "Orphan"
+
+		// Track container name for cleanup
+		p.containerNames = append(p.containerNames, containerName)
 	}
 
 	// Cache for future calls
 	p.cache[compName] = fns
 
 	return fns, nil
+}
+
+// Cleanup stops and removes Docker containers created during function execution.
+// This implements the ContainerCleaner interface.
+func (p *CachedFunctionProvider) Cleanup(ctx context.Context) error {
+	if len(p.containerNames) == 0 {
+		p.logger.Debug("No containers to clean up")
+		return nil
+	}
+
+	p.logger.Info("Cleaning up function containers", "count", len(p.containerNames))
+
+	var errs []error
+	for _, containerName := range p.containerNames {
+		// Check if container exists
+		checkCmd := exec.CommandContext(ctx, "docker", "ps", "-a", "-q", "-f", fmt.Sprintf("name=%s", containerName))
+		output, err := checkCmd.Output()
+		if err != nil {
+			p.logger.Debug("Error checking container existence", "container", containerName, "error", err)
+			continue
+		}
+
+		// Skip if container doesn't exist
+		if len(strings.TrimSpace(string(output))) == 0 {
+			p.logger.Debug("Container does not exist, skipping", "container", containerName)
+			continue
+		}
+
+		// Stop and remove container
+		p.logger.Debug("Stopping and removing container", "container", containerName)
+		stopCmd := exec.CommandContext(ctx, "docker", "rm", "-f", containerName)
+		if err := stopCmd.Run(); err != nil {
+			p.logger.Debug("Error removing container", "container", containerName, "error", err)
+			errs = append(errs, errors.Wrapf(err, "failed to remove container %s", containerName))
+		} else {
+			p.logger.Debug("Successfully removed container", "container", containerName)
+		}
+	}
+
+	if len(errs) > 0 {
+		// Don't fail the entire cleanup if some containers couldn't be removed
+		// Log the error but return nil to allow graceful degradation
+		p.logger.Info("Some containers could not be cleaned up", "errors", len(errs))
+		for _, err := range errs {
+			p.logger.Debug("Cleanup error", "error", err)
+		}
+	}
+
+	return nil
 }
 
 // generateContainerName creates a stable Docker container name from a function package reference.

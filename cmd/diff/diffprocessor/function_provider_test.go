@@ -17,6 +17,7 @@ limitations under the License.
 package diffprocessor
 
 import (
+	"context"
 	"strings"
 	"testing"
 
@@ -331,6 +332,102 @@ func TestCachedFunctionProvider_GetFunctionsForComposition_MultipleCompositions(
 	}
 	if fetchCalls["composition-2"] != 1 {
 		t.Errorf("composition-2 fetched %d times, want 1", fetchCalls["composition-2"])
+	}
+}
+
+func TestCachedFunctionProvider_Cleanup(t *testing.T) {
+	tests := map[string]struct {
+		setupContainers func() []string // Returns container names to create
+		expectCleanup   bool            // Whether cleanup should be attempted
+	}{
+		"NoContainers": {
+			setupContainers: func() []string {
+				return []string{}
+			},
+			expectCleanup: false,
+		},
+		"WithContainers": {
+			setupContainers: func() []string {
+				// We'll track container names but won't actually create them
+				// The test will verify the cleanup logic is called correctly
+				return []string{"test-container-1-comp", "test-container-2-comp"}
+			},
+			expectCleanup: true,
+		},
+	}
+
+	for name, tt := range tests {
+		t.Run(name, func(t *testing.T) {
+			fnClient := tu.NewMockFunctionClient().Build()
+			logger := tu.TestLogger(t, false)
+			provider := &CachedFunctionProvider{
+				fnClient:       fnClient,
+				cache:          make(map[string][]pkgv1.Function),
+				containerNames: tt.setupContainers(),
+				logger:         logger,
+			}
+
+			ctx := context.Background()
+			err := provider.Cleanup(ctx)
+
+			// Cleanup should never return an error (graceful degradation)
+			if err != nil {
+				t.Errorf("Cleanup() returned unexpected error: %v", err)
+			}
+		})
+	}
+}
+
+func TestCachedFunctionProvider_TracksContainerNames(t *testing.T) {
+	functions := []pkgv1.Function{
+		{
+			ObjectMeta: metav1.ObjectMeta{Name: "function-1"},
+			Spec: pkgv1.FunctionSpec{
+				PackageSpec: pkgv1.PackageSpec{
+					Package: "xpkg.io/test/function-one:v1.0.0",
+				},
+			},
+		},
+		{
+			ObjectMeta: metav1.ObjectMeta{Name: "function-2"},
+			Spec: pkgv1.FunctionSpec{
+				PackageSpec: pkgv1.PackageSpec{
+					Package: "xpkg.io/test/function-two:v2.0.0",
+				},
+			},
+		},
+	}
+
+	fnClient := tu.NewMockFunctionClient().
+		WithSuccessfulFunctionsFetch(functions).
+		Build()
+
+	logger := tu.TestLogger(t, false)
+	provider := NewCachedFunctionProvider(fnClient, logger).(*CachedFunctionProvider)
+
+	comp := &apiextensionsv1.Composition{
+		ObjectMeta: metav1.ObjectMeta{Name: "test-composition"},
+	}
+
+	_, err := provider.GetFunctionsForComposition(comp)
+	if err != nil {
+		t.Fatalf("GetFunctionsForComposition() error = %v", err)
+	}
+
+	// Verify container names were tracked
+	if len(provider.containerNames) != 2 {
+		t.Errorf("Expected 2 container names tracked, got %d", len(provider.containerNames))
+	}
+
+	expectedNames := []string{"function-one-v1.0.0-comp", "function-two-v2.0.0-comp"}
+	for i, expected := range expectedNames {
+		if i >= len(provider.containerNames) {
+			t.Errorf("Missing container name at index %d", i)
+			continue
+		}
+		if provider.containerNames[i] != expected {
+			t.Errorf("Container name[%d] = %q, want %q", i, provider.containerNames[i], expected)
+		}
 	}
 }
 

@@ -17,7 +17,10 @@ limitations under the License.
 package main
 
 import (
+	"context"
+
 	"github.com/alecthomas/kong"
+	xp "github.com/crossplane-contrib/crossplane-diff/cmd/diff/client/crossplane"
 	dp "github.com/crossplane-contrib/crossplane-diff/cmd/diff/diffprocessor"
 	"k8s.io/client-go/rest"
 
@@ -78,7 +81,7 @@ func (c *CompCmd) initializeDependencies(ctx *kong.Context, log logging.Logger, 
 		return err
 	}
 
-	proc := makeDefaultCompProc(c, appCtx, log)
+	proc, fnProvider := makeDefaultCompProc(c, appCtx, log)
 
 	loader, err := ld.NewCompositeLoader(c.Files)
 	if err != nil {
@@ -87,16 +90,20 @@ func (c *CompCmd) initializeDependencies(ctx *kong.Context, log logging.Logger, 
 
 	ctx.BindTo(proc, (*dp.CompDiffProcessor)(nil))
 	ctx.BindTo(loader, (*ld.Loader)(nil))
+	ctx.BindTo(fnProvider, (*dp.FunctionProvider)(nil))
 
 	return nil
 }
 
-func makeDefaultCompProc(c *CompCmd, ctx *AppContext, log logging.Logger) dp.CompDiffProcessor {
+func makeDefaultCompProc(c *CompCmd, ctx *AppContext, log logging.Logger) (dp.CompDiffProcessor, dp.FunctionProvider) {
 	// Use provided namespace or default to "default"
 	namespace := c.Namespace
 	if namespace == "" {
 		namespace = "default"
 	}
+
+	// Create the cached function provider that we'll return for cleanup
+	fnProvider := dp.NewCachedFunctionProvider(ctx.XpClients.Function, log)
 
 	// Both processors share the same options since they're part of the same command
 	opts := defaultProcessorOptions(c.CommonCmdFields, namespace)
@@ -104,25 +111,37 @@ func makeDefaultCompProc(c *CompCmd, ctx *AppContext, log logging.Logger) dp.Com
 		dp.WithLogger(log),
 		dp.WithRenderMutex(&globalRenderMutex),
 		dp.WithIncludeManual(c.IncludeManual),
-		// Use cached function provider for composition diffs to enable Docker container reuse
-		// The provider lazy-loads and caches functions by composition name
-		dp.WithFunctionProviderFactory(dp.NewCachedFunctionProvider),
+		// Use the function provider we created above
+		dp.WithFunctionProviderFactory(func(xp.FunctionClient, logging.Logger) dp.FunctionProvider {
+			return fnProvider
+		}),
 	)
 
 	// Create XR processor first (peer processor)
 	xrProc := dp.NewDiffProcessor(ctx.K8sClients, ctx.XpClients, opts...)
 
 	// Inject it into composition processor
-	return dp.NewCompDiffProcessor(xrProc, ctx.XpClients.Composition, opts...)
+	return dp.NewCompDiffProcessor(xrProc, ctx.XpClients.Composition, opts...), fnProvider
 }
 
 // Run executes the composition diff command.
-func (c *CompCmd) Run(k *kong.Context, log logging.Logger, appCtx *AppContext, proc dp.CompDiffProcessor, loader ld.Loader) error {
+func (c *CompCmd) Run(k *kong.Context, log logging.Logger, appCtx *AppContext, proc dp.CompDiffProcessor, loader ld.Loader, fnProvider dp.FunctionProvider) error {
 	ctx, cancel, err := initializeAppContext(c.Timeout, appCtx, log)
 	if err != nil {
 		return err
 	}
 	defer cancel()
+
+	// Cleanup Docker containers if the function provider supports it
+	if cleaner, ok := fnProvider.(dp.ContainerCleaner); ok {
+		defer func() {
+			// Use background context for cleanup since the command context may be cancelled
+			cleanupCtx := context.Background()
+			if err := cleaner.Cleanup(cleanupCtx); err != nil {
+				log.Debug("Failed to cleanup containers", "error", err)
+			}
+		}()
+	}
 
 	err = proc.Initialize(ctx)
 	if err != nil {
