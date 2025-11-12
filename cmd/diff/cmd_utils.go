@@ -37,9 +37,8 @@ import (
 var globalRenderMutex sync.Mutex
 
 // initializeSharedDependencies handles the common initialization logic for both commands.
-func initializeSharedDependencies(ctx *kong.Context, log logging.Logger, config *rest.Config, fields CommonCmdFields) (*AppContext, error) {
-	config = initRestConfig(config, log, fields)
-
+// The rest.Config is injected by Kong after being created in CommonCmdFields.BeforeApply.
+func initializeSharedDependencies(ctx *kong.Context, log logging.Logger, config *rest.Config) (*AppContext, error) {
 	appCtx, err := NewAppContext(config, log)
 	if err != nil {
 		return nil, errors.Wrap(err, "cannot create app context")
@@ -50,30 +49,23 @@ func initializeSharedDependencies(ctx *kong.Context, log logging.Logger, config 
 	return appCtx, nil
 }
 
-// initRestConfig configures REST client rate limits for both commands.
-func initRestConfig(config *rest.Config, logger logging.Logger, fields CommonCmdFields) *rest.Config {
+// initRestConfig configures REST client rate limits with sensible defaults.
+func initRestConfig(config *rest.Config, logger logging.Logger) *rest.Config {
 	// Set default QPS and Burst if they are not set in the config
-	// or override with values from options if provided
 	originalQPS := config.QPS
 	originalBurst := config.Burst
 
-	if fields.QPS > 0 {
-		config.QPS = fields.QPS
-	} else if config.QPS == 0 {
+	if config.QPS == 0 {
 		config.QPS = 20
 	}
 
-	if fields.Burst > 0 {
-		config.Burst = fields.Burst
-	} else if config.Burst == 0 {
+	if config.Burst == 0 {
 		config.Burst = 30
 	}
 
 	logger.Debug("Configured REST client rate limits",
 		"original_qps", originalQPS,
 		"original_burst", originalBurst,
-		"options_qps", fields.QPS,
-		"options_burst", fields.Burst,
 		"final_qps", config.QPS,
 		"final_burst", config.Burst)
 

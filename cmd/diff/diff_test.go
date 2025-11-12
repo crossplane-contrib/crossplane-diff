@@ -1062,8 +1062,8 @@ users:
 				os.Unsetenv("KUBECONFIG")
 			}
 
-			// Call the function
-			config, err := getRestConfig()
+			// Call the function with empty context (use default)
+			config, err := getRestConfig("")
 
 			// Check error expectations
 			if tc.expectError && err == nil {
