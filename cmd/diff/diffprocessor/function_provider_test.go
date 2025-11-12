@@ -55,6 +55,7 @@ func TestDefaultFunctionProvider_GetFunctionsForComposition(t *testing.T) {
 					{ObjectMeta: metav1.ObjectMeta{Name: "function-1"}},
 					{ObjectMeta: metav1.ObjectMeta{Name: "function-2"}},
 				}
+
 				return tu.NewMockFunctionClient().
 					WithSuccessfulFunctionsFetch(functions)
 			},
@@ -166,6 +167,7 @@ func TestCachedFunctionProvider_GetFunctionsForComposition_LazyLoading(t *testin
 	}
 
 	expectedContainerName := "function-go-templating-v0.11.0-comp"
+
 	gotContainerName := fns[0].Annotations["render.crossplane.io/runtime-docker-name"]
 	if gotContainerName != expectedContainerName {
 		t.Errorf("Container name = %q, want %q", gotContainerName, expectedContainerName)
@@ -275,6 +277,7 @@ func TestCachedFunctionProvider_GetFunctionsForComposition_MultipleCompositions(
 					},
 				}, nil
 			}
+
 			return []pkgv1.Function{
 				{
 					ObjectMeta: metav1.ObjectMeta{Name: "function-2"},
@@ -330,6 +333,7 @@ func TestCachedFunctionProvider_GetFunctionsForComposition_MultipleCompositions(
 	if fetchCalls["composition-1"] != 1 {
 		t.Errorf("composition-1 fetched %d times, want 1", fetchCalls["composition-1"])
 	}
+
 	if fetchCalls["composition-2"] != 1 {
 		t.Errorf("composition-2 fetched %d times, want 1", fetchCalls["composition-2"])
 	}
@@ -369,7 +373,6 @@ func TestCachedFunctionProvider_Cleanup(t *testing.T) {
 
 			ctx := context.Background()
 			err := provider.Cleanup(ctx)
-
 			// Cleanup should never return an error (graceful degradation)
 			if err != nil {
 				t.Errorf("Cleanup() returned unexpected error: %v", err)
@@ -425,6 +428,7 @@ func TestCachedFunctionProvider_TracksContainerNames(t *testing.T) {
 			t.Errorf("Missing container name at index %d", i)
 			continue
 		}
+
 		if provider.containerNames[i] != expected {
 			t.Errorf("Container name[%d] = %q, want %q", i, provider.containerNames[i], expected)
 		}
