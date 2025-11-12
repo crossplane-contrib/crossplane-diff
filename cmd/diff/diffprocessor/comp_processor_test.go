@@ -19,20 +19,19 @@ package diffprocessor
 import (
 	"bytes"
 	"context"
+	"io"
 	"strings"
 	"testing"
 
 	xp "github.com/crossplane-contrib/crossplane-diff/cmd/diff/client/crossplane"
-	k8 "github.com/crossplane-contrib/crossplane-diff/cmd/diff/client/kubernetes"
 	tu "github.com/crossplane-contrib/crossplane-diff/cmd/diff/testutils"
+	"github.com/crossplane-contrib/crossplane-diff/cmd/diff/types"
 	gcmp "github.com/google/go-cmp/cmp"
-	extv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	un "k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 
 	"github.com/crossplane/crossplane-runtime/v2/pkg/logging"
 
 	apiextensionsv1 "github.com/crossplane/crossplane/v2/apis/apiextensions/v1"
-	pkgv1 "github.com/crossplane/crossplane/v2/apis/pkg/v1"
 	"github.com/crossplane/crossplane/v2/cmd/crank/render"
 )
 
@@ -163,25 +162,14 @@ func TestDefaultCompDiffProcessor_DiffComposition(t *testing.T) {
 					BuildAsUnstructured(),
 			},
 			setupMocks: func() xp.Clients {
-				// Need to create the XRD here so it can be captured in the closure
-				testXRD := tu.NewXRD("xresources.example.org", "example.org", "XResource").BuildAsUnstructured()
-
 				return xp.Clients{
 					Composition: tu.NewMockCompositionClient().
 						WithSuccessfulCompositionFetch(testComp).
 						WithXRsForComposition("test-composition", "default", []*un.Unstructured{testXR}).
 						Build(),
-					Definition: tu.NewMockDefinitionClient().
-						WithSuccessfulXRDsFetch([]*un.Unstructured{}).
-						WithXRDForXR(testXRD).
-						WithIsClaimResource(func(_ context.Context, _ *un.Unstructured) bool {
-							return false // testXR is an XR, not a claim
-						}).
-						Build(),
-					Environment: tu.NewMockEnvironmentClient().WithSuccessfulEnvironmentConfigsFetch([]*un.Unstructured{}).Build(),
-					Function: tu.NewMockFunctionClient().
-						WithSuccessfulFunctionsFetch([]pkgv1.Function{}).
-						Build(),
+					Definition:   tu.NewMockDefinitionClient().Build(),
+					Environment:  tu.NewMockEnvironmentClient().Build(),
+					Function:     tu.NewMockFunctionClient().Build(),
 					ResourceTree: tu.NewMockResourceTreeClient().Build(),
 				}
 			},
@@ -236,9 +224,9 @@ func TestDefaultCompDiffProcessor_DiffComposition(t *testing.T) {
 						WithXRsForComposition("test-composition-1", "default", []*un.Unstructured{}).
 						WithXRsForComposition("test-composition-2", "default", []*un.Unstructured{}).
 						Build(),
-					Definition:   tu.NewMockDefinitionClient().WithSuccessfulXRDsFetch([]*un.Unstructured{}).Build(),
-					Environment:  tu.NewMockEnvironmentClient().WithSuccessfulEnvironmentConfigsFetch([]*un.Unstructured{}).Build(),
-					Function:     tu.NewMockFunctionClient().WithSuccessfulFunctionsFetch([]pkgv1.Function{}).Build(),
+					Definition:   tu.NewMockDefinitionClient().Build(),
+					Environment:  tu.NewMockEnvironmentClient().Build(),
+					Function:     tu.NewMockFunctionClient().Build(),
 					ResourceTree: tu.NewMockResourceTreeClient().Build(),
 				}
 			},
@@ -262,44 +250,30 @@ func TestDefaultCompDiffProcessor_DiffComposition(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			xpClients := tt.setupMocks()
 
-			// Create mock k8s clients
-			// Create test CRD for XResource
-			testCRD := makeTestCRD("xresources.example.org", "XResource", "example.org", "v1")
-
-			k8Clients := k8.Clients{
-				Resource: tu.NewMockResourceClient().
-					WithEmptyListResources().
-					WithResourceNotFound().
-					Build(),
-				Apply: tu.NewMockApplyClient().
-					WithSuccessfulDryRun().
-					Build(),
-				Schema: tu.NewMockSchemaClient().
-					WithSuccessfulCRDByNameFetch("xresources.example.org", testCRD).
-					WithFoundCRD("example.org", "XResource", testCRD).
-					WithGetAllCRDs(func() []*extv1.CustomResourceDefinition { return []*extv1.CustomResourceDefinition{testCRD} }).
-					Build(),
+			// Create mock XR processor
+			mockXRProc := &tu.MockDiffProcessor{
+				PerformDiffFn: func(_ context.Context, stdout io.Writer, _ []*un.Unstructured, _ types.CompositionProvider) error {
+					_, err := stdout.Write([]byte("Mock XR diff output"))
+					return err
+				},
 			}
 
-			// Create processor options
-			opts := []ProcessorOption{
-				WithNamespace(tt.namespace),
-				WithColorize(false),
-				WithCompact(false),
-				WithLogger(tu.TestLogger(t, true)), // Enable debug logging
-				WithRenderFunc(func(_ context.Context, _ logging.Logger, in render.Inputs) (render.Outputs, error) {
-					return render.Outputs{
-						CompositeResource: in.CompositeResource,
-					}, nil
-				}),
-				WithMaxNestedDepth(1),
+			// Create processor
+			processor := &DefaultCompDiffProcessor{
+				compositionClient: xpClients.Composition,
+				xrProc:            mockXRProc,
+				config: ProcessorConfig{
+					Namespace: tt.namespace,
+					Colorize:  false,
+					Compact:   false,
+					Logger:    tu.TestLogger(t, false),
+					RenderFunc: func(_ context.Context, _ logging.Logger, in render.Inputs) (render.Outputs, error) {
+						return render.Outputs{
+							CompositeResource: in.CompositeResource,
+						}, nil
+					},
+				},
 			}
-
-			// Create XR processor first
-			xrProc := NewDiffProcessor(k8Clients, xpClients, opts...)
-
-			// Create composition processor with injected XR processor
-			processor := NewCompDiffProcessor(xrProc, xpClients.Composition, opts...)
 
 			var stdout bytes.Buffer
 
