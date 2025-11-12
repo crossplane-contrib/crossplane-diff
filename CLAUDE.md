@@ -29,13 +29,13 @@ go test -cover ./cmd/diff/diffprocessor/... -coverprofile=/tmp/coverage.out
 go tool cover -func=/tmp/coverage.out
 
 # Pre-PR checks: linting, tests, generation (requires long timeout, can take several minutes)
-earthly +reviewable
+earthly -P +reviewable
 
-# Generate test manifests (required after Crossplane API changes)
-earthly +go-generate --CROSSPLANE_IMAGE_TAG=main
+# Fetch Crossplane cluster CRDs (required after Crossplane API changes or for integration tests)
+earthly +fetch-crossplane-cluster --CROSSPLANE_IMAGE_TAG=main
 
 # Tidy go modules
-earthly +go-modules-tidy
+earthly +generate
 ```
 
 **Earthly Output Notes:**

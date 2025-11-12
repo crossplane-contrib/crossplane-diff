@@ -57,6 +57,9 @@ cat xr.yaml | crossplane-diff xr -
 # Process multiple files
 crossplane-diff xr xr1.yaml xr2.yaml xr3.yaml
 
+# Use a specific kubeconfig context
+crossplane-diff xr xr.yaml --context staging
+
 # Show changes in a compact format with minimal context
 crossplane-diff xr xr.yaml --compact
 
@@ -72,6 +75,9 @@ crossplane-diff comp updated-composition.yaml
 
 # Show impact of multiple composition changes
 crossplane-diff comp comp1.yaml comp2.yaml comp3.yaml
+
+# Use a specific kubeconfig context
+crossplane-diff comp updated-composition.yaml --context production
 
 # Show impact only on XRs in a specific namespace
 crossplane-diff comp updated-composition.yaml -n production
@@ -93,12 +99,11 @@ Arguments:
 Flags:
   -h, --help                   Show context-sensitive help.
       --verbose                Print verbose logging statements.
+      --context=STRING         Kubernetes context to use (defaults to current context).
       --no-color               Disable colorized output.
       --compact                Show compact diffs with minimal context.
       --max-nested-depth=10    Maximum depth for nested XR recursion.
       --timeout=1m             How long to run before timing out.
-      --qps=0                  Maximum QPS to the API server.
-      --burst=0                Maximum burst for throttle.
 ```
 
 **Note**: XR namespaces are read directly from the YAML files being diffed, not from command-line flags.
@@ -114,12 +119,11 @@ Arguments:
 Flags:
   -h, --help                   Show context-sensitive help.
       --verbose                Print verbose logging statements.
+      --context=STRING         Kubernetes context to use (defaults to current context).
       --no-color               Disable colorized output.
       --compact                Show compact diffs with minimal context.
       --max-nested-depth=10    Maximum depth for nested XR recursion.
       --timeout=1m             How long to run before timing out.
-      --qps=0                  Maximum QPS to the API server.
-      --burst=0                Maximum burst for throttle.
   -n, --namespace=""           Namespace to find XRs (empty = all namespaces).
       --include-manual         Include XRs with Manual update policy (default:
                                only Automatic policy XRs)

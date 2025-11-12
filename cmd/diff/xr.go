@@ -67,7 +67,7 @@ func (c *XRCmd) AfterApply(ctx *kong.Context, log logging.Logger, config *rest.C
 }
 
 func (c *XRCmd) initializeDependencies(ctx *kong.Context, log logging.Logger, config *rest.Config) error {
-	appCtx, err := initializeSharedDependencies(ctx, log, config, c.CommonCmdFields)
+	appCtx, err := initializeSharedDependencies(ctx, log, config)
 	if err != nil {
 		return err
 	}
