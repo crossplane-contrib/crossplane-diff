@@ -44,6 +44,31 @@ earthly -i -P +e2e --FLAGS="-test.failfast -fail-fast -destroy-kind-cluster=fals
 earthly -P +e2e --FLAGS="-test.v -test-suite=composition-webhook-schema-validation"
 ```
 
+### Generating Expected Output Files
+
+When adding or updating tests that compare command output against expected files, you can use the `E2E_DUMP_EXPECTED` environment variable to automatically generate or update the expected output files:
+
+```shell
+# Generate expected output files for all tests
+E2E_DUMP_EXPECTED=1 go test -v ./test/e2e -run TestYourSpecificTest
+
+# Or with earthly (requires modifying Earthfile to pass the env var)
+E2E_DUMP_EXPECTED=1 earthly -P +e2e --FLAGS="-test.run TestYourSpecificTest"
+```
+
+When `E2E_DUMP_EXPECTED` is set:
+- Commands run **without** `--verbose` mode to produce clean output
+- The actual output is normalized using the existing regex patterns (to replace dynamic values like resource hashes)
+- The normalized output is written to the expected file path
+- No assertions are performed (the test will pass after writing the file)
+
+After generating the expected files:
+1. Review the generated files to ensure they look correct
+2. Unset `E2E_DUMP_EXPECTED` and run the tests again to verify they pass
+3. Commit the new/updated expected files
+
+**Important**: Always review generated expected files before committing them, as they become the source of truth for test assertions.
+
 ### Accessing the Test Cluster
 
 Earthly runs e2e tests in a buildkit container, which is not directly accessible

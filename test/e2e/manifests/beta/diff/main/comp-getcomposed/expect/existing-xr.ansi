@@ -1,0 +1,78 @@
+=== Composition Changes ===
+
+~~~ Composition/xgetcomposedresources.getcomposed.example.org
+  apiVersion: apiextensions.crossplane.io/v1
+  kind: Composition
+  metadata:
+    name: xgetcomposedresources.getcomposed.example.org
+  spec:
+    compositeTypeRef:
+      apiVersion: getcomposed.example.org/v1alpha1
+      kind: XGetComposedResource
+    mode: Pipeline
+    pipeline:
+    - functionRef:
+        name: function-patch-and-transform
+      input:
+        apiVersion: pt.fn.crossplane.io/v1beta1
+        kind: Resources
+        resources:
+        - base:
+            apiVersion: nop.crossplane.io/v1alpha1
+            kind: ClusterNopResource
+            spec:
+              forProvider:
+                conditionAfter:
+                - conditionStatus: "True"
+                  conditionType: Ready
+                  time: 0s
+          name: test-bucket
+          patches:
+          - fromFieldPath: spec.bucketName
+            toFieldPath: metadata.annotations[bucket-name]
+            type: FromCompositeFieldPath
+        - base:
+            apiVersion: nop.crossplane.io/v1alpha1
+            kind: ClusterNopResource
+            spec:
+              forProvider:
+                conditionAfter:
+                - conditionStatus: "True"
+                  conditionType: Ready
+                  time: 0s
+          name: test-lifecycle
+          patches:
+          - fromFieldPath: spec.bucketName
+            toFieldPath: metadata.annotations[for-bucket]
+            type: FromCompositeFieldPath
+      step: generate-resources
+    - functionRef:
+[32m+       name: function-go-templating[0m
+[32m+     input:[0m
+[32m+       apiVersion: gotemplating.fn.crossplane.io/v1beta1[0m
+[32m+       inline:[0m
+[32m+         template: |[0m
+[32m+           {{ $bucket := getComposedResource . "test-bucket" }}[0m
+[32m+           ---[0m
+[32m+           apiVersion: getcomposed.example.org/v1alpha1[0m
+[32m+           kind: XGetComposedResource[0m
+[32m+           status:[0m
+[32m+             bucketRef:[0m
+[32m+               name: {{ $bucket.metadata.name }}[0m
+[32m+       kind: GoTemplate[0m
+[32m+       source: Inline[0m
+[32m+     step: use-getcomposed[0m
+[32m+   - functionRef:[0m
+        name: function-auto-ready
+      step: detect-ready-resources
+
+---
+
+Summary: 1 modified
+
+=== Affected Composite Resources ===
+
+- XGetComposedResource/test-getcomposed-resource (cluster-scoped)
+
+=== Impact Analysis ===
+

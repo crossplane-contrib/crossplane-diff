@@ -63,8 +63,13 @@ const (
 func runCrossplaneDiff(t *testing.T, c *envconf.Config, binPath, subcommand string, resourcePaths ...string) (string, string, error) {
 	t.Helper()
 
-	// Prepare the command to run
-	args := append([]string{"--verbose", subcommand, "--timeout=2m"}, resourcePaths...)
+	// When E2E_DUMP_EXPECTED is set, run without verbose mode to get clean output for expected files
+	args := []string{subcommand, "--timeout=2m"}
+	if os.Getenv("E2E_DUMP_EXPECTED") == "" {
+		args = append([]string{"--verbose"}, args...)
+	}
+	args = append(args, resourcePaths...)
+
 	t.Logf("Running command: %s %s", binPath, strings.Join(args, " "))
 	cmd := exec.Command(binPath, args...)
 
@@ -524,6 +529,7 @@ var (
 	resourceNameRegex              = regexp.MustCompile(`(existing-resource)-[a-z0-9]{5,}(?:-nop-resource)?`)
 	compResourceNameRegex          = regexp.MustCompile(`(test-comp-resource)-[a-z0-9]{5,}`)
 	fanoutResourceNameRegex        = regexp.MustCompile(`(test-fanout-resource-\d{2})-[a-z0-9]{5,}`)
+	getComposedResourceNameRegex   = regexp.MustCompile(`(test-getcomposed-resource)-[a-z0-9]{5,}`)
 	claimNameRegex                 = regexp.MustCompile(`(test-claim)-[a-z0-9]{5,}(?:-[a-z0-9]{5,})?`)
 	claimCompositionRevisionRegex  = regexp.MustCompile(`(xnopclaims\.claim\.diff\.example\.org)-[a-z0-9]{7,}`)
 	compositionRevisionRegex       = regexp.MustCompile(`(xnopresources\.(cluster\.|legacy\.)?diff\.example\.org)-[a-z0-9]{7,}`)
@@ -540,6 +546,28 @@ func normalizeLine(line string) string {
 	line = resourceNameRegex.ReplaceAllString(line, "${1}-XXXXX")
 	line = compResourceNameRegex.ReplaceAllString(line, "${1}-XXXXX")
 	line = fanoutResourceNameRegex.ReplaceAllString(line, "${1}-XXXXX")
+	line = getComposedResourceNameRegex.ReplaceAllString(line, "${1}-XXXXX")
+	line = claimNameRegex.ReplaceAllString(line, "${1}-XXXXX")
+
+	// Replace composition revision refs with random hash
+	line = compositionRevisionRegex.ReplaceAllString(line, "${1}-XXXXXXX")
+	line = claimCompositionRevisionRegex.ReplaceAllString(line, "${1}-XXXXXXX")
+	line = nestedCompositionRevisionRegex.ReplaceAllString(line, "${1}-XXXXXXX")
+
+	// Trim trailing whitespace
+	line = strings.TrimRight(line, " ")
+
+	return line
+}
+
+// normalizeLineKeepAnsi replaces dynamic parts with fixed placeholders while preserving ANSI color codes.
+// Used when writing expected output files that should maintain color codes for human readability.
+func normalizeLineKeepAnsi(line string) string {
+	// Replace resource names with random suffixes
+	line = resourceNameRegex.ReplaceAllString(line, "${1}-XXXXX")
+	line = compResourceNameRegex.ReplaceAllString(line, "${1}-XXXXX")
+	line = fanoutResourceNameRegex.ReplaceAllString(line, "${1}-XXXXX")
+	line = getComposedResourceNameRegex.ReplaceAllString(line, "${1}-XXXXX")
 	line = claimNameRegex.ReplaceAllString(line, "${1}-XXXXX")
 
 	// Replace composition revision refs with random hash
@@ -571,8 +599,37 @@ func parseStringContent(content string) ([]string, []string) {
 }
 
 // AssertDiffMatchesFile compares a diff output with an expected file, ignoring dynamic parts.
+// When E2E_DUMP_EXPECTED environment variable is set, it writes the normalized actual output
+// to the expected file path instead of performing assertions.
 func assertDiffMatchesFile(t *testing.T, actual, expectedSource, log string) {
 	t.Helper()
+
+	actualRaw, actualNormalized := parseStringContent(actual)
+
+	// If E2E_DUMP_EXPECTED is set, write the normalized output to the expected file
+	if os.Getenv("E2E_DUMP_EXPECTED") != "" {
+		// Reconstruct the actual output as a string (with normalization applied, keeping ANSI codes)
+		var normalizedOutput strings.Builder
+		for _, line := range actualRaw {
+			// Normalize each line before writing, but keep ANSI color codes for readability
+			normalizedOutput.WriteString(normalizeLineKeepAnsi(line))
+			normalizedOutput.WriteString("\n")
+		}
+
+		// Create directory if it doesn't exist
+		dir := filepath.Dir(expectedSource)
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatalf("Failed to create directory for expected file: %v", err)
+		}
+
+		// Write the normalized output
+		if err := os.WriteFile(expectedSource, []byte(normalizedOutput.String()), 0o644); err != nil {
+			t.Fatalf("Failed to write expected file: %v", err)
+		}
+
+		t.Logf("Wrote normalized output to %s", expectedSource)
+		return
+	}
 
 	expected, err := os.ReadFile(expectedSource)
 	if err != nil {
@@ -580,7 +637,6 @@ func assertDiffMatchesFile(t *testing.T, actual, expectedSource, log string) {
 	}
 
 	expectedRaw, expectedNormalized := parseStringContent(string(expected))
-	actualRaw, actualNormalized := parseStringContent(actual)
 
 	if len(expectedNormalized) != len(actualNormalized) {
 		t.Errorf("Line count mismatch: expected %d lines in %s, got %d lines in output",
@@ -767,6 +823,55 @@ func TestCompDiffLargeFanout(t *testing.T) {
 			WithTeardown("DeleteExistingXRs", funcs.AllOf(
 				funcs.DeleteResources(manifests, "existing-xrs.yaml"),
 				funcs.ResourcesDeletedWithin(2*time.Minute, manifests, "existing-xrs.yaml"),
+			)).
+			WithTeardown("DeletePrerequisites", funcs.ResourcesDeletedAfterListedAreGone(3*time.Minute, setupPath, "*.yaml", clusterNopList)).
+			Feature(),
+	)
+}
+
+// TestDiffCompositionWithGetComposedResource tests the comp diff command with a composition
+// that uses getComposedResource template function to reference observed resources.
+// This test verifies that ObservedResources are correctly populated during rendering.
+func TestDiffCompositionWithGetComposedResource(t *testing.T) {
+	imageTag := strings.Split(environment.GetCrossplaneImage(), ":")[1]
+	manifests := filepath.Join("test/e2e/manifests/beta/diff", imageTag, "comp-getcomposed")
+	setupPath := filepath.Join(manifests, "setup")
+	expectPath := filepath.Join(manifests, "expect")
+
+	environment.Test(t,
+		features.New("DiffCompositionWithGetComposedResource").
+			WithLabel(e2e.LabelArea, LabelAreaDiff).
+			WithLabel(e2e.LabelSize, e2e.LabelSizeSmall).
+			WithLabel(config.LabelTestSuite, config.TestSuiteDefault).
+			WithLabel(LabelCrossplaneVersion, CrossplaneVersionMain).
+			WithSetup("CreatePrerequisites", funcs.AllOf(
+				funcs.ApplyResources(e2e.FieldManager, setupPath, "*.yaml"),
+				funcs.ResourcesCreatedWithin(30*time.Second, setupPath, "*.yaml"),
+			)).
+			WithSetup("PrerequisitesAreReady", funcs.AllOf(
+				funcs.ResourcesHaveConditionWithin(1*time.Minute, setupPath, "definition.yaml", apiextensionsv1.WatchingComposite()),
+			)).
+			WithSetup("CreateExistingXR", funcs.AllOf(
+				funcs.ApplyResources(e2e.FieldManager, manifests, "existing-xr.yaml"),
+				funcs.ResourcesCreatedWithin(30*time.Second, manifests, "existing-xr.yaml"),
+				funcs.ResourcesHaveConditionWithin(2*time.Minute, manifests, "existing-xr.yaml", xpv1.Available()),
+			)).
+			Assess("CanDiffCompositionWithGetComposedResource", func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
+				t.Helper()
+
+				output, log, err := RunCompDiff(t, c, "./crossplane-diff", filepath.Join(manifests, "updated-composition.yaml"))
+				if err != nil {
+					t.Fatalf("Error running comp diff command: %v\nLog output:\n%s", err, log)
+				}
+
+
+				assertDiffMatchesFile(t, output, filepath.Join(expectPath, "existing-xr.ansi"), log)
+
+				return ctx
+			}).
+			WithTeardown("DeleteExistingXR", funcs.AllOf(
+				funcs.DeleteResources(manifests, "existing-xr.yaml"),
+				funcs.ResourcesDeletedWithin(2*time.Minute, manifests, "existing-xr.yaml"),
 			)).
 			WithTeardown("DeletePrerequisites", funcs.ResourcesDeletedAfterListedAreGone(3*time.Minute, setupPath, "*.yaml", clusterNopList)).
 			Feature(),

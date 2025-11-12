@@ -739,6 +739,7 @@ type MockDiffCalculator struct {
 	CalculateDiffFn                 func(context.Context, *un.Unstructured, *un.Unstructured) (*dt.ResourceDiff, error)
 	CalculateDiffsFn                func(context.Context, *cmp.Unstructured, render.Outputs) (map[string]*dt.ResourceDiff, error)
 	CalculateRemovedResourceDiffsFn func(context.Context, *un.Unstructured, map[string]bool) (map[string]*dt.ResourceDiff, error)
+	FetchObservedResourcesFn        func(context.Context, *cmp.Unstructured) ([]cpd.Unstructured, error)
 }
 
 // CalculateDiff implements DiffCalculator.
@@ -763,6 +764,15 @@ func (m *MockDiffCalculator) CalculateDiffs(ctx context.Context, xr *cmp.Unstruc
 func (m *MockDiffCalculator) CalculateRemovedResourceDiffs(ctx context.Context, xr *un.Unstructured, renderedResources map[string]bool) (map[string]*dt.ResourceDiff, error) {
 	if m.CalculateRemovedResourceDiffsFn != nil {
 		return m.CalculateRemovedResourceDiffsFn(ctx, xr, renderedResources)
+	}
+
+	return nil, nil
+}
+
+// FetchObservedResources implements DiffCalculator.
+func (m *MockDiffCalculator) FetchObservedResources(ctx context.Context, xr *cmp.Unstructured) ([]cpd.Unstructured, error) {
+	if m.FetchObservedResourcesFn != nil {
+		return m.FetchObservedResourcesFn(ctx, xr)
 	}
 
 	return nil, nil

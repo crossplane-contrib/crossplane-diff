@@ -1,0 +1,64 @@
+apiVersion: apiextensions.crossplane.io/v1
+kind: Composition
+metadata:
+  name: xgetcomposedresources.getcomposed.example.org
+spec:
+  compositeTypeRef:
+    apiVersion: getcomposed.example.org/v1alpha1
+    kind: XGetComposedResource
+  mode: Pipeline
+  pipeline:
+    - step: generate-resources
+      functionRef:
+        name: function-patch-and-transform
+      input:
+        apiVersion: pt.fn.crossplane.io/v1beta1
+        kind: Resources
+        resources:
+          - name: test-bucket
+            base:
+              apiVersion: nop.crossplane.io/v1alpha1
+              kind: ClusterNopResource
+              spec:
+                forProvider:
+                  conditionAfter:
+                    - conditionType: Ready
+                      conditionStatus: "True"
+                      time: 0s
+            patches:
+              - type: FromCompositeFieldPath
+                fromFieldPath: spec.bucketName
+                toFieldPath: metadata.annotations[bucket-name]
+          - name: test-lifecycle
+            base:
+              apiVersion: nop.crossplane.io/v1alpha1
+              kind: ClusterNopResource
+              spec:
+                forProvider:
+                  conditionAfter:
+                    - conditionType: Ready
+                      conditionStatus: "True"
+                      time: 0s
+            patches:
+              - type: FromCompositeFieldPath
+                fromFieldPath: spec.bucketName
+                toFieldPath: metadata.annotations[for-bucket]
+    - step: use-getcomposed
+      functionRef:
+        name: function-go-templating
+      input:
+        apiVersion: gotemplating.fn.crossplane.io/v1beta1
+        kind: GoTemplate
+        source: Inline
+        inline:
+          template: |
+            {{ $bucket := getComposedResource . "test-bucket" }}
+            ---
+            apiVersion: getcomposed.example.org/v1alpha1
+            kind: XGetComposedResource
+            status:
+              bucketRef:
+                name: {{ $bucket.metadata.name }}
+    - step: detect-ready-resources
+      functionRef:
+        name: function-auto-ready
