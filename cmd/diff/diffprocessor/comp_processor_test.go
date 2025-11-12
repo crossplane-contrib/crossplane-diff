@@ -293,13 +293,13 @@ func TestDefaultCompDiffProcessor_DiffComposition(t *testing.T) {
 					}, nil
 				}),
 				WithMaxNestedDepth(1),
-				WithDiffProcessorFactory(func(k8Clients k8.Clients, xpClients xp.Clients, processorOpts []ProcessorOption) DiffProcessor {
-					return NewDiffProcessor(k8Clients, xpClients, processorOpts...)
-				}),
 			}
 
-			// Create processor using constructor
-			processor := NewCompDiffProcessor(k8Clients, xpClients, opts...)
+			// Create XR processor first
+			xrProc := NewDiffProcessor(k8Clients, xpClients, opts...)
+
+			// Create composition processor with injected XR processor
+			processor := NewCompDiffProcessor(xrProc, xpClients.Composition, opts...)
 
 			var stdout bytes.Buffer
 

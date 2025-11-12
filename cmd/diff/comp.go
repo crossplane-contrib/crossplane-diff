@@ -18,8 +18,6 @@ package main
 
 import (
 	"github.com/alecthomas/kong"
-	xp "github.com/crossplane-contrib/crossplane-diff/cmd/diff/client/crossplane"
-	k8 "github.com/crossplane-contrib/crossplane-diff/cmd/diff/client/kubernetes"
 	dp "github.com/crossplane-contrib/crossplane-diff/cmd/diff/diffprocessor"
 	"k8s.io/client-go/rest"
 
@@ -100,22 +98,22 @@ func makeDefaultCompProc(c *CompCmd, ctx *AppContext, log logging.Logger) dp.Com
 		namespace = "default"
 	}
 
-	// Composition processor options
+	// Both processors share the same options since they're part of the same command
 	opts := defaultProcessorOptions(c.CommonCmdFields, namespace)
 	opts = append(opts,
 		dp.WithLogger(log),
 		dp.WithRenderMutex(&globalRenderMutex),
 		dp.WithIncludeManual(c.IncludeManual),
-		dp.WithDiffProcessorFactory(func(k8Clients k8.Clients, xpClients xp.Clients, processorOpts []dp.ProcessorOption) dp.DiffProcessor {
-			return dp.NewDiffProcessor(k8Clients, xpClients, processorOpts...)
-		}),
 		// Use cached function provider for composition diffs to enable Docker container reuse
 		// The provider lazy-loads and caches functions by composition name
 		dp.WithFunctionProviderFactory(dp.NewCachedFunctionProvider),
 	)
 
-	// Create composition processor with clients
-	return dp.NewCompDiffProcessor(ctx.K8sClients, ctx.XpClients, opts...)
+	// Create XR processor first (peer processor)
+	xrProc := dp.NewDiffProcessor(ctx.K8sClients, ctx.XpClients, opts...)
+
+	// Inject it into composition processor
+	return dp.NewCompDiffProcessor(xrProc, ctx.XpClients.Composition, opts...)
 }
 
 // Run executes the composition diff command.
