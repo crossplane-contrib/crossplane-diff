@@ -10,7 +10,7 @@ require (
 	github.com/alecthomas/kong v1.12.1
 	github.com/crossplane/crossplane-runtime/v2 v2.1.0
 	github.com/crossplane/crossplane/v2 v2.1.1
-	github.com/docker/docker v28.3.3+incompatible
+	github.com/docker/docker v28.5.2+incompatible
 	github.com/google/go-cmp v0.7.0
 	github.com/pkg/errors v0.9.1
 	github.com/sergi/go-diff v1.4.0
