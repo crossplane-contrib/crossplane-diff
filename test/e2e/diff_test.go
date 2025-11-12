@@ -523,6 +523,7 @@ var clusterNopList = composed.NewList(composed.FromReferenceToList(corev1.Object
 var (
 	resourceNameRegex              = regexp.MustCompile(`(existing-resource)-[a-z0-9]{5,}(?:-nop-resource)?`)
 	compResourceNameRegex          = regexp.MustCompile(`(test-comp-resource)-[a-z0-9]{5,}`)
+	fanoutResourceNameRegex        = regexp.MustCompile(`(test-fanout-resource-\d{2})-[a-z0-9]{5,}`)
 	claimNameRegex                 = regexp.MustCompile(`(test-claim)-[a-z0-9]{5,}(?:-[a-z0-9]{5,})?`)
 	claimCompositionRevisionRegex  = regexp.MustCompile(`(xnopclaims\.claim\.diff\.example\.org)-[a-z0-9]{7,}`)
 	compositionRevisionRegex       = regexp.MustCompile(`(xnopresources\.(cluster\.|legacy\.)?diff\.example\.org)-[a-z0-9]{7,}`)
@@ -538,6 +539,7 @@ func normalizeLine(line string) string {
 	// Replace resource names with random suffixes
 	line = resourceNameRegex.ReplaceAllString(line, "${1}-XXXXX")
 	line = compResourceNameRegex.ReplaceAllString(line, "${1}-XXXXX")
+	line = fanoutResourceNameRegex.ReplaceAllString(line, "${1}-XXXXX")
 	line = claimNameRegex.ReplaceAllString(line, "${1}-XXXXX")
 
 	// Replace composition revision refs with random hash
@@ -714,6 +716,57 @@ func TestDiffExistingComposition(t *testing.T) {
 			WithTeardown("DeleteExistingXR", funcs.AllOf(
 				funcs.DeleteResources(manifests, "existing-xr.yaml"),
 				funcs.ResourcesDeletedWithin(2*time.Minute, manifests, "existing-xr.yaml"),
+			)).
+			WithTeardown("DeletePrerequisites", funcs.ResourcesDeletedAfterListedAreGone(3*time.Minute, setupPath, "*.yaml", clusterNopList)).
+			Feature(),
+	)
+}
+
+// TestCompDiffLargeFanout tests the comp diff command with a large number of XRs (15) using the same composition.
+// This validates that:
+// 1. Container reuse works correctly across many XRs
+// 2. Cleanup happens properly after processing all XRs
+// 3. Diff output is generated for all XRs
+// 4. No performance issues or failures with large fanout.
+func TestCompDiffLargeFanout(t *testing.T) {
+	imageTag := strings.Split(environment.GetCrossplaneImage(), ":")[1]
+	manifests := filepath.Join("test/e2e/manifests/beta/diff", imageTag, "comp-fanout")
+	setupPath := filepath.Join(manifests, "setup")
+	expectPath := filepath.Join(manifests, "expect")
+
+	environment.Test(t,
+		features.New("CompDiffLargeFanout").
+			WithLabel(e2e.LabelArea, LabelAreaDiff).
+			WithLabel(e2e.LabelSize, e2e.LabelSizeLarge).
+			WithLabel(config.LabelTestSuite, config.TestSuiteDefault).
+			WithLabel(LabelCrossplaneVersion, CrossplaneVersionMain).
+			WithSetup("CreatePrerequisites", funcs.AllOf(
+				funcs.ApplyResources(e2e.FieldManager, setupPath, "*.yaml"),
+				funcs.ResourcesCreatedWithin(30*time.Second, setupPath, "*.yaml"),
+			)).
+			WithSetup("PrerequisitesAreReady", funcs.AllOf(
+				funcs.ResourcesHaveConditionWithin(1*time.Minute, setupPath, "definition.yaml", apiextensionsv1.WatchingComposite()),
+			)).
+			WithSetup("CreateExistingXRs", funcs.AllOf(
+				funcs.ApplyResources(e2e.FieldManager, manifests, "existing-xrs.yaml"),
+				funcs.ResourcesCreatedWithin(30*time.Second, manifests, "existing-xrs.yaml"),
+				funcs.ResourcesHaveConditionWithin(3*time.Minute, manifests, "existing-xrs.yaml", xpv1.Available()),
+			)).
+			Assess("CanDiffCompositionWithLargeFanout", func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
+				t.Helper()
+
+				output, log, err := RunCompDiff(t, c, "./crossplane-diff", filepath.Join(manifests, "updated-composition.yaml"))
+				if err != nil {
+					t.Fatalf("Error running comp diff command: %v\nLog output:\n%s", err, log)
+				}
+
+				assertDiffMatchesFile(t, output, filepath.Join(expectPath, "existing-xrs.ansi"), log)
+
+				return ctx
+			}).
+			WithTeardown("DeleteExistingXRs", funcs.AllOf(
+				funcs.DeleteResources(manifests, "existing-xrs.yaml"),
+				funcs.ResourcesDeletedWithin(2*time.Minute, manifests, "existing-xrs.yaml"),
 			)).
 			WithTeardown("DeletePrerequisites", funcs.ResourcesDeletedAfterListedAreGone(3*time.Minute, setupPath, "*.yaml", clusterNopList)).
 			Feature(),
