@@ -48,29 +48,6 @@ func initializeSharedDependencies(ctx *kong.Context, log logging.Logger, config 
 	return appCtx, nil
 }
 
-// initRestConfig configures REST client rate limits with sensible defaults.
-func initRestConfig(config *rest.Config, logger logging.Logger) *rest.Config {
-	// Set default QPS and Burst if they are not set in the config
-	originalQPS := config.QPS
-	originalBurst := config.Burst
-
-	if config.QPS == 0 {
-		config.QPS = 20
-	}
-
-	if config.Burst == 0 {
-		config.Burst = 30
-	}
-
-	logger.Debug("Configured REST client rate limits",
-		"original_qps", originalQPS,
-		"original_burst", originalBurst,
-		"final_qps", config.QPS,
-		"final_burst", config.Burst)
-
-	return config
-}
-
 // initializeAppContext initializes the application context with timeout and error handling.
 func initializeAppContext(timeout time.Duration, appCtx *AppContext, log logging.Logger) (context.Context, context.CancelFunc, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)

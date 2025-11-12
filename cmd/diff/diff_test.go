@@ -1063,8 +1063,7 @@ users:
 			}
 
 			// Call the function with empty context (use default)
-			logger := tu.TestLogger(t, false)
-			config, err := getRestConfig("", logger)
+			config, err := getRestConfig("")
 
 			// Check error expectations
 			if tc.expectError && err == nil {
@@ -1177,8 +1176,7 @@ users:
 			t.Setenv("KUBECONFIG", kubeconfigPath)
 
 			// Call getRestConfig with the context override
-			logger := tu.TestLogger(t, false)
-			config, err := getRestConfig(KubeContext(tc.contextOverride), logger)
+			config, err := getRestConfig(KubeContext(tc.contextOverride))
 
 			// Check error expectations
 			if tc.expectError && err == nil {

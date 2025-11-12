@@ -42,10 +42,10 @@ type (
 type CommonCmdFields struct {
 	// Configuration options
 	Context        KubeContext   `help:"Kubernetes context to use (defaults to current context)." name:"context"`
-	NoColor        bool          `help:"Disable colorized output."                                 name:"no-color"`
-	Compact        bool          `help:"Show compact diffs with minimal context."                  name:"compact"`
-	MaxNestedDepth int           `default:"10"                                                     help:"Maximum depth for nested XR recursion." name:"max-nested-depth"`
-	Timeout        time.Duration `default:"1m"                                                     help:"How long to run before timing out."`
+	NoColor        bool          `help:"Disable colorized output."                                name:"no-color"`
+	Compact        bool          `help:"Show compact diffs with minimal context."                 name:"compact"`
+	MaxNestedDepth int           `default:"10"                                                    help:"Maximum depth for nested XR recursion." name:"max-nested-depth"`
+	Timeout        time.Duration `default:"1m"                                                    help:"How long to run before timing out."`
 }
 
 func (v verboseFlag) BeforeApply(ctx *kong.Context) error { //nolint:unparam // BeforeApply requires this signature.
@@ -56,7 +56,7 @@ func (v verboseFlag) BeforeApply(ctx *kong.Context) error { //nolint:unparam // 
 }
 
 // BeforeApply binds the context string so it's available to getRestConfig via dependency injection.
-func (c *CommonCmdFields) BeforeApply(ctx *kong.Context) error {
+func (c *CommonCmdFields) BeforeApply(ctx *kong.Context) error { //nolint:unparam // BeforeApply requires this signature.
 	// Bind the context string so getRestConfig can use it
 	ctx.BindTo(c.Context, (*KubeContext)(nil))
 	return nil
@@ -96,7 +96,7 @@ func main() {
 	ctx.FatalIfErrorf(err)
 }
 
-func getRestConfig(kubeContext KubeContext, logger logging.Logger) (*rest.Config, error) {
+func getRestConfig(kubeContext KubeContext) (*rest.Config, error) {
 	// Use the standard client-go loading rules:
 	// 1. If KUBECONFIG env var is set, use that
 	// 2. Otherwise, use ~/.kube/config
@@ -116,6 +116,14 @@ func getRestConfig(kubeContext KubeContext, logger logging.Logger) (*rest.Config
 		return nil, err
 	}
 
-	// Set default rate limits
-	return initRestConfig(config, logger), nil
+	// Set default QPS and Burst if not already set
+	if config.QPS == 0 {
+		config.QPS = 20
+	}
+
+	if config.Burst == 0 {
+		config.Burst = 30
+	}
+
+	return config, nil
 }

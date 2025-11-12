@@ -142,6 +142,7 @@ func (c *CompCmd) Run(k *kong.Context, log logging.Logger, appCtx *AppContext, p
 		// prevent cleanup from blocking indefinitely if the Docker daemon is slow or hung.
 		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cleanupCancel()
+
 		if err := fnProvider.Cleanup(cleanupCtx); err != nil {
 			log.Debug("Failed to cleanup function provider resources", "error", err)
 		}
