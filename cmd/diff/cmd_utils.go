@@ -37,11 +37,7 @@ import (
 var globalRenderMutex sync.Mutex
 
 // initializeSharedDependencies handles the common initialization logic for both commands.
-// The rest.Config is lazily provided by Kong via the getRestConfig provider function.
-func initializeSharedDependencies(ctx *kong.Context, log logging.Logger) (*AppContext, error) {
-	// Request the rest.Config - Kong will call getRestConfig provider if needed
-	var config *rest.Config
-	ctx.Bind(&config)
+func initializeSharedDependencies(ctx *kong.Context, log logging.Logger, config *rest.Config) (*AppContext, error) {
 	appCtx, err := NewAppContext(config, log)
 	if err != nil {
 		return nil, errors.Wrap(err, "cannot create app context")
