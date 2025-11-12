@@ -1088,3 +1088,123 @@ users:
 		})
 	}
 }
+
+func TestGetRestConfigContextSelection(t *testing.T) {
+	// Create a kubeconfig with multiple contexts
+	tempDir := t.TempDir()
+	kubeconfigPath := filepath.Join(tempDir, "kubeconfig")
+	kubeconfigContent := `
+apiVersion: v1
+kind: Config
+clusters:
+- cluster:
+    server: https://prod.example.com:8443
+  name: prod-cluster
+- cluster:
+    server: https://staging.example.com:8443
+  name: staging-cluster
+- cluster:
+    server: https://dev.example.com:8443
+  name: dev-cluster
+contexts:
+- context:
+    cluster: prod-cluster
+    user: prod-user
+  name: production
+- context:
+    cluster: staging-cluster
+    user: staging-user
+  name: staging
+- context:
+    cluster: dev-cluster
+    user: dev-user
+  name: development
+current-context: production
+users:
+- name: prod-user
+  user:
+    token: prod-token
+- name: staging-user
+  user:
+    token: staging-token
+- name: dev-user
+  user:
+    token: dev-token
+`
+
+	err := os.WriteFile(kubeconfigPath, []byte(kubeconfigContent), 0o600)
+	if err != nil {
+		t.Fatalf("Failed to write temp kubeconfig: %v", err)
+	}
+
+	tests := map[string]struct {
+		contextOverride string
+		expectedServer  string
+		expectError     bool
+		errorContains   string
+	}{
+		"UsesCurrentContextWhenNoOverride": {
+			contextOverride: "",
+			expectedServer:  "https://prod.example.com:8443",
+			expectError:     false,
+		},
+		"OverridesToStagingContext": {
+			contextOverride: "staging",
+			expectedServer:  "https://staging.example.com:8443",
+			expectError:     false,
+		},
+		"OverridesToDevelopmentContext": {
+			contextOverride: "development",
+			expectedServer:  "https://dev.example.com:8443",
+			expectError:     false,
+		},
+		"OverridesToProductionContextExplicitly": {
+			contextOverride: "production",
+			expectedServer:  "https://prod.example.com:8443",
+			expectError:     false,
+		},
+		"InvalidContextNameFails": {
+			contextOverride: "nonexistent-context",
+			expectError:     true,
+			errorContains:   "context",
+		},
+	}
+
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			// Set KUBECONFIG environment variable
+			t.Setenv("KUBECONFIG", kubeconfigPath)
+
+			// Call getRestConfig with the context override
+			config, err := getRestConfig(tc.contextOverride)
+
+			// Check error expectations
+			if tc.expectError && err == nil {
+				t.Errorf("Expected error but got none")
+				return
+			}
+
+			if !tc.expectError && err != nil {
+				t.Errorf("Expected no error, got: %v", err)
+				return
+			}
+
+			if tc.errorContains != "" && !strings.Contains(err.Error(), tc.errorContains) {
+				t.Errorf("Expected error containing %q, got: %v", tc.errorContains, err)
+				return
+			}
+
+			// If no error expected, verify the server URL matches the expected context
+			if !tc.expectError {
+				if config == nil {
+					t.Errorf("Expected config to be non-nil when no error")
+					return
+				}
+
+				if config.Host != tc.expectedServer {
+					t.Errorf("Expected server %q, got %q", tc.expectedServer, config.Host)
+				}
+			}
+		})
+	}
+}
