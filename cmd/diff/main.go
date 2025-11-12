@@ -26,7 +26,6 @@ import (
 	"k8s.io/client-go/tools/clientcmd"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 
-	"github.com/crossplane/crossplane-runtime/v2/pkg/errors"
 	"github.com/crossplane/crossplane-runtime/v2/pkg/logging"
 )
 
@@ -34,12 +33,15 @@ var _ = kong.Must(&cli{})
 
 type (
 	verboseFlag bool
+	// KubeContext represents the Kubernetes context name from the kubeconfig.
+	// Kong will automatically bind this when the --context flag is parsed.
+	KubeContext string
 )
 
 // CommonCmdFields contains common fields shared by both XR and Comp commands.
 type CommonCmdFields struct {
 	// Configuration options
-	Context        string        `help:"Kubernetes context to use (defaults to current context)." name:"context"`
+	Context        KubeContext   `help:"Kubernetes context to use (defaults to current context)." name:"context"`
 	NoColor        bool          `help:"Disable colorized output."                                 name:"no-color"`
 	Compact        bool          `help:"Show compact diffs with minimal context."                  name:"compact"`
 	MaxNestedDepth int           `default:"10"                                                     help:"Maximum depth for nested XR recursion." name:"max-nested-depth"`
@@ -53,25 +55,10 @@ func (v verboseFlag) BeforeApply(ctx *kong.Context) error { //nolint:unparam // 
 	return nil
 }
 
-// BeforeApply creates and binds the REST config based on the context flag.
-// This makes rest.Config available as an injected dependency to commands.
+// BeforeApply binds the context string so it's available to getRestConfig via dependency injection.
 func (c *CommonCmdFields) BeforeApply(ctx *kong.Context) error {
-	// Get the logger (may be nop logger or verbose logger depending on --verbose flag)
-	var logger logging.Logger
-	ctx.Bind(&logger)
-
-	// Create rest config for the specified context
-	config, err := getRestConfig(c.Context)
-	if err != nil {
-		return errors.Wrap(err, "cannot get rest config")
-	}
-
-	// Set default rate limits
-	config = initRestConfig(config, logger)
-
-	// Bind the config so it's available to AfterApply and Run methods
-	ctx.BindTo(config, (*rest.Config)(nil))
-
+	// Bind the context string so getRestConfig can use it
+	ctx.BindTo(c.Context, (*KubeContext)(nil))
 	return nil
 }
 
@@ -98,6 +85,7 @@ func main() {
 		// Binding a variable to kong context makes it available to all commands
 		// at runtime.
 		kong.BindTo(logger, (*logging.Logger)(nil)),
+		kong.BindToProvider(getRestConfig),
 		kong.ConfigureHelp(kong.HelpOptions{
 			FlagsLast:      true,
 			Compact:        true,
@@ -108,7 +96,7 @@ func main() {
 	ctx.FatalIfErrorf(err)
 }
 
-func getRestConfig(context string) (*rest.Config, error) {
+func getRestConfig(kubeContext KubeContext, logger logging.Logger) (*rest.Config, error) {
 	// Use the standard client-go loading rules:
 	// 1. If KUBECONFIG env var is set, use that
 	// 2. Otherwise, use ~/.kube/config
@@ -117,11 +105,17 @@ func getRestConfig(context string) (*rest.Config, error) {
 	configOverrides := &clientcmd.ConfigOverrides{}
 
 	// If a specific context is requested, override the current context
-	if context != "" {
-		configOverrides.CurrentContext = context
+	if kubeContext != "" {
+		configOverrides.CurrentContext = string(kubeContext)
 	}
 
 	kubeConfig := clientcmd.NewNonInteractiveDeferredLoadingClientConfig(loadingRules, configOverrides)
 
-	return kubeConfig.ClientConfig()
+	config, err := kubeConfig.ClientConfig()
+	if err != nil {
+		return nil, err
+	}
+
+	// Set default rate limits
+	return initRestConfig(config, logger), nil
 }
