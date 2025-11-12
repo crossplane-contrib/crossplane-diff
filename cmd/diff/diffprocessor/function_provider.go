@@ -18,6 +18,8 @@ package diffprocessor
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"fmt"
 	"os/exec"
 	"regexp"
@@ -86,6 +88,7 @@ type CachedFunctionProvider struct {
 	fnClient       xp.FunctionClient
 	cache          map[string][]pkgv1.Function
 	containerNames []string // Track container names for cleanup
+	instanceID     string   // Unique identifier for this provider instance
 	logger         logging.Logger
 }
 
@@ -95,8 +98,22 @@ func NewCachedFunctionProvider(fnClient xp.FunctionClient, logger logging.Logger
 		fnClient:       fnClient,
 		cache:          make(map[string][]pkgv1.Function),
 		containerNames: make([]string, 0),
+		instanceID:     generateInstanceID(),
 		logger:         logger,
 	}
+}
+
+// generateInstanceID creates a short random identifier for this provider instance.
+// This ensures container names are unique across different provider instances and test runs.
+func generateInstanceID() string {
+	b := make([]byte, 4)
+	if _, err := rand.Read(b); err != nil {
+		// Fallback to a simple timestamp-based approach if crypto/rand fails
+		// This is extremely unlikely but we handle it for completeness
+		return fmt.Sprintf("%d", len(b))
+	}
+
+	return hex.EncodeToString(b)
 }
 
 // GetFunctionsForComposition fetches and caches functions on first call per composition.
@@ -123,13 +140,15 @@ func (p *CachedFunctionProvider) GetFunctionsForComposition(comp *apiextensionsv
 	for i := range fns {
 		fn := &fns[i]
 
-		// Generate a stable container name from the function package
-		containerName := generateContainerName(fn.Spec.Package)
+		// Generate a stable container name from the function package and instance ID
+		// The instance ID ensures containers are unique across provider instances and test runs
+		containerName := generateContainerName(fn.Spec.Package, p.instanceID)
 
 		p.logger.Debug("Adding reuse annotations to function",
 			"function", fn.GetName(),
 			"package", fn.Spec.Package,
-			"containerName", containerName)
+			"containerName", containerName,
+			"instanceID", p.instanceID)
 
 		// Initialize annotations map if it doesn't exist
 		if fn.Annotations == nil {
@@ -213,13 +232,14 @@ func (p *CachedFunctionProvider) Cleanup(ctx context.Context) error {
 	return nil
 }
 
-// generateContainerName creates a stable Docker container name from a function package reference.
-// Example: xpkg.crossplane.io/crossplane-contrib/function-go-templating:v0.11.0
-// Returns: function-go-templating-v0.11.0-comp.
-func generateContainerName(pkg string) string {
+// generateContainerName creates a stable Docker container name from a function package reference and instance ID.
+// The instance ID ensures containers are unique across provider instances and test runs to avoid race conditions.
+// Example: xpkg.crossplane.io/crossplane-contrib/function-go-templating:v0.11.0 with instanceID "a1b2c3d4"
+// Returns: function-go-templating-v0.11.0-comp-a1b2c3d4.
+func generateContainerName(pkg, instanceID string) string {
 	// Handle empty package string
 	if pkg == "" {
-		return "unknown-comp"
+		return fmt.Sprintf("unknown-comp-%s", instanceID)
 	}
 
 	// Split package into path and version
@@ -233,8 +253,8 @@ func generateContainerName(pkg string) string {
 	// function-go-templating:v0.11.0 -> function-go-templating-v0.11.0
 	containerName := strings.ReplaceAll(nameAndVersion, ":", "-")
 
-	// Add suffix to distinguish from test containers
-	containerName += "-comp"
+	// Add suffix and instance ID to make it unique per provider instance
+	containerName += fmt.Sprintf("-comp-%s", instanceID)
 
 	return containerName
 }

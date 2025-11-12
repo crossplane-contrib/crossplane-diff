@@ -166,11 +166,18 @@ func TestCachedFunctionProvider_GetFunctionsForComposition_LazyLoading(t *testin
 		t.Fatal("GetFunctionsForComposition() did not add annotations")
 	}
 
-	expectedContainerName := "function-go-templating-v0.11.0-comp"
+	// Container name should have format: function-go-templating-v0.11.0-comp-<instanceID>
+	expectedPrefix := "function-go-templating-v0.11.0-comp-"
 
 	gotContainerName := fns[0].Annotations["render.crossplane.io/runtime-docker-name"]
-	if gotContainerName != expectedContainerName {
-		t.Errorf("Container name = %q, want %q", gotContainerName, expectedContainerName)
+	if !strings.HasPrefix(gotContainerName, expectedPrefix) {
+		t.Errorf("Container name = %q, want prefix %q", gotContainerName, expectedPrefix)
+	}
+
+	// Verify the instance ID suffix is present and has expected length (8 hex chars)
+	instanceID := strings.TrimPrefix(gotContainerName, expectedPrefix)
+	if len(instanceID) != 8 {
+		t.Errorf("Instance ID length = %d, want 8 (got container name: %q)", len(instanceID), gotContainerName)
 	}
 
 	gotCleanup := fns[0].Annotations["render.crossplane.io/runtime-docker-cleanup"]
@@ -422,55 +429,64 @@ func TestCachedFunctionProvider_TracksContainerNames(t *testing.T) {
 		t.Errorf("Expected 2 container names tracked, got %d", len(provider.containerNames))
 	}
 
-	expectedNames := []string{"function-one-v1.0.0-comp", "function-two-v2.0.0-comp"}
-	for i, expected := range expectedNames {
+	// Container names should have format: <function-name>-<version>-comp-<instanceID>
+	expectedPrefixes := []string{"function-one-v1.0.0-comp-", "function-two-v2.0.0-comp-"}
+	for i, expectedPrefix := range expectedPrefixes {
 		if i >= len(provider.containerNames) {
 			t.Errorf("Missing container name at index %d", i)
 			continue
 		}
 
-		if provider.containerNames[i] != expected {
-			t.Errorf("Container name[%d] = %q, want %q", i, provider.containerNames[i], expected)
+		if !strings.HasPrefix(provider.containerNames[i], expectedPrefix) {
+			t.Errorf("Container name[%d] = %q, want prefix %q", i, provider.containerNames[i], expectedPrefix)
+		}
+
+		// Verify instance ID is present
+		instanceID := strings.TrimPrefix(provider.containerNames[i], expectedPrefix)
+		if len(instanceID) != 8 {
+			t.Errorf("Instance ID length at index %d = %d, want 8 (got: %q)", i, len(instanceID), provider.containerNames[i])
 		}
 	}
 }
 
 func TestGenerateContainerName(t *testing.T) {
+	const testInstanceID = "test1234"
+
 	tests := map[string]struct {
 		pkg  string
 		want string
 	}{
 		"StandardPackage": {
 			pkg:  "xpkg.io/crossplane-contrib/function-go-templating:v0.11.0",
-			want: "function-go-templating-v0.11.0-comp",
+			want: "function-go-templating-v0.11.0-comp-test1234",
 		},
 		"DifferentRegistry": {
 			pkg:  "ghcr.io/crossplane/function-auto-ready:v1.2.3",
-			want: "function-auto-ready-v1.2.3-comp",
+			want: "function-auto-ready-v1.2.3-comp-test1234",
 		},
 		"ShortPackage": {
 			pkg:  "function-test:v1.0.0",
-			want: "function-test-v1.0.0-comp",
+			want: "function-test-v1.0.0-comp-test1234",
 		},
 		"NoVersion": {
 			pkg:  "xpkg.io/org/function-name",
-			want: "function-name-comp",
+			want: "function-name-comp-test1234",
 		},
 		"EmptyPackage": {
 			pkg:  "",
-			want: "unknown-comp",
+			want: "unknown-comp-test1234",
 		},
 		"OnlyName": {
 			pkg:  "my-function",
-			want: "my-function-comp",
+			want: "my-function-comp-test1234",
 		},
 	}
 
 	for name, tt := range tests {
 		t.Run(name, func(t *testing.T) {
-			got := generateContainerName(tt.pkg)
+			got := generateContainerName(tt.pkg, testInstanceID)
 			if got != tt.want {
-				t.Errorf("generateContainerName(%q) = %q, want %q", tt.pkg, got, tt.want)
+				t.Errorf("generateContainerName(%q, %q) = %q, want %q", tt.pkg, testInstanceID, got, tt.want)
 			}
 		})
 	}
