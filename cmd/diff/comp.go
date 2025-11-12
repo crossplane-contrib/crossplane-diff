@@ -18,6 +18,7 @@ package main
 
 import (
 	"context"
+	"time"
 
 	"github.com/alecthomas/kong"
 	xp "github.com/crossplane-contrib/crossplane-diff/cmd/diff/client/crossplane"
@@ -134,8 +135,13 @@ func (c *CompCmd) Run(k *kong.Context, log logging.Logger, appCtx *AppContext, p
 
 	// Cleanup any resources created by the function provider
 	defer func() {
-		// Use background context for cleanup since the command context may be cancelled
-		cleanupCtx := context.Background()
+		// Use background context with timeout for cleanup instead of the command context.
+		// The command context may be cancelled (user Ctrl+C, timeout, etc.), which would cause
+		// Docker API calls to fail immediately, leaving containers running. By using a background
+		// context, we ensure cleanup completes even after cancellation, but we add a timeout to
+		// prevent cleanup from blocking indefinitely if the Docker daemon is slow or hung.
+		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cleanupCancel()
 		if err := fnProvider.Cleanup(cleanupCtx); err != nil {
 			log.Debug("Failed to cleanup function provider resources", "error", err)
 		}

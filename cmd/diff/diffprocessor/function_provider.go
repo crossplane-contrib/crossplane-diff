@@ -22,6 +22,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"strings"
+	"time"
 
 	xp "github.com/crossplane-contrib/crossplane-diff/cmd/diff/client/crossplane"
 	"github.com/docker/docker/api/types/container"
@@ -107,9 +108,9 @@ func NewCachedFunctionProvider(fnClient xp.FunctionClient, logger logging.Logger
 func generateInstanceID() string {
 	b := make([]byte, 4)
 	if _, err := rand.Read(b); err != nil {
-		// Fallback to a simple timestamp-based approach if crypto/rand fails
+		// Fallback to a timestamp-based approach if crypto/rand fails
 		// This is extremely unlikely but we handle it for completeness
-		return fmt.Sprintf("%d", len(b))
+		return fmt.Sprintf("%x", time.Now().UnixNano()&0xFFFFFFFF)
 	}
 
 	return hex.EncodeToString(b)
