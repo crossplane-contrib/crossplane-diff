@@ -226,27 +226,9 @@ func (p *DefaultCompDiffProcessor) processSingleComposition(ctx context.Context,
 		return errors.Wrap(err, "cannot convert unstructured to Composition")
 	}
 
-	// Create a CachedFunctionProvider factory for this specific composition
-	cachedFnProviderFactory := func(fnClient xp.FunctionClient, logger logging.Logger) FunctionProvider {
-		provider, err := NewCachedFunctionProvider(fnClient, comp, logger)
-		if err != nil {
-			// Log error and fall back to default provider
-			logger.Debug("Failed to create cached function provider, using default", "error", err)
-			return NewDefaultFunctionProvider(fnClient, logger)
-		}
-
-		return provider
-	}
-
-	// Create options with the cached function provider factory
-	// Note: We must append to a copy to avoid mutating the original slice
-	optsWithCache := make([]ProcessorOption, len(p.processorOpts), len(p.processorOpts)+1)
-	copy(optsWithCache, p.processorOpts)
-	optsWithCache = append(optsWithCache, WithFunctionProviderFactory(cachedFnProviderFactory))
-
-	// Create a new XR processor with cached function provider for this composition
-	// Factory must be provided via WithDiffProcessorFactory option
-	xrProc := p.config.Factories.DiffProcessor(p.k8Clients, p.xpClients, optsWithCache)
+	// Create a new XR processor
+	// The FunctionProvider factory (configured at top level) will be called with the composition when functions are needed
+	xrProc := p.config.Factories.DiffProcessor(p.k8Clients, p.xpClients, p.processorOpts)
 
 	// Initialize the processor
 	if err := xrProc.Initialize(ctx); err != nil {

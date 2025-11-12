@@ -64,26 +64,43 @@ func (p *DefaultFunctionProvider) GetFunctionsForComposition(comp *apiextensions
 	return fns, nil
 }
 
-// CachedFunctionProvider returns pre-fetched functions with reuse annotations.
+// CachedFunctionProvider lazy-loads and caches functions with reuse annotations.
 // This is appropriate for the comp command where many XRs use the same composition,
 // allowing Docker containers to be reused across renders.
 type CachedFunctionProvider struct {
-	cached []pkgv1.Function
-	logger logging.Logger
+	fnClient xp.FunctionClient
+	cache    map[string][]pkgv1.Function
+	logger   logging.Logger
 }
 
 // NewCachedFunctionProvider creates a new CachedFunctionProvider.
-// It fetches functions once and adds Docker reuse annotations to enable container reuse.
-func NewCachedFunctionProvider(fnClient xp.FunctionClient, comp *apiextensionsv1.Composition, logger logging.Logger) (FunctionProvider, error) {
-	logger.Debug("Fetching functions for caching", "composition", comp.GetName())
+func NewCachedFunctionProvider(fnClient xp.FunctionClient, logger logging.Logger) FunctionProvider {
+	return &CachedFunctionProvider{
+		fnClient: fnClient,
+		cache:    make(map[string][]pkgv1.Function),
+		logger:   logger,
+	}
+}
 
-	// Fetch functions from the composition
-	fns, err := fnClient.GetFunctionsFromPipeline(comp)
+// GetFunctionsForComposition fetches and caches functions on first call per composition.
+func (p *CachedFunctionProvider) GetFunctionsForComposition(comp *apiextensionsv1.Composition) ([]pkgv1.Function, error) {
+	compName := comp.GetName()
+
+	// Check cache first
+	if cached, ok := p.cache[compName]; ok {
+		p.logger.Debug("Using cached functions", "composition", compName, "count", len(cached))
+		return cached, nil
+	}
+
+	// Cache miss - fetch and cache functions
+	p.logger.Debug("Fetching functions for caching", "composition", compName)
+
+	fns, err := p.fnClient.GetFunctionsFromPipeline(comp)
 	if err != nil {
 		return nil, errors.Wrap(err, "cannot get functions from pipeline")
 	}
 
-	logger.Debug("Fetched functions for caching", "composition", comp.GetName(), "count", len(fns))
+	p.logger.Debug("Fetched functions for caching", "composition", compName, "count", len(fns))
 
 	// Add reuse annotations to each function
 	for i := range fns {
@@ -92,7 +109,7 @@ func NewCachedFunctionProvider(fnClient xp.FunctionClient, comp *apiextensionsv1
 		// Generate a stable container name from the function package
 		containerName := generateContainerName(fn.Spec.Package)
 
-		logger.Debug("Adding reuse annotations to function",
+		p.logger.Debug("Adding reuse annotations to function",
 			"function", fn.GetName(),
 			"package", fn.Spec.Package,
 			"containerName", containerName)
@@ -110,16 +127,10 @@ func NewCachedFunctionProvider(fnClient xp.FunctionClient, comp *apiextensionsv1
 		fn.Annotations["render.crossplane.io/runtime-docker-cleanup"] = "Orphan"
 	}
 
-	return &CachedFunctionProvider{
-		cached: fns,
-		logger: logger,
-	}, nil
-}
+	// Cache for future calls
+	p.cache[compName] = fns
 
-// GetFunctionsForComposition returns the cached functions.
-func (p *CachedFunctionProvider) GetFunctionsForComposition(comp *apiextensionsv1.Composition) ([]pkgv1.Function, error) {
-	p.logger.Debug("Using cached functions", "composition", comp.GetName(), "count", len(p.cached))
-	return p.cached, nil
+	return fns, nil
 }
 
 // generateContainerName creates a stable Docker container name from a function package reference.

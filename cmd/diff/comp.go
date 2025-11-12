@@ -109,6 +109,9 @@ func makeDefaultCompProc(c *CompCmd, ctx *AppContext, log logging.Logger) dp.Com
 		dp.WithDiffProcessorFactory(func(k8Clients k8.Clients, xpClients xp.Clients, processorOpts []dp.ProcessorOption) dp.DiffProcessor {
 			return dp.NewDiffProcessor(k8Clients, xpClients, processorOpts...)
 		}),
+		// Use cached function provider for composition diffs to enable Docker container reuse
+		// The provider lazy-loads and caches functions by composition name
+		dp.WithFunctionProviderFactory(dp.NewCachedFunctionProvider),
 	)
 
 	// Create composition processor with clients

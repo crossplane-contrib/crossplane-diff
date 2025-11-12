@@ -43,11 +43,11 @@ type DiffProcessor interface {
 
 // DefaultDiffProcessor implements DiffProcessor with modular components.
 type DefaultDiffProcessor struct {
-	functionProvider     FunctionProvider
 	compClient           xp.CompositionClient
 	defClient            xp.DefinitionClient
 	schemaClient         k8.SchemaClient
 	config               ProcessorConfig
+	functionProvider     FunctionProvider
 	schemaValidator      SchemaValidator
 	diffCalculator       DiffCalculator
 	diffRenderer         renderer.DiffRenderer
@@ -90,11 +90,11 @@ func NewDiffProcessor(k8cs k8.Clients, xpcs xp.Clients, opts ...ProcessorOption)
 	functionProvider := config.Factories.FunctionProvider(xpcs.Function, config.Logger)
 
 	processor := &DefaultDiffProcessor{
-		functionProvider:     functionProvider,
 		compClient:           xpcs.Composition,
 		defClient:            xpcs.Definition,
 		schemaClient:         k8cs.Schema,
 		config:               config,
+		functionProvider:     functionProvider,
 		schemaValidator:      schemaValidator,
 		diffCalculator:       diffCalculator,
 		diffRenderer:         diffRenderer,
@@ -216,7 +216,7 @@ func (p *DefaultDiffProcessor) DiffSingleResource(ctx context.Context, res *un.U
 
 	p.config.Logger.Debug("Resource setup complete", "resource", resourceID, "composition", comp.GetName())
 
-	// Get functions for rendering
+	// Get functions for this composition (provider handles caching internally)
 	fns, err := p.functionProvider.GetFunctionsForComposition(comp)
 	if err != nil {
 		p.config.Logger.Debug("Failed to get functions", "resource", resourceID, "error", err)
