@@ -218,6 +218,7 @@ func (p *DefaultCompDiffProcessor) processSingleComposition(ctx context.Context,
 
 	// Collect any errors from the results and return them
 	var processingErrs []error
+
 	for _, result := range results {
 		if result.HasError() {
 			processingErrs = append(processingErrs, result.Error)
@@ -315,6 +316,7 @@ func (p *DefaultCompDiffProcessor) renderXRImpactAnalysis(stdout io.Writer, xrs 
 
 	// Collect all diffs from the results
 	allDiffs := make(map[string]*dt.ResourceDiff)
+
 	for _, result := range results {
 		if !result.HasError() && result.HasChanges() {
 			maps.Copy(allDiffs, result.Diffs)
@@ -557,18 +559,20 @@ func buildXRStatusList(xrs []*un.Unstructured, results map[string]*XRDiffResult,
 
 		// Determine status indicator and color based on result
 		var indicator, color string
+
 		result := results[resourceID]
-		if result != nil && result.HasError() {
+		switch {
+		case result != nil && result.HasError():
 			// Processing error - show red X
 			indicator = errorMark
 			color = colorRed
 			errorCount++
-		} else if result != nil && result.HasChanges() {
+		case result != nil && result.HasChanges():
 			// Has changes - show yellow warning
 			indicator = warningMark
 			color = colorYellow
 			changedCount++
-		} else {
+		default:
 			// No changes - show green check
 			indicator = checkMark
 			color = colorGreen

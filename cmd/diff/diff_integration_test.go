@@ -1958,7 +1958,7 @@ Summary: 1 modified
   ⚠ XNopResource/another-resource (namespace: default)
   ⚠ XNopResource/test-resource (namespace: default)
 
-Summary: 2 resources with changes, 0 resources unchanged
+Summary: 2 resources with changes
 
 === Impact Analysis ===
 
@@ -2030,7 +2030,7 @@ No changes detected in composition xnopresources.diff.example.org
 
   ✓ XNopResource/test-resource (namespace: default)
 
-Summary: 0 resources with changes, 1 resource unchanged
+Summary: 1 resource unchanged
 
 === Impact Analysis ===
 
@@ -2109,7 +2109,7 @@ Summary: 1 modified
 
   ⚠ XNopResource/custom-namespace-resource (namespace: custom-namespace)
 
-Summary: 1 resource with changes, 0 resources unchanged
+Summary: 1 resource with changes
 
 === Impact Analysis ===
 
@@ -2206,7 +2206,7 @@ Summary: 1 modified
   ⚠ XNopResource/another-resource (namespace: default)
   ⚠ XNopResource/test-resource (namespace: default)
 
-Summary: 2 resources with changes, 0 resources unchanged
+Summary: 2 resources with changes
 
 === Impact Analysis ===
 
@@ -2328,7 +2328,7 @@ Summary: 1 modified
 
   ⚠ XNopResource/test-resource (namespace: default)
 
-Summary: 1 resource with changes, 0 resources unchanged
+Summary: 1 resource with changes
 
 === Impact Analysis ===
 
@@ -2425,7 +2425,7 @@ Summary: 1 modified
 
   ⚠ XNopResource/test-api-version (namespace: default)
 
-Summary: 1 resource with changes, 0 resources unchanged
+Summary: 1 resource with changes
 
 === Impact Analysis ===
 
@@ -2579,7 +2579,7 @@ Summary: 1 modified
   ✓ XNopResource/status-test-xr-1 (namespace: default)
   ✓ XNopResource/status-test-xr-2 (namespace: default)
 
-Summary: 0 resources with changes, 2 resources unchanged
+Summary: 2 resources unchanged
 
 === Impact Analysis ===
 
