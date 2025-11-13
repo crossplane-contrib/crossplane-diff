@@ -50,6 +50,7 @@ type IntegrationTestCase struct {
 	noColor                 bool
 	namespace               string        // For composition tests (optional)
 	xrdAPIVersion           XrdAPIVersion // For XR tests (optional)
+	ignorePaths             []string      // Paths to ignore in diffs
 	skip                    bool
 	skipReason              string
 }
@@ -187,6 +188,13 @@ func runIntegrationTest(t *testing.T, testType DiffTestType, scheme *runtime.Sch
 	// Add no-color flag if true
 	if tt.noColor {
 		args = append(args, "--no-color")
+	}
+
+	// Add ignore-paths if specified
+	if len(tt.ignorePaths) > 0 {
+		for _, path := range tt.ignorePaths {
+			args = append(args, fmt.Sprintf("--ignore-paths=%s", path))
+		}
 	}
 
 	// Add files as positional arguments
@@ -394,6 +402,25 @@ func TestDiffIntegration(t *testing.T) {
 
 Summary: 2 modified`,
 			expectedError: false,
+		},
+		"IgnorePathsArgoCD": {
+			reason: "Ignores ArgoCD annotations and labels when --ignore-paths is specified",
+			setupFiles: []string{
+				"testdata/diff/resources/xrd.yaml",
+				"testdata/diff/resources/composition.yaml",
+				"testdata/diff/resources/composition-revision-default.yaml",
+				"testdata/diff/resources/functions.yaml",
+				// put an existing resource with different ArgoCD annotations
+				"testdata/diff/resources/existing-downstream-resource-with-argocd.yaml",
+				"testdata/diff/resources/existing-xr-with-argocd.yaml",
+			},
+			inputFiles: []string{"testdata/diff/xr-with-argocd-annotations.yaml"},
+			ignorePaths: []string{
+				"metadata.annotations[argocd.argoproj.io/tracking-id]",
+				"metadata.labels[argocd.argoproj.io/instance]",
+			},
+			expectedOutput: ``,
+			expectedError:  false,
 		},
 		"ModifiedXRCreatesDownstream": {
 			reason: "Shows color diff when modified XR creates new downstream resource",
@@ -1973,6 +2000,36 @@ Summary: 1 modified
 ---
 
 Summary: 2 modified`,
+			expectedError: false,
+			noColor:       true,
+		},
+		"CompositionDiffIgnorePaths": {
+			reason: "Validates that ArgoCD annotations are ignored in composition diffs",
+			setupFiles: []string{
+				"testdata/comp/resources/xrd.yaml",
+				"testdata/comp/resources/original-composition.yaml",
+				"testdata/comp/resources/functions.yaml",
+				// Add existing XR with ArgoCD annotations
+				"testdata/comp/resources/existing-xr-with-argocd.yaml",
+				"testdata/comp/resources/existing-downstream-with-argocd.yaml",
+			},
+			inputFiles: []string{"testdata/comp/composition-no-changes.yaml"},
+			namespace:  "default",
+			ignorePaths: []string{
+				"metadata.annotations[argocd.argoproj.io/tracking-id]",
+				"metadata.labels[argocd.argoproj.io/instance]",
+			},
+			expectedOutput: `
+=== Composition Changes ===
+
+No changes detected in composition xnopresources.diff.example.org
+
+=== Affected Composite Resources ===
+
+- XNopResource/test-resource (namespace: default)
+
+=== Impact Analysis ===
+`,
 			expectedError: false,
 			noColor:       true,
 		},

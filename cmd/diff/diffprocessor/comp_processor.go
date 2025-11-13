@@ -281,6 +281,7 @@ func (p *DefaultCompDiffProcessor) displayCompositionDiff(ctx context.Context, s
 	diffOptions := renderer.DefaultDiffOptions()
 	diffOptions.UseColors = p.config.Colorize
 	diffOptions.Compact = p.config.Compact
+	diffOptions.IgnorePaths = p.config.IgnorePaths
 
 	compDiff, err := renderer.GenerateDiffWithOptions(ctx, originalCompUnstructured, newCompUnstructured, p.config.Logger, diffOptions)
 	if err != nil {

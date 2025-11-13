@@ -62,10 +62,19 @@ func initializeAppContext(timeout time.Duration, appCtx *AppContext, log logging
 // defaultProcessorOptions returns the standard default options used by both XR and composition processors.
 // This is the single source of truth for behavior defaults in the CLI layer.
 func defaultProcessorOptions(fields CommonCmdFields, namespace string) []dp.ProcessorOption {
+	// Default ignored paths - always filtered from diffs
+	allIgnorePaths := []string{
+		"metadata.annotations[kubectl.kubernetes.io/last-applied-configuration]",
+	}
+
+	// Combine default paths with user-specified ones
+	allIgnorePaths = append(allIgnorePaths, fields.IgnorePaths...)
+
 	return []dp.ProcessorOption{
 		dp.WithNamespace(namespace),
 		dp.WithColorize(!fields.NoColor),
 		dp.WithCompact(fields.Compact),
 		dp.WithMaxNestedDepth(fields.MaxNestedDepth),
+		dp.WithIgnorePaths(allIgnorePaths),
 	}
 }
