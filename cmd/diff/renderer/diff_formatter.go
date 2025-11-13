@@ -495,6 +495,12 @@ func removeNestedPath(obj map[string]any, path string) bool {
 		// Remove the specific key from the map
 		if _, keyExists := parentMap[key]; keyExists {
 			delete(parentMap, key)
+
+			// If the parent map is now empty, remove the parent field entirely
+			if len(parentMap) == 0 {
+				un.RemoveNestedField(obj, parts...)
+			}
+
 			return true
 		}
 
