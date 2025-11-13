@@ -604,6 +604,8 @@ func Test_buildXRStatusList(t *testing.T) {
 			wantChanged:   0,
 			wantUnchanged: 0,
 			validateList: func(t *testing.T, list string) {
+				t.Helper()
+
 				if list != "" {
 					t.Errorf("Expected empty list, got: %q", list)
 				}
@@ -620,9 +622,12 @@ func Test_buildXRStatusList(t *testing.T) {
 			wantChanged:   0,
 			wantUnchanged: 1,
 			validateList: func(t *testing.T, list string) {
+				t.Helper()
+
 				if !strings.Contains(list, "✓ XResource/test-xr") {
 					t.Errorf("Expected checkmark for unchanged resource, got: %q", list)
 				}
+
 				if !strings.Contains(list, "namespace: default") {
 					t.Errorf("Expected namespace info, got: %q", list)
 				}
@@ -639,6 +644,8 @@ func Test_buildXRStatusList(t *testing.T) {
 			wantChanged:   1,
 			wantUnchanged: 0,
 			validateList: func(t *testing.T, list string) {
+				t.Helper()
+
 				if !strings.Contains(list, "⚠ XResource/test-xr") {
 					t.Errorf("Expected warning mark for changed resource, got: %q", list)
 				}
@@ -661,9 +668,12 @@ func Test_buildXRStatusList(t *testing.T) {
 			wantChanged:   1,
 			wantUnchanged: 1,
 			validateList: func(t *testing.T, list string) {
+				t.Helper()
+
 				if !strings.Contains(list, "✓ XResource/unchanged-xr") {
 					t.Errorf("Expected checkmark for unchanged resource")
 				}
+
 				if !strings.Contains(list, "⚠ XResource/changed-xr") {
 					t.Errorf("Expected warning mark for changed resource")
 				}
@@ -679,6 +689,8 @@ func Test_buildXRStatusList(t *testing.T) {
 			wantChanged:   0,
 			wantUnchanged: 1,
 			validateList: func(t *testing.T, list string) {
+				t.Helper()
+
 				if !strings.Contains(list, "cluster-scoped") {
 					t.Errorf("Expected cluster-scoped indicator, got: %q", list)
 				}
@@ -695,6 +707,7 @@ func Test_buildXRStatusList(t *testing.T) {
 			wantChanged:   0,
 			wantUnchanged: 1,
 			validateList: func(t *testing.T, list string) {
+				t.Helper()
 				// Should contain green ANSI code for unchanged resource
 				if !strings.Contains(list, "\x1b[32m") {
 					t.Errorf("Expected green ANSI color code, got: %q", list)
@@ -716,6 +729,7 @@ func Test_buildXRStatusList(t *testing.T) {
 			wantChanged:   1,
 			wantUnchanged: 0,
 			validateList: func(t *testing.T, list string) {
+				t.Helper()
 				// Should contain yellow ANSI code for changed resource
 				if !strings.Contains(list, "\x1b[33m") {
 					t.Errorf("Expected yellow ANSI color code, got: %q", list)
@@ -743,9 +757,12 @@ func Test_buildXRStatusList(t *testing.T) {
 			wantChanged:   1,
 			wantUnchanged: 1,
 			validateList: func(t *testing.T, list string) {
+				t.Helper()
+
 				if !strings.Contains(list, "namespace: namespace-a") {
 					t.Errorf("Expected namespace-a in output")
 				}
+
 				if !strings.Contains(list, "namespace: namespace-b") {
 					t.Errorf("Expected namespace-b in output")
 				}
@@ -760,6 +777,7 @@ func Test_buildXRStatusList(t *testing.T) {
 			if gotChanged != tt.wantChanged {
 				t.Errorf("buildXRStatusList() changed count = %d, want %d", gotChanged, tt.wantChanged)
 			}
+
 			if gotUnchanged != tt.wantUnchanged {
 				t.Errorf("buildXRStatusList() unchanged count = %d, want %d", gotUnchanged, tt.wantUnchanged)
 			}
