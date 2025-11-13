@@ -65,6 +65,11 @@ crossplane-diff xr xr.yaml --compact
 
 # Disable color output
 crossplane-diff xr xr.yaml --no-color
+
+# Ignore specific fields in diffs (useful for filtering out metadata like ArgoCD annotations)
+crossplane-diff xr xr.yaml \
+  --ignore-paths 'metadata.annotations[argocd.argoproj.io/tracking-id]' \
+  --ignore-paths 'metadata.labels[argocd.argoproj.io/instance]'
 ```
 
 ### Composition Diff - Analyze Impact of Composition Changes
@@ -84,6 +89,11 @@ crossplane-diff comp updated-composition.yaml -n production
 
 # Include XRs with Manual update policy (pinned revisions)
 crossplane-diff comp updated-composition.yaml --include-manual
+
+# Ignore specific fields in diffs (useful for filtering out metadata like ArgoCD annotations)
+crossplane-diff comp updated-composition.yaml \
+  --ignore-paths 'metadata.annotations[argocd.argoproj.io/tracking-id]' \
+  --ignore-paths 'metadata.labels[argocd.argoproj.io/instance]'
 ```
 
 ### Command Options
@@ -104,9 +114,15 @@ Flags:
       --compact                Show compact diffs with minimal context.
       --max-nested-depth=10    Maximum depth for nested XR recursion.
       --timeout=1m             How long to run before timing out.
+      --ignore-paths=STRING,... Paths to ignore in diffs. Supports simple paths
+                               (e.g., 'metadata.annotations') and map key paths with
+                               bracket notation (e.g., 'metadata.annotations[key]').
+                               Can be specified multiple times.
 ```
 
 **Note**: XR namespaces are read directly from the YAML files being diffed, not from command-line flags.
+
+**Ignored Paths**: By default, `metadata.annotations[kubectl.kubernetes.io/last-applied-configuration]` is always ignored. Additional paths can be specified with `--ignore-paths`. This is useful for filtering out metadata added by tools like ArgoCD (e.g., tracking IDs, sync waves) that shouldn't affect diff results.
 
 #### `comp` - Diff Composition Impact
 
@@ -127,9 +143,15 @@ Flags:
   -n, --namespace=""           Namespace to find XRs (empty = all namespaces).
       --include-manual         Include XRs with Manual update policy (default:
                                only Automatic policy XRs)
+      --ignore-paths=STRING,... Paths to ignore in diffs. Supports simple paths
+                               (e.g., 'metadata.annotations') and map key paths with
+                               bracket notation (e.g., 'metadata.annotations[key]').
+                               Can be specified multiple times.
 ```
 
 **Note**: The `diff` subcommand is deprecated. Use `xr` instead.
+
+**Ignored Paths**: By default, `metadata.annotations[kubectl.kubernetes.io/last-applied-configuration]` is always ignored. Additional paths can be specified with `--ignore-paths`. This is useful for filtering out metadata added by tools like ArgoCD (e.g., tracking IDs, sync waves) that shouldn't affect diff results.
 
 ### Prerequisites
 

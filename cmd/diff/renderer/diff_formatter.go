@@ -39,6 +39,11 @@ type DiffOptions struct {
 
 	// Compact determines whether to show a compact diff
 	Compact bool
+
+	// IgnorePaths is a list of paths to ignore when calculating diffs
+	// Supports both simple paths (e.g., "metadata.annotations") and
+	// map key paths (e.g., "metadata.annotations[key.name/value]")
+	IgnorePaths []string
 }
 
 // DefaultDiffOptions returns the default options with colors enabled.
@@ -244,7 +249,7 @@ func GetLineDiff(oldText, newText string) []diffmatchpatch.Diff {
 }
 
 // GenerateDiffWithOptions produces a structured diff between two unstructured objects.
-func GenerateDiffWithOptions(_ context.Context, current, desired *un.Unstructured, logger logging.Logger, _ DiffOptions) (*t.ResourceDiff, error) {
+func GenerateDiffWithOptions(_ context.Context, current, desired *un.Unstructured, logger logging.Logger, options DiffOptions) (*t.ResourceDiff, error) {
 	var diffType t.DiffType
 
 	// Determine resource identifiers upfront
@@ -285,8 +290,8 @@ func GenerateDiffWithOptions(_ context.Context, current, desired *un.Unstructure
 		}
 
 		// Clean up both objects for comparison
-		currentClean := cleanupForDiff(current.DeepCopy(), logger.WithValues("resourceStage", "current", "before", current))
-		desiredClean := cleanupForDiff(desired.DeepCopy(), logger.WithValues("resourceStage", "desired", "before", desired))
+		currentClean := cleanupForDiff(current.DeepCopy(), logger.WithValues("resourceStage", "current", "before", current), options.IgnorePaths)
+		desiredClean := cleanupForDiff(desired.DeepCopy(), logger.WithValues("resourceStage", "desired", "before", desired), options.IgnorePaths)
 
 		// Check if the cleaned objects are equal
 		if equality.Semantic.DeepEqual(currentClean.Object, desiredClean.Object) {
@@ -303,7 +308,7 @@ func GenerateDiffWithOptions(_ context.Context, current, desired *un.Unstructure
 			return "", nil
 		}
 
-		clean := cleanupForDiff(obj.DeepCopy(), logger)
+		clean := cleanupForDiff(obj.DeepCopy(), logger, options.IgnorePaths)
 
 		yaml, err := sigsyaml.Marshal(clean.Object)
 		if err != nil {
@@ -450,14 +455,83 @@ func formatLine(line string, diffType diffmatchpatch.Operation, options DiffOpti
 	return fmt.Sprintf("%s%s", prefix, line)
 }
 
+// removeNestedPath removes a field from an object based on a path string.
+// Supports both simple paths (e.g., "metadata.annotations") and
+// map key paths (e.g., "metadata.annotations[key.name/value]").
+// Returns true if the field was found and removed, false otherwise.
+func removeNestedPath(obj map[string]interface{}, path string) bool {
+	if path == "" {
+		return false
+	}
+
+	// Check if this is a map key path (contains brackets)
+	if strings.Contains(path, "[") && strings.HasSuffix(path, "]") {
+		// Parse path like "metadata.annotations[key]"
+		openBracket := strings.Index(path, "[")
+		closeBracket := strings.LastIndex(path, "]")
+
+		if openBracket == -1 || closeBracket == -1 || closeBracket <= openBracket+1 {
+			return false // Invalid format
+		}
+
+		// Extract the base path and the key
+		basePath := path[:openBracket]
+		key := path[openBracket+1 : closeBracket]
+
+		// Split the base path into parts and use k8s helper to get the map reference
+		parts := strings.Split(basePath, ".")
+		fieldValue, found, err := un.NestedFieldNoCopy(obj, parts...)
+		if !found || err != nil {
+			return false
+		}
+
+		// Ensure it's a map
+		parentMap, ok := fieldValue.(map[string]interface{})
+		if !ok {
+			return false
+		}
+
+		// Remove the specific key from the map
+		if _, keyExists := parentMap[key]; keyExists {
+			delete(parentMap, key)
+			return true
+		}
+
+		return false
+	}
+
+	// Simple path without brackets - use k8s unstructured helper
+	parts := strings.Split(path, ".")
+	_, found, _ := un.NestedFieldNoCopy(obj, parts...)
+	if found {
+		un.RemoveNestedField(obj, parts...)
+		return true
+	}
+
+	return false
+}
+
 // cleanupForDiff removes fields that shouldn't be included in the diff.
-func cleanupForDiff(obj *un.Unstructured, logger logging.Logger) *un.Unstructured {
+func cleanupForDiff(obj *un.Unstructured, logger logging.Logger, ignorePaths []string) *un.Unstructured {
 	resKind := obj.GetKind()
 	resName := obj.GetName()
 	resKey := fmt.Sprintf("%s/%s", resKind, resName)
 
 	// Track all modifications for a single consolidated log message
 	var modifications []string
+
+	// Add default ignored paths
+	defaultIgnoredPaths := []string{
+		"metadata.annotations[kubectl.kubernetes.io/last-applied-configuration]",
+	}
+	allIgnorePaths := append(defaultIgnoredPaths, ignorePaths...)
+
+	// Remove user-specified and default ignored paths
+	for _, path := range allIgnorePaths {
+		if removeNestedPath(obj.Object, path) {
+			modifications = append(modifications, fmt.Sprintf("ignored path: %s", path))
+		}
+	}
 
 	// Remove server-side fields and metadata that we don't want to diff
 	metadata, found, _ := un.NestedMap(obj.Object, "metadata")

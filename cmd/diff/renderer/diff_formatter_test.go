@@ -296,3 +296,156 @@ func TestFormatDiff(t *testing.T) {
 		})
 	}
 }
+
+func TestRemoveNestedPath(t *testing.T) {
+	tests := map[string]struct {
+		obj      map[string]interface{}
+		path     string
+		want     bool
+		wantObj  map[string]interface{}
+		descr    string
+	}{
+		"SimplePath": {
+			obj: map[string]interface{}{
+				"metadata": map[string]interface{}{
+					"name":      "test",
+					"namespace": "default",
+				},
+			},
+			path: "metadata.namespace",
+			want: true,
+			wantObj: map[string]interface{}{
+				"metadata": map[string]interface{}{
+					"name": "test",
+				},
+			},
+			descr: "removes a simple nested field",
+		},
+		"MapKeyPath": {
+			obj: map[string]interface{}{
+				"metadata": map[string]interface{}{
+					"annotations": map[string]interface{}{
+						"kubectl.kubernetes.io/last-applied-configuration": "large-json",
+						"argocd.argoproj.io/tracking-id":                   "some-id",
+						"keep-this": "value",
+					},
+				},
+			},
+			path: "metadata.annotations[kubectl.kubernetes.io/last-applied-configuration]",
+			want: true,
+			wantObj: map[string]interface{}{
+				"metadata": map[string]interface{}{
+					"annotations": map[string]interface{}{
+						"argocd.argoproj.io/tracking-id": "some-id",
+						"keep-this":                      "value",
+					},
+				},
+			},
+			descr: "removes a specific key from a map",
+		},
+		"MapKeyPathWithSlash": {
+			obj: map[string]interface{}{
+				"metadata": map[string]interface{}{
+					"labels": map[string]interface{}{
+						"argocd.argoproj.io/instance": "some-instance",
+						"provider":                    "aws",
+					},
+				},
+			},
+			path: "metadata.labels[argocd.argoproj.io/instance]",
+			want: true,
+			wantObj: map[string]interface{}{
+				"metadata": map[string]interface{}{
+					"labels": map[string]interface{}{
+						"provider": "aws",
+					},
+				},
+			},
+			descr: "removes a label with slash in key",
+		},
+		"NonExistentPath": {
+			obj: map[string]interface{}{
+				"metadata": map[string]interface{}{
+					"name": "test",
+				},
+			},
+			path: "metadata.nonexistent",
+			want: false,
+			wantObj: map[string]interface{}{
+				"metadata": map[string]interface{}{
+					"name": "test",
+				},
+			},
+			descr: "returns false for non-existent path",
+		},
+		"NonExistentMapKey": {
+			obj: map[string]interface{}{
+				"metadata": map[string]interface{}{
+					"annotations": map[string]interface{}{
+						"keep-this": "value",
+					},
+				},
+			},
+			path: "metadata.annotations[nonexistent-key]",
+			want: false,
+			wantObj: map[string]interface{}{
+				"metadata": map[string]interface{}{
+					"annotations": map[string]interface{}{
+						"keep-this": "value",
+					},
+				},
+			},
+			descr: "returns false for non-existent map key",
+		},
+		"EmptyPath": {
+			obj: map[string]interface{}{
+				"metadata": map[string]interface{}{
+					"name": "test",
+				},
+			},
+			path: "",
+			want: false,
+			wantObj: map[string]interface{}{
+				"metadata": map[string]interface{}{
+					"name": "test",
+				},
+			},
+			descr: "returns false for empty path",
+		},
+		"RemoveEntireSection": {
+			obj: map[string]interface{}{
+				"metadata": map[string]interface{}{
+					"annotations": map[string]interface{}{
+						"key": "value",
+					},
+				},
+				"spec": map[string]interface{}{
+					"field": "value",
+				},
+			},
+			path: "metadata.annotations",
+			want: true,
+			wantObj: map[string]interface{}{
+				"metadata": map[string]interface{}{},
+				"spec": map[string]interface{}{
+					"field": "value",
+				},
+			},
+			descr: "removes entire nested map",
+		},
+	}
+
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			got := removeNestedPath(tc.obj, tc.path)
+
+			if got != tc.want {
+				t.Errorf("removeNestedPath() = %v, want %v for %s", got, tc.want, tc.descr)
+			}
+
+			if diff := cmp.Diff(tc.wantObj, tc.obj); diff != "" {
+				t.Errorf("removeNestedPath() object mismatch (-want +got):\n%s", diff)
+			}
+		})
+	}
+}

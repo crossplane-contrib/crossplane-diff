@@ -27,6 +27,9 @@ type ProcessorConfig struct {
 	// IncludeManual determines whether to include XRs with Manual update policy in composition diffs
 	IncludeManual bool
 
+	// IgnorePaths is a list of paths to ignore when calculating diffs
+	IgnorePaths []string
+
 	// Logger is the logger to use
 	Logger logging.Logger
 
@@ -99,6 +102,13 @@ func WithIncludeManual(includeManual bool) ProcessorOption {
 	}
 }
 
+// WithIgnorePaths sets the paths to ignore when calculating diffs.
+func WithIgnorePaths(ignorePaths []string) ProcessorOption {
+	return func(config *ProcessorConfig) {
+		config.IgnorePaths = ignorePaths
+	}
+}
+
 // WithLogger sets the logger for the processor.
 func WithLogger(logger logging.Logger) ProcessorOption {
 	return func(config *ProcessorConfig) {
@@ -167,6 +177,7 @@ func (c *ProcessorConfig) GetDiffOptions() renderer.DiffOptions {
 	opts := renderer.DefaultDiffOptions()
 	opts.UseColors = c.Colorize
 	opts.Compact = c.Compact
+	opts.IgnorePaths = c.IgnorePaths
 
 	return opts
 }

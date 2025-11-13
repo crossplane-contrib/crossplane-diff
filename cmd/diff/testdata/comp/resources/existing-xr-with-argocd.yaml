@@ -1,0 +1,14 @@
+apiVersion: ns.diff.example.org/v1alpha1
+kind: XNopResource
+metadata:
+  name: test-resource
+  namespace: default
+  annotations:
+    argocd.argoproj.io/tracking-id: "test-app:/XNopResource:default/test-resource"
+  labels:
+    argocd.argoproj.io/instance: test-app
+spec:
+  coolField: "existing-value"
+  crossplane:
+    compositionRef:
+      name: xnopresources.diff.example.org
