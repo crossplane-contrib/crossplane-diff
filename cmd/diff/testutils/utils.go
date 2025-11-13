@@ -26,9 +26,9 @@ const (
 	ColorReset  = "\x1b[0m"
 )
 
-// Green takes a multiline string, splits it by line, and adds green coloring to each line.
+// color takes a multiline string, splits it by line, and adds the specified coloring to each line.
 // It returns a single string with all lines joined back together.
-func Green(input string) string {
+func color(colorCode, input string) string {
 	lines := strings.Split(input, "\n")
 	coloredLines := make([]string, 0, len(lines))
 
@@ -39,48 +39,28 @@ func Green(input string) string {
 			continue
 		}
 
-		coloredLines = append(coloredLines, ColorGreen+line+ColorReset)
+		coloredLines = append(coloredLines, colorCode+line+ColorReset)
 	}
 
 	return strings.Join(coloredLines, "\n")
+}
+
+// Green takes a multiline string, splits it by line, and adds green coloring to each line.
+// It returns a single string with all lines joined back together.
+func Green(input string) string {
+	return color(ColorGreen, input)
 }
 
 // Red takes a multiline string, splits it by line, and adds red coloring to each line.
 // It returns a single string with all lines joined back together.
 func Red(input string) string {
-	lines := strings.Split(input, "\n")
-	coloredLines := make([]string, 0, len(lines))
-
-	for _, line := range lines {
-		// Handle the case of the last empty line after a newline
-		if line == "" && len(coloredLines) == len(lines)-1 {
-			coloredLines = append(coloredLines, "")
-			continue
-		}
-
-		coloredLines = append(coloredLines, ColorRed+line+ColorReset)
-	}
-
-	return strings.Join(coloredLines, "\n")
+	return color(ColorRed, input)
 }
 
 // Yellow takes a multiline string, splits it by line, and adds yellow coloring to each line.
 // It returns a single string with all lines joined back together.
 func Yellow(input string) string {
-	lines := strings.Split(input, "\n")
-	coloredLines := make([]string, 0, len(lines))
-
-	for _, line := range lines {
-		// Handle the case of the last empty line after a newline
-		if line == "" && len(coloredLines) == len(lines)-1 {
-			coloredLines = append(coloredLines, "")
-			continue
-		}
-
-		coloredLines = append(coloredLines, ColorYellow+line+ColorReset)
-	}
-
-	return strings.Join(coloredLines, "\n")
+	return color(ColorYellow, input)
 }
 
 // CompareIgnoringAnsi compares two strings after stripping ANSI special characters.
