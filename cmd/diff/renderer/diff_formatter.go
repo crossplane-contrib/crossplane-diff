@@ -522,14 +522,8 @@ func cleanupForDiff(obj *un.Unstructured, logger logging.Logger, ignorePaths []s
 	// Track all modifications for a single consolidated log message
 	var modifications []string
 
-	// Combine default ignored paths with user-specified ones
-	allIgnorePaths := []string{
-		"metadata.annotations[kubectl.kubernetes.io/last-applied-configuration]",
-	}
-	allIgnorePaths = append(allIgnorePaths, ignorePaths...)
-
-	// Remove user-specified and default ignored paths
-	for _, path := range allIgnorePaths {
+	// Remove ignored paths (includes both defaults and user-specified)
+	for _, path := range ignorePaths {
 		if removeNestedPath(obj.Object, path) {
 			modifications = append(modifications, fmt.Sprintf("ignored path: %s", path))
 		}
