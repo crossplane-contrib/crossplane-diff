@@ -299,43 +299,43 @@ func TestFormatDiff(t *testing.T) {
 
 func TestRemoveNestedPath(t *testing.T) {
 	tests := map[string]struct {
-		obj      map[string]interface{}
-		path     string
-		want     bool
-		wantObj  map[string]interface{}
-		descr    string
+		obj     map[string]any
+		path    string
+		want    bool
+		wantObj map[string]any
+		descr   string
 	}{
 		"SimplePath": {
-			obj: map[string]interface{}{
-				"metadata": map[string]interface{}{
+			obj: map[string]any{
+				"metadata": map[string]any{
 					"name":      "test",
 					"namespace": "default",
 				},
 			},
 			path: "metadata.namespace",
 			want: true,
-			wantObj: map[string]interface{}{
-				"metadata": map[string]interface{}{
+			wantObj: map[string]any{
+				"metadata": map[string]any{
 					"name": "test",
 				},
 			},
 			descr: "removes a simple nested field",
 		},
 		"MapKeyPath": {
-			obj: map[string]interface{}{
-				"metadata": map[string]interface{}{
-					"annotations": map[string]interface{}{
+			obj: map[string]any{
+				"metadata": map[string]any{
+					"annotations": map[string]any{
 						"kubectl.kubernetes.io/last-applied-configuration": "large-json",
 						"argocd.argoproj.io/tracking-id":                   "some-id",
-						"keep-this": "value",
+						"keep-this":                                        "value",
 					},
 				},
 			},
 			path: "metadata.annotations[kubectl.kubernetes.io/last-applied-configuration]",
 			want: true,
-			wantObj: map[string]interface{}{
-				"metadata": map[string]interface{}{
-					"annotations": map[string]interface{}{
+			wantObj: map[string]any{
+				"metadata": map[string]any{
+					"annotations": map[string]any{
 						"argocd.argoproj.io/tracking-id": "some-id",
 						"keep-this":                      "value",
 					},
@@ -344,9 +344,9 @@ func TestRemoveNestedPath(t *testing.T) {
 			descr: "removes a specific key from a map",
 		},
 		"MapKeyPathWithSlash": {
-			obj: map[string]interface{}{
-				"metadata": map[string]interface{}{
-					"labels": map[string]interface{}{
+			obj: map[string]any{
+				"metadata": map[string]any{
+					"labels": map[string]any{
 						"argocd.argoproj.io/instance": "some-instance",
 						"provider":                    "aws",
 					},
@@ -354,9 +354,9 @@ func TestRemoveNestedPath(t *testing.T) {
 			},
 			path: "metadata.labels[argocd.argoproj.io/instance]",
 			want: true,
-			wantObj: map[string]interface{}{
-				"metadata": map[string]interface{}{
-					"labels": map[string]interface{}{
+			wantObj: map[string]any{
+				"metadata": map[string]any{
+					"labels": map[string]any{
 						"provider": "aws",
 					},
 				},
@@ -364,33 +364,33 @@ func TestRemoveNestedPath(t *testing.T) {
 			descr: "removes a label with slash in key",
 		},
 		"NonExistentPath": {
-			obj: map[string]interface{}{
-				"metadata": map[string]interface{}{
+			obj: map[string]any{
+				"metadata": map[string]any{
 					"name": "test",
 				},
 			},
 			path: "metadata.nonexistent",
 			want: false,
-			wantObj: map[string]interface{}{
-				"metadata": map[string]interface{}{
+			wantObj: map[string]any{
+				"metadata": map[string]any{
 					"name": "test",
 				},
 			},
 			descr: "returns false for non-existent path",
 		},
 		"NonExistentMapKey": {
-			obj: map[string]interface{}{
-				"metadata": map[string]interface{}{
-					"annotations": map[string]interface{}{
+			obj: map[string]any{
+				"metadata": map[string]any{
+					"annotations": map[string]any{
 						"keep-this": "value",
 					},
 				},
 			},
 			path: "metadata.annotations[nonexistent-key]",
 			want: false,
-			wantObj: map[string]interface{}{
-				"metadata": map[string]interface{}{
-					"annotations": map[string]interface{}{
+			wantObj: map[string]any{
+				"metadata": map[string]any{
+					"annotations": map[string]any{
 						"keep-this": "value",
 					},
 				},
@@ -398,36 +398,36 @@ func TestRemoveNestedPath(t *testing.T) {
 			descr: "returns false for non-existent map key",
 		},
 		"EmptyPath": {
-			obj: map[string]interface{}{
-				"metadata": map[string]interface{}{
+			obj: map[string]any{
+				"metadata": map[string]any{
 					"name": "test",
 				},
 			},
 			path: "",
 			want: false,
-			wantObj: map[string]interface{}{
-				"metadata": map[string]interface{}{
+			wantObj: map[string]any{
+				"metadata": map[string]any{
 					"name": "test",
 				},
 			},
 			descr: "returns false for empty path",
 		},
 		"RemoveEntireSection": {
-			obj: map[string]interface{}{
-				"metadata": map[string]interface{}{
-					"annotations": map[string]interface{}{
+			obj: map[string]any{
+				"metadata": map[string]any{
+					"annotations": map[string]any{
 						"key": "value",
 					},
 				},
-				"spec": map[string]interface{}{
+				"spec": map[string]any{
 					"field": "value",
 				},
 			},
 			path: "metadata.annotations",
 			want: true,
-			wantObj: map[string]interface{}{
-				"metadata": map[string]interface{}{},
-				"spec": map[string]interface{}{
+			wantObj: map[string]any{
+				"metadata": map[string]any{},
+				"spec": map[string]any{
 					"field": "value",
 				},
 			},

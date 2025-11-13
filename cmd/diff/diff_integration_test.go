@@ -420,7 +420,7 @@ Summary: 2 modified`,
 				"metadata.labels[argocd.argoproj.io/instance]",
 			},
 			expectedOutput: ``,
-			expectedError: false,
+			expectedError:  false,
 		},
 		"ModifiedXRCreatesDownstream": {
 			reason: "Shows color diff when modified XR creates new downstream resource",

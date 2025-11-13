@@ -459,7 +459,7 @@ func formatLine(line string, diffType diffmatchpatch.Operation, options DiffOpti
 // Supports both simple paths (e.g., "metadata.annotations") and
 // map key paths (e.g., "metadata.annotations[key.name/value]").
 // Returns true if the field was found and removed, false otherwise.
-func removeNestedPath(obj map[string]interface{}, path string) bool {
+func removeNestedPath(obj map[string]any, path string) bool {
 	if path == "" {
 		return false
 	}
@@ -480,13 +480,14 @@ func removeNestedPath(obj map[string]interface{}, path string) bool {
 
 		// Split the base path into parts and use k8s helper to get the map reference
 		parts := strings.Split(basePath, ".")
+
 		fieldValue, found, err := un.NestedFieldNoCopy(obj, parts...)
 		if !found || err != nil {
 			return false
 		}
 
 		// Ensure it's a map
-		parentMap, ok := fieldValue.(map[string]interface{})
+		parentMap, ok := fieldValue.(map[string]any)
 		if !ok {
 			return false
 		}
@@ -502,6 +503,7 @@ func removeNestedPath(obj map[string]interface{}, path string) bool {
 
 	// Simple path without brackets - use k8s unstructured helper
 	parts := strings.Split(path, ".")
+
 	_, found, _ := un.NestedFieldNoCopy(obj, parts...)
 	if found {
 		un.RemoveNestedField(obj, parts...)
@@ -520,11 +522,11 @@ func cleanupForDiff(obj *un.Unstructured, logger logging.Logger, ignorePaths []s
 	// Track all modifications for a single consolidated log message
 	var modifications []string
 
-	// Add default ignored paths
-	defaultIgnoredPaths := []string{
+	// Combine default ignored paths with user-specified ones
+	allIgnorePaths := []string{
 		"metadata.annotations[kubectl.kubernetes.io/last-applied-configuration]",
 	}
-	allIgnorePaths := append(defaultIgnoredPaths, ignorePaths...)
+	allIgnorePaths = append(allIgnorePaths, ignorePaths...)
 
 	// Remove user-specified and default ignored paths
 	for _, path := range allIgnorePaths {
