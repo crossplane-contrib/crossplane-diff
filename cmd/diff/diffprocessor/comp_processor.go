@@ -65,6 +65,9 @@ func NewCompDiffProcessor(xrProc DiffProcessor, compositionClient xp.Composition
 		option(&config)
 	}
 
+	// Set default factories if not provided
+	config.SetDefaultFactories()
+
 	return &DefaultCompDiffProcessor{
 		compositionClient: compositionClient,
 		config:            config,
@@ -201,33 +204,90 @@ func (p *DefaultCompDiffProcessor) processSingleComposition(ctx context.Context,
 	// Use filtered XRs for the rest of the processing
 	affectedXRs = filteredXRs
 
-	// Process affected XRs using the existing XR processor with composition override
-	// List the affected XRs so users can understand the scope of impact
-	var xrList strings.Builder
+	// Process affected XRs and collect diffs to determine which ones have changes
+	p.config.Logger.Debug("Processing XRs to collect diff information", "count", len(affectedXRs))
 
-	for _, xr := range affectedXRs {
-		// Format namespace/scope information
-		scope := fmt.Sprintf("namespace: %s", xr.GetNamespace())
-		if xr.GetNamespace() == "" {
-			scope = "cluster-scoped"
-		}
-
-		xrList.WriteString(fmt.Sprintf("- %s/%s (%s)\n", xr.GetKind(), xr.GetName(), scope))
-	}
-
-	if _, err := fmt.Fprintf(stdout, "=== Affected Composite Resources ===\n\n%s\n=== Impact Analysis ===\n\n", xrList.String()); err != nil {
-		return errors.Wrap(err, "cannot write XR list and headers")
-	}
-
-	if err := p.xrProc.PerformDiff(ctx, stdout, affectedXRs, func(context.Context, *un.Unstructured) (*apiextensionsv1.Composition, error) {
-		// Convert unstructured to structured only when needed by the XR processor
+	// Composition provider function for getting the updated composition
+	compositionProvider := func(context.Context, *un.Unstructured) (*apiextensionsv1.Composition, error) {
 		comp := &apiextensionsv1.Composition{}
 		if err := runtime.DefaultUnstructuredConverter.FromUnstructured(newComp.Object, comp); err != nil {
 			return nil, errors.Wrap(err, "cannot convert unstructured to Composition")
 		}
 		return comp, nil
-	}); err != nil {
-		return errors.Wrap(err, "cannot process XRs with composition override")
+	}
+
+	// Collect diffs for each XR and track which ones have changes
+	xrHasChanges := make(map[string]bool)
+	allDiffs := make(map[string]*dt.ResourceDiff)
+	var processingErrs []error
+
+	for _, xr := range affectedXRs {
+		resourceID := fmt.Sprintf("%s/%s", xr.GetKind(), xr.GetName())
+
+		diffs, err := p.xrProc.DiffSingleResource(ctx, xr, compositionProvider)
+		if err != nil {
+			p.config.Logger.Debug("Failed to process resource", "resource", resourceID, "error", err)
+			processingErrs = append(processingErrs, errors.Wrapf(err, "unable to process resource %s", resourceID))
+
+			// Write error message to stdout so user can see it
+			errMsg := fmt.Sprintf("ERROR: Failed to process %s: %v\n\n", resourceID, err)
+			if _, writeErr := fmt.Fprint(stdout, errMsg); writeErr != nil {
+				p.config.Logger.Debug("Failed to write error message", "error", writeErr)
+			}
+
+			xrHasChanges[resourceID] = false // Mark as no changes on error
+		} else {
+			// Merge the diffs into our combined map
+			for k, v := range diffs {
+				allDiffs[k] = v
+			}
+
+			// Check if this XR has any changes
+			hasChanges := len(diffs) > 0
+			xrHasChanges[resourceID] = hasChanges
+		}
+	}
+
+	// Build the XR list with status indicators and counts
+	xrList, changedCount, unchangedCount := buildXRStatusList(affectedXRs, xrHasChanges, p.config.Colorize)
+
+	// Generate summary line
+	summary := formatXRStatusSummary(changedCount, unchangedCount)
+
+	// Write the XR list with summary
+	if _, err := fmt.Fprintf(stdout, "=== Affected Composite Resources ===\n\n%s%s\n=== Impact Analysis ===\n\n",
+		xrList, summary); err != nil {
+		return errors.Wrap(err, "cannot write XR list and headers")
+	}
+
+	// Render all diffs if we found some, or show a message if empty
+	if len(allDiffs) > 0 {
+		diffRenderer := p.config.Factories.DiffRenderer(
+			p.config.Logger,
+			renderer.DiffOptions{
+				UseColors:      p.config.Colorize,
+				AddPrefix:      "+ ",
+				DeletePrefix:   "- ",
+				ContextPrefix:  "  ",
+				ContextLines:   3,
+				ChunkSeparator: "...",
+				Compact:        p.config.Compact,
+			},
+		)
+
+		if err := diffRenderer.RenderDiffs(stdout, allDiffs); err != nil {
+			p.config.Logger.Debug("Failed to render diffs", "error", err)
+			return errors.Wrap(err, "failed to render diffs")
+		}
+	} else {
+		// No diffs found - write explanatory message
+		if _, err := fmt.Fprint(stdout, "All composite resources are up-to-date. No downstream resource changes detected.\n\n"); err != nil {
+			return errors.Wrap(err, "cannot write empty impact message")
+		}
+	}
+
+	if len(processingErrs) > 0 {
+		return errors.Join(processingErrs...)
 	}
 
 	return nil
@@ -379,4 +439,67 @@ func (p *DefaultCompDiffProcessor) getCompositionUpdatePolicy(xr *un.Unstructure
 
 	// Default to Automatic if not found (matching Crossplane default behavior)
 	return "Automatic"
+}
+
+// pluralize returns "s" if count is not 1, otherwise returns empty string.
+func pluralize(count int) string {
+	if count == 1 {
+		return ""
+	}
+	return "s"
+}
+
+// formatXRStatusSummary generates the summary line with correct pluralization.
+func formatXRStatusSummary(changedCount, unchangedCount int) string {
+	return fmt.Sprintf("\nSummary: %d resource%s with changes, %d resource%s unchanged\n",
+		changedCount, pluralize(changedCount),
+		unchangedCount, pluralize(unchangedCount))
+}
+
+// buildXRStatusList builds the XR list with status indicators and returns the formatted string with counts.
+func buildXRStatusList(xrs []*un.Unstructured, xrHasChanges map[string]bool, colorize bool) (xrList string, changedCount, unchangedCount int) {
+	var sb strings.Builder
+
+	// Color codes
+	checkMark := "✓"
+	warningMark := "⚠"
+	colorGreen := ""
+	colorYellow := ""
+	colorReset := ""
+
+	if colorize {
+		colorGreen = dt.ColorGreen
+		colorYellow = dt.ColorYellow
+		colorReset = dt.ColorReset
+	}
+
+	for _, xr := range xrs {
+		resourceID := fmt.Sprintf("%s/%s", xr.GetKind(), xr.GetName())
+
+		// Format namespace/scope information
+		scope := fmt.Sprintf("namespace: %s", xr.GetNamespace())
+		if xr.GetNamespace() == "" {
+			scope = "cluster-scoped"
+		}
+
+		// Determine status indicator and color
+		var indicator, color string
+		if xrHasChanges[resourceID] {
+			indicator = warningMark
+			color = colorYellow
+			changedCount++
+		} else {
+			indicator = checkMark
+			color = colorGreen
+			unchangedCount++
+		}
+
+		sb.WriteString(fmt.Sprintf("%s  %s %s/%s (%s)%s\n",
+			color,
+			indicator,
+			xr.GetKind(), xr.GetName(), scope,
+			colorReset))
+	}
+
+	return sb.String(), changedCount, unchangedCount
 }

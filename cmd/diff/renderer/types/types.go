@@ -39,6 +39,8 @@ const (
 	ColorRed = "\x1b[31m"
 	// ColorGreen an ANSI "begin green" character.
 	ColorGreen = "\x1b[32m"
+	// ColorYellow an ANSI "begin yellow" character.
+	ColorYellow = "\x1b[33m"
 	// ColorReset an ANSI "reset color" character.
 	ColorReset = "\x1b[0m"
 )

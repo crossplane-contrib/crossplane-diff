@@ -20,9 +20,10 @@ import (
 
 // Colors for terminal output.
 const (
-	ColorRed   = "\x1b[31m"
-	ColorGreen = "\x1b[32m"
-	ColorReset = "\x1b[0m"
+	ColorRed    = "\x1b[31m"
+	ColorGreen  = "\x1b[32m"
+	ColorYellow = "\x1b[33m"
+	ColorReset  = "\x1b[0m"
 )
 
 // Green takes a multiline string, splits it by line, and adds green coloring to each line.
@@ -58,6 +59,25 @@ func Red(input string) string {
 		}
 
 		coloredLines = append(coloredLines, ColorRed+line+ColorReset)
+	}
+
+	return strings.Join(coloredLines, "\n")
+}
+
+// Yellow takes a multiline string, splits it by line, and adds yellow coloring to each line.
+// It returns a single string with all lines joined back together.
+func Yellow(input string) string {
+	lines := strings.Split(input, "\n")
+	coloredLines := make([]string, 0, len(lines))
+
+	for _, line := range lines {
+		// Handle the case of the last empty line after a newline
+		if line == "" && len(coloredLines) == len(lines)-1 {
+			coloredLines = append(coloredLines, "")
+			continue
+		}
+
+		coloredLines = append(coloredLines, ColorYellow+line+ColorReset)
 	}
 
 	return strings.Join(coloredLines, "\n")

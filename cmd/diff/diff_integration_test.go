@@ -1955,8 +1955,10 @@ Summary: 1 modified
 
 === Affected Composite Resources ===
 
-- XNopResource/another-resource (namespace: default)
-- XNopResource/test-resource (namespace: default)
+  ⚠ XNopResource/another-resource (namespace: default)
+  ⚠ XNopResource/test-resource (namespace: default)
+
+Summary: 2 resources with changes, 0 resources unchanged
 
 === Impact Analysis ===
 
@@ -2100,7 +2102,9 @@ Summary: 1 modified
 
 === Affected Composite Resources ===
 
-- XNopResource/custom-namespace-resource (namespace: custom-namespace)
+  ⚠ XNopResource/custom-namespace-resource (namespace: custom-namespace)
+
+Summary: 1 resource with changes, 0 resources unchanged
 
 === Impact Analysis ===
 
@@ -2194,8 +2198,10 @@ Summary: 1 modified
 
 === Affected Composite Resources ===
 
-- XNopResource/another-resource (namespace: default)
-- XNopResource/test-resource (namespace: default)
+  ⚠ XNopResource/another-resource (namespace: default)
+  ⚠ XNopResource/test-resource (namespace: default)
+
+Summary: 2 resources with changes, 0 resources unchanged
 
 === Impact Analysis ===
 
@@ -2315,7 +2321,9 @@ Summary: 1 modified
 
 === Affected Composite Resources ===
 
-- XNopResource/test-resource (namespace: default)
+  ⚠ XNopResource/test-resource (namespace: default)
+
+Summary: 1 resource with changes, 0 resources unchanged
 
 === Impact Analysis ===
 
@@ -2410,7 +2418,9 @@ Summary: 1 modified
 
 === Affected Composite Resources ===
 
-- XNopResource/test-api-version (namespace: default)
+  ⚠ XNopResource/test-api-version (namespace: default)
+
+Summary: 1 resource with changes, 0 resources unchanged
 
 === Impact Analysis ===
 
@@ -2498,6 +2508,234 @@ Summary: 1 added
 No XRs found using composition xnewresources.diff.example.org`,
 			expectedError: false,
 			noColor:       true,
+		},
+		"CompositionChangeWithUnchangedDownstreamResources": {
+			reason: "Validates status indicators for unchanged downstream resources",
+			// Set up existing XRs that use the original composition
+			setupFiles: []string{
+				"testdata/comp/resources/xrd.yaml",
+				"testdata/comp/resources/status-indicator-composition.yaml",
+				"testdata/comp/resources/functions.yaml",
+				// Add existing XRs that use the composition
+				"testdata/comp/resources/status-xr-1.yaml",
+				"testdata/comp/resources/status-downstream-1.yaml",
+				"testdata/comp/resources/status-xr-2.yaml",
+				"testdata/comp/resources/status-downstream-2.yaml",
+			},
+			// Updated composition with only metadata change (no downstream impact)
+			inputFiles: []string{"testdata/comp/status-indicator-updated-composition.yaml"},
+			namespace:  "default",
+			expectedOutput: `
+=== Composition Changes ===
+
+~~~ Composition/xstatus.diff.example.org
+  apiVersion: apiextensions.crossplane.io/v1
+  kind: Composition
+  metadata:
++   labels:
++     environment: production
+    name: xstatus.diff.example.org
+  spec:
+    compositeTypeRef:
+      apiVersion: ns.diff.example.org/v1alpha1
+      kind: XNopResource
+    mode: Pipeline
+    pipeline:
+    - functionRef:
+        name: function-go-templating
+      input:
+        apiVersion: template.fn.crossplane.io/v1beta1
+        inline:
+          template: |
+            apiVersion: ns.nop.example.org/v1alpha1
+            kind: XDownstreamResource
+            metadata:
+              name: {{ .observed.composite.resource.metadata.name }}
+              namespace: {{ .observed.composite.resource.metadata.namespace }}
+              annotations:
+                gotemplating.fn.crossplane.io/composition-resource-name: nop-resource
+            spec:
+              forProvider:
+                configData: stable-value
+                resourceTier: standard
+        kind: GoTemplate
+        source: Inline
+      step: generate-resources
+    - functionRef:
+        name: function-auto-ready
+      step: automatically-detect-ready-composed-resources
+
+---
+
+Summary: 1 modified
+
+=== Affected Composite Resources ===
+
+  ✓ XNopResource/status-test-xr-1 (namespace: default)
+  ✓ XNopResource/status-test-xr-2 (namespace: default)
+
+Summary: 0 resources with changes, 2 resources unchanged
+
+=== Impact Analysis ===
+
+All composite resources are up-to-date. No downstream resource changes detected.`,
+			expectedError: false,
+			noColor:       true,
+		},
+		"CompositionChangeWithMixedStatusAndColors": {
+			reason: "Validates status indicators with colorization for mixed changed/unchanged XRs",
+			setupFiles: []string{
+				"testdata/comp/resources/xrd.yaml",
+				"testdata/comp/resources/mixed-status-composition.yaml",
+				"testdata/comp/resources/functions.yaml",
+				// XR 1 with downstream resources (standard tier - will change)
+				"testdata/comp/resources/mixed-xr-1.yaml",
+				"testdata/comp/resources/mixed-downstream-db-1.yaml",
+				"testdata/comp/resources/mixed-downstream-storage-1.yaml",
+				"testdata/comp/resources/mixed-downstream-network-1.yaml",
+				// XR 2 with downstream resources (standard tier - will change)
+				"testdata/comp/resources/mixed-xr-2.yaml",
+				"testdata/comp/resources/mixed-downstream-db-2.yaml",
+				"testdata/comp/resources/mixed-downstream-storage-2.yaml",
+				"testdata/comp/resources/mixed-downstream-network-2.yaml",
+				// XR 3 with downstream resources (already premium tier - no change)
+				"testdata/comp/resources/mixed-xr-3.yaml",
+				"testdata/comp/resources/mixed-downstream-db-3.yaml",
+				"testdata/comp/resources/mixed-downstream-storage-3.yaml",
+				"testdata/comp/resources/mixed-downstream-network-3.yaml",
+			},
+			inputFiles: []string{"testdata/comp/mixed-status-updated-composition.yaml"},
+			namespace:  "default",
+			expectedOutput: strings.Join([]string{
+				`
+=== Composition Changes ===
+
+~~~ Composition/xmixed.diff.example.org
+  apiVersion: apiextensions.crossplane.io/v1
+  kind: Composition
+  metadata:
+    name: xmixed.diff.example.org
+  spec:
+    compositeTypeRef:
+      apiVersion: ns.diff.example.org/v1alpha1
+      kind: XNopResource
+    mode: Pipeline
+    pipeline:
+    - functionRef:
+        name: function-go-templating
+      input:
+        apiVersion: template.fn.crossplane.io/v1beta1
+        inline:
+          template: |
+            ---
+            apiVersion: ns.nop.example.org/v1alpha1
+            kind: XDownstreamResource
+            metadata:
+              name: {{ .observed.composite.resource.metadata.name }}-database
+              namespace: {{ .observed.composite.resource.metadata.namespace }}
+              annotations:
+                gotemplating.fn.crossplane.io/composition-resource-name: database
+            spec:
+              forProvider:
+                resourceType: database
+`, tu.Red(`-               tier: standard`), `
+`, tu.Green(`+               tier: premium`), `
+`, tu.Green(`+               backupEnabled: true`), `
+            ---
+            apiVersion: ns.nop.example.org/v1alpha1
+            kind: XDownstreamResource
+            metadata:
+              name: {{ .observed.composite.resource.metadata.name }}-storage
+              namespace: {{ .observed.composite.resource.metadata.namespace }}
+              annotations:
+                gotemplating.fn.crossplane.io/composition-resource-name: storage
+            spec:
+              forProvider:
+                resourceType: storage
+                tier: standard
+            ---
+            apiVersion: ns.nop.example.org/v1alpha1
+            kind: XDownstreamResource
+            metadata:
+              name: {{ .observed.composite.resource.metadata.name }}-network
+              namespace: {{ .observed.composite.resource.metadata.namespace }}
+              annotations:
+                gotemplating.fn.crossplane.io/composition-resource-name: network
+            spec:
+              forProvider:
+                resourceType: network
+                tier: standard
+        kind: GoTemplate
+        source: Inline
+      step: generate-resources
+    - functionRef:
+        name: function-auto-ready
+      step: automatically-detect-ready-composed-resources
+
+---
+
+Summary: 1 modified
+
+=== Affected Composite Resources ===
+
+`, tu.Yellow(`  ⚠ XNopResource/mixed-test-xr-1 (namespace: default)`), `
+`, tu.Yellow(`  ⚠ XNopResource/mixed-test-xr-2 (namespace: default)`), `
+`, tu.Green(`  ✓ XNopResource/mixed-test-xr-3 (namespace: default)`), `
+
+Summary: 2 resources with changes, 1 resource unchanged
+
+=== Impact Analysis ===
+
+~~~ XDownstreamResource/mixed-test-xr-1-database
+  apiVersion: ns.nop.example.org/v1alpha1
+  kind: XDownstreamResource
+  metadata:
+    annotations:
+      crossplane.io/composition-resource-name: database
+      gotemplating.fn.crossplane.io/composition-resource-name: database
+    labels:
+      crossplane.io/composite: mixed-test-xr-1
+    name: mixed-test-xr-1-database
+    namespace: default
+  spec:
+    forProvider:
+`, tu.Red(`-     resourceType: database`), `
+`, tu.Red(`-     tier: standard`), `
+`, tu.Green(`+     backupEnabled: true`), `
+`, tu.Green(`+     resourceType: database`), `
+`, tu.Green(`+     tier: premium`), `
+  
+  
+
+---
+~~~ XDownstreamResource/mixed-test-xr-2-database
+  apiVersion: ns.nop.example.org/v1alpha1
+  kind: XDownstreamResource
+  metadata:
+    annotations:
+      crossplane.io/composition-resource-name: database
+      gotemplating.fn.crossplane.io/composition-resource-name: database
+    labels:
+      crossplane.io/composite: mixed-test-xr-2
+    name: mixed-test-xr-2-database
+    namespace: default
+  spec:
+    forProvider:
+`, tu.Red(`-     resourceType: database`), `
+`, tu.Red(`-     tier: standard`), `
+`, tu.Green(`+     backupEnabled: true`), `
+`, tu.Green(`+     resourceType: database`), `
+`, tu.Green(`+     tier: premium`), `
+  
+  
+
+---
+
+Summary: 2 modified
+`,
+			}, ""),
+			expectedError: false,
+			noColor:       false,
 		},
 	}
 

@@ -500,3 +500,273 @@ func TestDefaultCompDiffProcessor_getCompositionUpdatePolicy(t *testing.T) {
 		})
 	}
 }
+
+func Test_pluralize(t *testing.T) {
+	tests := map[string]struct {
+		count int
+		want  string
+	}{
+		"Zero": {
+			count: 0,
+			want:  "s",
+		},
+		"One": {
+			count: 1,
+			want:  "",
+		},
+		"Two": {
+			count: 2,
+			want:  "s",
+		},
+		"Many": {
+			count: 100,
+			want:  "s",
+		},
+	}
+
+	for name, tt := range tests {
+		t.Run(name, func(t *testing.T) {
+			got := pluralize(tt.count)
+			if got != tt.want {
+				t.Errorf("pluralize(%d) = %q, want %q", tt.count, got, tt.want)
+			}
+		})
+	}
+}
+
+func Test_formatXRStatusSummary(t *testing.T) {
+	tests := map[string]struct {
+		changedCount   int
+		unchangedCount int
+		want           string
+	}{
+		"NoResources": {
+			changedCount:   0,
+			unchangedCount: 0,
+			want:           "\nSummary: 0 resources with changes, 0 resources unchanged\n",
+		},
+		"OneChanged_NoneUnchanged": {
+			changedCount:   1,
+			unchangedCount: 0,
+			want:           "\nSummary: 1 resource with changes, 0 resources unchanged\n",
+		},
+		"NoneChanged_OneUnchanged": {
+			changedCount:   0,
+			unchangedCount: 1,
+			want:           "\nSummary: 0 resources with changes, 1 resource unchanged\n",
+		},
+		"OneChanged_OneUnchanged": {
+			changedCount:   1,
+			unchangedCount: 1,
+			want:           "\nSummary: 1 resource with changes, 1 resource unchanged\n",
+		},
+		"MultipleChanged_MultipleUnchanged": {
+			changedCount:   5,
+			unchangedCount: 3,
+			want:           "\nSummary: 5 resources with changes, 3 resources unchanged\n",
+		},
+		"ManyChanged_NoneUnchanged": {
+			changedCount:   100,
+			unchangedCount: 0,
+			want:           "\nSummary: 100 resources with changes, 0 resources unchanged\n",
+		},
+		"NoneChanged_ManyUnchanged": {
+			changedCount:   0,
+			unchangedCount: 50,
+			want:           "\nSummary: 0 resources with changes, 50 resources unchanged\n",
+		},
+	}
+
+	for name, tt := range tests {
+		t.Run(name, func(t *testing.T) {
+			got := formatXRStatusSummary(tt.changedCount, tt.unchangedCount)
+			if got != tt.want {
+				t.Errorf("formatXRStatusSummary(%d, %d) = %q, want %q",
+					tt.changedCount, tt.unchangedCount, got, tt.want)
+			}
+		})
+	}
+}
+
+func Test_buildXRStatusList(t *testing.T) {
+	tests := map[string]struct {
+		xrs           []*un.Unstructured
+		xrHasChanges  map[string]bool
+		colorize      bool
+		wantChanged   int
+		wantUnchanged int
+		validateList  func(t *testing.T, list string)
+	}{
+		"EmptyList": {
+			xrs:           []*un.Unstructured{},
+			xrHasChanges:  map[string]bool{},
+			colorize:      false,
+			wantChanged:   0,
+			wantUnchanged: 0,
+			validateList: func(t *testing.T, list string) {
+				if list != "" {
+					t.Errorf("Expected empty list, got: %q", list)
+				}
+			},
+		},
+		"SingleUnchangedResource_NoColor": {
+			xrs: []*un.Unstructured{
+				tu.NewResource("example.org/v1", "XResource", "test-xr").
+					WithNamespace("default").
+					Build(),
+			},
+			xrHasChanges:  map[string]bool{"XResource/test-xr": false},
+			colorize:      false,
+			wantChanged:   0,
+			wantUnchanged: 1,
+			validateList: func(t *testing.T, list string) {
+				if !strings.Contains(list, "✓ XResource/test-xr") {
+					t.Errorf("Expected checkmark for unchanged resource, got: %q", list)
+				}
+				if !strings.Contains(list, "namespace: default") {
+					t.Errorf("Expected namespace info, got: %q", list)
+				}
+			},
+		},
+		"SingleChangedResource_NoColor": {
+			xrs: []*un.Unstructured{
+				tu.NewResource("example.org/v1", "XResource", "test-xr").
+					WithNamespace("default").
+					Build(),
+			},
+			xrHasChanges:  map[string]bool{"XResource/test-xr": true},
+			colorize:      false,
+			wantChanged:   1,
+			wantUnchanged: 0,
+			validateList: func(t *testing.T, list string) {
+				if !strings.Contains(list, "⚠ XResource/test-xr") {
+					t.Errorf("Expected warning mark for changed resource, got: %q", list)
+				}
+			},
+		},
+		"MixedResources_NoColor": {
+			xrs: []*un.Unstructured{
+				tu.NewResource("example.org/v1", "XResource", "unchanged-xr").
+					WithNamespace("default").
+					Build(),
+				tu.NewResource("example.org/v1", "XResource", "changed-xr").
+					WithNamespace("default").
+					Build(),
+			},
+			xrHasChanges: map[string]bool{
+				"XResource/unchanged-xr": false,
+				"XResource/changed-xr":   true,
+			},
+			colorize:      false,
+			wantChanged:   1,
+			wantUnchanged: 1,
+			validateList: func(t *testing.T, list string) {
+				if !strings.Contains(list, "✓ XResource/unchanged-xr") {
+					t.Errorf("Expected checkmark for unchanged resource")
+				}
+				if !strings.Contains(list, "⚠ XResource/changed-xr") {
+					t.Errorf("Expected warning mark for changed resource")
+				}
+			},
+		},
+		"ClusterScopedResource_NoColor": {
+			xrs: []*un.Unstructured{
+				tu.NewResource("example.org/v1", "ClusterXResource", "cluster-xr").
+					Build(), // No namespace = cluster-scoped
+			},
+			xrHasChanges:  map[string]bool{"ClusterXResource/cluster-xr": false},
+			colorize:      false,
+			wantChanged:   0,
+			wantUnchanged: 1,
+			validateList: func(t *testing.T, list string) {
+				if !strings.Contains(list, "cluster-scoped") {
+					t.Errorf("Expected cluster-scoped indicator, got: %q", list)
+				}
+			},
+		},
+		"SingleResource_WithColor": {
+			xrs: []*un.Unstructured{
+				tu.NewResource("example.org/v1", "XResource", "test-xr").
+					WithNamespace("default").
+					Build(),
+			},
+			xrHasChanges:  map[string]bool{"XResource/test-xr": false},
+			colorize:      true,
+			wantChanged:   0,
+			wantUnchanged: 1,
+			validateList: func(t *testing.T, list string) {
+				// Should contain green ANSI code for unchanged resource
+				if !strings.Contains(list, "\x1b[32m") {
+					t.Errorf("Expected green ANSI color code, got: %q", list)
+				}
+				// Should contain reset code
+				if !strings.Contains(list, "\x1b[0m") {
+					t.Errorf("Expected ANSI reset code, got: %q", list)
+				}
+			},
+		},
+		"ChangedResource_WithColor": {
+			xrs: []*un.Unstructured{
+				tu.NewResource("example.org/v1", "XResource", "test-xr").
+					WithNamespace("default").
+					Build(),
+			},
+			xrHasChanges:  map[string]bool{"XResource/test-xr": true},
+			colorize:      true,
+			wantChanged:   1,
+			wantUnchanged: 0,
+			validateList: func(t *testing.T, list string) {
+				// Should contain yellow ANSI code for changed resource
+				if !strings.Contains(list, "\x1b[33m") {
+					t.Errorf("Expected yellow ANSI color code, got: %q", list)
+				}
+				// Should contain reset code
+				if !strings.Contains(list, "\x1b[0m") {
+					t.Errorf("Expected ANSI reset code, got: %q", list)
+				}
+			},
+		},
+		"MultipleNamespaces": {
+			xrs: []*un.Unstructured{
+				tu.NewResource("example.org/v1", "XResource", "xr-1").
+					WithNamespace("namespace-a").
+					Build(),
+				tu.NewResource("example.org/v1", "XResource", "xr-2").
+					WithNamespace("namespace-b").
+					Build(),
+			},
+			xrHasChanges: map[string]bool{
+				"XResource/xr-1": false,
+				"XResource/xr-2": true,
+			},
+			colorize:      false,
+			wantChanged:   1,
+			wantUnchanged: 1,
+			validateList: func(t *testing.T, list string) {
+				if !strings.Contains(list, "namespace: namespace-a") {
+					t.Errorf("Expected namespace-a in output")
+				}
+				if !strings.Contains(list, "namespace: namespace-b") {
+					t.Errorf("Expected namespace-b in output")
+				}
+			},
+		},
+	}
+
+	for name, tt := range tests {
+		t.Run(name, func(t *testing.T) {
+			gotList, gotChanged, gotUnchanged := buildXRStatusList(tt.xrs, tt.xrHasChanges, tt.colorize)
+
+			if gotChanged != tt.wantChanged {
+				t.Errorf("buildXRStatusList() changed count = %d, want %d", gotChanged, tt.wantChanged)
+			}
+			if gotUnchanged != tt.wantUnchanged {
+				t.Errorf("buildXRStatusList() unchanged count = %d, want %d", gotUnchanged, tt.wantUnchanged)
+			}
+
+			if tt.validateList != nil {
+				tt.validateList(t, gotList)
+			}
+		})
+	}
+}
