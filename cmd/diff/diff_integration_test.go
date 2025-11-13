@@ -2028,9 +2028,14 @@ No changes detected in composition xnopresources.diff.example.org
 
 === Affected Composite Resources ===
 
-- XNopResource/test-resource (namespace: default)
+  ✓ XNopResource/test-resource (namespace: default)
+
+Summary: 0 resources with changes, 1 resource unchanged
 
 === Impact Analysis ===
+
+All composite resources are up-to-date. No downstream resource changes detected.
+
 `,
 			expectedError: false,
 			noColor:       true,
