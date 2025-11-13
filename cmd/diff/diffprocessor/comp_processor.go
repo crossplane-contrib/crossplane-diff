@@ -37,6 +37,26 @@ import (
 	"github.com/crossplane/crossplane/v2/cmd/crank/render"
 )
 
+// XRDiffResult captures the result of processing a single XR against a composition.
+type XRDiffResult struct {
+	// Diffs contains the downstream resource diffs for this XR (keyed by resource ID).
+	// Empty map means no changes detected.
+	Diffs map[string]*dt.ResourceDiff
+	// Error contains any error that occurred while processing this XR.
+	// nil means processing was successful.
+	Error error
+}
+
+// HasChanges returns true if this XR has downstream resource changes.
+func (r *XRDiffResult) HasChanges() bool {
+	return len(r.Diffs) > 0
+}
+
+// HasError returns true if this XR encountered a processing error.
+func (r *XRDiffResult) HasError() bool {
+	return r.Error != nil
+}
+
 // CompDiffProcessor defines the interface for composition diffing.
 type CompDiffProcessor interface {
 	DiffComposition(ctx context.Context, stdout io.Writer, compositions []*un.Unstructured, namespace string) error
@@ -189,11 +209,19 @@ func (p *DefaultCompDiffProcessor) processSingleComposition(ctx context.Context,
 	// Process affected XRs and collect diffs to determine which ones have changes
 	p.config.Logger.Debug("Processing XRs to collect diff information", "count", len(affectedXRs))
 
-	xrHasChanges, allDiffs, processingErrs := p.collectXRDiffs(ctx, stdout, affectedXRs, newComp)
+	results := p.collectXRDiffs(ctx, stdout, affectedXRs, newComp)
 
 	// Render the impact analysis (XR list and diffs)
-	if err := p.renderXRImpactAnalysis(stdout, affectedXRs, xrHasChanges, allDiffs); err != nil {
+	if err := p.renderXRImpactAnalysis(stdout, affectedXRs, results); err != nil {
 		return err
+	}
+
+	// Collect any errors from the results and return them
+	var processingErrs []error
+	for _, result := range results {
+		if result.HasError() {
+			processingErrs = append(processingErrs, result.Error)
+		}
 	}
 
 	if len(processingErrs) > 0 {
@@ -227,8 +255,8 @@ func (p *DefaultCompDiffProcessor) handleNoXRsFound(stdout io.Writer, compositio
 	return nil
 }
 
-// collectXRDiffs processes XRs and collects their diffs, returning status and any errors.
-func (p *DefaultCompDiffProcessor) collectXRDiffs(ctx context.Context, stdout io.Writer, xrs []*un.Unstructured, newComp *un.Unstructured) (map[string]bool, map[string]*dt.ResourceDiff, []error) {
+// collectXRDiffs processes XRs and collects their diffs, returning results for each XR.
+func (p *DefaultCompDiffProcessor) collectXRDiffs(ctx context.Context, stdout io.Writer, xrs []*un.Unstructured, newComp *un.Unstructured) map[string]*XRDiffResult {
 	// Composition provider function for getting the updated composition
 	compositionProvider := func(context.Context, *un.Unstructured) (*apiextensionsv1.Composition, error) {
 		comp := &apiextensionsv1.Composition{}
@@ -239,10 +267,7 @@ func (p *DefaultCompDiffProcessor) collectXRDiffs(ctx context.Context, stdout io
 		return comp, nil
 	}
 
-	xrHasChanges := make(map[string]bool)
-	allDiffs := make(map[string]*dt.ResourceDiff)
-
-	var processingErrs []error
+	results := make(map[string]*XRDiffResult)
 
 	for _, xr := range xrs {
 		resourceID := fmt.Sprintf("%s/%s", xr.GetKind(), xr.GetName())
@@ -250,7 +275,6 @@ func (p *DefaultCompDiffProcessor) collectXRDiffs(ctx context.Context, stdout io
 		diffs, err := p.xrProc.DiffSingleResource(ctx, xr, compositionProvider)
 		if err != nil {
 			p.config.Logger.Debug("Failed to process resource", "resource", resourceID, "error", err)
-			processingErrs = append(processingErrs, errors.Wrapf(err, "unable to process resource %s", resourceID))
 
 			// Write error message to stdout so user can see it
 			errMsg := fmt.Sprintf("ERROR: Failed to process %s: %v\n\n", resourceID, err)
@@ -258,32 +282,43 @@ func (p *DefaultCompDiffProcessor) collectXRDiffs(ctx context.Context, stdout io
 				p.config.Logger.Debug("Failed to write error message", "error", writeErr)
 			}
 
-			xrHasChanges[resourceID] = false // Mark as no changes on error
+			// Store the error in the result
+			results[resourceID] = &XRDiffResult{
+				Diffs: make(map[string]*dt.ResourceDiff),
+				Error: errors.Wrapf(err, "unable to process resource %s", resourceID),
+			}
 		} else {
-			// Merge the diffs into our combined map
-			maps.Copy(allDiffs, diffs)
-
-			// Check if this XR has any changes
-			hasChanges := len(diffs) > 0
-			xrHasChanges[resourceID] = hasChanges
+			// Store successful result with diffs
+			results[resourceID] = &XRDiffResult{
+				Diffs: diffs,
+				Error: nil,
+			}
 		}
 	}
 
-	return xrHasChanges, allDiffs, processingErrs
+	return results
 }
 
 // renderXRImpactAnalysis renders the XR list with status indicators and all collected diffs.
-func (p *DefaultCompDiffProcessor) renderXRImpactAnalysis(stdout io.Writer, xrs []*un.Unstructured, xrHasChanges map[string]bool, allDiffs map[string]*dt.ResourceDiff) error {
+func (p *DefaultCompDiffProcessor) renderXRImpactAnalysis(stdout io.Writer, xrs []*un.Unstructured, results map[string]*XRDiffResult) error {
 	// Build the XR list with status indicators and counts
-	xrList, changedCount, unchangedCount := buildXRStatusList(xrs, xrHasChanges, p.config.Colorize)
+	xrList, changedCount, unchangedCount, errorCount := buildXRStatusList(xrs, results, p.config.Colorize)
 
 	// Generate summary line
-	summary := formatXRStatusSummary(changedCount, unchangedCount)
+	summary := formatXRStatusSummary(changedCount, unchangedCount, errorCount)
 
 	// Write the XR list with summary
 	if _, err := fmt.Fprintf(stdout, "=== Affected Composite Resources ===\n\n%s%s\n=== Impact Analysis ===\n\n",
 		xrList, summary); err != nil {
 		return errors.Wrap(err, "cannot write XR list and headers")
+	}
+
+	// Collect all diffs from the results
+	allDiffs := make(map[string]*dt.ResourceDiff)
+	for _, result := range results {
+		if !result.HasError() && result.HasChanges() {
+			maps.Copy(allDiffs, result.Diffs)
+		}
 	}
 
 	// Render all diffs if we found some, or show a message if empty
@@ -473,26 +508,41 @@ func pluralize(count int) string {
 }
 
 // formatXRStatusSummary generates the summary line with correct pluralization.
-func formatXRStatusSummary(changedCount, unchangedCount int) string {
-	return fmt.Sprintf("\nSummary: %d resource%s with changes, %d resource%s unchanged\n",
-		changedCount, pluralize(changedCount),
-		unchangedCount, pluralize(unchangedCount))
+func formatXRStatusSummary(changedCount, unchangedCount, errorCount int) string {
+	parts := []string{}
+
+	if changedCount > 0 {
+		parts = append(parts, fmt.Sprintf("%d resource%s with changes", changedCount, pluralize(changedCount)))
+	}
+
+	if unchangedCount > 0 {
+		parts = append(parts, fmt.Sprintf("%d resource%s unchanged", unchangedCount, pluralize(unchangedCount)))
+	}
+
+	if errorCount > 0 {
+		parts = append(parts, fmt.Sprintf("%d resource%s with errors", errorCount, pluralize(errorCount)))
+	}
+
+	return fmt.Sprintf("\nSummary: %s\n", strings.Join(parts, ", "))
 }
 
 // buildXRStatusList builds the XR list with status indicators and returns the formatted string with counts.
-func buildXRStatusList(xrs []*un.Unstructured, xrHasChanges map[string]bool, colorize bool) (xrList string, changedCount, unchangedCount int) {
+func buildXRStatusList(xrs []*un.Unstructured, results map[string]*XRDiffResult, colorize bool) (xrList string, changedCount, unchangedCount, errorCount int) {
 	var sb strings.Builder
 
-	// Color codes
+	// Color codes and indicators (colors remain empty strings when colorization is disabled)
 	checkMark := "✓"
 	warningMark := "⚠"
+	errorMark := "✗"
 	colorGreen := ""
 	colorYellow := ""
+	colorRed := ""
 	colorReset := ""
 
 	if colorize {
 		colorGreen = dt.ColorGreen
 		colorYellow = dt.ColorYellow
+		colorRed = dt.ColorRed
 		colorReset = dt.ColorReset
 	}
 
@@ -505,13 +555,21 @@ func buildXRStatusList(xrs []*un.Unstructured, xrHasChanges map[string]bool, col
 			scope = "cluster-scoped"
 		}
 
-		// Determine status indicator and color
+		// Determine status indicator and color based on result
 		var indicator, color string
-		if xrHasChanges[resourceID] {
+		result := results[resourceID]
+		if result != nil && result.HasError() {
+			// Processing error - show red X
+			indicator = errorMark
+			color = colorRed
+			errorCount++
+		} else if result != nil && result.HasChanges() {
+			// Has changes - show yellow warning
 			indicator = warningMark
 			color = colorYellow
 			changedCount++
 		} else {
+			// No changes - show green check
 			indicator = checkMark
 			color = colorGreen
 			unchangedCount++
@@ -524,5 +582,5 @@ func buildXRStatusList(xrs []*un.Unstructured, xrHasChanges map[string]bool, col
 			colorReset))
 	}
 
-	return sb.String(), changedCount, unchangedCount
+	return sb.String(), changedCount, unchangedCount, errorCount
 }

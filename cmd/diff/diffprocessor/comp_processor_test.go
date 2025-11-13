@@ -19,11 +19,13 @@ package diffprocessor
 import (
 	"bytes"
 	"context"
+	"errors"
 	"io"
 	"strings"
 	"testing"
 
 	xp "github.com/crossplane-contrib/crossplane-diff/cmd/diff/client/crossplane"
+	dt "github.com/crossplane-contrib/crossplane-diff/cmd/diff/renderer/types"
 	tu "github.com/crossplane-contrib/crossplane-diff/cmd/diff/testutils"
 	"github.com/crossplane-contrib/crossplane-diff/cmd/diff/types"
 	gcmp "github.com/google/go-cmp/cmp"
@@ -538,51 +540,77 @@ func Test_formatXRStatusSummary(t *testing.T) {
 	tests := map[string]struct {
 		changedCount   int
 		unchangedCount int
+		errorCount     int
 		want           string
 	}{
 		"NoResources": {
 			changedCount:   0,
 			unchangedCount: 0,
-			want:           "\nSummary: 0 resources with changes, 0 resources unchanged\n",
+			errorCount:     0,
+			want:           "\nSummary: \n",
 		},
-		"OneChanged_NoneUnchanged": {
+		"OneChanged_Only": {
 			changedCount:   1,
 			unchangedCount: 0,
-			want:           "\nSummary: 1 resource with changes, 0 resources unchanged\n",
+			errorCount:     0,
+			want:           "\nSummary: 1 resource with changes\n",
 		},
-		"NoneChanged_OneUnchanged": {
+		"OneUnchanged_Only": {
 			changedCount:   0,
 			unchangedCount: 1,
-			want:           "\nSummary: 0 resources with changes, 1 resource unchanged\n",
+			errorCount:     0,
+			want:           "\nSummary: 1 resource unchanged\n",
+		},
+		"OneError_Only": {
+			changedCount:   0,
+			unchangedCount: 0,
+			errorCount:     1,
+			want:           "\nSummary: 1 resource with errors\n",
 		},
 		"OneChanged_OneUnchanged": {
 			changedCount:   1,
 			unchangedCount: 1,
+			errorCount:     0,
 			want:           "\nSummary: 1 resource with changes, 1 resource unchanged\n",
 		},
 		"MultipleChanged_MultipleUnchanged": {
 			changedCount:   5,
 			unchangedCount: 3,
+			errorCount:     0,
 			want:           "\nSummary: 5 resources with changes, 3 resources unchanged\n",
 		},
-		"ManyChanged_NoneUnchanged": {
+		"ManyChanged_Only": {
 			changedCount:   100,
 			unchangedCount: 0,
-			want:           "\nSummary: 100 resources with changes, 0 resources unchanged\n",
+			errorCount:     0,
+			want:           "\nSummary: 100 resources with changes\n",
 		},
-		"NoneChanged_ManyUnchanged": {
+		"ManyUnchanged_Only": {
 			changedCount:   0,
 			unchangedCount: 50,
-			want:           "\nSummary: 0 resources with changes, 50 resources unchanged\n",
+			errorCount:     0,
+			want:           "\nSummary: 50 resources unchanged\n",
+		},
+		"AllThreeTypes": {
+			changedCount:   2,
+			unchangedCount: 3,
+			errorCount:     1,
+			want:           "\nSummary: 2 resources with changes, 3 resources unchanged, 1 resource with errors\n",
+		},
+		"MultipleErrors": {
+			changedCount:   1,
+			unchangedCount: 0,
+			errorCount:     5,
+			want:           "\nSummary: 1 resource with changes, 5 resources with errors\n",
 		},
 	}
 
 	for name, tt := range tests {
 		t.Run(name, func(t *testing.T) {
-			got := formatXRStatusSummary(tt.changedCount, tt.unchangedCount)
+			got := formatXRStatusSummary(tt.changedCount, tt.unchangedCount, tt.errorCount)
 			if got != tt.want {
-				t.Errorf("formatXRStatusSummary(%d, %d) = %q, want %q",
-					tt.changedCount, tt.unchangedCount, got, tt.want)
+				t.Errorf("formatXRStatusSummary(%d, %d, %d) = %q, want %q",
+					tt.changedCount, tt.unchangedCount, tt.errorCount, got, tt.want)
 			}
 		})
 	}
@@ -591,18 +619,20 @@ func Test_formatXRStatusSummary(t *testing.T) {
 func Test_buildXRStatusList(t *testing.T) {
 	tests := map[string]struct {
 		xrs           []*un.Unstructured
-		xrHasChanges  map[string]bool
+		results       map[string]*XRDiffResult
 		colorize      bool
 		wantChanged   int
 		wantUnchanged int
+		wantError     int
 		validateList  func(t *testing.T, list string)
 	}{
 		"EmptyList": {
 			xrs:           []*un.Unstructured{},
-			xrHasChanges:  map[string]bool{},
+			results:       map[string]*XRDiffResult{},
 			colorize:      false,
 			wantChanged:   0,
 			wantUnchanged: 0,
+			wantError:     0,
 			validateList: func(t *testing.T, list string) {
 				t.Helper()
 
@@ -617,10 +647,16 @@ func Test_buildXRStatusList(t *testing.T) {
 					WithNamespace("default").
 					Build(),
 			},
-			xrHasChanges:  map[string]bool{"XResource/test-xr": false},
+			results: map[string]*XRDiffResult{
+				"XResource/test-xr": {
+					Diffs: make(map[string]*dt.ResourceDiff),
+					Error: nil,
+				},
+			},
 			colorize:      false,
 			wantChanged:   0,
 			wantUnchanged: 1,
+			wantError:     0,
 			validateList: func(t *testing.T, list string) {
 				t.Helper()
 
@@ -639,10 +675,16 @@ func Test_buildXRStatusList(t *testing.T) {
 					WithNamespace("default").
 					Build(),
 			},
-			xrHasChanges:  map[string]bool{"XResource/test-xr": true},
+			results: map[string]*XRDiffResult{
+				"XResource/test-xr": {
+					Diffs: map[string]*dt.ResourceDiff{"some-resource": {}},
+					Error: nil,
+				},
+			},
 			colorize:      false,
 			wantChanged:   1,
 			wantUnchanged: 0,
+			wantError:     0,
 			validateList: func(t *testing.T, list string) {
 				t.Helper()
 
@@ -660,13 +702,20 @@ func Test_buildXRStatusList(t *testing.T) {
 					WithNamespace("default").
 					Build(),
 			},
-			xrHasChanges: map[string]bool{
-				"XResource/unchanged-xr": false,
-				"XResource/changed-xr":   true,
+			results: map[string]*XRDiffResult{
+				"XResource/unchanged-xr": {
+					Diffs: make(map[string]*dt.ResourceDiff),
+					Error: nil,
+				},
+				"XResource/changed-xr": {
+					Diffs: map[string]*dt.ResourceDiff{"some-resource": {}},
+					Error: nil,
+				},
 			},
 			colorize:      false,
 			wantChanged:   1,
 			wantUnchanged: 1,
+			wantError:     0,
 			validateList: func(t *testing.T, list string) {
 				t.Helper()
 
@@ -684,10 +733,16 @@ func Test_buildXRStatusList(t *testing.T) {
 				tu.NewResource("example.org/v1", "ClusterXResource", "cluster-xr").
 					Build(), // No namespace = cluster-scoped
 			},
-			xrHasChanges:  map[string]bool{"ClusterXResource/cluster-xr": false},
+			results: map[string]*XRDiffResult{
+				"ClusterXResource/cluster-xr": {
+					Diffs: make(map[string]*dt.ResourceDiff),
+					Error: nil,
+				},
+			},
 			colorize:      false,
 			wantChanged:   0,
 			wantUnchanged: 1,
+			wantError:     0,
 			validateList: func(t *testing.T, list string) {
 				t.Helper()
 
@@ -702,10 +757,16 @@ func Test_buildXRStatusList(t *testing.T) {
 					WithNamespace("default").
 					Build(),
 			},
-			xrHasChanges:  map[string]bool{"XResource/test-xr": false},
+			results: map[string]*XRDiffResult{
+				"XResource/test-xr": {
+					Diffs: make(map[string]*dt.ResourceDiff),
+					Error: nil,
+				},
+			},
 			colorize:      true,
 			wantChanged:   0,
 			wantUnchanged: 1,
+			wantError:     0,
 			validateList: func(t *testing.T, list string) {
 				t.Helper()
 				// Should contain green ANSI code for unchanged resource
@@ -724,10 +785,16 @@ func Test_buildXRStatusList(t *testing.T) {
 					WithNamespace("default").
 					Build(),
 			},
-			xrHasChanges:  map[string]bool{"XResource/test-xr": true},
+			results: map[string]*XRDiffResult{
+				"XResource/test-xr": {
+					Diffs: map[string]*dt.ResourceDiff{"some-resource": {}},
+					Error: nil,
+				},
+			},
 			colorize:      true,
 			wantChanged:   1,
 			wantUnchanged: 0,
+			wantError:     0,
 			validateList: func(t *testing.T, list string) {
 				t.Helper()
 				// Should contain yellow ANSI code for changed resource
@@ -749,13 +816,20 @@ func Test_buildXRStatusList(t *testing.T) {
 					WithNamespace("namespace-b").
 					Build(),
 			},
-			xrHasChanges: map[string]bool{
-				"XResource/xr-1": false,
-				"XResource/xr-2": true,
+			results: map[string]*XRDiffResult{
+				"XResource/xr-1": {
+					Diffs: make(map[string]*dt.ResourceDiff),
+					Error: nil,
+				},
+				"XResource/xr-2": {
+					Diffs: map[string]*dt.ResourceDiff{"some-resource": {}},
+					Error: nil,
+				},
 			},
 			colorize:      false,
 			wantChanged:   1,
 			wantUnchanged: 1,
+			wantError:     0,
 			validateList: func(t *testing.T, list string) {
 				t.Helper()
 
@@ -768,11 +842,109 @@ func Test_buildXRStatusList(t *testing.T) {
 				}
 			},
 		},
+		"ResourceWithError_NoColor": {
+			xrs: []*un.Unstructured{
+				tu.NewResource("example.org/v1", "XResource", "error-xr").
+					WithNamespace("default").
+					Build(),
+			},
+			results: map[string]*XRDiffResult{
+				"XResource/error-xr": {
+					Diffs: make(map[string]*dt.ResourceDiff),
+					Error: errors.New("processing failed"),
+				},
+			},
+			colorize:      false,
+			wantChanged:   0,
+			wantUnchanged: 0,
+			wantError:     1,
+			validateList: func(t *testing.T, list string) {
+				t.Helper()
+
+				if !strings.Contains(list, "✗ XResource/error-xr") {
+					t.Errorf("Expected error mark for resource with error, got: %q", list)
+				}
+			},
+		},
+		"ResourceWithError_WithColor": {
+			xrs: []*un.Unstructured{
+				tu.NewResource("example.org/v1", "XResource", "error-xr").
+					WithNamespace("default").
+					Build(),
+			},
+			results: map[string]*XRDiffResult{
+				"XResource/error-xr": {
+					Diffs: make(map[string]*dt.ResourceDiff),
+					Error: errors.New("processing failed"),
+				},
+			},
+			colorize:      true,
+			wantChanged:   0,
+			wantUnchanged: 0,
+			wantError:     1,
+			validateList: func(t *testing.T, list string) {
+				t.Helper()
+				// Should contain red ANSI code for error resource
+				if !strings.Contains(list, "\x1b[31m") {
+					t.Errorf("Expected red ANSI color code, got: %q", list)
+				}
+				// Should contain reset code
+				if !strings.Contains(list, "\x1b[0m") {
+					t.Errorf("Expected ANSI reset code, got: %q", list)
+				}
+			},
+		},
+		"MixedResources_WithErrors": {
+			xrs: []*un.Unstructured{
+				tu.NewResource("example.org/v1", "XResource", "unchanged-xr").
+					WithNamespace("default").
+					Build(),
+				tu.NewResource("example.org/v1", "XResource", "changed-xr").
+					WithNamespace("default").
+					Build(),
+				tu.NewResource("example.org/v1", "XResource", "error-xr").
+					WithNamespace("default").
+					Build(),
+			},
+			results: map[string]*XRDiffResult{
+				"XResource/unchanged-xr": {
+					Diffs: make(map[string]*dt.ResourceDiff),
+					Error: nil,
+				},
+				"XResource/changed-xr": {
+					Diffs: map[string]*dt.ResourceDiff{"some-resource": {}},
+					Error: nil,
+				},
+				"XResource/error-xr": {
+					Diffs: make(map[string]*dt.ResourceDiff),
+					Error: errors.New("processing failed"),
+				},
+			},
+			colorize:      false,
+			wantChanged:   1,
+			wantUnchanged: 1,
+			wantError:     1,
+			validateList: func(t *testing.T, list string) {
+				t.Helper()
+
+				if !strings.Contains(list, "✓ XResource/unchanged-xr") {
+					t.Errorf("Expected checkmark for unchanged resource")
+				}
+
+				if !strings.Contains(list, "⚠ XResource/changed-xr") {
+					t.Errorf("Expected warning mark for changed resource")
+				}
+
+				if !strings.Contains(list, "✗ XResource/error-xr") {
+					t.Errorf("Expected error mark for resource with error")
+				}
+			},
+		},
 	}
 
 	for name, tt := range tests {
 		t.Run(name, func(t *testing.T) {
-			gotList, gotChanged, gotUnchanged := buildXRStatusList(tt.xrs, tt.xrHasChanges, tt.colorize)
+			gotList, gotChanged, gotUnchanged, gotError := buildXRStatusList(tt.xrs, tt.results, tt.colorize)
 
 			if gotChanged != tt.wantChanged {
 				t.Errorf("buildXRStatusList() changed count = %d, want %d", gotChanged, tt.wantChanged)
@@ -780,6 +952,10 @@ func Test_buildXRStatusList(t *testing.T) {
 
 			if gotUnchanged != tt.wantUnchanged {
 				t.Errorf("buildXRStatusList() unchanged count = %d, want %d", gotUnchanged, tt.wantUnchanged)
+			}
+
+			if gotError != tt.wantError {
+				t.Errorf("buildXRStatusList() error count = %d, want %d", gotError, tt.wantError)
 			}
 
 			if tt.validateList != nil {
