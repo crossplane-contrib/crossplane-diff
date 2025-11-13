@@ -20,6 +20,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"maps"
 	"strings"
 
 	xp "github.com/crossplane-contrib/crossplane-diff/cmd/diff/client/crossplane"
@@ -35,6 +36,26 @@ import (
 	apiextensionsv1 "github.com/crossplane/crossplane/v2/apis/apiextensions/v1"
 	"github.com/crossplane/crossplane/v2/cmd/crank/render"
 )
+
+// XRDiffResult captures the result of processing a single XR against a composition.
+type XRDiffResult struct {
+	// Diffs contains the downstream resource diffs for this XR (keyed by resource ID).
+	// Empty map means no changes detected.
+	Diffs map[string]*dt.ResourceDiff
+	// Error contains any error that occurred while processing this XR.
+	// nil means processing was successful.
+	Error error
+}
+
+// HasChanges returns true if this XR has downstream resource changes.
+func (r *XRDiffResult) HasChanges() bool {
+	return len(r.Diffs) > 0
+}
+
+// HasError returns true if this XR encountered a processing error.
+func (r *XRDiffResult) HasError() bool {
+	return r.Error != nil
+}
 
 // CompDiffProcessor defines the interface for composition diffing.
 type CompDiffProcessor interface {
@@ -64,6 +85,9 @@ func NewCompDiffProcessor(xrProc DiffProcessor, compositionClient xp.Composition
 	for _, option := range opts {
 		option(&config)
 	}
+
+	// Set default factories if not provided
+	config.SetDefaultFactories()
 
 	return &DefaultCompDiffProcessor{
 		compositionClient: compositionClient,
@@ -176,58 +200,153 @@ func (p *DefaultCompDiffProcessor) processSingleComposition(ctx context.Context,
 		"includeManual", p.config.IncludeManual)
 
 	if len(filteredXRs) == 0 {
-		if !p.config.IncludeManual && len(affectedXRs) > 0 {
-			// XRs exist but were filtered out due to Manual policy
-			p.config.Logger.Info("All XRs using composition have Manual update policy (use --include-manual to see them)",
-				"composition", newComp.GetName(),
-				"filteredCount", len(affectedXRs))
-
-			if _, err := fmt.Fprintf(stdout, "All %d XR(s) using composition %s have Manual update policy (use --include-manual to see them)\n",
-				len(affectedXRs), newComp.GetName()); err != nil {
-				return errors.Wrap(err, "cannot write filtered XRs message")
-			}
-		} else {
-			// No XRs found at all
-			p.config.Logger.Info("No XRs found using composition", "composition", newComp.GetName())
-
-			if _, err := fmt.Fprintf(stdout, "No XRs found using composition %s\n", newComp.GetName()); err != nil {
-				return errors.Wrap(err, "cannot write no XRs message")
-			}
-		}
-
-		return nil
+		return p.handleNoXRsFound(stdout, newComp.GetName(), len(affectedXRs))
 	}
 
 	// Use filtered XRs for the rest of the processing
 	affectedXRs = filteredXRs
 
-	// Process affected XRs using the existing XR processor with composition override
-	// List the affected XRs so users can understand the scope of impact
-	var xrList strings.Builder
+	// Process affected XRs and collect diffs to determine which ones have changes
+	p.config.Logger.Debug("Processing XRs to collect diff information", "count", len(affectedXRs))
 
-	for _, xr := range affectedXRs {
-		// Format namespace/scope information
-		scope := fmt.Sprintf("namespace: %s", xr.GetNamespace())
-		if xr.GetNamespace() == "" {
-			scope = "cluster-scoped"
+	results := p.collectXRDiffs(ctx, stdout, affectedXRs, newComp)
+
+	// Render the impact analysis (XR list and diffs)
+	if err := p.renderXRImpactAnalysis(stdout, affectedXRs, results); err != nil {
+		return err
+	}
+
+	// Collect any errors from the results and return them
+	var processingErrs []error
+
+	for _, result := range results {
+		if result.HasError() {
+			processingErrs = append(processingErrs, result.Error)
 		}
-
-		xrList.WriteString(fmt.Sprintf("- %s/%s (%s)\n", xr.GetKind(), xr.GetName(), scope))
 	}
 
-	if _, err := fmt.Fprintf(stdout, "=== Affected Composite Resources ===\n\n%s\n=== Impact Analysis ===\n\n", xrList.String()); err != nil {
-		return errors.Wrap(err, "cannot write XR list and headers")
+	if len(processingErrs) > 0 {
+		return errors.Join(processingErrs...)
 	}
 
-	if err := p.xrProc.PerformDiff(ctx, stdout, affectedXRs, func(context.Context, *un.Unstructured) (*apiextensionsv1.Composition, error) {
-		// Convert unstructured to structured only when needed by the XR processor
+	return nil
+}
+
+// handleNoXRsFound writes appropriate messages when no XRs are found or all are filtered.
+func (p *DefaultCompDiffProcessor) handleNoXRsFound(stdout io.Writer, compositionName string, totalXRs int) error {
+	if !p.config.IncludeManual && totalXRs > 0 {
+		// XRs exist but were filtered out due to Manual policy
+		p.config.Logger.Info("All XRs using composition have Manual update policy (use --include-manual to see them)",
+			"composition", compositionName,
+			"filteredCount", totalXRs)
+
+		if _, err := fmt.Fprintf(stdout, "All %d XR(s) using composition %s have Manual update policy (use --include-manual to see them)\n",
+			totalXRs, compositionName); err != nil {
+			return errors.Wrap(err, "cannot write filtered XRs message")
+		}
+	} else {
+		// No XRs found at all
+		p.config.Logger.Info("No XRs found using composition", "composition", compositionName)
+
+		if _, err := fmt.Fprintf(stdout, "No XRs found using composition %s\n", compositionName); err != nil {
+			return errors.Wrap(err, "cannot write no XRs message")
+		}
+	}
+
+	return nil
+}
+
+// collectXRDiffs processes XRs and collects their diffs, returning results for each XR.
+func (p *DefaultCompDiffProcessor) collectXRDiffs(ctx context.Context, stdout io.Writer, xrs []*un.Unstructured, newComp *un.Unstructured) map[string]*XRDiffResult {
+	// Composition provider function for getting the updated composition
+	compositionProvider := func(context.Context, *un.Unstructured) (*apiextensionsv1.Composition, error) {
 		comp := &apiextensionsv1.Composition{}
 		if err := runtime.DefaultUnstructuredConverter.FromUnstructured(newComp.Object, comp); err != nil {
 			return nil, errors.Wrap(err, "cannot convert unstructured to Composition")
 		}
+
 		return comp, nil
-	}); err != nil {
-		return errors.Wrap(err, "cannot process XRs with composition override")
+	}
+
+	results := make(map[string]*XRDiffResult)
+
+	for _, xr := range xrs {
+		resourceID := fmt.Sprintf("%s/%s", xr.GetKind(), xr.GetName())
+
+		diffs, err := p.xrProc.DiffSingleResource(ctx, xr, compositionProvider)
+		if err != nil {
+			p.config.Logger.Debug("Failed to process resource", "resource", resourceID, "error", err)
+
+			// Write error message to stdout so user can see it
+			errMsg := fmt.Sprintf("ERROR: Failed to process %s: %v\n\n", resourceID, err)
+			if _, writeErr := fmt.Fprint(stdout, errMsg); writeErr != nil {
+				p.config.Logger.Debug("Failed to write error message", "error", writeErr)
+			}
+
+			// Store the error in the result
+			results[resourceID] = &XRDiffResult{
+				Diffs: make(map[string]*dt.ResourceDiff),
+				Error: errors.Wrapf(err, "unable to process resource %s", resourceID),
+			}
+		} else {
+			// Store successful result with diffs
+			results[resourceID] = &XRDiffResult{
+				Diffs: diffs,
+				Error: nil,
+			}
+		}
+	}
+
+	return results
+}
+
+// renderXRImpactAnalysis renders the XR list with status indicators and all collected diffs.
+func (p *DefaultCompDiffProcessor) renderXRImpactAnalysis(stdout io.Writer, xrs []*un.Unstructured, results map[string]*XRDiffResult) error {
+	// Build the XR list with status indicators and counts
+	xrList, changedCount, unchangedCount, errorCount := buildXRStatusList(xrs, results, p.config.Colorize)
+
+	// Generate summary line
+	summary := formatXRStatusSummary(changedCount, unchangedCount, errorCount)
+
+	// Write the XR list with summary
+	if _, err := fmt.Fprintf(stdout, "=== Affected Composite Resources ===\n\n%s%s\n=== Impact Analysis ===\n\n",
+		xrList, summary); err != nil {
+		return errors.Wrap(err, "cannot write XR list and headers")
+	}
+
+	// Collect all diffs from the results
+	allDiffs := make(map[string]*dt.ResourceDiff)
+
+	for _, result := range results {
+		if !result.HasError() && result.HasChanges() {
+			maps.Copy(allDiffs, result.Diffs)
+		}
+	}
+
+	// Render all diffs if we found some, or show a message if empty
+	if len(allDiffs) > 0 {
+		diffRenderer := p.config.Factories.DiffRenderer(
+			p.config.Logger,
+			renderer.DiffOptions{
+				UseColors:      p.config.Colorize,
+				AddPrefix:      "+ ",
+				DeletePrefix:   "- ",
+				ContextPrefix:  "  ",
+				ContextLines:   3,
+				ChunkSeparator: "...",
+				Compact:        p.config.Compact,
+			},
+		)
+
+		if err := diffRenderer.RenderDiffs(stdout, allDiffs); err != nil {
+			p.config.Logger.Debug("Failed to render diffs", "error", err)
+			return errors.Wrap(err, "failed to render diffs")
+		}
+	} else {
+		// No diffs found - write explanatory message
+		if _, err := fmt.Fprint(stdout, "All composite resources are up-to-date. No downstream resource changes detected.\n\n"); err != nil {
+			return errors.Wrap(err, "cannot write empty impact message")
+		}
 	}
 
 	return nil
@@ -379,4 +498,93 @@ func (p *DefaultCompDiffProcessor) getCompositionUpdatePolicy(xr *un.Unstructure
 
 	// Default to Automatic if not found (matching Crossplane default behavior)
 	return "Automatic"
+}
+
+// pluralize returns "s" if count is not 1, otherwise returns empty string.
+func pluralize(count int) string {
+	if count == 1 {
+		return ""
+	}
+
+	return "s"
+}
+
+// formatXRStatusSummary generates the summary line with correct pluralization.
+func formatXRStatusSummary(changedCount, unchangedCount, errorCount int) string {
+	parts := []string{}
+
+	if changedCount > 0 {
+		parts = append(parts, fmt.Sprintf("%d resource%s with changes", changedCount, pluralize(changedCount)))
+	}
+
+	if unchangedCount > 0 {
+		parts = append(parts, fmt.Sprintf("%d resource%s unchanged", unchangedCount, pluralize(unchangedCount)))
+	}
+
+	if errorCount > 0 {
+		parts = append(parts, fmt.Sprintf("%d resource%s with errors", errorCount, pluralize(errorCount)))
+	}
+
+	return fmt.Sprintf("\nSummary: %s\n", strings.Join(parts, ", "))
+}
+
+// buildXRStatusList builds the XR list with status indicators and returns the formatted string with counts.
+func buildXRStatusList(xrs []*un.Unstructured, results map[string]*XRDiffResult, colorize bool) (xrList string, changedCount, unchangedCount, errorCount int) {
+	var sb strings.Builder
+
+	// Color codes and indicators (colors remain empty strings when colorization is disabled)
+	checkMark := "✓"
+	warningMark := "⚠"
+	errorMark := "✗"
+	colorGreen := ""
+	colorYellow := ""
+	colorRed := ""
+	colorReset := ""
+
+	if colorize {
+		colorGreen = dt.ColorGreen
+		colorYellow = dt.ColorYellow
+		colorRed = dt.ColorRed
+		colorReset = dt.ColorReset
+	}
+
+	for _, xr := range xrs {
+		resourceID := fmt.Sprintf("%s/%s", xr.GetKind(), xr.GetName())
+
+		// Format namespace/scope information
+		scope := fmt.Sprintf("namespace: %s", xr.GetNamespace())
+		if xr.GetNamespace() == "" {
+			scope = "cluster-scoped"
+		}
+
+		// Determine status indicator and color based on result
+		var indicator, color string
+
+		result := results[resourceID]
+		switch {
+		case result != nil && result.HasError():
+			// Processing error - show red X
+			indicator = errorMark
+			color = colorRed
+			errorCount++
+		case result != nil && result.HasChanges():
+			// Has changes - show yellow warning
+			indicator = warningMark
+			color = colorYellow
+			changedCount++
+		default:
+			// No changes - show green check
+			indicator = checkMark
+			color = colorGreen
+			unchangedCount++
+		}
+
+		sb.WriteString(fmt.Sprintf("%s  %s %s/%s (%s)%s\n",
+			color,
+			indicator,
+			xr.GetKind(), xr.GetName(), scope,
+			colorReset))
+	}
+
+	return sb.String(), changedCount, unchangedCount, errorCount
 }

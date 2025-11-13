@@ -255,8 +255,9 @@ func (m *MockResourceInterface) ApplyStatus(_ context.Context, _ string, _ *un.U
 // MockDiffProcessor implements the DiffProcessor interface for testing.
 type MockDiffProcessor struct {
 	// Function fields for mocking behavior
-	InitializeFn  func(ctx context.Context) error
-	PerformDiffFn func(ctx context.Context, stdout io.Writer, resources []*un.Unstructured, compositionProvider types.CompositionProvider) error
+	InitializeFn         func(ctx context.Context) error
+	PerformDiffFn        func(ctx context.Context, stdout io.Writer, resources []*un.Unstructured, compositionProvider types.CompositionProvider) error
+	DiffSingleResourceFn func(ctx context.Context, res *un.Unstructured, compositionProvider types.CompositionProvider) (map[string]*dt.ResourceDiff, error)
 }
 
 // Initialize implements the DiffProcessor interface.
@@ -275,6 +276,15 @@ func (m *MockDiffProcessor) PerformDiff(ctx context.Context, stdout io.Writer, r
 	}
 
 	return nil
+}
+
+// DiffSingleResource implements the DiffProcessor.DiffSingleResource method.
+func (m *MockDiffProcessor) DiffSingleResource(ctx context.Context, res *un.Unstructured, compositionProvider types.CompositionProvider) (map[string]*dt.ResourceDiff, error) {
+	if m.DiffSingleResourceFn != nil {
+		return m.DiffSingleResourceFn(ctx, res, compositionProvider)
+	}
+
+	return make(map[string]*dt.ResourceDiff), nil
 }
 
 // endregion
@@ -790,4 +800,18 @@ func (m *MockDiffRenderer) RenderDiffs(w io.Writer, diffs map[string]*dt.Resourc
 	}
 
 	return nil
+}
+
+// MockCompositionProvider provides a mock implementation for CompositionProvider.
+type MockCompositionProvider struct {
+	GetCompositionFn func() (*xpextv1.Composition, error)
+}
+
+// GetComposition implements GetComposition from the CompositionProvider interface.
+func (m *MockCompositionProvider) GetComposition() (*xpextv1.Composition, error) {
+	if m.GetCompositionFn != nil {
+		return m.GetCompositionFn()
+	}
+
+	return &xpextv1.Composition{}, nil
 }

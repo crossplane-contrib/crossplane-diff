@@ -1,0 +1,10 @@
+apiVersion: ns.diff.example.org/v1alpha1
+kind: XNopResource
+metadata:
+  name: mixed-test-xr-3
+  namespace: default
+spec:
+  coolField: mixed-value-3
+  crossplane:
+    compositionRef:
+      name: xmixed.diff.example.org

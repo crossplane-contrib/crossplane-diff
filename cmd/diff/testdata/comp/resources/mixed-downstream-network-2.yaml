@@ -1,0 +1,14 @@
+apiVersion: ns.nop.example.org/v1alpha1
+kind: XDownstreamResource
+metadata:
+  name: mixed-test-xr-2-network
+  namespace: default
+  annotations:
+    crossplane.io/composition-resource-name: network
+    gotemplating.fn.crossplane.io/composition-resource-name: network
+  labels:
+    crossplane.io/composite: mixed-test-xr-2
+spec:
+  forProvider:
+    resourceType: network
+    tier: standard

@@ -37,6 +37,9 @@ type DiffProcessor interface {
 	// PerformDiff processes resources using a composition provider function
 	PerformDiff(ctx context.Context, stdout io.Writer, resources []*un.Unstructured, compositionProvider types.CompositionProvider) error
 
+	// DiffSingleResource processes a single resource and returns its diffs
+	DiffSingleResource(ctx context.Context, res *un.Unstructured, compositionProvider types.CompositionProvider) (map[string]*dt.ResourceDiff, error)
+
 	// Initialize loads required resources like CRDs and environment configs
 	Initialize(ctx context.Context) error
 }

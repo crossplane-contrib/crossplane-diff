@@ -1,0 +1,14 @@
+apiVersion: ns.nop.example.org/v1alpha1
+kind: XDownstreamResource
+metadata:
+  name: mixed-test-xr-1-database
+  namespace: default
+  annotations:
+    crossplane.io/composition-resource-name: database
+    gotemplating.fn.crossplane.io/composition-resource-name: database
+  labels:
+    crossplane.io/composite: mixed-test-xr-1
+spec:
+  forProvider:
+    resourceType: database
+    tier: standard

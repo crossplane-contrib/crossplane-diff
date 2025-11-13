@@ -205,6 +205,55 @@ The tool prioritizes **accuracy over convenience**:
 - Mock external dependencies using `testutils/mock_builder.go`
 - Integration tests use `envtest` for realistic cluster interactions
 
+**Working with ANSI Escape Codes in Test Expectations**
+
+E2E test expectation files (`.ansi` files) contain actual ANSI escape sequences as binary data. These are extremely fragile when editing with shell tools.
+
+**CRITICAL**: Never use `sed`, `perl`, or other shell text tools to directly edit ANSI codes in expectation files. They often:
+- Double or triple escape sequences (e.g., `\x1b\x1b\x1b[32m` instead of `\x1b[32m`)
+- Convert binary escape bytes to literal text (e.g., `[32m` instead of `\x1b[32m`)
+- Corrupt the files in hard-to-debug ways
+
+**Recommended Approach**: Use the Python script approach for reliable ANSI code manipulation:
+
+```python
+#!/usr/bin/env python3
+# Script: scripts/fix-ansi-codes.py
+import sys
+
+def fix_ansi_codes(filepath):
+    """Fix ANSI escape codes by removing duplicate escape bytes."""
+    with open(filepath, 'rb') as f:
+        content = f.read()
+
+    # Replace triple/double escapes with single
+    content = content.replace(b'\x1b\x1b\x1b[', b'\x1b[')
+    content = content.replace(b'\x1b\x1b[', b'\x1b[')
+
+    with open(filepath, 'wb') as f:
+        f.write(content)
+    print(f"Fixed {filepath}")
+
+if __name__ == '__main__':
+    for filepath in sys.argv[1:]:
+        fix_ansi_codes(filepath)
+```
+
+Usage:
+```bash
+# Fix ANSI codes in test expectation files
+python3 scripts/fix-ansi-codes.py test/e2e/manifests/beta/diff/main/*/expect/*.ansi
+
+# Verify ANSI codes are correct (should show single \x1b before each [)
+hexdump -C test/e2e/manifests/beta/diff/main/comp/expect/existing-xr.ansi | grep "1b 5b 33"
+```
+
+**Better Alternative**: Use `E2E_DUMP_EXPECTED=1` to auto-generate correct expectation files:
+```bash
+# Run tests with auto-dump to regenerate expectation files
+earthly -P +e2e --FLAGS="-test.run TestSpecificTest" --E2E_DUMP_EXPECTED=1
+```
+
 ## Code Modification Guidelines
 
 ### Minimizing Change Footprint

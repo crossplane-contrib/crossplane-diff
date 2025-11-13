@@ -1,0 +1,14 @@
+apiVersion: ns.nop.example.org/v1alpha1
+kind: XDownstreamResource
+metadata:
+  name: mixed-test-xr-1-storage
+  namespace: default
+  annotations:
+    crossplane.io/composition-resource-name: storage
+    gotemplating.fn.crossplane.io/composition-resource-name: storage
+  labels:
+    crossplane.io/composite: mixed-test-xr-1
+spec:
+  forProvider:
+    resourceType: storage
+    tier: standard

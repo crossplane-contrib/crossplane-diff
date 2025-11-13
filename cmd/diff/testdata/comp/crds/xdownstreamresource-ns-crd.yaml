@@ -32,6 +32,15 @@ spec:
                     resourceTier:
                       type: string
                       description: "Tier of the resource (e.g., default, production, staging)"
+                    resourceType:
+                      type: string
+                      description: "Type of the resource (e.g., database, storage, network)"
+                    tier:
+                      type: string
+                      description: "Service tier (e.g., standard, premium)"
+                    backupEnabled:
+                      type: boolean
+                      description: "Whether backup is enabled for this resource"
                 crossplane:
                   type: object
                   properties:

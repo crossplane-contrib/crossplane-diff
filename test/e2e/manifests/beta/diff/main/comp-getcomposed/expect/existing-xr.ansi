@@ -72,7 +72,11 @@ Summary: 1 modified
 
 === Affected Composite Resources ===
 
-- XGetComposedResource/test-getcomposed-resource (cluster-scoped)
+  [32m✓[0m XGetComposedResource/test-getcomposed-resource (cluster-scoped)
+
+Summary: 1 resource unchanged
 
 === Impact Analysis ===
+
+All composite resources are up-to-date. No downstream resource changes detected.
 
