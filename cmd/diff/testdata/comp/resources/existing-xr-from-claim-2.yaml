@@ -1,0 +1,14 @@
+apiVersion: diff.example.org/v1alpha1
+kind: XNopClaim
+metadata:
+  name: test-claim-2-xr
+  namespace: test-namespace
+spec:
+  coolField: claim-value-2
+  compositionRef:
+    name: nopclaims.diff.example.org
+  claimRef:
+    apiVersion: diff.example.org/v1alpha1
+    kind: NopClaim
+    name: test-claim-2
+    namespace: test-namespace

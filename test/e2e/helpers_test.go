@@ -70,9 +70,11 @@ var (
 	compResourceNameRegex          = regexp.MustCompile(`(test-comp-resource)-[a-z0-9]{5,}`)
 	fanoutResourceNameRegex        = regexp.MustCompile(`(test-fanout-resource-\d{2})-[a-z0-9]{5,}`)
 	claimNameRegex                 = regexp.MustCompile(`(test-claim)-[a-z0-9]{5,}(?:-[a-z0-9]{5,})?`)
+	compClaimNameRegex             = regexp.MustCompile(`(test-comp-claim)-[a-z0-9]{5,}`)
 	claimCompositionRevisionRegex  = regexp.MustCompile(`(xnopclaims\.claim\.diff\.example\.org)-[a-z0-9]{7,}`)
 	compositionRevisionRegex       = regexp.MustCompile(`(xnopresources\.(cluster\.|legacy\.)?diff\.example\.org)-[a-z0-9]{7,}`)
 	nestedCompositionRevisionRegex = regexp.MustCompile(`(child-nop-composition|parent-nop-composition)-[a-z0-9]{7,}`)
+	compClaimCompositionRevisionRegex = regexp.MustCompile(`(xnopclaimdiffresources\.claimdiff\.example\.org)-[a-z0-9]{7,}`)
 	ansiEscapeRegex                = regexp.MustCompile(`\x1b\[[0-9;]*m`)
 )
 
@@ -125,11 +127,13 @@ func normalizeLine(line string) string {
 	line = compResourceNameRegex.ReplaceAllString(line, "${1}-XXXXX")
 	line = fanoutResourceNameRegex.ReplaceAllString(line, "${1}-XXXXX")
 	line = claimNameRegex.ReplaceAllString(line, "${1}-XXXXX")
+	line = compClaimNameRegex.ReplaceAllString(line, "${1}-XXXXX")
 
 	// Replace composition revision refs with random hash
 	line = compositionRevisionRegex.ReplaceAllString(line, "${1}-XXXXXXX")
 	line = claimCompositionRevisionRegex.ReplaceAllString(line, "${1}-XXXXXXX")
 	line = nestedCompositionRevisionRegex.ReplaceAllString(line, "${1}-XXXXXXX")
+	line = compClaimCompositionRevisionRegex.ReplaceAllString(line, "${1}-XXXXXXX")
 
 	// Trim trailing whitespace
 	line = strings.TrimRight(line, " ")

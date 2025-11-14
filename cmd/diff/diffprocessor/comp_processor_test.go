@@ -37,7 +37,7 @@ import (
 	"github.com/crossplane/crossplane/v2/cmd/crank/render"
 )
 
-func TestDefaultCompDiffProcessor_findXRsUsingComposition(t *testing.T) {
+func TestDefaultCompDiffProcessor_findResourcesUsingComposition(t *testing.T) {
 	ctx := t.Context()
 
 	// Create test XR data
@@ -61,7 +61,7 @@ func TestDefaultCompDiffProcessor_findXRsUsingComposition(t *testing.T) {
 			setupMocks: func() xp.Clients {
 				return xp.Clients{
 					Composition: tu.NewMockCompositionClient().
-						WithXRsForComposition("test-composition", "default", []*un.Unstructured{xr1}).
+						WithResourcesForComposition("test-composition", "default", []*un.Unstructured{xr1}).
 						Build(),
 				}
 			},
@@ -74,7 +74,7 @@ func TestDefaultCompDiffProcessor_findXRsUsingComposition(t *testing.T) {
 			setupMocks: func() xp.Clients {
 				return xp.Clients{
 					Composition: tu.NewMockCompositionClient().
-						WithXRsForComposition("test-composition", "custom-ns", []*un.Unstructured{xr2}).
+						WithResourcesForComposition("test-composition", "custom-ns", []*un.Unstructured{xr2}).
 						Build(),
 				}
 			},
@@ -87,7 +87,7 @@ func TestDefaultCompDiffProcessor_findXRsUsingComposition(t *testing.T) {
 			setupMocks: func() xp.Clients {
 				return xp.Clients{
 					Composition: tu.NewMockCompositionClient().
-						WithFindXRsError("client error").
+						WithFindResourcesError("client error").
 						Build(),
 				}
 			},
@@ -100,7 +100,7 @@ func TestDefaultCompDiffProcessor_findXRsUsingComposition(t *testing.T) {
 			setupMocks: func() xp.Clients {
 				return xp.Clients{
 					Composition: tu.NewMockCompositionClient().
-						WithXRsForComposition("test-composition", "default", []*un.Unstructured{}).
+						WithResourcesForComposition("test-composition", "default", []*un.Unstructured{}).
 						Build(),
 				}
 			},
@@ -120,15 +120,15 @@ func TestDefaultCompDiffProcessor_findXRsUsingComposition(t *testing.T) {
 				},
 			}
 
-			got, err := processor.compositionClient.FindXRsUsingComposition(ctx, tt.compositionName, tt.namespace)
+			got, err := processor.compositionClient.FindResourcesUsingComposition(ctx, tt.compositionName, tt.namespace)
 
 			if (err != nil) != tt.wantErr {
-				t.Errorf("findXRsUsingComposition() error = %v, wantErr %v", err, tt.wantErr)
+				t.Errorf("findResourcesUsingComposition() error = %v, wantErr %v", err, tt.wantErr)
 				return
 			}
 
 			if diff := gcmp.Diff(tt.want, got); diff != "" {
-				t.Errorf("findXRsUsingComposition() mismatch (-want +got):\n%s", diff)
+				t.Errorf("findResourcesUsingComposition() mismatch (-want +got):\n%s", diff)
 			}
 		})
 	}
@@ -167,7 +167,7 @@ func TestDefaultCompDiffProcessor_DiffComposition(t *testing.T) {
 				return xp.Clients{
 					Composition: tu.NewMockCompositionClient().
 						WithSuccessfulCompositionFetch(testComp).
-						WithXRsForComposition("test-composition", "default", []*un.Unstructured{testXR}).
+						WithResourcesForComposition("test-composition", "default", []*un.Unstructured{testXR}).
 						Build(),
 					Definition:   tu.NewMockDefinitionClient().Build(),
 					Environment:  tu.NewMockEnvironmentClient().Build(),
@@ -223,8 +223,8 @@ func TestDefaultCompDiffProcessor_DiffComposition(t *testing.T) {
 				return xp.Clients{
 					Composition: tu.NewMockCompositionClient().
 						WithSuccessfulCompositionFetches([]*apiextensionsv1.Composition{testComp1, testComp2}).
-						WithXRsForComposition("test-composition-1", "default", []*un.Unstructured{}).
-						WithXRsForComposition("test-composition-2", "default", []*un.Unstructured{}).
+						WithResourcesForComposition("test-composition-1", "default", []*un.Unstructured{}).
+						WithResourcesForComposition("test-composition-2", "default", []*un.Unstructured{}).
 						Build(),
 					Definition:   tu.NewMockDefinitionClient().Build(),
 					Environment:  tu.NewMockEnvironmentClient().Build(),

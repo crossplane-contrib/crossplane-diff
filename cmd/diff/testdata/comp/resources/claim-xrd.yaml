@@ -1,0 +1,72 @@
+apiVersion: apiextensions.crossplane.io/v1
+kind: CompositeResourceDefinition
+metadata:
+  name: xnopclaims.diff.example.org
+spec:
+  group: diff.example.org
+  names:
+    kind: XNopClaim
+    plural: xnopclaims
+  claimNames:
+    kind: NopClaim
+    plural: nopclaims
+  versions:
+    - name: v1alpha1
+      served: true
+      referenceable: true
+      schema:
+        openAPIV3Schema:
+          type: object
+          properties:
+            spec:
+              type: object
+              properties:
+                coolField:
+                  type: string
+                compositionRef:
+                  type: object
+                  properties:
+                    name:
+                      type: string
+                compositionSelector:
+                  type: object
+                  properties:
+                    matchLabels:
+                      type: object
+                      additionalProperties:
+                        type: string
+                compositionUpdatePolicy:
+                  type: string
+                  enum:
+                    - Automatic
+                    - Manual
+                  default: "Automatic"
+                compositeDeletePolicy:
+                  type: string
+                  enum:
+                    - Background
+                    - Foreground
+                  default: "Background"
+                publishConnectionDetailsTo:
+                  type: object
+                  properties:
+                    name:
+                      type: string
+                    configRef:
+                      type: object
+                      properties:
+                        name:
+                          type: string
+                    metadata:
+                      type: object
+                      properties:
+                        labels:
+                          type: object
+                          additionalProperties:
+                            type: string
+                        annotations:
+                          type: object
+                          additionalProperties:
+                            type: string
+                writeConnectionSecretsToNamespace:
+                  type: string
