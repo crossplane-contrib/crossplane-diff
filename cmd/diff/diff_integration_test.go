@@ -2709,8 +2709,8 @@ Summary: 2 resources with changes, 1 resource unchanged
 `, tu.Green(`+     backupEnabled: true`), `
 `, tu.Green(`+     resourceType: database`), `
 `, tu.Green(`+     tier: premium`), `
-
-
+  
+  
 
 ---
 ~~~ XDownstreamResource/mixed-test-xr-2-database
@@ -2731,8 +2731,8 @@ Summary: 2 resources with changes, 1 resource unchanged
 `, tu.Green(`+     backupEnabled: true`), `
 `, tu.Green(`+     resourceType: database`), `
 `, tu.Green(`+     tier: premium`), `
-
-
+  
+  
 
 ---
 
@@ -2833,9 +2833,9 @@ Summary: 2 resources with changes
 +   forProvider:
 +     configData: updated-claim-value-1
 +     resourceTier: premium
-
-
-
+  
+  
+  
 
 ---
 ~~~ XDownstreamResource/test-claim-2-xr
@@ -2860,9 +2860,9 @@ Summary: 2 resources with changes
 +   forProvider:
 +     configData: updated-claim-value-2
 +     resourceTier: premium
-
-
-
+  
+  
+  
 
 ---
 
