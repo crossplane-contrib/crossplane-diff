@@ -47,8 +47,10 @@ Summary: 1 modified
 
 === Affected Composite Resources ===
 
-- XNopClaimDiffResource/test-comp-claim-XXXXX (cluster-scoped)
-- NopClaimDiffResource/test-comp-claim (namespace: default)
+  ⚠ XNopClaimDiffResource/test-comp-claim-XXXXX (cluster-scoped)
+  ⚠ NopClaimDiffResource/test-comp-claim (namespace: default)
+
+Summary: 2 resources with changes
 
 === Impact Analysis ===
 

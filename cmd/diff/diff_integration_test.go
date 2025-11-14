@@ -2804,8 +2804,10 @@ Summary: 1 modified
 
 === Affected Composite Resources ===
 
-- NopClaim/test-claim-1 (namespace: test-namespace)
-- NopClaim/test-claim-2 (namespace: test-namespace)
+  ⚠ NopClaim/test-claim-1 (namespace: test-namespace)
+  ⚠ NopClaim/test-claim-2 (namespace: test-namespace)
+
+Summary: 2 resources with changes
 
 === Impact Analysis ===
 
