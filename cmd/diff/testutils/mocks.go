@@ -546,9 +546,9 @@ func (m *MockTypeConverter) GetResourceNameForGVK(ctx context.Context, gvk schem
 type MockCompositionClient struct {
 	InitializeFn              func(ctx context.Context) error
 	FindMatchingCompositionFn func(ctx context.Context, res *un.Unstructured) (*xpextv1.Composition, error)
-	ListCompositionsFn        func(ctx context.Context) ([]*xpextv1.Composition, error)
-	GetCompositionFn          func(ctx context.Context, name string) (*xpextv1.Composition, error)
-	FindXRsUsingCompositionFn func(ctx context.Context, compositionName string, namespace string) ([]*un.Unstructured, error)
+	ListCompositionsFn           func(ctx context.Context) ([]*xpextv1.Composition, error)
+	GetCompositionFn             func(ctx context.Context, name string) (*xpextv1.Composition, error)
+	FindCompositesUsingCompositionFn func(ctx context.Context, compositionName string, namespace string) ([]*un.Unstructured, error)
 }
 
 // Initialize implements crossplane.CompositionClient.
@@ -587,13 +587,13 @@ func (m *MockCompositionClient) GetComposition(ctx context.Context, name string)
 	return nil, errors.New("GetComposition not implemented")
 }
 
-// FindXRsUsingComposition implements crossplane.CompositionClient.
-func (m *MockCompositionClient) FindXRsUsingComposition(ctx context.Context, compositionName string, namespace string) ([]*un.Unstructured, error) {
-	if m.FindXRsUsingCompositionFn != nil {
-		return m.FindXRsUsingCompositionFn(ctx, compositionName, namespace)
+// FindCompositesUsingComposition implements crossplane.CompositionClient.
+func (m *MockCompositionClient) FindCompositesUsingComposition(ctx context.Context, compositionName string, namespace string) ([]*un.Unstructured, error) {
+	if m.FindCompositesUsingCompositionFn != nil {
+		return m.FindCompositesUsingCompositionFn(ctx, compositionName, namespace)
 	}
 
-	return nil, errors.New("FindXRsUsingComposition not implemented")
+	return nil, errors.New("FindCompositesUsingComposition not implemented")
 }
 
 // MockFunctionClient implements the crossplane.FunctionClient interface.

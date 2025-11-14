@@ -1,0 +1,37 @@
+apiVersion: apiextensions.crossplane.io/v1
+kind: Composition
+metadata:
+  name: xnopclaimdiffresources.claimdiff.example.org
+spec:
+  compositeTypeRef:
+    apiVersion: claimdiff.example.org/v1alpha1
+    kind: XNopClaimDiffResource
+  mode: Pipeline
+  pipeline:
+    - step: generate-resources
+      functionRef:
+        name: function-go-templating
+      input:
+        apiVersion: template.fn.crossplane.io/v1beta1
+        kind: GoTemplate
+        source: Inline
+        inline:
+          template: |
+            apiVersion: nop.crossplane.io/v1alpha1
+            kind: ClusterNopResource
+            metadata:
+              annotations:
+                gotemplating.fn.crossplane.io/composition-resource-name: nop-resource
+              name: {{ .observed.composite.resource.metadata.name }}
+            spec:
+              forProvider:
+                conditionAfter:
+                  - conditionType: Ready
+                    conditionStatus: "True"
+                    time: 0s
+                fields:
+                  configData: updated-{{ .observed.composite.resource.spec.coolField }}
+                  resourceTier: premium
+    - step: detect-ready-resources
+      functionRef:
+        name: function-auto-ready

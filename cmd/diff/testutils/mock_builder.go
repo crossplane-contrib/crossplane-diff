@@ -715,26 +715,26 @@ func (b *MockCompositionClientBuilder) WithSuccessfulCompositionFetches(comps []
 	})
 }
 
-// WithFindXRsUsingComposition sets the FindXRsUsingComposition behavior.
-func (b *MockCompositionClientBuilder) WithFindXRsUsingComposition(fn func(context.Context, string, string) ([]*un.Unstructured, error)) *MockCompositionClientBuilder {
-	b.mock.FindXRsUsingCompositionFn = fn
+// WithFindCompositesUsingComposition sets the FindCompositesUsingComposition behavior.
+func (b *MockCompositionClientBuilder) WithFindCompositesUsingComposition(fn func(context.Context, string, string) ([]*un.Unstructured, error)) *MockCompositionClientBuilder {
+	b.mock.FindCompositesUsingCompositionFn = fn
 	return b
 }
 
-// WithXRsForComposition sets FindXRsUsingComposition to return specific XRs for a given composition name and namespace.
-func (b *MockCompositionClientBuilder) WithXRsForComposition(compositionName, namespace string, xrs []*un.Unstructured) *MockCompositionClientBuilder {
-	return b.WithFindXRsUsingComposition(func(_ context.Context, compName, ns string) ([]*un.Unstructured, error) {
+// WithResourcesForComposition sets FindCompositesUsingComposition to return specific resources for a given composition name and namespace.
+func (b *MockCompositionClientBuilder) WithResourcesForComposition(compositionName, namespace string, resources []*un.Unstructured) *MockCompositionClientBuilder {
+	return b.WithFindCompositesUsingComposition(func(_ context.Context, compName, ns string) ([]*un.Unstructured, error) {
 		if compName == compositionName && ns == namespace {
-			return xrs, nil
+			return resources, nil
 		}
 
-		return nil, errors.Errorf("no XRs found for composition %s in namespace %s", compName, ns)
+		return nil, errors.Errorf("no resources found for composition %s in namespace %s", compName, ns)
 	})
 }
 
-// WithFindXRsError sets FindXRsUsingComposition to return an error.
-func (b *MockCompositionClientBuilder) WithFindXRsError(errMsg string) *MockCompositionClientBuilder {
-	return b.WithFindXRsUsingComposition(func(context.Context, string, string) ([]*un.Unstructured, error) {
+// WithFindResourcesError sets FindCompositesUsingComposition to return an error.
+func (b *MockCompositionClientBuilder) WithFindResourcesError(errMsg string) *MockCompositionClientBuilder {
+	return b.WithFindCompositesUsingComposition(func(context.Context, string, string) ([]*un.Unstructured, error) {
 		return nil, errors.New(errMsg)
 	})
 }

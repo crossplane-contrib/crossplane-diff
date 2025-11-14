@@ -1469,3 +1469,151 @@ func TestDefaultCompositionClient_ResolveCompositionFromRevisions(t *testing.T) 
 		})
 	}
 }
+
+func TestDefaultCompositionClient_getClaimTypeFromXRD(t *testing.T) {
+	type args struct {
+		xrd *un.Unstructured
+	}
+
+	type want struct {
+		gvk    schema.GroupVersionKind
+		errMsg string
+	}
+
+	tests := map[string]struct {
+		reason string
+		args   args
+		want   want
+	}{
+		"XRDWithClaimNames": {
+			reason: "Should extract claim GVK from XRD with claimNames",
+			args: args{
+				xrd: tu.NewResource("apiextensions.crossplane.io/v1", "CompositeResourceDefinition", "test-xrd").
+					WithSpecField("group", "example.org").
+					WithSpecField("names", map[string]any{
+						"kind":     "XTestResource",
+						"plural":   "xtestresources",
+						"singular": "xtestresource",
+					}).
+					WithSpecField("claimNames", map[string]any{
+						"kind":     "TestClaim",
+						"plural":   "testclaims",
+						"singular": "testclaim",
+					}).
+					WithSpecField("versions", []any{
+						map[string]any{
+							"name":          "v1alpha1",
+							"referenceable": true,
+							"served":        true,
+						},
+					}).
+					Build(),
+			},
+			want: want{
+				gvk: schema.GroupVersionKind{
+					Group:   "example.org",
+					Version: "v1alpha1",
+					Kind:    "TestClaim",
+				},
+			},
+		},
+		"XRDWithoutClaimNames": {
+			reason: "Should return empty GVK when XRD doesn't define claims",
+			args: args{
+				xrd: tu.NewResource("apiextensions.crossplane.io/v1", "CompositeResourceDefinition", "test-xrd").
+					WithSpecField("group", "example.org").
+					WithSpecField("names", map[string]any{
+						"kind":     "XTestResource",
+						"plural":   "xtestresources",
+						"singular": "xtestresource",
+					}).
+					WithSpecField("versions", []any{
+						map[string]any{
+							"name":          "v1alpha1",
+							"referenceable": true,
+							"served":        true,
+						},
+					}).
+					Build(),
+			},
+			want: want{
+				gvk: schema.GroupVersionKind{}, // empty GVK
+			},
+		},
+		"XRDWithClaimNamesButMissingKind": {
+			reason: "Should return error when claimNames exists but kind is missing",
+			args: args{
+				xrd: tu.NewResource("apiextensions.crossplane.io/v1", "CompositeResourceDefinition", "test-xrd").
+					WithSpecField("group", "example.org").
+					WithSpecField("claimNames", map[string]any{
+						"plural":   "testclaims",
+						"singular": "testclaim",
+					}).
+					WithSpecField("versions", []any{
+						map[string]any{
+							"name":          "v1alpha1",
+							"referenceable": true,
+							"served":        true,
+						},
+					}).
+					Build(),
+			},
+			want: want{
+				errMsg: "missing kind",
+			},
+		},
+		"XRDWithNoReferenceableVersion": {
+			reason: "Should return error when no referenceable version found",
+			args: args{
+				xrd: tu.NewResource("apiextensions.crossplane.io/v1", "CompositeResourceDefinition", "test-xrd").
+					WithSpecField("group", "example.org").
+					WithSpecField("claimNames", map[string]any{
+						"kind":     "TestClaim",
+						"plural":   "testclaims",
+						"singular": "testclaim",
+					}).
+					WithSpecField("versions", []any{
+						map[string]any{
+							"name":          "v1alpha1",
+							"referenceable": false,
+							"served":        true,
+						},
+					}).
+					Build(),
+			},
+			want: want{
+				errMsg: "no referenceable version",
+			},
+		},
+	}
+
+	for name, tt := range tests {
+		t.Run(name, func(t *testing.T) {
+			client := &DefaultCompositionClient{
+				logger: tu.TestLogger(t, false),
+			}
+
+			got, err := client.getClaimTypeFromXRD(tt.args.xrd)
+
+			if tt.want.errMsg != "" {
+				if err == nil {
+					t.Errorf("\n%s\ngetClaimTypeFromXRD(): expected error containing %q but got none", tt.reason, tt.want.errMsg)
+					return
+				}
+				if !strings.Contains(err.Error(), tt.want.errMsg) {
+					t.Errorf("\n%s\ngetClaimTypeFromXRD(): expected error containing %q, got %q", tt.reason, tt.want.errMsg, err.Error())
+				}
+				return
+			}
+
+			if err != nil {
+				t.Errorf("\n%s\ngetClaimTypeFromXRD(): unexpected error: %v", tt.reason, err)
+				return
+			}
+
+			if diff := cmp.Diff(tt.want.gvk, got); diff != "" {
+				t.Errorf("\n%s\ngetClaimTypeFromXRD(): -want GVK, +got GVK:\n%s", tt.reason, diff)
+			}
+		})
+	}
+}

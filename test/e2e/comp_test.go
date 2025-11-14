@@ -176,3 +176,50 @@ func TestDiffCompositionWithGetComposedResource(t *testing.T) {
 			Feature(),
 	)
 }
+
+// TestDiffCompositionWithClaims tests the crossplane comp diff command with Claims.
+func TestDiffCompositionWithClaims(t *testing.T) {
+	imageTag := strings.Split(environment.GetCrossplaneImage(), ":")[1]
+	manifests := filepath.Join("test/e2e/manifests/beta/diff", imageTag, "comp-claim")
+	setupPath := filepath.Join(manifests, "setup")
+	expectPath := filepath.Join(manifests, "expect")
+
+	environment.Test(t,
+		features.New("DiffCompositionWithClaims").
+			WithLabel(e2e.LabelArea, LabelAreaDiff).
+			WithLabel(e2e.LabelSize, e2e.LabelSizeSmall).
+			WithLabel(config.LabelTestSuite, config.TestSuiteDefault).
+			WithLabel(LabelCrossplaneVersion, CrossplaneVersionMain).
+			WithSetup("CreatePrerequisites", funcs.AllOf(
+				funcs.ApplyResources(e2e.FieldManager, setupPath, "*.yaml"),
+				funcs.ResourcesCreatedWithin(30*time.Second, setupPath, "*.yaml"),
+			)).
+			WithSetup("PrerequisitesAreReady", funcs.AllOf(
+				funcs.ResourcesHaveConditionWithin(1*time.Minute, setupPath, "definition.yaml", apiextensionsv1.WatchingComposite()),
+			)).
+			WithSetup("CreateExistingClaim", funcs.AllOf(
+				funcs.ApplyResources(e2e.FieldManager, manifests, "existing-claim.yaml"),
+				funcs.ResourcesCreatedWithin(30*time.Second, manifests, "existing-claim.yaml"),
+				// Claims get their status from the backing XR, so wait for the claim to be available
+				funcs.ResourcesHaveConditionWithin(2*time.Minute, manifests, "existing-claim.yaml", xpv1.Available()),
+			)).
+			Assess("CanDiffCompositionWithClaim", func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
+				t.Helper()
+
+				output, log, err := RunCompDiff(t, c, "./crossplane-diff", filepath.Join(manifests, "updated-composition.yaml"))
+				if err != nil {
+					t.Fatalf("Error running comp diff command: %v\nLog output:\n%s", err, log)
+				}
+
+				assertDiffMatchesFile(t, output, filepath.Join(expectPath, "existing-claim.ansi"), log)
+
+				return ctx
+			}).
+			WithTeardown("DeleteExistingClaim", funcs.AllOf(
+				funcs.DeleteResources(manifests, "existing-claim.yaml"),
+				funcs.ResourcesDeletedWithin(2*time.Minute, manifests, "existing-claim.yaml"),
+			)).
+			WithTeardown("DeletePrerequisites", funcs.ResourcesDeletedAfterListedAreGone(3*time.Minute, setupPath, "*.yaml", clusterNopList)).
+			Feature(),
+	)
+}

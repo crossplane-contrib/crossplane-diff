@@ -30,8 +30,8 @@ type CompositionClient interface {
 	// GetComposition gets a composition by name
 	GetComposition(ctx context.Context, name string) (*apiextensionsv1.Composition, error)
 
-	// FindXRsUsingComposition finds all XRs that use the specified composition
-	FindXRsUsingComposition(ctx context.Context, compositionName string, namespace string) ([]*un.Unstructured, error)
+	// FindCompositesUsingComposition finds all composites (XRs and Claims) that use the specified composition
+	FindCompositesUsingComposition(ctx context.Context, compositionName string, namespace string) ([]*un.Unstructured, error)
 }
 
 // DefaultCompositionClient implements CompositionClient.
@@ -392,6 +392,66 @@ func (c *DefaultCompositionClient) getXRTypeFromXRD(xrdForClaim *un.Unstructured
 	return targetGVK, nil
 }
 
+// getClaimTypeFromXRD extracts the Claim GroupVersionKind from an XRD if it defines one.
+// Returns empty GVK and nil error if the XRD doesn't define claims (not an error condition).
+func (c *DefaultCompositionClient) getClaimTypeFromXRD(xrd *un.Unstructured) (schema.GroupVersionKind, error) {
+	// Check if the XRD defines a claim type
+	claimNames, found, _ := un.NestedMap(xrd.Object, "spec", "claimNames")
+	if !found || claimNames == nil {
+		// Not an error - XRD simply doesn't define claims
+		return schema.GroupVersionKind{}, nil
+	}
+
+	// Get the claim kind
+	claimKind, found, _ := un.NestedString(claimNames, "kind")
+	if !found || claimKind == "" {
+		return schema.GroupVersionKind{}, errors.New("XRD has claimNames but missing kind")
+	}
+
+	// Get the group from the XRD
+	claimGroup, found, _ := un.NestedString(xrd.Object, "spec", "group")
+	if !found || claimGroup == "" {
+		return schema.GroupVersionKind{}, errors.New("could not determine group from XRD")
+	}
+
+	// Find the referenceable version - there should be exactly one
+	claimVersion := ""
+
+	versions, versionsFound, _ := un.NestedSlice(xrd.Object, "spec", "versions")
+	if versionsFound && len(versions) > 0 {
+		// Look for the one version that is marked referenceable
+		for _, versionObj := range versions {
+			if version, ok := versionObj.(map[string]any); ok {
+				ref, refFound, _ := un.NestedBool(version, "referenceable")
+				if refFound && ref {
+					name, nameFound, _ := un.NestedString(version, "name")
+					if nameFound {
+						claimVersion = name
+						break
+					}
+				}
+			}
+		}
+	}
+
+	// If no referenceable version found, we shouldn't guess
+	if claimVersion == "" {
+		return schema.GroupVersionKind{}, errors.New("no referenceable version found in XRD")
+	}
+
+	claimGVK := schema.GroupVersionKind{
+		Group:   claimGroup,
+		Version: claimVersion,
+		Kind:    claimKind,
+	}
+
+	c.logger.Debug("XRD defines claim type",
+		"xrd", xrd.GetName(),
+		"claimGVK", claimGVK.String())
+
+	return claimGVK, nil
+}
+
 // isCompositionCompatible checks if a composition is compatible with a GVK.
 func (c *DefaultCompositionClient) isCompositionCompatible(comp *apiextensionsv1.Composition, xrGVK schema.GroupVersionKind) bool {
 	return comp.Spec.CompositeTypeRef.APIVersion == xrGVK.GroupVersion().String() &&
@@ -578,9 +638,9 @@ func (c *DefaultCompositionClient) findByTypeReference(ctx context.Context, _ *u
 	return compatibleCompositions[0], nil
 }
 
-// FindXRsUsingComposition finds all XRs that use the specified composition.
-func (c *DefaultCompositionClient) FindXRsUsingComposition(ctx context.Context, compositionName string, namespace string) ([]*un.Unstructured, error) {
-	c.logger.Debug("Finding XRs using composition",
+// FindCompositesUsingComposition finds all composites (XRs and Claims) that use the specified composition.
+func (c *DefaultCompositionClient) FindCompositesUsingComposition(ctx context.Context, compositionName string, namespace string) ([]*un.Unstructured, error) {
+	c.logger.Debug("Finding composites using composition",
 		"compositionName", compositionName,
 		"namespace", namespace)
 
@@ -618,25 +678,78 @@ func (c *DefaultCompositionClient) FindXRsUsingComposition(ctx context.Context, 
 	c.logger.Debug("Found XRs of target type", "count", len(xrs))
 
 	// Filter XRs that use this specific composition
-	var matchingXRs []*un.Unstructured
+	var matchingResources []*un.Unstructured
 
 	for _, xr := range xrs {
-		if c.xrUsesComposition(xr, compositionName) {
-			matchingXRs = append(matchingXRs, xr)
+		if c.resourceUsesComposition(xr, compositionName) {
+			matchingResources = append(matchingResources, xr)
 		}
 	}
 
 	c.logger.Debug("Found XRs using composition",
 		"compositionName", compositionName,
-		"count", len(matchingXRs))
+		"count", len(matchingResources))
 
-	return matchingXRs, nil
+	// Now check if the XRD defines a claim type and search for claims too
+	xrd, err := c.definitionClient.GetXRDForXR(ctx, xrGVK)
+	if err != nil {
+		// If we can't get the XRD, just return the XRs we found
+		c.logger.Debug("Cannot get XRD for XR type (will not search for claims)",
+			"xrGVK", xrGVK.String(),
+			"error", err)
+		return matchingResources, nil
+	}
+
+	// Try to get the claim type from the XRD
+	claimGVK, err := c.getClaimTypeFromXRD(xrd)
+	if err != nil {
+		// Error extracting claim type - log and return XRs only
+		c.logger.Debug("Error extracting claim type from XRD",
+			"xrd", xrd.GetName(),
+			"error", err)
+		return matchingResources, nil
+	}
+
+	// If XRD doesn't define claims, just return the XRs
+	if claimGVK.Empty() {
+		c.logger.Debug("XRD does not define claims",
+			"xrd", xrd.GetName())
+		return matchingResources, nil
+	}
+
+	// XRD defines claims - search for them
+	c.logger.Debug("Searching for claims using composition",
+		"claimGVK", claimGVK.String())
+
+	claims, err := c.resourceClient.ListResources(ctx, claimGVK, namespace)
+	if err != nil {
+		// Log error but don't fail - we still have the XRs
+		c.logger.Debug("Cannot list claims of type (will only return XRs)",
+			"claimGVK", claimGVK.String(),
+			"error", err)
+		return matchingResources, nil
+	}
+
+	c.logger.Debug("Found claims of target type", "count", len(claims))
+
+	// Filter claims that use this specific composition
+	for _, claim := range claims {
+		if c.resourceUsesComposition(claim, compositionName) {
+			matchingResources = append(matchingResources, claim)
+		}
+	}
+
+	c.logger.Debug("Found resources (XRs and Claims) using composition",
+		"compositionName", compositionName,
+		"totalCount", len(matchingResources))
+
+	return matchingResources, nil
 }
 
-// xrUsesComposition checks if an XR uses the specified composition.
-func (c *DefaultCompositionClient) xrUsesComposition(xr *un.Unstructured, compositionName string) bool {
+// resourceUsesComposition checks if a resource (XR or Claim) uses the specified composition.
+func (c *DefaultCompositionClient) resourceUsesComposition(resource *un.Unstructured, compositionName string) bool {
 	// Check direct composition reference in spec.compositionRef.name or spec.crossplane.compositionRef.name
-	apiVersion := xr.GetAPIVersion()
+	apiVersion := resource.GetAPIVersion()
 
 	// Try both v1 and v2 paths
 	paths := [][]string{
@@ -645,7 +758,7 @@ func (c *DefaultCompositionClient) xrUsesComposition(xr *un.Unstructured, compos
 	}
 
 	for _, path := range paths {
-		if refName, found, _ := un.NestedString(xr.Object, path...); found && refName == compositionName {
+		if refName, found, _ := un.NestedString(resource.Object, path...); found && refName == compositionName {
 			return true
 		}
 	}

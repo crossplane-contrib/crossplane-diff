@@ -1,0 +1,14 @@
+apiVersion: nop.example.org/v1alpha1
+kind: XDownstreamResource
+metadata:
+  annotations:
+    gotemplating.fn.crossplane.io/composition-resource-name: nop-resource
+  labels:
+    crossplane.io/composite: test-claim-2-xr
+    crossplane.io/claim-name: test-claim-2
+    crossplane.io/claim-namespace: test-namespace
+  name: test-claim-2-xr
+spec:
+  forProvider:
+    configData: claim-value-2
+    resourceTier: basic

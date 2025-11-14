@@ -47,15 +47,20 @@ earthly -P +build
 
 ### XR Diff - Preview Changes to Composite Resources
 
+The `xr` command supports both Composite Resources (XRs) and Claims. You can pass either type directly as input.
+
 ```bash
 # Show changes that would result from applying an XR from a file
 crossplane-diff xr xr.yaml
 
+# Show changes for a Claim
+crossplane-diff xr claim.yaml
+
 # Show changes from stdin
 cat xr.yaml | crossplane-diff xr -
 
-# Process multiple files
-crossplane-diff xr xr1.yaml xr2.yaml xr3.yaml
+# Process multiple files (can mix XRs and Claims)
+crossplane-diff xr xr1.yaml claim1.yaml xr2.yaml
 
 # Use a specific kubeconfig context
 crossplane-diff xr xr.yaml --context staging
@@ -74,8 +79,10 @@ crossplane-diff xr xr.yaml \
 
 ### Composition Diff - Analyze Impact of Composition Changes
 
+The `comp` command analyzes how composition changes affect all Composite Resources (both XRs and Claims) that use the composition. The tool automatically discovers and displays impacts on both direct XRs and any Claims that reference them.
+
 ```bash
-# Show impact of updated composition on all XRs using it
+# Show impact of updated composition on all XRs and Claims using it
 crossplane-diff comp updated-composition.yaml
 
 # Show impact of multiple composition changes
@@ -104,7 +111,7 @@ crossplane-diff comp updated-composition.yaml \
 crossplane-diff xr [<files> ...] [flags]
 
 Arguments:
-  [<files> ...]    YAML files containing Crossplane resources to diff.
+  [<files> ...]    YAML files containing Composite Resources (XRs) or Claims to diff.
 
 Flags:
   -h, --help                   Show context-sensitive help.
@@ -140,9 +147,9 @@ Flags:
       --compact                Show compact diffs with minimal context.
       --max-nested-depth=10    Maximum depth for nested XR recursion.
       --timeout=1m             How long to run before timing out.
-  -n, --namespace=""           Namespace to find XRs (empty = all namespaces).
-      --include-manual         Include XRs with Manual update policy (default:
-                               only Automatic policy XRs)
+  -n, --namespace=""           Namespace to find Composites (empty = all namespaces).
+      --include-manual         Include Composites with Manual update policy (default:
+                               only Automatic policy Composites)
       --ignore-paths=STRING,... Paths to ignore in diffs. Supports simple paths
                                (e.g., 'metadata.annotations') and map key paths with
                                bracket notation (e.g., 'metadata.annotations[key]').

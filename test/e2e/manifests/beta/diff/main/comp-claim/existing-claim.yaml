@@ -1,0 +1,10 @@
+apiVersion: claimdiff.example.org/v1alpha1
+kind: NopClaimDiffResource
+metadata:
+  name: test-comp-claim
+  namespace: default
+spec:
+  coolField: claim-value-1
+  crossplane:
+    compositionRef:
+      name: xnopclaimdiffresources.claimdiff.example.org

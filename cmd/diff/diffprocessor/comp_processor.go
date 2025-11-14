@@ -172,12 +172,12 @@ func (p *DefaultCompDiffProcessor) processSingleComposition(ctx context.Context,
 		return errors.Wrap(err, "cannot display composition diff")
 	}
 
-	// Find all XRs that use this composition
-	affectedXRs, err := p.compositionClient.FindXRsUsingComposition(ctx, newComp.GetName(), namespace)
+	// Find all composites (XRs and Claims) that use this composition
+	affectedXRs, err := p.compositionClient.FindCompositesUsingComposition(ctx, newComp.GetName(), namespace)
 	if err != nil {
 		// For net-new compositions, the composition won't exist in the cluster
-		// so findXRsUsingComposition will fail. This is expected behavior.
-		p.config.Logger.Debug("Cannot find XRs using composition (likely net-new composition)",
+		// so FindCompositesUsingComposition will fail. This is expected behavior.
+		p.config.Logger.Debug("Cannot find composites using composition (likely net-new composition)",
 			"composition", newComp.GetName(), "error", err)
 
 		// Display the "no XRs found" message for net-new compositions
