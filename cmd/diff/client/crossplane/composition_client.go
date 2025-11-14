@@ -30,8 +30,8 @@ type CompositionClient interface {
 	// GetComposition gets a composition by name
 	GetComposition(ctx context.Context, name string) (*apiextensionsv1.Composition, error)
 
-	// FindResourcesUsingComposition finds all resources (XRs and Claims) that use the specified composition
-	FindResourcesUsingComposition(ctx context.Context, compositionName string, namespace string) ([]*un.Unstructured, error)
+	// FindCompositesUsingComposition finds all composites (XRs and Claims) that use the specified composition
+	FindCompositesUsingComposition(ctx context.Context, compositionName string, namespace string) ([]*un.Unstructured, error)
 }
 
 // DefaultCompositionClient implements CompositionClient.
@@ -638,9 +638,9 @@ func (c *DefaultCompositionClient) findByTypeReference(ctx context.Context, _ *u
 	return compatibleCompositions[0], nil
 }
 
-// FindResourcesUsingComposition finds all resources (XRs and Claims) that use the specified composition.
-func (c *DefaultCompositionClient) FindResourcesUsingComposition(ctx context.Context, compositionName string, namespace string) ([]*un.Unstructured, error) {
-	c.logger.Debug("Finding resources using composition",
+// FindCompositesUsingComposition finds all composites (XRs and Claims) that use the specified composition.
+func (c *DefaultCompositionClient) FindCompositesUsingComposition(ctx context.Context, compositionName string, namespace string) ([]*un.Unstructured, error) {
+	c.logger.Debug("Finding composites using composition",
 		"compositionName", compositionName,
 		"namespace", namespace)
 

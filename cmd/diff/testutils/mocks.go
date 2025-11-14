@@ -548,7 +548,7 @@ type MockCompositionClient struct {
 	FindMatchingCompositionFn func(ctx context.Context, res *un.Unstructured) (*xpextv1.Composition, error)
 	ListCompositionsFn           func(ctx context.Context) ([]*xpextv1.Composition, error)
 	GetCompositionFn             func(ctx context.Context, name string) (*xpextv1.Composition, error)
-	FindResourcesUsingCompositionFn func(ctx context.Context, compositionName string, namespace string) ([]*un.Unstructured, error)
+	FindCompositesUsingCompositionFn func(ctx context.Context, compositionName string, namespace string) ([]*un.Unstructured, error)
 }
 
 // Initialize implements crossplane.CompositionClient.
@@ -587,13 +587,13 @@ func (m *MockCompositionClient) GetComposition(ctx context.Context, name string)
 	return nil, errors.New("GetComposition not implemented")
 }
 
-// FindResourcesUsingComposition implements crossplane.CompositionClient.
-func (m *MockCompositionClient) FindResourcesUsingComposition(ctx context.Context, compositionName string, namespace string) ([]*un.Unstructured, error) {
-	if m.FindResourcesUsingCompositionFn != nil {
-		return m.FindResourcesUsingCompositionFn(ctx, compositionName, namespace)
+// FindCompositesUsingComposition implements crossplane.CompositionClient.
+func (m *MockCompositionClient) FindCompositesUsingComposition(ctx context.Context, compositionName string, namespace string) ([]*un.Unstructured, error) {
+	if m.FindCompositesUsingCompositionFn != nil {
+		return m.FindCompositesUsingCompositionFn(ctx, compositionName, namespace)
 	}
 
-	return nil, errors.New("FindResourcesUsingComposition not implemented")
+	return nil, errors.New("FindCompositesUsingComposition not implemented")
 }
 
 // MockFunctionClient implements the crossplane.FunctionClient interface.

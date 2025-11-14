@@ -715,15 +715,15 @@ func (b *MockCompositionClientBuilder) WithSuccessfulCompositionFetches(comps []
 	})
 }
 
-// WithFindResourcesUsingComposition sets the FindResourcesUsingComposition behavior.
-func (b *MockCompositionClientBuilder) WithFindResourcesUsingComposition(fn func(context.Context, string, string) ([]*un.Unstructured, error)) *MockCompositionClientBuilder {
-	b.mock.FindResourcesUsingCompositionFn = fn
+// WithFindCompositesUsingComposition sets the FindCompositesUsingComposition behavior.
+func (b *MockCompositionClientBuilder) WithFindCompositesUsingComposition(fn func(context.Context, string, string) ([]*un.Unstructured, error)) *MockCompositionClientBuilder {
+	b.mock.FindCompositesUsingCompositionFn = fn
 	return b
 }
 
-// WithResourcesForComposition sets FindResourcesUsingComposition to return specific resources for a given composition name and namespace.
+// WithResourcesForComposition sets FindCompositesUsingComposition to return specific resources for a given composition name and namespace.
 func (b *MockCompositionClientBuilder) WithResourcesForComposition(compositionName, namespace string, resources []*un.Unstructured) *MockCompositionClientBuilder {
-	return b.WithFindResourcesUsingComposition(func(_ context.Context, compName, ns string) ([]*un.Unstructured, error) {
+	return b.WithFindCompositesUsingComposition(func(_ context.Context, compName, ns string) ([]*un.Unstructured, error) {
 		if compName == compositionName && ns == namespace {
 			return resources, nil
 		}
@@ -732,9 +732,9 @@ func (b *MockCompositionClientBuilder) WithResourcesForComposition(compositionNa
 	})
 }
 
-// WithFindResourcesError sets FindResourcesUsingComposition to return an error.
+// WithFindResourcesError sets FindCompositesUsingComposition to return an error.
 func (b *MockCompositionClientBuilder) WithFindResourcesError(errMsg string) *MockCompositionClientBuilder {
-	return b.WithFindResourcesUsingComposition(func(context.Context, string, string) ([]*un.Unstructured, error) {
+	return b.WithFindCompositesUsingComposition(func(context.Context, string, string) ([]*un.Unstructured, error) {
 		return nil, errors.New(errMsg)
 	})
 }

@@ -120,7 +120,7 @@ func TestDefaultCompDiffProcessor_findResourcesUsingComposition(t *testing.T) {
 				},
 			}
 
-			got, err := processor.compositionClient.FindResourcesUsingComposition(ctx, tt.compositionName, tt.namespace)
+			got, err := processor.compositionClient.FindCompositesUsingComposition(ctx, tt.compositionName, tt.namespace)
 
 			if (err != nil) != tt.wantErr {
 				t.Errorf("findResourcesUsingComposition() error = %v, wantErr %v", err, tt.wantErr)
