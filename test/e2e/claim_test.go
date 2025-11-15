@@ -185,6 +185,7 @@ func TestDiffNewClaimWithNestedXRs(t *testing.T) {
 				if !strings.Contains(output, "ParentNopClaim/") {
 					t.Error("Expected output to contain claim diff")
 				}
+
 				if !strings.Contains(output, "XChildNopClaim/") {
 					t.Error("Expected output to contain child XR diff")
 				}
@@ -203,6 +204,7 @@ func TestDiffNewClaimWithNestedXRs(t *testing.T) {
 				}
 
 				t.Logf("Diff output:\n%s", output)
+
 				return ctx
 			}).
 			WithTeardown("DeletePrerequisites", funcs.AllOf(
@@ -270,6 +272,7 @@ func TestDiffExistingClaimWithNestedXRs(t *testing.T) {
 				}
 
 				t.Logf("Diff output:\n%s", output)
+
 				return ctx
 			}).
 			WithTeardown("DeleteClaim", funcs.AllOf(

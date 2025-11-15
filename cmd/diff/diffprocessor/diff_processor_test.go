@@ -1696,7 +1696,7 @@ func TestDefaultDiffProcessor_ProcessNestedXRs(t *testing.T) {
 					WithSpecField("childField", "existing-value").
 					WithCompositionResourceName("child-xr").
 					WithLabels(map[string]string{
-						"crossplane.io/composite": "parent-xr-abc",  // Existing composite label
+						"crossplane.io/composite": "parent-xr-abc", // Existing composite label
 					}).
 					Build()
 
@@ -1708,7 +1708,7 @@ func TestDefaultDiffProcessor_ProcessNestedXRs(t *testing.T) {
 					}).
 					WithCompositionResourceName("managed-resource").
 					WithLabels(map[string]string{
-						"crossplane.io/composite": "parent-xr-child-abc123",  // Points to existing nested XR
+						"crossplane.io/composite": "parent-xr-child-abc123", // Points to existing nested XR
 					}).
 					Build()
 
