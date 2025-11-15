@@ -66,16 +66,16 @@ var clusterNopList = composed.NewList(composed.FromReferenceToList(corev1.Object
 
 // Regular expressions to match the dynamic parts.
 var (
-	resourceNameRegex              = regexp.MustCompile(`(existing-resource)-[a-z0-9]{5,}(?:-nop-resource)?`)
-	compResourceNameRegex          = regexp.MustCompile(`(test-comp-resource)-[a-z0-9]{5,}`)
-	fanoutResourceNameRegex        = regexp.MustCompile(`(test-fanout-resource-\d{2})-[a-z0-9]{5,}`)
-	claimNameRegex                 = regexp.MustCompile(`(test-claim)-[a-z0-9]{5,}(?:-[a-z0-9]{5,})?`)
-	compClaimNameRegex             = regexp.MustCompile(`(test-comp-claim)-[a-z0-9]{5,}`)
-	claimCompositionRevisionRegex  = regexp.MustCompile(`(xnopclaims\.claim\.diff\.example\.org)-[a-z0-9]{7,}`)
-	compositionRevisionRegex       = regexp.MustCompile(`(xnopresources\.(cluster\.|legacy\.)?diff\.example\.org)-[a-z0-9]{7,}`)
-	nestedCompositionRevisionRegex = regexp.MustCompile(`(child-nop-composition|parent-nop-composition)-[a-z0-9]{7,}`)
+	resourceNameRegex                 = regexp.MustCompile(`(existing-resource)-[a-z0-9]{5,}(?:-nop-resource)?`)
+	compResourceNameRegex             = regexp.MustCompile(`(test-comp-resource)-[a-z0-9]{5,}`)
+	fanoutResourceNameRegex           = regexp.MustCompile(`(test-fanout-resource-\d{2})-[a-z0-9]{5,}`)
+	claimNameRegex                    = regexp.MustCompile(`(test-claim)-[a-z0-9]{5,}(?:-[a-z0-9]{5,})?`)
+	compClaimNameRegex                = regexp.MustCompile(`(test-comp-claim)-[a-z0-9]{5,}`)
+	claimCompositionRevisionRegex     = regexp.MustCompile(`(xnopclaims\.claim\.diff\.example\.org)-[a-z0-9]{7,}`)
+	compositionRevisionRegex          = regexp.MustCompile(`(xnopresources\.(cluster\.|legacy\.)?diff\.example\.org)-[a-z0-9]{7,}`)
+	nestedCompositionRevisionRegex    = regexp.MustCompile(`(child-nop-composition|parent-nop-composition)-[a-z0-9]{7,}`)
 	compClaimCompositionRevisionRegex = regexp.MustCompile(`(xnopclaimdiffresources\.claimdiff\.example\.org)-[a-z0-9]{7,}`)
-	ansiEscapeRegex                = regexp.MustCompile(`\x1b\[[0-9;]*m`)
+	ansiEscapeRegex                   = regexp.MustCompile(`\x1b\[[0-9;]*m`)
 )
 
 // runCrossplaneDiff runs the crossplane diff command with the specified subcommand on the provided resources.

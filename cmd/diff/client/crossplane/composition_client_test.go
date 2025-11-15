@@ -1600,9 +1600,11 @@ func TestDefaultCompositionClient_getClaimTypeFromXRD(t *testing.T) {
 					t.Errorf("\n%s\ngetClaimTypeFromXRD(): expected error containing %q but got none", tt.reason, tt.want.errMsg)
 					return
 				}
+
 				if !strings.Contains(err.Error(), tt.want.errMsg) {
 					t.Errorf("\n%s\ngetClaimTypeFromXRD(): expected error containing %q, got %q", tt.reason, tt.want.errMsg, err.Error())
 				}
+
 				return
 			}
 

@@ -544,10 +544,10 @@ func (m *MockTypeConverter) GetResourceNameForGVK(ctx context.Context, gvk schem
 
 // MockCompositionClient implements the crossplane.CompositionClient interface.
 type MockCompositionClient struct {
-	InitializeFn              func(ctx context.Context) error
-	FindMatchingCompositionFn func(ctx context.Context, res *un.Unstructured) (*xpextv1.Composition, error)
-	ListCompositionsFn           func(ctx context.Context) ([]*xpextv1.Composition, error)
-	GetCompositionFn             func(ctx context.Context, name string) (*xpextv1.Composition, error)
+	InitializeFn                     func(ctx context.Context) error
+	FindMatchingCompositionFn        func(ctx context.Context, res *un.Unstructured) (*xpextv1.Composition, error)
+	ListCompositionsFn               func(ctx context.Context) ([]*xpextv1.Composition, error)
+	GetCompositionFn                 func(ctx context.Context, name string) (*xpextv1.Composition, error)
 	FindCompositesUsingCompositionFn func(ctx context.Context, compositionName string, namespace string) ([]*un.Unstructured, error)
 }
 

@@ -697,6 +697,7 @@ func (c *DefaultCompositionClient) FindCompositesUsingComposition(ctx context.Co
 		c.logger.Debug("Cannot get XRD for XR type (will not search for claims)",
 			"xrGVK", xrGVK.String(),
 			"error", err)
+
 		return matchingResources, nil
 	}
 
@@ -707,6 +708,7 @@ func (c *DefaultCompositionClient) FindCompositesUsingComposition(ctx context.Co
 		c.logger.Debug("Error extracting claim type from XRD",
 			"xrd", xrd.GetName(),
 			"error", err)
+
 		return matchingResources, nil
 	}
 
@@ -714,6 +716,7 @@ func (c *DefaultCompositionClient) FindCompositesUsingComposition(ctx context.Co
 	if claimGVK.Empty() {
 		c.logger.Debug("XRD does not define claims",
 			"xrd", xrd.GetName())
+
 		return matchingResources, nil
 	}
 
@@ -727,6 +730,7 @@ func (c *DefaultCompositionClient) FindCompositesUsingComposition(ctx context.Co
 		c.logger.Debug("Cannot list claims of type (will only return XRs)",
 			"claimGVK", claimGVK.String(),
 			"error", err)
+
 		return matchingResources, nil
 	}
 

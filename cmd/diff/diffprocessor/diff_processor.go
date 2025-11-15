@@ -359,12 +359,17 @@ func preserveNestedXRIdentity(nestedXR, existingNestedXR *un.Unstructured) {
 			if nestedXRLabels == nil {
 				nestedXRLabels = make(map[string]string)
 			}
+
 			nestedXRLabels["crossplane.io/composite"] = compositeLabel
 			nestedXR.SetLabels(nestedXRLabels)
 		}
 	}
 }
 
+// ProcessNestedXRs recursively processes composed resources that are themselves XRs.
+// It checks each composed resource to see if it's an XR, and if so, processes it through
+// its own composition pipeline to get the full tree of diffs. It preserves the identity
+// of existing nested XRs to ensure accurate diff calculation.
 func (p *DefaultDiffProcessor) ProcessNestedXRs(
 	ctx context.Context,
 	composedResources []cpd.Unstructured,
@@ -390,6 +395,7 @@ func (p *DefaultDiffProcessor) ProcessNestedXRs(
 	// Fetch observed resources from parent XR to find existing nested XRs
 	// This allows us to preserve the identity of nested XRs that already exist in the cluster
 	var observedResources []cpd.Unstructured
+
 	if parentXR != nil {
 		obs, err := p.diffCalculator.FetchObservedResources(ctx, parentXR)
 		if err != nil {
