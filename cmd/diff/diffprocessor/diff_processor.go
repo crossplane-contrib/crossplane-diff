@@ -303,7 +303,7 @@ func (p *DefaultDiffProcessor) DiffSingleResource(ctx context.Context, res *un.U
 	// Check for nested XRs in the composed resources and process them recursively
 	p.config.Logger.Debug("Checking for nested XRs", "resource", resourceID, "composedCount", len(desired.ComposedResources))
 
-	nestedDiffs, err := p.ProcessNestedXRs(ctx, desired.ComposedResources, compositionProvider, resourceID, 1)
+	nestedDiffs, err := p.ProcessNestedXRs(ctx, desired.ComposedResources, compositionProvider, resourceID, xr, 1)
 	if err != nil {
 		p.config.Logger.Debug("Error processing nested XRs", "resource", resourceID, "error", err)
 		return nil, errors.Wrap(err, "cannot process nested XRs")
@@ -329,6 +329,7 @@ func (p *DefaultDiffProcessor) ProcessNestedXRs(
 	composedResources []cpd.Unstructured,
 	compositionProvider types.CompositionProvider,
 	parentResourceID string,
+	parentXR *cmp.Unstructured,
 	depth int,
 ) (map[string]*dt.ResourceDiff, error) {
 	if depth > p.config.MaxNestedDepth {
@@ -345,27 +346,88 @@ func (p *DefaultDiffProcessor) ProcessNestedXRs(
 		"composedResourceCount", len(composedResources),
 		"depth", depth)
 
+	// Fetch observed resources from parent XR to find existing nested XRs
+	// This allows us to preserve the identity of nested XRs that already exist in the cluster
+	var observedResources []cpd.Unstructured
+	if parentXR != nil {
+		obs, err := p.diffCalculator.FetchObservedResources(ctx, parentXR)
+		if err != nil {
+			// Log but continue - nested XRs without existing cluster state will show as new (with "(generated)")
+			p.config.Logger.Debug("Could not fetch observed resources for parent XR (continuing)",
+				"parentResource", parentResourceID,
+				"error", err)
+		} else {
+			observedResources = obs
+		}
+	}
+
 	allDiffs := make(map[string]*dt.ResourceDiff)
 
 	for _, composed := range composedResources {
-		un := &un.Unstructured{Object: composed.UnstructuredContent()}
+		nestedXR := &un.Unstructured{Object: composed.UnstructuredContent()}
 
 		// Check if this composed resource is itself an XR
-		isXR, _ := p.getCompositeResourceXRD(ctx, un)
+		isXR, _ := p.getCompositeResourceXRD(ctx, nestedXR)
 
 		if !isXR {
 			// Skip non-XR resources
 			continue
 		}
 
-		nestedResourceID := fmt.Sprintf("%s/%s (nested depth %d)", un.GetKind(), un.GetName(), depth)
+		nestedResourceID := fmt.Sprintf("%s/%s (nested depth %d)", nestedXR.GetKind(), nestedXR.GetName(), depth)
 		p.config.Logger.Debug("Found nested XR, processing recursively",
 			"nestedXR", nestedResourceID,
 			"parentXR", parentResourceID,
 			"depth", depth)
 
+		// Find the matching existing nested XR in observed resources (if it exists)
+		// Match by composition-resource-name annotation to find the correct existing resource
+		var existingNestedXR *un.Unstructured
+		compositionResourceName := nestedXR.GetAnnotations()["crossplane.io/composition-resource-name"]
+		if compositionResourceName != "" {
+			for _, obs := range observedResources {
+				obsUnstructured := &un.Unstructured{Object: obs.UnstructuredContent()}
+				obsCompResName := obsUnstructured.GetAnnotations()["crossplane.io/composition-resource-name"]
+
+				// Match by composition-resource-name annotation and kind
+				if obsCompResName == compositionResourceName && obsUnstructured.GetKind() == nestedXR.GetKind() {
+					existingNestedXR = obsUnstructured
+					p.config.Logger.Debug("Found existing nested XR in cluster",
+						"nestedXR", nestedResourceID,
+						"existingName", existingNestedXR.GetName(),
+						"compositionResourceName", compositionResourceName)
+					break
+				}
+			}
+		}
+
+		// If we found an existing nested XR, preserve its identity (name, composite label)
+		// This ensures its managed resources can be matched correctly
+		if existingNestedXR != nil {
+			// Preserve the actual cluster name
+			nestedXR.SetName(existingNestedXR.GetName())
+			nestedXR.SetGenerateName(existingNestedXR.GetGenerateName())
+
+			// Preserve the composite label so child resources get matched correctly
+			if labels := existingNestedXR.GetLabels(); labels != nil {
+				if compositeLabel, exists := labels["crossplane.io/composite"]; exists {
+					nestedXRLabels := nestedXR.GetLabels()
+					if nestedXRLabels == nil {
+						nestedXRLabels = make(map[string]string)
+					}
+					nestedXRLabels["crossplane.io/composite"] = compositeLabel
+					nestedXR.SetLabels(nestedXRLabels)
+
+					p.config.Logger.Debug("Preserved nested XR identity",
+						"nestedXR", nestedResourceID,
+						"preservedName", nestedXR.GetName(),
+						"preservedCompositeLabel", compositeLabel)
+				}
+			}
+		}
+
 		// Recursively process this nested XR
-		nestedDiffs, err := p.DiffSingleResource(ctx, un, compositionProvider)
+		nestedDiffs, err := p.DiffSingleResource(ctx, nestedXR, compositionProvider)
 		if err != nil {
 			// Check if the error is due to missing composition
 			// Note: It's valid to have an XRD in Crossplane without a composition attached to it.
@@ -376,7 +438,7 @@ func (p *DefaultDiffProcessor) ProcessNestedXRs(
 				p.config.Logger.Info("Skipping nested XR processing due to missing composition",
 					"nestedXR", nestedResourceID,
 					"parentXR", parentResourceID,
-					"gvk", un.GroupVersionKind().String())
+					"gvk", nestedXR.GroupVersionKind().String())
 				// Continue processing other nested XRs
 				continue
 			}
