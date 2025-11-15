@@ -324,6 +324,47 @@ func (p *DefaultDiffProcessor) DiffSingleResource(ctx context.Context, res *un.U
 // ProcessNestedXRs recursively processes composed resources that are themselves XRs.
 // It checks each composed resource to see if it's an XR, and if so, processes it through
 // its own composition pipeline to get the full tree of diffs.
+// findExistingNestedXR locates an existing nested XR in the observed resources by matching
+// the composition-resource-name annotation and kind.
+func findExistingNestedXR(nestedXR *un.Unstructured, observedResources []cpd.Unstructured) *un.Unstructured {
+	compositionResourceName := nestedXR.GetAnnotations()["crossplane.io/composition-resource-name"]
+	if compositionResourceName == "" {
+		return nil
+	}
+
+	for _, obs := range observedResources {
+		obsUnstructured := &un.Unstructured{Object: obs.UnstructuredContent()}
+		obsCompResName := obsUnstructured.GetAnnotations()["crossplane.io/composition-resource-name"]
+
+		// Match by composition-resource-name annotation and kind
+		if obsCompResName == compositionResourceName && obsUnstructured.GetKind() == nestedXR.GetKind() {
+			return obsUnstructured
+		}
+	}
+
+	return nil
+}
+
+// preserveNestedXRIdentity updates the nested XR to preserve the identity of an existing XR
+// by copying its name, generateName, and composite label.
+func preserveNestedXRIdentity(nestedXR, existingNestedXR *un.Unstructured) {
+	// Preserve the actual cluster name
+	nestedXR.SetName(existingNestedXR.GetName())
+	nestedXR.SetGenerateName(existingNestedXR.GetGenerateName())
+
+	// Preserve the composite label so child resources get matched correctly
+	if labels := existingNestedXR.GetLabels(); labels != nil {
+		if compositeLabel, exists := labels["crossplane.io/composite"]; exists {
+			nestedXRLabels := nestedXR.GetLabels()
+			if nestedXRLabels == nil {
+				nestedXRLabels = make(map[string]string)
+			}
+			nestedXRLabels["crossplane.io/composite"] = compositeLabel
+			nestedXR.SetLabels(nestedXRLabels)
+		}
+	}
+}
+
 func (p *DefaultDiffProcessor) ProcessNestedXRs(
 	ctx context.Context,
 	composedResources []cpd.Unstructured,
@@ -382,48 +423,19 @@ func (p *DefaultDiffProcessor) ProcessNestedXRs(
 
 		// Find the matching existing nested XR in observed resources (if it exists)
 		// Match by composition-resource-name annotation to find the correct existing resource
-		var existingNestedXR *un.Unstructured
-		compositionResourceName := nestedXR.GetAnnotations()["crossplane.io/composition-resource-name"]
-		if compositionResourceName != "" {
-			for _, obs := range observedResources {
-				obsUnstructured := &un.Unstructured{Object: obs.UnstructuredContent()}
-				obsCompResName := obsUnstructured.GetAnnotations()["crossplane.io/composition-resource-name"]
-
-				// Match by composition-resource-name annotation and kind
-				if obsCompResName == compositionResourceName && obsUnstructured.GetKind() == nestedXR.GetKind() {
-					existingNestedXR = obsUnstructured
-					p.config.Logger.Debug("Found existing nested XR in cluster",
-						"nestedXR", nestedResourceID,
-						"existingName", existingNestedXR.GetName(),
-						"compositionResourceName", compositionResourceName)
-					break
-				}
-			}
-		}
-
-		// If we found an existing nested XR, preserve its identity (name, composite label)
-		// This ensures its managed resources can be matched correctly
+		existingNestedXR := findExistingNestedXR(nestedXR, observedResources)
 		if existingNestedXR != nil {
-			// Preserve the actual cluster name
-			nestedXR.SetName(existingNestedXR.GetName())
-			nestedXR.SetGenerateName(existingNestedXR.GetGenerateName())
+			p.config.Logger.Debug("Found existing nested XR in cluster",
+				"nestedXR", nestedResourceID,
+				"existingName", existingNestedXR.GetName(),
+				"compositionResourceName", nestedXR.GetAnnotations()["crossplane.io/composition-resource-name"])
 
-			// Preserve the composite label so child resources get matched correctly
-			if labels := existingNestedXR.GetLabels(); labels != nil {
-				if compositeLabel, exists := labels["crossplane.io/composite"]; exists {
-					nestedXRLabels := nestedXR.GetLabels()
-					if nestedXRLabels == nil {
-						nestedXRLabels = make(map[string]string)
-					}
-					nestedXRLabels["crossplane.io/composite"] = compositeLabel
-					nestedXR.SetLabels(nestedXRLabels)
+			// Preserve its identity (name, composite label) so its managed resources can be matched correctly
+			preserveNestedXRIdentity(nestedXR, existingNestedXR)
 
-					p.config.Logger.Debug("Preserved nested XR identity",
-						"nestedXR", nestedResourceID,
-						"preservedName", nestedXR.GetName(),
-						"preservedCompositeLabel", compositeLabel)
-				}
-			}
+			p.config.Logger.Debug("Preserved nested XR identity",
+				"nestedXR", nestedResourceID,
+				"preservedName", nestedXR.GetName())
 		}
 
 		// Recursively process this nested XR
