@@ -49,6 +49,7 @@ type DefaultDiffProcessor struct {
 	compClient           xp.CompositionClient
 	defClient            xp.DefinitionClient
 	schemaClient         k8.SchemaClient
+	resourceManager      ResourceManager
 	config               ProcessorConfig
 	functionProvider     FunctionProvider
 	schemaValidator      SchemaValidator
@@ -85,7 +86,7 @@ func NewDiffProcessor(k8cs k8.Clients, xpcs xp.Clients, opts ...ProcessorOption)
 	diffOpts := config.GetDiffOptions()
 
 	// Create components using factories
-	resourceManager := config.Factories.ResourceManager(k8cs.Resource, xpcs.Definition, config.Logger)
+	resourceManager := config.Factories.ResourceManager(k8cs.Resource, xpcs.Definition, xpcs.ResourceTree, config.Logger)
 	schemaValidator := config.Factories.SchemaValidator(k8cs.Schema, xpcs.Definition, config.Logger)
 	requirementsProvider := config.Factories.RequirementsProvider(k8cs.Resource, xpcs.Environment, config.RenderFunc, config.Logger)
 	diffCalculator := config.Factories.DiffCalculator(k8cs.Apply, xpcs.ResourceTree, resourceManager, config.Logger, diffOpts)
@@ -96,6 +97,7 @@ func NewDiffProcessor(k8cs k8.Clients, xpcs xp.Clients, opts ...ProcessorOption)
 		compClient:           xpcs.Composition,
 		defClient:            xpcs.Definition,
 		schemaClient:         k8cs.Schema,
+		resourceManager:      resourceManager,
 		config:               config,
 		functionProvider:     functionProvider,
 		schemaValidator:      schemaValidator,
@@ -201,20 +203,28 @@ func (p *DefaultDiffProcessor) PerformDiff(ctx context.Context, stdout io.Writer
 
 // DiffSingleResource handles one resource at a time and returns its diffs.
 // The compositionProvider function is called to obtain the composition to use for rendering.
+// This is the public method for top-level XR diffing, which enables removal detection.
 func (p *DefaultDiffProcessor) DiffSingleResource(ctx context.Context, res *un.Unstructured, compositionProvider types.CompositionProvider) (map[string]*dt.ResourceDiff, error) {
+	diffs, _, err := p.diffSingleResourceInternal(ctx, res, compositionProvider, true)
+	return diffs, err
+}
+
+// diffSingleResourceInternal is the internal implementation that allows control over removal detection.
+// detectRemovals should be true for top-level XRs and false for nested XRs (which don't own their composed resources).
+func (p *DefaultDiffProcessor) diffSingleResourceInternal(ctx context.Context, res *un.Unstructured, compositionProvider types.CompositionProvider, detectRemovals bool) (map[string]*dt.ResourceDiff, map[string]bool, error) {
 	resourceID := fmt.Sprintf("%s/%s", res.GetKind(), res.GetName())
 	p.config.Logger.Debug("Processing resource", "resource", resourceID)
 
 	xr, done, err := p.SanitizeXR(res, resourceID)
 	if done {
-		return nil, err
+		return nil, nil, err
 	}
 
 	// Get the composition using the provided function
 	comp, err := compositionProvider(ctx, res)
 	if err != nil {
 		p.config.Logger.Debug("Failed to get composition", "resource", resourceID, "error", err)
-		return nil, errors.Wrap(err, "cannot get composition")
+		return nil, nil, errors.Wrap(err, "cannot get composition")
 	}
 
 	p.config.Logger.Debug("Resource setup complete", "resource", resourceID, "composition", comp.GetName())
@@ -223,7 +233,7 @@ func (p *DefaultDiffProcessor) DiffSingleResource(ctx context.Context, res *un.U
 	fns, err := p.functionProvider.GetFunctionsForComposition(comp)
 	if err != nil {
 		p.config.Logger.Debug("Failed to get functions", "resource", resourceID, "error", err)
-		return nil, errors.Wrap(err, "cannot get functions for composition")
+		return nil, nil, errors.Wrap(err, "cannot get functions for composition")
 	}
 
 	// Note: Serialization mutex prevents concurrent Docker operations.
@@ -233,12 +243,33 @@ func (p *DefaultDiffProcessor) DiffSingleResource(ctx context.Context, res *un.U
 	err = p.applyXRDDefaults(ctx, xr, resourceID)
 	if err != nil {
 		p.config.Logger.Debug("Failed to apply XRD defaults", "resource", resourceID, "error", err)
-		return nil, errors.Wrap(err, "cannot apply XRD defaults")
+		return nil, nil, errors.Wrap(err, "cannot apply XRD defaults")
+	}
+
+	// Fetch the existing XR from the cluster to populate UID and other cluster-specific fields.
+	// This ensures that when composition functions set owner references on nested resources,
+	// they use the correct UID from the cluster, preventing duplicate owner reference errors.
+	existingXRFromCluster, isNew, err := p.resourceManager.FetchCurrentObject(ctx, nil, xr.GetUnstructured())
+	switch {
+	case err == nil && !isNew && existingXRFromCluster != nil:
+		// Preserve cluster-specific fields from the existing XR
+		xr.SetUID(existingXRFromCluster.GetUID())
+		xr.SetResourceVersion(existingXRFromCluster.GetResourceVersion())
+		p.config.Logger.Debug("Populated XR with cluster UID before rendering",
+			"resource", resourceID,
+			"uid", existingXRFromCluster.GetUID())
+	case isNew:
+		p.config.Logger.Debug("XR is new (will render without UID)", "resource", resourceID)
+	default:
+		// Error fetching
+		p.config.Logger.Debug("Error fetching XR from cluster (will render without UID)",
+			"resource", resourceID,
+			"error", err)
 	}
 
 	// Fetch observed resources for use in rendering (needed for getComposedResource template function)
 	// For new XRs that don't exist in the cluster yet, this will return an empty list
-	observedResources, err := p.diffCalculator.FetchObservedResources(ctx, xr)
+	observedResources, err := p.resourceManager.FetchObservedResources(ctx, xr)
 	if err != nil {
 		// Log the error but continue with empty observed resources
 		// This handles the case where the XR doesn't exist in the cluster yet
@@ -253,7 +284,7 @@ func (p *DefaultDiffProcessor) DiffSingleResource(ctx context.Context, res *un.U
 	desired, err := p.RenderWithRequirements(ctx, xr, comp, fns, resourceID, observedResources)
 	if err != nil {
 		p.config.Logger.Debug("Resource rendering failed", "resource", resourceID, "error", err)
-		return nil, errors.Wrap(err, "cannot render resources with requirements")
+		return nil, nil, errors.Wrap(err, "cannot render resources with requirements")
 	}
 
 	// Merge the result of the render together with the input XR
@@ -267,7 +298,7 @@ func (p *DefaultDiffProcessor) DiffSingleResource(ctx context.Context, res *un.U
 	)
 	if err != nil {
 		p.config.Logger.Debug("Failed to merge XR", "resource", resourceID, "error", err)
-		return nil, errors.Wrap(err, "cannot merge input XR with result of rendered XR")
+		return nil, nil, errors.Wrap(err, "cannot merge input XR with result of rendered XR")
 	}
 
 	// Clean up namespaces from cluster-scoped resources
@@ -277,16 +308,16 @@ func (p *DefaultDiffProcessor) DiffSingleResource(ctx context.Context, res *un.U
 	// for details on the upstream fix needed.
 	if err := p.removeNamespacesFromClusterScopedResources(ctx, desired.ComposedResources); err != nil {
 		p.config.Logger.Debug("Failed to clean up namespaces from cluster-scoped resources", "resource", resourceID, "error", err)
-		return nil, errors.Wrap(err, "cannot clean up namespaces from cluster-scoped resources")
+		return nil, nil, errors.Wrap(err, "cannot clean up namespaces from cluster-scoped resources")
 	}
 
 	// Validate the resources
 	if err := p.schemaValidator.ValidateResources(ctx, xrUnstructured, desired.ComposedResources); err != nil {
 		p.config.Logger.Debug("Resource validation failed", "resource", resourceID, "error", err)
-		return nil, errors.Wrap(err, "cannot validate resources")
+		return nil, nil, errors.Wrap(err, "cannot validate resources")
 	}
 
-	// Calculate diffs
+	// Calculate diffs (without removal detection)
 	p.config.Logger.Debug("Calculating diffs", "resource", resourceID)
 
 	// Clean the XR for diff calculation - remove managed fields that can cause apply issues
@@ -294,7 +325,7 @@ func (p *DefaultDiffProcessor) DiffSingleResource(ctx context.Context, res *un.U
 	cleanXR.SetManagedFields(nil)
 	cleanXR.SetResourceVersion("")
 
-	diffs, err := p.diffCalculator.CalculateDiffs(ctx, cleanXR, desired)
+	diffs, renderedResources, err := p.diffCalculator.CalculateNonRemovalDiffs(ctx, cleanXR, desired)
 	if err != nil {
 		// We don't fail completely if some diffs couldn't be calculated
 		p.config.Logger.Debug("Partial error calculating diffs", "resource", resourceID, "error", err)
@@ -303,14 +334,60 @@ func (p *DefaultDiffProcessor) DiffSingleResource(ctx context.Context, res *un.U
 	// Check for nested XRs in the composed resources and process them recursively
 	p.config.Logger.Debug("Checking for nested XRs", "resource", resourceID, "composedCount", len(desired.ComposedResources))
 
-	nestedDiffs, err := p.ProcessNestedXRs(ctx, desired.ComposedResources, compositionProvider, resourceID, xr, 1)
+	// Extract the existing XR from the cluster (if it exists) to pass to ProcessNestedXRs
+	// This is needed because ProcessNestedXRs fetches observed resources using the parent XR's UID,
+	// which is only available on the existing cluster XR, not the modified XR from the input file.
+	var existingXR *cmp.Unstructured
+
+	xrDiffKey := fmt.Sprintf("%s/%s/%s", xr.GetAPIVersion(), xr.GetKind(), xr.GetName())
+	if xrDiff, ok := diffs[xrDiffKey]; ok && xrDiff.Current != nil {
+		// Convert from unstructured.Unstructured to composite.Unstructured
+		existingXR = cmp.New()
+
+		err := runtime.DefaultUnstructuredConverter.FromUnstructured(xrDiff.Current.Object, existingXR)
+		if err != nil {
+			p.config.Logger.Debug("Failed to convert existing XR to composite unstructured",
+				"resource", resourceID,
+				"error", err)
+			// Continue with nil existingXR - ProcessNestedXRs will handle this case
+		}
+	}
+
+	nestedDiffs, nestedRenderedResources, err := p.ProcessNestedXRs(ctx, desired.ComposedResources, compositionProvider, resourceID, existingXR, 1)
 	if err != nil {
 		p.config.Logger.Debug("Error processing nested XRs", "resource", resourceID, "error", err)
-		return nil, errors.Wrap(err, "cannot process nested XRs")
+		return nil, nil, errors.Wrap(err, "cannot process nested XRs")
 	}
+
+	p.config.Logger.Debug("Before merging nested resources",
+		"resource", resourceID,
+		"renderedResourcesCount", len(renderedResources),
+		"nestedRenderedResourcesCount", len(nestedRenderedResources))
 
 	// Merge nested diffs into our result
 	maps.Copy(diffs, nestedDiffs)
+
+	// Merge nested rendered resources into our tracking map
+	// This ensures that resources from nested XRs (including unchanged ones) are not flagged as removed
+	maps.Copy(renderedResources, nestedRenderedResources)
+
+	p.config.Logger.Debug("After merging nested resources",
+		"resource", resourceID,
+		"renderedResourcesCount", len(renderedResources))
+
+	// Now detect removals if requested (only for top-level XRs)
+	// This must happen after nested XR processing to avoid false positives
+	if detectRemovals && existingXR != nil {
+		p.config.Logger.Debug("Detecting removed resources", "resource", resourceID, "renderedCount", len(renderedResources))
+
+		removedDiffs, err := p.diffCalculator.DetectRemovedResources(ctx, existingXR.GetUnstructured(), renderedResources)
+		if err != nil {
+			p.config.Logger.Debug("Error detecting removed resources (continuing)", "resource", resourceID, "error", err)
+		} else if len(removedDiffs) > 0 {
+			maps.Copy(diffs, removedDiffs)
+			p.config.Logger.Debug("Found removed resources", "resource", resourceID, "removedCount", len(removedDiffs))
+		}
+	}
 
 	p.config.Logger.Debug("Resource processing complete",
 		"resource", resourceID,
@@ -318,7 +395,7 @@ func (p *DefaultDiffProcessor) DiffSingleResource(ctx context.Context, res *un.U
 		"nestedDiffCount", len(nestedDiffs),
 		"hasErrors", err != nil)
 
-	return diffs, err
+	return diffs, renderedResources, err
 }
 
 // ProcessNestedXRs recursively processes composed resources that are themselves XRs.
@@ -346,11 +423,12 @@ func findExistingNestedXR(nestedXR *un.Unstructured, observedResources []cpd.Uns
 }
 
 // preserveNestedXRIdentity updates the nested XR to preserve the identity of an existing XR
-// by copying its name, generateName, and composite label.
+// by copying its name, generateName, UID, and composite label.
 func preserveNestedXRIdentity(nestedXR, existingNestedXR *un.Unstructured) {
-	// Preserve the actual cluster name
+	// Preserve the actual cluster name and UID
 	nestedXR.SetName(existingNestedXR.GetName())
 	nestedXR.SetGenerateName(existingNestedXR.GetGenerateName())
+	nestedXR.SetUID(existingNestedXR.GetUID())
 
 	// Preserve the composite label so child resources get matched correctly
 	if labels := existingNestedXR.GetLabels(); labels != nil {
@@ -377,14 +455,14 @@ func (p *DefaultDiffProcessor) ProcessNestedXRs(
 	parentResourceID string,
 	parentXR *cmp.Unstructured,
 	depth int,
-) (map[string]*dt.ResourceDiff, error) {
+) (map[string]*dt.ResourceDiff, map[string]bool, error) {
 	if depth > p.config.MaxNestedDepth {
 		p.config.Logger.Debug("Maximum nesting depth exceeded",
 			"parentResource", parentResourceID,
 			"depth", depth,
 			"maxDepth", p.config.MaxNestedDepth)
 
-		return nil, errors.New("maximum nesting depth exceeded")
+		return nil, nil, errors.New("maximum nesting depth exceeded")
 	}
 
 	p.config.Logger.Debug("Processing nested XRs",
@@ -397,7 +475,7 @@ func (p *DefaultDiffProcessor) ProcessNestedXRs(
 	var observedResources []cpd.Unstructured
 
 	if parentXR != nil {
-		obs, err := p.diffCalculator.FetchObservedResources(ctx, parentXR)
+		obs, err := p.resourceManager.FetchObservedResources(ctx, parentXR)
 		if err != nil {
 			// Log but continue - nested XRs without existing cluster state will show as new (with "(generated)")
 			p.config.Logger.Debug("Could not fetch observed resources for parent XR (continuing)",
@@ -409,6 +487,7 @@ func (p *DefaultDiffProcessor) ProcessNestedXRs(
 	}
 
 	allDiffs := make(map[string]*dt.ResourceDiff)
+	allRenderedResources := make(map[string]bool)
 
 	for _, composed := range composedResources {
 		nestedXR := &un.Unstructured{Object: composed.UnstructuredContent()}
@@ -445,7 +524,9 @@ func (p *DefaultDiffProcessor) ProcessNestedXRs(
 		}
 
 		// Recursively process this nested XR
-		nestedDiffs, err := p.DiffSingleResource(ctx, nestedXR, compositionProvider)
+		// Use detectRemovals=false for nested XRs since they don't own their composed resources
+		// (resources are owned by the top-level parent XR in Crossplane's ownership model)
+		nestedDiffs, nestedRenderedResources, err := p.diffSingleResourceInternal(ctx, nestedXR, compositionProvider, false)
 		if err != nil {
 			// Check if the error is due to missing composition
 			// Note: It's valid to have an XRD in Crossplane without a composition attached to it.
@@ -467,23 +548,28 @@ func (p *DefaultDiffProcessor) ProcessNestedXRs(
 				"parentXR", parentResourceID,
 				"error", err)
 
-			return nil, errors.Wrapf(err, "cannot process nested XR %s", nestedResourceID)
+			return nil, nil, errors.Wrapf(err, "cannot process nested XR %s", nestedResourceID)
 		}
 
 		// Merge diffs from nested XR
 		maps.Copy(allDiffs, nestedDiffs)
+		// Merge rendered resources from nested XR
+		maps.Copy(allRenderedResources, nestedRenderedResources)
 
 		p.config.Logger.Debug("Nested XR processed successfully",
 			"nestedXR", nestedResourceID,
-			"diffCount", len(nestedDiffs))
+			"diffCount", len(nestedDiffs),
+			"nestedRenderedResourcesCount", len(nestedRenderedResources),
+			"allRenderedResourcesCount", len(allRenderedResources))
 	}
 
 	p.config.Logger.Debug("Finished processing nested XRs",
 		"parentResource", parentResourceID,
 		"totalNestedDiffs", len(allDiffs),
+		"totalRenderedResourcesCount", len(allRenderedResources),
 		"depth", depth)
 
-	return allDiffs, nil
+	return allDiffs, allRenderedResources, nil
 }
 
 // SanitizeXR makes an XR into a valid unstructured object that we can use in a dry-run apply.

@@ -16,6 +16,10 @@ import (
 
 	"github.com/crossplane/crossplane-runtime/v2/pkg/errors"
 	"github.com/crossplane/crossplane-runtime/v2/pkg/logging"
+	cpd "github.com/crossplane/crossplane-runtime/v2/pkg/resource/unstructured/composed"
+	cmp "github.com/crossplane/crossplane-runtime/v2/pkg/resource/unstructured/composite"
+
+	"github.com/crossplane/crossplane/v2/cmd/crank/common/resource"
 )
 
 // ResourceManager handles resource-related operations like fetching, updating owner refs,
@@ -26,21 +30,26 @@ type ResourceManager interface {
 
 	// UpdateOwnerRefs ensures all OwnerReferences have valid UIDs
 	UpdateOwnerRefs(ctx context.Context, parent *un.Unstructured, child *un.Unstructured)
+
+	// FetchObservedResources fetches the observed composed resources for the given XR
+	FetchObservedResources(ctx context.Context, xr *cmp.Unstructured) ([]cpd.Unstructured, error)
 }
 
 // DefaultResourceManager implements ResourceManager interface.
 type DefaultResourceManager struct {
-	client    k8.ResourceClient
-	defClient xp.DefinitionClient
-	logger    logging.Logger
+	client     k8.ResourceClient
+	defClient  xp.DefinitionClient
+	treeClient xp.ResourceTreeClient
+	logger     logging.Logger
 }
 
 // NewResourceManager creates a new DefaultResourceManager.
-func NewResourceManager(client k8.ResourceClient, defClient xp.DefinitionClient, logger logging.Logger) ResourceManager {
+func NewResourceManager(client k8.ResourceClient, defClient xp.DefinitionClient, treeClient xp.ResourceTreeClient, logger logging.Logger) ResourceManager {
 	return &DefaultResourceManager{
-		client:    client,
-		defClient: defClient,
-		logger:    logger,
+		client:     client,
+		defClient:  defClient,
+		treeClient: treeClient,
+		logger:     logger,
 	}
 }
 
@@ -517,4 +526,64 @@ func (m *DefaultResourceManager) updateCompositeOwnerLabel(ctx context.Context, 
 	}
 
 	child.SetLabels(labels)
+}
+
+// FetchObservedResources fetches the observed composed resources for the given XR.
+// Returns a flat slice of composed resources suitable for render.Inputs.ObservedResources.
+func (m *DefaultResourceManager) FetchObservedResources(ctx context.Context, xr *cmp.Unstructured) ([]cpd.Unstructured, error) {
+	m.logger.Debug("Fetching observed resources for XR",
+		"xr_kind", xr.GetKind(),
+		"xr_name", xr.GetName())
+
+	// Get the resource tree from the cluster
+	tree, err := m.treeClient.GetResourceTree(ctx, &xr.Unstructured)
+	if err != nil {
+		m.logger.Debug("Failed to get resource tree for XR",
+			"xr", xr.GetName(),
+			"error", err)
+
+		return nil, errors.Wrap(err, "cannot get resource tree")
+	}
+
+	// Extract composed resources from the tree
+	observed := extractComposedResourcesFromTree(tree)
+
+	m.logger.Debug("Fetched observed composed resources",
+		"xr", xr.GetName(),
+		"count", len(observed))
+
+	return observed, nil
+}
+
+// extractComposedResourcesFromTree recursively extracts all composed resources from a resource tree.
+// It returns a flat slice of composed resources, suitable for render.Inputs.ObservedResources.
+// Only includes resources with the crossplane.io/composition-resource-name annotation.
+func extractComposedResourcesFromTree(tree *resource.Resource) []cpd.Unstructured {
+	var resources []cpd.Unstructured
+
+	// Recursively collect composed resources from the tree
+	var collectResources func(node *resource.Resource)
+
+	collectResources = func(node *resource.Resource) {
+		// Only include resources that have the composition-resource-name annotation
+		// (this filters out the root XR and non-composed resources)
+		if _, hasAnno := node.Unstructured.GetAnnotations()["crossplane.io/composition-resource-name"]; hasAnno {
+			// Convert to cpd.Unstructured (composed resource)
+			resources = append(resources, cpd.Unstructured{
+				Unstructured: node.Unstructured,
+			})
+		}
+
+		// Recursively process children
+		for _, child := range node.Children {
+			collectResources(child)
+		}
+	}
+
+	// Start from root's children to avoid including the XR itself
+	for _, child := range tree.Children {
+		collectResources(child)
+	}
+
+	return resources
 }

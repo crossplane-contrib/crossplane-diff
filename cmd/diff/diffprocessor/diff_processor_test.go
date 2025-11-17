@@ -415,8 +415,9 @@ func TestDefaultDiffProcessor_PerformDiff(t *testing.T) {
 				// Override the diff calculator factory to return actual diffs
 				WithDiffCalculatorFactory(func(k8.ApplyClient, xp.ResourceTreeClient, ResourceManager, logging.Logger, renderer.DiffOptions) DiffCalculator {
 					return &tu.MockDiffCalculator{
-						CalculateDiffsFn: func(context.Context, *cmp.Unstructured, render.Outputs) (map[string]*dt.ResourceDiff, error) {
+						CalculateNonRemovalDiffsFn: func(context.Context, *cmp.Unstructured, render.Outputs) (map[string]*dt.ResourceDiff, map[string]bool, error) {
 							diffs := make(map[string]*dt.ResourceDiff)
+							rendered := make(map[string]bool)
 
 							// Add a modified diff (not just equal)
 							lineDiffs := []diffmatchpatch.Diff{
@@ -424,7 +425,8 @@ func TestDefaultDiffProcessor_PerformDiff(t *testing.T) {
 								{Type: diffmatchpatch.DiffInsert, Text: "  field: new-value"},
 							}
 
-							diffs["example.org/v1/XR1/test-xr"] = &dt.ResourceDiff{
+							diffKey1 := "example.org/v1/XR1/test-xr"
+							diffs[diffKey1] = &dt.ResourceDiff{
 								Gvk:          schema.GroupVersionKind{Group: "example.org", Version: "v1", Kind: "XR1"},
 								ResourceName: "test-xr",
 								DiffType:     dt.DiffTypeModified,
@@ -432,9 +434,11 @@ func TestDefaultDiffProcessor_PerformDiff(t *testing.T) {
 								Current:      resource1, // Set current for completeness
 								Desired:      resource1, // Set desired for completeness
 							}
+							rendered[diffKey1] = true
 
 							// Add a composed resource diff that's also modified
-							diffs["example.org/v1/ComposedResource/resource-a"] = &dt.ResourceDiff{
+							diffKey2 := "example.org/v1/ComposedResource/resource-a"
+							diffs[diffKey2] = &dt.ResourceDiff{
 								Gvk:          schema.GroupVersionKind{Group: "example.org", Version: "v1", Kind: "ComposedResource"},
 								ResourceName: "resource-a",
 								DiffType:     dt.DiffTypeModified,
@@ -442,8 +446,9 @@ func TestDefaultDiffProcessor_PerformDiff(t *testing.T) {
 								Current:      composedResource,
 								Desired:      composedResource,
 							}
+							rendered[diffKey2] = true
 
-							return diffs, nil
+							return diffs, rendered, nil
 						},
 					}
 				}),
@@ -1548,6 +1553,7 @@ func TestDefaultDiffProcessor_ProcessNestedXRs(t *testing.T) {
 					Environment: tu.NewMockEnvironmentClient().
 						WithNoEnvironmentConfigs().
 						Build(),
+					ResourceTree: tu.NewMockResourceTreeClient().Build(),
 				}
 
 				// Create a child CRD with proper schema for childField
@@ -1643,6 +1649,7 @@ func TestDefaultDiffProcessor_ProcessNestedXRs(t *testing.T) {
 					Environment: tu.NewMockEnvironmentClient().
 						WithNoEnvironmentConfigs().
 						Build(),
+					ResourceTree: tu.NewMockResourceTreeClient().Build(),
 				}
 
 				// Create a child CRD with proper schema for childField
@@ -1813,9 +1820,10 @@ func TestDefaultDiffProcessor_ProcessNestedXRs(t *testing.T) {
 				}),
 				WithDiffCalculatorFactory(func(k8.ApplyClient, xp.ResourceTreeClient, ResourceManager, logging.Logger, renderer.DiffOptions) DiffCalculator {
 					return &tu.MockDiffCalculator{
-						CalculateDiffsFn: func(_ context.Context, xr *cmp.Unstructured, _ render.Outputs) (map[string]*dt.ResourceDiff, error) {
+						CalculateNonRemovalDiffsFn: func(_ context.Context, xr *cmp.Unstructured, _ render.Outputs) (map[string]*dt.ResourceDiff, map[string]bool, error) {
 							// Return a simple diff for the XR to make the test pass
 							diffs := make(map[string]*dt.ResourceDiff)
+							rendered := make(map[string]bool)
 							gvk := xr.GroupVersionKind()
 							resourceID := gvk.Kind + "/" + xr.GetName()
 							diffs[resourceID] = &dt.ResourceDiff{
@@ -1823,8 +1831,9 @@ func TestDefaultDiffProcessor_ProcessNestedXRs(t *testing.T) {
 								ResourceName: xr.GetName(),
 								DiffType:     dt.DiffTypeAdded,
 							}
+							rendered[resourceID] = true
 
-							return diffs, nil
+							return diffs, rendered, nil
 						},
 					}
 				}),
@@ -1843,7 +1852,7 @@ func TestDefaultDiffProcessor_ProcessNestedXRs(t *testing.T) {
 				var parentXR *cmp.Unstructured
 
 				// Call the method under test
-				diffs, err := processor.ProcessNestedXRs(ctx, tt.composedResources, compositionProvider, tt.parentResourceID, parentXR, tt.depth)
+				diffs, _, err := processor.ProcessNestedXRs(ctx, tt.composedResources, compositionProvider, tt.parentResourceID, parentXR, tt.depth)
 
 				// Check error
 				if (err != nil) != tt.wantErr {

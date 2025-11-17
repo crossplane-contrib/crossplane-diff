@@ -746,10 +746,10 @@ func (m *MockResourceTreeClient) GetResourceTree(ctx context.Context, root *un.U
 
 // MockDiffCalculator is a mock implementation of DiffCalculator for testing.
 type MockDiffCalculator struct {
-	CalculateDiffFn                 func(context.Context, *un.Unstructured, *un.Unstructured) (*dt.ResourceDiff, error)
-	CalculateDiffsFn                func(context.Context, *cmp.Unstructured, render.Outputs) (map[string]*dt.ResourceDiff, error)
-	CalculateRemovedResourceDiffsFn func(context.Context, *un.Unstructured, map[string]bool) (map[string]*dt.ResourceDiff, error)
-	FetchObservedResourcesFn        func(context.Context, *cmp.Unstructured) ([]cpd.Unstructured, error)
+	CalculateDiffFn            func(context.Context, *un.Unstructured, *un.Unstructured) (*dt.ResourceDiff, error)
+	CalculateDiffsFn           func(context.Context, *cmp.Unstructured, render.Outputs) (map[string]*dt.ResourceDiff, error)
+	CalculateNonRemovalDiffsFn func(context.Context, *cmp.Unstructured, render.Outputs) (map[string]*dt.ResourceDiff, map[string]bool, error)
+	DetectRemovedResourcesFn   func(context.Context, *un.Unstructured, map[string]bool) (map[string]*dt.ResourceDiff, error)
 }
 
 // CalculateDiff implements DiffCalculator.
@@ -770,19 +770,19 @@ func (m *MockDiffCalculator) CalculateDiffs(ctx context.Context, xr *cmp.Unstruc
 	return nil, nil
 }
 
-// CalculateRemovedResourceDiffs implements DiffCalculator.
-func (m *MockDiffCalculator) CalculateRemovedResourceDiffs(ctx context.Context, xr *un.Unstructured, renderedResources map[string]bool) (map[string]*dt.ResourceDiff, error) {
-	if m.CalculateRemovedResourceDiffsFn != nil {
-		return m.CalculateRemovedResourceDiffsFn(ctx, xr, renderedResources)
+// CalculateNonRemovalDiffs implements DiffCalculator.
+func (m *MockDiffCalculator) CalculateNonRemovalDiffs(ctx context.Context, xr *cmp.Unstructured, desired render.Outputs) (map[string]*dt.ResourceDiff, map[string]bool, error) {
+	if m.CalculateNonRemovalDiffsFn != nil {
+		return m.CalculateNonRemovalDiffsFn(ctx, xr, desired)
 	}
 
-	return nil, nil
+	return nil, nil, nil
 }
 
-// FetchObservedResources implements DiffCalculator.
-func (m *MockDiffCalculator) FetchObservedResources(ctx context.Context, xr *cmp.Unstructured) ([]cpd.Unstructured, error) {
-	if m.FetchObservedResourcesFn != nil {
-		return m.FetchObservedResourcesFn(ctx, xr)
+// DetectRemovedResources implements DiffCalculator.
+func (m *MockDiffCalculator) DetectRemovedResources(ctx context.Context, xr *un.Unstructured, renderedResources map[string]bool) (map[string]*dt.ResourceDiff, error) {
+	if m.DetectRemovedResourcesFn != nil {
+		return m.DetectRemovedResourcesFn(ctx, xr, renderedResources)
 	}
 
 	return nil, nil
