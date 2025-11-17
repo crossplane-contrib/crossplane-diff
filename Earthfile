@@ -308,7 +308,7 @@ kubectl-setup:
   ARG NATIVEPLATFORM
   ARG TARGETOS
   ARG TARGETARCH
-  FROM --platform=${NATIVEPLATFORM} curlimages/curl:8.16.0
+  FROM --platform=${NATIVEPLATFORM} curlimages/curl:8.17.0
   RUN curl -fsSL https://dl.k8s.io/${KUBECTL_VERSION}/kubernetes-client-${TARGETOS}-${TARGETARCH}.tar.gz|tar zx
   SAVE ARTIFACT kubernetes/client/bin/kubectl
 
@@ -318,7 +318,7 @@ kind-setup:
   ARG NATIVEPLATFORM
   ARG TARGETOS
   ARG TARGETARCH
-  FROM --platform=${NATIVEPLATFORM} curlimages/curl:8.16.0
+  FROM --platform=${NATIVEPLATFORM} curlimages/curl:8.17.0
   RUN curl -fsSLo kind https://github.com/kubernetes-sigs/kind/releases/download/${KIND_VERSION}/kind-${TARGETOS}-${TARGETARCH}&&chmod +x kind
   SAVE ARTIFACT kind
 
@@ -328,7 +328,7 @@ gotestsum-setup:
   ARG NATIVEPLATFORM
   ARG TARGETOS
   ARG TARGETARCH
-  FROM --platform=${NATIVEPLATFORM} curlimages/curl:8.16.0
+  FROM --platform=${NATIVEPLATFORM} curlimages/curl:8.17.0
   RUN curl -fsSL https://github.com/gotestyourself/gotestsum/releases/download/v${GOTESTSUM_VERSION}/gotestsum_${GOTESTSUM_VERSION}_${TARGETOS}_${TARGETARCH}.tar.gz|tar zx>gotestsum
   SAVE ARTIFACT gotestsum
 
@@ -338,7 +338,7 @@ helm-docs-setup:
   ARG NATIVEPLATFORM
   ARG TARGETOS
   ARG TARGETARCH
-  FROM --platform=${NATIVEPLATFORM} curlimages/curl:8.16.0
+  FROM --platform=${NATIVEPLATFORM} curlimages/curl:8.17.0
   IF [ "${TARGETARCH}" = "amd64" ]
     LET ARCH=x86_64
   ELSE
@@ -353,7 +353,7 @@ helm-setup:
   ARG NATIVEPLATFORM
   ARG TARGETOS
   ARG TARGETARCH
-  FROM --platform=${NATIVEPLATFORM} curlimages/curl:8.16.0
+  FROM --platform=${NATIVEPLATFORM} curlimages/curl:8.17.0
   RUN curl -fsSL https://get.helm.sh/helm-${HELM_VERSION}-${TARGETOS}-${TARGETARCH}.tar.gz|tar zx --strip-components=1
   SAVE ARTIFACT helm
 
@@ -385,7 +385,7 @@ ci-artifacts:
 # ci-codeql-setup sets up CodeQL for the ci-codeql target.
 ci-codeql-setup:
   ARG CODEQL_VERSION=2.23.5
-  FROM curlimages/curl:8.16.0
+  FROM curlimages/curl:8.17.0
   RUN curl -fsSL https://github.com/github/codeql-action/releases/download/codeql-bundle-v${CODEQL_VERSION}/codeql-bundle-linux64.tar.gz|tar zx
   SAVE ARTIFACT codeql
 
