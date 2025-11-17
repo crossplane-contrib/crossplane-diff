@@ -731,7 +731,7 @@ func TestDefaultDiffCalculator_CalculateDiffs(t *testing.T) {
 	}
 }
 
-func TestDefaultDiffCalculator_DetectRemovedResources(t *testing.T) {
+func TestDefaultDiffCalculator_CalculateRemovedResourceDiffs(t *testing.T) {
 	ctx := t.Context()
 
 	// Create a test XR
@@ -844,16 +844,16 @@ func TestDefaultDiffCalculator_DetectRemovedResources(t *testing.T) {
 			// Setup mocks
 			applyClient, resourceTreeClient, resourceManager := tt.setupMocks(t)
 
-			// Create a diff calculator with the mocks (concrete type for testing internal method)
-			calculator := &DefaultDiffCalculator{
-				applyClient:     applyClient,
-				treeClient:      resourceTreeClient,
-				resourceManager: resourceManager,
-				logger:          logger,
-				diffOptions:     renderer.DefaultDiffOptions(),
-			}
+			// Create a diff calculator with the mocks
+			calculator := NewDiffCalculator(
+				applyClient,
+				resourceTreeClient,
+				resourceManager,
+				logger,
+				renderer.DefaultDiffOptions(),
+			)
 
-			// Call the internal method under test
+			// Call the method under test
 			diffs, err := calculator.CalculateRemovedResourceDiffs(ctx, xr, tt.renderedResources)
 
 			if tt.wantErr {

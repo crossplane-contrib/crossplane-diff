@@ -1796,8 +1796,8 @@ func TestDefaultDiffProcessor_ProcessNestedXRs(t *testing.T) {
 			},
 			parentResourceID: "XParentResource/parent-xr-abc",
 			depth:            1,
-			// TODO: This will currently fail because the nested XR gets "(generated)" name
-			// After fix, should NOT show managed resources as removed/added
+			// With identity preservation fix, nested XR maintains its cluster identity
+			// so managed resources show as modified rather than removed/added
 			wantDiffCount: 1, // Just the nested XR diff, not its managed resources as separate remove/add
 			wantErr:       false,
 		},

@@ -2,12 +2,12 @@ package diffprocessor
 
 import (
 	"context"
-	"fmt"
 	"strings"
 	"sync"
 
 	xp "github.com/crossplane-contrib/crossplane-diff/cmd/diff/client/crossplane"
 	k8 "github.com/crossplane-contrib/crossplane-diff/cmd/diff/client/kubernetes"
+	dt "github.com/crossplane-contrib/crossplane-diff/cmd/diff/renderer/types"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	un "k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -76,7 +76,7 @@ func (p *RequirementsProvider) cacheResources(resources []*un.Unstructured) {
 	defer p.cacheMutex.Unlock()
 
 	for _, res := range resources {
-		key := fmt.Sprintf("%s/%s/%s", res.GetAPIVersion(), res.GetKind(), res.GetName())
+		key := dt.MakeDiffKey(res.GetAPIVersion(), res.GetKind(), res.GetName())
 		p.resourceCache[key] = res
 	}
 }
@@ -86,7 +86,7 @@ func (p *RequirementsProvider) getCachedResource(apiVersion, kind, name string) 
 	p.cacheMutex.RLock()
 	defer p.cacheMutex.RUnlock()
 
-	key := fmt.Sprintf("%s/%s/%s", apiVersion, kind, name)
+	key := dt.MakeDiffKey(apiVersion, kind, name)
 
 	return p.resourceCache[key]
 }

@@ -339,7 +339,7 @@ func (p *DefaultDiffProcessor) diffSingleResourceInternal(ctx context.Context, r
 	// which is only available on the existing cluster XR, not the modified XR from the input file.
 	var existingXR *cmp.Unstructured
 
-	xrDiffKey := fmt.Sprintf("%s/%s/%s", xr.GetAPIVersion(), xr.GetKind(), xr.GetName())
+	xrDiffKey := dt.MakeDiffKey(xr.GetAPIVersion(), xr.GetKind(), xr.GetName())
 	if xrDiff, ok := diffs[xrDiffKey]; ok && xrDiff.Current != nil {
 		// Convert from unstructured.Unstructured to composite.Unstructured
 		existingXR = cmp.New()
@@ -380,7 +380,7 @@ func (p *DefaultDiffProcessor) diffSingleResourceInternal(ctx context.Context, r
 	if detectRemovals && existingXR != nil {
 		p.config.Logger.Debug("Detecting removed resources", "resource", resourceID, "renderedCount", len(renderedResources))
 
-		removedDiffs, err := p.diffCalculator.DetectRemovedResources(ctx, existingXR.GetUnstructured(), renderedResources)
+		removedDiffs, err := p.diffCalculator.CalculateRemovedResourceDiffs(ctx, existingXR.GetUnstructured(), renderedResources)
 		if err != nil {
 			p.config.Logger.Debug("Error detecting removed resources (continuing)", "resource", resourceID, "error", err)
 		} else if len(removedDiffs) > 0 {
@@ -398,9 +398,6 @@ func (p *DefaultDiffProcessor) diffSingleResourceInternal(ctx context.Context, r
 	return diffs, renderedResources, err
 }
 
-// ProcessNestedXRs recursively processes composed resources that are themselves XRs.
-// It checks each composed resource to see if it's an XR, and if so, processes it through
-// its own composition pipeline to get the full tree of diffs.
 // findExistingNestedXR locates an existing nested XR in the observed resources by matching
 // the composition-resource-name annotation and kind.
 func findExistingNestedXR(nestedXR *un.Unstructured, observedResources []cpd.Unstructured) *un.Unstructured {
