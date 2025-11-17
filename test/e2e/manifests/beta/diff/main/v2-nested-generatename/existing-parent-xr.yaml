@@ -1,0 +1,10 @@
+apiVersion: nested.diff.example.org/v1alpha1
+kind: XParentNop
+metadata:
+  name: test-parent-generatename
+  namespace: default
+spec:
+  crossplane:
+    compositionRef:
+      name: parent-nop-composition-generatename
+  parentField: "existing-value"
