@@ -33,9 +33,9 @@ type DiffCalculator interface {
 	// Returns: (diffs map, rendered resource keys, error)
 	CalculateNonRemovalDiffs(ctx context.Context, xr *cmp.Unstructured, desired render.Outputs) (map[string]*dt.ResourceDiff, map[string]bool, error)
 
-	// DetectRemovedResources identifies resources that exist in the cluster but are not
+	// CalculateRemovedResourceDiffs identifies resources that exist in the cluster but are not
 	// in the rendered set. This is called after nested XR processing is complete.
-	DetectRemovedResources(ctx context.Context, xr *un.Unstructured, renderedResources map[string]bool) (map[string]*dt.ResourceDiff, error)
+	CalculateRemovedResourceDiffs(ctx context.Context, xr *un.Unstructured, renderedResources map[string]bool) (map[string]*dt.ResourceDiff, error)
 }
 
 // DefaultDiffCalculator implements the DiffCalculator interface.
@@ -231,23 +231,6 @@ func (c *DefaultDiffCalculator) CalculateNonRemovalDiffs(ctx context.Context, xr
 	return diffs, renderedResources, nil
 }
 
-// DetectRemovedResources identifies resources that exist in the cluster but are not in the rendered set.
-// This should be called after all nested XRs have been processed to avoid false positives.
-func (c *DefaultDiffCalculator) DetectRemovedResources(ctx context.Context, xr *un.Unstructured, renderedResources map[string]bool) (map[string]*dt.ResourceDiff, error) {
-	xrName := xr.GetName()
-	c.logger.Debug("Finding resources to be removed", "xr", xrName, "renderedCount", len(renderedResources))
-
-	removedDiffs, err := c.CalculateRemovedResourceDiffs(ctx, xr, renderedResources)
-	if err != nil {
-		c.logger.Debug("Error calculating removed resources", "error", err)
-		return nil, err
-	}
-
-	c.logger.Debug("Removal detection complete", "removedCount", len(removedDiffs), "xr", xrName)
-
-	return removedDiffs, nil
-}
-
 // CalculateDiffs computes all diffs including removals for the rendered resources.
 // This is the primary method that most code should use.
 func (c *DefaultDiffCalculator) CalculateDiffs(ctx context.Context, xr *cmp.Unstructured, desired render.Outputs) (map[string]*dt.ResourceDiff, error) {
@@ -258,7 +241,7 @@ func (c *DefaultDiffCalculator) CalculateDiffs(ctx context.Context, xr *cmp.Unst
 	}
 
 	// Then detect removed resources
-	removedDiffs, err := c.DetectRemovedResources(ctx, xr.GetUnstructured(), renderedResources)
+	removedDiffs, err := c.CalculateRemovedResourceDiffs(ctx, xr.GetUnstructured(), renderedResources)
 	if err != nil {
 		return nil, err
 	}

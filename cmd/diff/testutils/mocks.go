@@ -746,10 +746,10 @@ func (m *MockResourceTreeClient) GetResourceTree(ctx context.Context, root *un.U
 
 // MockDiffCalculator is a mock implementation of DiffCalculator for testing.
 type MockDiffCalculator struct {
-	CalculateDiffFn            func(context.Context, *un.Unstructured, *un.Unstructured) (*dt.ResourceDiff, error)
-	CalculateDiffsFn           func(context.Context, *cmp.Unstructured, render.Outputs) (map[string]*dt.ResourceDiff, error)
-	CalculateNonRemovalDiffsFn func(context.Context, *cmp.Unstructured, render.Outputs) (map[string]*dt.ResourceDiff, map[string]bool, error)
-	DetectRemovedResourcesFn   func(context.Context, *un.Unstructured, map[string]bool) (map[string]*dt.ResourceDiff, error)
+	CalculateDiffFn                 func(context.Context, *un.Unstructured, *un.Unstructured) (*dt.ResourceDiff, error)
+	CalculateDiffsFn                func(context.Context, *cmp.Unstructured, render.Outputs) (map[string]*dt.ResourceDiff, error)
+	CalculateNonRemovalDiffsFn      func(context.Context, *cmp.Unstructured, render.Outputs) (map[string]*dt.ResourceDiff, map[string]bool, error)
+	CalculateRemovedResourceDiffsFn func(context.Context, *un.Unstructured, map[string]bool) (map[string]*dt.ResourceDiff, error)
 }
 
 // CalculateDiff implements DiffCalculator.
@@ -779,10 +779,10 @@ func (m *MockDiffCalculator) CalculateNonRemovalDiffs(ctx context.Context, xr *c
 	return nil, nil, nil
 }
 
-// DetectRemovedResources implements DiffCalculator.
-func (m *MockDiffCalculator) DetectRemovedResources(ctx context.Context, xr *un.Unstructured, renderedResources map[string]bool) (map[string]*dt.ResourceDiff, error) {
-	if m.DetectRemovedResourcesFn != nil {
-		return m.DetectRemovedResourcesFn(ctx, xr, renderedResources)
+// CalculateRemovedResourceDiffs implements DiffCalculator.
+func (m *MockDiffCalculator) CalculateRemovedResourceDiffs(ctx context.Context, xr *un.Unstructured, renderedResources map[string]bool) (map[string]*dt.ResourceDiff, error) {
+	if m.CalculateRemovedResourceDiffsFn != nil {
+		return m.CalculateRemovedResourceDiffsFn(ctx, xr, renderedResources)
 	}
 
 	return nil, nil

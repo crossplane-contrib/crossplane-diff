@@ -171,6 +171,20 @@ cmd/diff/
 - Compares rendered resources against cluster state via server-side dry-run
 - Detects additions, modifications, and removals
 - Handles `generateName` by matching via labels/annotations (`crossplane.io/composition-resource-name`)
+- Uses two-phase approach to correctly handle nested XRs:
+  1. **Phase 1 - Non-removal diffs**: `CalculateNonRemovalDiffs` computes diffs for all rendered resources
+  2. **Phase 2 - Removal detection**: `CalculateRemovedResourceDiffs` identifies resources to be removed
+  - This separation is critical because nested XRs must be processed before detecting removals
+  - Nested XRs may render additional composed resources that shouldn't be marked as removals
+
+**Resource Management**
+- `ResourceManager` handles all resource fetching and cluster state operations
+- Key responsibilities:
+  - `FetchCurrentObject`: Retrieves existing resource from cluster (for identity preservation)
+  - `FetchObservedResources`: Fetches resource tree to find all composed resources (including nested)
+  - `UpdateOwnerReferences`: Updates owner references with dry-run annotations
+- Separation of concerns: `DiffCalculator` focuses on diff logic, `ResourceManager` handles cluster I/O
+- Identity preservation: Fetches existing nested XRs to maintain their cluster identity across renders
 
 ## Design Principles
 
