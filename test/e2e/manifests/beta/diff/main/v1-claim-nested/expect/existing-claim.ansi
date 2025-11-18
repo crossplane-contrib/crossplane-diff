@@ -1,30 +1,30 @@
---- ClusterNopResource/existing-parent-claim-gv76n-4a77f606e369
-[31m- apiVersion: nop.crossplane.io/v1alpha1[0m
-[31m- kind: ClusterNopResource[0m
-[31m- metadata:[0m
-[31m-   annotations:[0m
-[31m-     child-field: existing-parent-value[0m
-[31m-     crossplane.io/composition-resource-name: nop-resource[0m
-[31m-     crossplane.io/external-name: existing-parent-claim-gv76n-4a77f606e369[0m
-[31m-   finalizers:[0m
-[31m-   - finalizer.managedresource.crossplane.io[0m
-[31m-   generateName: existing-parent-claim-gv76n-[0m
-[31m-   labels:[0m
-[31m-     crossplane.io/claim-name: existing-parent-claim[0m
-[31m-     crossplane.io/claim-namespace: default[0m
-[31m-     crossplane.io/composite: existing-parent-claim-gv76n[0m
-[31m-   name: existing-parent-claim-gv76n-4a77f606e369[0m
-[31m- spec:[0m
-[31m-   deletionPolicy: Delete[0m
-[31m-   forProvider:[0m
-[31m-     conditionAfter:[0m
-[31m-     - conditionStatus: "True"[0m
-[31m-       conditionType: Ready[0m
-[31m-       time: 0s[0m
-[31m-   managementPolicies:[0m
-[31m-   - '*'[0m
-[31m-   providerConfigRef:[0m
-[31m-     name: default[0m
+--- ClusterNopResource/existing-parent-claim-XXXXX
+- apiVersion: nop.crossplane.io/v1alpha1
+- kind: ClusterNopResource
+- metadata:
+-   annotations:
+-     child-field: existing-parent-value
+-     crossplane.io/composition-resource-name: nop-resource
+-     crossplane.io/external-name: existing-parent-claim-XXXXX
+-   finalizers:
+-   - finalizer.managedresource.crossplane.io
+-   generateName: existing-parent-claim-XXXXX-
+-   labels:
+-     crossplane.io/claim-name: existing-parent-claim
+-     crossplane.io/claim-namespace: default
+-     crossplane.io/composite: existing-parent-claim-XXXXX
+-   name: existing-parent-claim-XXXXX
+- spec:
+-   deletionPolicy: Delete
+-   forProvider:
+-     conditionAfter:
+-     - conditionStatus: "True"
+-       conditionType: Ready
+-       time: 0s
+-   managementPolicies:
+-   - '*'
+-   providerConfigRef:
+-     name: default
 
 ---
 ~~~ ParentNopClaim/existing-parent-claim
@@ -33,8 +33,8 @@
   metadata:
     finalizers:
     - finalizer.apiextensions.crossplane.io
-[32m+   labels:[0m
-[32m+     new-label: added-value[0m
++   labels:
++     new-label: added-value
     name: existing-parent-claim
     namespace: default
   spec:
@@ -43,16 +43,16 @@
       name: parent-nop-claim-composition
     compositionRevisionRef:
       name: parent-nop-claim-composition-7c02fc0
-[31m-   parentField: existing-parent-value[0m
-[32m+   compositionUpdatePolicy: Automatic[0m
-[32m+   parentField: modified-parent-value[0m
+-   parentField: existing-parent-value
++   compositionUpdatePolicy: Automatic
++   parentField: modified-parent-value
     resourceRef:
       apiVersion: claimnested.diff.example.org/v1alpha1
       kind: XParentNopClaim
-      name: existing-parent-claim-gv76n
+      name: existing-parent-claim-XXXXX
 
 ---
-~~~ XChildNopClaim/existing-parent-claim-gv76n-0508b5688508
+~~~ XChildNopClaim/existing-parent-claim-XXXXX
   apiVersion: claimnested.diff.example.org/v1alpha1
   kind: XChildNopClaim
   metadata:
@@ -60,15 +60,15 @@
       crossplane.io/composition-resource-name: child-xr
     finalizers:
     - composite.apiextensions.crossplane.io
-    generateName: existing-parent-claim-gv76n-
+    generateName: existing-parent-claim-XXXXX-
     labels:
       crossplane.io/claim-name: existing-parent-claim
       crossplane.io/claim-namespace: default
-      crossplane.io/composite: existing-parent-claim-gv76n
-    name: existing-parent-claim-gv76n-0508b5688508
+      crossplane.io/composite: existing-parent-claim-XXXXX
+    name: existing-parent-claim-XXXXX
   spec:
-[31m-   childField: existing-parent-value[0m
-[32m+   childField: modified-parent-value[0m
+-   childField: existing-parent-value
++   childField: modified-parent-value
     compositionRef:
       name: child-nop-claim-composition
     compositionRevisionRef:

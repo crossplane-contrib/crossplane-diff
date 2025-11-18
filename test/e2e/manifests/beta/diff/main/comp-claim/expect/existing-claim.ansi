@@ -30,10 +30,10 @@
                     conditionStatus: "True"
                     time: 0s
                 fields:
-[31m-                 configData: {{ .observed.composite.resource.spec.coolField }}[0m
-[31m-                 resourceTier: basic[0m
-[32m+                 configData: updated-{{ .observed.composite.resource.spec.coolField }}[0m
-[32m+                 resourceTier: premium[0m
+-                 configData: {{ .observed.composite.resource.spec.coolField }}
+-                 resourceTier: basic
++                 configData: updated-{{ .observed.composite.resource.spec.coolField }}
++                 resourceTier: premium
         kind: GoTemplate
         source: Inline
       step: generate-resources
@@ -47,27 +47,27 @@ Summary: 1 modified
 
 === Affected Composite Resources ===
 
-[33m  ⚠ XNopClaimDiffResource/test-comp-claim-rn4nr (cluster-scoped)[0m
-[33m  ⚠ NopClaimDiffResource/test-comp-claim (namespace: default)[0m
+  ⚠ XNopClaimDiffResource/test-comp-claim-XXXXX (cluster-scoped)
+  ⚠ NopClaimDiffResource/test-comp-claim (namespace: default)
 
 Summary: 2 resources with changes
 
 === Impact Analysis ===
 
-~~~ ClusterNopResource/test-comp-claim-rn4nr
+~~~ ClusterNopResource/test-comp-claim-XXXXX
   apiVersion: nop.crossplane.io/v1alpha1
   kind: ClusterNopResource
   metadata:
     annotations:
       crossplane.io/composition-resource-name: nop-resource
-      crossplane.io/external-name: test-comp-claim-rn4nr
+      crossplane.io/external-name: test-comp-claim-XXXXX
     finalizers:
     - finalizer.managedresource.crossplane.io
     labels:
       crossplane.io/claim-name: test-comp-claim
       crossplane.io/claim-namespace: default
-      crossplane.io/composite: test-comp-claim-rn4nr
-    name: test-comp-claim-rn4nr
+      crossplane.io/composite: test-comp-claim-XXXXX
+    name: test-comp-claim-XXXXX
   spec:
     deletionPolicy: Delete
     forProvider:
@@ -76,10 +76,10 @@ Summary: 2 resources with changes
         conditionType: Ready
         time: 0s
       fields:
-[31m-       configData: claim-value-1[0m
-[31m-       resourceTier: basic[0m
-[32m+       configData: updated-claim-value-1[0m
-[32m+       resourceTier: premium[0m
+-       configData: claim-value-1
+-       resourceTier: basic
++       configData: updated-claim-value-1
++       resourceTier: premium
     managementPolicies:
     - '*'
     providerConfigRef:
@@ -99,8 +99,8 @@ Summary: 2 resources with changes
     compositionRef:
       name: xnopclaimdiffresources.claimdiff.example.org
     compositionRevisionRef:
-      name: xnopclaimdiffresources.claimdiff.example.org-d873a25
-[32m+   compositionUpdatePolicy: Automatic[0m
+      name: xnopclaimdiffresources.claimdiff.example.org-XXXXXXX
++   compositionUpdatePolicy: Automatic
     coolField: claim-value-1
     crossplane:
       compositionRef:
@@ -108,7 +108,7 @@ Summary: 2 resources with changes
     resourceRef:
       apiVersion: claimdiff.example.org/v1alpha1
       kind: XNopClaimDiffResource
-      name: test-comp-claim-rn4nr
+      name: test-comp-claim-XXXXX
 
 ---
 

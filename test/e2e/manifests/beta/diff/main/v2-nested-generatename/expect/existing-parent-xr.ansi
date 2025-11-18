@@ -1,4 +1,4 @@
-~~~ XChildNop/test-parent-generatename-child-9ad5e5d178f4
+~~~ XChildNop/test-parent-generatename-child-XXXXX
   apiVersion: nested.diff.example.org/v1alpha1
   kind: XChildNop
   metadata:
@@ -9,16 +9,16 @@
     generateName: test-parent-generatename-child-
     labels:
       crossplane.io/composite: test-parent-generatename
-    name: test-parent-generatename-child-9ad5e5d178f4
+    name: test-parent-generatename-child-XXXXX
     namespace: default
   spec:
-[31m-   childField: existing-value[0m
-[32m+   childField: modified-value[0m
+-   childField: existing-value
++   childField: modified-value
     crossplane:
       compositionRef:
         name: child-nop-composition
       compositionRevisionRef:
-        name: child-nop-composition-a843bad
+        name: child-nop-composition-XXXXXXX
       compositionUpdatePolicy: Automatic
 
 ---
@@ -35,12 +35,12 @@
   spec:
     crossplane:
       compositionRef:
-        name: parent-nop-composition-generatename
+        name: parent-nop-composition-XXXXXXX
       compositionRevisionRef:
-        name: parent-nop-composition-generatename-caacbdf
+        name: parent-nop-composition-XXXXXXX-caacbdf
       compositionUpdatePolicy: Automatic
-[31m-   parentField: existing-value[0m
-[32m+   parentField: modified-value[0m
+-   parentField: existing-value
++   parentField: modified-value
 
 ---
 
