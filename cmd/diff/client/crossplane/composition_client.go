@@ -670,19 +670,26 @@ func (c *DefaultCompositionClient) FindCompositesUsingComposition(ctx context.Co
 		"gvk", xrGVK.String())
 
 	// List all resources of this XR type in the specified namespace
+	// Note: If namespace is specified and XRs are cluster-scoped, this will fail gracefully
+	// and we'll continue to search for Claims
 	xrs, err := c.resourceClient.ListResources(ctx, xrGVK, namespace)
-	if err != nil {
-		return nil, errors.Wrapf(err, "cannot list XRs of type %s in namespace %s", xrGVK.String(), namespace)
-	}
 
-	c.logger.Debug("Found XRs of target type", "count", len(xrs))
-
-	// Filter XRs that use this specific composition
 	var matchingResources []*un.Unstructured
 
-	for _, xr := range xrs {
-		if c.resourceUsesComposition(xr, compositionName) {
-			matchingResources = append(matchingResources, xr)
+	if err != nil {
+		// Log the error but don't fail - we'll try to find Claims instead
+		c.logger.Debug("Cannot list XRs (will search for claims if XRD defines them)",
+			"xrGVK", xrGVK.String(),
+			"namespace", namespace,
+			"error", err)
+	} else {
+		c.logger.Debug("Found XRs of target type", "count", len(xrs))
+
+		// Filter XRs that use this specific composition
+		for _, xr := range xrs {
+			if c.resourceUsesComposition(xr, compositionName) {
+				matchingResources = append(matchingResources, xr)
+			}
 		}
 	}
 

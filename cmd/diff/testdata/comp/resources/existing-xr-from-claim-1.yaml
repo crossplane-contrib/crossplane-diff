@@ -1,5 +1,5 @@
 apiVersion: diff.example.org/v1alpha1
-kind: XNopClaim
+kind: XNop
 metadata:
   name: test-claim-1-xr
   namespace: test-namespace

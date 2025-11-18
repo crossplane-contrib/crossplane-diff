@@ -170,16 +170,17 @@ func assertDiffMatchesFile(t *testing.T, actual, expectedSource, log string) {
 	// If E2E_DUMP_EXPECTED is set, write the actual output to the expected file
 	if os.Getenv("E2E_DUMP_EXPECTED") != "" {
 		// Ensure the directory exists
-		if err := os.MkdirAll(filepath.Dir(expectedSource), 0755); err != nil {
+		if err := os.MkdirAll(filepath.Dir(expectedSource), 0o755); err != nil {
 			t.Fatalf("Failed to create directory for expected file: %v", err)
 		}
 
 		// Write the actual output to the expected file
-		if err := os.WriteFile(expectedSource, []byte(actual), 0644); err != nil {
+		if err := os.WriteFile(expectedSource, []byte(actual), 0o644); err != nil {
 			t.Fatalf("Failed to write expected file: %v", err)
 		}
 
 		t.Logf("Wrote expected output to %s", expectedSource)
+
 		return
 	}
 
