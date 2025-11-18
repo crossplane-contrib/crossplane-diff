@@ -153,7 +153,42 @@ func (c *DefaultDiffCalculator) CalculateDiff(ctx context.Context, composite *un
 
 // CalculateNonRemovalDiffs computes diffs for modified/added resources and returns
 // the set of rendered resource keys for removal detection.
-// This is used internally for nested XR processing.
+//
+// TWO-PHASE DIFF ALGORITHM:
+// This method implements Phase 1 of our two-phase diff calculation. The two-phase
+// approach is necessary to correctly handle nested XRs (Composite Resources that
+// themselves create other Composite Resources).
+//
+// WHY TWO PHASES?
+// When processing nested XRs, we must:
+//   1. Phase 1 (this method): Calculate diffs for all rendered resources (adds/modifications)
+//      and build a set of "rendered resource keys" that tracks what was generated
+//   2. Phase 2 (CalculateRemovedResourceDiffs): Compare cluster state against rendered
+//      resources to identify removals
+//
+// The separation is critical because:
+//   - Nested XRs are processed recursively BETWEEN these phases
+//   - Nested XRs generate additional composed resources that must be added to the
+//     "rendered resources" set before removal detection
+//   - If we detected removals too early, we'd falsely identify nested XR resources
+//     as "to be removed" before they've been processed
+//
+// EXAMPLE SCENARIO:
+//   Parent XR renders: [Resource-A, NestedXR-B]
+//   NestedXR-B renders: [Resource-C, Resource-D]
+//
+//   Without two phases:
+//     - We'd see cluster has [Resource-A, Resource-C, Resource-D] from prior render
+//     - We'd see new render has [Resource-A, NestedXR-B]
+//     - We'd INCORRECTLY mark Resource-C and Resource-D as removed
+//
+//   With two phases:
+//     Phase 1: Calculate diffs for [Resource-A, NestedXR-B], track as rendered
+//     Process nested: Recurse into NestedXR-B, add Resource-C and Resource-D to rendered set
+//     Phase 2: Now see [Resource-A, NestedXR-B, Resource-C, Resource-D] as rendered
+//              No false removal detection!
+//
+// Returns: (diffs map, rendered resource keys, error)
 func (c *DefaultDiffCalculator) CalculateNonRemovalDiffs(ctx context.Context, xr *cmp.Unstructured, desired render.Outputs) (map[string]*dt.ResourceDiff, map[string]bool, error) {
 	xrName := xr.GetName()
 	c.logger.Debug("Calculating diffs",
