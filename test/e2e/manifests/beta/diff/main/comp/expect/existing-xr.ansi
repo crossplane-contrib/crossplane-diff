@@ -56,13 +56,13 @@ Summary: 1 modified
 
 === Affected Composite Resources ===
 
-  [33m⚠[0m XCompDiffResource/test-comp-resource (cluster-scoped)
+[33m  ⚠ XCompDiffResource/test-comp-resource (cluster-scoped)[0m
 
 Summary: 1 resource with changes
 
 === Impact Analysis ===
 
-~~~ ClusterNopResource/test-comp-resource-XXXXX
+~~~ ClusterNopResource/test-comp-resource-2755fc83a673
   apiVersion: nop.crossplane.io/v1alpha1
   kind: ClusterNopResource
   metadata:
@@ -70,7 +70,7 @@ Summary: 1 resource with changes
 [31m-     config-data: existing-value[0m
 [32m+     config-data: updated-existing-value[0m
       crossplane.io/composition-resource-name: nop-resource
-      crossplane.io/external-name: test-comp-resource-XXXXX
+      crossplane.io/external-name: test-comp-resource-2755fc83a673
 [31m-     resource-tier: basic-existing-value[0m
 [32m+     resource-tier: premium-existing-value[0m
     finalizers:
@@ -78,7 +78,7 @@ Summary: 1 resource with changes
     generateName: test-comp-resource-
     labels:
       crossplane.io/composite: test-comp-resource
-    name: test-comp-resource-XXXXX
+    name: test-comp-resource-2755fc83a673
   spec:
     deletionPolicy: Delete
     forProvider:

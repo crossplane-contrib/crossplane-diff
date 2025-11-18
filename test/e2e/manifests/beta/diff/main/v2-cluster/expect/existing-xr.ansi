@@ -1,4 +1,4 @@
-~~~ ClusterNopResource/existing-resource-czpjg
+~~~ ClusterNopResource/existing-resource-5c30c0cf3dcf
   apiVersion: nop.crossplane.io/v1alpha1
   kind: ClusterNopResource
   metadata:
@@ -6,7 +6,7 @@
 [31m-     cool-field: I'm existing![0m
 [32m+     cool-field: I'm modified![0m
       crossplane.io/composition-resource-name: nop-resource
-      crossplane.io/external-name: existing-resource-czpjg
+      crossplane.io/external-name: existing-resource-5c30c0cf3dcf
 [31m-     setting: original[0m
 [32m+     setting: changed[0m
     finalizers:
@@ -14,7 +14,7 @@
     generateName: existing-resource-
     labels:
       crossplane.io/composite: existing-resource
-    name: existing-resource-czpjg
+    name: existing-resource-5c30c0cf3dcf
   spec:
     deletionPolicy: Delete
     forProvider:
@@ -44,7 +44,7 @@
       compositionRef:
         name: xnopresources.cluster.diff.example.org
       compositionRevisionRef:
-        name: xnopresources.cluster.diff.example.org-acd5cd1
+        name: xnopresources.cluster.diff.example.org-3917f71
       compositionUpdatePolicy: Automatic
     parameters:
       config:
@@ -53,8 +53,8 @@
 [32m+       setting1: changed[0m
 [32m+       setting2: original[0m
 [32m+       setting3: new-value[0m
-
-
+  
+  
 
 ---
 

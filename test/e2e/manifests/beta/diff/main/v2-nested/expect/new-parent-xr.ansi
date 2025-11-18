@@ -1,48 +1,48 @@
 +++ NopResource/test-parent-new-child-nop
-+ apiVersion: nop.crossplane.io/v1alpha1
-+ kind: NopResource
-+ metadata:
-+   annotations:
-+     crossplane.io/composition-resource-name: nop-resource
-+   labels:
-+     crossplane.io/composite: test-parent-new-child
-+   name: test-parent-new-child-nop
-+   namespace: default
-+ spec:
-+   deletionPolicy: Delete
-+   forProvider:
-+     conditionAfter:
-+     - conditionStatus: "True"
-+       conditionType: Ready
-+       time: 0s
-+   managementPolicies:
-+   - '*'
-+   providerConfigRef:
-+     name: default
+[32m+ apiVersion: nop.crossplane.io/v1alpha1[0m
+[32m+ kind: NopResource[0m
+[32m+ metadata:[0m
+[32m+   annotations:[0m
+[32m+     crossplane.io/composition-resource-name: nop-resource[0m
+[32m+   labels:[0m
+[32m+     crossplane.io/composite: test-parent-new-child[0m
+[32m+   name: test-parent-new-child-nop[0m
+[32m+   namespace: default[0m
+[32m+ spec:[0m
+[32m+   deletionPolicy: Delete[0m
+[32m+   forProvider:[0m
+[32m+     conditionAfter:[0m
+[32m+     - conditionStatus: "True"[0m
+[32m+       conditionType: Ready[0m
+[32m+       time: 0s[0m
+[32m+   managementPolicies:[0m
+[32m+   - '*'[0m
+[32m+   providerConfigRef:[0m
+[32m+     name: default[0m
 
 ---
 +++ XChildNop/test-parent-new-child
-+ apiVersion: nested.diff.example.org/v1alpha1
-+ kind: XChildNop
-+ metadata:
-+   annotations:
-+     crossplane.io/composition-resource-name: child-xr
-+   labels:
-+     crossplane.io/composite: test-parent-new
-+   name: test-parent-new-child
-+   namespace: default
-+ spec:
-+   childField: new-value
+[32m+ apiVersion: nested.diff.example.org/v1alpha1[0m
+[32m+ kind: XChildNop[0m
+[32m+ metadata:[0m
+[32m+   annotations:[0m
+[32m+     crossplane.io/composition-resource-name: child-xr[0m
+[32m+   labels:[0m
+[32m+     crossplane.io/composite: test-parent-new[0m
+[32m+   name: test-parent-new-child[0m
+[32m+   namespace: default[0m
+[32m+ spec:[0m
+[32m+   childField: new-value[0m
 
 ---
 +++ XParentNop/test-parent-new
-+ apiVersion: nested.diff.example.org/v1alpha1
-+ kind: XParentNop
-+ metadata:
-+   name: test-parent-new
-+   namespace: default
-+ spec:
-+   parentField: new-value
+[32m+ apiVersion: nested.diff.example.org/v1alpha1[0m
+[32m+ kind: XParentNop[0m
+[32m+ metadata:[0m
+[32m+   name: test-parent-new[0m
+[32m+   namespace: default[0m
+[32m+ spec:[0m
+[32m+   parentField: new-value[0m
 
 ---
 

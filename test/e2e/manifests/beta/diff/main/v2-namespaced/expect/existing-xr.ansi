@@ -1,4 +1,4 @@
-~~~ NopResource/existing-resource-czpjg
+~~~ NopResource/existing-resource-34c87347bf0c
   apiVersion: nop.crossplane.io/v1alpha1
   kind: NopResource
   metadata:
@@ -6,7 +6,7 @@
 [31m-     cool-field: I'm existing![0m
 [32m+     cool-field: I'm modified![0m
       crossplane.io/composition-resource-name: nop-resource
-      crossplane.io/external-name: existing-resource-czpjg
+      crossplane.io/external-name: existing-resource-34c87347bf0c
 [31m-     setting: original[0m
 [32m+     setting: changed[0m
     finalizers:
@@ -14,7 +14,7 @@
     generateName: existing-resource-
     labels:
       crossplane.io/composite: existing-resource
-    name: existing-resource-czpjg
+    name: existing-resource-34c87347bf0c
     namespace: default
   spec:
     deletionPolicy: Delete
@@ -46,7 +46,7 @@
       compositionRef:
         name: xnopresources.diff.example.org
       compositionRevisionRef:
-        name: xnopresources.diff.example.org-acd5cd1
+        name: xnopresources.diff.example.org-1504015
       compositionUpdatePolicy: Automatic
     parameters:
       config:
@@ -55,8 +55,8 @@
 [32m+       setting1: changed[0m
 [32m+       setting2: original[0m
 [32m+       setting3: new-value[0m
-
-
+  
+  
 
 ---
 

@@ -179,31 +179,8 @@ func TestDiffNewClaimWithNestedXRs(t *testing.T) {
 					t.Fatalf("Error running diff command: %v\nLog output:\n%s", err, log)
 				}
 
-				// Verify the diff contains expected resources
-				// Should show: claim -> child XR -> managed resource
-				// (Note: backing parent XR is not shown when diffing claims)
-				if !strings.Contains(output, "ParentNopClaim/") {
-					t.Error("Expected output to contain claim diff")
-				}
-
-				if !strings.Contains(output, "XChildNopClaim/") {
-					t.Error("Expected output to contain child XR diff")
-				}
-
-				// Check for the appropriate managed resource type based on Crossplane version
-				if slices.Contains(c.Labels()[LabelCrossplaneVersion], CrossplaneVersionRelease120) {
-					// release-1.20 uses old provider-nop where NopResource is cluster-scoped
-					if !strings.Contains(output, "NopResource/") {
-						t.Error("Expected output to contain NopResource (release-1.20 uses cluster-scoped NopResource)")
-					}
-				} else {
-					// main uses new provider-nop where ClusterNopResource exists
-					if !strings.Contains(output, "ClusterNopResource/") {
-						t.Error("Expected output to contain ClusterNopResource (main uses ClusterNopResource)")
-					}
-				}
-
-				t.Logf("Diff output:\n%s", output)
+				expectPath := filepath.Join(manifests, "expect")
+				assertDiffMatchesFile(t, output, filepath.Join(expectPath, "new-claim.ansi"), log)
 
 				return ctx
 			}).
@@ -262,16 +239,8 @@ func TestDiffExistingClaimWithNestedXRs(t *testing.T) {
 					t.Fatalf("Error running diff command: %v\nLog output:\n%s", err, log)
 				}
 
-				// Verify nested XR identity was preserved (not showing as remove/add)
-				// The key test: should NOT show child XR or its managed resources as removed and re-added
-				removedChildXRs := strings.Count(output, "--- XChildNopClaim/")
-				addedChildXRs := strings.Count(output, "+++ XChildNopClaim/")
-
-				if removedChildXRs > 0 && addedChildXRs > 0 {
-					t.Errorf("Expected nested XR to be modified, not removed and re-added (found %d removed, %d added)", removedChildXRs, addedChildXRs)
-				}
-
-				t.Logf("Diff output:\n%s", output)
+				expectPath := filepath.Join(manifests, "expect")
+				assertDiffMatchesFile(t, output, filepath.Join(expectPath, "existing-claim.ansi"), log)
 
 				return ctx
 			}).

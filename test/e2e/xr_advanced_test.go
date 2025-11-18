@@ -239,25 +239,8 @@ func TestDiffExistingNestedResourceV2WithGenerateName(t *testing.T) {
 					t.Fatalf("Error running diff command: %v\nLog output:\n%s", err, log)
 				}
 
-				// The critical assertion: with identity preservation working correctly,
-				// we should see NO removals or additions of the child XR or its managed resources.
-				// Only modifications should appear (parent XR spec change propagating through).
-				if strings.Contains(output, "--- XChildNop/") || strings.Contains(output, "+++ XChildNop/") {
-					t.Errorf("Found unexpected child XR removal/addition - identity preservation failed.\nOutput:\n%s\nLog:\n%s", output, log)
-				}
-
-				if strings.Contains(output, "--- NopResource/") || strings.Contains(output, "+++ NopResource/") {
-					t.Errorf("Found unexpected NopResource removal/addition - identity preservation failed.\nOutput:\n%s\nLog:\n%s", output, log)
-				}
-
-				// Should see exactly 3 modified resources:
-				// 1. Parent XR (spec.parentField changed)
-				// 2. Child XR (spec.childField changed from parent propagation)
-				// 3. NopResource (owned by child XR)
-				modifiedCount := strings.Count(output, "~~~")
-				if modifiedCount != 3 {
-					t.Errorf("Expected exactly 3 modified resources, found %d.\nOutput:\n%s\nLog:\n%s", modifiedCount, output, log)
-				}
+				expectPath := filepath.Join(manifests, "expect")
+				assertDiffMatchesFile(t, output, filepath.Join(expectPath, "existing-parent-xr.ansi"), log)
 
 				return ctx
 			}).

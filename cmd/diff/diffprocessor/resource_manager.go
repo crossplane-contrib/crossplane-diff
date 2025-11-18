@@ -518,11 +518,22 @@ func (m *DefaultResourceManager) updateCompositeOwnerLabel(ctx context.Context, 
 				"child", child.GetName())
 		}
 	default:
-		// For XRs, set the composite label
-		labels["crossplane.io/composite"] = parentName
-		m.logger.Debug("Updated composite owner label",
-			"composite", parentName,
-			"child", child.GetName())
+		// For XRs, only set the composite label if it doesn't already exist
+		// If it exists, preserve it (e.g., for managed resources that already have correct ownership)
+		existingComposite, hasComposite := labels["crossplane.io/composite"]
+		if !hasComposite {
+			// No existing composite label, set it to the parent XR name
+			labels["crossplane.io/composite"] = parentName
+			m.logger.Debug("Set composite label for new XR resource",
+				"xrName", parentName,
+				"child", child.GetName())
+		} else {
+			// Preserve existing composite label
+			m.logger.Debug("Preserved existing composite label for XR resource",
+				"xrName", parentName,
+				"existingComposite", existingComposite,
+				"child", child.GetName())
+		}
 	}
 
 	child.SetLabels(labels)
