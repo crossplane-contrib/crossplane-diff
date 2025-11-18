@@ -2743,24 +2743,28 @@ Summary: 2 modified
 			noColor:       false,
 		},
 		"CompositionChangeImpactsClaims": {
-			reason: "Validates composition change impacts existing Claims (issue #120)",
-			// Set up existing Claims that use the composition
+			reason: "Validates composition change impacts existing Claims",
+			// Set up existing Claims and their XRs that use the original composition
 			setupFiles: []string{
+				// XRD, composition, and functions
 				"testdata/comp/resources/claim-xrd.yaml",
 				"testdata/comp/resources/claim-composition.yaml",
 				"testdata/comp/resources/functions.yaml",
-				"testdata/comp/resources/existing-namespace.yaml",
-				// Add existing Claims that use the composition
+				// Test namespace
+				"testdata/comp/resources/test-namespace.yaml",
+				// Existing Claims and their corresponding XRs
 				"testdata/comp/resources/existing-claim-1.yaml",
-				"testdata/comp/resources/existing-claim-2.yaml",
-				// Add the downstream resources created by the Claims' XRs
+				"testdata/comp/resources/existing-claim-1-xr.yaml",
 				"testdata/comp/resources/existing-claim-downstream-1.yaml",
+				"testdata/comp/resources/existing-claim-2.yaml",
+				"testdata/comp/resources/existing-claim-2-xr.yaml",
 				"testdata/comp/resources/existing-claim-downstream-2.yaml",
 			},
-			// New composition file that will be diffed
+			// Updated composition that will be diffed
 			inputFiles: []string{"testdata/comp/updated-claim-composition.yaml"},
 			namespace:  "test-namespace",
-			expectedOutput: `=== Composition Changes ===
+			expectedOutput: `
+=== Composition Changes ===
 
 ~~~ Composition/nopclaims.diff.example.org
   apiVersion: apiextensions.crossplane.io/v1
@@ -2770,7 +2774,7 @@ Summary: 2 modified
   spec:
     compositeTypeRef:
       apiVersion: diff.example.org/v1alpha1
-      kind: XNopClaim
+      kind: XNop
     mode: Pipeline
     pipeline:
     - functionRef:
@@ -2821,21 +2825,15 @@ Summary: 2 resources with changes
     labels:
       crossplane.io/claim-name: test-claim-1
       crossplane.io/claim-namespace: test-namespace
--     crossplane.io/composite: test-claim-1-xr
+      crossplane.io/composite: test-claim-1-xr
 -   name: test-claim-1-xr
-- spec:
--   forProvider:
++   name: test-claim-1
+  spec:
+    forProvider:
 -     configData: claim-value-1
 -     resourceTier: basic
-+     crossplane.io/composite: test-claim-1
-+   name: test-claim-1
-+ spec:
-+   forProvider:
 +     configData: updated-claim-value-1
 +     resourceTier: premium
-  
-  
-  
 
 ---
 ~~~ XDownstreamResource/test-claim-2-xr
@@ -2848,21 +2846,15 @@ Summary: 2 resources with changes
     labels:
       crossplane.io/claim-name: test-claim-2
       crossplane.io/claim-namespace: test-namespace
--     crossplane.io/composite: test-claim-2-xr
+      crossplane.io/composite: test-claim-2-xr
 -   name: test-claim-2-xr
-- spec:
--   forProvider:
++   name: test-claim-2
+  spec:
+    forProvider:
 -     configData: claim-value-2
 -     resourceTier: basic
-+     crossplane.io/composite: test-claim-2
-+   name: test-claim-2
-+ spec:
-+   forProvider:
 +     configData: updated-claim-value-2
 +     resourceTier: premium
-  
-  
-  
 
 ---
 

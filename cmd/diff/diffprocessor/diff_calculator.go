@@ -393,6 +393,7 @@ func (c *DefaultDiffCalculator) preserveCompositeLabel(current, desired *un.Unst
 
 	// Preserve the composite label in the desired resource
 	desiredCopy := desired.DeepCopy()
+
 	desiredLabels := desiredCopy.GetLabels()
 	if desiredLabels == nil {
 		desiredLabels = make(map[string]string)

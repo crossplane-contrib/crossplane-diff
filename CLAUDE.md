@@ -167,6 +167,27 @@ cmd/diff/
 - Scope validation: Namespaced XRs cannot own cluster-scoped resources (except Claims)
 - Namespace propagation: XR namespace propagates to managed resources in Crossplane v2
 
+**Claim Label Behavior (Empirically Verified)**
+Crossplane ALWAYS uses the XR name for the `crossplane.io/composite` label on composed resources, even when rendering from a Claim.
+
+Evidence from empirical testing (2025-11-18):
+```yaml
+# Claim: my-test-claim (namespace: claim-test-ns)
+# XR: my-test-claim-mjwln (cluster-scoped, auto-generated suffix)
+# Composed NopResource labels:
+labels:
+  crossplane.io/claim-name: my-test-claim           # Points to Claim
+  crossplane.io/claim-namespace: claim-test-ns      # Claim namespace
+  crossplane.io/composite: my-test-claim-mjwln      # Points to XR, NOT Claim!
+```
+
+Key implications:
+- When diffing Claims, the `crossplane.io/composite` label should NOT change between renders
+- Crossplane templates use `{{ .observed.composite.resource.metadata.name }}` which is the XR name
+- The XR is the actual composite owner; the Claim just references it via `spec.resourceRef`
+- Test expectations must reflect this: NO label changes when modifying existing Claims
+- This behavior is consistent across Crossplane versions
+
 **Diff Calculation**
 - Compares rendered resources against cluster state via server-side dry-run
 - Detects additions, modifications, and removals

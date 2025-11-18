@@ -912,24 +912,24 @@ func TestDefaultDiffCalculator_preserveCompositeLabel(t *testing.T) {
 		{
 			name: "PreservesCompositeLabelFromExistingResourceWithFullName",
 			current: &un.Unstructured{
-				Object: map[string]interface{}{
+				Object: map[string]any{
 					"apiVersion": "nop.crossplane.io/v1alpha1",
 					"kind":       "NopResource",
-					"metadata": map[string]interface{}{
+					"metadata": map[string]any{
 						"name": "existing-resource",
-						"labels": map[string]interface{}{
+						"labels": map[string]any{
 							"crossplane.io/composite": "root-xr-name",
 						},
 					},
 				},
 			},
 			desired: &un.Unstructured{
-				Object: map[string]interface{}{
+				Object: map[string]any{
 					"apiVersion": "nop.crossplane.io/v1alpha1",
 					"kind":       "NopResource",
-					"metadata": map[string]interface{}{
+					"metadata": map[string]any{
 						"name": "existing-resource",
-						"labels": map[string]interface{}{
+						"labels": map[string]any{
 							"crossplane.io/composite": "child-xr-name",
 						},
 					},
@@ -941,25 +941,25 @@ func TestDefaultDiffCalculator_preserveCompositeLabel(t *testing.T) {
 		{
 			name: "PreservesCompositeLabelFromExistingResourceWithGenerateName",
 			current: &un.Unstructured{
-				Object: map[string]interface{}{
+				Object: map[string]any{
 					"apiVersion": "nop.crossplane.io/v1alpha1",
 					"kind":       "NopResource",
-					"metadata": map[string]interface{}{
+					"metadata": map[string]any{
 						"generateName": "existing-resource-",
 						"name":         "existing-resource-abc123",
-						"labels": map[string]interface{}{
+						"labels": map[string]any{
 							"crossplane.io/composite": "root-xr-name",
 						},
 					},
 				},
 			},
 			desired: &un.Unstructured{
-				Object: map[string]interface{}{
+				Object: map[string]any{
 					"apiVersion": "nop.crossplane.io/v1alpha1",
 					"kind":       "NopResource",
-					"metadata": map[string]interface{}{
+					"metadata": map[string]any{
 						"generateName": "existing-resource-",
-						"labels": map[string]interface{}{
+						"labels": map[string]any{
 							"crossplane.io/composite": "child-xr-name",
 						},
 					},
@@ -972,12 +972,12 @@ func TestDefaultDiffCalculator_preserveCompositeLabel(t *testing.T) {
 			name:    "NoPreservationWhenCurrentIsNil",
 			current: nil,
 			desired: &un.Unstructured{
-				Object: map[string]interface{}{
+				Object: map[string]any{
 					"apiVersion": "nop.crossplane.io/v1alpha1",
 					"kind":       "NopResource",
-					"metadata": map[string]interface{}{
+					"metadata": map[string]any{
 						"name": "new-resource",
-						"labels": map[string]interface{}{
+						"labels": map[string]any{
 							"crossplane.io/composite": "child-xr-name",
 						},
 					},
@@ -989,24 +989,24 @@ func TestDefaultDiffCalculator_preserveCompositeLabel(t *testing.T) {
 		{
 			name: "NoPreservationWhenCurrentHasNoCompositeLabel",
 			current: &un.Unstructured{
-				Object: map[string]interface{}{
+				Object: map[string]any{
 					"apiVersion": "nop.crossplane.io/v1alpha1",
 					"kind":       "NopResource",
-					"metadata": map[string]interface{}{
+					"metadata": map[string]any{
 						"name": "existing-resource",
-						"labels": map[string]interface{}{
+						"labels": map[string]any{
 							"some-other-label": "value",
 						},
 					},
 				},
 			},
 			desired: &un.Unstructured{
-				Object: map[string]interface{}{
+				Object: map[string]any{
 					"apiVersion": "nop.crossplane.io/v1alpha1",
 					"kind":       "NopResource",
-					"metadata": map[string]interface{}{
+					"metadata": map[string]any{
 						"name": "existing-resource",
-						"labels": map[string]interface{}{
+						"labels": map[string]any{
 							"crossplane.io/composite": "child-xr-name",
 						},
 					},
@@ -1018,21 +1018,21 @@ func TestDefaultDiffCalculator_preserveCompositeLabel(t *testing.T) {
 		{
 			name: "NoPreservationWhenCurrentHasNoLabels",
 			current: &un.Unstructured{
-				Object: map[string]interface{}{
+				Object: map[string]any{
 					"apiVersion": "nop.crossplane.io/v1alpha1",
 					"kind":       "NopResource",
-					"metadata": map[string]interface{}{
+					"metadata": map[string]any{
 						"name": "existing-resource",
 					},
 				},
 			},
 			desired: &un.Unstructured{
-				Object: map[string]interface{}{
+				Object: map[string]any{
 					"apiVersion": "nop.crossplane.io/v1alpha1",
 					"kind":       "NopResource",
-					"metadata": map[string]interface{}{
+					"metadata": map[string]any{
 						"name": "existing-resource",
-						"labels": map[string]interface{}{
+						"labels": map[string]any{
 							"crossplane.io/composite": "child-xr-name",
 						},
 					},
@@ -1044,22 +1044,22 @@ func TestDefaultDiffCalculator_preserveCompositeLabel(t *testing.T) {
 		{
 			name: "CreatesLabelsMapWhenDesiredHasNoLabels",
 			current: &un.Unstructured{
-				Object: map[string]interface{}{
+				Object: map[string]any{
 					"apiVersion": "nop.crossplane.io/v1alpha1",
 					"kind":       "NopResource",
-					"metadata": map[string]interface{}{
+					"metadata": map[string]any{
 						"name": "existing-resource",
-						"labels": map[string]interface{}{
+						"labels": map[string]any{
 							"crossplane.io/composite": "root-xr-name",
 						},
 					},
 				},
 			},
 			desired: &un.Unstructured{
-				Object: map[string]interface{}{
+				Object: map[string]any{
 					"apiVersion": "nop.crossplane.io/v1alpha1",
 					"kind":       "NopResource",
-					"metadata": map[string]interface{}{
+					"metadata": map[string]any{
 						"name": "existing-resource",
 					},
 				},
@@ -1070,24 +1070,24 @@ func TestDefaultDiffCalculator_preserveCompositeLabel(t *testing.T) {
 		{
 			name: "PreservesOtherLabelsOnDesiredResource",
 			current: &un.Unstructured{
-				Object: map[string]interface{}{
+				Object: map[string]any{
 					"apiVersion": "nop.crossplane.io/v1alpha1",
 					"kind":       "NopResource",
-					"metadata": map[string]interface{}{
+					"metadata": map[string]any{
 						"name": "existing-resource",
-						"labels": map[string]interface{}{
+						"labels": map[string]any{
 							"crossplane.io/composite": "root-xr-name",
 						},
 					},
 				},
 			},
 			desired: &un.Unstructured{
-				Object: map[string]interface{}{
+				Object: map[string]any{
 					"apiVersion": "nop.crossplane.io/v1alpha1",
 					"kind":       "NopResource",
-					"metadata": map[string]interface{}{
+					"metadata": map[string]any{
 						"name": "existing-resource",
-						"labels": map[string]interface{}{
+						"labels": map[string]any{
 							"crossplane.io/composite": "child-xr-name",
 							"custom-label":            "custom-value",
 							"another-label":           "another-value",
@@ -1142,6 +1142,7 @@ func TestDefaultDiffCalculator_preserveCompositeLabel(t *testing.T) {
 					if labels["custom-label"] != "custom-value" {
 						t.Errorf("Expected custom-label to be preserved as 'custom-value', got %q", labels["custom-label"])
 					}
+
 					if labels["another-label"] != "another-value" {
 						t.Errorf("Expected another-label to be preserved as 'another-value', got %q", labels["another-label"])
 					}
