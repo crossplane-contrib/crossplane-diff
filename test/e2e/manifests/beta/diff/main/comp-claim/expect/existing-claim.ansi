@@ -47,28 +47,27 @@ Summary: 1 modified
 
 === Affected Composite Resources ===
 
-  ⚠ XNopClaimDiffResource/test-comp-claim-XXXXX (cluster-scoped)
-  ⚠ NopClaimDiffResource/test-comp-claim (namespace: default)
+[33m  ⚠ XNopClaimDiffResource/test-comp-claim-rn4nr (cluster-scoped)[0m
+[33m  ⚠ NopClaimDiffResource/test-comp-claim (namespace: default)[0m
 
 Summary: 2 resources with changes
 
 === Impact Analysis ===
 
-~~~ ClusterNopResource/test-comp-claim-XXXXX
+~~~ ClusterNopResource/test-comp-claim-rn4nr
   apiVersion: nop.crossplane.io/v1alpha1
   kind: ClusterNopResource
   metadata:
     annotations:
       crossplane.io/composition-resource-name: nop-resource
-      crossplane.io/external-name: test-comp-claim-XXXXX
+      crossplane.io/external-name: test-comp-claim-rn4nr
     finalizers:
     - finalizer.managedresource.crossplane.io
     labels:
       crossplane.io/claim-name: test-comp-claim
       crossplane.io/claim-namespace: default
-[31m-     crossplane.io/composite: test-comp-claim-XXXXX[0m
-[32m+     crossplane.io/composite: test-comp-claim[0m
-    name: test-comp-claim-XXXXX
+      crossplane.io/composite: test-comp-claim-rn4nr
+    name: test-comp-claim-rn4nr
   spec:
     deletionPolicy: Delete
     forProvider:
@@ -100,7 +99,7 @@ Summary: 2 resources with changes
     compositionRef:
       name: xnopclaimdiffresources.claimdiff.example.org
     compositionRevisionRef:
-      name: xnopclaimdiffresources.claimdiff.example.org-XXXXXXX
+      name: xnopclaimdiffresources.claimdiff.example.org-d873a25
 [32m+   compositionUpdatePolicy: Automatic[0m
     coolField: claim-value-1
     crossplane:
@@ -109,7 +108,7 @@ Summary: 2 resources with changes
     resourceRef:
       apiVersion: claimdiff.example.org/v1alpha1
       kind: XNopClaimDiffResource
-      name: test-comp-claim-XXXXX
+      name: test-comp-claim-rn4nr
 
 ---
 

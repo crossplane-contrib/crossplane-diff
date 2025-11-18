@@ -1,0 +1,53 @@
++++ ClusterNopResource/test-parent-claim-(generated)-(generated)
+[32m+ apiVersion: nop.crossplane.io/v1alpha1[0m
+[32m+ kind: ClusterNopResource[0m
+[32m+ metadata:[0m
+[32m+   annotations:[0m
+[32m+     child-field: new-parent-value[0m
+[32m+     crossplane.io/composition-resource-name: nop-resource[0m
+[32m+   generateName: test-parent-claim-(generated)-[0m
+[32m+   labels:[0m
+[32m+     crossplane.io/composite: test-parent-claim-(generated)[0m
+[32m+ spec:[0m
+[32m+   deletionPolicy: Delete[0m
+[32m+   forProvider:[0m
+[32m+     conditionAfter:[0m
+[32m+     - conditionStatus: "True"[0m
+[32m+       conditionType: Ready[0m
+[32m+       time: 0s[0m
+[32m+   managementPolicies:[0m
+[32m+   - '*'[0m
+[32m+   providerConfigRef:[0m
+[32m+     name: default[0m
+
+---
++++ ParentNopClaim/test-parent-claim
+[32m+ apiVersion: claimnested.diff.example.org/v1alpha1[0m
+[32m+ kind: ParentNopClaim[0m
+[32m+ metadata:[0m
+[32m+   name: test-parent-claim[0m
+[32m+   namespace: default[0m
+[32m+ spec:[0m
+[32m+   compositeDeletePolicy: Background[0m
+[32m+   compositionRef:[0m
+[32m+     name: parent-nop-claim-composition[0m
+[32m+   compositionUpdatePolicy: Automatic[0m
+[32m+   parentField: new-parent-value[0m
+
+---
++++ XChildNopClaim/test-parent-claim-(generated)
+[32m+ apiVersion: claimnested.diff.example.org/v1alpha1[0m
+[32m+ kind: XChildNopClaim[0m
+[32m+ metadata:[0m
+[32m+   annotations:[0m
+[32m+     crossplane.io/composition-resource-name: child-xr[0m
+[32m+   generateName: test-parent-claim-[0m
+[32m+   labels:[0m
+[32m+     crossplane.io/composite: test-parent-claim[0m
+[32m+ spec:[0m
+[32m+   childField: new-parent-value[0m
+[32m+   compositionUpdatePolicy: Automatic[0m
+
+---
+
+Summary: 3 added
