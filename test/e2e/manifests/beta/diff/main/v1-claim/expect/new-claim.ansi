@@ -1,38 +1,38 @@
 +++ ClusterNopResource/test-claim-(generated)
-[32m+ apiVersion: nop.crossplane.io/v1alpha1[0m
-[32m+ kind: ClusterNopResource[0m
-[32m+ metadata:[0m
-[32m+   annotations:[0m
-[32m+     cool-field: new-value[0m
-[32m+     crossplane.io/composition-resource-name: nop-resource[0m
-[32m+   generateName: test-claim-[0m
-[32m+   labels:[0m
-[32m+     crossplane.io/composite: test-claim[0m
-[32m+ spec:[0m
-[32m+   deletionPolicy: Delete[0m
-[32m+   forProvider:[0m
-[32m+     conditionAfter:[0m
-[32m+     - conditionStatus: "True"[0m
-[32m+       conditionType: Ready[0m
-[32m+       time: 0s[0m
-[32m+   managementPolicies:[0m
-[32m+   - '*'[0m
-[32m+   providerConfigRef:[0m
-[32m+     name: default[0m
++ apiVersion: nop.crossplane.io/v1alpha1
++ kind: ClusterNopResource
++ metadata:
++   annotations:
++     cool-field: new-value
++     crossplane.io/composition-resource-name: nop-resource
++   generateName: test-claim-
++   labels:
++     crossplane.io/composite: test-claim
++ spec:
++   deletionPolicy: Delete
++   forProvider:
++     conditionAfter:
++     - conditionStatus: "True"
++       conditionType: Ready
++       time: 0s
++   managementPolicies:
++   - '*'
++   providerConfigRef:
++     name: default
 
 ---
 +++ NopClaim/test-claim
-[32m+ apiVersion: claim.diff.example.org/v1alpha1[0m
-[32m+ kind: NopClaim[0m
-[32m+ metadata:[0m
-[32m+   name: test-claim[0m
-[32m+   namespace: default[0m
-[32m+ spec:[0m
-[32m+   compositeDeletePolicy: Background[0m
-[32m+   compositionRef:[0m
-[32m+     name: xnopclaims.claim.diff.example.org[0m
-[32m+   compositionUpdatePolicy: Automatic[0m
-[32m+   coolField: new-value[0m
++ apiVersion: claim.diff.example.org/v1alpha1
++ kind: NopClaim
++ metadata:
++   name: test-claim
++   namespace: default
++ spec:
++   compositeDeletePolicy: Background
++   compositionRef:
++     name: xnopclaims.claim.diff.example.org
++   compositionUpdatePolicy: Automatic
++   coolField: new-value
 
 ---
 

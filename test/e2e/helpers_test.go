@@ -174,12 +174,20 @@ func assertDiffMatchesFile(t *testing.T, actual, expectedSource, log string) {
 			t.Fatalf("Failed to create directory for expected file: %v", err)
 		}
 
-		// Write the actual output to the expected file
-		if err := os.WriteFile(expectedSource, []byte(actual), 0o644); err != nil {
+		// Normalize the output before writing to reduce churn from random generated names
+		_, normalizedLines := parseStringContent(actual)
+		normalizedOutput := strings.Join(normalizedLines, "\n")
+		if !strings.HasSuffix(actual, "\n") {
+			// Don't add trailing newline if original didn't have one
+			normalizedOutput = strings.TrimSuffix(normalizedOutput, "\n")
+		}
+
+		// Write the normalized output to the expected file
+		if err := os.WriteFile(expectedSource, []byte(normalizedOutput), 0o644); err != nil {
 			t.Fatalf("Failed to write expected file: %v", err)
 		}
 
-		t.Logf("Wrote expected output to %s", expectedSource)
+		t.Logf("Wrote normalized expected output to %s", expectedSource)
 
 		return
 	}

@@ -11,13 +11,13 @@
     name: test-parent-existing-child
     namespace: default
   spec:
-[31m-   childField: existing-value[0m
-[32m+   childField: modified-value[0m
+-   childField: existing-value
++   childField: modified-value
     crossplane:
       compositionRef:
         name: child-nop-composition
       compositionRevisionRef:
-        name: child-nop-composition-a843bad
+        name: child-nop-composition-XXXXXXX
       compositionUpdatePolicy: Automatic
 
 ---
@@ -36,10 +36,10 @@
       compositionRef:
         name: parent-nop-composition
       compositionRevisionRef:
-        name: parent-nop-composition-b8ca6fe
+        name: parent-nop-composition-XXXXXXX
       compositionUpdatePolicy: Automatic
-[31m-   parentField: existing-value[0m
-[32m+   parentField: modified-value[0m
+-   parentField: existing-value
++   parentField: modified-value
 
 ---
 
