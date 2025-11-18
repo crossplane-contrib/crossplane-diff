@@ -124,6 +124,7 @@ e2e-internal:
   ARG GOOS=${TARGETOS}
   ARG FLAGS="-test-suite=base -labels=crossplane-version=${CROSSPLANE_IMAGE_TAG}"
   ARG TEST_FORMAT=testname
+  ARG E2E_DUMP_EXPECTED
   # Using earthly image to allow compatibility with different development environments e.g. WSL
   FROM earthly/dind:alpine-3.20-docker-26.1.5-r0
   RUN wget https://dl.google.com/go/go${GO_VERSION}.${GOOS}-${GOARCH}.tar.gz
@@ -151,10 +152,11 @@ e2e-internal:
     WITH DOCKER --pull crossplane/crossplane:${CROSSPLANE_IMAGE_TAG}
       # TODO(negz:) Set GITHUB_ACTIONS=true and use RUN --raw-output when
       # https://github.com/earthly/earthly/issues/4143 is fixed.
-      RUN gotestsum --no-color=false --format ${TEST_FORMAT} --junitfile e2e-tests.xml --raw-command go tool test2json -t -p E2E ./e2e -test.v -crossplane-image=crossplane/crossplane:${CROSSPLANE_IMAGE_TAG} ${FLAGS}
+      RUN E2E_DUMP_EXPECTED=${E2E_DUMP_EXPECTED} gotestsum --no-color=false --format ${TEST_FORMAT} --junitfile e2e-tests.xml --raw-command go tool test2json -t -p E2E ./e2e -test.v -crossplane-image=crossplane/crossplane:${CROSSPLANE_IMAGE_TAG} ${FLAGS}
     END
   FINALLY
     SAVE ARTIFACT --if-exists e2e-tests.xml AS LOCAL _output/tests/e2e-tests.xml
+    SAVE ARTIFACT --if-exists test/e2e/manifests/beta/diff AS LOCAL test/e2e/manifests/beta/diff
   END
 
 # go-modules downloads Crossplane's go modules. It's the base target of most Go

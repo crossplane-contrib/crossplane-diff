@@ -1,4 +1,4 @@
-~~~ ClusterNopResource/test-claim-xxxxx
+~~~ ClusterNopResource/test-claim-zjdv2-a7408f82b2b7
   apiVersion: nop.crossplane.io/v1alpha1
   kind: ClusterNopResource
   metadata:
@@ -6,16 +6,16 @@
 [31m-     cool-field: existing-value[0m
 [32m+     cool-field: modified-value[0m
       crossplane.io/composition-resource-name: nop-resource
-      crossplane.io/external-name: test-claim-xxxxx-xxxxx
+      crossplane.io/external-name: test-claim-zjdv2-a7408f82b2b7
 [32m+     setting: enabled[0m
     finalizers:
     - finalizer.managedresource.crossplane.io
-    generateName: test-claim-xxxxx-
+    generateName: test-claim-zjdv2-
     labels:
       crossplane.io/claim-name: test-claim
       crossplane.io/claim-namespace: default
-      crossplane.io/composite: test-claim-xxxxx-xxxxx
-    name: test-claim-xxxxx-xxxxx
+      crossplane.io/composite: test-claim-zjdv2
+    name: test-claim-zjdv2-a7408f82b2b7
   spec:
     deletionPolicy: Delete
     forProvider:
@@ -42,7 +42,7 @@
     compositionRef:
       name: xnopclaims.claim.diff.example.org
     compositionRevisionRef:
-      name: xnopclaims.claim.diff.example.org-xxxxxxx
+      name: xnopclaims.claim.diff.example.org-b77b4ca
 [31m-   coolField: existing-value[0m
 [32m+   compositionUpdatePolicy: Automatic[0m
 [32m+   coolField: modified-value[0m
@@ -52,7 +52,7 @@
     resourceRef:
       apiVersion: claim.diff.example.org/v1alpha1
       kind: XNopClaim
-      name: test-claim-xxxxx
+      name: test-claim-zjdv2
 
 ---
 

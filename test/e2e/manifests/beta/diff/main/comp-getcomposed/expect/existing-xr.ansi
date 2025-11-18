@@ -72,7 +72,7 @@ Summary: 1 modified
 
 === Affected Composite Resources ===
 
-  [32m✓[0m XGetComposedResource/test-getcomposed-resource (cluster-scoped)
+[32m  ✓ XGetComposedResource/test-getcomposed-resource (cluster-scoped)[0m
 
 Summary: 1 resource unchanged
 

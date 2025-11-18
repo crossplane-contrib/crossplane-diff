@@ -104,6 +104,11 @@ func (c *DefaultDiffCalculator) CalculateDiff(ctx context.Context, composite *un
 	// Preserve existing resource identity for resources with generateName
 	desired = c.preserveExistingResourceIdentity(current, desired, resourceID, name)
 
+	// Preserve the composite label for ALL existing resources
+	// This is critical because in Crossplane, all resources in a tree point to the ROOT composite,
+	// not their immediate parent. We must never change this label.
+	desired = c.preserveCompositeLabel(current, desired, resourceID)
+
 	// Update owner references if needed (done after preserving existing labels)
 	// IMPORTANT: For composed resources, the owner should be the XR, not a Claim.
 	// When composite is the current XR from the cluster, we use it as the owner.
@@ -362,6 +367,43 @@ func (c *DefaultDiffCalculator) preserveExistingResourceIdentity(current, desire
 
 		desiredCopy.SetLabels(desiredLabels)
 	}
+
+	return desiredCopy
+}
+
+// preserveCompositeLabel preserves the crossplane.io/composite label from an existing resource.
+// This is critical because in Crossplane, all resources in a tree point to the ROOT composite,
+// not their immediate parent. We must never change this label for existing resources.
+func (c *DefaultDiffCalculator) preserveCompositeLabel(current, desired *un.Unstructured, resourceID string) *un.Unstructured {
+	// If there's no current resource, nothing to preserve
+	if current == nil {
+		return desired
+	}
+
+	// Get the composite label from the current resource
+	currentLabels := current.GetLabels()
+	if currentLabels == nil {
+		return desired
+	}
+
+	compositeLabel, exists := currentLabels["crossplane.io/composite"]
+	if !exists {
+		return desired
+	}
+
+	// Preserve the composite label in the desired resource
+	desiredCopy := desired.DeepCopy()
+	desiredLabels := desiredCopy.GetLabels()
+	if desiredLabels == nil {
+		desiredLabels = make(map[string]string)
+	}
+
+	desiredLabels["crossplane.io/composite"] = compositeLabel
+	desiredCopy.SetLabels(desiredLabels)
+
+	c.logger.Debug("Preserved composite label from existing resource",
+		"resource", resourceID,
+		"compositeLabel", compositeLabel)
 
 	return desiredCopy
 }

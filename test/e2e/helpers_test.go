@@ -22,6 +22,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"testing"
@@ -71,6 +72,8 @@ var (
 	fanoutResourceNameRegex           = regexp.MustCompile(`(test-fanout-resource-\d{2})-[a-z0-9]{5,}`)
 	claimNameRegex                    = regexp.MustCompile(`(test-claim)-[a-z0-9]{5,}(?:-[a-z0-9]{5,})?`)
 	compClaimNameRegex                = regexp.MustCompile(`(test-comp-claim)-[a-z0-9]{5,}`)
+	nestedGenerateNameRegex           = regexp.MustCompile(`(test-parent-generatename-child)-[a-z0-9]{12,16}`)
+	nestedClaimGenerateNameRegex      = regexp.MustCompile(`(existing-parent-claim)-[a-z0-9]{5,}(?:-[a-z0-9]{12,16})?`)
 	claimCompositionRevisionRegex     = regexp.MustCompile(`(xnopclaims\.claim\.diff\.example\.org)-[a-z0-9]{7,}`)
 	compositionRevisionRegex          = regexp.MustCompile(`(xnopresources\.(cluster\.|legacy\.)?diff\.example\.org)-[a-z0-9]{7,}`)
 	nestedCompositionRevisionRegex    = regexp.MustCompile(`(child-nop-composition|parent-nop-composition)-[a-z0-9]{7,}`)
@@ -128,6 +131,8 @@ func normalizeLine(line string) string {
 	line = fanoutResourceNameRegex.ReplaceAllString(line, "${1}-XXXXX")
 	line = claimNameRegex.ReplaceAllString(line, "${1}-XXXXX")
 	line = compClaimNameRegex.ReplaceAllString(line, "${1}-XXXXX")
+	line = nestedGenerateNameRegex.ReplaceAllString(line, "${1}-XXXXX")
+	line = nestedClaimGenerateNameRegex.ReplaceAllString(line, "${1}-XXXXX")
 
 	// Replace composition revision refs with random hash
 	line = compositionRevisionRegex.ReplaceAllString(line, "${1}-XXXXXXX")
@@ -161,6 +166,22 @@ func parseStringContent(content string) ([]string, []string) {
 // AssertDiffMatchesFile compares a diff output with an expected file, ignoring dynamic parts.
 func assertDiffMatchesFile(t *testing.T, actual, expectedSource, log string) {
 	t.Helper()
+
+	// If E2E_DUMP_EXPECTED is set, write the actual output to the expected file
+	if os.Getenv("E2E_DUMP_EXPECTED") != "" {
+		// Ensure the directory exists
+		if err := os.MkdirAll(filepath.Dir(expectedSource), 0755); err != nil {
+			t.Fatalf("Failed to create directory for expected file: %v", err)
+		}
+
+		// Write the actual output to the expected file
+		if err := os.WriteFile(expectedSource, []byte(actual), 0644); err != nil {
+			t.Fatalf("Failed to write expected file: %v", err)
+		}
+
+		t.Logf("Wrote expected output to %s", expectedSource)
+		return
+	}
 
 	expected, err := os.ReadFile(expectedSource)
 	if err != nil {

@@ -1,4 +1,4 @@
-~~~ XChildNop/test-parent-existing-child
+~~~ XChildNop/test-parent-generatename-child-9ad5e5d178f4
   apiVersion: nested.diff.example.org/v1alpha1
   kind: XChildNop
   metadata:
@@ -6,9 +6,10 @@
       crossplane.io/composition-resource-name: child-xr
     finalizers:
     - composite.apiextensions.crossplane.io
+    generateName: test-parent-generatename-child-
     labels:
-      crossplane.io/composite: test-parent-existing
-    name: test-parent-existing-child
+      crossplane.io/composite: test-parent-generatename
+    name: test-parent-generatename-child-9ad5e5d178f4
     namespace: default
   spec:
 [31m-   childField: existing-value[0m
@@ -21,22 +22,22 @@
       compositionUpdatePolicy: Automatic
 
 ---
-~~~ XParentNop/test-parent-existing
+~~~ XParentNop/test-parent-generatename
   apiVersion: nested.diff.example.org/v1alpha1
   kind: XParentNop
   metadata:
     finalizers:
     - composite.apiextensions.crossplane.io
     labels:
-      crossplane.io/composite: test-parent-existing
-    name: test-parent-existing
+      crossplane.io/composite: test-parent-generatename
+    name: test-parent-generatename
     namespace: default
   spec:
     crossplane:
       compositionRef:
-        name: parent-nop-composition
+        name: parent-nop-composition-generatename
       compositionRevisionRef:
-        name: parent-nop-composition-b8ca6fe
+        name: parent-nop-composition-generatename-caacbdf
       compositionUpdatePolicy: Automatic
 [31m-   parentField: existing-value[0m
 [32m+   parentField: modified-value[0m
