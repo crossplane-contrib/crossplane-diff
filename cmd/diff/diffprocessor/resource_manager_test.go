@@ -1067,7 +1067,7 @@ func TestDefaultResourceManager_updateCompositeOwnerLabel_EdgeCases(t *testing.T
 }
 
 func TestDefaultResourceManager_FetchObservedResources(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 
 	// Create test XR
 	testXR := tu.NewResource("example.org/v1", "XR", "test-xr").
