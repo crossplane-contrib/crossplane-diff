@@ -2,9 +2,11 @@ package diffprocessor
 
 import (
 	"context"
+	"sort"
 	"strings"
 	"testing"
 
+	gcmp "github.com/google/go-cmp/cmp"
 	tu "github.com/crossplane-contrib/crossplane-diff/cmd/diff/testutils"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -1279,10 +1281,13 @@ func TestDefaultResourceManager_FetchObservedResources(t *testing.T) {
 
 	for name, tt := range tests {
 		t.Run(name, func(t *testing.T) {
-			rm := &DefaultResourceManager{
-				treeClient: tt.setupTreeClient(),
-				logger:     tu.TestLogger(t, false),
-			}
+			// Use the constructor and interface type to test via the public API
+			rm := NewResourceManager(
+				nil, // client not used by FetchObservedResources
+				nil, // defClient not used by FetchObservedResources
+				tt.setupTreeClient(),
+				tu.TestLogger(t, false),
+			)
 
 			observed, err := rm.FetchObservedResources(ctx, &cmp.Unstructured{Unstructured: *tt.xr})
 
@@ -1305,15 +1310,18 @@ func TestDefaultResourceManager_FetchObservedResources(t *testing.T) {
 
 			// Verify we got the expected resources
 			if len(tt.wantResourceIDs) > 0 {
-				foundIDs := make(map[string]bool)
+				// Extract resource IDs from observed resources
+				var gotResourceIDs []string
 				for _, res := range observed {
-					foundIDs[res.GetName()] = true
+					gotResourceIDs = append(gotResourceIDs, res.GetName())
 				}
+				sort.Strings(gotResourceIDs)
 
-				for _, wantID := range tt.wantResourceIDs {
-					if !foundIDs[wantID] {
-						t.Errorf("FetchObservedResources() missing expected resource: %s", wantID)
-					}
+				wantResourceIDs := append([]string{}, tt.wantResourceIDs...)
+				sort.Strings(wantResourceIDs)
+
+				if diff := gcmp.Diff(wantResourceIDs, gotResourceIDs); diff != "" {
+					t.Errorf("FetchObservedResources() resource IDs mismatch (-want +got):\n%s", diff)
 				}
 
 				// Verify all resources have the composition-resource-name annotation

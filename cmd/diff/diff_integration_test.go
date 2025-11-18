@@ -2743,7 +2743,7 @@ Summary: 2 modified
 			noColor:       false,
 		},
 		"CompositionChangeImpactsClaims": {
-			reason: "Validates composition change impacts existing Claims",
+			reason: "Validates composition change impacts existing Claims (issue #120)",
 			// Set up existing Claims and their XRs that use the original composition
 			setupFiles: []string{
 				// XRD, composition, and functions
