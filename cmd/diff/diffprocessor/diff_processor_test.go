@@ -415,7 +415,7 @@ func TestDefaultDiffProcessor_PerformDiff(t *testing.T) {
 				// Override the diff calculator factory to return actual diffs
 				WithDiffCalculatorFactory(func(k8.ApplyClient, xp.ResourceTreeClient, ResourceManager, logging.Logger, renderer.DiffOptions) DiffCalculator {
 					return &tu.MockDiffCalculator{
-						CalculateNonRemovalDiffsFn: func(context.Context, *cmp.Unstructured, render.Outputs) (map[string]*dt.ResourceDiff, map[string]bool, error) {
+						CalculateNonRemovalDiffsFn: func(context.Context, *cmp.Unstructured, *un.Unstructured, render.Outputs) (map[string]*dt.ResourceDiff, map[string]bool, error) {
 							diffs := make(map[string]*dt.ResourceDiff)
 							rendered := make(map[string]bool)
 
@@ -1820,7 +1820,7 @@ func TestDefaultDiffProcessor_ProcessNestedXRs(t *testing.T) {
 				}),
 				WithDiffCalculatorFactory(func(k8.ApplyClient, xp.ResourceTreeClient, ResourceManager, logging.Logger, renderer.DiffOptions) DiffCalculator {
 					return &tu.MockDiffCalculator{
-						CalculateNonRemovalDiffsFn: func(_ context.Context, xr *cmp.Unstructured, _ render.Outputs) (map[string]*dt.ResourceDiff, map[string]bool, error) {
+						CalculateNonRemovalDiffsFn: func(_ context.Context, xr *cmp.Unstructured, _ *un.Unstructured, _ render.Outputs) (map[string]*dt.ResourceDiff, map[string]bool, error) {
 							// Return a simple diff for the XR to make the test pass
 							diffs := make(map[string]*dt.ResourceDiff)
 							rendered := make(map[string]bool)

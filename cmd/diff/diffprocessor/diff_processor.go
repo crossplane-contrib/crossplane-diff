@@ -205,13 +205,14 @@ func (p *DefaultDiffProcessor) PerformDiff(ctx context.Context, stdout io.Writer
 // The compositionProvider function is called to obtain the composition to use for rendering.
 // This is the public method for top-level XR diffing, which enables removal detection.
 func (p *DefaultDiffProcessor) DiffSingleResource(ctx context.Context, res *un.Unstructured, compositionProvider types.CompositionProvider) (map[string]*dt.ResourceDiff, error) {
-	diffs, _, err := p.diffSingleResourceInternal(ctx, res, compositionProvider, true)
+	diffs, _, err := p.diffSingleResourceInternal(ctx, res, compositionProvider, nil, true)
 	return diffs, err
 }
 
 // diffSingleResourceInternal is the internal implementation that allows control over removal detection.
+// parentXR should be nil for root XRs, and the parent XR for nested XRs.
 // detectRemovals should be true for top-level XRs and false for nested XRs (which don't own their composed resources).
-func (p *DefaultDiffProcessor) diffSingleResourceInternal(ctx context.Context, res *un.Unstructured, compositionProvider types.CompositionProvider, detectRemovals bool) (map[string]*dt.ResourceDiff, map[string]bool, error) {
+func (p *DefaultDiffProcessor) diffSingleResourceInternal(ctx context.Context, res *un.Unstructured, compositionProvider types.CompositionProvider, parentXR *cmp.Unstructured, detectRemovals bool) (map[string]*dt.ResourceDiff, map[string]bool, error) {
 	resourceID := fmt.Sprintf("%s/%s", res.GetKind(), res.GetName())
 	p.config.Logger.Debug("Processing resource", "resource", resourceID)
 
@@ -325,7 +326,13 @@ func (p *DefaultDiffProcessor) diffSingleResourceInternal(ctx context.Context, r
 	cleanXR.SetManagedFields(nil)
 	cleanXR.SetResourceVersion("")
 
-	diffs, renderedResources, err := p.diffCalculator.CalculateNonRemovalDiffs(ctx, cleanXR, desired)
+	// Convert parentXR to unstructured for the diff calculator
+	var parentComposite *un.Unstructured
+	if parentXR != nil {
+		parentComposite = parentXR.GetUnstructured()
+	}
+
+	diffs, renderedResources, err := p.diffCalculator.CalculateNonRemovalDiffs(ctx, cleanXR, parentComposite, desired)
 	if err != nil {
 		// We don't fail completely if some diffs couldn't be calculated
 		p.config.Logger.Debug("Partial error calculating diffs", "resource", resourceID, "error", err)
@@ -441,21 +448,6 @@ func preserveNestedXRIdentity(nestedXR, existingNestedXR *un.Unstructured) {
 	}
 }
 
-// mergeNestedXRSpecs merges the parent-produced nested XR spec with the existing cluster XR.
-// The existing cluster XR provides the base (with all fields populated by its own composition),
-// and the parent-produced spec provides overrides for fields the parent wants to change.
-func mergeNestedXRSpecs(existingNestedXR, parentProducedXR *un.Unstructured) *un.Unstructured {
-	// Start with a deep copy of the existing cluster XR
-	merged := existingNestedXR.DeepCopy()
-
-	// Merge the parent-produced spec into the existing XR's spec
-	// mergo.WithOverride means parent fields take precedence
-	// Deep merge ensures nested maps are merged recursively
-	_ = mergo.Merge(&merged.Object, parentProducedXR.Object, mergo.WithOverride)
-
-	return merged
-}
-
 // ProcessNestedXRs recursively processes composed resources that are themselves XRs.
 // It checks each composed resource to see if it's an XR, and if so, processes it through
 // its own composition pipeline to get the full tree of diffs. It preserves the identity
@@ -521,32 +513,25 @@ func (p *DefaultDiffProcessor) ProcessNestedXRs(
 		// Find the matching existing nested XR in observed resources (if it exists)
 		// Match by composition-resource-name annotation to find the correct existing resource
 		existingNestedXR := findExistingNestedXR(nestedXR, observedResources)
-
-		// Determine which XR to use for rendering
-		xrToRender := nestedXR
 		if existingNestedXR != nil {
 			p.config.Logger.Debug("Found existing nested XR in cluster",
 				"nestedXR", nestedResourceID,
 				"existingName", existingNestedXR.GetName(),
 				"compositionResourceName", nestedXR.GetAnnotations()["crossplane.io/composition-resource-name"])
 
-			// For nested XRs, we should render based on the spec that merges:
-			// 1. The existing cluster XR's spec (for fields managed by the nested XR's own composition)
-			// 2. The parent-produced spec (for fields the parent wants to change)
-			//
-			// We start with the existing cluster XR to preserve its identity and state,
-			// then overlay the parent's changes on top.
-			xrToRender = mergeNestedXRSpecs(existingNestedXR, nestedXR)
+			// Preserve its identity (name, composite label) so its managed resources can be matched correctly
+			preserveNestedXRIdentity(nestedXR, existingNestedXR)
 
-			p.config.Logger.Debug("Merged existing cluster XR spec with parent-produced changes",
+			p.config.Logger.Debug("Preserved nested XR identity",
 				"nestedXR", nestedResourceID,
-				"existingName", existingNestedXR.GetName())
+				"preservedName", nestedXR.GetName())
 		}
 
 		// Recursively process this nested XR
+		// Pass parentXR so nested XR can have correct composite label
 		// Use detectRemovals=false for nested XRs since they don't own their composed resources
 		// (resources are owned by the top-level parent XR in Crossplane's ownership model)
-		nestedDiffs, nestedRenderedResources, err := p.diffSingleResourceInternal(ctx, xrToRender, compositionProvider, false)
+		nestedDiffs, nestedRenderedResources, err := p.diffSingleResourceInternal(ctx, nestedXR, compositionProvider, parentXR, false)
 		if err != nil {
 			// Check if the error is due to missing composition
 			// Note: It's valid to have an XRD in Crossplane without a composition attached to it.

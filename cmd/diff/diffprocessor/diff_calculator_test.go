@@ -929,6 +929,9 @@ func TestDefaultDiffCalculator_preserveCompositeLabel(t *testing.T) {
 					"kind":       "NopResource",
 					"metadata": map[string]any{
 						"name": "existing-resource",
+						"annotations": map[string]any{
+							"crossplane.io/composition-resource-name": "composed-resource",
+						},
 						"labels": map[string]any{
 							"crossplane.io/composite": "child-xr-name",
 						},
@@ -959,6 +962,9 @@ func TestDefaultDiffCalculator_preserveCompositeLabel(t *testing.T) {
 					"kind":       "NopResource",
 					"metadata": map[string]any{
 						"generateName": "existing-resource-",
+						"annotations": map[string]any{
+							"crossplane.io/composition-resource-name": "composed-resource",
+						},
 						"labels": map[string]any{
 							"crossplane.io/composite": "child-xr-name",
 						},
@@ -1061,6 +1067,9 @@ func TestDefaultDiffCalculator_preserveCompositeLabel(t *testing.T) {
 					"kind":       "NopResource",
 					"metadata": map[string]any{
 						"name": "existing-resource",
+						"annotations": map[string]any{
+							"crossplane.io/composition-resource-name": "composed-resource",
+						},
 					},
 				},
 			},
@@ -1087,6 +1096,9 @@ func TestDefaultDiffCalculator_preserveCompositeLabel(t *testing.T) {
 					"kind":       "NopResource",
 					"metadata": map[string]any{
 						"name": "existing-resource",
+						"annotations": map[string]any{
+							"crossplane.io/composition-resource-name": "nop-resource",
+						},
 						"labels": map[string]any{
 							"crossplane.io/composite": "child-xr-name",
 							"custom-label":            "custom-value",
