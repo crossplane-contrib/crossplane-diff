@@ -161,10 +161,10 @@ func (c *DefaultDiffCalculator) CalculateDiff(ctx context.Context, composite *un
 //
 // WHY TWO PHASES?
 // When processing nested XRs, we must:
-//   1. Phase 1 (this method): Calculate diffs for all rendered resources (adds/modifications)
-//      and build a set of "rendered resource keys" that tracks what was generated
-//   2. Phase 2 (CalculateRemovedResourceDiffs): Compare cluster state against rendered
-//      resources to identify removals
+//  1. Phase 1 (this method): Calculate diffs for all rendered resources (adds/modifications)
+//     and build a set of "rendered resource keys" that tracks what was generated
+//  2. Phase 2 (CalculateRemovedResourceDiffs): Compare cluster state against rendered
+//     resources to identify removals
 //
 // The separation is critical because:
 //   - Nested XRs are processed recursively BETWEEN these phases
@@ -174,21 +174,22 @@ func (c *DefaultDiffCalculator) CalculateDiff(ctx context.Context, composite *un
 //     as "to be removed" before they've been processed
 //
 // EXAMPLE SCENARIO:
-//   Parent XR renders: [Resource-A, NestedXR-B]
-//   NestedXR-B renders: [Resource-C, Resource-D]
 //
-//   Without two phases:
-//     - We'd see cluster has [Resource-A, Resource-C, Resource-D] from prior render
-//     - We'd see new render has [Resource-A, NestedXR-B]
-//     - We'd INCORRECTLY mark Resource-C and Resource-D as removed
+//	Parent XR renders: [Resource-A, NestedXR-B]
+//	NestedXR-B renders: [Resource-C, Resource-D]
 //
-//   With two phases:
-//     Phase 1: Calculate diffs for [Resource-A, NestedXR-B], track as rendered
-//     Process nested: Recurse into NestedXR-B, add Resource-C and Resource-D to rendered set
-//     Phase 2: Now see [Resource-A, NestedXR-B, Resource-C, Resource-D] as rendered
-//              No false removal detection!
+//	Without two phases:
+//	  - We'd see cluster has [Resource-A, Resource-C, Resource-D] from prior render
+//	  - We'd see new render has [Resource-A, NestedXR-B]
+//	  - We'd INCORRECTLY mark Resource-C and Resource-D as removed
 //
-// Returns: (diffs map, rendered resource keys, error)
+//	With two phases:
+//	  Phase 1: Calculate diffs for [Resource-A, NestedXR-B], track as rendered
+//	  Process nested: Recurse into NestedXR-B, add Resource-C and Resource-D to rendered set
+//	  Phase 2: Now see [Resource-A, NestedXR-B, Resource-C, Resource-D] as rendered
+//	           No false removal detection!
+//
+// Returns: (diffs map, rendered resource keys, error).
 func (c *DefaultDiffCalculator) CalculateNonRemovalDiffs(ctx context.Context, xr *cmp.Unstructured, desired render.Outputs) (map[string]*dt.ResourceDiff, map[string]bool, error) {
 	xrName := xr.GetName()
 	c.logger.Debug("Calculating diffs",

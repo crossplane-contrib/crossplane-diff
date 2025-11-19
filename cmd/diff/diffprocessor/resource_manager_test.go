@@ -6,8 +6,8 @@ import (
 	"strings"
 	"testing"
 
-	gcmp "github.com/google/go-cmp/cmp"
 	tu "github.com/crossplane-contrib/crossplane-diff/cmd/diff/testutils"
+	gcmp "github.com/google/go-cmp/cmp"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	un "k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -1315,6 +1315,7 @@ func TestDefaultResourceManager_FetchObservedResources(t *testing.T) {
 				for _, res := range observed {
 					gotResourceIDs = append(gotResourceIDs, res.GetName())
 				}
+
 				sort.Strings(gotResourceIDs)
 
 				wantResourceIDs := append([]string{}, tt.wantResourceIDs...)
