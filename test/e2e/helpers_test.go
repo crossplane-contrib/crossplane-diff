@@ -177,9 +177,9 @@ func assertDiffMatchesFile(t *testing.T, actual, expectedSource, log string) {
 		// Normalize the output before writing to reduce churn from random generated names
 		_, normalizedLines := parseStringContent(actual)
 		normalizedOutput := strings.Join(normalizedLines, "\n")
-		if !strings.HasSuffix(actual, "\n") {
-			// Don't add trailing newline if original didn't have one
-			normalizedOutput = strings.TrimSuffix(normalizedOutput, "\n")
+		if strings.HasSuffix(actual, "\n") {
+			// Add trailing newline if original had one
+			normalizedOutput += "\n"
 		}
 
 		// Write the normalized output to the expected file
