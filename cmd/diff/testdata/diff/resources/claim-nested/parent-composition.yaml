@@ -1,0 +1,31 @@
+apiVersion: apiextensions.crossplane.io/v1
+kind: Composition
+metadata:
+  name: parent-nop-claim-composition
+spec:
+  compositeTypeRef:
+    apiVersion: claimnested.diff.example.org/v1alpha1
+    kind: XParentNopClaim
+  mode: Pipeline
+  pipeline:
+    - step: create-child-xr
+      functionRef:
+        name: function-go-templating
+      input:
+        apiVersion: gotemplating.fn.crossplane.io/v1beta1
+        kind: GoTemplate
+        source: Inline
+        inline:
+          template: |
+            apiVersion: claimnested.diff.example.org/v1alpha1
+            kind: XChildNopClaim
+            metadata:
+              generateName: {{ .observed.composite.resource.metadata.name }}-
+              namespace: {{ .observed.composite.resource.metadata.namespace }}
+              annotations:
+                gotemplating.fn.crossplane.io/composition-resource-name: child-xr
+            spec:
+              childField: {{ .observed.composite.resource.spec.parentField }}
+    - step: auto-ready
+      functionRef:
+        name: function-auto-ready

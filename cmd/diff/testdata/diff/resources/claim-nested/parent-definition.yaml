@@ -1,0 +1,32 @@
+apiVersion: apiextensions.crossplane.io/v1
+kind: CompositeResourceDefinition
+metadata:
+  name: xparentnopclaims.claimnested.diff.example.org
+spec:
+  group: claimnested.diff.example.org
+  names:
+    kind: XParentNopClaim
+    plural: xparentnopclaims
+  claimNames:
+    kind: ParentNopClaim
+    plural: parentnopclaims
+  versions:
+    - name: v1alpha1
+      served: true
+      referenceable: true
+      schema:
+        openAPIV3Schema:
+          type: object
+          properties:
+            spec:
+              type: object
+              properties:
+                parentField:
+                  type: string
+              required:
+                - parentField
+            status:
+              type: object
+              properties:
+                message:
+                  type: string
