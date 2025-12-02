@@ -1,0 +1,13 @@
+apiVersion: claimnested.diff.example.org/v1alpha1
+kind: XParentNopClaim
+metadata:
+  name: existing-parent-claim-82crv
+  generateName: existing-parent-claim-
+  labels:
+    crossplane.io/claim-name: existing-parent-claim
+    crossplane.io/claim-namespace: default
+    crossplane.io/composite: existing-parent-claim-82crv
+spec:
+  parentField: existing-parent-value
+  compositionRef:
+    name: parent-nop-claim-composition
