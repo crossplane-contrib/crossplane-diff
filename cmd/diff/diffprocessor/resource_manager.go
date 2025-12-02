@@ -222,7 +222,8 @@ func (m *DefaultResourceManager) lookupByComposite(ctx context.Context, composit
 	// not the intermediate nested XR's name.
 	desiredCompositeLabel := desired.GetLabels()["crossplane.io/composite"]
 
-	if isCompositeAClaim {
+	switch {
+	case isCompositeAClaim:
 		// For claims, we need to find the XR that was created from this claim
 		// The downstream resources will have labels pointing to that XR
 		// We'll use the claim labels to find downstream resources
@@ -236,7 +237,7 @@ func (m *DefaultResourceManager) lookupByComposite(ctx context.Context, composit
 		m.logger.Debug("Using claim labels for resource lookup",
 			"claim", composite.GetName(),
 			"namespace", composite.GetNamespace())
-	} else if desiredCompositeLabel != "" && desiredCompositeLabel != composite.GetName() {
+	case desiredCompositeLabel != "" && desiredCompositeLabel != composite.GetName():
 		// The desired resource has a different composite label than the parent
 		// (e.g., for nested XRs where we've fixed the label to point to root XR)
 		// Use the resource's own label value for lookup
@@ -249,7 +250,7 @@ func (m *DefaultResourceManager) lookupByComposite(ctx context.Context, composit
 		m.logger.Debug("Using resource's own composite label for lookup",
 			"composite", desiredCompositeLabel,
 			"parentComposite", composite.GetName())
-	} else {
+	default:
 		// For XRs, use the composite label
 		labelSelector = metav1.LabelSelector{
 			MatchLabels: map[string]string{
