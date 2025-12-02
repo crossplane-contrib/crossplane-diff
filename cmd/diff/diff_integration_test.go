@@ -1874,6 +1874,111 @@ Summary: 2 added`,
 			expectedError: false,
 			noColor:       true,
 		},
+		"ModifiedClaimWithNestedXRsShowsDiff": {
+			reason: "Validates that modified Claims with nested XRs show proper diff (3 modified resources)",
+			setupFiles: []string{
+				"testdata/diff/resources/existing-namespace.yaml",
+				// NOTE: CRDs for parent/child Claims/XRs are auto-loaded from testdata/diff/crds/
+				// XRDs for parent and child Claims
+				"testdata/diff/resources/claim-nested/parent-definition.yaml",
+				"testdata/diff/resources/claim-nested/child-definition.yaml",
+				// Compositions for parent and child
+				"testdata/diff/resources/claim-nested/parent-composition.yaml",
+				"testdata/diff/resources/claim-nested/child-composition.yaml",
+				"testdata/diff/resources/functions.yaml",
+				// Claim is set up separately (not via owner refs - it uses spec.resourceRef to link to backing XR)
+				"testdata/diff/resources/claim-nested/existing-claim.yaml",
+			},
+			// Owner ref hierarchy matches Crossplane's actual ownership model:
+			// - Backing XR is the root of the owner ref tree (no owner refs)
+			// - Nested XR has owner ref to backing XR
+			// - Managed resource has owner ref to nested XR
+			// Note: Claim is NOT in this hierarchy - it links to backing XR via spec.resourceRef, not owner refs
+			setupFilesWithOwnerRefs: []HierarchicalOwnershipRelation{
+				{
+					// Backing XR is the root of owner ref tree
+					OwnerFile: "testdata/diff/resources/claim-nested/existing-parent-xr.yaml",
+					OwnedFiles: map[string]*HierarchicalOwnershipRelation{
+						// Nested XR owned by backing XR
+						"testdata/diff/resources/claim-nested/existing-child-xr.yaml": {
+							// Managed resource owned by nested XR
+							OwnedFiles: map[string]*HierarchicalOwnershipRelation{
+								"testdata/diff/resources/claim-nested/existing-managed-resource.yaml": nil,
+							},
+						},
+					},
+				},
+			},
+			inputFiles: []string{"testdata/diff/modified-claim-nested.yaml"},
+			expectedOutput: `
+~~~ ClusterNopResource/existing-parent-claim-82crv-nop
+  apiVersion: nop.crossplane.io/v1alpha1
+  kind: ClusterNopResource
+  metadata:
+    annotations:
+-     child-field: existing-parent-value
++     child-field: modified-parent-value
+      crossplane.io/composition-resource-name: nop-resource
+    generateName: existing-parent-claim-82crv-
+    labels:
+      crossplane.io/claim-name: existing-parent-claim
+      crossplane.io/claim-namespace: default
+      crossplane.io/composite: existing-parent-claim-82crv
+    name: existing-parent-claim-82crv-nop
+  spec:
+    forProvider:
+      conditionAfter:
+      - conditionStatus: "True"
+        conditionType: Ready
+        time: 0s
+
+---
+~~~ ParentNopClaim/existing-parent-claim
+  apiVersion: claimnested.diff.example.org/v1alpha1
+  kind: ParentNopClaim
+  metadata:
++   labels:
++     new-label: added-value
+    name: existing-parent-claim
+    namespace: default
+  spec:
+    compositeDeletePolicy: Background
+    compositionRef:
+      name: parent-nop-claim-composition
+    compositionUpdatePolicy: Automatic
+-   parentField: existing-parent-value
++   parentField: modified-parent-value
+    resourceRef:
+      apiVersion: claimnested.diff.example.org/v1alpha1
+      kind: XParentNopClaim
+      name: existing-parent-claim-82crv
+
+---
+~~~ XChildNopClaim/existing-parent-claim-82crv-child
+  apiVersion: claimnested.diff.example.org/v1alpha1
+  kind: XChildNopClaim
+  metadata:
+    annotations:
+      crossplane.io/composition-resource-name: child-xr
+    generateName: existing-parent-claim-82crv-
+    labels:
+      crossplane.io/claim-name: existing-parent-claim
+      crossplane.io/claim-namespace: default
+      crossplane.io/composite: existing-parent-claim-82crv
+    name: existing-parent-claim-82crv-child
+  spec:
+-   childField: existing-parent-value
++   childField: modified-parent-value
+    compositionRef:
+      name: child-nop-claim-composition
+    compositionUpdatePolicy: Automatic
+
+---
+
+Summary: 3 modified`,
+			expectedError: false,
+			noColor:       true,
+		},
 	}
 
 	for name, tt := range tests {
