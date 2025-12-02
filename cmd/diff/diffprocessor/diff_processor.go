@@ -596,6 +596,41 @@ func (p *DefaultDiffProcessor) propagateCompositeLabelInClaimContext(composedRes
 
 // fixNestedXRLabelsForClaim fixes the labels in nested XRs to point to the backing XR
 // instead of the Claim. This ensures FetchCurrentObject can match them to existing resources.
+//
+// WHY THIS FUNCTION EXISTS:
+//
+// This function compensates for a semantic gap between Crossplane's render pipeline and
+// how Crossplane actually handles Claims in the controller.
+//
+// In real Crossplane:
+//   1. User creates Claim "my-claim"
+//   2. Crossplane creates backing XR "my-claim-xyz123" (generateName adds suffix)
+//   3. Backing XR owns all composed resources
+//   4. Composed resources get crossplane.io/composite label pointing to backing XR name
+//   5. Owner references point to backing XR
+//
+// What crossplane render produces when given a Claim:
+//   1. Render treats Claim as if it were the composite
+//   2. Composed resources get crossplane.io/composite label pointing to Claim name (WRONG)
+//   3. Owner references point to Claim (WRONG)
+//
+// This mismatch occurs because render is an offline tool - it has no cluster access and
+// doesn't know that a backing XR exists, what its name is, or its UID.
+//
+// POTENTIAL FUTURE IMPROVEMENT:
+//
+// Instead of post-render fixups, we could potentially render from the backing XR directly:
+//   1. User provides Claim YAML
+//   2. Fetch backing XR from cluster
+//   3. Merge Claim.spec into backing XR
+//   4. Render using backing XR (produces correct labels!)
+//   5. No fixups needed
+//
+// This would be more faithful to Crossplane's actual behavior. However, it requires
+// careful handling of the Claim → XR spec merging and may have edge cases.
+//
+// Another avenue to explore is whether ObservedResources could provide the backing XR
+// identity to the render pipeline, avoiding the need for post-render fixups.
 func (p *DefaultDiffProcessor) fixNestedXRLabelsForClaim(ctx context.Context, composedResources []cpd.Unstructured, xr *cmp.Unstructured, existingBackingXRUn *un.Unstructured, backingXRName string) {
 	if existingBackingXRUn == nil {
 		return
