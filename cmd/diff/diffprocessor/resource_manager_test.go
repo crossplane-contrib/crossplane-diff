@@ -2,10 +2,12 @@ package diffprocessor
 
 import (
 	"context"
+	"sort"
 	"strings"
 	"testing"
 
 	tu "github.com/crossplane-contrib/crossplane-diff/cmd/diff/testutils"
+	gcmp "github.com/google/go-cmp/cmp"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	un "k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -13,6 +15,9 @@ import (
 	"k8s.io/utils/ptr"
 
 	"github.com/crossplane/crossplane-runtime/v2/pkg/errors"
+	cmp "github.com/crossplane/crossplane-runtime/v2/pkg/resource/unstructured/composite"
+
+	"github.com/crossplane/crossplane/v2/cmd/crank/common/resource"
 )
 
 const (
@@ -334,7 +339,7 @@ func TestDefaultResourceManager_FetchCurrentObject(t *testing.T) {
 			// Create the resource manager
 			resourceClient := tt.setupResourceClient()
 
-			rm := NewResourceManager(resourceClient, tt.defClient, tu.TestLogger(t, false))
+			rm := NewResourceManager(resourceClient, tt.defClient, tu.NewMockResourceTreeClient().Build(), tu.TestLogger(t, false))
 
 			// Call the method under test
 			current, isNew, err := rm.FetchCurrentObject(ctx, tt.composite, tt.desired)
@@ -721,7 +726,7 @@ func TestDefaultResourceManager_UpdateOwnerRefs(t *testing.T) {
 	for name, tt := range tests {
 		t.Run(name, func(t *testing.T) {
 			// Create the resource manager
-			rm := NewResourceManager(tu.NewMockResourceClient().Build(), tt.defClient, tu.TestLogger(t, false))
+			rm := NewResourceManager(tu.NewMockResourceClient().Build(), tt.defClient, tu.NewMockResourceTreeClient().Build(), tu.TestLogger(t, false))
 
 			// Need to create a copy of the child to avoid modifying test data
 			child := tt.child.DeepCopy()
@@ -1059,6 +1064,274 @@ func TestDefaultResourceManager_updateCompositeOwnerLabel_EdgeCases(t *testing.T
 			child := tt.child.DeepCopy()
 			rm.updateCompositeOwnerLabel(ctx, tt.parent, child)
 			tt.validate(t, child)
+		})
+	}
+}
+
+func TestDefaultResourceManager_FetchObservedResources(t *testing.T) {
+	ctx := t.Context()
+
+	// Create test XR
+	testXR := tu.NewResource("example.org/v1", "XR", "test-xr").
+		WithSpecField("field", "value").
+		Build()
+
+	// Create composed resources with composition-resource-name annotation
+	composedResource1 := tu.NewResource("example.org/v1", "ManagedResource", "resource-1").
+		WithSpecField("field", "value1").
+		WithAnnotations(map[string]string{
+			"crossplane.io/composition-resource-name": "db-instance",
+		}).
+		Build()
+
+	composedResource2 := tu.NewResource("example.org/v1", "ManagedResource", "resource-2").
+		WithSpecField("field", "value2").
+		WithAnnotations(map[string]string{
+			"crossplane.io/composition-resource-name": "db-subnet",
+		}).
+		Build()
+
+	// Create a nested XR (child XR with composition-resource-name annotation)
+	nestedXR := tu.NewResource("example.org/v1", "ChildXR", "nested-xr").
+		WithSpecField("nested", "value").
+		WithAnnotations(map[string]string{
+			"crossplane.io/composition-resource-name": "child-xr",
+		}).
+		Build()
+
+	// Create composed resources under the nested XR
+	nestedComposedResource := tu.NewResource("example.org/v1", "NestedResource", "nested-resource-1").
+		WithSpecField("field", "nested-value").
+		WithAnnotations(map[string]string{
+			"crossplane.io/composition-resource-name": "nested-db",
+		}).
+		Build()
+
+	// Create a resource without the composition-resource-name annotation (should be filtered out)
+	resourceWithoutAnnotation := tu.NewResource("example.org/v1", "OtherResource", "other-resource").
+		WithSpecField("field", "other").
+		Build()
+
+	tests := map[string]struct {
+		setupTreeClient func() *tu.MockResourceTreeClient
+		xr              *un.Unstructured
+		wantCount       int
+		wantResourceIDs []string // Names of resources we expect to find
+		wantErr         bool
+	}{
+		"SuccessfullyFetchesFlatComposedResources": {
+			setupTreeClient: func() *tu.MockResourceTreeClient {
+				return tu.NewMockResourceTreeClient().
+					WithResourceTreeFromXRAndComposed(testXR, []*un.Unstructured{
+						composedResource1,
+						composedResource2,
+					}).
+					Build()
+			},
+			xr:              testXR,
+			wantCount:       2,
+			wantResourceIDs: []string{"resource-1", "resource-2"},
+			wantErr:         false,
+		},
+		"SuccessfullyFetchesNestedResources": {
+			setupTreeClient: func() *tu.MockResourceTreeClient {
+				// Build a tree with nested structure:
+				// XR
+				//   -> composedResource1
+				//   -> nestedXR
+				//        -> nestedComposedResource
+				return tu.NewMockResourceTreeClient().
+					WithGetResourceTree(func(_ context.Context, _ *un.Unstructured) (*resource.Resource, error) {
+						return &resource.Resource{
+							Unstructured: *testXR.DeepCopy(),
+							Children: []*resource.Resource{
+								{
+									Unstructured: *composedResource1.DeepCopy(),
+									Children:     []*resource.Resource{},
+								},
+								{
+									Unstructured: *nestedXR.DeepCopy(),
+									Children: []*resource.Resource{
+										{
+											Unstructured: *nestedComposedResource.DeepCopy(),
+											Children:     []*resource.Resource{},
+										},
+									},
+								},
+							},
+						}, nil
+					}).
+					Build()
+			},
+			xr:              testXR,
+			wantCount:       3, // composedResource1, nestedXR, nestedComposedResource
+			wantResourceIDs: []string{"resource-1", "nested-xr", "nested-resource-1"},
+			wantErr:         false,
+		},
+		"FiltersOutResourcesWithoutAnnotation": {
+			setupTreeClient: func() *tu.MockResourceTreeClient {
+				return tu.NewMockResourceTreeClient().
+					WithGetResourceTree(func(_ context.Context, _ *un.Unstructured) (*resource.Resource, error) {
+						return &resource.Resource{
+							Unstructured: *testXR.DeepCopy(),
+							Children: []*resource.Resource{
+								{
+									Unstructured: *composedResource1.DeepCopy(),
+									Children:     []*resource.Resource{},
+								},
+								{
+									// This resource lacks the annotation and should be filtered out
+									Unstructured: *resourceWithoutAnnotation.DeepCopy(),
+									Children:     []*resource.Resource{},
+								},
+								{
+									Unstructured: *composedResource2.DeepCopy(),
+									Children:     []*resource.Resource{},
+								},
+							},
+						}, nil
+					}).
+					Build()
+			},
+			xr:              testXR,
+			wantCount:       2, // Only composedResource1 and composedResource2
+			wantResourceIDs: []string{"resource-1", "resource-2"},
+			wantErr:         false,
+		},
+		"ReturnsEmptySliceWhenNoComposedResources": {
+			setupTreeClient: func() *tu.MockResourceTreeClient {
+				return tu.NewMockResourceTreeClient().
+					WithEmptyResourceTree().
+					Build()
+			},
+			xr:              testXR,
+			wantCount:       0,
+			wantResourceIDs: []string{},
+			wantErr:         false,
+		},
+		"ReturnsEmptySliceWhenOnlyRootXRInTree": {
+			setupTreeClient: func() *tu.MockResourceTreeClient {
+				return tu.NewMockResourceTreeClient().
+					WithGetResourceTree(func(_ context.Context, _ *un.Unstructured) (*resource.Resource, error) {
+						// Tree with only root (XR itself has no composition-resource-name)
+						return &resource.Resource{
+							Unstructured: *testXR.DeepCopy(),
+							Children:     []*resource.Resource{},
+						}, nil
+					}).
+					Build()
+			},
+			xr:              testXR,
+			wantCount:       0,
+			wantResourceIDs: []string{},
+			wantErr:         false,
+		},
+		"ReturnsErrorWhenTreeClientFails": {
+			setupTreeClient: func() *tu.MockResourceTreeClient {
+				return tu.NewMockResourceTreeClient().
+					WithFailedResourceTreeFetch("failed to get tree").
+					Build()
+			},
+			xr:      testXR,
+			wantErr: true,
+		},
+		"HandlesDeepNestedStructure": {
+			setupTreeClient: func() *tu.MockResourceTreeClient {
+				// Build a deeply nested tree:
+				// XR
+				//   -> composedResource1
+				//        -> nestedXR
+				//             -> nestedComposedResource
+				//                  -> composedResource2
+				return tu.NewMockResourceTreeClient().
+					WithGetResourceTree(func(_ context.Context, _ *un.Unstructured) (*resource.Resource, error) {
+						return &resource.Resource{
+							Unstructured: *testXR.DeepCopy(),
+							Children: []*resource.Resource{
+								{
+									Unstructured: *composedResource1.DeepCopy(),
+									Children: []*resource.Resource{
+										{
+											Unstructured: *nestedXR.DeepCopy(),
+											Children: []*resource.Resource{
+												{
+													Unstructured: *nestedComposedResource.DeepCopy(),
+													Children: []*resource.Resource{
+														{
+															Unstructured: *composedResource2.DeepCopy(),
+															Children:     []*resource.Resource{},
+														},
+													},
+												},
+											},
+										},
+									},
+								},
+							},
+						}, nil
+					}).
+					Build()
+			},
+			xr:              testXR,
+			wantCount:       4, // All 4 resources have the annotation
+			wantResourceIDs: []string{"resource-1", "nested-xr", "nested-resource-1", "resource-2"},
+			wantErr:         false,
+		},
+	}
+
+	for name, tt := range tests {
+		t.Run(name, func(t *testing.T) {
+			// Use the constructor and interface type to test via the public API
+			rm := NewResourceManager(
+				nil, // client not used by FetchObservedResources
+				nil, // defClient not used by FetchObservedResources
+				tt.setupTreeClient(),
+				tu.TestLogger(t, false),
+			)
+
+			observed, err := rm.FetchObservedResources(ctx, &cmp.Unstructured{Unstructured: *tt.xr})
+
+			if tt.wantErr {
+				if err == nil {
+					t.Errorf("FetchObservedResources() expected error, got nil")
+				}
+
+				return
+			}
+
+			if err != nil {
+				t.Errorf("FetchObservedResources() unexpected error: %v", err)
+				return
+			}
+
+			if len(observed) != tt.wantCount {
+				t.Errorf("FetchObservedResources() got %d resources, want %d", len(observed), tt.wantCount)
+			}
+
+			// Verify we got the expected resources
+			if len(tt.wantResourceIDs) > 0 {
+				// Extract resource IDs from observed resources
+				var gotResourceIDs []string
+				for _, res := range observed {
+					gotResourceIDs = append(gotResourceIDs, res.GetName())
+				}
+
+				sort.Strings(gotResourceIDs)
+
+				wantResourceIDs := append([]string{}, tt.wantResourceIDs...)
+				sort.Strings(wantResourceIDs)
+
+				if diff := gcmp.Diff(wantResourceIDs, gotResourceIDs); diff != "" {
+					t.Errorf("FetchObservedResources() resource IDs mismatch (-want +got):\n%s", diff)
+				}
+
+				// Verify all resources have the composition-resource-name annotation
+				for _, res := range observed {
+					if _, hasAnno := res.GetAnnotations()["crossplane.io/composition-resource-name"]; !hasAnno {
+						t.Errorf("FetchObservedResources() returned resource %s without composition-resource-name annotation", res.GetName())
+					}
+				}
+			}
 		})
 	}
 }

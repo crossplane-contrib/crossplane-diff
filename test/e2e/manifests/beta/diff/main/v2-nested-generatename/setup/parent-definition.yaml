@@ -1,0 +1,30 @@
+apiVersion: apiextensions.crossplane.io/v2
+kind: CompositeResourceDefinition
+metadata:
+  name: xparentnops.nested.diff.example.org
+spec:
+  group: nested.diff.example.org
+  names:
+    kind: XParentNop
+    plural: xparentnops
+  scope: Namespaced
+  versions:
+    - name: v1alpha1
+      served: true
+      referenceable: true
+      schema:
+        openAPIV3Schema:
+          type: object
+          properties:
+            spec:
+              type: object
+              properties:
+                parentField:
+                  type: string
+              required:
+                - parentField
+            status:
+              type: object
+              properties:
+                message:
+                  type: string

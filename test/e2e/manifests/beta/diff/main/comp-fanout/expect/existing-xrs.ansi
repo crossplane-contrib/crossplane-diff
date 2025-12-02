@@ -30,18 +30,18 @@
           patches:
           - fromFieldPath: spec.coolField
             toFieldPath: metadata.annotations[config-data]
-[32m+           transforms:[0m
-[32m+           - string:[0m
-[32m+               fmt: updated-%s[0m
-[32m+               type: Format[0m
-[32m+             type: string[0m
++           transforms:
++           - string:
++               fmt: updated-%s
++               type: Format
++             type: string
             type: FromCompositeFieldPath
           - fromFieldPath: spec.coolField
             toFieldPath: metadata.annotations[resource-tier]
             transforms:
             - string:
-[31m-               fmt: basic-%s[0m
-[32m+               fmt: premium-%s[0m
+-               fmt: basic-%s
++               fmt: premium-%s
                 type: Format
               type: string
             type: FromCompositeFieldPath
@@ -56,35 +56,35 @@ Summary: 1 modified
 
 === Affected Composite Resources ===
 
-  [33m⚠[0m XCompDiffFanoutResource/test-fanout-resource-01 (cluster-scoped)
-  [33m⚠[0m XCompDiffFanoutResource/test-fanout-resource-02 (cluster-scoped)
-  [33m⚠[0m XCompDiffFanoutResource/test-fanout-resource-03 (cluster-scoped)
-  [33m⚠[0m XCompDiffFanoutResource/test-fanout-resource-04 (cluster-scoped)
-  [33m⚠[0m XCompDiffFanoutResource/test-fanout-resource-05 (cluster-scoped)
-  [33m⚠[0m XCompDiffFanoutResource/test-fanout-resource-06 (cluster-scoped)
-  [33m⚠[0m XCompDiffFanoutResource/test-fanout-resource-07 (cluster-scoped)
-  [33m⚠[0m XCompDiffFanoutResource/test-fanout-resource-08 (cluster-scoped)
-  [33m⚠[0m XCompDiffFanoutResource/test-fanout-resource-09 (cluster-scoped)
-  [33m⚠[0m XCompDiffFanoutResource/test-fanout-resource-10 (cluster-scoped)
-  [33m⚠[0m XCompDiffFanoutResource/test-fanout-resource-11 (cluster-scoped)
-  [33m⚠[0m XCompDiffFanoutResource/test-fanout-resource-12 (cluster-scoped)
-  [33m⚠[0m XCompDiffFanoutResource/test-fanout-resource-13 (cluster-scoped)
-  [33m⚠[0m XCompDiffFanoutResource/test-fanout-resource-14 (cluster-scoped)
-  [33m⚠[0m XCompDiffFanoutResource/test-fanout-resource-16 (cluster-scoped)
-  [33m⚠[0m XCompDiffFanoutResource/test-fanout-resource-17 (cluster-scoped)
-  [33m⚠[0m XCompDiffFanoutResource/test-fanout-resource-18 (cluster-scoped)
-  [33m⚠[0m XCompDiffFanoutResource/test-fanout-resource-19 (cluster-scoped)
-  [33m⚠[0m XCompDiffFanoutResource/test-fanout-resource-20 (cluster-scoped)
-  [33m⚠[0m XCompDiffFanoutResource/test-fanout-resource-21 (cluster-scoped)
-  [33m⚠[0m XCompDiffFanoutResource/test-fanout-resource-22 (cluster-scoped)
-  [33m⚠[0m XCompDiffFanoutResource/test-fanout-resource-23 (cluster-scoped)
-  [33m⚠[0m XCompDiffFanoutResource/test-fanout-resource-24 (cluster-scoped)
-  [33m⚠[0m XCompDiffFanoutResource/test-fanout-resource-25 (cluster-scoped)
-  [33m⚠[0m XCompDiffFanoutResource/test-fanout-resource-26 (cluster-scoped)
-  [33m⚠[0m XCompDiffFanoutResource/test-fanout-resource-27 (cluster-scoped)
-  [33m⚠[0m XCompDiffFanoutResource/test-fanout-resource-28 (cluster-scoped)
-  [33m⚠[0m XCompDiffFanoutResource/test-fanout-resource-29 (cluster-scoped)
-  [33m⚠[0m XCompDiffFanoutResource/test-fanout-resource-30 (cluster-scoped)
+  ⚠ XCompDiffFanoutResource/test-fanout-resource-01 (cluster-scoped)
+  ⚠ XCompDiffFanoutResource/test-fanout-resource-02 (cluster-scoped)
+  ⚠ XCompDiffFanoutResource/test-fanout-resource-03 (cluster-scoped)
+  ⚠ XCompDiffFanoutResource/test-fanout-resource-04 (cluster-scoped)
+  ⚠ XCompDiffFanoutResource/test-fanout-resource-05 (cluster-scoped)
+  ⚠ XCompDiffFanoutResource/test-fanout-resource-06 (cluster-scoped)
+  ⚠ XCompDiffFanoutResource/test-fanout-resource-07 (cluster-scoped)
+  ⚠ XCompDiffFanoutResource/test-fanout-resource-08 (cluster-scoped)
+  ⚠ XCompDiffFanoutResource/test-fanout-resource-09 (cluster-scoped)
+  ⚠ XCompDiffFanoutResource/test-fanout-resource-10 (cluster-scoped)
+  ⚠ XCompDiffFanoutResource/test-fanout-resource-11 (cluster-scoped)
+  ⚠ XCompDiffFanoutResource/test-fanout-resource-12 (cluster-scoped)
+  ⚠ XCompDiffFanoutResource/test-fanout-resource-13 (cluster-scoped)
+  ⚠ XCompDiffFanoutResource/test-fanout-resource-14 (cluster-scoped)
+  ⚠ XCompDiffFanoutResource/test-fanout-resource-16 (cluster-scoped)
+  ⚠ XCompDiffFanoutResource/test-fanout-resource-17 (cluster-scoped)
+  ⚠ XCompDiffFanoutResource/test-fanout-resource-18 (cluster-scoped)
+  ⚠ XCompDiffFanoutResource/test-fanout-resource-19 (cluster-scoped)
+  ⚠ XCompDiffFanoutResource/test-fanout-resource-20 (cluster-scoped)
+  ⚠ XCompDiffFanoutResource/test-fanout-resource-21 (cluster-scoped)
+  ⚠ XCompDiffFanoutResource/test-fanout-resource-22 (cluster-scoped)
+  ⚠ XCompDiffFanoutResource/test-fanout-resource-23 (cluster-scoped)
+  ⚠ XCompDiffFanoutResource/test-fanout-resource-24 (cluster-scoped)
+  ⚠ XCompDiffFanoutResource/test-fanout-resource-25 (cluster-scoped)
+  ⚠ XCompDiffFanoutResource/test-fanout-resource-26 (cluster-scoped)
+  ⚠ XCompDiffFanoutResource/test-fanout-resource-27 (cluster-scoped)
+  ⚠ XCompDiffFanoutResource/test-fanout-resource-28 (cluster-scoped)
+  ⚠ XCompDiffFanoutResource/test-fanout-resource-29 (cluster-scoped)
+  ⚠ XCompDiffFanoutResource/test-fanout-resource-30 (cluster-scoped)
 
 Summary: 29 resources with changes
 
@@ -95,12 +95,12 @@ Summary: 29 resources with changes
   kind: ClusterNopResource
   metadata:
     annotations:
-[31m-     config-data: value-01[0m
-[32m+     config-data: updated-value-01[0m
+-     config-data: value-01
++     config-data: updated-value-01
       crossplane.io/composition-resource-name: nop-resource
       crossplane.io/external-name: test-fanout-resource-01-XXXXX
-[31m-     resource-tier: basic-value-01[0m
-[32m+     resource-tier: premium-value-01[0m
+-     resource-tier: basic-value-01
++     resource-tier: premium-value-01
     finalizers:
     - finalizer.managedresource.crossplane.io
     generateName: test-fanout-resource-01-
@@ -125,12 +125,12 @@ Summary: 29 resources with changes
   kind: ClusterNopResource
   metadata:
     annotations:
-[31m-     config-data: value-02[0m
-[32m+     config-data: updated-value-02[0m
+-     config-data: value-02
++     config-data: updated-value-02
       crossplane.io/composition-resource-name: nop-resource
       crossplane.io/external-name: test-fanout-resource-02-XXXXX
-[31m-     resource-tier: basic-value-02[0m
-[32m+     resource-tier: premium-value-02[0m
+-     resource-tier: basic-value-02
++     resource-tier: premium-value-02
     finalizers:
     - finalizer.managedresource.crossplane.io
     generateName: test-fanout-resource-02-
@@ -155,12 +155,12 @@ Summary: 29 resources with changes
   kind: ClusterNopResource
   metadata:
     annotations:
-[31m-     config-data: value-03[0m
-[32m+     config-data: updated-value-03[0m
+-     config-data: value-03
++     config-data: updated-value-03
       crossplane.io/composition-resource-name: nop-resource
       crossplane.io/external-name: test-fanout-resource-03-XXXXX
-[31m-     resource-tier: basic-value-03[0m
-[32m+     resource-tier: premium-value-03[0m
+-     resource-tier: basic-value-03
++     resource-tier: premium-value-03
     finalizers:
     - finalizer.managedresource.crossplane.io
     generateName: test-fanout-resource-03-
@@ -185,12 +185,12 @@ Summary: 29 resources with changes
   kind: ClusterNopResource
   metadata:
     annotations:
-[31m-     config-data: value-04[0m
-[32m+     config-data: updated-value-04[0m
+-     config-data: value-04
++     config-data: updated-value-04
       crossplane.io/composition-resource-name: nop-resource
       crossplane.io/external-name: test-fanout-resource-04-XXXXX
-[31m-     resource-tier: basic-value-04[0m
-[32m+     resource-tier: premium-value-04[0m
+-     resource-tier: basic-value-04
++     resource-tier: premium-value-04
     finalizers:
     - finalizer.managedresource.crossplane.io
     generateName: test-fanout-resource-04-
@@ -215,12 +215,12 @@ Summary: 29 resources with changes
   kind: ClusterNopResource
   metadata:
     annotations:
-[31m-     config-data: value-05[0m
-[32m+     config-data: updated-value-05[0m
+-     config-data: value-05
++     config-data: updated-value-05
       crossplane.io/composition-resource-name: nop-resource
       crossplane.io/external-name: test-fanout-resource-05-XXXXX
-[31m-     resource-tier: basic-value-05[0m
-[32m+     resource-tier: premium-value-05[0m
+-     resource-tier: basic-value-05
++     resource-tier: premium-value-05
     finalizers:
     - finalizer.managedresource.crossplane.io
     generateName: test-fanout-resource-05-
@@ -245,12 +245,12 @@ Summary: 29 resources with changes
   kind: ClusterNopResource
   metadata:
     annotations:
-[31m-     config-data: value-06[0m
-[32m+     config-data: updated-value-06[0m
+-     config-data: value-06
++     config-data: updated-value-06
       crossplane.io/composition-resource-name: nop-resource
       crossplane.io/external-name: test-fanout-resource-06-XXXXX
-[31m-     resource-tier: basic-value-06[0m
-[32m+     resource-tier: premium-value-06[0m
+-     resource-tier: basic-value-06
++     resource-tier: premium-value-06
     finalizers:
     - finalizer.managedresource.crossplane.io
     generateName: test-fanout-resource-06-
@@ -275,12 +275,12 @@ Summary: 29 resources with changes
   kind: ClusterNopResource
   metadata:
     annotations:
-[31m-     config-data: value-07[0m
-[32m+     config-data: updated-value-07[0m
+-     config-data: value-07
++     config-data: updated-value-07
       crossplane.io/composition-resource-name: nop-resource
       crossplane.io/external-name: test-fanout-resource-07-XXXXX
-[31m-     resource-tier: basic-value-07[0m
-[32m+     resource-tier: premium-value-07[0m
+-     resource-tier: basic-value-07
++     resource-tier: premium-value-07
     finalizers:
     - finalizer.managedresource.crossplane.io
     generateName: test-fanout-resource-07-
@@ -305,12 +305,12 @@ Summary: 29 resources with changes
   kind: ClusterNopResource
   metadata:
     annotations:
-[31m-     config-data: value-08[0m
-[32m+     config-data: updated-value-08[0m
+-     config-data: value-08
++     config-data: updated-value-08
       crossplane.io/composition-resource-name: nop-resource
       crossplane.io/external-name: test-fanout-resource-08-XXXXX
-[31m-     resource-tier: basic-value-08[0m
-[32m+     resource-tier: premium-value-08[0m
+-     resource-tier: basic-value-08
++     resource-tier: premium-value-08
     finalizers:
     - finalizer.managedresource.crossplane.io
     generateName: test-fanout-resource-08-
@@ -335,12 +335,12 @@ Summary: 29 resources with changes
   kind: ClusterNopResource
   metadata:
     annotations:
-[31m-     config-data: value-09[0m
-[32m+     config-data: updated-value-09[0m
+-     config-data: value-09
++     config-data: updated-value-09
       crossplane.io/composition-resource-name: nop-resource
       crossplane.io/external-name: test-fanout-resource-09-XXXXX
-[31m-     resource-tier: basic-value-09[0m
-[32m+     resource-tier: premium-value-09[0m
+-     resource-tier: basic-value-09
++     resource-tier: premium-value-09
     finalizers:
     - finalizer.managedresource.crossplane.io
     generateName: test-fanout-resource-09-
@@ -365,12 +365,12 @@ Summary: 29 resources with changes
   kind: ClusterNopResource
   metadata:
     annotations:
-[31m-     config-data: value-10[0m
-[32m+     config-data: updated-value-10[0m
+-     config-data: value-10
++     config-data: updated-value-10
       crossplane.io/composition-resource-name: nop-resource
       crossplane.io/external-name: test-fanout-resource-10-XXXXX
-[31m-     resource-tier: basic-value-10[0m
-[32m+     resource-tier: premium-value-10[0m
+-     resource-tier: basic-value-10
++     resource-tier: premium-value-10
     finalizers:
     - finalizer.managedresource.crossplane.io
     generateName: test-fanout-resource-10-
@@ -395,12 +395,12 @@ Summary: 29 resources with changes
   kind: ClusterNopResource
   metadata:
     annotations:
-[31m-     config-data: value-11[0m
-[32m+     config-data: updated-value-11[0m
+-     config-data: value-11
++     config-data: updated-value-11
       crossplane.io/composition-resource-name: nop-resource
       crossplane.io/external-name: test-fanout-resource-11-XXXXX
-[31m-     resource-tier: basic-value-11[0m
-[32m+     resource-tier: premium-value-11[0m
+-     resource-tier: basic-value-11
++     resource-tier: premium-value-11
     finalizers:
     - finalizer.managedresource.crossplane.io
     generateName: test-fanout-resource-11-
@@ -425,12 +425,12 @@ Summary: 29 resources with changes
   kind: ClusterNopResource
   metadata:
     annotations:
-[31m-     config-data: value-12[0m
-[32m+     config-data: updated-value-12[0m
+-     config-data: value-12
++     config-data: updated-value-12
       crossplane.io/composition-resource-name: nop-resource
       crossplane.io/external-name: test-fanout-resource-12-XXXXX
-[31m-     resource-tier: basic-value-12[0m
-[32m+     resource-tier: premium-value-12[0m
+-     resource-tier: basic-value-12
++     resource-tier: premium-value-12
     finalizers:
     - finalizer.managedresource.crossplane.io
     generateName: test-fanout-resource-12-
@@ -455,12 +455,12 @@ Summary: 29 resources with changes
   kind: ClusterNopResource
   metadata:
     annotations:
-[31m-     config-data: value-13[0m
-[32m+     config-data: updated-value-13[0m
+-     config-data: value-13
++     config-data: updated-value-13
       crossplane.io/composition-resource-name: nop-resource
       crossplane.io/external-name: test-fanout-resource-13-XXXXX
-[31m-     resource-tier: basic-value-13[0m
-[32m+     resource-tier: premium-value-13[0m
+-     resource-tier: basic-value-13
++     resource-tier: premium-value-13
     finalizers:
     - finalizer.managedresource.crossplane.io
     generateName: test-fanout-resource-13-
@@ -485,12 +485,12 @@ Summary: 29 resources with changes
   kind: ClusterNopResource
   metadata:
     annotations:
-[31m-     config-data: value-14[0m
-[32m+     config-data: updated-value-14[0m
+-     config-data: value-14
++     config-data: updated-value-14
       crossplane.io/composition-resource-name: nop-resource
       crossplane.io/external-name: test-fanout-resource-14-XXXXX
-[31m-     resource-tier: basic-value-14[0m
-[32m+     resource-tier: premium-value-14[0m
+-     resource-tier: basic-value-14
++     resource-tier: premium-value-14
     finalizers:
     - finalizer.managedresource.crossplane.io
     generateName: test-fanout-resource-14-
@@ -515,12 +515,12 @@ Summary: 29 resources with changes
   kind: ClusterNopResource
   metadata:
     annotations:
-[31m-     config-data: value-16[0m
-[32m+     config-data: updated-value-16[0m
+-     config-data: value-16
++     config-data: updated-value-16
       crossplane.io/composition-resource-name: nop-resource
       crossplane.io/external-name: test-fanout-resource-16-XXXXX
-[31m-     resource-tier: basic-value-16[0m
-[32m+     resource-tier: premium-value-16[0m
+-     resource-tier: basic-value-16
++     resource-tier: premium-value-16
     finalizers:
     - finalizer.managedresource.crossplane.io
     generateName: test-fanout-resource-16-
@@ -545,12 +545,12 @@ Summary: 29 resources with changes
   kind: ClusterNopResource
   metadata:
     annotations:
-[31m-     config-data: value-17[0m
-[32m+     config-data: updated-value-17[0m
+-     config-data: value-17
++     config-data: updated-value-17
       crossplane.io/composition-resource-name: nop-resource
       crossplane.io/external-name: test-fanout-resource-17-XXXXX
-[31m-     resource-tier: basic-value-17[0m
-[32m+     resource-tier: premium-value-17[0m
+-     resource-tier: basic-value-17
++     resource-tier: premium-value-17
     finalizers:
     - finalizer.managedresource.crossplane.io
     generateName: test-fanout-resource-17-
@@ -575,12 +575,12 @@ Summary: 29 resources with changes
   kind: ClusterNopResource
   metadata:
     annotations:
-[31m-     config-data: value-18[0m
-[32m+     config-data: updated-value-18[0m
+-     config-data: value-18
++     config-data: updated-value-18
       crossplane.io/composition-resource-name: nop-resource
       crossplane.io/external-name: test-fanout-resource-18-XXXXX
-[31m-     resource-tier: basic-value-18[0m
-[32m+     resource-tier: premium-value-18[0m
+-     resource-tier: basic-value-18
++     resource-tier: premium-value-18
     finalizers:
     - finalizer.managedresource.crossplane.io
     generateName: test-fanout-resource-18-
@@ -605,12 +605,12 @@ Summary: 29 resources with changes
   kind: ClusterNopResource
   metadata:
     annotations:
-[31m-     config-data: value-19[0m
-[32m+     config-data: updated-value-19[0m
+-     config-data: value-19
++     config-data: updated-value-19
       crossplane.io/composition-resource-name: nop-resource
       crossplane.io/external-name: test-fanout-resource-19-XXXXX
-[31m-     resource-tier: basic-value-19[0m
-[32m+     resource-tier: premium-value-19[0m
+-     resource-tier: basic-value-19
++     resource-tier: premium-value-19
     finalizers:
     - finalizer.managedresource.crossplane.io
     generateName: test-fanout-resource-19-
@@ -635,12 +635,12 @@ Summary: 29 resources with changes
   kind: ClusterNopResource
   metadata:
     annotations:
-[31m-     config-data: value-20[0m
-[32m+     config-data: updated-value-20[0m
+-     config-data: value-20
++     config-data: updated-value-20
       crossplane.io/composition-resource-name: nop-resource
       crossplane.io/external-name: test-fanout-resource-20-XXXXX
-[31m-     resource-tier: basic-value-20[0m
-[32m+     resource-tier: premium-value-20[0m
+-     resource-tier: basic-value-20
++     resource-tier: premium-value-20
     finalizers:
     - finalizer.managedresource.crossplane.io
     generateName: test-fanout-resource-20-
@@ -665,12 +665,12 @@ Summary: 29 resources with changes
   kind: ClusterNopResource
   metadata:
     annotations:
-[31m-     config-data: value-21[0m
-[32m+     config-data: updated-value-21[0m
+-     config-data: value-21
++     config-data: updated-value-21
       crossplane.io/composition-resource-name: nop-resource
       crossplane.io/external-name: test-fanout-resource-21-XXXXX
-[31m-     resource-tier: basic-value-21[0m
-[32m+     resource-tier: premium-value-21[0m
+-     resource-tier: basic-value-21
++     resource-tier: premium-value-21
     finalizers:
     - finalizer.managedresource.crossplane.io
     generateName: test-fanout-resource-21-
@@ -695,12 +695,12 @@ Summary: 29 resources with changes
   kind: ClusterNopResource
   metadata:
     annotations:
-[31m-     config-data: value-22[0m
-[32m+     config-data: updated-value-22[0m
+-     config-data: value-22
++     config-data: updated-value-22
       crossplane.io/composition-resource-name: nop-resource
       crossplane.io/external-name: test-fanout-resource-22-XXXXX
-[31m-     resource-tier: basic-value-22[0m
-[32m+     resource-tier: premium-value-22[0m
+-     resource-tier: basic-value-22
++     resource-tier: premium-value-22
     finalizers:
     - finalizer.managedresource.crossplane.io
     generateName: test-fanout-resource-22-
@@ -725,12 +725,12 @@ Summary: 29 resources with changes
   kind: ClusterNopResource
   metadata:
     annotations:
-[31m-     config-data: value-23[0m
-[32m+     config-data: updated-value-23[0m
+-     config-data: value-23
++     config-data: updated-value-23
       crossplane.io/composition-resource-name: nop-resource
       crossplane.io/external-name: test-fanout-resource-23-XXXXX
-[31m-     resource-tier: basic-value-23[0m
-[32m+     resource-tier: premium-value-23[0m
+-     resource-tier: basic-value-23
++     resource-tier: premium-value-23
     finalizers:
     - finalizer.managedresource.crossplane.io
     generateName: test-fanout-resource-23-
@@ -755,12 +755,12 @@ Summary: 29 resources with changes
   kind: ClusterNopResource
   metadata:
     annotations:
-[31m-     config-data: value-24[0m
-[32m+     config-data: updated-value-24[0m
+-     config-data: value-24
++     config-data: updated-value-24
       crossplane.io/composition-resource-name: nop-resource
       crossplane.io/external-name: test-fanout-resource-24-XXXXX
-[31m-     resource-tier: basic-value-24[0m
-[32m+     resource-tier: premium-value-24[0m
+-     resource-tier: basic-value-24
++     resource-tier: premium-value-24
     finalizers:
     - finalizer.managedresource.crossplane.io
     generateName: test-fanout-resource-24-
@@ -785,12 +785,12 @@ Summary: 29 resources with changes
   kind: ClusterNopResource
   metadata:
     annotations:
-[31m-     config-data: value-25[0m
-[32m+     config-data: updated-value-25[0m
+-     config-data: value-25
++     config-data: updated-value-25
       crossplane.io/composition-resource-name: nop-resource
       crossplane.io/external-name: test-fanout-resource-25-XXXXX
-[31m-     resource-tier: basic-value-25[0m
-[32m+     resource-tier: premium-value-25[0m
+-     resource-tier: basic-value-25
++     resource-tier: premium-value-25
     finalizers:
     - finalizer.managedresource.crossplane.io
     generateName: test-fanout-resource-25-
@@ -815,12 +815,12 @@ Summary: 29 resources with changes
   kind: ClusterNopResource
   metadata:
     annotations:
-[31m-     config-data: value-26
-[32m+     config-data: updated-value-26[0m
+-     config-data: value-26
++     config-data: updated-value-26
       crossplane.io/composition-resource-name: nop-resource
       crossplane.io/external-name: test-fanout-resource-26-XXXXX
-[31m-     resource-tier: basic-value-26[0m
-[32m+     resource-tier: premium-value-26[0m
+-     resource-tier: basic-value-26
++     resource-tier: premium-value-26
     finalizers:
     - finalizer.managedresource.crossplane.io
     generateName: test-fanout-resource-26-
@@ -845,12 +845,12 @@ Summary: 29 resources with changes
   kind: ClusterNopResource
   metadata:
     annotations:
-[31m-     config-data: value-27[0m
-[32m+     config-data: updated-value-27[0m
+-     config-data: value-27
++     config-data: updated-value-27
       crossplane.io/composition-resource-name: nop-resource
       crossplane.io/external-name: test-fanout-resource-27-XXXXX
-[31m-     resource-tier: basic-value-27[0m
-[32m+     resource-tier: premium-value-27[0m
+-     resource-tier: basic-value-27
++     resource-tier: premium-value-27
     finalizers:
     - finalizer.managedresource.crossplane.io
     generateName: test-fanout-resource-27-
@@ -875,12 +875,12 @@ Summary: 29 resources with changes
   kind: ClusterNopResource
   metadata:
     annotations:
-[31m-     config-data: value-28[0m
-[32m+     config-data: updated-value-28[0m
+-     config-data: value-28
++     config-data: updated-value-28
       crossplane.io/composition-resource-name: nop-resource
       crossplane.io/external-name: test-fanout-resource-28-XXXXX
-[31m-     resource-tier: basic-value-28[0m
-[32m+     resource-tier: premium-value-28[0m
+-     resource-tier: basic-value-28
++     resource-tier: premium-value-28
     finalizers:
     - finalizer.managedresource.crossplane.io
     generateName: test-fanout-resource-28-
@@ -905,12 +905,12 @@ Summary: 29 resources with changes
   kind: ClusterNopResource
   metadata:
     annotations:
-[31m-     config-data: value-29[0m
-[32m+     config-data: updated-value-29[0m
+-     config-data: value-29
++     config-data: updated-value-29
       crossplane.io/composition-resource-name: nop-resource
       crossplane.io/external-name: test-fanout-resource-29-XXXXX
-[31m-     resource-tier: basic-value-29[0m
-[32m+     resource-tier: premium-value-29[0m
+-     resource-tier: basic-value-29
++     resource-tier: premium-value-29
     finalizers:
     - finalizer.managedresource.crossplane.io
     generateName: test-fanout-resource-29-
@@ -935,12 +935,12 @@ Summary: 29 resources with changes
   kind: ClusterNopResource
   metadata:
     annotations:
-[31m-     config-data: value-30[0m
-[32m+     config-data: updated-value-30[0m
+-     config-data: value-30
++     config-data: updated-value-30
       crossplane.io/composition-resource-name: nop-resource
       crossplane.io/external-name: test-fanout-resource-30-XXXXX
-[31m-     resource-tier: basic-value-30[0m
-[32m+     resource-tier: premium-value-30[0m
+-     resource-tier: basic-value-30
++     resource-tier: premium-value-30
     finalizers:
     - finalizer.managedresource.crossplane.io
     generateName: test-fanout-resource-30-

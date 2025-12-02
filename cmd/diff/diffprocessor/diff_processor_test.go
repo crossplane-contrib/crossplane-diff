@@ -415,8 +415,9 @@ func TestDefaultDiffProcessor_PerformDiff(t *testing.T) {
 				// Override the diff calculator factory to return actual diffs
 				WithDiffCalculatorFactory(func(k8.ApplyClient, xp.ResourceTreeClient, ResourceManager, logging.Logger, renderer.DiffOptions) DiffCalculator {
 					return &tu.MockDiffCalculator{
-						CalculateDiffsFn: func(context.Context, *cmp.Unstructured, render.Outputs) (map[string]*dt.ResourceDiff, error) {
+						CalculateNonRemovalDiffsFn: func(context.Context, *cmp.Unstructured, *un.Unstructured, render.Outputs) (map[string]*dt.ResourceDiff, map[string]bool, error) {
 							diffs := make(map[string]*dt.ResourceDiff)
+							rendered := make(map[string]bool)
 
 							// Add a modified diff (not just equal)
 							lineDiffs := []diffmatchpatch.Diff{
@@ -424,7 +425,8 @@ func TestDefaultDiffProcessor_PerformDiff(t *testing.T) {
 								{Type: diffmatchpatch.DiffInsert, Text: "  field: new-value"},
 							}
 
-							diffs["example.org/v1/XR1/test-xr"] = &dt.ResourceDiff{
+							diffKey1 := "example.org/v1/XR1/test-xr"
+							diffs[diffKey1] = &dt.ResourceDiff{
 								Gvk:          schema.GroupVersionKind{Group: "example.org", Version: "v1", Kind: "XR1"},
 								ResourceName: "test-xr",
 								DiffType:     dt.DiffTypeModified,
@@ -432,9 +434,11 @@ func TestDefaultDiffProcessor_PerformDiff(t *testing.T) {
 								Current:      resource1, // Set current for completeness
 								Desired:      resource1, // Set desired for completeness
 							}
+							rendered[diffKey1] = true
 
 							// Add a composed resource diff that's also modified
-							diffs["example.org/v1/ComposedResource/resource-a"] = &dt.ResourceDiff{
+							diffKey2 := "example.org/v1/ComposedResource/resource-a"
+							diffs[diffKey2] = &dt.ResourceDiff{
 								Gvk:          schema.GroupVersionKind{Group: "example.org", Version: "v1", Kind: "ComposedResource"},
 								ResourceName: "resource-a",
 								DiffType:     dt.DiffTypeModified,
@@ -442,8 +446,9 @@ func TestDefaultDiffProcessor_PerformDiff(t *testing.T) {
 								Current:      composedResource,
 								Desired:      composedResource,
 							}
+							rendered[diffKey2] = true
 
-							return diffs, nil
+							return diffs, rendered, nil
 						},
 					}
 				}),
@@ -1548,6 +1553,7 @@ func TestDefaultDiffProcessor_ProcessNestedXRs(t *testing.T) {
 					Environment: tu.NewMockEnvironmentClient().
 						WithNoEnvironmentConfigs().
 						Build(),
+					ResourceTree: tu.NewMockResourceTreeClient().Build(),
 				}
 
 				// Create a child CRD with proper schema for childField
@@ -1643,6 +1649,7 @@ func TestDefaultDiffProcessor_ProcessNestedXRs(t *testing.T) {
 					Environment: tu.NewMockEnvironmentClient().
 						WithNoEnvironmentConfigs().
 						Build(),
+					ResourceTree: tu.NewMockResourceTreeClient().Build(),
 				}
 
 				// Create a child CRD with proper schema for childField
@@ -1685,6 +1692,115 @@ func TestDefaultDiffProcessor_ProcessNestedXRs(t *testing.T) {
 			wantDiffCount:    1, // Only the child XR should be processed
 			wantErr:          false,
 		},
+		"NestedXRWithExistingResourcesPreservesIdentity": {
+			setupMocks: func() (xp.Clients, k8.Clients) {
+				// This test reproduces the bug where existing nested XR identity is not preserved
+				// resulting in all managed resources showing as removed/added instead of modified
+
+				// Create an EXISTING nested XR with actual cluster name (not generateName)
+				existingChildXR := tu.NewResource("nested.example.org/v1alpha1", "XChildResource", "parent-xr-child-abc123").
+					WithGenerateName("parent-xr-").
+					WithSpecField("childField", "existing-value").
+					WithCompositionResourceName("child-xr").
+					WithLabels(map[string]string{
+						"crossplane.io/composite": "parent-xr-abc", // Existing composite label
+					}).
+					Build()
+
+				// Create an existing managed resource owned by the nested XR
+				existingManagedResource := tu.NewResource("nop.example.org/v1alpha1", "NopResource", "parent-xr-child-abc123-managed-xyz").
+					WithGenerateName("parent-xr-child-abc123-").
+					WithSpecField("forProvider", map[string]any{
+						"configData": "existing-data",
+					}).
+					WithCompositionResourceName("managed-resource").
+					WithLabels(map[string]string{
+						"crossplane.io/composite": "parent-xr-child-abc123", // Points to existing nested XR
+					}).
+					Build()
+
+				// Create a parent XR that owns the nested XR
+				parentXR := tu.NewResource("parent.example.org/v1alpha1", "XParentResource", "parent-xr-abc").
+					WithGenerateName("parent-xr-").
+					Build()
+
+				// Create functions
+				functions := []pkgv1.Function{
+					{
+						ObjectMeta: metav1.ObjectMeta{
+							Name: "function-go-templating",
+						},
+						Spec: pkgv1.FunctionSpec{
+							PackageSpec: pkgv1.PackageSpec{
+								Package: "xpkg.crossplane.io/crossplane-contrib/function-go-templating:v0.11.0",
+							},
+						},
+					},
+				}
+
+				xpClients := xp.Clients{
+					Definition: tu.NewMockDefinitionClient().
+						WithXRD(childXRD).
+						Build(),
+					Composition: tu.NewMockCompositionClient().
+						WithComposition(childComposition).
+						Build(),
+					Function: tu.NewMockFunctionClient().
+						WithSuccessfulFunctionsFetch(functions).
+						Build(),
+					Environment: tu.NewMockEnvironmentClient().
+						WithNoEnvironmentConfigs().
+						Build(),
+					// Mock resource tree to return existing nested XR and its managed resources
+					ResourceTree: tu.NewMockResourceTreeClient().
+						WithResourceTreeFromXRAndComposed(
+							parentXR,
+							[]*un.Unstructured{existingChildXR, existingManagedResource},
+						).
+						Build(),
+				}
+
+				// Create CRDs
+				childCRD := tu.NewCRD("xchildresources.nested.example.org", "nested.example.org", "XChildResource").
+					WithListKind("XChildResourceList").
+					WithPlural("xchildresources").
+					WithSingular("xchildresource").
+					WithVersion("v1alpha1", true, true).
+					WithStandardSchema("childField").
+					Build()
+
+				nopCRD := tu.NewCRD("nopresources.nop.example.org", "nop.example.org", "NopResource").
+					WithListKind("NopResourceList").
+					WithPlural("nopresources").
+					WithSingular("nopresource").
+					WithVersion("v1alpha1", true, true).
+					WithStandardSchema("configData").
+					Build()
+
+				k8sClients := k8.Clients{
+					Apply:    tu.NewMockApplyClient().Build(),
+					Resource: tu.NewMockResourceClient().Build(),
+					Schema: tu.NewMockSchemaClient().
+						WithFoundCRD("nested.example.org", "XChildResource", childCRD).
+						WithFoundCRD("nop.example.org", "NopResource", nopCRD).
+						WithSuccessfulCRDByNameFetch("xchildresources.nested.example.org", childCRD).
+						Build(),
+					Type: tu.NewMockTypeConverter().Build(),
+				}
+
+				return xpClients, k8sClients
+			},
+			composedResources: []cpd.Unstructured{
+				// The RENDERED nested XR (from parent composition) with generateName but no name
+				{Unstructured: *childXR},
+			},
+			parentResourceID: "XParentResource/parent-xr-abc",
+			depth:            1,
+			// With identity preservation fix, nested XR maintains its cluster identity
+			// so managed resources show as modified rather than removed/added
+			wantDiffCount: 1, // Just the nested XR diff, not its managed resources as separate remove/add
+			wantErr:       false,
+		},
 	}
 
 	for name, tt := range tests {
@@ -1704,9 +1820,10 @@ func TestDefaultDiffProcessor_ProcessNestedXRs(t *testing.T) {
 				}),
 				WithDiffCalculatorFactory(func(k8.ApplyClient, xp.ResourceTreeClient, ResourceManager, logging.Logger, renderer.DiffOptions) DiffCalculator {
 					return &tu.MockDiffCalculator{
-						CalculateDiffsFn: func(_ context.Context, xr *cmp.Unstructured, _ render.Outputs) (map[string]*dt.ResourceDiff, error) {
+						CalculateNonRemovalDiffsFn: func(_ context.Context, xr *cmp.Unstructured, _ *un.Unstructured, _ render.Outputs) (map[string]*dt.ResourceDiff, map[string]bool, error) {
 							// Return a simple diff for the XR to make the test pass
 							diffs := make(map[string]*dt.ResourceDiff)
+							rendered := make(map[string]bool)
 							gvk := xr.GroupVersionKind()
 							resourceID := gvk.Kind + "/" + xr.GetName()
 							diffs[resourceID] = &dt.ResourceDiff{
@@ -1714,8 +1831,9 @@ func TestDefaultDiffProcessor_ProcessNestedXRs(t *testing.T) {
 								ResourceName: xr.GetName(),
 								DiffType:     dt.DiffTypeAdded,
 							}
+							rendered[resourceID] = true
 
-							return diffs, nil
+							return diffs, rendered, nil
 						},
 					}
 				}),
@@ -1730,8 +1848,13 @@ func TestDefaultDiffProcessor_ProcessNestedXRs(t *testing.T) {
 					return xpClients.Composition.FindMatchingComposition(ctx, res)
 				}
 
+				// Create a mock parent XR (nil is acceptable for tests that don't need observed resources)
+				var parentXR *cmp.Unstructured
+
 				// Call the method under test
-				diffs, err := processor.ProcessNestedXRs(ctx, tt.composedResources, compositionProvider, tt.parentResourceID, tt.depth)
+				var observedResources []cpd.Unstructured
+
+				diffs, _, err := processor.ProcessNestedXRs(ctx, tt.composedResources, compositionProvider, tt.parentResourceID, parentXR, observedResources, tt.depth)
 
 				// Check error
 				if (err != nil) != tt.wantErr {

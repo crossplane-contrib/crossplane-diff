@@ -13,7 +13,6 @@ import (
 
 	"github.com/crossplane/crossplane-runtime/v2/pkg/errors"
 	"github.com/crossplane/crossplane-runtime/v2/pkg/logging"
-	cpd "github.com/crossplane/crossplane-runtime/v2/pkg/resource/unstructured/composed"
 	cmp "github.com/crossplane/crossplane-runtime/v2/pkg/resource/unstructured/composite"
 
 	"github.com/crossplane/crossplane/v2/cmd/crank/common/resource"
@@ -25,15 +24,19 @@ type DiffCalculator interface {
 	// CalculateDiff computes the diff for a single resource
 	CalculateDiff(ctx context.Context, composite *un.Unstructured, desired *un.Unstructured) (*dt.ResourceDiff, error)
 
-	// CalculateDiffs computes all diffs for the rendered resources and identifies resources to be removed
+	// CalculateDiffs computes all diffs including removals for the rendered resources.
+	// This is the primary method that most code should use.
 	CalculateDiffs(ctx context.Context, xr *cmp.Unstructured, desired render.Outputs) (map[string]*dt.ResourceDiff, error)
 
-	// CalculateRemovedResourceDiffs identifies resources that would be removed and calculates their diffs
-	CalculateRemovedResourceDiffs(ctx context.Context, xr *un.Unstructured, renderedResources map[string]bool) (map[string]*dt.ResourceDiff, error)
+	// CalculateNonRemovalDiffs computes diffs for modified/added resources and returns
+	// the set of rendered resource keys. This is used by nested XR processing.
+	// parentComposite should be nil for root XRs, and the parent XR for nested XRs.
+	// Returns: (diffs map, rendered resource keys, error)
+	CalculateNonRemovalDiffs(ctx context.Context, xr *cmp.Unstructured, parentComposite *un.Unstructured, desired render.Outputs) (map[string]*dt.ResourceDiff, map[string]bool, error)
 
-	// FetchObservedResources fetches the observed composed resources for the given XR.
-	// Returns a flat slice of composed resources suitable for render.Inputs.ObservedResources.
-	FetchObservedResources(ctx context.Context, xr *cmp.Unstructured) ([]cpd.Unstructured, error)
+	// CalculateRemovedResourceDiffs identifies resources that exist in the cluster but are not
+	// in the rendered set. This is called after nested XR processing is complete.
+	CalculateRemovedResourceDiffs(ctx context.Context, xr *un.Unstructured, renderedResources map[string]bool) (map[string]*dt.ResourceDiff, error)
 }
 
 // DefaultDiffCalculator implements the DiffCalculator interface.
@@ -102,6 +105,11 @@ func (c *DefaultDiffCalculator) CalculateDiff(ctx context.Context, composite *un
 	// Preserve existing resource identity for resources with generateName
 	desired = c.preserveExistingResourceIdentity(current, desired, resourceID, name)
 
+	// Preserve the composite label for ALL existing resources
+	// This is critical because in Crossplane, all resources in a tree point to the ROOT composite,
+	// not their immediate parent. We must never change this label.
+	desired = c.preserveCompositeLabel(current, desired, resourceID)
+
 	// Update owner references if needed (done after preserving existing labels)
 	// IMPORTANT: For composed resources, the owner should be the XR, not a Claim.
 	// When composite is the current XR from the cluster, we use it as the owner.
@@ -144,8 +152,46 @@ func (c *DefaultDiffCalculator) CalculateDiff(ctx context.Context, composite *un
 	return diff, nil
 }
 
-// CalculateDiffs collects all diffs for the desired resources and identifies resources to be removed.
-func (c *DefaultDiffCalculator) CalculateDiffs(ctx context.Context, xr *cmp.Unstructured, desired render.Outputs) (map[string]*dt.ResourceDiff, error) {
+// CalculateNonRemovalDiffs computes diffs for modified/added resources and returns
+// the set of rendered resource keys for removal detection.
+//
+// TWO-PHASE DIFF ALGORITHM:
+// This method implements Phase 1 of our two-phase diff calculation. The two-phase
+// approach is necessary to correctly handle nested XRs (Composite Resources that
+// themselves create other Composite Resources).
+//
+// WHY TWO PHASES?
+// When processing nested XRs, we must:
+//  1. Phase 1 (this method): Calculate diffs for all rendered resources (adds/modifications)
+//     and build a set of "rendered resource keys" that tracks what was generated
+//  2. Phase 2 (CalculateRemovedResourceDiffs): Compare cluster state against rendered
+//     resources to identify removals
+//
+// The separation is critical because:
+//   - Nested XRs are processed recursively BETWEEN these phases
+//   - Nested XRs generate additional composed resources that must be added to the
+//     "rendered resources" set before removal detection
+//   - If we detected removals too early, we'd falsely identify nested XR resources
+//     as "to be removed" before they've been processed
+//
+// EXAMPLE SCENARIO:
+//
+//	Parent XR renders: [Resource-A, NestedXR-B]
+//	NestedXR-B renders: [Resource-C, Resource-D]
+//
+//	Without two phases:
+//	  - We'd see cluster has [Resource-A, Resource-C, Resource-D] from prior render
+//	  - We'd see new render has [Resource-A, NestedXR-B]
+//	  - We'd INCORRECTLY mark Resource-C and Resource-D as removed
+//
+//	With two phases:
+//	  Phase 1: Calculate diffs for [Resource-A, NestedXR-B], track as rendered
+//	  Process nested: Recurse into NestedXR-B, add Resource-C and Resource-D to rendered set
+//	  Phase 2: Now see [Resource-A, NestedXR-B, Resource-C, Resource-D] as rendered
+//	           No false removal detection!
+//
+// Returns: (diffs map, rendered resource keys, error).
+func (c *DefaultDiffCalculator) CalculateNonRemovalDiffs(ctx context.Context, xr *cmp.Unstructured, parentComposite *un.Unstructured, desired render.Outputs) (map[string]*dt.ResourceDiff, map[string]bool, error) {
 	xrName := xr.GetName()
 	c.logger.Debug("Calculating diffs",
 		"xr", xrName,
@@ -155,13 +201,34 @@ func (c *DefaultDiffCalculator) CalculateDiffs(ctx context.Context, xr *cmp.Unst
 
 	var errs []error
 
-	// Create a map to track resources that were rendered
 	renderedResources := make(map[string]bool)
 
-	// First, calculate diff for the XR itself
-	xrDiff, err := c.CalculateDiff(ctx, nil, xr.GetUnstructured())
+	// Determine if this is a nested XR or root XR, and select the appropriate XR to diff
+	renderedXR := desired.CompositeResource.GetUnstructured()
+
+	var (
+		desiredXR       *un.Unstructured
+		compositeParent *un.Unstructured
+	)
+
+	if renderedXR.GetAnnotations()["crossplane.io/composition-resource-name"] != "" {
+		// NESTED XR: Use rendered XR (it's a composed resource from parent's composition)
+		c.logger.Debug("Processing nested XR", "xr", xrName, "hasParent", parentComposite != nil)
+
+		desiredXR = renderedXR
+		compositeParent = parentComposite
+	} else {
+		// ROOT XR: Use input XR as-is (source of truth, don't use rendered metadata)
+		c.logger.Debug("Processing root XR", "xr", xrName)
+
+		desiredXR = xr.GetUnstructured()
+		compositeParent = nil
+	}
+
+	// Calculate diff for the XR
+	xrDiff, err := c.CalculateDiff(ctx, compositeParent, desiredXR)
 	if err != nil || xrDiff == nil {
-		return nil, errors.Wrap(err, "cannot calculate diff for XR")
+		return nil, nil, errors.Wrap(err, "cannot calculate diff for XR")
 	} else if xrDiff.DiffType != dt.DiffTypeEqual {
 		key := xrDiff.GetDiffKey()
 		diffs[key] = xrDiff
@@ -207,30 +274,44 @@ func (c *DefaultDiffCalculator) CalculateDiffs(ctx context.Context, xr *cmp.Unst
 		}
 
 		renderedResources[diffKey] = true
-	}
-
-	if xrDiff.Current != nil {
-		// it only makes sense to calculate removal of things if we have a current XR.
-		c.logger.Debug("Finding resources to be removed", "xr", xrName)
-
-		removedDiffs, err := c.CalculateRemovedResourceDiffs(ctx, xrDiff.Current, renderedResources)
-		if err != nil {
-			c.logger.Debug("Error calculating removed resources (continuing)", "error", err)
-		} else if len(removedDiffs) > 0 {
-			// Add removed resources to the diffs map
-			maps.Copy(diffs, removedDiffs)
-		}
+		c.logger.Debug("Added resource to renderedResources",
+			"xr", xrName,
+			"diffKey", diffKey,
+			"diffType", diff.DiffType)
 	}
 
 	// Log a summary
 	c.logger.Debug("Diff calculation complete",
 		"totalDiffs", len(diffs),
+		"renderedResourcesCount", len(renderedResources),
 		"errors", len(errs),
 		"xr", xrName)
 
 	if len(errs) > 0 {
-		return diffs, errors.Join(errs...)
+		return diffs, renderedResources, errors.Join(errs...)
 	}
+
+	return diffs, renderedResources, nil
+}
+
+// CalculateDiffs computes all diffs including removals for the rendered resources.
+// This is the primary method that most code should use.
+func (c *DefaultDiffCalculator) CalculateDiffs(ctx context.Context, xr *cmp.Unstructured, desired render.Outputs) (map[string]*dt.ResourceDiff, error) {
+	// First calculate diffs for modified/added resources
+	// parentComposite is nil because CalculateDiffs is only called for root XRs
+	diffs, renderedResources, err := c.CalculateNonRemovalDiffs(ctx, xr, nil, desired)
+	if err != nil {
+		return nil, err
+	}
+
+	// Then detect removed resources
+	removedDiffs, err := c.CalculateRemovedResourceDiffs(ctx, xr.GetUnstructured(), renderedResources)
+	if err != nil {
+		return nil, err
+	}
+
+	// Merge removed diffs into the main diffs map
+	maps.Copy(diffs, removedDiffs)
 
 	return diffs, nil
 }
@@ -302,67 +383,6 @@ func (c *DefaultDiffCalculator) CalculateRemovedResourceDiffs(ctx context.Contex
 	return removedDiffs, nil
 }
 
-// FetchObservedResources fetches the observed composed resources for the given XR.
-// This returns a flat slice of all composed resources found in the resource tree,
-// which can be directly used for render.Inputs.ObservedResources.
-func (c *DefaultDiffCalculator) FetchObservedResources(ctx context.Context, xr *cmp.Unstructured) ([]cpd.Unstructured, error) {
-	c.logger.Debug("Fetching observed resources for XR",
-		"xr_kind", xr.GetKind(),
-		"xr_name", xr.GetName())
-
-	// Get the resource tree from the cluster
-	tree, err := c.treeClient.GetResourceTree(ctx, &xr.Unstructured)
-	if err != nil {
-		c.logger.Debug("Failed to get resource tree for XR",
-			"xr", xr.GetName(),
-			"error", err)
-
-		return nil, errors.Wrap(err, "cannot get resource tree")
-	}
-
-	// Extract composed resources from the tree
-	observed := extractComposedResources(tree)
-
-	c.logger.Debug("Fetched observed composed resources",
-		"xr", xr.GetName(),
-		"count", len(observed))
-
-	return observed, nil
-}
-
-// extractComposedResources recursively extracts all composed resources from a resource tree.
-// It returns a flat slice of composed resources, suitable for render.Inputs.ObservedResources.
-// Only includes resources with the crossplane.io/composition-resource-name annotation.
-func extractComposedResources(tree *resource.Resource) []cpd.Unstructured {
-	var resources []cpd.Unstructured
-
-	// Recursively collect composed resources from the tree
-	var collectResources func(node *resource.Resource)
-
-	collectResources = func(node *resource.Resource) {
-		// Only include resources that have the composition-resource-name annotation
-		// (this filters out the root XR and non-composed resources)
-		if _, hasAnno := node.Unstructured.GetAnnotations()["crossplane.io/composition-resource-name"]; hasAnno {
-			// Convert to cpd.Unstructured (composed resource)
-			resources = append(resources, cpd.Unstructured{
-				Unstructured: node.Unstructured,
-			})
-		}
-
-		// Recursively process children
-		for _, child := range node.Children {
-			collectResources(child)
-		}
-	}
-
-	// Start from root's children to avoid including the XR itself
-	for _, child := range tree.Children {
-		collectResources(child)
-	}
-
-	return resources
-}
-
 // preserveExistingResourceIdentity preserves the identity (name, generateName, labels) from an existing
 // resource with generateName to ensure dry-run apply works on the correct resource identity.
 // This is critical for claim scenarios where the rendered name differs from the generated name.
@@ -406,6 +426,39 @@ func (c *DefaultDiffCalculator) preserveExistingResourceIdentity(current, desire
 
 		desiredCopy.SetLabels(desiredLabels)
 	}
+
+	return desiredCopy
+}
+
+// preserveCompositeLabel preserves the crossplane.io/composite label from an existing composed resource.
+// This is critical because in Crossplane, all composed resources (including nested XRs) point to the ROOT composite.
+// We must never change this label for existing composed resources.
+// Root XRs don't have the composition-resource-name annotation and shouldn't have this label.
+func (c *DefaultDiffCalculator) preserveCompositeLabel(current, desired *un.Unstructured, resourceID string) *un.Unstructured {
+	// Only preserve for composed resources (those with composition-resource-name annotation)
+	if current == nil || desired.GetAnnotations()["crossplane.io/composition-resource-name"] == "" {
+		return desired
+	}
+
+	compositeLabel, exists := current.GetLabels()["crossplane.io/composite"]
+	if !exists {
+		return desired
+	}
+
+	// Preserve the composite label
+	desiredCopy := desired.DeepCopy()
+
+	desiredLabels := desiredCopy.GetLabels()
+	if desiredLabels == nil {
+		desiredLabels = make(map[string]string)
+	}
+
+	desiredLabels["crossplane.io/composite"] = compositeLabel
+	desiredCopy.SetLabels(desiredLabels)
+
+	c.logger.Debug("Preserved composite label from existing composed resource",
+		"resource", resourceID,
+		"compositeLabel", compositeLabel)
 
 	return desiredCopy
 }

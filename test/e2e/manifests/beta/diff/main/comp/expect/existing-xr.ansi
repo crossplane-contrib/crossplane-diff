@@ -30,18 +30,18 @@
           patches:
           - fromFieldPath: spec.coolField
             toFieldPath: metadata.annotations[config-data]
-[32m+           transforms:[0m
-[32m+           - string:[0m
-[32m+               fmt: updated-%s[0m
-[32m+               type: Format[0m
-[32m+             type: string[0m
++           transforms:
++           - string:
++               fmt: updated-%s
++               type: Format
++             type: string
             type: FromCompositeFieldPath
           - fromFieldPath: spec.coolField
             toFieldPath: metadata.annotations[resource-tier]
             transforms:
             - string:
-[31m-               fmt: basic-%s[0m
-[32m+               fmt: premium-%s[0m
+-               fmt: basic-%s
++               fmt: premium-%s
                 type: Format
               type: string
             type: FromCompositeFieldPath
@@ -56,7 +56,7 @@ Summary: 1 modified
 
 === Affected Composite Resources ===
 
-  [33m⚠[0m XCompDiffResource/test-comp-resource (cluster-scoped)
+  ⚠ XCompDiffResource/test-comp-resource (cluster-scoped)
 
 Summary: 1 resource with changes
 
@@ -67,12 +67,12 @@ Summary: 1 resource with changes
   kind: ClusterNopResource
   metadata:
     annotations:
-[31m-     config-data: existing-value[0m
-[32m+     config-data: updated-existing-value[0m
+-     config-data: existing-value
++     config-data: updated-existing-value
       crossplane.io/composition-resource-name: nop-resource
       crossplane.io/external-name: test-comp-resource-XXXXX
-[31m-     resource-tier: basic-existing-value[0m
-[32m+     resource-tier: premium-existing-value[0m
+-     resource-tier: basic-existing-value
++     resource-tier: premium-existing-value
     finalizers:
     - finalizer.managedresource.crossplane.io
     generateName: test-comp-resource-

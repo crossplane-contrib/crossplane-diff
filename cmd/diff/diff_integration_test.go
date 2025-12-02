@@ -1874,6 +1874,111 @@ Summary: 2 added`,
 			expectedError: false,
 			noColor:       true,
 		},
+		"ModifiedClaimWithNestedXRsShowsDiff": {
+			reason: "Validates that modified Claims with nested XRs show proper diff (3 modified resources)",
+			setupFiles: []string{
+				"testdata/diff/resources/existing-namespace.yaml",
+				// NOTE: CRDs for parent/child Claims/XRs are auto-loaded from testdata/diff/crds/
+				// XRDs for parent and child Claims
+				"testdata/diff/resources/claim-nested/parent-definition.yaml",
+				"testdata/diff/resources/claim-nested/child-definition.yaml",
+				// Compositions for parent and child
+				"testdata/diff/resources/claim-nested/parent-composition.yaml",
+				"testdata/diff/resources/claim-nested/child-composition.yaml",
+				"testdata/diff/resources/functions.yaml",
+				// Claim is set up separately (not via owner refs - it uses spec.resourceRef to link to backing XR)
+				"testdata/diff/resources/claim-nested/existing-claim.yaml",
+			},
+			// Owner ref hierarchy matches Crossplane's actual ownership model:
+			// - Backing XR is the root of the owner ref tree (no owner refs)
+			// - Nested XR has owner ref to backing XR
+			// - Managed resource has owner ref to nested XR
+			// Note: Claim is NOT in this hierarchy - it links to backing XR via spec.resourceRef, not owner refs
+			setupFilesWithOwnerRefs: []HierarchicalOwnershipRelation{
+				{
+					// Backing XR is the root of owner ref tree
+					OwnerFile: "testdata/diff/resources/claim-nested/existing-parent-xr.yaml",
+					OwnedFiles: map[string]*HierarchicalOwnershipRelation{
+						// Nested XR owned by backing XR
+						"testdata/diff/resources/claim-nested/existing-child-xr.yaml": {
+							// Managed resource owned by nested XR
+							OwnedFiles: map[string]*HierarchicalOwnershipRelation{
+								"testdata/diff/resources/claim-nested/existing-managed-resource.yaml": nil,
+							},
+						},
+					},
+				},
+			},
+			inputFiles: []string{"testdata/diff/modified-claim-nested.yaml"},
+			expectedOutput: `
+~~~ ClusterNopResource/existing-parent-claim-82crv-nop
+  apiVersion: nop.crossplane.io/v1alpha1
+  kind: ClusterNopResource
+  metadata:
+    annotations:
+-     child-field: existing-parent-value
++     child-field: modified-parent-value
+      crossplane.io/composition-resource-name: nop-resource
+    generateName: existing-parent-claim-82crv-
+    labels:
+      crossplane.io/claim-name: existing-parent-claim
+      crossplane.io/claim-namespace: default
+      crossplane.io/composite: existing-parent-claim-82crv
+    name: existing-parent-claim-82crv-nop
+  spec:
+    forProvider:
+      conditionAfter:
+      - conditionStatus: "True"
+        conditionType: Ready
+        time: 0s
+
+---
+~~~ ParentNopClaim/existing-parent-claim
+  apiVersion: claimnested.diff.example.org/v1alpha1
+  kind: ParentNopClaim
+  metadata:
++   labels:
++     new-label: added-value
+    name: existing-parent-claim
+    namespace: default
+  spec:
+    compositeDeletePolicy: Background
+    compositionRef:
+      name: parent-nop-claim-composition
+    compositionUpdatePolicy: Automatic
+-   parentField: existing-parent-value
++   parentField: modified-parent-value
+    resourceRef:
+      apiVersion: claimnested.diff.example.org/v1alpha1
+      kind: XParentNopClaim
+      name: existing-parent-claim-82crv
+
+---
+~~~ XChildNopClaim/existing-parent-claim-82crv-child
+  apiVersion: claimnested.diff.example.org/v1alpha1
+  kind: XChildNopClaim
+  metadata:
+    annotations:
+      crossplane.io/composition-resource-name: child-xr
+    generateName: existing-parent-claim-82crv-
+    labels:
+      crossplane.io/claim-name: existing-parent-claim
+      crossplane.io/claim-namespace: default
+      crossplane.io/composite: existing-parent-claim-82crv
+    name: existing-parent-claim-82crv-child
+  spec:
+-   childField: existing-parent-value
++   childField: modified-parent-value
+    compositionRef:
+      name: child-nop-claim-composition
+    compositionUpdatePolicy: Automatic
+
+---
+
+Summary: 3 modified`,
+			expectedError: false,
+			noColor:       true,
+		},
 	}
 
 	for name, tt := range tests {
@@ -2744,23 +2849,27 @@ Summary: 2 modified
 		},
 		"CompositionChangeImpactsClaims": {
 			reason: "Validates composition change impacts existing Claims (issue #120)",
-			// Set up existing Claims that use the composition
+			// Set up existing Claims and their XRs that use the original composition
 			setupFiles: []string{
+				// XRD, composition, and functions
 				"testdata/comp/resources/claim-xrd.yaml",
 				"testdata/comp/resources/claim-composition.yaml",
 				"testdata/comp/resources/functions.yaml",
-				"testdata/comp/resources/existing-namespace.yaml",
-				// Add existing Claims that use the composition
+				// Test namespace
+				"testdata/comp/resources/test-namespace.yaml",
+				// Existing Claims and their corresponding XRs
 				"testdata/comp/resources/existing-claim-1.yaml",
-				"testdata/comp/resources/existing-claim-2.yaml",
-				// Add the downstream resources created by the Claims' XRs
+				"testdata/comp/resources/existing-claim-1-xr.yaml",
 				"testdata/comp/resources/existing-claim-downstream-1.yaml",
+				"testdata/comp/resources/existing-claim-2.yaml",
+				"testdata/comp/resources/existing-claim-2-xr.yaml",
 				"testdata/comp/resources/existing-claim-downstream-2.yaml",
 			},
-			// New composition file that will be diffed
+			// Updated composition that will be diffed
 			inputFiles: []string{"testdata/comp/updated-claim-composition.yaml"},
 			namespace:  "test-namespace",
-			expectedOutput: `=== Composition Changes ===
+			expectedOutput: `
+=== Composition Changes ===
 
 ~~~ Composition/nopclaims.diff.example.org
   apiVersion: apiextensions.crossplane.io/v1
@@ -2770,7 +2879,7 @@ Summary: 2 modified
   spec:
     compositeTypeRef:
       apiVersion: diff.example.org/v1alpha1
-      kind: XNopClaim
+      kind: XNop
     mode: Pipeline
     pipeline:
     - functionRef:
@@ -2816,26 +2925,19 @@ Summary: 2 resources with changes
   kind: XDownstreamResource
   metadata:
     annotations:
--     gotemplating.fn.crossplane.io/composition-resource-name: nop-resource
 +     crossplane.io/composition-resource-name: nop-resource
+      gotemplating.fn.crossplane.io/composition-resource-name: nop-resource
     labels:
       crossplane.io/claim-name: test-claim-1
       crossplane.io/claim-namespace: test-namespace
--     crossplane.io/composite: test-claim-1-xr
--   name: test-claim-1-xr
-- spec:
--   forProvider:
+      crossplane.io/composite: test-claim-1-xr
+    name: test-claim-1-xr
+  spec:
+    forProvider:
 -     configData: claim-value-1
 -     resourceTier: basic
-+     crossplane.io/composite: test-claim-1
-+   name: test-claim-1
-+ spec:
-+   forProvider:
 +     configData: updated-claim-value-1
 +     resourceTier: premium
-  
-  
-  
 
 ---
 ~~~ XDownstreamResource/test-claim-2-xr
@@ -2843,26 +2945,19 @@ Summary: 2 resources with changes
   kind: XDownstreamResource
   metadata:
     annotations:
--     gotemplating.fn.crossplane.io/composition-resource-name: nop-resource
 +     crossplane.io/composition-resource-name: nop-resource
+      gotemplating.fn.crossplane.io/composition-resource-name: nop-resource
     labels:
       crossplane.io/claim-name: test-claim-2
       crossplane.io/claim-namespace: test-namespace
--     crossplane.io/composite: test-claim-2-xr
--   name: test-claim-2-xr
-- spec:
--   forProvider:
+      crossplane.io/composite: test-claim-2-xr
+    name: test-claim-2-xr
+  spec:
+    forProvider:
 -     configData: claim-value-2
 -     resourceTier: basic
-+     crossplane.io/composite: test-claim-2
-+   name: test-claim-2
-+ spec:
-+   forProvider:
 +     configData: updated-claim-value-2
 +     resourceTier: premium
-  
-  
-  
 
 ---
 

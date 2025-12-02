@@ -11,81 +11,55 @@ spec:
     singular: nopclaim
   scope: Namespaced
   versions:
-    - name: v1alpha1
-      served: true
-      storage: true
-      schema:
-        openAPIV3Schema:
-          type: object
-          properties:
-            spec:
-              type: object
-              properties:
-                coolField:
-                  type: string
-                compositionRef:
-                  type: object
-                  properties:
-                    name:
-                      type: string
-                compositeDeletePolicy:
-                  type: string
-                  enum:
-                    - Background
-                    - Foreground
-                  default: "Background"
-                compositionUpdatePolicy:
-                  type: string
-                  enum:
-                    - Automatic
-                    - Manual
-                  default: "Automatic"
-                compositionSelector:
-                  type: object
-                  properties:
-                    matchLabels:
-                      type: object
-                      additionalProperties:
-                        type: string
-                publishConnectionDetailsTo:
-                  type: object
-                  properties:
-                    name:
-                      type: string
-                    configRef:
-                      type: object
-                      properties:
-                        name:
-                          type: string
-                    metadata:
-                      type: object
-                      properties:
-                        labels:
-                          type: object
-                          additionalProperties:
-                            type: string
-                        annotations:
-                          type: object
-                          additionalProperties:
-                            type: string
-                writeConnectionSecretsToNamespace:
-                  type: string
-            status:
-              type: object
-              properties:
-                conditions:
-                  type: array
-                  items:
+  - name: v1alpha1
+    served: true
+    storage: true
+    schema:
+      openAPIV3Schema:
+        type: object
+        properties:
+          apiVersion:
+            type: string
+          kind:
+            type: string
+          metadata:
+            type: object
+          spec:
+            type: object
+            properties:
+              coolField:
+                type: string
+              compositionRef:
+                type: object
+                properties:
+                  name:
+                    type: string
+              compositionSelector:
+                type: object
+                properties:
+                  matchLabels:
                     type: object
-                    properties:
-                      lastTransitionTime:
-                        type: string
-                        format: date-time
-                      message:
-                        type: string
-                      reason:
-                        type: string
-                      status:
-                        type: string
-                      type:
-                        type: string
+                    additionalProperties:
+                      type: string
+              compositionUpdatePolicy:
+                type: string
+                enum:
+                  - Automatic
+                  - Manual
+              compositeDeletePolicy:
+                type: string
+                enum:
+                  - Background
+                  - Foreground
+              resourceRef:
+                type: object
+                properties:
+                  apiVersion:
+                    type: string
+                  kind:
+                    type: string
+                  name:
+                    type: string
+          status:
+            type: object
+            x-kubernetes-preserve-unknown-fields: true

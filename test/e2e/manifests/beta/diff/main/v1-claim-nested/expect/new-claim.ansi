@@ -1,0 +1,53 @@
++++ ClusterNopResource/test-parent-claim-(generated)-(generated)
++ apiVersion: nop.crossplane.io/v1alpha1
++ kind: ClusterNopResource
++ metadata:
++   annotations:
++     child-field: new-parent-value
++     crossplane.io/composition-resource-name: nop-resource
++   generateName: test-parent-claim-(generated)-
++   labels:
++     crossplane.io/composite: test-parent-claim-(generated)
++ spec:
++   deletionPolicy: Delete
++   forProvider:
++     conditionAfter:
++     - conditionStatus: "True"
++       conditionType: Ready
++       time: 0s
++   managementPolicies:
++   - '*'
++   providerConfigRef:
++     name: default
+
+---
++++ ParentNopClaim/test-parent-claim
++ apiVersion: claimnested.diff.example.org/v1alpha1
++ kind: ParentNopClaim
++ metadata:
++   name: test-parent-claim
++   namespace: default
++ spec:
++   compositeDeletePolicy: Background
++   compositionRef:
++     name: parent-nop-claim-composition
++   compositionUpdatePolicy: Automatic
++   parentField: new-parent-value
+
+---
++++ XChildNopClaim/test-parent-claim-(generated)
++ apiVersion: claimnested.diff.example.org/v1alpha1
++ kind: XChildNopClaim
++ metadata:
++   annotations:
++     crossplane.io/composition-resource-name: child-xr
++   generateName: test-parent-claim-
++   labels:
++     crossplane.io/composite: test-parent-claim
++ spec:
++   childField: new-parent-value
++   compositionUpdatePolicy: Automatic
+
+---
+
+Summary: 3 added

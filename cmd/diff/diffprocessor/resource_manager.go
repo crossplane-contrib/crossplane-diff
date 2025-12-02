@@ -16,6 +16,10 @@ import (
 
 	"github.com/crossplane/crossplane-runtime/v2/pkg/errors"
 	"github.com/crossplane/crossplane-runtime/v2/pkg/logging"
+	cpd "github.com/crossplane/crossplane-runtime/v2/pkg/resource/unstructured/composed"
+	cmp "github.com/crossplane/crossplane-runtime/v2/pkg/resource/unstructured/composite"
+
+	"github.com/crossplane/crossplane/v2/cmd/crank/common/resource"
 )
 
 // ResourceManager handles resource-related operations like fetching, updating owner refs,
@@ -26,21 +30,26 @@ type ResourceManager interface {
 
 	// UpdateOwnerRefs ensures all OwnerReferences have valid UIDs
 	UpdateOwnerRefs(ctx context.Context, parent *un.Unstructured, child *un.Unstructured)
+
+	// FetchObservedResources fetches the observed composed resources for the given XR
+	FetchObservedResources(ctx context.Context, xr *cmp.Unstructured) ([]cpd.Unstructured, error)
 }
 
 // DefaultResourceManager implements ResourceManager interface.
 type DefaultResourceManager struct {
-	client    k8.ResourceClient
-	defClient xp.DefinitionClient
-	logger    logging.Logger
+	client     k8.ResourceClient
+	defClient  xp.DefinitionClient
+	treeClient xp.ResourceTreeClient
+	logger     logging.Logger
 }
 
 // NewResourceManager creates a new DefaultResourceManager.
-func NewResourceManager(client k8.ResourceClient, defClient xp.DefinitionClient, logger logging.Logger) ResourceManager {
+func NewResourceManager(client k8.ResourceClient, defClient xp.DefinitionClient, treeClient xp.ResourceTreeClient, logger logging.Logger) ResourceManager {
 	return &DefaultResourceManager{
-		client:    client,
-		defClient: defClient,
-		logger:    logger,
+		client:     client,
+		defClient:  defClient,
+		treeClient: treeClient,
+		logger:     logger,
 	}
 }
 
@@ -207,7 +216,14 @@ func (m *DefaultResourceManager) lookupByComposite(ctx context.Context, composit
 
 	isCompositeAClaim := m.defClient.IsClaimResource(ctx, composite)
 
-	if isCompositeAClaim {
+	// Check if the desired resource already has a crossplane.io/composite label
+	// If so, use that for lookup instead of the parent's name. This handles nested XRs
+	// where the composed resources should have the ROOT XR's name in their composite label,
+	// not the intermediate nested XR's name.
+	desiredCompositeLabel := desired.GetLabels()["crossplane.io/composite"]
+
+	switch {
+	case isCompositeAClaim:
 		// For claims, we need to find the XR that was created from this claim
 		// The downstream resources will have labels pointing to that XR
 		// We'll use the claim labels to find downstream resources
@@ -221,7 +237,20 @@ func (m *DefaultResourceManager) lookupByComposite(ctx context.Context, composit
 		m.logger.Debug("Using claim labels for resource lookup",
 			"claim", composite.GetName(),
 			"namespace", composite.GetNamespace())
-	} else {
+	case desiredCompositeLabel != "" && desiredCompositeLabel != composite.GetName():
+		// The desired resource has a different composite label than the parent
+		// (e.g., for nested XRs where we've fixed the label to point to root XR)
+		// Use the resource's own label value for lookup
+		labelSelector = metav1.LabelSelector{
+			MatchLabels: map[string]string{
+				"crossplane.io/composite": desiredCompositeLabel,
+			},
+		}
+		lookupName = desiredCompositeLabel
+		m.logger.Debug("Using resource's own composite label for lookup",
+			"composite", desiredCompositeLabel,
+			"parentComposite", composite.GetName())
+	default:
 		// For XRs, use the composite label
 		labelSelector = metav1.LabelSelector{
 			MatchLabels: map[string]string{
@@ -509,12 +538,83 @@ func (m *DefaultResourceManager) updateCompositeOwnerLabel(ctx context.Context, 
 				"child", child.GetName())
 		}
 	default:
-		// For XRs, set the composite label
-		labels["crossplane.io/composite"] = parentName
-		m.logger.Debug("Updated composite owner label",
-			"composite", parentName,
-			"child", child.GetName())
+		// For XRs, only set the composite label if it doesn't already exist
+		// If it exists, preserve it (e.g., for managed resources that already have correct ownership)
+		existingComposite, hasComposite := labels["crossplane.io/composite"]
+		if !hasComposite {
+			// No existing composite label, set it to the parent XR name
+			labels["crossplane.io/composite"] = parentName
+			m.logger.Debug("Set composite label for new XR resource",
+				"xrName", parentName,
+				"child", child.GetName())
+		} else {
+			// Preserve existing composite label
+			m.logger.Debug("Preserved existing composite label for XR resource",
+				"xrName", parentName,
+				"existingComposite", existingComposite,
+				"child", child.GetName())
+		}
 	}
 
 	child.SetLabels(labels)
+}
+
+// FetchObservedResources fetches the observed composed resources for the given XR.
+// Returns a flat slice of composed resources suitable for render.Inputs.ObservedResources.
+func (m *DefaultResourceManager) FetchObservedResources(ctx context.Context, xr *cmp.Unstructured) ([]cpd.Unstructured, error) {
+	m.logger.Debug("Fetching observed resources for XR",
+		"xr_kind", xr.GetKind(),
+		"xr_name", xr.GetName())
+
+	// Get the resource tree from the cluster
+	tree, err := m.treeClient.GetResourceTree(ctx, &xr.Unstructured)
+	if err != nil {
+		m.logger.Debug("Failed to get resource tree for XR",
+			"xr", xr.GetName(),
+			"error", err)
+
+		return nil, errors.Wrap(err, "cannot get resource tree")
+	}
+
+	// Extract composed resources from the tree
+	observed := extractComposedResourcesFromTree(tree)
+
+	m.logger.Debug("Fetched observed composed resources",
+		"xr", xr.GetName(),
+		"count", len(observed))
+
+	return observed, nil
+}
+
+// extractComposedResourcesFromTree recursively extracts all composed resources from a resource tree.
+// It returns a flat slice of composed resources, suitable for render.Inputs.ObservedResources.
+// Only includes resources with the crossplane.io/composition-resource-name annotation.
+func extractComposedResourcesFromTree(tree *resource.Resource) []cpd.Unstructured {
+	var resources []cpd.Unstructured
+
+	// Recursively collect composed resources from the tree
+	var collectResources func(node *resource.Resource)
+
+	collectResources = func(node *resource.Resource) {
+		// Only include resources that have the composition-resource-name annotation
+		// (this filters out the root XR and non-composed resources)
+		if _, hasAnno := node.Unstructured.GetAnnotations()["crossplane.io/composition-resource-name"]; hasAnno {
+			// Convert to cpd.Unstructured (composed resource)
+			resources = append(resources, cpd.Unstructured{
+				Unstructured: node.Unstructured,
+			})
+		}
+
+		// Recursively process children
+		for _, child := range node.Children {
+			collectResources(child)
+		}
+	}
+
+	// Start from root's children to avoid including the XR itself
+	for _, child := range tree.Children {
+		collectResources(child)
+	}
+
+	return resources
 }
