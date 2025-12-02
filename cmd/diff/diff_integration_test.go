@@ -2925,14 +2925,13 @@ Summary: 2 resources with changes
   kind: XDownstreamResource
   metadata:
     annotations:
--     gotemplating.fn.crossplane.io/composition-resource-name: nop-resource
 +     crossplane.io/composition-resource-name: nop-resource
+      gotemplating.fn.crossplane.io/composition-resource-name: nop-resource
     labels:
       crossplane.io/claim-name: test-claim-1
       crossplane.io/claim-namespace: test-namespace
       crossplane.io/composite: test-claim-1-xr
--   name: test-claim-1-xr
-+   name: test-claim-1
+    name: test-claim-1-xr
   spec:
     forProvider:
 -     configData: claim-value-1
@@ -2946,14 +2945,13 @@ Summary: 2 resources with changes
   kind: XDownstreamResource
   metadata:
     annotations:
--     gotemplating.fn.crossplane.io/composition-resource-name: nop-resource
 +     crossplane.io/composition-resource-name: nop-resource
+      gotemplating.fn.crossplane.io/composition-resource-name: nop-resource
     labels:
       crossplane.io/claim-name: test-claim-2
       crossplane.io/claim-namespace: test-namespace
       crossplane.io/composite: test-claim-2-xr
--   name: test-claim-2-xr
-+   name: test-claim-2
+    name: test-claim-2-xr
   spec:
     forProvider:
 -     configData: claim-value-2
