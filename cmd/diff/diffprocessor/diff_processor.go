@@ -465,6 +465,12 @@ func (p *DefaultDiffProcessor) diffSingleResourceInternal(ctx context.Context, r
 	// Only propagate when:
 	// 1. We're in a Claim context (XR has claim-name label)
 	// 2. The XR has a composite label different from its name (set by preserveNestedXRIdentity)
+	//
+	// WHY NON-CLAIM XRs DON'T NEED THIS:
+	// For standalone XR trees (no Claim), Crossplane's render pipeline correctly sets the
+	// crossplane.io/composite label on each composed resource to its immediate parent XR's name.
+	// The DiffCalculator.preserveCompositeLabel() method then preserves this label from existing
+	// cluster resources, ensuring no spurious diffs. No manual propagation is needed.
 	xrCompositeLabel := xr.GetLabels()["crossplane.io/composite"]
 	xrClaimName := xr.GetLabels()["crossplane.io/claim-name"]
 	isClaimContext := xrClaimName != ""
