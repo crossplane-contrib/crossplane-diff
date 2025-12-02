@@ -1853,6 +1853,7 @@ func TestDefaultDiffProcessor_ProcessNestedXRs(t *testing.T) {
 
 				// Call the method under test
 				var observedResources []cpd.Unstructured
+
 				diffs, _, err := processor.ProcessNestedXRs(ctx, tt.composedResources, compositionProvider, tt.parentResourceID, parentXR, observedResources, tt.depth)
 
 				// Check error
