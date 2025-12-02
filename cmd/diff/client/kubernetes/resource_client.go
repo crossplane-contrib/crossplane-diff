@@ -146,38 +146,50 @@ func (c *DefaultResourceClient) ListResources(ctx context.Context, gvk schema.Gr
 }
 
 // GetGVKsForGroupKind returns all available GroupVersionKinds for a given group and kind.
+// It queries only the specified API group rather than all server APIs, avoiding issues
+// with stale discovery data in unrelated API groups.
 func (c *DefaultResourceClient) GetGVKsForGroupKind(_ context.Context, group, kind string) ([]schema.GroupVersionKind, error) {
-	// Get all API resources
-
-	// TODO:  is there any way to do this more efficiently than getting all resources?  that can be tremendously expensive
-	// in crossplane envs with tons of CRDs.
-	apiResourceLists, err := c.discoveryClient.ServerPreferredResources()
+	// Get API groups (lightweight - doesn't fetch all resources)
+	apiGroups, err := c.discoveryClient.ServerGroups()
 	if err != nil {
-		return nil, err
+		return nil, errors.Wrap(err, "cannot get server groups")
+	}
+
+	// Find the target group and its versions
+	var targetGroup *metav1.APIGroup
+	for i := range apiGroups.Groups {
+		if apiGroups.Groups[i].Name == group {
+			targetGroup = &apiGroups.Groups[i]
+			break
+		}
+	}
+
+	if targetGroup == nil {
+		return nil, errors.Errorf("API group %q not found on server", group)
 	}
 
 	var gvks []schema.GroupVersionKind
 
-	// Find all versions for the given group+kind
-	for _, apiResourceList := range apiResourceLists {
-		gv, err := schema.ParseGroupVersion(apiResourceList.GroupVersion)
+	// Query only the versions of the target group
+	for _, version := range targetGroup.Versions {
+		resourceList, err := c.discoveryClient.ServerResourcesForGroupVersion(version.GroupVersion)
 		if err != nil {
+			c.logger.Debug("Failed to get resources for group version", "groupVersion", version.GroupVersion, "error", err)
 			continue
 		}
 
-		if gv.Group != group {
-			continue
-		}
-
-		for _, resource := range apiResourceList.APIResources {
+		for _, resource := range resourceList.APIResources {
 			if resource.Kind == kind {
+				gv, err := schema.ParseGroupVersion(version.GroupVersion)
+				if err != nil {
+					continue
+				}
 				gvk := schema.GroupVersionKind{
 					Group:   gv.Group,
 					Version: gv.Version,
 					Kind:    kind,
 				}
 				gvks = append(gvks, gvk)
-
 				break // Found the kind in this version, move to next version
 			}
 		}
