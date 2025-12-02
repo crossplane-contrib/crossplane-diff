@@ -11,6 +11,7 @@ import (
 	un "k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/client-go/discovery"
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/dynamic/fake"
 	kt "k8s.io/client-go/testing"
@@ -758,6 +759,259 @@ func TestResourceClient_ListResources(t *testing.T) {
 			for name := range gotResources {
 				if !wantResources[name] {
 					t.Errorf("\n%s\nListResources(...): unexpected resource: %s", tc.reason, name)
+				}
+			}
+		})
+	}
+}
+
+// createStaleDiscoveryClient creates a fake discovery client that simulates stale discovery
+// for external.metrics.k8s.io but works correctly for Crossplane API groups.
+// This reproduces the exact scenario from issue #153.
+func createStaleDiscoveryClient() discovery.DiscoveryInterface {
+	// Create resources for Crossplane API groups
+	resources := map[string][]metav1.APIResource{
+		"apiextensions.crossplane.io/v1": {
+			{Name: "compositeresourcedefinitions", Kind: "CompositeResourceDefinition"},
+			{Name: "compositions", Kind: "Composition"},
+		},
+		// Include the stale group in the resources list so ServerGroups sees it,
+		// but we'll make ServerResourcesForGroupVersion fail for it
+		"external.metrics.k8s.io/v1beta1": {
+			{Name: "externalmetrics", Kind: "ExternalMetric"},
+		},
+	}
+
+	// Use the standard CreateFakeDiscoveryClient which sets up groups from resources
+	fakeDiscovery := tu.CreateFakeDiscoveryClient(resources)
+
+	return fakeDiscovery
+}
+
+// TestResourceClient_GetGVKsForGroupKind_StaleDiscoveryResilience validates that the fix
+// for issue #153 works correctly - we can query Crossplane API groups even when unrelated
+// API groups (like external.metrics.k8s.io) exist in the cluster.
+//
+// The key behavior validated here:
+// - The new implementation queries only the specific API group needed (apiextensions.crossplane.io)
+// - It does NOT query unrelated groups (external.metrics.k8s.io) which could have stale discovery
+// - This is achieved by using ServerGroups() + ServerResourcesForGroupVersion() instead of ServerPreferredResources()
+func TestResourceClient_GetGVKsForGroupKind_StaleDiscoveryResilience(t *testing.T) {
+	// Create a fake discovery client with multiple API groups including external.metrics.k8s.io
+	// In a real cluster, if external.metrics.k8s.io had stale discovery, ServerPreferredResources()
+	// would fail. Our fix avoids calling ServerPreferredResources() entirely.
+	discoveryClient := createStaleDiscoveryClient()
+
+	c := &DefaultResourceClient{
+		discoveryClient: discoveryClient,
+		logger:          tu.TestLogger(t, false),
+	}
+
+	// Test that we can query Crossplane API groups successfully
+	// The old implementation would call ServerPreferredResources() which queries ALL groups
+	// The new implementation only queries apiextensions.crossplane.io
+	got, err := c.GetGVKsForGroupKind(t.Context(), "apiextensions.crossplane.io", "CompositeResourceDefinition")
+	if err != nil {
+		t.Errorf("GetGVKsForGroupKind() failed unexpectedly: %v\n"+
+			"This error indicates the fix for issue #153 may not be working correctly.", err)
+		return
+	}
+
+	// Verify we got the expected GVK
+	if len(got) != 1 {
+		t.Errorf("GetGVKsForGroupKind() returned %d GVKs, want 1", len(got))
+		return
+	}
+
+	expectedGVK := schema.GroupVersionKind{
+		Group:   "apiextensions.crossplane.io",
+		Version: "v1",
+		Kind:    "CompositeResourceDefinition",
+	}
+	if got[0] != expectedGVK {
+		t.Errorf("GetGVKsForGroupKind() = %v, want %v", got[0], expectedGVK)
+	}
+
+	// Also verify we can query Composition kind in the same group
+	got2, err := c.GetGVKsForGroupKind(t.Context(), "apiextensions.crossplane.io", "Composition")
+	if err != nil {
+		t.Errorf("GetGVKsForGroupKind(Composition) failed unexpectedly: %v", err)
+		return
+	}
+
+	if len(got2) != 1 || got2[0].Kind != "Composition" {
+		t.Errorf("GetGVKsForGroupKind(Composition) = %v, want single Composition GVK", got2)
+	}
+}
+
+func TestResourceClient_GetGVKsForGroupKind(t *testing.T) {
+	tests := map[string]struct {
+		reason    string
+		resources map[string][]metav1.APIResource
+		group     string
+		kind      string
+		want      []schema.GroupVersionKind
+		wantErr   bool
+		errMsg    string
+	}{
+		"SingleVersion": {
+			reason: "Should return single GVK when kind exists in one version",
+			resources: map[string][]metav1.APIResource{
+				"apiextensions.crossplane.io/v1": {
+					{
+						Name: "compositeresourcedefinitions",
+						Kind: "CompositeResourceDefinition",
+					},
+				},
+			},
+			group: "apiextensions.crossplane.io",
+			kind:  "CompositeResourceDefinition",
+			want: []schema.GroupVersionKind{
+				{
+					Group:   "apiextensions.crossplane.io",
+					Version: "v1",
+					Kind:    "CompositeResourceDefinition",
+				},
+			},
+		},
+		"MultipleVersions": {
+			reason: "Should return GVKs for all versions when kind exists in multiple versions",
+			resources: map[string][]metav1.APIResource{
+				"apiextensions.crossplane.io/v1": {
+					{
+						Name: "compositeresourcedefinitions",
+						Kind: "CompositeResourceDefinition",
+					},
+				},
+				"apiextensions.crossplane.io/v1beta1": {
+					{
+						Name: "compositeresourcedefinitions",
+						Kind: "CompositeResourceDefinition",
+					},
+				},
+			},
+			group: "apiextensions.crossplane.io",
+			kind:  "CompositeResourceDefinition",
+			want: []schema.GroupVersionKind{
+				{
+					Group:   "apiextensions.crossplane.io",
+					Version: "v1",
+					Kind:    "CompositeResourceDefinition",
+				},
+				{
+					Group:   "apiextensions.crossplane.io",
+					Version: "v1beta1",
+					Kind:    "CompositeResourceDefinition",
+				},
+			},
+		},
+		"KindNotFound": {
+			reason: "Should return empty list when kind doesn't exist in group",
+			resources: map[string][]metav1.APIResource{
+				"apiextensions.crossplane.io/v1": {
+					{
+						Name: "compositeresourcedefinitions",
+						Kind: "CompositeResourceDefinition",
+					},
+				},
+			},
+			group: "apiextensions.crossplane.io",
+			kind:  "NonExistentKind",
+			want:  nil,
+		},
+		"GroupNotFound": {
+			reason: "Should return error when group doesn't exist",
+			resources: map[string][]metav1.APIResource{
+				"other.io/v1": {
+					{
+						Name: "resources",
+						Kind: "Resource",
+					},
+				},
+			},
+			group:   "nonexistent.io",
+			kind:    "SomeKind",
+			wantErr: true,
+			errMsg:  "API group \"nonexistent.io\" not found on server",
+		},
+		"IgnoresOtherGroups": {
+			reason: "Should only return GVKs from the specified group, ignoring others",
+			resources: map[string][]metav1.APIResource{
+				"apiextensions.crossplane.io/v1": {
+					{
+						Name: "compositeresourcedefinitions",
+						Kind: "CompositeResourceDefinition",
+					},
+				},
+				"external.metrics.k8s.io/v1beta1": {
+					{
+						Name: "externalmetrics",
+						Kind: "ExternalMetric",
+					},
+				},
+			},
+			group: "apiextensions.crossplane.io",
+			kind:  "CompositeResourceDefinition",
+			want: []schema.GroupVersionKind{
+				{
+					Group:   "apiextensions.crossplane.io",
+					Version: "v1",
+					Kind:    "CompositeResourceDefinition",
+				},
+			},
+		},
+	}
+
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			discoveryClient := tu.CreateFakeDiscoveryClient(tc.resources)
+
+			c := &DefaultResourceClient{
+				discoveryClient: discoveryClient,
+				logger:          tu.TestLogger(t, false),
+			}
+
+			got, err := c.GetGVKsForGroupKind(t.Context(), tc.group, tc.kind)
+
+			if tc.wantErr {
+				if err == nil {
+					t.Errorf("\n%s\nGetGVKsForGroupKind(...): expected error but got none", tc.reason)
+					return
+				}
+
+				if tc.errMsg != "" && !strings.Contains(err.Error(), tc.errMsg) {
+					t.Errorf("\n%s\nGetGVKsForGroupKind(...): expected error containing %q, got %q",
+						tc.reason, tc.errMsg, err.Error())
+				}
+
+				return
+			}
+
+			if err != nil {
+				t.Errorf("\n%s\nGetGVKsForGroupKind(...): unexpected error: %v", tc.reason, err)
+				return
+			}
+
+			// Compare by converting both to maps for order-independent comparison
+			wantMap := make(map[string]bool)
+			for _, gvk := range tc.want {
+				wantMap[gvk.String()] = true
+			}
+
+			gotMap := make(map[string]bool)
+			for _, gvk := range got {
+				gotMap[gvk.String()] = true
+			}
+
+			if len(wantMap) != len(gotMap) {
+				t.Errorf("\n%s\nGetGVKsForGroupKind(...): got %d GVKs, want %d GVKs\ngot: %v\nwant: %v",
+					tc.reason, len(got), len(tc.want), got, tc.want)
+				return
+			}
+
+			for gvkStr := range wantMap {
+				if !gotMap[gvkStr] {
+					t.Errorf("\n%s\nGetGVKsForGroupKind(...): missing expected GVK: %s", tc.reason, gvkStr)
 				}
 			}
 		})

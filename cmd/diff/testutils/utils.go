@@ -107,6 +107,8 @@ func TestLogger(t *testing.T, verbose bool) logging.Logger {
 }
 
 // CreateFakeDiscoveryClient is a helper function to create a fake discovery client for testing.
+// The fake discovery client automatically derives API groups from the provided resources,
+// enabling both ServerResourcesForGroupVersion() and ServerGroups() to work correctly.
 func CreateFakeDiscoveryClient(resources map[string][]metav1.APIResource) discovery.DiscoveryInterface {
 	fakeDiscovery := &fakediscovery.FakeDiscovery{
 		Fake: &kt.Fake{},
@@ -122,6 +124,7 @@ func CreateFakeDiscoveryClient(resources map[string][]metav1.APIResource) discov
 	}
 
 	fakeDiscovery.Resources = apiResourceLists
+	fakeDiscovery.Fake.Resources = apiResourceLists
 
 	return fakeDiscovery
 }
