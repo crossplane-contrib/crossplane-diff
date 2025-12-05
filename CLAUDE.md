@@ -323,16 +323,18 @@ earthly -P +e2e --FLAGS="-test.run TestSpecificTest" --E2E_DUMP_EXPECTED=1
 
 **Issue:** `crossplane render`'s `SetComposedResourceMetadata` function doesn't properly propagate the root composite's identity through nested XR trees. It always uses `xr.GetName()` for the `crossplane.io/composite` label instead of checking if the XR already has the label set (which would indicate it's a nested XR that inherited the root's identity).
 
-**Current Workaround:** We have `propagateCompositeLabelInClaimContext` in `diff_processor.go` that fixes composite labels on composed resources of nested XRs after rendering.
+**Status:** We are currently testing against a fork (Sanyaku/crossplane) that includes the fix. Once the upstream PR merges and is released:
+1. Remove the `replace` directive in `go.mod` that points to the fork
+2. Update to the official Crossplane release containing the fix
 
-**Simplifications After Upstream Merge:**
+**Completed Simplifications:**
 
-Once the upstream PR merges and we update our Crossplane dependency:
+The following simplifications were enabled by the upstream fix and have been implemented:
 
-1. **Remove `propagateCompositeLabelInClaimContext`** - The render pipeline will automatically propagate the correct composite label through nested XR trees.
+1. **Removed `propagateCompositeLabelInClaimContext`** - The render pipeline now automatically propagates the correct composite label through nested XR trees. This function was removed from `diff_processor.go`.
 
-2. **Simplify nested XR processing** - No post-render label fixups needed; rendering a nested XR with its inherited labels will produce composed resources with correct labels.
+2. **Simplified nested XR processing** - No post-render label fixups needed; rendering a nested XR with its inherited labels produces composed resources with correct labels.
 
-3. **Test updates** - E2E tests for nested XRs in Claim trees should pass without any special handling code.
+3. **Updated test expectations** - Integration and E2E tests for nested XRs now expect the correct behavior where `crossplane.io/composite` uses the root XR name throughout the tree.
 
 The fix works by checking `xr.GetLabels()[AnnotationKeyCompositeName]` before falling back to `xr.GetName()`. This mirrors the behavior in Crossplane's actual `RenderComposedResourceMetadata` function in `internal/controller/apiextensions/composite/composition_render.go`.

@@ -312,10 +312,6 @@ func (p *DefaultDiffProcessor) diffSingleResourceInternal(ctx context.Context, r
 		return nil, nil, errors.Wrap(err, "cannot render resources with requirements")
 	}
 
-	// Propagate composite label in Claim context - this handles nested XRs.
-	// The function checks for claim-name label internally.
-	p.propagateCompositeLabelInClaimContext(desired.ComposedResources, xr)
-
 	// Prepare the top-level XR for diff calculation
 	p.config.Logger.Debug("Preparing XR for diff calculation",
 		"resource", resourceID,
@@ -461,6 +457,9 @@ func (p *DefaultDiffProcessor) resolveBackingXRForClaim(ctx context.Context, exi
 	// Check if this is a Claim by looking for resourceRef field
 	resourceRefRaw, hasResourceRef, _ := un.NestedFieldCopy(existingXRFromCluster.Object, "spec", "resourceRef")
 	if !hasResourceRef || resourceRefRaw == nil {
+		p.config.Logger.Debug("No spec.resourceRef in cluster resource (either not a Claim, or backing XR not yet bound)",
+			"resource", xr.GetName(),
+			"gvk", existingXRFromCluster.GroupVersionKind().String())
 		return result, nil
 	}
 
@@ -569,65 +568,6 @@ func (p *DefaultDiffProcessor) resolveBackingXRForClaim(ctx context.Context, exi
 		"xrForRenderingName", xrForRendering.GetName())
 
 	return result, nil
-}
-
-// propagateCompositeLabelInClaimContext propagates the composite label to all composed resources
-// for nested XRs in a CLAIM context.
-//
-// In Crossplane, when rendering from a Claim, ALL composed resources (at all nesting levels)
-// get the BACKING XR's name in their composite label. This is different from non-Claim XR trees
-// where each resource gets its immediate parent XR's name.
-//
-// We detect Claim context by checking for claim labels (crossplane.io/claim-name).
-// Only propagate when:
-// 1. We're in a Claim context (XR has claim-name label)
-// 2. The XR has a composite label different from its name (set by preserveNestedXRIdentity)
-//
-// WHY NON-CLAIM XRs DON'T NEED THIS:
-// For standalone XR trees (no Claim), Crossplane's render pipeline correctly sets the
-// crossplane.io/composite label on each composed resource to its immediate parent XR's name.
-// The DiffCalculator.preserveCompositeLabel() method then preserves this label from existing
-// cluster resources, ensuring no spurious diffs. No manual propagation is needed.
-func (p *DefaultDiffProcessor) propagateCompositeLabelInClaimContext(composedResources []cpd.Unstructured, xr *cmp.Unstructured) {
-	xrCompositeLabel := xr.GetLabels()["crossplane.io/composite"]
-	xrClaimName := xr.GetLabels()["crossplane.io/claim-name"]
-
-	isClaimContext := xrClaimName != ""
-	if !isClaimContext || xrCompositeLabel == "" || xrCompositeLabel == xr.GetName() {
-		return
-	}
-
-	p.config.Logger.Debug("Propagating composite label to composed resources",
-		"xr", xr.GetName(),
-		"compositeLabel", xrCompositeLabel,
-		"composedCount", len(composedResources))
-
-	for i := range composedResources {
-		resource := &composedResources[i]
-
-		labels := resource.GetLabels()
-		if labels == nil {
-			labels = make(map[string]string)
-		}
-
-		oldLabel := labels["crossplane.io/composite"]
-		labels["crossplane.io/composite"] = xrCompositeLabel
-		resource.SetLabels(labels)
-
-		// Also fix generateName to use the root XR's name as prefix
-		oldGenerateName := resource.GetGenerateName()
-		if oldGenerateName != "" {
-			newGenerateName := xrCompositeLabel + "-"
-			resource.SetGenerateName(newGenerateName)
-
-			p.config.Logger.Debug("Fixed composed resource identity for nested XR",
-				"resource", resource.GetKind()+"/"+resource.GetName(),
-				"oldComposite", oldLabel,
-				"newComposite", xrCompositeLabel,
-				"oldGenerateName", oldGenerateName,
-				"newGenerateName", newGenerateName)
-		}
-	}
 }
 
 // prepareXRForDiff prepares the XR unstructured object for diff calculation.

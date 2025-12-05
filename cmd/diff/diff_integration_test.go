@@ -1414,7 +1414,7 @@ Summary: 1 added`,
 +   annotations:
 +     crossplane.io/composition-resource-name: managed-resource
 +   labels:
-+     crossplane.io/composite: test-parent-child
++     crossplane.io/composite: test-parent
 +   name: test-parent-child-managed
 +   namespace: default
 + spec:
@@ -1482,7 +1482,7 @@ Summary: 3 added`,
 +     crossplane.io/composition-resource-name: managed-resource
 +     gotemplating.fn.crossplane.io/composition-resource-name: managed-resource
 +   labels:
-+     crossplane.io/composite: test-parent-child
++     crossplane.io/composite: test-parent
     name: test-parent-child-managed
     namespace: default
   spec:

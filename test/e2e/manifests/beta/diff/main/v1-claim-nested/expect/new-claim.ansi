@@ -1,13 +1,13 @@
-+++ ClusterNopResource/test-parent-claim-(generated)-(generated)
++++ ClusterNopResource/test-parent-claim-(generated)
 + apiVersion: nop.crossplane.io/v1alpha1
 + kind: ClusterNopResource
 + metadata:
 +   annotations:
 +     child-field: new-parent-value
 +     crossplane.io/composition-resource-name: nop-resource
-+   generateName: test-parent-claim-(generated)-
++   generateName: test-parent-claim-
 +   labels:
-+     crossplane.io/composite: test-parent-claim-(generated)
++     crossplane.io/composite: test-parent-claim
 + spec:
 +   deletionPolicy: Delete
 +   forProvider:
