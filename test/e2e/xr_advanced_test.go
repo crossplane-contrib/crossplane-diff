@@ -187,3 +187,70 @@ func TestDiffExistingNestedResourceV2(t *testing.T) {
 			Feature(),
 	)
 }
+
+// TestDiffExistingNestedResourceV2WithGenerateName tests the crossplane diff command
+// against existing nested XR resources where the child XR uses generateName instead of an explicit name.
+//
+// This is a minimal E2E reproduction of the nested XR identity preservation bug.
+// The bug manifests when:
+//  1. A parent XR creates a child XR using generateName (not explicit name)
+//  2. The parent XR is modified (changing spec fields)
+//  3. Without identity preservation, the child XR gets a new random suffix on each render
+//  4. This causes all managed resources owned by the child XR to appear as removed/added
+//
+// The existing TestDiffExistingNestedResourceV2 test doesn't catch this bug because
+// it uses an explicit name template: `name: {{ .observed.composite.resource.metadata.name }}-child`
+// This produces deterministic naming (always "test-parent-existing-child"), masking the bug.
+//
+// This test uses `generateName: {{ .observed.composite.resource.metadata.name }}-child-`
+// which produces non-deterministic names (e.g., "test-parent-generatename-child-abc123").
+// Without identity preservation, each render would get a new random suffix.
+func TestDiffExistingNestedResourceV2WithGenerateName(t *testing.T) {
+	imageTag := strings.Split(environment.GetCrossplaneImage(), ":")[1]
+	manifests := filepath.Join("test/e2e/manifests/beta/diff", imageTag, "v2-nested-generatename")
+	setupPath := filepath.Join(manifests, "setup")
+
+	environment.Test(t,
+		features.New("DiffExistingNestedResourceV2WithGenerateName").
+			WithLabel(e2e.LabelArea, LabelAreaDiff).
+			WithLabel(e2e.LabelSize, e2e.LabelSizeSmall).
+			WithLabel(config.LabelTestSuite, config.TestSuiteDefault).
+			WithLabel(LabelCrossplaneVersion, CrossplaneVersionMain).
+			WithSetup("CreatePrerequisites", funcs.AllOf(
+				funcs.ApplyResources(e2e.FieldManager, setupPath, "*.yaml"),
+				funcs.ResourcesCreatedWithin(30*time.Second, setupPath, "*.yaml"),
+			)).
+			WithSetup("PrerequisitesAreReady", funcs.AllOf(
+				funcs.ResourcesHaveConditionWithin(1*time.Minute, setupPath, "parent-definition.yaml", apiextensionsv1.WatchingComposite()),
+				funcs.ResourcesHaveConditionWithin(1*time.Minute, setupPath, "child-definition.yaml", apiextensionsv1.WatchingComposite()),
+			)).
+			WithSetup("CreateExistingXR", funcs.AllOf(
+				funcs.ApplyResources(e2e.FieldManager, manifests, "existing-parent-xr.yaml"),
+				funcs.ResourcesCreatedWithin(1*time.Minute, manifests, "existing-parent-xr.yaml"),
+			)).
+			WithSetup("ExistingXRIsReady", funcs.AllOf(
+				funcs.ResourcesHaveConditionWithin(2*time.Minute, manifests, "existing-parent-xr.yaml", xpv1.Available()),
+			)).
+			Assess("CanDiffExistingNestedResourceWithGenerateName", func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
+				t.Helper()
+
+				output, log, err := RunXRDiff(t, c, "./crossplane-diff", filepath.Join(manifests, "modified-parent-xr.yaml"))
+				if err != nil {
+					t.Fatalf("Error running diff command: %v\nLog output:\n%s", err, log)
+				}
+
+				expectPath := filepath.Join(manifests, "expect")
+				assertDiffMatchesFile(t, output, filepath.Join(expectPath, "existing-parent-xr.ansi"), log)
+
+				return ctx
+			}).
+			WithTeardown("DeleteResources", funcs.AllOf(
+				funcs.DeleteResources(manifests, "existing-parent-xr.yaml"),
+				funcs.ResourcesDeletedWithin(2*time.Minute, manifests, "existing-parent-xr.yaml"),
+			)).
+			WithTeardown("DeletePrerequisites", funcs.AllOf(
+				funcs.ResourcesDeletedAfterListedAreGone(3*time.Minute, setupPath, "*.yaml", nsNopList),
+			)).
+			Feature(),
+	)
+}

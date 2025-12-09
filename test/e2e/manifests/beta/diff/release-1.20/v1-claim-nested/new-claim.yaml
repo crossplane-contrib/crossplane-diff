@@ -1,0 +1,10 @@
+apiVersion: claimnested.diff.example.org/v1alpha1
+kind: ParentNopClaim
+metadata:
+  name: test-parent-claim
+  namespace: default
+spec:
+  parentField: new-parent-value
+  compositeDeletePolicy: Background
+  compositionRef:
+    name: parent-nop-claim-composition

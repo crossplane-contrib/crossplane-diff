@@ -1,0 +1,12 @@
+apiVersion: claimnested.diff.example.org/v1alpha1
+kind: ParentNopClaim
+metadata:
+  name: existing-parent-claim
+  namespace: default
+  labels:
+    new-label: added-value
+spec:
+  parentField: modified-parent-value
+  compositeDeletePolicy: Background
+  compositionRef:
+    name: parent-nop-claim-composition

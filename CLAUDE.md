@@ -167,10 +167,45 @@ cmd/diff/
 - Scope validation: Namespaced XRs cannot own cluster-scoped resources (except Claims)
 - Namespace propagation: XR namespace propagates to managed resources in Crossplane v2
 
+**Claim Label Behavior (Empirically Verified)**
+Crossplane ALWAYS uses the XR name for the `crossplane.io/composite` label on composed resources, even when rendering from a Claim.
+
+Evidence from empirical testing (2025-11-18):
+```yaml
+# Claim: my-test-claim (namespace: claim-test-ns)
+# XR: my-test-claim-mjwln (cluster-scoped, auto-generated suffix)
+# Composed NopResource labels:
+labels:
+  crossplane.io/claim-name: my-test-claim           # Points to Claim
+  crossplane.io/claim-namespace: claim-test-ns      # Claim namespace
+  crossplane.io/composite: my-test-claim-mjwln      # Points to XR, NOT Claim!
+```
+
+Key implications:
+- When diffing Claims, the `crossplane.io/composite` label should NOT change between renders
+- Crossplane templates use `{{ .observed.composite.resource.metadata.name }}` which is the XR name
+- The XR is the actual composite owner; the Claim just references it via `spec.resourceRef`
+- Test expectations must reflect this: NO label changes when modifying existing Claims
+- This behavior is consistent across Crossplane versions
+
 **Diff Calculation**
 - Compares rendered resources against cluster state via server-side dry-run
 - Detects additions, modifications, and removals
 - Handles `generateName` by matching via labels/annotations (`crossplane.io/composition-resource-name`)
+- Uses two-phase approach to correctly handle nested XRs:
+  1. **Phase 1 - Non-removal diffs**: `CalculateNonRemovalDiffs` computes diffs for all rendered resources
+  2. **Phase 2 - Removal detection**: `CalculateRemovedResourceDiffs` identifies resources to be removed
+  - This separation is critical because nested XRs must be processed before detecting removals
+  - Nested XRs may render additional composed resources that shouldn't be marked as removals
+
+**Resource Management**
+- `ResourceManager` handles all resource fetching and cluster state operations
+- Key responsibilities:
+  - `FetchCurrentObject`: Retrieves existing resource from cluster (for identity preservation)
+  - `FetchObservedResources`: Fetches resource tree to find all composed resources (including nested)
+  - `UpdateOwnerReferences`: Updates owner references with dry-run annotations
+- Separation of concerns: `DiffCalculator` focuses on diff logic, `ResourceManager` handles cluster I/O
+- Identity preservation: Fetches existing nested XRs to maintain their cluster identity across renders
 
 ## Design Principles
 
@@ -279,3 +314,25 @@ earthly -P +e2e --FLAGS="-test.run TestSpecificTest" --E2E_DUMP_EXPECTED=1
 - [Design Document](design/design-doc-cli-diff.md): Comprehensive technical design and architecture
 - [E2E Test Guide](test/e2e/README.md): Details on E2E test structure and execution
 - [README](README.md): User-facing documentation and usage examples
+
+## Upstream Dependencies
+
+### Crossplane Render Nested XR Fix
+
+**Upstream PR:** https://github.com/crossplane/crossplane/pull/6957
+
+**Issue:** `crossplane render`'s `SetComposedResourceMetadata` function doesn't properly propagate the root composite's identity through nested XR trees. It always uses `xr.GetName()` for the `crossplane.io/composite` label instead of checking if the XR already has the label set (which would indicate it's a nested XR that inherited the root's identity).
+
+**Current Workaround:** We have `propagateCompositeLabelInClaimContext` in `diff_processor.go` that fixes composite labels on composed resources of nested XRs after rendering.
+
+**Simplifications After Upstream Merge:**
+
+Once the upstream PR merges and we update our Crossplane dependency:
+
+1. **Remove `propagateCompositeLabelInClaimContext`** - The render pipeline will automatically propagate the correct composite label through nested XR trees.
+
+2. **Simplify nested XR processing** - No post-render label fixups needed; rendering a nested XR with its inherited labels will produce composed resources with correct labels.
+
+3. **Test updates** - E2E tests for nested XRs in Claim trees should pass without any special handling code.
+
+The fix works by checking `xr.GetLabels()[AnnotationKeyCompositeName]` before falling back to `xr.GetName()`. This mirrors the behavior in Crossplane's actual `RenderComposedResourceMetadata` function in `internal/controller/apiextensions/composite/composition_render.go`.

@@ -670,19 +670,26 @@ func (c *DefaultCompositionClient) FindCompositesUsingComposition(ctx context.Co
 		"gvk", xrGVK.String())
 
 	// List all resources of this XR type in the specified namespace
+	// Note: If namespace is specified and XRs are cluster-scoped, this will fail gracefully
+	// and we'll continue to search for Claims
 	xrs, err := c.resourceClient.ListResources(ctx, xrGVK, namespace)
-	if err != nil {
-		return nil, errors.Wrapf(err, "cannot list XRs of type %s in namespace %s", xrGVK.String(), namespace)
-	}
 
-	c.logger.Debug("Found XRs of target type", "count", len(xrs))
-
-	// Filter XRs that use this specific composition
 	var matchingResources []*un.Unstructured
 
-	for _, xr := range xrs {
-		if c.resourceUsesComposition(xr, compositionName) {
-			matchingResources = append(matchingResources, xr)
+	if err != nil {
+		// Log the error but don't fail - we'll try to find Claims instead
+		c.logger.Debug("Cannot list XRs (will search for claims if XRD defines them)",
+			"xrGVK", xrGVK.String(),
+			"namespace", namespace,
+			"error", err)
+	} else {
+		c.logger.Debug("Found XRs of target type", "count", len(xrs))
+
+		// Filter XRs that use this specific composition
+		for _, xr := range xrs {
+			if c.resourceUsesComposition(xr, compositionName) {
+				matchingResources = append(matchingResources, xr)
+			}
 		}
 	}
 
@@ -697,6 +704,7 @@ func (c *DefaultCompositionClient) FindCompositesUsingComposition(ctx context.Co
 		c.logger.Debug("Cannot get XRD for XR type (will not search for claims)",
 			"xrGVK", xrGVK.String(),
 			"error", err)
+
 		return matchingResources, nil
 	}
 
@@ -707,6 +715,7 @@ func (c *DefaultCompositionClient) FindCompositesUsingComposition(ctx context.Co
 		c.logger.Debug("Error extracting claim type from XRD",
 			"xrd", xrd.GetName(),
 			"error", err)
+
 		return matchingResources, nil
 	}
 
@@ -714,6 +723,7 @@ func (c *DefaultCompositionClient) FindCompositesUsingComposition(ctx context.Co
 	if claimGVK.Empty() {
 		c.logger.Debug("XRD does not define claims",
 			"xrd", xrd.GetName())
+
 		return matchingResources, nil
 	}
 
@@ -727,6 +737,7 @@ func (c *DefaultCompositionClient) FindCompositesUsingComposition(ctx context.Co
 		c.logger.Debug("Cannot list claims of type (will only return XRs)",
 			"claimGVK", claimGVK.String(),
 			"error", err)
+
 		return matchingResources, nil
 	}
 

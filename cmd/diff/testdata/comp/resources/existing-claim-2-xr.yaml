@@ -1,0 +1,21 @@
+apiVersion: diff.example.org/v1alpha1
+kind: XNop
+metadata:
+  name: test-claim-2-xr
+  labels:
+    crossplane.io/claim-name: test-claim-2
+    crossplane.io/claim-namespace: test-namespace
+spec:
+  claimRef:
+    apiVersion: diff.example.org/v1alpha1
+    kind: NopClaim
+    name: test-claim-2
+    namespace: test-namespace
+  coolField: claim-value-2
+  compositeDeletePolicy: Background
+  compositionRef:
+    name: nopclaims.diff.example.org
+  resourceRefs:
+  - apiVersion: nop.example.org/v1alpha1
+    kind: XDownstreamResource
+    name: test-claim-2-xr

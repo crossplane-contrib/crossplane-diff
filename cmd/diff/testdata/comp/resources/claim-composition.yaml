@@ -5,7 +5,7 @@ metadata:
 spec:
   compositeTypeRef:
     apiVersion: diff.example.org/v1alpha1
-    kind: XNopClaim
+    kind: XNop
   mode: Pipeline
   pipeline:
     - step: generate-resources

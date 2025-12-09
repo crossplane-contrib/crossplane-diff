@@ -1,0 +1,81 @@
+~~~ ClusterNopResource/existing-parent-claim-XXXXX
+  apiVersion: nop.crossplane.io/v1alpha1
+  kind: ClusterNopResource
+  metadata:
+    annotations:
+-     child-field: existing-parent-value
++     child-field: modified-parent-value
+      crossplane.io/composition-resource-name: nop-resource
+      crossplane.io/external-name: existing-parent-claim-XXXXX
+    finalizers:
+    - finalizer.managedresource.crossplane.io
+    generateName: existing-parent-claim-XXXXX-
+    labels:
+      crossplane.io/claim-name: existing-parent-claim
+      crossplane.io/claim-namespace: default
+      crossplane.io/composite: existing-parent-claim-XXXXX
+    name: existing-parent-claim-XXXXX
+  spec:
+    deletionPolicy: Delete
+    forProvider:
+      conditionAfter:
+      - conditionStatus: "True"
+        conditionType: Ready
+        time: 0s
+    managementPolicies:
+    - '*'
+    providerConfigRef:
+      name: default
+
+---
+~~~ ParentNopClaim/existing-parent-claim
+  apiVersion: claimnested.diff.example.org/v1alpha1
+  kind: ParentNopClaim
+  metadata:
+    finalizers:
+    - finalizer.apiextensions.crossplane.io
++   labels:
++     new-label: added-value
+    name: existing-parent-claim
+    namespace: default
+  spec:
+    compositeDeletePolicy: Background
+    compositionRef:
+      name: parent-nop-claim-composition
+    compositionRevisionRef:
+      name: parent-nop-claim-composition-7c02fc0
+-   parentField: existing-parent-value
++   compositionUpdatePolicy: Automatic
++   parentField: modified-parent-value
+    resourceRef:
+      apiVersion: claimnested.diff.example.org/v1alpha1
+      kind: XParentNopClaim
+      name: existing-parent-claim-XXXXX
+
+---
+~~~ XChildNopClaim/existing-parent-claim-XXXXX
+  apiVersion: claimnested.diff.example.org/v1alpha1
+  kind: XChildNopClaim
+  metadata:
+    annotations:
+      crossplane.io/composition-resource-name: child-xr
+    finalizers:
+    - composite.apiextensions.crossplane.io
+    generateName: existing-parent-claim-XXXXX-
+    labels:
+      crossplane.io/claim-name: existing-parent-claim
+      crossplane.io/claim-namespace: default
+      crossplane.io/composite: existing-parent-claim-XXXXX
+    name: existing-parent-claim-XXXXX
+  spec:
+-   childField: existing-parent-value
++   childField: modified-parent-value
+    compositionRef:
+      name: child-nop-claim-composition
+    compositionRevisionRef:
+      name: child-nop-claim-composition-d23139b
+    compositionUpdatePolicy: Automatic
+
+---
+
+Summary: 3 modified

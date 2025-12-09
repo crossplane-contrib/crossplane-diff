@@ -22,6 +22,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"testing"
@@ -66,16 +67,18 @@ var clusterNopList = composed.NewList(composed.FromReferenceToList(corev1.Object
 
 // Regular expressions to match the dynamic parts.
 var (
-	resourceNameRegex              = regexp.MustCompile(`(existing-resource)-[a-z0-9]{5,}(?:-nop-resource)?`)
-	compResourceNameRegex          = regexp.MustCompile(`(test-comp-resource)-[a-z0-9]{5,}`)
-	fanoutResourceNameRegex        = regexp.MustCompile(`(test-fanout-resource-\d{2})-[a-z0-9]{5,}`)
-	claimNameRegex                 = regexp.MustCompile(`(test-claim)-[a-z0-9]{5,}(?:-[a-z0-9]{5,})?`)
-	compClaimNameRegex             = regexp.MustCompile(`(test-comp-claim)-[a-z0-9]{5,}`)
-	claimCompositionRevisionRegex  = regexp.MustCompile(`(xnopclaims\.claim\.diff\.example\.org)-[a-z0-9]{7,}`)
-	compositionRevisionRegex       = regexp.MustCompile(`(xnopresources\.(cluster\.|legacy\.)?diff\.example\.org)-[a-z0-9]{7,}`)
-	nestedCompositionRevisionRegex = regexp.MustCompile(`(child-nop-composition|parent-nop-composition)-[a-z0-9]{7,}`)
+	resourceNameRegex                 = regexp.MustCompile(`(existing-resource)-[a-z0-9]{5,}(?:-nop-resource)?`)
+	compResourceNameRegex             = regexp.MustCompile(`(test-comp-resource)-[a-z0-9]{5,}`)
+	fanoutResourceNameRegex           = regexp.MustCompile(`(test-fanout-resource-\d{2})-[a-z0-9]{5,}`)
+	claimNameRegex                    = regexp.MustCompile(`(test-claim)-[a-z0-9]{5,}(?:-[a-z0-9]{5,})?`)
+	compClaimNameRegex                = regexp.MustCompile(`(test-comp-claim)-[a-z0-9]{5,}`)
+	nestedGenerateNameRegex           = regexp.MustCompile(`(test-parent-generatename-child)-[a-z0-9]{12,16}`)
+	nestedClaimGenerateNameRegex      = regexp.MustCompile(`(existing-parent-claim)-[a-z0-9]{5,}(?:-[a-z0-9]{12,16})?`)
+	claimCompositionRevisionRegex     = regexp.MustCompile(`(xnopclaims\.claim\.diff\.example\.org)-[a-z0-9]{7,}`)
+	compositionRevisionRegex          = regexp.MustCompile(`(xnopresources\.(cluster\.|legacy\.)?diff\.example\.org)-[a-z0-9]{7,}`)
+	nestedCompositionRevisionRegex    = regexp.MustCompile(`(child-nop-composition|parent-nop-composition)-[a-z0-9]{7,}`)
 	compClaimCompositionRevisionRegex = regexp.MustCompile(`(xnopclaimdiffresources\.claimdiff\.example\.org)-[a-z0-9]{7,}`)
-	ansiEscapeRegex                = regexp.MustCompile(`\x1b\[[0-9;]*m`)
+	ansiEscapeRegex                   = regexp.MustCompile(`\x1b\[[0-9;]*m`)
 )
 
 // runCrossplaneDiff runs the crossplane diff command with the specified subcommand on the provided resources.
@@ -128,6 +131,8 @@ func normalizeLine(line string) string {
 	line = fanoutResourceNameRegex.ReplaceAllString(line, "${1}-XXXXX")
 	line = claimNameRegex.ReplaceAllString(line, "${1}-XXXXX")
 	line = compClaimNameRegex.ReplaceAllString(line, "${1}-XXXXX")
+	line = nestedGenerateNameRegex.ReplaceAllString(line, "${1}-XXXXX")
+	line = nestedClaimGenerateNameRegex.ReplaceAllString(line, "${1}-XXXXX")
 
 	// Replace composition revision refs with random hash
 	line = compositionRevisionRegex.ReplaceAllString(line, "${1}-XXXXXXX")
@@ -161,6 +166,32 @@ func parseStringContent(content string) ([]string, []string) {
 // AssertDiffMatchesFile compares a diff output with an expected file, ignoring dynamic parts.
 func assertDiffMatchesFile(t *testing.T, actual, expectedSource, log string) {
 	t.Helper()
+
+	// If E2E_DUMP_EXPECTED is set, write the actual output to the expected file
+	if os.Getenv("E2E_DUMP_EXPECTED") != "" {
+		// Ensure the directory exists
+		if err := os.MkdirAll(filepath.Dir(expectedSource), 0o755); err != nil {
+			t.Fatalf("Failed to create directory for expected file: %v", err)
+		}
+
+		// Normalize the output before writing to reduce churn from random generated names
+		_, normalizedLines := parseStringContent(actual)
+
+		normalizedOutput := strings.Join(normalizedLines, "\n")
+		if strings.HasSuffix(actual, "\n") {
+			// Add trailing newline if original had one
+			normalizedOutput += "\n"
+		}
+
+		// Write the normalized output to the expected file
+		if err := os.WriteFile(expectedSource, []byte(normalizedOutput), 0o644); err != nil {
+			t.Fatalf("Failed to write expected file: %v", err)
+		}
+
+		t.Logf("Wrote normalized expected output to %s", expectedSource)
+
+		return
+	}
 
 	expected, err := os.ReadFile(expectedSource)
 	if err != nil {
