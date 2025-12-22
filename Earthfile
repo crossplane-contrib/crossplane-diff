@@ -416,7 +416,7 @@ ci-promote-image:
   ARG --required CROSSPLANE_REPO
   ARG --required CROSSPLANE_VERSION
   ARG --required CHANNEL
-  FROM alpine:3.22
+  FROM alpine:3.23
   RUN apk add docker
   # We need to omit the registry argument when we're logging into Docker Hub.
   # Otherwise login will appear to succeed, but buildx will fail on auth.
