@@ -25,6 +25,10 @@ import (
 	xpextv1 "github.com/crossplane/crossplane/v2/apis/apiextensions/v1"
 )
 
+// CrossplaneFieldManager is the field manager used for SSA when setting up Crossplane-managed resources.
+// This simulates how Crossplane applies composed resources in production.
+const CrossplaneFieldManager = "apiextensions.crossplane.io/composed/integration-test"
+
 // Testing data for integration tests
 
 // createTestCompositionWithExtraResources creates a test Composition with a function-extra-resources step.
@@ -386,7 +390,7 @@ func applyResourceWithSSA(ctx context.Context, c client.Client, resource *un.Uns
 }
 
 // applyHierarchicalOwnership applies a hierarchical ownership structure.
-func applyHierarchicalOwnership(ctx context.Context, _ logging.Logger, c client.Client, xrdAPIVersion XrdAPIVersion, hierarchies []HierarchicalOwnershipRelation) error {
+func applyHierarchicalOwnership(ctx context.Context, log logging.Logger, c client.Client, xrdAPIVersion XrdAPIVersion, hierarchies []HierarchicalOwnershipRelation) error {
 	// Map to store created resources by file path
 	createdResources := make(map[string]*un.Unstructured)
 	// Map to track parent-child relationships for establishing resourceRefs
@@ -404,11 +408,10 @@ func applyHierarchicalOwnership(ctx context.Context, _ logging.Logger, c client.
 		return err
 	}
 
-	// Third pass: Log the final state of all resources for debugging
+	// Debug logging disabled by default. Uncomment to debug hierarchical setup issues.
 	// if err := LogResourcesAsYAML(ctx, log, c, createdResources); err != nil {
-	//	// Just log the error but don't fail the test
-	//	log.Info(fmt.Sprintf("Warning: Failed to log resources as YAML: %v\n", err))
-	//}
+	// 	log.Info(fmt.Sprintf("Warning: Failed to log resources as YAML: %v\n", err))
+	// }
 
 	return nil
 }
@@ -502,7 +505,9 @@ func createAllResourcesInHierarchy(ctx context.Context, c client.Client,
 	return nil
 }
 
-// createResourceFromFile creates a resource from a file without setting ownership.
+// createResourceFromFile creates a resource from a file using Server-Side Apply (SSA) with the
+// CrossplaneFieldManager. This more closely simulates how Crossplane applies composed resources
+// in production, enabling tests to accurately detect SSA-related behaviors like field removal.
 func createResourceFromFile(ctx context.Context, c client.Client, path string,
 	createdResources map[string]*un.Unstructured,
 ) (*un.Unstructured, error) {
@@ -523,28 +528,10 @@ func createResourceFromFile(ctx context.Context, c client.Client, path string,
 
 	resource := resources[0]
 
-	// Create the resource
-	if err := c.Create(ctx, resource.DeepCopy()); err != nil {
-		if apierrors.IsAlreadyExists(err) {
-			// If it already exists, fetch the current version
-			existing := &un.Unstructured{}
-			existing.SetGroupVersionKind(resource.GroupVersionKind())
-
-			err := c.Get(ctx, client.ObjectKey{
-				Name:      resource.GetName(),
-				Namespace: resource.GetNamespace(),
-			}, existing)
-			if err != nil {
-				return nil, fmt.Errorf("failed to get existing resource: %w", err)
-			}
-
-			// Store and return the existing resource
-			createdResources[path] = existing
-
-			return existing, nil
-		}
-
-		return nil, fmt.Errorf("failed to create resource: %w", err)
+	// Apply the resource using SSA with Crossplane field manager.
+	// This simulates how Crossplane applies composed resources in production.
+	if err := applyResourceWithSSA(ctx, c, resource, CrossplaneFieldManager); err != nil {
+		return nil, fmt.Errorf("failed to apply resource with SSA: %w", err)
 	}
 
 	// Get the resource back from the server
@@ -597,6 +584,7 @@ func applyAllRelationships(ctx context.Context, c client.Client,
 }
 
 // setOwnerReferenceAndUpdate sets the owner reference in the child and updates it.
+// Uses a separate field manager for owner references to avoid conflicts with SSA-created resources.
 func setOwnerReferenceAndUpdate(ctx context.Context, c client.Client,
 	owner *un.Unstructured, child *un.Unstructured,
 ) error {
@@ -615,8 +603,9 @@ func setOwnerReferenceAndUpdate(ctx context.Context, c client.Client,
 	// Set the owner reference
 	setOwnerReference(latestChild, owner)
 
-	// Update the child
-	err = c.Update(ctx, latestChild)
+	// Use a separate field manager for owner references to avoid conflicts with the
+	// Crossplane field manager that created the resource via SSA.
+	err = c.Update(ctx, latestChild, client.FieldOwner("diff.test"))
 	if err != nil {
 		return fmt.Errorf("failed to update child with owner reference: %w", err)
 	}
@@ -646,8 +635,9 @@ func addResourceRefAndUpdate(ctx context.Context, c client.Client,
 		return fmt.Errorf("unable to add resource ref: %w", err)
 	}
 
-	// Update the owner with the new reference
-	err = c.Update(ctx, latestOwner)
+	// Use a separate field manager for resource refs to avoid conflicts with the
+	// Crossplane field manager that created the resource via SSA.
+	err = c.Update(ctx, latestOwner, client.FieldOwner("diff.test"))
 	if err != nil {
 		return fmt.Errorf("failed to update owner with resource reference: %w", err)
 	}
