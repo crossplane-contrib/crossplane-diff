@@ -622,6 +622,7 @@ func (p *DefaultDiffProcessor) propagateCompositeLabelInClaimContext(composedRes
 		if xrClaimName != "" {
 			labels["crossplane.io/claim-name"] = xrClaimName
 		}
+
 		if xrClaimNamespace != "" {
 			labels["crossplane.io/claim-namespace"] = xrClaimNamespace
 		}

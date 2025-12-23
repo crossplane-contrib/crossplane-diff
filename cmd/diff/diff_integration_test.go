@@ -44,15 +44,15 @@ type IntegrationTestCase struct {
 	setupFiles                 []string
 	crossplaneManagedResources []HierarchicalOwnershipRelation // Resources applied via SSA with Crossplane field manager
 	inputFiles                 []string                        // Input files to diff (XR YAML files or Composition YAML files)
-	expectedOutput          string
-	expectedError           bool
-	expectedErrorContains   string
-	noColor                 bool
-	namespace               string        // For composition tests (optional)
-	xrdAPIVersion           XrdAPIVersion // For XR tests (optional)
-	ignorePaths             []string      // Paths to ignore in diffs
-	skip                    bool
-	skipReason              string
+	expectedOutput             string
+	expectedError              bool
+	expectedErrorContains      string
+	noColor                    bool
+	namespace                  string        // For composition tests (optional)
+	xrdAPIVersion              XrdAPIVersion // For XR tests (optional)
+	ignorePaths                []string      // Paths to ignore in diffs
+	skip                       bool
+	skipReason                 string
 }
 
 type XrdAPIVersion int
