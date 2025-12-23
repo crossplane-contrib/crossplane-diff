@@ -38,12 +38,20 @@ const (
 	CompositionDiffTest DiffTestType = "comp"
 )
 
+// SSASetupFile represents a file to be applied using Server-Side Apply with a specific field manager.
+// This is useful for testing SSA-specific behavior like field ownership and removal detection.
+type SSASetupFile struct {
+	FilePath     string // Path to the resource file
+	FieldManager string // SSA field manager to use when applying
+}
+
 // IntegrationTestCase represents a common test case structure for both XR and composition diff tests.
 type IntegrationTestCase struct {
 	reason                  string // Description of what this test validates
 	setupFiles              []string
 	setupFilesWithOwnerRefs []HierarchicalOwnershipRelation
-	inputFiles              []string // Input files to diff (XR YAML files or Composition YAML files)
+	setupFilesWithSSA       []SSASetupFile // Files to apply with Server-Side Apply and specific field manager
+	inputFiles              []string       // Input files to diff (XR YAML files or Composition YAML files)
 	expectedOutput          string
 	expectedError           bool
 	expectedErrorContains   string
@@ -161,6 +169,23 @@ func runIntegrationTest(t *testing.T, testType DiffTestType, scheme *runtime.Sch
 		err := applyHierarchicalOwnership(ctx, tu.TestLogger(t, false), k8sClient, xrdAPIVersion, tt.setupFilesWithOwnerRefs)
 		if err != nil {
 			t.Fatalf("failed to setup owner references: %v", err)
+		}
+	}
+
+	// Apply resources with Server-Side Apply and specific field managers
+	// This is used to test SSA-specific behavior like field ownership
+	if len(tt.setupFilesWithSSA) > 0 {
+		for _, ssaFile := range tt.setupFilesWithSSA {
+			resources, err := readResourcesFromFile(ssaFile.FilePath)
+			if err != nil {
+				t.Fatalf("failed to read SSA resources from %s: %v", ssaFile.FilePath, err)
+			}
+
+			for _, resource := range resources {
+				if err := applyResourceWithSSA(ctx, k8sClient, resource, ssaFile.FieldManager); err != nil {
+					t.Fatalf("failed to apply SSA resource from %s: %v", ssaFile.FilePath, err)
+				}
+			}
 		}
 	}
 
@@ -2962,6 +2987,98 @@ Summary: 2 resources with changes
 ---
 
 Summary: 2 modified`,
+			expectedError: false,
+			noColor:       true,
+		},
+		"SSAFieldRemovalDetection": {
+			reason: "Validates that field removals are correctly detected when resources are created via Server-Side Apply with Crossplane's field manager (issue #121)",
+			// Set up XRD, functions, and original composition with the removable field
+			setupFiles: []string{
+				"testdata/comp/resources/xrd.yaml",
+				"testdata/comp/resources/functions.yaml",
+				"testdata/comp/resources/field-removal/composition-with-field.yaml",
+				"testdata/comp/resources/field-removal/existing-xr.yaml",
+			},
+			// Apply downstream resource via SSA with a Crossplane-like field manager
+			// This simulates how Crossplane applies composed resources
+			setupFilesWithSSA: []SSASetupFile{
+				{
+					FilePath:     "testdata/comp/resources/field-removal/existing-downstream.yaml",
+					FieldManager: "apiextensions.crossplane.io/composed/abc123def456simulated",
+				},
+			},
+			// Updated composition that removes the removableField
+			inputFiles: []string{"testdata/comp/field-removal-updated-composition.yaml"},
+			namespace:  "default",
+			expectedOutput: `
+=== Composition Changes ===
+
+~~~ Composition/xfieldremoval.diff.example.org
+  apiVersion: apiextensions.crossplane.io/v1
+  kind: Composition
+  metadata:
+    name: xfieldremoval.diff.example.org
+  spec:
+    compositeTypeRef:
+      apiVersion: ns.diff.example.org/v1alpha1
+      kind: XNopResource
+    mode: Pipeline
+    pipeline:
+    - functionRef:
+        name: function-go-templating
+      input:
+        apiVersion: template.fn.crossplane.io/v1beta1
+        inline:
+          template: |
+            apiVersion: ns.nop.example.org/v1alpha1
+            kind: XDownstreamResource
+            metadata:
+              name: {{ .observed.composite.resource.metadata.name }}
+              namespace: {{ .observed.composite.resource.metadata.namespace }}
+              annotations:
+                gotemplating.fn.crossplane.io/composition-resource-name: nop-resource
+            spec:
+              forProvider:
+                configData: {{ .observed.composite.resource.spec.coolField }}
+-               removableField: will-be-removed
+        kind: GoTemplate
+        source: Inline
+      step: generate-resources
+    - functionRef:
+        name: function-auto-ready
+      step: automatically-detect-ready-composed-resources
+
+---
+
+Summary: 1 modified
+
+=== Affected Composite Resources ===
+
+  ⚠ XNopResource/field-removal-test (namespace: default)
+
+Summary: 1 resource with changes
+
+=== Impact Analysis ===
+
+~~~ XDownstreamResource/field-removal-test
+  apiVersion: ns.nop.example.org/v1alpha1
+  kind: XDownstreamResource
+  metadata:
+    annotations:
+      crossplane.io/composition-resource-name: nop-resource
+-     gotemplating.fn.crossplane.io/composition-resource-name: nop-resource
+    labels:
+      crossplane.io/composite: field-removal-test
+    name: field-removal-test
+    namespace: default
+  spec:
+    forProvider:
+      configData: test-value
+-     removableField: will-be-removed
+
+---
+
+Summary: 1 modified`,
 			expectedError: false,
 			noColor:       true,
 		},

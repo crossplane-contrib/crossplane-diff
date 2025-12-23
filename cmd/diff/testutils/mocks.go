@@ -480,7 +480,7 @@ func (m *MockSchemaClient) GetAllCRDs() []*extv1.CustomResourceDefinition {
 type MockApplyClient struct {
 	InitializeFn  func(ctx context.Context) error
 	ApplyFn       func(ctx context.Context, obj *un.Unstructured) (*un.Unstructured, error)
-	DryRunApplyFn func(ctx context.Context, obj *un.Unstructured) (*un.Unstructured, error)
+	DryRunApplyFn func(ctx context.Context, obj *un.Unstructured, fieldOwner string) (*un.Unstructured, error)
 }
 
 // Initialize implements kubernetes.ApplyClient.
@@ -502,9 +502,9 @@ func (m *MockApplyClient) Apply(ctx context.Context, obj *un.Unstructured) (*un.
 }
 
 // DryRunApply implements kubernetes.ApplyClient.
-func (m *MockApplyClient) DryRunApply(ctx context.Context, obj *un.Unstructured) (*un.Unstructured, error) {
+func (m *MockApplyClient) DryRunApply(ctx context.Context, obj *un.Unstructured, fieldOwner string) (*un.Unstructured, error) {
 	if m.DryRunApplyFn != nil {
-		return m.DryRunApplyFn(ctx, obj)
+		return m.DryRunApplyFn(ctx, obj, fieldOwner)
 	}
 
 	return nil, errors.New("DryRunApply not implemented")
