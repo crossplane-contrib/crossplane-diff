@@ -795,7 +795,7 @@ func createStaleDiscoveryClient() discovery.DiscoveryInterface {
 // The key behavior validated here:
 // - The new implementation queries only the specific API group needed (apiextensions.crossplane.io)
 // - It does NOT query unrelated groups (external.metrics.k8s.io) which could have stale discovery
-// - This is achieved by using ServerGroups() + ServerResourcesForGroupVersion() instead of ServerPreferredResources()
+// - This is achieved by using ServerGroups() + ServerResourcesForGroupVersion() instead of ServerPreferredResources().
 func TestResourceClient_GetGVKsForGroupKind_StaleDiscoveryResilience(t *testing.T) {
 	// Create a fake discovery client with multiple API groups including external.metrics.k8s.io
 	// In a real cluster, if external.metrics.k8s.io had stale discovery, ServerPreferredResources()
@@ -814,6 +814,7 @@ func TestResourceClient_GetGVKsForGroupKind_StaleDiscoveryResilience(t *testing.
 	if err != nil {
 		t.Errorf("GetGVKsForGroupKind() failed unexpectedly: %v\n"+
 			"This error indicates the fix for issue #153 may not be working correctly.", err)
+
 		return
 	}
 
@@ -1006,6 +1007,7 @@ func TestResourceClient_GetGVKsForGroupKind(t *testing.T) {
 			if len(wantMap) != len(gotMap) {
 				t.Errorf("\n%s\nGetGVKsForGroupKind(...): got %d GVKs, want %d GVKs\ngot: %v\nwant: %v",
 					tc.reason, len(got), len(tc.want), got, tc.want)
+
 				return
 			}
 

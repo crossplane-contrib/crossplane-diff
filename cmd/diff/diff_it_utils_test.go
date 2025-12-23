@@ -390,7 +390,7 @@ func applyResourceWithSSA(ctx context.Context, c client.Client, resource *un.Uns
 }
 
 // applyHierarchicalOwnership applies a hierarchical ownership structure.
-func applyHierarchicalOwnership(ctx context.Context, log logging.Logger, c client.Client, xrdAPIVersion XrdAPIVersion, hierarchies []HierarchicalOwnershipRelation) error {
+func applyHierarchicalOwnership(ctx context.Context, _ logging.Logger, c client.Client, xrdAPIVersion XrdAPIVersion, hierarchies []HierarchicalOwnershipRelation) error {
 	// Map to store created resources by file path
 	createdResources := make(map[string]*un.Unstructured)
 	// Map to track parent-child relationships for establishing resourceRefs

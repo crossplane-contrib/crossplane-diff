@@ -118,6 +118,7 @@ func (c *DefaultDiffCalculator) CalculateDiff(ctx context.Context, composite *un
 
 	// Determine what the resource would look like after application
 	wouldBeResult := desired
+
 	if current != nil {
 		// Extract the Crossplane field owner from the existing object's managedFields.
 		// This ensures our dry-run apply uses the same field owner as Crossplane,
