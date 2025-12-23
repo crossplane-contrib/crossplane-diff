@@ -1,0 +1,10 @@
+apiVersion: ns.diff.example.org/v1alpha1
+kind: XNopResource
+metadata:
+  name: field-removal-test
+  namespace: default
+spec:
+  coolField: test-value
+  crossplane:
+    compositionRef:
+      name: xfieldremoval.diff.example.org

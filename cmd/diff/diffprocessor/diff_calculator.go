@@ -119,13 +119,20 @@ func (c *DefaultDiffCalculator) CalculateDiff(ctx context.Context, composite *un
 	// Determine what the resource would look like after application
 	wouldBeResult := desired
 	if current != nil {
+		// Extract the Crossplane field owner from the existing object's managedFields.
+		// This ensures our dry-run apply uses the same field owner as Crossplane,
+		// which correctly handles field removal detection (SSA removes fields that
+		// are owned by this manager but not present in the apply request).
+		fieldOwner := k8.GetComposedFieldOwner(current)
+
 		// Perform a dry-run apply to get the result after we'd apply
 		c.logger.Debug("Performing dry-run apply",
 			"resource", resourceID,
 			"name", desired.GetName(),
+			"fieldOwner", fieldOwner,
 			"desired", desired)
 
-		wouldBeResult, err = c.applyClient.DryRunApply(ctx, desired)
+		wouldBeResult, err = c.applyClient.DryRunApply(ctx, desired, fieldOwner)
 		if err != nil {
 			c.logger.Debug("Dry-run apply failed", "resource", resourceID, "error", err)
 			return nil, errors.Wrap(err, "cannot dry-run apply desired object")

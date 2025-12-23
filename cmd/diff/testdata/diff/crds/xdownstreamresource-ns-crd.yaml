@@ -32,6 +32,9 @@ spec:
                     resourceTier:
                       type: string
                       description: "Tier of the resource (e.g., default, production, staging)"
+                    removableField:
+                      type: string
+                      description: "A field that can be removed for testing field removal detection"
                 crossplane:
                   type: object
                   properties:
