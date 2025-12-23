@@ -503,21 +503,21 @@ func (b *MockApplyClientBuilder) WithApply(fn func(context.Context, *un.Unstruct
 }
 
 // WithDryRunApply sets the DryRunApply behavior.
-func (b *MockApplyClientBuilder) WithDryRunApply(fn func(context.Context, *un.Unstructured) (*un.Unstructured, error)) *MockApplyClientBuilder {
+func (b *MockApplyClientBuilder) WithDryRunApply(fn func(context.Context, *un.Unstructured, string) (*un.Unstructured, error)) *MockApplyClientBuilder {
 	b.mock.DryRunApplyFn = fn
 	return b
 }
 
 // WithSuccessfulDryRun sets DryRunApply to return the input resource.
 func (b *MockApplyClientBuilder) WithSuccessfulDryRun() *MockApplyClientBuilder {
-	return b.WithDryRunApply(func(_ context.Context, obj *un.Unstructured) (*un.Unstructured, error) {
+	return b.WithDryRunApply(func(_ context.Context, obj *un.Unstructured, _ string) (*un.Unstructured, error) {
 		return obj, nil
 	})
 }
 
 // WithFailedDryRun sets DryRunApply to return an error.
 func (b *MockApplyClientBuilder) WithFailedDryRun(errMsg string) *MockApplyClientBuilder {
-	return b.WithDryRunApply(func(context.Context, *un.Unstructured) (*un.Unstructured, error) {
+	return b.WithDryRunApply(func(context.Context, *un.Unstructured, string) (*un.Unstructured, error) {
 		return nil, errors.New(errMsg)
 	})
 }
