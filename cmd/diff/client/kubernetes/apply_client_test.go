@@ -259,6 +259,7 @@ func TestGetComposedFieldOwner(t *testing.T) {
 					{Manager: "kubectl-client-side-apply"},
 					{Manager: "other-controller"},
 				})
+
 				return obj
 			}(),
 			want: "",
@@ -272,6 +273,7 @@ func TestGetComposedFieldOwner(t *testing.T) {
 					{Manager: "apiextensions.crossplane.io/composed/abc123def456"},
 					{Manager: "other-controller"},
 				})
+
 				return obj
 			}(),
 			want: "apiextensions.crossplane.io/composed/abc123def456",
@@ -284,6 +286,7 @@ func TestGetComposedFieldOwner(t *testing.T) {
 					{Manager: "apiextensions.crossplane.io/composed/first-hash"},
 					{Manager: "apiextensions.crossplane.io/composed/second-hash"},
 				})
+
 				return obj
 			}(),
 			want: "apiextensions.crossplane.io/composed/first-hash",
@@ -297,6 +300,7 @@ func TestGetComposedFieldOwner(t *testing.T) {
 					{Manager: "crossplane", Operation: "Apply"},
 					{Manager: "apiextensions.crossplane.io/composed/e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"},
 				})
+
 				return obj
 			}(),
 			want: "apiextensions.crossplane.io/composed/e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",

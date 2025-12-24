@@ -274,6 +274,7 @@ func TestDefaultDiffCalculator_CalculateDiff(t *testing.T) {
 						if fieldOwner != expectedFieldOwner {
 							t.Errorf("DryRunApply called with wrong field owner: got %q, want %q", fieldOwner, expectedFieldOwner)
 						}
+
 						return obj, nil
 					}).
 					Build()
@@ -324,6 +325,7 @@ func TestDefaultDiffCalculator_CalculateDiff(t *testing.T) {
 						if fieldOwner != "" {
 							t.Errorf("DryRunApply called with unexpected field owner: got %q, want empty string", fieldOwner)
 						}
+
 						return obj, nil
 					}).
 					Build()
