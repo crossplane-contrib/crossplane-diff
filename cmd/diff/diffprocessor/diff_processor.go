@@ -697,7 +697,7 @@ func findExistingNestedXR(nestedXR *un.Unstructured, observedResources []cpd.Uns
 }
 
 // preserveNestedXRIdentity updates the nested XR to preserve the identity of an existing XR
-// by copying its name, generateName, UID, composite label, and compositionRef.
+// by copying its name, generateName, UID, Crossplane labels, and compositionRef.
 func preserveNestedXRIdentity(nestedXR, existingNestedXR *un.Unstructured) {
 	// Preserve the actual cluster name and UID
 	nestedXR.SetName(existingNestedXR.GetName())
@@ -708,63 +708,10 @@ func preserveNestedXRIdentity(nestedXR, existingNestedXR *un.Unstructured) {
 	// These labels are needed for:
 	// - crossplane.io/composite: matching composed resources to their owner
 	// - crossplane.io/claim-name/namespace: detecting Claim context for label propagation
-	if labels := existingNestedXR.GetLabels(); labels != nil {
-		nestedXRLabels := nestedXR.GetLabels()
-		if nestedXRLabels == nil {
-			nestedXRLabels = make(map[string]string)
-		}
+	CopyLabels(existingNestedXR, nestedXR, LabelComposite, LabelClaimName, LabelClaimNamespace)
 
-		// Copy composite label
-		if compositeLabel, exists := labels["crossplane.io/composite"]; exists {
-			nestedXRLabels["crossplane.io/composite"] = compositeLabel
-		}
-
-		// Copy claim labels (needed to detect Claim context during nested XR processing)
-		if claimName, exists := labels["crossplane.io/claim-name"]; exists {
-			nestedXRLabels["crossplane.io/claim-name"] = claimName
-		}
-
-		if claimNamespace, exists := labels["crossplane.io/claim-namespace"]; exists {
-			nestedXRLabels["crossplane.io/claim-namespace"] = claimNamespace
-		}
-
-		nestedXR.SetLabels(nestedXRLabels)
-	}
-
-	// Preserve compositionRef from the existing resource. In a real cluster, Crossplane's
-	// control plane sets compositionRef via composition selection. Since crossplane render
-	// doesn't do this selection, we preserve the existing compositionRef to avoid showing
-	// spurious removals in the diff. The composition template shouldn't need to specify
-	// compositionRef - that's Crossplane's job.
-	//
-	// Handle both V1 and V2 XRD paths:
-	// - V1 (apiextensions.crossplane.io/v1): spec.compositionRef
-	// - V2 (apiextensions.crossplane.io/v2+): spec.crossplane.compositionRef
-	preserveCompositionRef(nestedXR, existingNestedXR)
-}
-
-// preserveCompositionRef copies compositionRef from existingXR to xr.
-// Handles both V1 (spec.compositionRef) and V2 (spec.crossplane.compositionRef) paths.
-func preserveCompositionRef(xr, existingXR *un.Unstructured) {
-	// Try V1 path first: spec.compositionRef
-	existingCompRef, found, _ := un.NestedMap(existingXR.Object, "spec", "compositionRef")
-	if found && existingCompRef != nil {
-		_ = un.SetNestedMap(xr.Object, existingCompRef, "spec", "compositionRef")
-		return
-	}
-
-	// Try V2 path: spec.crossplane.compositionRef
-	existingCompRef, found, _ = un.NestedMap(existingXR.Object, "spec", "crossplane", "compositionRef")
-	if found && existingCompRef != nil {
-		// Ensure spec.crossplane exists
-		crossplane, _, _ := un.NestedMap(xr.Object, "spec", "crossplane")
-		if crossplane == nil {
-			crossplane = make(map[string]interface{})
-		}
-
-		crossplane["compositionRef"] = existingCompRef
-		_ = un.SetNestedMap(xr.Object, crossplane, "spec", "crossplane")
-	}
+	// Preserve compositionRef (handles both V1 and V2 XRD paths)
+	CopyCompositionRef(existingNestedXR, nestedXR)
 }
 
 // ProcessNestedXRs recursively processes composed resources that are themselves XRs.
