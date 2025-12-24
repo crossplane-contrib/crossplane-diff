@@ -697,7 +697,7 @@ func findExistingNestedXR(nestedXR *un.Unstructured, observedResources []cpd.Uns
 }
 
 // preserveNestedXRIdentity updates the nested XR to preserve the identity of an existing XR
-// by copying its name, generateName, UID, and composite label.
+// by copying its name, generateName, UID, composite label, and compositionRef.
 func preserveNestedXRIdentity(nestedXR, existingNestedXR *un.Unstructured) {
 	// Preserve the actual cluster name and UID
 	nestedXR.SetName(existingNestedXR.GetName())
@@ -729,6 +729,41 @@ func preserveNestedXRIdentity(nestedXR, existingNestedXR *un.Unstructured) {
 		}
 
 		nestedXR.SetLabels(nestedXRLabels)
+	}
+
+	// Preserve compositionRef from the existing resource. In a real cluster, Crossplane's
+	// control plane sets compositionRef via composition selection. Since crossplane render
+	// doesn't do this selection, we preserve the existing compositionRef to avoid showing
+	// spurious removals in the diff. The composition template shouldn't need to specify
+	// compositionRef - that's Crossplane's job.
+	//
+	// Handle both V1 and V2 XRD paths:
+	// - V1 (apiextensions.crossplane.io/v1): spec.compositionRef
+	// - V2 (apiextensions.crossplane.io/v2+): spec.crossplane.compositionRef
+	preserveCompositionRef(nestedXR, existingNestedXR)
+}
+
+// preserveCompositionRef copies compositionRef from existingXR to xr.
+// Handles both V1 (spec.compositionRef) and V2 (spec.crossplane.compositionRef) paths.
+func preserveCompositionRef(xr, existingXR *un.Unstructured) {
+	// Try V1 path first: spec.compositionRef
+	existingCompRef, found, _ := un.NestedMap(existingXR.Object, "spec", "compositionRef")
+	if found && existingCompRef != nil {
+		_ = un.SetNestedMap(xr.Object, existingCompRef, "spec", "compositionRef")
+		return
+	}
+
+	// Try V2 path: spec.crossplane.compositionRef
+	existingCompRef, found, _ = un.NestedMap(existingXR.Object, "spec", "crossplane", "compositionRef")
+	if found && existingCompRef != nil {
+		// Ensure spec.crossplane exists
+		crossplane, _, _ := un.NestedMap(xr.Object, "spec", "crossplane")
+		if crossplane == nil {
+			crossplane = make(map[string]interface{})
+		}
+
+		crossplane["compositionRef"] = existingCompRef
+		_ = un.SetNestedMap(xr.Object, crossplane, "spec", "crossplane")
 	}
 }
 
