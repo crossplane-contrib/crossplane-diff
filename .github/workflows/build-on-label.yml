@@ -1,0 +1,17 @@
+name: Build Artifacts on Label
+
+# Triggers build-artifacts when the 'build-artifacts' label is added to a PR.
+# This is separate from ci.yml to avoid adding skip conditions to every CI job.
+
+on:
+  pull_request:
+    types: [labeled]
+
+jobs:
+  build-artifacts:
+    # Only run when the specific 'build-artifacts' label is added
+    if: github.event.label.name == 'build-artifacts'
+    uses: ./.github/workflows/build-artifacts.yml
+    with:
+      earthly-version: '0.8.16'
+    secrets: inherit

@@ -250,45 +250,16 @@ jobs:
           path: _output/tests/e2e-tests.xml
 
   build-artifacts:
-    runs-on: ubuntu-24.04
     # Only run when explicitly requested via workflow_dispatch input,
     # commit message contains [build-artifacts], or PR has build-artifacts label
     if: |
       github.event.inputs.build-artifacts == 'true' ||
       contains(github.event.head_commit.message, '[build-artifacts]') ||
       contains(github.event.pull_request.labels.*.name, 'build-artifacts')
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6
-        with:
-          fetch-depth: 0
-
-      - name: Setup Earthly
-        uses: earthly/actions-setup@43211c7a0eae5344d6d79fb4aaf209c8f8866203 # v1.0.13
-        with:
-          github-token: ${{ secrets.GITHUB_TOKEN }}
-          version: ${{ env.EARTHLY_VERSION }}
-
-      - name: Login to GitHub Container Registry
-        uses: docker/login-action@5e57cd118135c172c3672efd75eb46360885c0ef # v3
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Configure Earthly Cache
-        if: github.ref == 'refs/heads/main'
-        run: echo "EARTHLY_MAX_REMOTE_CACHE=true" >> $GITHUB_ENV
-
-      - name: Build CLI Binaries
-        run: earthly --strict --remote-cache ghcr.io/crossplane-contrib/crossplane-diff/earthly-cache:${{ github.job }} +multiplatform-build
-
-      - name: Upload Artifacts to GitHub
-        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
-        with:
-          name: output
-          path: _output/**
+    uses: ./.github/workflows/build-artifacts.yml
+    with:
+      earthly-version: '0.8.16'
+    secrets: inherit
 
 #  fuzz-test:
 #    runs-on: ubuntu-22.04
