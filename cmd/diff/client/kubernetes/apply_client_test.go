@@ -7,7 +7,6 @@ import (
 
 	tu "github.com/crossplane-contrib/crossplane-diff/cmd/diff/testutils"
 	"github.com/google/go-cmp/cmp"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	un "k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -253,56 +252,41 @@ func TestGetComposedFieldOwner(t *testing.T) {
 		},
 		"ManagedFieldsWithoutCrossplanePrefix": {
 			reason: "Should return empty string when managed fields don't contain Crossplane composed prefix",
-			obj: func() *un.Unstructured {
-				obj := tu.NewResource("example.org/v1", "ExampleResource", "test-resource").Build()
-				obj.SetManagedFields([]metav1.ManagedFieldsEntry{
-					{Manager: "kubectl-client-side-apply"},
-					{Manager: "other-controller"},
-				})
-
-				return obj
-			}(),
+			obj: tu.NewResource("example.org/v1", "ExampleResource", "test-resource").
+				WithFieldManagers("kubectl-client-side-apply", "other-controller").
+				Build(),
 			want: "",
 		},
 		"ManagedFieldsWithCrossplaneComposedPrefix": {
 			reason: "Should return the Crossplane composed field owner when present",
-			obj: func() *un.Unstructured {
-				obj := tu.NewResource("example.org/v1", "ExampleResource", "test-resource").Build()
-				obj.SetManagedFields([]metav1.ManagedFieldsEntry{
-					{Manager: "kubectl-client-side-apply"},
-					{Manager: "apiextensions.crossplane.io/composed/abc123def456"},
-					{Manager: "other-controller"},
-				})
-
-				return obj
-			}(),
+			obj: tu.NewResource("example.org/v1", "ExampleResource", "test-resource").
+				WithFieldManagers(
+					"kubectl-client-side-apply",
+					"apiextensions.crossplane.io/composed/abc123def456",
+					"other-controller",
+				).
+				Build(),
 			want: "apiextensions.crossplane.io/composed/abc123def456",
 		},
 		"MultipleCrossplanePrefixes": {
 			reason: "Should return the first Crossplane composed field owner when multiple present",
-			obj: func() *un.Unstructured {
-				obj := tu.NewResource("example.org/v1", "ExampleResource", "test-resource").Build()
-				obj.SetManagedFields([]metav1.ManagedFieldsEntry{
-					{Manager: "apiextensions.crossplane.io/composed/first-hash"},
-					{Manager: "apiextensions.crossplane.io/composed/second-hash"},
-				})
-
-				return obj
-			}(),
+			obj: tu.NewResource("example.org/v1", "ExampleResource", "test-resource").
+				WithFieldManagers(
+					"apiextensions.crossplane.io/composed/first-hash",
+					"apiextensions.crossplane.io/composed/second-hash",
+				).
+				Build(),
 			want: "apiextensions.crossplane.io/composed/first-hash",
 		},
 		"RealWorldCrossplaneFieldOwner": {
 			reason: "Should correctly extract a real-world Crossplane field owner hash",
-			obj: func() *un.Unstructured {
-				// This simulates a real composed resource from Crossplane
-				obj := tu.NewResource("nop.crossplane.io/v1alpha1", "ClusterNopResource", "test-xr-abc123").Build()
-				obj.SetManagedFields([]metav1.ManagedFieldsEntry{
-					{Manager: "crossplane", Operation: "Apply"},
-					{Manager: "apiextensions.crossplane.io/composed/e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"},
-				})
-
-				return obj
-			}(),
+			// This simulates a real composed resource from Crossplane
+			obj: tu.NewResource("nop.crossplane.io/v1alpha1", "ClusterNopResource", "test-xr-abc123").
+				WithFieldManagers(
+					"crossplane",
+					"apiextensions.crossplane.io/composed/e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+				).
+				Build(),
 			want: "apiextensions.crossplane.io/composed/e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
 		},
 	}
