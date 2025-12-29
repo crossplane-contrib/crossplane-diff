@@ -43,10 +43,10 @@ jobs:
         run: echo "EARTHLY_MAX_REMOTE_CACHE=true" >> $GITHUB_ENV
 
       - name: Build CLI Binaries
-        run: earthly --strict --remote-cache ghcr.io/crossplane-contrib/crossplane-diff/earthly-cache:build-artifacts +multiplatform-build
+        run: earthly --strict --remote-cache ghcr.io/crossplane-contrib/crossplane-diff/earthly-cache:build-artifacts +multiplatform-build --RELEASE_ARTIFACTS=true
 
       - name: Upload Artifacts to GitHub
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:
-          name: output
-          path: _output/**
+          name: crossplane-diff-binaries
+          path: _output/release/*
