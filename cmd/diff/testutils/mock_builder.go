@@ -1445,6 +1445,18 @@ func (b *ResourceBuilder) WithNestedField(value any, fields ...string) *Resource
 	return b
 }
 
+// WithFieldManagers sets the managed fields on the resource using the provided manager names.
+func (b *ResourceBuilder) WithFieldManagers(managers ...string) *ResourceBuilder {
+	entries := make([]metav1.ManagedFieldsEntry, len(managers))
+	for i, manager := range managers {
+		entries[i] = metav1.ManagedFieldsEntry{Manager: manager}
+	}
+
+	b.resource.SetManagedFields(entries)
+
+	return b
+}
+
 // Build returns the built unstructured resource.
 func (b *ResourceBuilder) Build() *un.Unstructured {
 	return b.resource.DeepCopy()
