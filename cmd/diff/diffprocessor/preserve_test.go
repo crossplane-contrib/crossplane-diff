@@ -3,6 +3,8 @@ package diffprocessor
 import (
 	"testing"
 
+	tu "github.com/crossplane-contrib/crossplane-diff/cmd/diff/testutils"
+	"github.com/google/go-cmp/cmp"
 	un "k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 )
 
@@ -16,117 +18,77 @@ func TestCopyLabels(t *testing.T) {
 	}{
 		{
 			name: "CopiesSingleLabel",
-			source: &un.Unstructured{
-				Object: map[string]any{
-					"metadata": map[string]any{
-						"labels": map[string]any{
-							"crossplane.io/composite": "root-xr",
-						},
-					},
-				},
-			},
-			target: &un.Unstructured{
-				Object: map[string]any{
-					"metadata": map[string]any{},
-				},
-			},
-			keys: []string{LabelComposite},
+			source: tu.NewResource("v1", "Resource", "source").
+				WithLabels(map[string]string{
+					LabelComposite: "root-xr",
+				}).
+				Build(),
+			target: tu.NewResource("v1", "Resource", "target").Build(),
+			keys:   []string{LabelComposite},
 			expectedLabels: map[string]string{
-				"crossplane.io/composite": "root-xr",
+				LabelComposite: "root-xr",
 			},
 		},
 		{
 			name: "CopiesMultipleLabels",
-			source: &un.Unstructured{
-				Object: map[string]any{
-					"metadata": map[string]any{
-						"labels": map[string]any{
-							"crossplane.io/composite":       "root-xr",
-							"crossplane.io/claim-name":      "my-claim",
-							"crossplane.io/claim-namespace": "default",
-						},
-					},
-				},
-			},
-			target: &un.Unstructured{
-				Object: map[string]any{
-					"metadata": map[string]any{},
-				},
-			},
-			keys: []string{LabelComposite, LabelClaimName, LabelClaimNamespace},
+			source: tu.NewResource("v1", "Resource", "source").
+				WithLabels(map[string]string{
+					LabelComposite:      "root-xr",
+					LabelClaimName:      "my-claim",
+					LabelClaimNamespace: "default",
+				}).
+				Build(),
+			target: tu.NewResource("v1", "Resource", "target").Build(),
+			keys:   []string{LabelComposite, LabelClaimName, LabelClaimNamespace},
 			expectedLabels: map[string]string{
-				"crossplane.io/composite":       "root-xr",
-				"crossplane.io/claim-name":      "my-claim",
-				"crossplane.io/claim-namespace": "default",
+				LabelComposite:      "root-xr",
+				LabelClaimName:      "my-claim",
+				LabelClaimNamespace: "default",
 			},
 		},
 		{
 			name: "PreservesExistingTargetLabels",
-			source: &un.Unstructured{
-				Object: map[string]any{
-					"metadata": map[string]any{
-						"labels": map[string]any{
-							"crossplane.io/composite": "root-xr",
-						},
-					},
-				},
-			},
-			target: &un.Unstructured{
-				Object: map[string]any{
-					"metadata": map[string]any{
-						"labels": map[string]any{
-							"existing-label": "existing-value",
-						},
-					},
-				},
-			},
+			source: tu.NewResource("v1", "Resource", "source").
+				WithLabels(map[string]string{
+					LabelComposite: "root-xr",
+				}).
+				Build(),
+			target: tu.NewResource("v1", "Resource", "target").
+				WithLabels(map[string]string{
+					"existing-label": "existing-value",
+				}).
+				Build(),
 			keys: []string{LabelComposite},
 			expectedLabels: map[string]string{
-				"crossplane.io/composite": "root-xr",
-				"existing-label":          "existing-value",
+				LabelComposite:   "root-xr",
+				"existing-label": "existing-value",
 			},
 		},
 		{
 			name: "OverwritesTargetLabelWithSourceValue",
-			source: &un.Unstructured{
-				Object: map[string]any{
-					"metadata": map[string]any{
-						"labels": map[string]any{
-							"crossplane.io/composite": "correct-root-xr",
-						},
-					},
-				},
-			},
-			target: &un.Unstructured{
-				Object: map[string]any{
-					"metadata": map[string]any{
-						"labels": map[string]any{
-							"crossplane.io/composite": "wrong-root-xr",
-						},
-					},
-				},
-			},
+			source: tu.NewResource("v1", "Resource", "source").
+				WithLabels(map[string]string{
+					LabelComposite: "correct-root-xr",
+				}).
+				Build(),
+			target: tu.NewResource("v1", "Resource", "target").
+				WithLabels(map[string]string{
+					LabelComposite: "wrong-root-xr",
+				}).
+				Build(),
 			keys: []string{LabelComposite},
 			expectedLabels: map[string]string{
-				"crossplane.io/composite": "correct-root-xr",
+				LabelComposite: "correct-root-xr",
 			},
 		},
 		{
-			name: "NoOpWhenSourceHasNoLabels",
-			source: &un.Unstructured{
-				Object: map[string]any{
-					"metadata": map[string]any{},
-				},
-			},
-			target: &un.Unstructured{
-				Object: map[string]any{
-					"metadata": map[string]any{
-						"labels": map[string]any{
-							"existing-label": "existing-value",
-						},
-					},
-				},
-			},
+			name:   "NoOpWhenSourceHasNoLabels",
+			source: tu.NewResource("v1", "Resource", "source").Build(),
+			target: tu.NewResource("v1", "Resource", "target").
+				WithLabels(map[string]string{
+					"existing-label": "existing-value",
+				}).
+				Build(),
 			keys: []string{LabelComposite},
 			expectedLabels: map[string]string{
 				"existing-label": "existing-value",
@@ -134,18 +96,15 @@ func TestCopyLabels(t *testing.T) {
 		},
 		{
 			name: "NoOpWhenSourceLabelsNil",
+			// Use raw construction to test truly nil metadata
 			source: &un.Unstructured{
 				Object: map[string]any{},
 			},
-			target: &un.Unstructured{
-				Object: map[string]any{
-					"metadata": map[string]any{
-						"labels": map[string]any{
-							"existing-label": "existing-value",
-						},
-					},
-				},
-			},
+			target: tu.NewResource("v1", "Resource", "target").
+				WithLabels(map[string]string{
+					"existing-label": "existing-value",
+				}).
+				Build(),
 			keys: []string{LabelComposite},
 			expectedLabels: map[string]string{
 				"existing-label": "existing-value",
@@ -153,60 +112,41 @@ func TestCopyLabels(t *testing.T) {
 		},
 		{
 			name: "SkipsKeysNotInSource",
-			source: &un.Unstructured{
-				Object: map[string]any{
-					"metadata": map[string]any{
-						"labels": map[string]any{
-							"crossplane.io/composite": "root-xr",
-						},
-					},
-				},
-			},
-			target: &un.Unstructured{
-				Object: map[string]any{
-					"metadata": map[string]any{},
-				},
-			},
-			keys: []string{LabelComposite, LabelClaimName, LabelClaimNamespace},
+			source: tu.NewResource("v1", "Resource", "source").
+				WithLabels(map[string]string{
+					LabelComposite: "root-xr",
+				}).
+				Build(),
+			target: tu.NewResource("v1", "Resource", "target").Build(),
+			keys:   []string{LabelComposite, LabelClaimName, LabelClaimNamespace},
 			expectedLabels: map[string]string{
-				"crossplane.io/composite": "root-xr",
+				LabelComposite: "root-xr",
 			},
 		},
 		{
 			name: "CreatesLabelsMapWhenTargetHasNone",
-			source: &un.Unstructured{
-				Object: map[string]any{
-					"metadata": map[string]any{
-						"labels": map[string]any{
-							"crossplane.io/composite": "root-xr",
-						},
-					},
-				},
-			},
+			source: tu.NewResource("v1", "Resource", "source").
+				WithLabels(map[string]string{
+					LabelComposite: "root-xr",
+				}).
+				Build(),
+			// Use raw construction to test target with no labels map
 			target: &un.Unstructured{
 				Object: map[string]any{},
 			},
 			keys: []string{LabelComposite},
 			expectedLabels: map[string]string{
-				"crossplane.io/composite": "root-xr",
+				LabelComposite: "root-xr",
 			},
 		},
 		{
 			name: "NoOpWhenNoKeysSpecified",
-			source: &un.Unstructured{
-				Object: map[string]any{
-					"metadata": map[string]any{
-						"labels": map[string]any{
-							"crossplane.io/composite": "root-xr",
-						},
-					},
-				},
-			},
-			target: &un.Unstructured{
-				Object: map[string]any{
-					"metadata": map[string]any{},
-				},
-			},
+			source: tu.NewResource("v1", "Resource", "source").
+				WithLabels(map[string]string{
+					LabelComposite: "root-xr",
+				}).
+				Build(),
+			target:         tu.NewResource("v1", "Resource", "target").Build(),
 			keys:           []string{},
 			expectedLabels: nil,
 		},
@@ -218,29 +158,8 @@ func TestCopyLabels(t *testing.T) {
 
 			actualLabels := tt.target.GetLabels()
 
-			if tt.expectedLabels == nil {
-				if len(actualLabels) > 0 {
-					t.Errorf("Expected no labels, got %v", actualLabels)
-				}
-
-				return
-			}
-
-			if len(actualLabels) != len(tt.expectedLabels) {
-				t.Errorf("Expected %d labels, got %d: %v", len(tt.expectedLabels), len(actualLabels), actualLabels)
-				return
-			}
-
-			for key, expectedValue := range tt.expectedLabels {
-				actualValue, exists := actualLabels[key]
-				if !exists {
-					t.Errorf("Expected label %s to exist", key)
-					continue
-				}
-
-				if actualValue != expectedValue {
-					t.Errorf("Expected label %s=%s, got %s", key, expectedValue, actualValue)
-				}
+			if diff := cmp.Diff(tt.expectedLabels, actualLabels); diff != "" {
+				t.Errorf("Labels mismatch (-want +got):\n%s", diff)
 			}
 		})
 	}
@@ -256,20 +175,12 @@ func TestCopyCompositionRef(t *testing.T) {
 	}{
 		{
 			name: "CopiesV1CompositionRef",
-			source: &un.Unstructured{
-				Object: map[string]any{
-					"spec": map[string]any{
-						"compositionRef": map[string]any{
-							"name": "my-composition",
-						},
-					},
-				},
-			},
-			target: &un.Unstructured{
-				Object: map[string]any{
-					"spec": map[string]any{},
-				},
-			},
+			source: tu.NewResource("v1", "Resource", "source").
+				WithNestedField(map[string]any{"name": "my-composition"}, "spec", "compositionRef").
+				Build(),
+			target: tu.NewResource("v1", "Resource", "target").
+				WithSpec(map[string]any{}).
+				Build(),
 			expectedRef: map[string]any{
 				"name": "my-composition",
 			},
@@ -277,22 +188,12 @@ func TestCopyCompositionRef(t *testing.T) {
 		},
 		{
 			name: "CopiesV2CompositionRef",
-			source: &un.Unstructured{
-				Object: map[string]any{
-					"spec": map[string]any{
-						"crossplane": map[string]any{
-							"compositionRef": map[string]any{
-								"name": "my-composition",
-							},
-						},
-					},
-				},
-			},
-			target: &un.Unstructured{
-				Object: map[string]any{
-					"spec": map[string]any{},
-				},
-			},
+			source: tu.NewResource("v1", "Resource", "source").
+				WithNestedField(map[string]any{"name": "my-composition"}, "spec", "crossplane", "compositionRef").
+				Build(),
+			target: tu.NewResource("v1", "Resource", "target").
+				WithSpec(map[string]any{}).
+				Build(),
 			expectedRef: map[string]any{
 				"name": "my-composition",
 			},
@@ -300,25 +201,13 @@ func TestCopyCompositionRef(t *testing.T) {
 		},
 		{
 			name: "V1TakesPrecedenceOverV2",
-			source: &un.Unstructured{
-				Object: map[string]any{
-					"spec": map[string]any{
-						"compositionRef": map[string]any{
-							"name": "v1-composition",
-						},
-						"crossplane": map[string]any{
-							"compositionRef": map[string]any{
-								"name": "v2-composition",
-							},
-						},
-					},
-				},
-			},
-			target: &un.Unstructured{
-				Object: map[string]any{
-					"spec": map[string]any{},
-				},
-			},
+			source: tu.NewResource("v1", "Resource", "source").
+				WithNestedField(map[string]any{"name": "v1-composition"}, "spec", "compositionRef").
+				WithNestedField(map[string]any{"name": "v2-composition"}, "spec", "crossplane", "compositionRef").
+				Build(),
+			target: tu.NewResource("v1", "Resource", "target").
+				WithSpec(map[string]any{}).
+				Build(),
 			expectedRef: map[string]any{
 				"name": "v1-composition",
 			},
@@ -326,52 +215,35 @@ func TestCopyCompositionRef(t *testing.T) {
 		},
 		{
 			name: "NoOpWhenSourceHasNoCompositionRef",
-			source: &un.Unstructured{
-				Object: map[string]any{
-					"spec": map[string]any{
-						"someField": "someValue",
-					},
-				},
-			},
-			target: &un.Unstructured{
-				Object: map[string]any{
-					"spec": map[string]any{},
-				},
-			},
+			source: tu.NewResource("v1", "Resource", "source").
+				WithSpecField("someField", "someValue").
+				Build(),
+			target: tu.NewResource("v1", "Resource", "target").
+				WithSpec(map[string]any{}).
+				Build(),
 			expectedRef: nil,
 			path:        []string{"spec", "compositionRef"},
 		},
 		{
 			name: "NoOpWhenSourceHasEmptySpec",
+			// Use raw construction to test truly empty object
 			source: &un.Unstructured{
 				Object: map[string]any{},
 			},
-			target: &un.Unstructured{
-				Object: map[string]any{
-					"spec": map[string]any{},
-				},
-			},
+			target: tu.NewResource("v1", "Resource", "target").
+				WithSpec(map[string]any{}).
+				Build(),
 			expectedRef: nil,
 			path:        []string{"spec", "compositionRef"},
 		},
 		{
 			name: "PreservesExistingTargetSpecFields",
-			source: &un.Unstructured{
-				Object: map[string]any{
-					"spec": map[string]any{
-						"compositionRef": map[string]any{
-							"name": "my-composition",
-						},
-					},
-				},
-			},
-			target: &un.Unstructured{
-				Object: map[string]any{
-					"spec": map[string]any{
-						"coolField": "cool-value",
-					},
-				},
-			},
+			source: tu.NewResource("v1", "Resource", "source").
+				WithNestedField(map[string]any{"name": "my-composition"}, "spec", "compositionRef").
+				Build(),
+			target: tu.NewResource("v1", "Resource", "target").
+				WithSpecField("coolField", "cool-value").
+				Build(),
 			expectedRef: map[string]any{
 				"name": "my-composition",
 			},
@@ -379,24 +251,12 @@ func TestCopyCompositionRef(t *testing.T) {
 		},
 		{
 			name: "V2CreatesSpecCrossplaneIfNotExists",
-			source: &un.Unstructured{
-				Object: map[string]any{
-					"spec": map[string]any{
-						"crossplane": map[string]any{
-							"compositionRef": map[string]any{
-								"name": "my-composition",
-							},
-						},
-					},
-				},
-			},
-			target: &un.Unstructured{
-				Object: map[string]any{
-					"spec": map[string]any{
-						"coolField": "cool-value",
-					},
-				},
-			},
+			source: tu.NewResource("v1", "Resource", "source").
+				WithNestedField(map[string]any{"name": "my-composition"}, "spec", "crossplane", "compositionRef").
+				Build(),
+			target: tu.NewResource("v1", "Resource", "target").
+				WithSpecField("coolField", "cool-value").
+				Build(),
 			expectedRef: map[string]any{
 				"name": "my-composition",
 			},
@@ -404,26 +264,12 @@ func TestCopyCompositionRef(t *testing.T) {
 		},
 		{
 			name: "V2PreservesExistingCrossplaneFields",
-			source: &un.Unstructured{
-				Object: map[string]any{
-					"spec": map[string]any{
-						"crossplane": map[string]any{
-							"compositionRef": map[string]any{
-								"name": "my-composition",
-							},
-						},
-					},
-				},
-			},
-			target: &un.Unstructured{
-				Object: map[string]any{
-					"spec": map[string]any{
-						"crossplane": map[string]any{
-							"compositionUpdatePolicy": "Automatic",
-						},
-					},
-				},
-			},
+			source: tu.NewResource("v1", "Resource", "source").
+				WithNestedField(map[string]any{"name": "my-composition"}, "spec", "crossplane", "compositionRef").
+				Build(),
+			target: tu.NewResource("v1", "Resource", "target").
+				WithNestedField("Automatic", "spec", "crossplane", "compositionUpdatePolicy").
+				Build(),
 			expectedRef: map[string]any{
 				"name": "my-composition",
 			},
@@ -435,81 +281,40 @@ func TestCopyCompositionRef(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			CopyCompositionRef(tt.source, tt.target)
 
-			actualRef, found, _ := un.NestedMap(tt.target.Object, tt.path...)
+			actualRef, _, _ := un.NestedMap(tt.target.Object, tt.path...)
 
-			if tt.expectedRef == nil {
-				if found && actualRef != nil {
-					t.Errorf("Expected no compositionRef at %v, got %v", tt.path, actualRef)
-				}
-
-				return
-			}
-
-			if !found || actualRef == nil {
-				t.Errorf("Expected compositionRef at %v, got nothing", tt.path)
-				return
-			}
-
-			expectedName, _ := tt.expectedRef["name"].(string)
-			actualName, _ := actualRef["name"].(string)
-
-			if actualName != expectedName {
-				t.Errorf("Expected compositionRef.name=%s, got %s", expectedName, actualName)
+			if diff := cmp.Diff(tt.expectedRef, actualRef); diff != "" {
+				t.Errorf("CompositionRef mismatch at %v (-want +got):\n%s", tt.path, diff)
 			}
 		})
 	}
 }
 
 func TestCopyCompositionRef_V2PreservesOtherCrossplaneFields(t *testing.T) {
-	source := &un.Unstructured{
-		Object: map[string]any{
-			"spec": map[string]any{
-				"crossplane": map[string]any{
-					"compositionRef": map[string]any{
-						"name": "my-composition",
-					},
-				},
-			},
-		},
-	}
+	source := tu.NewResource("v1", "Resource", "source").
+		WithNestedField(map[string]any{"name": "my-composition"}, "spec", "crossplane", "compositionRef").
+		Build()
 
-	target := &un.Unstructured{
-		Object: map[string]any{
-			"spec": map[string]any{
-				"crossplane": map[string]any{
-					"compositionUpdatePolicy": "Manual",
-					"compositionRevisionRef": map[string]any{
-						"name": "my-revision",
-					},
-				},
-			},
-		},
-	}
+	target := tu.NewResource("v1", "Resource", "target").
+		WithNestedField("Manual", "spec", "crossplane", "compositionUpdatePolicy").
+		WithNestedField(map[string]any{"name": "my-revision"}, "spec", "crossplane", "compositionRevisionRef").
+		Build()
 
 	CopyCompositionRef(source, target)
 
-	// Verify compositionRef was copied
-	compRef, found, _ := un.NestedMap(target.Object, "spec", "crossplane", "compositionRef")
+	// Verify the entire crossplane section
+	crossplane, found, _ := un.NestedMap(target.Object, "spec", "crossplane")
 	if !found {
-		t.Fatal("Expected compositionRef to be copied")
+		t.Fatal("Expected spec.crossplane to exist")
 	}
 
-	if compRef["name"] != "my-composition" {
-		t.Errorf("Expected compositionRef.name=my-composition, got %v", compRef["name"])
+	expected := map[string]any{
+		"compositionRef":          map[string]any{"name": "my-composition"},
+		"compositionUpdatePolicy": "Manual",
+		"compositionRevisionRef":  map[string]any{"name": "my-revision"},
 	}
 
-	// Verify other crossplane fields are preserved
-	policy, found, _ := un.NestedString(target.Object, "spec", "crossplane", "compositionUpdatePolicy")
-	if !found || policy != "Manual" {
-		t.Errorf("Expected compositionUpdatePolicy=Manual to be preserved, got %v", policy)
-	}
-
-	revRef, found, _ := un.NestedMap(target.Object, "spec", "crossplane", "compositionRevisionRef")
-	if !found {
-		t.Error("Expected compositionRevisionRef to be preserved")
-	}
-
-	if revRef["name"] != "my-revision" {
-		t.Errorf("Expected compositionRevisionRef.name=my-revision, got %v", revRef["name"])
+	if diff := cmp.Diff(expected, crossplane); diff != "" {
+		t.Errorf("spec.crossplane mismatch (-want +got):\n%s", diff)
 	}
 }
