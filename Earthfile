@@ -61,7 +61,8 @@ build:
 
 # multiplatform-build builds Crossplane for all supported OS and architectures.
 multiplatform-build:
-  BUILD +go-multiplatform-build
+  ARG RELEASE_ARTIFACTS=false
+  BUILD +go-multiplatform-build --RELEASE_ARTIFACTS=${RELEASE_ARTIFACTS}
 
 # generate runs code generation. To keep builds fast, it doesn't run as part of
 # the build target. It's important to run it explicitly when code needs to be
@@ -202,6 +203,7 @@ patch-crds:
   SAVE ARTIFACT cluster/${CROSSPLANE_IMAGE_TAG}/meta AS LOCAL cluster/${CROSSPLANE_IMAGE_TAG}/meta
 
 # go-build builds Crossplane binaries for your native OS and architecture.
+# Set RELEASE_ARTIFACTS=true to output flat release-ready artifacts to _output/release/
 go-build:
   ARG EARTHLY_GIT_SHORT_HASH
   ARG EARTHLY_GIT_COMMIT_TIMESTAMP
@@ -213,6 +215,7 @@ go-build:
   ARG LDFLAGS="-s -w -X=github.com/crossplane-contrib/crossplane-diff/internal/version.version=${CROSSPLANE_DIFF_VERSION}"
   ARG CGO_ENABLED=0
   ARG BIN_NAME=crossplane-diff
+  ARG RELEASE_ARTIFACTS=false
   FROM +go-modules
   LET ext = ""
   IF [ "$GOOS" = "windows" ]
@@ -224,14 +227,24 @@ go-build:
   RUN sha256sum ${BIN_NAME}${ext} | head -c 64 > ${BIN_NAME}${ext}.sha256
   RUN tar -czvf ${BIN_NAME}.tar.gz ${BIN_NAME}${ext} ${BIN_NAME}${ext}.sha256
   RUN sha256sum ${BIN_NAME}.tar.gz | head -c 64 > ${BIN_NAME}.tar.gz.sha256
-  SAVE ARTIFACT --keep-ts ${BIN_NAME}${ext} AS LOCAL _output/bin/${GOOS}_${GOARCH}/${BIN_NAME}${ext}
-  SAVE ARTIFACT --keep-ts ${BIN_NAME}${ext}.sha256 AS LOCAL _output/bin/${GOOS}_${GOARCH}/${BIN_NAME}${ext}.sha256
-  SAVE ARTIFACT --keep-ts ${BIN_NAME}.tar.gz AS LOCAL _output/bundle/${GOOS}_${GOARCH}/${BIN_NAME}.tar.gz
-  SAVE ARTIFACT --keep-ts ${BIN_NAME}.tar.gz.sha256 AS LOCAL _output/bundle/${GOOS}_${GOARCH}/${BIN_NAME}.tar.gz.sha256
+  IF [ "$RELEASE_ARTIFACTS" = "true" ]
+    # Flat structure with arch suffix for releases: _output/release/crossplane-diff_linux_amd64
+    SAVE ARTIFACT --keep-ts ${BIN_NAME}${ext} AS LOCAL _output/release/${BIN_NAME}_${GOOS}_${GOARCH}${ext}
+    SAVE ARTIFACT --keep-ts ${BIN_NAME}${ext}.sha256 AS LOCAL _output/release/${BIN_NAME}_${GOOS}_${GOARCH}${ext}.sha256
+    SAVE ARTIFACT --keep-ts ${BIN_NAME}.tar.gz AS LOCAL _output/release/${BIN_NAME}_${GOOS}_${GOARCH}.tar.gz
+    SAVE ARTIFACT --keep-ts ${BIN_NAME}.tar.gz.sha256 AS LOCAL _output/release/${BIN_NAME}_${GOOS}_${GOARCH}.tar.gz.sha256
+  ELSE
+    # Nested structure for local development: _output/bin/linux_amd64/crossplane-diff
+    SAVE ARTIFACT --keep-ts ${BIN_NAME}${ext} AS LOCAL _output/bin/${GOOS}_${GOARCH}/${BIN_NAME}${ext}
+    SAVE ARTIFACT --keep-ts ${BIN_NAME}${ext}.sha256 AS LOCAL _output/bin/${GOOS}_${GOARCH}/${BIN_NAME}${ext}.sha256
+    SAVE ARTIFACT --keep-ts ${BIN_NAME}.tar.gz AS LOCAL _output/bundle/${GOOS}_${GOARCH}/${BIN_NAME}.tar.gz
+    SAVE ARTIFACT --keep-ts ${BIN_NAME}.tar.gz.sha256 AS LOCAL _output/bundle/${GOOS}_${GOARCH}/${BIN_NAME}.tar.gz.sha256
+  END
 
 # go-multiplatform-build builds Crossplane binaries for all supported OS
-# and architectures.
+# and architectures. Set RELEASE_ARTIFACTS=true for flat release structure.
 go-multiplatform-build:
+  ARG RELEASE_ARTIFACTS=false
   BUILD \
     --platform=linux/amd64 \
     --platform=linux/arm64 \
@@ -240,7 +253,7 @@ go-multiplatform-build:
     --platform=darwin/arm64 \
     --platform=darwin/amd64 \
     --platform=windows/amd64 \
-    +go-build
+    +go-build --RELEASE_ARTIFACTS=${RELEASE_ARTIFACTS}
 
 # go-build-e2e builds Crossplane's end-to-end tests.
 go-build-e2e:

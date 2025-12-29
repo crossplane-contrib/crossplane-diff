@@ -59,36 +59,8 @@ jobs:
       - name: Build Release Artifacts
         run: |
           earthly --strict --remote-cache ghcr.io/crossplane-contrib/crossplane-diff/earthly-cache:release +multiplatform-build \
-            --CROSSPLANE_DIFF_VERSION=${{ steps.version.outputs.VERSION }}
-
-      - name: Prepare Release Artifacts
-        run: |
-          mkdir -p _output/release
-
-          # Copy and rename all artifacts with architecture suffix
-          for dir in _output/{bin,bundle}/*/; do
-            arch=$(basename "$dir")
-            for file in "$dir"*; do
-              if [ -f "$file" ]; then
-                filename=$(basename "$file")
-
-                # Split filename at first dot to get basename and extension
-                if [[ "$filename" == *.* ]]; then
-                  basename="${filename%%.*}"
-                  extension="${filename#*.}"
-                  new_name="${basename}_${arch}.${extension}"
-                else
-                  new_name="${filename}_${arch}"
-                fi
-
-                cp "$file" "_output/release/$new_name"
-              fi
-            done
-          done
-
-          # List what we're about to upload
-          echo "Release artifacts:"
-          ls -la _output/release/
+            --CROSSPLANE_DIFF_VERSION=${{ steps.version.outputs.VERSION }} \
+            --RELEASE_ARTIFACTS=true
 
       - name: Create Release
         uses: softprops/action-gh-release@a06a81a03ee405af7f2048a818ed3f03bbf83c7b # v2.5.0
