@@ -260,12 +260,8 @@ func TestDefaultDiffCalculator_CalculateDiff(t *testing.T) {
 				// Create existing resource WITH managed fields containing Crossplane composed prefix
 				existingWithManagedFields := tu.NewResource("example.org/v1", "TestResource", "existing-resource").
 					WithSpecField("field", "old-value").
+					WithFieldManagers("kubectl-client-side-apply", expectedFieldOwner, "other-controller").
 					Build()
-				existingWithManagedFields.SetManagedFields([]metav1.ManagedFieldsEntry{
-					{Manager: "kubectl-client-side-apply"},
-					{Manager: expectedFieldOwner},
-					{Manager: "other-controller"},
-				})
 
 				// Create mock apply client that captures and verifies the field owner
 				applyClient := tu.NewMockApplyClient().
@@ -311,11 +307,8 @@ func TestDefaultDiffCalculator_CalculateDiff(t *testing.T) {
 				// Create existing resource WITHOUT Crossplane managed fields
 				existingWithoutCrossplaneManagedFields := tu.NewResource("example.org/v1", "TestResource", "existing-resource").
 					WithSpecField("field", "old-value").
+					WithFieldManagers("kubectl-client-side-apply", "some-other-controller").
 					Build()
-				existingWithoutCrossplaneManagedFields.SetManagedFields([]metav1.ManagedFieldsEntry{
-					{Manager: "kubectl-client-side-apply"},
-					{Manager: "some-other-controller"},
-				})
 
 				// Create mock apply client that captures and verifies the field owner is empty
 				// (which means the default will be used)
