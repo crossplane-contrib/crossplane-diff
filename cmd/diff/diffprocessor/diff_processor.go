@@ -589,17 +589,21 @@ func (p *DefaultDiffProcessor) resolveBackingXRForClaim(ctx context.Context, exi
 // The DiffCalculator.preserveCompositeLabel() method then preserves this label from existing
 // cluster resources, ensuring no spurious diffs. No manual propagation is needed.
 func (p *DefaultDiffProcessor) propagateCompositeLabelInClaimContext(composedResources []cpd.Unstructured, xr *cmp.Unstructured) {
-	xrCompositeLabel := xr.GetLabels()["crossplane.io/composite"]
-	xrClaimName := xr.GetLabels()["crossplane.io/claim-name"]
+	xrLabels := xr.GetLabels()
+	xrCompositeLabel := xrLabels["crossplane.io/composite"]
+	xrClaimName := xrLabels["crossplane.io/claim-name"]
+	xrClaimNamespace := xrLabels["crossplane.io/claim-namespace"]
 
 	isClaimContext := xrClaimName != ""
 	if !isClaimContext || xrCompositeLabel == "" || xrCompositeLabel == xr.GetName() {
 		return
 	}
 
-	p.config.Logger.Debug("Propagating composite label to composed resources",
+	p.config.Logger.Debug("Propagating composite and claim labels to composed resources",
 		"xr", xr.GetName(),
 		"compositeLabel", xrCompositeLabel,
+		"claimName", xrClaimName,
+		"claimNamespace", xrClaimNamespace,
 		"composedCount", len(composedResources))
 
 	for i := range composedResources {
@@ -612,6 +616,17 @@ func (p *DefaultDiffProcessor) propagateCompositeLabelInClaimContext(composedRes
 
 		oldLabel := labels["crossplane.io/composite"]
 		labels["crossplane.io/composite"] = xrCompositeLabel
+
+		// Propagate claim labels to composed resources of nested XRs.
+		// In Crossplane, ALL composed resources in a Claim tree get these labels.
+		if xrClaimName != "" {
+			labels["crossplane.io/claim-name"] = xrClaimName
+		}
+
+		if xrClaimNamespace != "" {
+			labels["crossplane.io/claim-namespace"] = xrClaimNamespace
+		}
+
 		resource.SetLabels(labels)
 
 		// Also fix generateName to use the root XR's name as prefix
@@ -682,7 +697,7 @@ func findExistingNestedXR(nestedXR *un.Unstructured, observedResources []cpd.Uns
 }
 
 // preserveNestedXRIdentity updates the nested XR to preserve the identity of an existing XR
-// by copying its name, generateName, UID, and composite label.
+// by copying its name, generateName, UID, Crossplane labels, and compositionRef.
 func preserveNestedXRIdentity(nestedXR, existingNestedXR *un.Unstructured) {
 	// Preserve the actual cluster name and UID
 	nestedXR.SetName(existingNestedXR.GetName())
@@ -693,28 +708,10 @@ func preserveNestedXRIdentity(nestedXR, existingNestedXR *un.Unstructured) {
 	// These labels are needed for:
 	// - crossplane.io/composite: matching composed resources to their owner
 	// - crossplane.io/claim-name/namespace: detecting Claim context for label propagation
-	if labels := existingNestedXR.GetLabels(); labels != nil {
-		nestedXRLabels := nestedXR.GetLabels()
-		if nestedXRLabels == nil {
-			nestedXRLabels = make(map[string]string)
-		}
+	CopyLabels(existingNestedXR, nestedXR, LabelComposite, LabelClaimName, LabelClaimNamespace)
 
-		// Copy composite label
-		if compositeLabel, exists := labels["crossplane.io/composite"]; exists {
-			nestedXRLabels["crossplane.io/composite"] = compositeLabel
-		}
-
-		// Copy claim labels (needed to detect Claim context during nested XR processing)
-		if claimName, exists := labels["crossplane.io/claim-name"]; exists {
-			nestedXRLabels["crossplane.io/claim-name"] = claimName
-		}
-
-		if claimNamespace, exists := labels["crossplane.io/claim-namespace"]; exists {
-			nestedXRLabels["crossplane.io/claim-namespace"] = claimNamespace
-		}
-
-		nestedXR.SetLabels(nestedXRLabels)
-	}
+	// Preserve compositionRef (handles both V1 and V2 XRD paths)
+	CopyCompositionRef(existingNestedXR, nestedXR)
 }
 
 // ProcessNestedXRs recursively processes composed resources that are themselves XRs.
