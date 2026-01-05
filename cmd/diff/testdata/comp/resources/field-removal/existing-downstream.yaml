@@ -1,0 +1,14 @@
+apiVersion: ns.nop.example.org/v1alpha1
+kind: XDownstreamResource
+metadata:
+  name: field-removal-test
+  namespace: default
+  annotations:
+    crossplane.io/composition-resource-name: nop-resource
+    gotemplating.fn.crossplane.io/composition-resource-name: nop-resource
+  labels:
+    crossplane.io/composite: field-removal-test
+spec:
+  forProvider:
+    configData: test-value
+    removableField: will-be-removed

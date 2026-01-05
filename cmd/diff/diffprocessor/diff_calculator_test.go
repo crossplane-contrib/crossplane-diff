@@ -248,6 +248,104 @@ func TestDefaultDiffCalculator_CalculateDiff(t *testing.T) {
 			desired:   modifiedResource,
 			wantErr:   true,
 		},
+		"FieldOwnerExtractedFromManagedFields": {
+			// This test verifies that the Crossplane composed field owner is extracted from
+			// the existing resource's managedFields and passed to the dry-run apply.
+			// This is critical for correct field removal detection with Server-Side Apply.
+			setupMocks: func(t *testing.T) (k8.ApplyClient, xp.ResourceTreeClient, ResourceManager) {
+				t.Helper()
+
+				const expectedFieldOwner = "apiextensions.crossplane.io/composed/abc123def456"
+
+				// Create existing resource WITH managed fields containing Crossplane composed prefix
+				existingWithManagedFields := tu.NewResource("example.org/v1", "TestResource", "existing-resource").
+					WithSpecField("field", "old-value").
+					WithFieldManagers("kubectl-client-side-apply", expectedFieldOwner, "other-controller").
+					Build()
+
+				// Create mock apply client that captures and verifies the field owner
+				applyClient := tu.NewMockApplyClient().
+					WithDryRunApply(func(_ context.Context, obj *un.Unstructured, fieldOwner string) (*un.Unstructured, error) {
+						// Verify the field owner was correctly extracted
+						if fieldOwner != expectedFieldOwner {
+							t.Errorf("DryRunApply called with wrong field owner: got %q, want %q", fieldOwner, expectedFieldOwner)
+						}
+
+						return obj, nil
+					}).
+					Build()
+
+				// Create mock resource tree client (not used in this test)
+				resourceTreeClient := tu.NewMockResourceTreeClient().Build()
+
+				// Create mock resource client for resource manager
+				resourceClient := tu.NewMockResourceClient().
+					WithResourcesExist(existingWithManagedFields).
+					Build()
+
+				// Create resource manager
+				resourceManager := NewResourceManager(resourceClient, tu.NewMockDefinitionClient().Build(), tu.NewMockResourceTreeClient().Build(), tu.TestLogger(t, false))
+
+				return applyClient, resourceTreeClient, resourceManager
+			},
+			composite: nil,
+			desired: tu.NewResource("example.org/v1", "TestResource", "existing-resource").
+				WithSpecField("field", "new-value").
+				Build(),
+			wantDiff: &dt.ResourceDiff{
+				Gvk:          schema.GroupVersionKind{Kind: "TestResource", Group: "example.org", Version: "v1"},
+				ResourceName: "existing-resource",
+				DiffType:     dt.DiffTypeModified,
+			},
+		},
+		"FieldOwnerDefaultsWhenNotInManagedFields": {
+			// This test verifies that when no Crossplane composed field owner is found
+			// in the existing resource's managedFields, we use the default field owner.
+			setupMocks: func(t *testing.T) (k8.ApplyClient, xp.ResourceTreeClient, ResourceManager) {
+				t.Helper()
+
+				// Create existing resource WITHOUT Crossplane managed fields
+				existingWithoutCrossplaneManagedFields := tu.NewResource("example.org/v1", "TestResource", "existing-resource").
+					WithSpecField("field", "old-value").
+					WithFieldManagers("kubectl-client-side-apply", "some-other-controller").
+					Build()
+
+				// Create mock apply client that captures and verifies the field owner is empty
+				// (which means the default will be used)
+				applyClient := tu.NewMockApplyClient().
+					WithDryRunApply(func(_ context.Context, obj *un.Unstructured, fieldOwner string) (*un.Unstructured, error) {
+						// Verify no Crossplane field owner was extracted (defaults to empty)
+						if fieldOwner != "" {
+							t.Errorf("DryRunApply called with unexpected field owner: got %q, want empty string", fieldOwner)
+						}
+
+						return obj, nil
+					}).
+					Build()
+
+				// Create mock resource tree client (not used in this test)
+				resourceTreeClient := tu.NewMockResourceTreeClient().Build()
+
+				// Create mock resource client for resource manager
+				resourceClient := tu.NewMockResourceClient().
+					WithResourcesExist(existingWithoutCrossplaneManagedFields).
+					Build()
+
+				// Create resource manager
+				resourceManager := NewResourceManager(resourceClient, tu.NewMockDefinitionClient().Build(), tu.NewMockResourceTreeClient().Build(), tu.TestLogger(t, false))
+
+				return applyClient, resourceTreeClient, resourceManager
+			},
+			composite: nil,
+			desired: tu.NewResource("example.org/v1", "TestResource", "existing-resource").
+				WithSpecField("field", "new-value").
+				Build(),
+			wantDiff: &dt.ResourceDiff{
+				Gvk:          schema.GroupVersionKind{Kind: "TestResource", Group: "example.org", Version: "v1"},
+				ResourceName: "existing-resource",
+				DiffType:     dt.DiffTypeModified,
+			},
+		},
 		"FindAndDiffResourceWithGenerateName": {
 			setupMocks: func(t *testing.T) (k8.ApplyClient, xp.ResourceTreeClient, ResourceManager) {
 				t.Helper()

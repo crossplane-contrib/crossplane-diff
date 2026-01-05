@@ -124,7 +124,7 @@ func CreateFakeDiscoveryClient(resources map[string][]metav1.APIResource) discov
 	}
 
 	fakeDiscovery.Resources = apiResourceLists
-	fakeDiscovery.Fake.Resources = apiResourceLists
+	fakeDiscovery.Resources = apiResourceLists
 
 	return fakeDiscovery
 }

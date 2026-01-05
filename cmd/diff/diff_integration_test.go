@@ -40,19 +40,19 @@ const (
 
 // IntegrationTestCase represents a common test case structure for both XR and composition diff tests.
 type IntegrationTestCase struct {
-	reason                  string // Description of what this test validates
-	setupFiles              []string
-	setupFilesWithOwnerRefs []HierarchicalOwnershipRelation
-	inputFiles              []string // Input files to diff (XR YAML files or Composition YAML files)
-	expectedOutput          string
-	expectedError           bool
-	expectedErrorContains   string
-	noColor                 bool
-	namespace               string        // For composition tests (optional)
-	xrdAPIVersion           XrdAPIVersion // For XR tests (optional)
-	ignorePaths             []string      // Paths to ignore in diffs
-	skip                    bool
-	skipReason              string
+	reason                     string // Description of what this test validates
+	setupFiles                 []string
+	crossplaneManagedResources []HierarchicalOwnershipRelation // Resources applied via SSA with Crossplane field manager
+	inputFiles                 []string                        // Input files to diff (XR YAML files or Composition YAML files)
+	expectedOutput             string
+	expectedError              bool
+	expectedErrorContains      string
+	noColor                    bool
+	namespace                  string        // For composition tests (optional)
+	xrdAPIVersion              XrdAPIVersion // For XR tests (optional)
+	ignorePaths                []string      // Paths to ignore in diffs
+	skip                       bool
+	skipReason                 string
 }
 
 type XrdAPIVersion int
@@ -156,11 +156,12 @@ func runIntegrationTest(t *testing.T, testType DiffTestType, scheme *runtime.Sch
 		xrdAPIVersion = tt.xrdAPIVersion
 	}
 
-	// Apply resources with owner references
-	if len(tt.setupFilesWithOwnerRefs) > 0 {
-		err := applyHierarchicalOwnership(ctx, tu.TestLogger(t, false), k8sClient, xrdAPIVersion, tt.setupFilesWithOwnerRefs)
+	// Apply Crossplane-managed resources (XRs, composed resources) using SSA with Crossplane field manager.
+	// These resources simulate what Crossplane actually manages in production.
+	if len(tt.crossplaneManagedResources) > 0 {
+		err := applyHierarchicalOwnership(ctx, tu.TestLogger(t, false), k8sClient, xrdAPIVersion, tt.crossplaneManagedResources)
 		if err != nil {
-			t.Fatalf("failed to setup owner references: %v", err)
+			t.Fatalf("failed to setup Crossplane-managed resources: %v", err)
 		}
 	}
 
@@ -660,7 +661,7 @@ Summary: 1 added, 1 modified`,
 		"ResourceRemovalHierarchyV1ClusterScoped": {
 			reason:        "Validates resource removal detection with hierarchy using v1 style resourceRefs and cluster scoped downstreams",
 			xrdAPIVersion: V1,
-			setupFilesWithOwnerRefs: []HierarchicalOwnershipRelation{
+			crossplaneManagedResources: []HierarchicalOwnershipRelation{
 				{
 					OwnerFile: "testdata/diff/resources/existing-legacy-xr.yaml",
 					OwnedFiles: map[string]*HierarchicalOwnershipRelation{
@@ -746,7 +747,7 @@ Summary: 2 modified, 2 removed`,
 		},
 		"ResourceRemovalHierarchyV2Namespaced": {
 			reason: "Validates resource removal detection with hierarchy using v2 style resourceRefs and namespaced downstreams",
-			setupFilesWithOwnerRefs: []HierarchicalOwnershipRelation{
+			crossplaneManagedResources: []HierarchicalOwnershipRelation{
 				{
 					OwnerFile: "testdata/diff/resources/existing-xr.yaml",
 					OwnedFiles: map[string]*HierarchicalOwnershipRelation{
@@ -835,7 +836,7 @@ Summary: 2 modified, 2 removed`,
 		},
 		"ResourceRemovalHierarchyV2ClusterScoped": {
 			reason: "Validates resource removal detection with hierarchy using v2 style resourceRefs and cluster scoped downstreams",
-			setupFilesWithOwnerRefs: []HierarchicalOwnershipRelation{
+			crossplaneManagedResources: []HierarchicalOwnershipRelation{
 				{
 					OwnerFile: "testdata/diff/resources/existing-cluster-xr.yaml",
 					OwnedFiles: map[string]*HierarchicalOwnershipRelation{
@@ -925,7 +926,7 @@ Summary: 2 modified, 2 removed`,
 				"testdata/diff/resources/functions.yaml",
 				"testdata/diff/resources/generated-name-composition.yaml",
 			},
-			setupFilesWithOwnerRefs: []HierarchicalOwnershipRelation{
+			crossplaneManagedResources: []HierarchicalOwnershipRelation{
 				{
 					// Set up the XR as the owner of the generated composed resource
 					OwnerFile: "testdata/diff/resources/existing-xr.yaml",
@@ -1894,7 +1895,7 @@ Summary: 2 added`,
 			// - Nested XR has owner ref to backing XR
 			// - Managed resource has owner ref to nested XR
 			// Note: Claim is NOT in this hierarchy - it links to backing XR via spec.resourceRef, not owner refs
-			setupFilesWithOwnerRefs: []HierarchicalOwnershipRelation{
+			crossplaneManagedResources: []HierarchicalOwnershipRelation{
 				{
 					// Backing XR is the root of owner ref tree
 					OwnerFile: "testdata/diff/resources/claim-nested/existing-parent-xr.yaml",
@@ -1976,6 +1977,7 @@ Summary: 2 added`,
 ---
 
 Summary: 3 modified`,
+			xrdAPIVersion: V1, // Use V1 style resourceRefs since XRDs have claims
 			expectedError: false,
 			noColor:       true,
 		},
@@ -2962,6 +2964,98 @@ Summary: 2 resources with changes
 ---
 
 Summary: 2 modified`,
+			expectedError: false,
+			noColor:       true,
+		},
+		"SSAFieldRemovalDetection": {
+			reason: "Validates that field removals are correctly detected when resources are created via Server-Side Apply with Crossplane's field manager (issue #121)",
+			// Set up XRD, functions, and original composition with the removable field
+			setupFiles: []string{
+				"testdata/comp/resources/xrd.yaml",
+				"testdata/comp/resources/functions.yaml",
+				"testdata/comp/resources/field-removal/composition-with-field.yaml",
+			},
+			// XR and downstream resource applied via SSA with Crossplane field manager
+			crossplaneManagedResources: []HierarchicalOwnershipRelation{
+				{
+					OwnerFile: "testdata/comp/resources/field-removal/existing-xr.yaml",
+					OwnedFiles: map[string]*HierarchicalOwnershipRelation{
+						"testdata/comp/resources/field-removal/existing-downstream.yaml": nil,
+					},
+				},
+			},
+			// Updated composition that removes the removableField
+			inputFiles: []string{"testdata/comp/field-removal-updated-composition.yaml"},
+			namespace:  "default",
+			expectedOutput: `
+=== Composition Changes ===
+
+~~~ Composition/xfieldremoval.diff.example.org
+  apiVersion: apiextensions.crossplane.io/v1
+  kind: Composition
+  metadata:
+    name: xfieldremoval.diff.example.org
+  spec:
+    compositeTypeRef:
+      apiVersion: ns.diff.example.org/v1alpha1
+      kind: XNopResource
+    mode: Pipeline
+    pipeline:
+    - functionRef:
+        name: function-go-templating
+      input:
+        apiVersion: template.fn.crossplane.io/v1beta1
+        inline:
+          template: |
+            apiVersion: ns.nop.example.org/v1alpha1
+            kind: XDownstreamResource
+            metadata:
+              name: {{ .observed.composite.resource.metadata.name }}
+              namespace: {{ .observed.composite.resource.metadata.namespace }}
+              annotations:
+                gotemplating.fn.crossplane.io/composition-resource-name: nop-resource
+            spec:
+              forProvider:
+                configData: {{ .observed.composite.resource.spec.coolField }}
+-               removableField: will-be-removed
+        kind: GoTemplate
+        source: Inline
+      step: generate-resources
+    - functionRef:
+        name: function-auto-ready
+      step: automatically-detect-ready-composed-resources
+
+---
+
+Summary: 1 modified
+
+=== Affected Composite Resources ===
+
+  ⚠ XNopResource/field-removal-test (namespace: default)
+
+Summary: 1 resource with changes
+
+=== Impact Analysis ===
+
+~~~ XDownstreamResource/field-removal-test
+  apiVersion: ns.nop.example.org/v1alpha1
+  kind: XDownstreamResource
+  metadata:
+    annotations:
+      crossplane.io/composition-resource-name: nop-resource
+-     gotemplating.fn.crossplane.io/composition-resource-name: nop-resource
+    labels:
+      crossplane.io/composite: field-removal-test
+    name: field-removal-test
+    namespace: default
+  spec:
+    forProvider:
+      configData: test-value
+-     removableField: will-be-removed
+
+---
+
+Summary: 1 modified`,
 			expectedError: false,
 			noColor:       true,
 		},
