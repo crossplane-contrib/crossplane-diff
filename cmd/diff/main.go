@@ -34,7 +34,6 @@ var _ = kong.Must(&cli{})
 type (
 	verboseFlag bool
 	// KubeContext represents the Kubernetes context name from the kubeconfig.
-	// Kong will automatically bind this when the --context flag is parsed.
 	KubeContext string
 )
 
@@ -49,17 +48,15 @@ type CommonCmdFields struct {
 	IgnorePaths    []string      `help:"Paths to ignore in diffs (e.g., 'metadata.annotations[argocd.argoproj.io/tracking-id]')." name:"ignore-paths"`
 }
 
+// GetRestConfig creates a Kubernetes REST config using the context specified in the command flags.
+func (c *CommonCmdFields) GetRestConfig() (*rest.Config, error) {
+	return GetRestConfigForContext(c.Context)
+}
+
 func (v verboseFlag) BeforeApply(ctx *kong.Context) error { //nolint:unparam // BeforeApply requires this signature.
 	logger := logging.NewLogrLogger(zap.New(zap.UseDevMode(true)))
 	ctx.BindTo(logger, (*logging.Logger)(nil))
 
-	return nil
-}
-
-// BeforeApply binds the context string so it's available to getRestConfig via dependency injection.
-func (c *CommonCmdFields) BeforeApply(ctx *kong.Context) error { //nolint:unparam // BeforeApply requires this signature.
-	// Bind the context string so getRestConfig can use it
-	ctx.BindTo(c.Context, (*KubeContext)(nil))
 	return nil
 }
 
@@ -86,7 +83,6 @@ func main() {
 		// Binding a variable to kong context makes it available to all commands
 		// at runtime.
 		kong.BindTo(logger, (*logging.Logger)(nil)),
-		kong.BindToProvider(getRestConfig),
 		kong.ConfigureHelp(kong.HelpOptions{
 			FlagsLast:      true,
 			Compact:        true,
@@ -97,7 +93,9 @@ func main() {
 	ctx.FatalIfErrorf(err)
 }
 
-func getRestConfig(kubeContext KubeContext) (*rest.Config, error) {
+// GetRestConfigForContext creates a Kubernetes REST config for the specified context.
+// If kubeContext is empty, it uses the current context from kubeconfig.
+func GetRestConfigForContext(kubeContext KubeContext) (*rest.Config, error) {
 	// Use the standard client-go loading rules:
 	// 1. If KUBECONFIG env var is set, use that
 	// 2. Otherwise, use ~/.kube/config
