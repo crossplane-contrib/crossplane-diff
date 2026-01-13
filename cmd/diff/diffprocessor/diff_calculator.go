@@ -118,14 +118,22 @@ func (c *DefaultDiffCalculator) CalculateDiff(ctx context.Context, composite *un
 
 	// Determine what the resource would look like after application
 	wouldBeResult := desired
+
 	if current != nil {
+		// Extract the Crossplane field owner from the existing object's managedFields.
+		// This ensures our dry-run apply uses the same field owner as Crossplane,
+		// which correctly handles field removal detection (SSA removes fields that
+		// are owned by this manager but not present in the apply request).
+		fieldOwner := k8.GetComposedFieldOwner(current)
+
 		// Perform a dry-run apply to get the result after we'd apply
 		c.logger.Debug("Performing dry-run apply",
 			"resource", resourceID,
 			"name", desired.GetName(),
+			"fieldOwner", fieldOwner,
 			"desired", desired)
 
-		wouldBeResult, err = c.applyClient.DryRunApply(ctx, desired)
+		wouldBeResult, err = c.applyClient.DryRunApply(ctx, desired, fieldOwner)
 		if err != nil {
 			c.logger.Debug("Dry-run apply failed", "resource", resourceID, "error", err)
 			return nil, errors.Wrap(err, "cannot dry-run apply desired object")
@@ -409,22 +417,12 @@ func (c *DefaultDiffCalculator) preserveExistingResourceIdentity(current, desire
 
 	// Preserve important labels from the existing resource, particularly the composite label
 	// This ensures the dry-run apply gets the right labels and preserves them correctly
-	currentLabels := current.GetLabels()
-	if currentLabels != nil {
-		desiredLabels := desiredCopy.GetLabels()
-		if desiredLabels == nil {
-			desiredLabels = make(map[string]string)
-		}
+	CopyLabels(current, desiredCopy, LabelComposite)
 
-		// Preserve the composite label if it exists (critical for claims)
-		if compositeLabel, exists := currentLabels["crossplane.io/composite"]; exists {
-			desiredLabels["crossplane.io/composite"] = compositeLabel
-			c.logger.Debug("Preserved composite label for dry-run apply",
-				"resource", resourceID,
-				"compositeLabel", compositeLabel)
-		}
-
-		desiredCopy.SetLabels(desiredLabels)
+	if compositeLabel := current.GetLabels()[LabelComposite]; compositeLabel != "" {
+		c.logger.Debug("Preserved composite label for dry-run apply",
+			"resource", resourceID,
+			"compositeLabel", compositeLabel)
 	}
 
 	return desiredCopy
@@ -440,21 +438,14 @@ func (c *DefaultDiffCalculator) preserveCompositeLabel(current, desired *un.Unst
 		return desired
 	}
 
-	compositeLabel, exists := current.GetLabels()["crossplane.io/composite"]
-	if !exists {
+	compositeLabel := current.GetLabels()[LabelComposite]
+	if compositeLabel == "" {
 		return desired
 	}
 
 	// Preserve the composite label
 	desiredCopy := desired.DeepCopy()
-
-	desiredLabels := desiredCopy.GetLabels()
-	if desiredLabels == nil {
-		desiredLabels = make(map[string]string)
-	}
-
-	desiredLabels["crossplane.io/composite"] = compositeLabel
-	desiredCopy.SetLabels(desiredLabels)
+	CopyLabels(current, desiredCopy, LabelComposite)
 
 	c.logger.Debug("Preserved composite label from existing composed resource",
 		"resource", resourceID,

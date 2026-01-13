@@ -193,7 +193,7 @@ func TestApplyClient_DryRunApply(t *testing.T) {
 				logger:        tu.TestLogger(t, false),
 			}
 
-			got, err := c.DryRunApply(tc.args.ctx, tc.args.obj)
+			got, err := c.DryRunApply(tc.args.ctx, tc.args.obj, "")
 
 			if tc.want.err != nil {
 				if err == nil {
@@ -228,6 +228,75 @@ func TestApplyClient_DryRunApply(t *testing.T) {
 
 			if diff := cmp.Diff(wantCopy, gotCopy); diff != "" {
 				t.Errorf("\n%s\nDryRunApply(...): -want, +got:\n%s", tc.reason, diff)
+			}
+		})
+	}
+}
+
+func TestGetComposedFieldOwner(t *testing.T) {
+	tests := map[string]struct {
+		reason string
+		obj    *un.Unstructured
+		want   string
+	}{
+		"NilObject": {
+			reason: "Should return empty string for nil object",
+			obj:    nil,
+			want:   "",
+		},
+		"NoManagedFields": {
+			reason: "Should return empty string when object has no managed fields",
+			obj: tu.NewResource("example.org/v1", "ExampleResource", "test-resource").
+				Build(),
+			want: "",
+		},
+		"ManagedFieldsWithoutCrossplanePrefix": {
+			reason: "Should return empty string when managed fields don't contain Crossplane composed prefix",
+			obj: tu.NewResource("example.org/v1", "ExampleResource", "test-resource").
+				WithFieldManagers("kubectl-client-side-apply", "other-controller").
+				Build(),
+			want: "",
+		},
+		"ManagedFieldsWithCrossplaneComposedPrefix": {
+			reason: "Should return the Crossplane composed field owner when present",
+			obj: tu.NewResource("example.org/v1", "ExampleResource", "test-resource").
+				WithFieldManagers(
+					"kubectl-client-side-apply",
+					"apiextensions.crossplane.io/composed/abc123def456",
+					"other-controller",
+				).
+				Build(),
+			want: "apiextensions.crossplane.io/composed/abc123def456",
+		},
+		"MultipleCrossplanePrefixes": {
+			reason: "Should return the first Crossplane composed field owner when multiple present",
+			obj: tu.NewResource("example.org/v1", "ExampleResource", "test-resource").
+				WithFieldManagers(
+					"apiextensions.crossplane.io/composed/first-hash",
+					"apiextensions.crossplane.io/composed/second-hash",
+				).
+				Build(),
+			want: "apiextensions.crossplane.io/composed/first-hash",
+		},
+		"RealWorldCrossplaneFieldOwner": {
+			reason: "Should correctly extract a real-world Crossplane field owner hash",
+			// This simulates a real composed resource from Crossplane
+			obj: tu.NewResource("nop.crossplane.io/v1alpha1", "ClusterNopResource", "test-xr-abc123").
+				WithFieldManagers(
+					"crossplane",
+					"apiextensions.crossplane.io/composed/e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+				).
+				Build(),
+			want: "apiextensions.crossplane.io/composed/e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+		},
+	}
+
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			got := GetComposedFieldOwner(tc.obj)
+
+			if got != tc.want {
+				t.Errorf("\n%s\nGetComposedFieldOwner(...): want %q, got %q", tc.reason, tc.want, got)
 			}
 		})
 	}

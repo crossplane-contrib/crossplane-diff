@@ -41,6 +41,9 @@ spec:
                     backupEnabled:
                       type: boolean
                       description: "Whether backup is enabled for this resource"
+                    removableField:
+                      type: string
+                      description: "A field that can be removed for testing field removal detection"
                 crossplane:
                   type: object
                   properties:

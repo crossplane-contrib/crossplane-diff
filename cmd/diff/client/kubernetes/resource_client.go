@@ -157,6 +157,7 @@ func (c *DefaultResourceClient) GetGVKsForGroupKind(_ context.Context, group, ki
 
 	// Find the target group and its versions
 	var targetGroup *metav1.APIGroup
+
 	for i := range apiGroups.Groups {
 		if apiGroups.Groups[i].Name == group {
 			targetGroup = &apiGroups.Groups[i]
@@ -184,12 +185,14 @@ func (c *DefaultResourceClient) GetGVKsForGroupKind(_ context.Context, group, ki
 				if err != nil {
 					continue
 				}
+
 				gvk := schema.GroupVersionKind{
 					Group:   gv.Group,
 					Version: gv.Version,
 					Kind:    kind,
 				}
 				gvks = append(gvks, gvk)
+
 				break // Found the kind in this version, move to next version
 			}
 		}
