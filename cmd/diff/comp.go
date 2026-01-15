@@ -23,7 +23,6 @@ import (
 	"github.com/alecthomas/kong"
 	xp "github.com/crossplane-contrib/crossplane-diff/cmd/diff/client/crossplane"
 	dp "github.com/crossplane-contrib/crossplane-diff/cmd/diff/diffprocessor"
-	"k8s.io/client-go/rest"
 
 	"github.com/crossplane/crossplane-runtime/v2/pkg/errors"
 	"github.com/crossplane/crossplane-runtime/v2/pkg/logging"
@@ -72,11 +71,17 @@ Examples:
 }
 
 // AfterApply implements kong's AfterApply method to bind our dependencies.
-func (c *CompCmd) AfterApply(ctx *kong.Context, log logging.Logger, config *rest.Config) error {
-	return c.initializeDependencies(ctx, log, config)
+func (c *CompCmd) AfterApply(ctx *kong.Context, log logging.Logger) error {
+	return c.initializeDependencies(ctx, log)
 }
 
-func (c *CompCmd) initializeDependencies(ctx *kong.Context, log logging.Logger, config *rest.Config) error {
+func (c *CompCmd) initializeDependencies(ctx *kong.Context, log logging.Logger) error {
+	// Get the REST config using the context flag from CommonCmdFields
+	config, err := c.GetRestConfig()
+	if err != nil {
+		return errors.Wrap(err, "cannot create kubernetes client config")
+	}
+
 	appCtx, err := initializeSharedDependencies(ctx, log, config)
 	if err != nil {
 		return err
