@@ -63,9 +63,9 @@ func initializeAppContext(timeout time.Duration, appCtx *AppContext, log logging
 // This is the single source of truth for behavior defaults in the CLI layer.
 func defaultProcessorOptions(fields CommonCmdFields, namespace string) []dp.ProcessorOption {
 	// Default ignored paths - always filtered from diffs
-	allIgnorePaths := []string{
-		"metadata.annotations[kubectl.kubernetes.io/last-applied-configuration]",
-	}
+	// Preallocate with capacity for default + user-specified paths
+	allIgnorePaths := make([]string, 0, 1+len(fields.IgnorePaths))
+	allIgnorePaths = append(allIgnorePaths, "metadata.annotations[kubectl.kubernetes.io/last-applied-configuration]")
 
 	// Combine default paths with user-specified ones
 	allIgnorePaths = append(allIgnorePaths, fields.IgnorePaths...)

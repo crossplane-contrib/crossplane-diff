@@ -462,7 +462,7 @@ func (b *MockSchemaClientBuilder) WithCachingBehavior() *MockSchemaClientBuilder
 
 	// Override GetAllCRDs to return cached CRDs
 	b.mock.GetAllCRDsFn = func() []*extv1.CustomResourceDefinition {
-		var result []*extv1.CustomResourceDefinition
+		result := make([]*extv1.CustomResourceDefinition, 0, len(cachedCRDs))
 		for _, crd := range cachedCRDs {
 			result = append(result, crd)
 		}

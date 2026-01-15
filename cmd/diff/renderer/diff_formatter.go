@@ -116,7 +116,8 @@ type lineItem struct {
 // Format implements the DiffFormatter interface for CompactDiffFormatter.
 func (f *CompactDiffFormatter) Format(diffs []diffmatchpatch.Diff, options DiffOptions) string {
 	// Create a flat array of all formatted lines with their diff types
-	var allLines []lineItem
+	// Preallocate with reasonable initial capacity based on number of diffs
+	allLines := make([]lineItem, 0, len(diffs)*4)
 
 	for _, diff := range diffs {
 		formattedLines, hasTrailingNewline := processLines(diff, options)
