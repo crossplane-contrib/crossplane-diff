@@ -166,7 +166,7 @@ func runIntegrationTest(t *testing.T, testType DiffTestType, scheme *runtime.Sch
 	}
 
 	// Set up the test files
-	var testFiles []string
+	testFiles := make([]string, 0, len(tt.inputFiles))
 
 	// Handle any additional input files
 	// Note: NewCompositeLoader handles both individual files and directories,
