@@ -1240,6 +1240,50 @@ Summary: 2 added`,
 			expectedError: false,
 			noColor:       true,
 		},
+		"NewClaimWithClaimRefComposition": {
+			reason: "Shows diff for new claim when composition uses spec.claimRef - claimRef is synthesized for new claims",
+			setupFiles: []string{
+				"testdata/diff/resources/existing-namespace.yaml",
+				"testdata/diff/resources/claim-xrd.yaml",
+				"testdata/diff/resources/claim-composition-with-claimref.yaml",
+				"testdata/diff/resources/claim-composition-with-claimref-revision.yaml",
+				"testdata/diff/resources/functions.yaml",
+			},
+			inputFiles: []string{"testdata/diff/new-claim-with-claimref-composition.yaml"},
+			expectedOutput: `
++++ NopClaim/test-claim
++ apiVersion: diff.example.org/v1alpha1
++ kind: NopClaim
++ metadata:
++   name: test-claim
++   namespace: existing-namespace
++ spec:
++   compositeDeletePolicy: Background
++   compositionRef:
++     name: claim-composition-with-claimref
++   compositionUpdatePolicy: Automatic
++   coolField: new-value
+
+---
++++ XDownstreamResource/test-claim
++ apiVersion: nop.example.org/v1alpha1
++ kind: XDownstreamResource
++ metadata:
++   annotations:
++     crossplane.io/composition-resource-name: nop-resource
++   labels:
++     crossplane.io/composite: test-claim
++   name: test-claim
++ spec:
++   forProvider:
++     configData: existing-namespace/test-claim
+
+---
+
+Summary: 2 added`,
+			expectedError: false,
+			noColor:       true,
+		},
 		"ModifiedClaimShowsDiff": {
 			reason: "Shows diff for modified claim",
 			setupFiles: []string{
