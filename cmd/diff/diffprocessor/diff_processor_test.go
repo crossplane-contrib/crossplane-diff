@@ -2293,14 +2293,14 @@ func TestDefaultDiffProcessor_synthesizeDummyBackingXRForNewClaim(t *testing.T) 
 	}
 
 	tests := map[string]struct {
-		defClient       func() *tu.MockDefinitionClient
-		claim           *un.Unstructured
-		wantResult      bool // whether we expect a non-empty result
-		wantXRKind      string
-		wantXRName      string
-		wantClaimRef    bool
-		wantSpecCopied  bool
-		wantErr         bool
+		defClient      func() *tu.MockDefinitionClient
+		claim          *un.Unstructured
+		wantResult     bool // whether we expect a non-empty result
+		wantXRKind     string
+		wantXRName     string
+		wantClaimRef   bool
+		wantSpecCopied bool
+		wantErr        bool
 	}{
 		"NotAClaim_ReturnsEmptyResult": {
 			defClient: func() *tu.MockDefinitionClient {
@@ -2375,8 +2375,10 @@ func TestDefaultDiffProcessor_synthesizeDummyBackingXRForNewClaim(t *testing.T) 
 				if err == nil {
 					t.Errorf("synthesizeDummyBackingXRForNewClaim() expected error, got nil")
 				}
+
 				return
 			}
+
 			if err != nil {
 				t.Errorf("synthesizeDummyBackingXRForNewClaim() unexpected error: %v", err)
 				return
@@ -2384,8 +2386,8 @@ func TestDefaultDiffProcessor_synthesizeDummyBackingXRForNewClaim(t *testing.T) 
 
 			// Check if result is empty or not
 			hasResult := result.xrForRendering != nil
-			if hasResult != tt.wantResult {
-				t.Errorf("synthesizeDummyBackingXRForNewClaim() hasResult = %v, want %v", hasResult, tt.wantResult)
+			if diff := gcmp.Diff(tt.wantResult, hasResult); diff != "" {
+				t.Errorf("synthesizeDummyBackingXRForNewClaim() hasResult mismatch (-want +got):\n%s", diff)
 				return
 			}
 
@@ -2394,13 +2396,13 @@ func TestDefaultDiffProcessor_synthesizeDummyBackingXRForNewClaim(t *testing.T) 
 			}
 
 			// Verify XR kind
-			if result.kind != tt.wantXRKind {
-				t.Errorf("synthesizeDummyBackingXRForNewClaim() kind = %v, want %v", result.kind, tt.wantXRKind)
+			if diff := gcmp.Diff(tt.wantXRKind, result.kind); diff != "" {
+				t.Errorf("synthesizeDummyBackingXRForNewClaim() kind mismatch (-want +got):\n%s", diff)
 			}
 
 			// Verify XR name
-			if result.name != tt.wantXRName {
-				t.Errorf("synthesizeDummyBackingXRForNewClaim() name = %v, want %v", result.name, tt.wantXRName)
+			if diff := gcmp.Diff(tt.wantXRName, result.name); diff != "" {
+				t.Errorf("synthesizeDummyBackingXRForNewClaim() name mismatch (-want +got):\n%s", diff)
 			}
 
 			// Verify claimRef is set
@@ -2409,18 +2411,16 @@ func TestDefaultDiffProcessor_synthesizeDummyBackingXRForNewClaim(t *testing.T) 
 				if !found {
 					t.Errorf("synthesizeDummyBackingXRForNewClaim() claimRef not found in result")
 				} else {
-					// Verify claimRef fields
-					if claimRef["name"] != tt.claim.GetName() {
-						t.Errorf("claimRef.name = %v, want %v", claimRef["name"], tt.claim.GetName())
+					// Build expected claimRef for comparison
+					wantClaimRef := map[string]any{
+						"name":       tt.claim.GetName(),
+						"namespace":  tt.claim.GetNamespace(),
+						"kind":       tt.claim.GetKind(),
+						"apiVersion": tt.claim.GetAPIVersion(),
 					}
-					if claimRef["namespace"] != tt.claim.GetNamespace() {
-						t.Errorf("claimRef.namespace = %v, want %v", claimRef["namespace"], tt.claim.GetNamespace())
-					}
-					if claimRef["kind"] != tt.claim.GetKind() {
-						t.Errorf("claimRef.kind = %v, want %v", claimRef["kind"], tt.claim.GetKind())
-					}
-					if claimRef["apiVersion"] != tt.claim.GetAPIVersion() {
-						t.Errorf("claimRef.apiVersion = %v, want %v", claimRef["apiVersion"], tt.claim.GetAPIVersion())
+
+					if diff := gcmp.Diff(wantClaimRef, claimRef); diff != "" {
+						t.Errorf("synthesizeDummyBackingXRForNewClaim() claimRef mismatch (-want +got):\n%s", diff)
 					}
 				}
 			}
@@ -2429,9 +2429,10 @@ func TestDefaultDiffProcessor_synthesizeDummyBackingXRForNewClaim(t *testing.T) 
 			if tt.wantSpecCopied {
 				coolField, found, _ := un.NestedString(result.xrForRendering.Object, "spec", "coolField")
 				if !found {
-					t.Errorf("synthesizeDummyBackingXRForNewClaim() spec.coolField not copied to result")
-				} else if coolField != "test-value" {
-					t.Errorf("spec.coolField = %v, want %v", coolField, "test-value")
+					t.Errorf("synthesizeDummyBackingXRForNewClaim() spec.coolField not found")
+				}
+				if diff := gcmp.Diff("test-value", coolField); diff != "" {
+					t.Errorf("synthesizeDummyBackingXRForNewClaim() spec.coolField mismatch (-want +got):\n%s", diff)
 				}
 			}
 
