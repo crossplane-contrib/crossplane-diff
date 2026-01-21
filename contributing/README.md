@@ -28,7 +28,8 @@ Before you begin, ensure you have the following tools installed:
 
 2. **Generate required manifests**:
    ```bash
-   earthly +go-generate --CROSSPLANE_IMAGE_TAG=main
+   earthly +generate --CROSSPLANE_IMAGE_TAG=main
+   earthly +fetch-crossplane-cluster --CROSSPLANE_IMAGE_TAG=main
    ```
 
 3. **Build the project**:
@@ -39,7 +40,7 @@ Before you begin, ensure you have the following tools installed:
 4. **Run unit and integration tests**:
    ```bash
    cd cmd/diff
-   go test ./...
+   KUBEBUILDER_ASSETS="$(setup-envtest use 1.30.3 -p path)" go test ./...
    ```
 
 ## Development Workflow
@@ -61,7 +62,7 @@ Before you begin, ensure you have the following tools installed:
 4. **Run the development checks**:
    ```bash
    # Run all pre-commit checks (linting, unit tests, etc.)
-   earthly +reviewable
+   earthly -P +reviewable
 
    # Run the full end-to-end test matrix (takes longer)
    earthly -P +e2e-matrix

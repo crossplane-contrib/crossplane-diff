@@ -2266,3 +2266,179 @@ func TestDefaultDiffProcessor_DiffSingleResource_WithObservedResources(t *testin
 		})
 	}
 }
+
+func TestDefaultDiffProcessor_synthesizeDummyBackingXRForNewClaim(t *testing.T) {
+	ctx := t.Context()
+
+	// Create test XRD as unstructured (simpler than using typed builder for this test)
+	xrdObj := &un.Unstructured{
+		Object: map[string]any{
+			"apiVersion": "apiextensions.crossplane.io/v1",
+			"kind":       "CompositeResourceDefinition",
+			"metadata": map[string]any{
+				"name": "xnopresources.example.org",
+			},
+			"spec": map[string]any{
+				"group": "example.org",
+				"names": map[string]any{
+					"kind":   "XNopResource",
+					"plural": "xnopresources",
+				},
+				"claimNames": map[string]any{
+					"kind":   "NopClaim",
+					"plural": "nopclaims",
+				},
+			},
+		},
+	}
+
+	tests := map[string]struct {
+		defClient       func() *tu.MockDefinitionClient
+		claim           *un.Unstructured
+		wantResult      bool // whether we expect a non-empty result
+		wantXRKind      string
+		wantXRName      string
+		wantClaimRef    bool
+		wantSpecCopied  bool
+		wantErr         bool
+	}{
+		"NotAClaim_ReturnsEmptyResult": {
+			defClient: func() *tu.MockDefinitionClient {
+				return tu.NewMockDefinitionClient().
+					WithIsClaimResource(func(_ context.Context, _ *un.Unstructured) bool {
+						return false
+					}).
+					Build()
+			},
+			claim: tu.NewResource("example.org/v1alpha1", "XNopResource", "test-xr").
+				WithSpecField("coolField", "test-value").
+				Build(),
+			wantResult: false,
+			wantErr:    false,
+		},
+		"ClaimWithValidXRD_SynthesizesBackingXR": {
+			defClient: func() *tu.MockDefinitionClient {
+				return tu.NewMockDefinitionClient().
+					WithIsClaimResource(func(_ context.Context, _ *un.Unstructured) bool {
+						return true
+					}).
+					WithXRDForClaim(xrdObj).
+					Build()
+			},
+			claim: tu.NewResource("example.org/v1alpha1", "NopClaim", "test-claim").
+				WithNamespace("test-namespace").
+				WithSpecField("coolField", "test-value").
+				Build(),
+			wantResult:     true,
+			wantXRKind:     "XNopResource",
+			wantXRName:     "test-claim",
+			wantClaimRef:   true,
+			wantSpecCopied: true,
+			wantErr:        false,
+		},
+		"ClaimWithXRDError_ReturnsError": {
+			defClient: func() *tu.MockDefinitionClient {
+				return tu.NewMockDefinitionClient().
+					WithIsClaimResource(func(_ context.Context, _ *un.Unstructured) bool {
+						return true
+					}).
+					WithGetXRDForClaim(func(_ context.Context, _ schema.GroupVersionKind) (*un.Unstructured, error) {
+						return nil, errors.New("XRD not found")
+					}).
+					Build()
+			},
+			claim: tu.NewResource("example.org/v1alpha1", "NopClaim", "test-claim").
+				WithNamespace("test-namespace").
+				Build(),
+			wantResult: false,
+			wantErr:    true,
+		},
+	}
+
+	for name, tt := range tests {
+		t.Run(name, func(t *testing.T) {
+			processor := &DefaultDiffProcessor{
+				defClient: tt.defClient(),
+				config: ProcessorConfig{
+					Logger: tu.TestLogger(t, false),
+				},
+			}
+
+			// Convert claim to composite.Unstructured
+			claim := cmp.New()
+			claim.SetUnstructuredContent(tt.claim.Object)
+
+			result, err := processor.synthesizeDummyBackingXRForNewClaim(ctx, claim)
+
+			// Check error expectation
+			if tt.wantErr {
+				if err == nil {
+					t.Errorf("synthesizeDummyBackingXRForNewClaim() expected error, got nil")
+				}
+				return
+			}
+			if err != nil {
+				t.Errorf("synthesizeDummyBackingXRForNewClaim() unexpected error: %v", err)
+				return
+			}
+
+			// Check if result is empty or not
+			hasResult := result.xrForRendering != nil
+			if hasResult != tt.wantResult {
+				t.Errorf("synthesizeDummyBackingXRForNewClaim() hasResult = %v, want %v", hasResult, tt.wantResult)
+				return
+			}
+
+			if !tt.wantResult {
+				return // No further checks needed for empty result
+			}
+
+			// Verify XR kind
+			if result.kind != tt.wantXRKind {
+				t.Errorf("synthesizeDummyBackingXRForNewClaim() kind = %v, want %v", result.kind, tt.wantXRKind)
+			}
+
+			// Verify XR name
+			if result.name != tt.wantXRName {
+				t.Errorf("synthesizeDummyBackingXRForNewClaim() name = %v, want %v", result.name, tt.wantXRName)
+			}
+
+			// Verify claimRef is set
+			if tt.wantClaimRef {
+				claimRef, found, _ := un.NestedMap(result.xrForRendering.Object, "spec", "claimRef")
+				if !found {
+					t.Errorf("synthesizeDummyBackingXRForNewClaim() claimRef not found in result")
+				} else {
+					// Verify claimRef fields
+					if claimRef["name"] != tt.claim.GetName() {
+						t.Errorf("claimRef.name = %v, want %v", claimRef["name"], tt.claim.GetName())
+					}
+					if claimRef["namespace"] != tt.claim.GetNamespace() {
+						t.Errorf("claimRef.namespace = %v, want %v", claimRef["namespace"], tt.claim.GetNamespace())
+					}
+					if claimRef["kind"] != tt.claim.GetKind() {
+						t.Errorf("claimRef.kind = %v, want %v", claimRef["kind"], tt.claim.GetKind())
+					}
+					if claimRef["apiVersion"] != tt.claim.GetAPIVersion() {
+						t.Errorf("claimRef.apiVersion = %v, want %v", claimRef["apiVersion"], tt.claim.GetAPIVersion())
+					}
+				}
+			}
+
+			// Verify spec fields are copied
+			if tt.wantSpecCopied {
+				coolField, found, _ := un.NestedString(result.xrForRendering.Object, "spec", "coolField")
+				if !found {
+					t.Errorf("synthesizeDummyBackingXRForNewClaim() spec.coolField not copied to result")
+				} else if coolField != "test-value" {
+					t.Errorf("spec.coolField = %v, want %v", coolField, "test-value")
+				}
+			}
+
+			// Verify UID is set
+			if result.xrForRendering.GetUID() == "" {
+				t.Errorf("synthesizeDummyBackingXRForNewClaim() UID not set on result")
+			}
+		})
+	}
+}

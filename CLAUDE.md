@@ -188,6 +188,15 @@ Key implications:
 - Test expectations must reflect this: NO label changes when modifying existing Claims
 - This behavior is consistent across Crossplane versions
 
+**New Claim Handling with spec.claimRef**
+When diffing a new Claim (one that doesn't exist in the cluster yet), compositions may reference `spec.claimRef` fields like `{{ .observed.composite.resource.spec.claimRef.name }}`. Since `claimRef` is only populated by Crossplane on the backing XR at runtime, we synthesize a dummy backing XR with:
+- The XR kind/apiVersion derived from the XRD
+- A synthesized `spec.claimRef` containing the claim's apiVersion, kind, name, and namespace
+- All spec fields from the claim copied to the XR
+- A generated UID for the dummy XR
+
+This allows compositions using claimRef to render correctly during diff operations for new claims.
+
 **Diff Calculation**
 - Compares rendered resources against cluster state via server-side dry-run
 - Detects additions, modifications, and removals
