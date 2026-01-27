@@ -19,6 +19,7 @@ package e2e
 import (
 	"bufio"
 	"bytes"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -81,9 +82,21 @@ var (
 	ansiEscapeRegex                   = regexp.MustCompile(`\x1b\[[0-9;]*m`)
 )
 
+// Exit codes returned by crossplane-diff.
+const (
+	// ExitCodeSuccess indicates no differences were detected.
+	ExitCodeSuccess = 0
+	// ExitCodeToolError indicates a tool execution error (e.g., cluster access issues).
+	ExitCodeToolError = 1
+	// ExitCodeSchemaValidation indicates a schema validation error.
+	ExitCodeSchemaValidation = 2
+	// ExitCodeDiffDetected indicates differences were found.
+	ExitCodeDiffDetected = 3
+)
+
 // runCrossplaneDiff runs the crossplane diff command with the specified subcommand on the provided resources.
-// It returns the output and any error encountered.
-func runCrossplaneDiff(t *testing.T, c *envconf.Config, binPath, subcommand string, resourcePaths ...string) (string, string, error) {
+// It returns the stdout, stderr, exit code, and any error that is not an ExitError.
+func runCrossplaneDiff(t *testing.T, c *envconf.Config, binPath, subcommand string, resourcePaths ...string) (string, string, int, error) {
 	t.Helper()
 
 	// Prepare the command to run
@@ -103,21 +116,54 @@ func runCrossplaneDiff(t *testing.T, c *envconf.Config, binPath, subcommand stri
 	// Run the command
 	err := cmd.Run()
 
-	return stdout.String(), stderr.String(), err
+	// Extract exit code from error
+	exitCode := 0
+
+	if err != nil {
+		var exitErr *exec.ExitError
+		if errors.As(err, &exitErr) {
+			exitCode = exitErr.ExitCode()
+			err = nil // Not a real error, just a non-zero exit code
+		}
+	}
+
+	return stdout.String(), stderr.String(), exitCode, err
 }
 
 // RunXRDiff runs the crossplane xr diff command on the provided resources.
-// It returns the output and any error encountered.
-func RunXRDiff(t *testing.T, c *envconf.Config, binPath string, resourcePaths ...string) (string, string, error) {
+// It returns the output, log, and any error encountered.
+// expectedExitCode specifies which exit code is expected.
+func RunXRDiff(t *testing.T, c *envconf.Config, binPath string, expectedExitCode int, resourcePaths ...string) (string, string, error) {
 	t.Helper()
-	return runCrossplaneDiff(t, c, binPath, "xr", resourcePaths...)
+
+	stdout, stderr, exitCode, err := runCrossplaneDiff(t, c, binPath, "xr", resourcePaths...)
+	if err != nil {
+		return stdout, stderr, err
+	}
+
+	if exitCode != expectedExitCode {
+		return stdout, stderr, fmt.Errorf("unexpected exit code %d, expected %d", exitCode, expectedExitCode)
+	}
+
+	return stdout, stderr, nil
 }
 
 // RunCompDiff runs the crossplane comp diff command on the provided compositions.
-// It returns the output and any error encountered.
-func RunCompDiff(t *testing.T, c *envconf.Config, binPath string, compositionPaths ...string) (string, string, error) {
+// It returns the output, log, and any error encountered.
+// expectedExitCode specifies which exit code is expected.
+func RunCompDiff(t *testing.T, c *envconf.Config, binPath string, expectedExitCode int, compositionPaths ...string) (string, string, error) {
 	t.Helper()
-	return runCrossplaneDiff(t, c, binPath, "comp", compositionPaths...)
+
+	stdout, stderr, exitCode, err := runCrossplaneDiff(t, c, binPath, "comp", compositionPaths...)
+	if err != nil {
+		return stdout, stderr, err
+	}
+
+	if exitCode != expectedExitCode {
+		return stdout, stderr, fmt.Errorf("unexpected exit code %d, expected %d", exitCode, expectedExitCode)
+	}
+
+	return stdout, stderr, nil
 }
 
 // NormalizeLine replaces dynamic parts with fixed placeholders.

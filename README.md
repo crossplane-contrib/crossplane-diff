@@ -236,6 +236,30 @@ The output follows familiar diff conventions with colorized output (unless disab
 Summary: 1 added, 1 modified, 1 removed
 ```
 
+## Exit Codes
+
+The tool returns different exit codes to indicate the result of the diff operation, making it easy to use in CI/CD pipelines and scripts:
+
+| Exit Code | Meaning |
+|-----------|---------|
+| 0 | Success - no differences detected |
+| 1 | Tool error - execution failed (e.g., cluster access issues, invalid input) |
+| 2 | Schema validation error - resources failed validation against their CRD/XRD schemas |
+| 3 | Diff detected - differences were found between input and cluster state |
+
+Exit codes are ordered by severity. When processing multiple resources, the highest severity exit code is returned:
+
+```bash
+# Example: Use exit codes in CI/CD
+crossplane-diff xr my-xr.yaml
+case $? in
+  0) echo "No changes needed" ;;
+  1) echo "Error running diff" ; exit 1 ;;
+  2) echo "Schema validation failed" ; exit 1 ;;
+  3) echo "Changes detected - review required" ;;
+esac
+```
+
 ## Guiding Principles
 
 The tool prioritizes **accuracy above all else**:

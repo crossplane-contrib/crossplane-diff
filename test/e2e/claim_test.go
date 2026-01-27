@@ -61,7 +61,7 @@ func TestDiffNewClaim(t *testing.T) {
 			Assess("CanDiffNewClaim", func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
 				t.Helper()
 
-				output, log, err := RunXRDiff(t, c, "./crossplane-diff", filepath.Join(manifests, "new-claim.yaml"))
+				output, log, err := RunXRDiff(t, c, "./crossplane-diff", ExitCodeDiffDetected, filepath.Join(manifests, "new-claim.yaml"))
 				if err != nil {
 					t.Fatalf("Error running diff command: %v\nLog output:\n%s", err, log)
 				}
@@ -112,7 +112,7 @@ func TestDiffExistingClaim(t *testing.T) {
 			Assess("CanDiffExistingClaim", func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
 				t.Helper()
 
-				output, log, err := RunXRDiff(t, c, "./crossplane-diff", filepath.Join(manifests, "modified-claim.yaml"))
+				output, log, err := RunXRDiff(t, c, "./crossplane-diff", ExitCodeDiffDetected, filepath.Join(manifests, "modified-claim.yaml"))
 				if err != nil {
 					t.Fatalf("Error running diff command: %v\nLog output:\n%s", err, log)
 				}
@@ -174,7 +174,7 @@ func TestDiffNewClaimWithNestedXRs(t *testing.T) {
 			Assess("CanDiffNewClaimWithNestedXRs", func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
 				t.Helper()
 
-				output, log, err := RunXRDiff(t, c, "./crossplane-diff", filepath.Join(manifests, "new-claim.yaml"))
+				output, log, err := RunXRDiff(t, c, "./crossplane-diff", ExitCodeDiffDetected, filepath.Join(manifests, "new-claim.yaml"))
 				if err != nil {
 					t.Fatalf("Error running diff command: %v\nLog output:\n%s", err, log)
 				}
@@ -234,7 +234,7 @@ func TestDiffExistingClaimWithNestedXRs(t *testing.T) {
 			Assess("CanDiffExistingClaimWithNestedXRs", func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
 				t.Helper()
 
-				output, log, err := RunXRDiff(t, c, "./crossplane-diff", filepath.Join(manifests, "modified-claim.yaml"))
+				output, log, err := RunXRDiff(t, c, "./crossplane-diff", ExitCodeDiffDetected, filepath.Join(manifests, "modified-claim.yaml"))
 				if err != nil {
 					t.Fatalf("Error running diff command: %v\nLog output:\n%s", err, log)
 				}

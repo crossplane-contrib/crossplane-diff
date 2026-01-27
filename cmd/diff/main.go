@@ -97,7 +97,7 @@ func main() {
 		// Binding a variable to kong context makes it available to all commands
 		// at runtime.
 		kong.BindTo(logger, (*logging.Logger)(nil)),
-		kong.BindTo(exitCode, (*ExitCode)(nil)), // Bind exit code state
+		kong.Bind(exitCode), // Bind exit code state
 		kong.BindToProvider(getRestConfig),
 		kong.ConfigureHelp(kong.HelpOptions{
 			FlagsLast:      true,
