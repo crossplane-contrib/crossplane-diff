@@ -72,10 +72,7 @@ func (c *XRCmd) initializeDependencies(ctx *kong.Context, log logging.Logger, co
 		return err
 	}
 
-	proc, err := makeDefaultXRProc(c, appCtx, log)
-	if err != nil {
-		return err
-	}
+	proc := makeDefaultXRProc(c, appCtx, log)
 
 	loader, err := makeDefaultXRLoader(c)
 	if err != nil {
@@ -88,7 +85,7 @@ func (c *XRCmd) initializeDependencies(ctx *kong.Context, log logging.Logger, co
 	return nil
 }
 
-func makeDefaultXRProc(c *XRCmd, ctx *AppContext, log logging.Logger) (dp.DiffProcessor, error) {
+func makeDefaultXRProc(c *XRCmd, ctx *AppContext, log logging.Logger) dp.DiffProcessor {
 	// Use default namespace for processor options (not actually used for XR diffs)
 	namespace := "default"
 
@@ -98,20 +95,7 @@ func makeDefaultXRProc(c *XRCmd, ctx *AppContext, log logging.Logger) (dp.DiffPr
 		dp.WithRenderMutex(&globalRenderMutex),
 	)
 
-	// Load function credentials if specified - fail if path is provided but unusable
-	if c.FunctionCredentials != "" {
-		creds, err := LoadFunctionCredentials(c.FunctionCredentials)
-		if err != nil {
-			return nil, errors.Wrapf(err, "cannot load function credentials from %q", c.FunctionCredentials)
-		}
-
-		opts = append(opts, dp.WithFunctionCredentials(creds))
-		log.Debug("Loaded function credentials from file",
-			"path", c.FunctionCredentials,
-			"count", len(creds))
-	}
-
-	return dp.NewDiffProcessor(ctx.K8sClients, ctx.XpClients, opts...), nil
+	return dp.NewDiffProcessor(ctx.K8sClients, ctx.XpClients, opts...)
 }
 
 func makeDefaultXRLoader(c *XRCmd) (ld.Loader, error) {

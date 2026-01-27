@@ -65,7 +65,6 @@ func initializeAppContext(timeout time.Duration, appCtx *AppContext, log logging
 
 // defaultProcessorOptions returns the standard default options used by both XR and composition processors.
 // This is the single source of truth for behavior defaults in the CLI layer.
-// Note: Function credentials should be loaded separately and passed via WithFunctionCredentials option.
 func defaultProcessorOptions(fields CommonCmdFields, namespace string) []dp.ProcessorOption {
 	// Default ignored paths - always filtered from diffs
 	// Preallocate with capacity for default + user-specified paths
@@ -75,13 +74,20 @@ func defaultProcessorOptions(fields CommonCmdFields, namespace string) []dp.Proc
 	// Combine default paths with user-specified ones
 	allIgnorePaths = append(allIgnorePaths, fields.IgnorePaths...)
 
-	return []dp.ProcessorOption{
+	opts := []dp.ProcessorOption{
 		dp.WithNamespace(namespace),
 		dp.WithColorize(!fields.NoColor),
 		dp.WithCompact(fields.Compact),
 		dp.WithMaxNestedDepth(fields.MaxNestedDepth),
 		dp.WithIgnorePaths(allIgnorePaths),
 	}
+
+	// Add function credentials if provided (empty path with no secrets errors in FunctionCredentials.Decode)
+	if len(fields.FunctionCredentials.Secrets) > 0 {
+		opts = append(opts, dp.WithFunctionCredentials(fields.FunctionCredentials.Secrets))
+	}
+
+	return opts
 }
 
 // LoadFunctionCredentials loads Secret resources from a YAML file or directory.

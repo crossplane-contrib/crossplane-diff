@@ -82,10 +82,7 @@ func (c *CompCmd) initializeDependencies(ctx *kong.Context, log logging.Logger, 
 		return err
 	}
 
-	proc, fnProvider, err := makeDefaultCompProc(c, appCtx, log)
-	if err != nil {
-		return err
-	}
+	proc, fnProvider := makeDefaultCompProc(c, appCtx, log)
 
 	loader, err := ld.NewCompositeLoader(c.Files)
 	if err != nil {
@@ -99,7 +96,7 @@ func (c *CompCmd) initializeDependencies(ctx *kong.Context, log logging.Logger, 
 	return nil
 }
 
-func makeDefaultCompProc(c *CompCmd, ctx *AppContext, log logging.Logger) (dp.CompDiffProcessor, dp.FunctionProvider, error) {
+func makeDefaultCompProc(c *CompCmd, ctx *AppContext, log logging.Logger) (dp.CompDiffProcessor, dp.FunctionProvider) {
 	// Use provided namespace or default to "default"
 	namespace := c.Namespace
 	if namespace == "" {
@@ -121,24 +118,11 @@ func makeDefaultCompProc(c *CompCmd, ctx *AppContext, log logging.Logger) (dp.Co
 		}),
 	)
 
-	// Load function credentials if specified - fail if path is provided but unusable
-	if c.FunctionCredentials != "" {
-		creds, err := LoadFunctionCredentials(c.FunctionCredentials)
-		if err != nil {
-			return nil, nil, errors.Wrapf(err, "cannot load function credentials from %q", c.FunctionCredentials)
-		}
-
-		opts = append(opts, dp.WithFunctionCredentials(creds))
-		log.Debug("Loaded function credentials from file",
-			"path", c.FunctionCredentials,
-			"count", len(creds))
-	}
-
 	// Create XR processor first (peer processor)
 	xrProc := dp.NewDiffProcessor(ctx.K8sClients, ctx.XpClients, opts...)
 
 	// Inject it into composition processor
-	return dp.NewCompDiffProcessor(xrProc, ctx.XpClients.Composition, opts...), fnProvider, nil
+	return dp.NewCompDiffProcessor(xrProc, ctx.XpClients.Composition, opts...), fnProvider
 }
 
 // Run executes the composition diff command.
