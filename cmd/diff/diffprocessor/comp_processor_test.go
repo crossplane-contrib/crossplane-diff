@@ -254,9 +254,9 @@ func TestDefaultCompDiffProcessor_DiffComposition(t *testing.T) {
 
 			// Create mock XR processor
 			mockXRProc := &tu.MockDiffProcessor{
-				PerformDiffFn: func(_ context.Context, stdout io.Writer, _ []*un.Unstructured, _ types.CompositionProvider) error {
+				PerformDiffFn: func(_ context.Context, stdout io.Writer, _ []*un.Unstructured, _ types.CompositionProvider) (bool, error) {
 					_, err := stdout.Write([]byte("Mock XR diff output"))
-					return err
+					return true, err
 				},
 			}
 
@@ -279,7 +279,7 @@ func TestDefaultCompDiffProcessor_DiffComposition(t *testing.T) {
 
 			var stdout bytes.Buffer
 
-			err := processor.DiffComposition(ctx, &stdout, tt.compositions, tt.namespace)
+			_, err := processor.DiffComposition(ctx, &stdout, tt.compositions, tt.namespace)
 
 			if (err != nil) != tt.wantErr {
 				t.Errorf("DiffComposition() error = %v, wantErr %v", err, tt.wantErr)

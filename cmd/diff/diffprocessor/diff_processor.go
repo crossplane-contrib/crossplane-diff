@@ -35,8 +35,9 @@ type RenderFunc func(ctx context.Context, log logging.Logger, in render.Inputs) 
 
 // DiffProcessor interface for processing resources.
 type DiffProcessor interface {
-	// PerformDiff processes resources using a composition provider function
-	PerformDiff(ctx context.Context, stdout io.Writer, resources []*un.Unstructured, compositionProvider types.CompositionProvider) error
+	// PerformDiff processes resources using a composition provider function.
+	// Returns (hasDiffs, error) where hasDiffs indicates if any differences were detected.
+	PerformDiff(ctx context.Context, stdout io.Writer, resources []*un.Unstructured, compositionProvider types.CompositionProvider) (bool, error)
 
 	// DiffSingleResource processes a single resource and returns its diffs
 	DiffSingleResource(ctx context.Context, res *un.Unstructured, compositionProvider types.CompositionProvider) (map[string]*dt.ResourceDiff, error)
@@ -148,12 +149,13 @@ func (p *DefaultDiffProcessor) initializeSchemaValidator(ctx context.Context) er
 }
 
 // PerformDiff processes resources using a composition provider function.
-func (p *DefaultDiffProcessor) PerformDiff(ctx context.Context, stdout io.Writer, resources []*un.Unstructured, compositionProvider types.CompositionProvider) error {
+// Returns (hasDiffs, error) where hasDiffs indicates if any differences were detected.
+func (p *DefaultDiffProcessor) PerformDiff(ctx context.Context, stdout io.Writer, resources []*un.Unstructured, compositionProvider types.CompositionProvider) (bool, error) {
 	p.config.Logger.Debug("Processing resources with composition provider", "count", len(resources))
 
 	if len(resources) == 0 {
 		p.config.Logger.Debug("No resources to process")
-		return nil
+		return false, nil
 	}
 
 	// Collect all diffs across all resources
@@ -190,16 +192,19 @@ func (p *DefaultDiffProcessor) PerformDiff(ctx context.Context, stdout io.Writer
 		}
 	}
 
+	hasDiffs := len(allDiffs) > 0
+
 	p.config.Logger.Debug("Processing complete",
 		"resourceCount", len(resources),
 		"totalDiffs", len(allDiffs),
+		"hasDiffs", hasDiffs,
 		"errorCount", len(errs))
 
 	if len(errs) > 0 {
-		return errors.Join(errs...)
+		return hasDiffs, errors.Join(errs...)
 	}
 
-	return nil
+	return hasDiffs, nil
 }
 
 // DiffSingleResource handles one resource at a time and returns its diffs.

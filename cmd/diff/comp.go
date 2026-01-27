@@ -126,9 +126,10 @@ func makeDefaultCompProc(c *CompCmd, ctx *AppContext, log logging.Logger) (dp.Co
 }
 
 // Run executes the composition diff command.
-func (c *CompCmd) Run(k *kong.Context, log logging.Logger, appCtx *AppContext, proc dp.CompDiffProcessor, loader ld.Loader, fnProvider dp.FunctionProvider) error {
+func (c *CompCmd) Run(k *kong.Context, log logging.Logger, appCtx *AppContext, proc dp.CompDiffProcessor, loader ld.Loader, fnProvider dp.FunctionProvider, exitCode *ExitCode) error {
 	ctx, cancel, err := initializeAppContext(c.Timeout, appCtx, log)
 	if err != nil {
+		exitCode.Code = dp.ExitCodeToolError
 		return err
 	}
 	defer cancel()
@@ -150,15 +151,22 @@ func (c *CompCmd) Run(k *kong.Context, log logging.Logger, appCtx *AppContext, p
 
 	err = proc.Initialize(ctx)
 	if err != nil {
+		exitCode.Code = dp.ExitCodeToolError
 		return errors.Wrap(err, "cannot initialize composition diff processor")
 	}
 
 	compositions, err := loader.Load()
 	if err != nil {
+		exitCode.Code = dp.ExitCodeToolError
 		return errors.Wrap(err, "cannot load compositions")
 	}
 
-	if err := proc.DiffComposition(ctx, k.Stdout, compositions, c.Namespace); err != nil {
+	hasDiffs, err := proc.DiffComposition(ctx, k.Stdout, compositions, c.Namespace)
+
+	// Determine exit code based on result
+	exitCode.Code = dp.DetermineExitCode(err, hasDiffs)
+
+	if err != nil {
 		return errors.Wrap(err, "unable to process composition diff")
 	}
 

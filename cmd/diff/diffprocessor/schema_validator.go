@@ -112,7 +112,7 @@ func (v *DefaultSchemaValidator) ValidateResources(ctx context.Context, xr *un.U
 
 	err = validate.SchemaValidation(ctx, resources, v.schemaClient.GetAllCRDs(), true, true, loggerWriter)
 	if err != nil {
-		return errors.Wrap(err, "schema validation failed")
+		return NewSchemaValidationError("", "schema validation failed", err)
 	}
 
 	// Strip Crossplane-managed fields from resources after validation
@@ -129,8 +129,8 @@ func (v *DefaultSchemaValidator) ValidateResources(ctx context.Context, xr *un.U
 	for _, resource := range resources {
 		err := v.ValidateScopeConstraints(ctx, resource, expectedNamespace, isClaimRoot)
 		if err != nil {
-			return errors.Wrapf(err, "resource scope validation failed for %s/%s",
-				resource.GetKind(), resource.GetName())
+			resourceID := fmt.Sprintf("%s/%s", resource.GetKind(), resource.GetName())
+			return NewSchemaValidationError(resourceID, "resource scope validation failed", err)
 		}
 	}
 

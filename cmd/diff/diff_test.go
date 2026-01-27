@@ -264,6 +264,7 @@ metadata:
 				&tc.args.appContext,
 				tc.args.processor,
 				tc.args.loader,
+				&ExitCode{},
 			)
 
 			if (err != nil) != tc.wantErr {
@@ -425,7 +426,7 @@ func TestDiffCommand(t *testing.T) {
 			setupProcessor: func() dp.DiffProcessor {
 				return tu.NewMockDiffProcessor().
 					WithSuccessfulInitialize().
-					WithPerformDiff(func(_ context.Context, w io.Writer, _ []*un.Unstructured, _ types.CompositionProvider) error {
+					WithPerformDiff(func(_ context.Context, w io.Writer, _ []*un.Unstructured, _ types.CompositionProvider) (bool, error) {
 						// Generate a mock diff for our test
 						_, _ = fmt.Fprintf(w, `~ ComposedResource/test-xr-composed-resource
 {
@@ -436,7 +437,7 @@ func TestDiffCommand(t *testing.T) {
   }
 }`)
 
-						return nil
+						return true, nil
 					}).
 					Build()
 			},
@@ -516,8 +517,8 @@ spec:
 			setupProcessor: func() dp.DiffProcessor {
 				return tu.NewMockDiffProcessor().
 					WithSuccessfulInitialize().
-					WithPerformDiff(func(_ context.Context, _ io.Writer, _ []*un.Unstructured, _ types.CompositionProvider) error {
-						return errors.New("processing error")
+					WithPerformDiff(func(_ context.Context, _ io.Writer, _ []*un.Unstructured, _ types.CompositionProvider) (bool, error) {
+						return false, errors.New("processing error")
 					}).
 					Build()
 			},
@@ -623,9 +624,9 @@ spec:
 			setupProcessor: func() dp.DiffProcessor {
 				return tu.NewMockDiffProcessor().
 					WithSuccessfulInitialize().
-					WithPerformDiff(func(_ context.Context, _ io.Writer, _ []*un.Unstructured, _ types.CompositionProvider) error {
+					WithPerformDiff(func(_ context.Context, _ io.Writer, _ []*un.Unstructured, _ types.CompositionProvider) (bool, error) {
 						// For matching resources, we don't produce any output
-						return nil
+						return false, nil
 					}).
 					Build()
 			},
@@ -726,7 +727,7 @@ spec:
 			setupProcessor: func() dp.DiffProcessor {
 				return tu.NewMockDiffProcessor().
 					WithSuccessfulInitialize().
-					WithPerformDiff(func(_ context.Context, w io.Writer, _ []*un.Unstructured, _ types.CompositionProvider) error {
+					WithPerformDiff(func(_ context.Context, w io.Writer, _ []*un.Unstructured, _ types.CompositionProvider) (bool, error) {
 						// Generate output for a new resource
 						_, _ = fmt.Fprintf(w, `+++ ComposedResource/test-xr-composed-resource
 {
@@ -737,7 +738,7 @@ spec:
   }
 }`)
 
-						return nil
+						return true, nil
 					}).
 					Build()
 			},
@@ -935,7 +936,7 @@ spec:
 			}
 
 			// Execute the test
-			err = cmd.Run(kongCtx, logger, appCtx, mockProcessor, mockLoader)
+			err = cmd.Run(kongCtx, logger, appCtx, mockProcessor, mockLoader, &ExitCode{})
 
 			// Check for expected errors
 			if tt.expectError {

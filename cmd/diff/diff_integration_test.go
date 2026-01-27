@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/alecthomas/kong"
+	dp "github.com/crossplane-contrib/crossplane-diff/cmd/diff/diffprocessor"
 	tu "github.com/crossplane-contrib/crossplane-diff/cmd/diff/testutils"
 	extv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -47,6 +48,7 @@ type IntegrationTestCase struct {
 	expectedOutput             string
 	expectedError              bool
 	expectedErrorContains      string
+	expectedExitCode           int // Expected exit code (0=success, 1=tool error, 2=schema validation, 3=diff detected)
 	noColor                    bool
 	namespace                  string        // For composition tests (optional)
 	xrdAPIVersion              XrdAPIVersion // For XR tests (optional)
@@ -210,10 +212,12 @@ func runIntegrationTest(t *testing.T, testType DiffTestType, scheme *runtime.Sch
 	}
 
 	logger := tu.TestLogger(t, true)
+	exitCode := &ExitCode{}
 	// Create a Kong context with stdout
 	parser, err := kong.New(cmd,
 		kong.Writers(&stdout, &stdout),
 		kong.Bind(cfg),
+		kong.Bind(exitCode),
 		kong.BindTo(logger, (*logging.Logger)(nil)),
 	)
 	if err != nil {
@@ -226,6 +230,11 @@ func runIntegrationTest(t *testing.T, testType DiffTestType, scheme *runtime.Sch
 	}
 
 	err = kongCtx.Run(cfg)
+
+	// Check exit code matches expected
+	if exitCode.Code != tt.expectedExitCode {
+		t.Errorf("expected exit code %d, got %d", tt.expectedExitCode, exitCode.Code)
+	}
 
 	if tt.expectedError && err == nil {
 		t.Fatal("expected error but got none")
@@ -319,7 +328,8 @@ func TestDiffIntegration(t *testing.T) {
 ---
 `,
 			}, ""),
-			expectedError: false,
+			expectedError:    false,
+			expectedExitCode: dp.ExitCodeDiffDetected,
 		},
 		"AutomaticNamespacePropagation": {
 			reason:     "Validates automatic namespace propagation for namespaced managed resources",
@@ -357,7 +367,8 @@ func TestDiffIntegration(t *testing.T) {
 ---
 `,
 			}, ""),
-			expectedError: false,
+			expectedError:    false,
+			expectedExitCode: dp.ExitCodeDiffDetected,
 		},
 		"ModifiedResourceDiff": {
 			reason: "Shows color diff for modified resources",
@@ -402,7 +413,8 @@ func TestDiffIntegration(t *testing.T) {
 ---
 
 Summary: 2 modified`,
-			expectedError: false,
+			expectedError:    false,
+			expectedExitCode: dp.ExitCodeDiffDetected,
 		},
 		"IgnorePathsArgoCD": {
 			reason: "Ignores ArgoCD annotations and labels when --ignore-paths is specified",
@@ -462,7 +474,8 @@ Summary: 2 modified`,
 ---
 
 Summary: 1 added, 1 modified`,
-			expectedError: false,
+			expectedError:    false,
+			expectedExitCode: dp.ExitCodeDiffDetected,
 		},
 		"EnvironmentConfigIncorporation": {
 			reason: "Validates EnvironmentConfig (v1beta1) incorporation in diff",
@@ -509,8 +522,9 @@ Summary: 1 added, 1 modified`,
 
 ---
 `,
-			expectedError: false,
-			noColor:       true,
+			expectedError:    false,
+			expectedExitCode: dp.ExitCodeDiffDetected,
+			noColor:          true,
 		},
 		"ExternalResourceDependencies": {
 			reason: "Validates diff with external resource dependencies via fn-external-resources",
@@ -560,8 +574,9 @@ Summary: 1 added, 1 modified`,
 
 ---
 `,
-			expectedError: false,
-			noColor:       true,
+			expectedError:    false,
+			expectedExitCode: dp.ExitCodeDiffDetected,
+			noColor:          true,
 		},
 		"TemplatedExtraResources": {
 			reason: "Validates diff with templated ExtraResources embedded in go-templating function",
@@ -608,8 +623,9 @@ Summary: 1 added, 1 modified`,
 
 ---
 `,
-			expectedError: false,
-			noColor:       true,
+			expectedError:    false,
+			expectedExitCode: dp.ExitCodeDiffDetected,
+			noColor:          true,
 		},
 		"CrossNamespaceResourceDependencies": {
 			reason: "Validates cross-namespace resource dependencies via fn-external-resources",
@@ -655,8 +671,9 @@ Summary: 1 added, 1 modified`,
 
 ---
 `,
-			expectedError: false,
-			noColor:       true,
+			expectedError:    false,
+			expectedExitCode: dp.ExitCodeDiffDetected,
+			noColor:          true,
 		},
 		"ResourceRemovalHierarchyV1ClusterScoped": {
 			reason:        "Validates resource removal detection with hierarchy using v1 style resourceRefs and cluster scoped downstreams",
@@ -742,8 +759,9 @@ Summary: 1 added, 1 modified`,
 ---
 
 Summary: 2 modified, 2 removed`,
-			expectedError: false,
-			noColor:       true,
+			expectedError:    false,
+			expectedExitCode: dp.ExitCodeDiffDetected,
+			noColor:          true,
 		},
 		"ResourceRemovalHierarchyV2Namespaced": {
 			reason: "Validates resource removal detection with hierarchy using v2 style resourceRefs and namespaced downstreams",
@@ -831,8 +849,9 @@ Summary: 2 modified, 2 removed`,
 ---
 
 Summary: 2 modified, 2 removed`,
-			expectedError: false,
-			noColor:       true,
+			expectedError:    false,
+			expectedExitCode: dp.ExitCodeDiffDetected,
+			noColor:          true,
 		},
 		"ResourceRemovalHierarchyV2ClusterScoped": {
 			reason: "Validates resource removal detection with hierarchy using v2 style resourceRefs and cluster scoped downstreams",
@@ -916,8 +935,9 @@ Summary: 2 modified, 2 removed`,
 ---
 
 Summary: 2 modified, 2 removed`,
-			expectedError: false,
-			noColor:       true,
+			expectedError:    false,
+			expectedExitCode: dp.ExitCodeDiffDetected,
+			noColor:          true,
 		},
 		"ResourceWithGenerateName": {
 			reason: "Validates handling of resources with generateName",
@@ -968,8 +988,9 @@ Summary: 2 modified, 2 removed`,
 
 ---
 `,
-			expectedError: false,
-			noColor:       true,
+			expectedError:    false,
+			expectedExitCode: dp.ExitCodeDiffDetected,
+			noColor:          true,
 		},
 		"NewXRWithGenerateName": {
 			reason: "Shows diff for new XR with generateName",
@@ -1007,8 +1028,9 @@ Summary: 2 modified, 2 removed`,
 
 ---
 `,
-			expectedError: false,
-			noColor:       true,
+			expectedError:    false,
+			expectedExitCode: dp.ExitCodeDiffDetected,
+			noColor:          true,
 		},
 		"MultipleXRs": {
 			reason: "Validates diff for multiple XRs",
@@ -1082,8 +1104,9 @@ Summary: 2 modified, 2 removed`,
 
 Summary: 2 added, 2 modified
 `,
-			expectedError: false,
-			noColor:       true,
+			expectedError:    false,
+			expectedExitCode: dp.ExitCodeDiffDetected,
+			noColor:          true,
 		},
 		"SelectCompositionByDirectReference": {
 			reason: "Validates composition selection by direct reference",
@@ -1127,8 +1150,9 @@ Summary: 2 added, 2 modified
 +     compositionRef:
 +       name: production-composition
 `,
-			expectedError: false,
-			noColor:       true,
+			expectedError:    false,
+			expectedExitCode: dp.ExitCodeDiffDetected,
+			noColor:          true,
 		},
 		"SelectCompositionByLabelSelector": {
 			reason: "Validates composition selection by label selector",
@@ -1175,8 +1199,9 @@ Summary: 2 added, 2 modified
 +         provider: aws
 
 `,
-			expectedError: false,
-			noColor:       true,
+			expectedError:    false,
+			expectedExitCode: dp.ExitCodeDiffDetected,
+			noColor:          true,
 		},
 		"AmbiguousCompositionSelection": {
 			reason: "Validates error on ambiguous composition selection",
@@ -1192,7 +1217,23 @@ Summary: 2 added, 2 modified
 				"testdata/diff/xr-with-ambiguous-selector.yaml",
 			},
 			expectedError:         true,
+			expectedExitCode:      dp.ExitCodeToolError,
 			expectedErrorContains: "ambiguous composition selection: multiple compositions match",
+			noColor:               true,
+		},
+		"SchemaValidationError": {
+			reason: "Validates exit code 2 for schema validation errors",
+			setupFiles: []string{
+				"testdata/diff/resources/xrd.yaml",
+				"testdata/diff/resources/composition.yaml",
+				"testdata/diff/resources/functions.yaml",
+			},
+			inputFiles: []string{
+				"testdata/diff/invalid-schema-xr.yaml",
+			},
+			expectedError:         true,
+			expectedExitCode:      dp.ExitCodeSchemaValidation,
+			expectedErrorContains: "schema validation",
 			noColor:               true,
 		},
 		"NewClaimShowsDiff": {
@@ -1237,8 +1278,9 @@ Summary: 2 added, 2 modified
 ---
 
 Summary: 2 added`,
-			expectedError: false,
-			noColor:       true,
+			expectedError:    false,
+			expectedExitCode: dp.ExitCodeDiffDetected,
+			noColor:          true,
 		},
 		"NewClaimWithClaimRefComposition": {
 			reason: "Shows diff for new claim when composition uses spec.claimRef - claimRef is synthesized for new claims",
@@ -1281,8 +1323,9 @@ Summary: 2 added`,
 ---
 
 Summary: 2 added`,
-			expectedError: false,
-			noColor:       true,
+			expectedError:    false,
+			expectedExitCode: dp.ExitCodeDiffDetected,
+			noColor:          true,
 		},
 		"ModifiedClaimShowsDiff": {
 			reason: "Shows diff for modified claim",
@@ -1334,8 +1377,9 @@ Summary: 2 added`,
 ---
 
 Summary: 2 modified`,
-			expectedError: false,
-			noColor:       true,
+			expectedError:    false,
+			expectedExitCode: dp.ExitCodeDiffDetected,
+			noColor:          true,
 		},
 		"XRDDefaultsAppliedBeforeRendering": {
 			reason:     "Validates that XRD defaults are applied to XR before rendering",
@@ -1366,8 +1410,9 @@ Summary: 2 modified`,
 
 Summary: 1 added`,
 			}, ""),
-			expectedError: false,
-			noColor:       true,
+			expectedError:    false,
+			expectedExitCode: dp.ExitCodeDiffDetected,
+			noColor:          true,
 		},
 		"XRDDefaultsNoOverride": {
 			reason:     "Validates that XRD defaults do not override user-specified values",
@@ -1399,8 +1444,9 @@ Summary: 1 added`,
 
 Summary: 1 added`,
 			}, ""),
-			expectedError: false,
-			noColor:       true,
+			expectedError:    false,
+			expectedExitCode: dp.ExitCodeDiffDetected,
+			noColor:          true,
 		},
 		"ConcurrentRenderingMultipleXRs": {
 			reason: "Validates concurrent rendering with multiple functions and XRs from directory",
@@ -1419,9 +1465,10 @@ Summary: 1 added`,
 			// Each XR should produce 3 base resources + 2 additional resources = 5 resources per XR
 			// Plus the XR itself = 6 additions per XR
 			// Total: 5 XRs * 6 additions = 30 additions
-			expectedOutput: "Summary: 30 added",
-			expectedError:  false,
-			noColor:        true,
+			expectedOutput:   "Summary: 30 added",
+			expectedError:    false,
+			expectedExitCode: dp.ExitCodeDiffDetected,
+			noColor:          true,
 		},
 		"NewNestedXRCreatesChildren": {
 			reason: "Validates that new nested XR creates child XR and downstream resources",
@@ -1479,8 +1526,9 @@ Summary: 1 added`,
 ---
 
 Summary: 3 added`,
-			expectedError: false,
-			noColor:       true,
+			expectedError:    false,
+			expectedExitCode: dp.ExitCodeDiffDetected,
+			noColor:          true,
 		},
 		"ModifiedNestedXRPropagatesChanges": {
 			reason: "Validates that modified nested XR propagates changes through child XR to downstream resources",
@@ -1550,8 +1598,9 @@ Summary: 3 added`,
 ---
 
 Summary: 3 modified`,
-			expectedError: false,
-			noColor:       true,
+			expectedError:    false,
+			expectedExitCode: dp.ExitCodeDiffDetected,
+			noColor:          true,
 		},
 		// Composition Revision tests for v2 XRDs
 		"V2ManualPolicyPinnedRevision": {
@@ -1602,8 +1651,9 @@ Summary: 3 modified`,
 
 ---
 `,
-			expectedError: false,
-			noColor:       true,
+			expectedError:    false,
+			expectedExitCode: dp.ExitCodeDiffDetected,
+			noColor:          true,
 		},
 		"V2AutomaticPolicyLatestRevision": {
 			reason: "Validates v2 XR with Automatic update policy uses latest revision",
@@ -1653,8 +1703,9 @@ Summary: 3 modified`,
 
 ---
 `,
-			expectedError: false,
-			noColor:       true,
+			expectedError:    false,
+			expectedExitCode: dp.ExitCodeDiffDetected,
+			noColor:          true,
 		},
 		"V2ManualRevisionUpgradeDiff": {
 			reason: "Validates v2 XR changing revision in Manual mode shows upgrade diff",
@@ -1705,8 +1756,9 @@ Summary: 3 modified`,
 
 ---
 `,
-			expectedError: false,
-			noColor:       true,
+			expectedError:    false,
+			expectedExitCode: dp.ExitCodeDiffDetected,
+			noColor:          true,
 		},
 		"CompositionRevisionUpgradesResourceAPIVersion": {
 			// NOTE: This test validates that resources are correctly matched across API version changes,
@@ -1764,8 +1816,9 @@ Summary: 3 modified`,
 
 ---
 `,
-			expectedError: false,
-			noColor:       true,
+			expectedError:    false,
+			expectedExitCode: dp.ExitCodeDiffDetected,
+			noColor:          true,
 		},
 		"V2SwitchManualToAutomatic": {
 			reason: "Validates v2 XR switching from Manual to Automatic mode uses latest revision",
@@ -1816,8 +1869,9 @@ Summary: 3 modified`,
 
 ---
 `,
-			expectedError: false,
-			noColor:       true,
+			expectedError:    false,
+			expectedExitCode: dp.ExitCodeDiffDetected,
+			noColor:          true,
 		},
 		"V2NetNewManualNoRevRef": {
 			reason: "Validates v2 net new XR with Manual policy but no revision ref uses latest revision",
@@ -1861,8 +1915,9 @@ Summary: 3 modified`,
 ---
 
 Summary: 2 added`,
-			expectedError: false,
-			noColor:       true,
+			expectedError:    false,
+			expectedExitCode: dp.ExitCodeDiffDetected,
+			noColor:          true,
 		},
 		// Composition Revision tests for v1 XRDs (Crossplane 1.20 compatibility)
 		"V1ManualRevisionUpgradeDiff": {
@@ -1916,8 +1971,9 @@ Summary: 2 added`,
 
 ---
 `,
-			expectedError: false,
-			noColor:       true,
+			expectedError:    false,
+			expectedExitCode: dp.ExitCodeDiffDetected,
+			noColor:          true,
 		},
 		"ModifiedClaimWithNestedXRsShowsDiff": {
 			reason: "Validates that modified Claims with nested XRs show proper diff (3 modified resources)",
@@ -2021,9 +2077,10 @@ Summary: 2 added`,
 ---
 
 Summary: 3 modified`,
-			xrdAPIVersion: V1, // Use V1 style resourceRefs since XRDs have claims
-			expectedError: false,
-			noColor:       true,
+			xrdAPIVersion:    V1, // Use V1 style resourceRefs since XRDs have claims
+			expectedError:    false,
+			expectedExitCode: dp.ExitCodeDiffDetected,
+			noColor:          true,
 		},
 	}
 
@@ -2153,8 +2210,9 @@ Summary: 2 resources with changes
 ---
 
 Summary: 2 modified`,
-			expectedError: false,
-			noColor:       true,
+			expectedError:    false,
+			expectedExitCode: dp.ExitCodeDiffDetected,
+			noColor:          true,
 		},
 		"CompositionDiffIgnorePaths": {
 			reason: "Validates that ArgoCD annotations are ignored in composition diffs",
@@ -2285,8 +2343,9 @@ Summary: 1 resource with changes
 ---
 
 Summary: 1 modified`,
-			expectedError: false,
-			noColor:       true,
+			expectedError:    false,
+			expectedExitCode: dp.ExitCodeDiffDetected,
+			noColor:          true,
 		},
 		"MultipleCompositionDiffImpact": {
 			reason: "Validates multiple composition diff shows impact on existing XRs",
@@ -2409,8 +2468,9 @@ Summary: 2 modified
 No changes detected in composition xnopresources-v2.diff.example.org
 
 No XRs found using composition xnopresources-v2.diff.example.org`,
-			expectedError: false,
-			noColor:       true,
+			expectedError:    false,
+			expectedExitCode: dp.ExitCodeDiffDetected,
+			noColor:          true,
 		},
 		"CompositionDiffFiltersManualXRs": {
 			reason: "Validates composition diff filters Manual policy XRs by default",
@@ -2504,8 +2564,9 @@ Summary: 1 resource with changes
 ---
 
 Summary: 1 modified`,
-			expectedError: false,
-			noColor:       true,
+			expectedError:    false,
+			expectedExitCode: dp.ExitCodeDiffDetected,
+			noColor:          true,
 		},
 		"CompositionUpgradesResourceAPIVersion": {
 			// NOTE: This test validates that resources are correctly matched across API version changes,
@@ -2598,8 +2659,9 @@ Summary: 1 resource with changes
 ---
 
 Summary: 1 modified`,
-			expectedError: false,
-			noColor:       true,
+			expectedError:    false,
+			expectedExitCode: dp.ExitCodeDiffDetected,
+			noColor:          true,
 		},
 		"NetNewCompositionNoImpact": {
 			reason: "Validates net-new composition with no downstream impact",
@@ -2662,8 +2724,9 @@ Summary: 1 modified`,
 Summary: 1 added
 
 No XRs found using composition xnewresources.diff.example.org`,
-			expectedError: false,
-			noColor:       true,
+			expectedError:    false,
+			expectedExitCode: dp.ExitCodeDiffDetected,
+			noColor:          true,
 		},
 		"CompositionChangeWithUnchangedDownstreamResources": {
 			reason: "Validates status indicators for unchanged downstream resources",
@@ -2735,8 +2798,9 @@ Summary: 2 resources unchanged
 === Impact Analysis ===
 
 All composite resources are up-to-date. No downstream resource changes detected.`,
-			expectedError: false,
-			noColor:       true,
+			expectedError:    false,
+			expectedExitCode: dp.ExitCodeDiffDetected,
+			noColor:          true,
 		},
 		"CompositionChangeWithMixedStatusAndColors": {
 			reason: "Validates status indicators with colorization for mixed changed/unchanged XRs",
@@ -2890,8 +2954,9 @@ Summary: 2 resources with changes, 1 resource unchanged
 Summary: 2 modified
 `,
 			}, ""),
-			expectedError: false,
-			noColor:       false,
+			expectedError:    false,
+			expectedExitCode: dp.ExitCodeDiffDetected,
+			noColor:          false,
 		},
 		"CompositionChangeImpactsClaims": {
 			reason: "Validates composition change impacts existing Claims (issue #120)",
@@ -3008,8 +3073,9 @@ Summary: 2 resources with changes
 ---
 
 Summary: 2 modified`,
-			expectedError: false,
-			noColor:       true,
+			expectedError:    false,
+			expectedExitCode: dp.ExitCodeDiffDetected,
+			noColor:          true,
 		},
 		"SSAFieldRemovalDetection": {
 			reason: "Validates that field removals are correctly detected when resources are created via Server-Side Apply with Crossplane's field manager (issue #121)",
@@ -3100,8 +3166,9 @@ Summary: 1 resource with changes
 ---
 
 Summary: 1 modified`,
-			expectedError: false,
-			noColor:       true,
+			expectedError:    false,
+			expectedExitCode: dp.ExitCodeDiffDetected,
+			noColor:          true,
 		},
 	}
 
