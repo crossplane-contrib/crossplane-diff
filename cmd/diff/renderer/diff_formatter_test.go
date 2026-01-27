@@ -125,16 +125,16 @@ func TestGenerateDiffWithOptions(t *testing.T) {
 			}
 
 			// Check the basic properties
-			if diff.Gvk != tt.wantDiff.Gvk {
-				t.Errorf("Gvk = %v, want %v", diff.Gvk.String(), tt.wantDiff.Gvk.String())
+			if diffStr := cmp.Diff(tt.wantDiff.Gvk, diff.Gvk); diffStr != "" {
+				t.Errorf("Gvk mismatch (-want +got):\n%s", diffStr)
 			}
 
-			if diff.ResourceName != tt.wantDiff.ResourceName {
-				t.Errorf("ResourceName = %v, want %v", diff.ResourceName, tt.wantDiff.ResourceName)
+			if diffStr := cmp.Diff(tt.wantDiff.ResourceName, diff.ResourceName); diffStr != "" {
+				t.Errorf("ResourceName mismatch (-want +got):\n%s", diffStr)
 			}
 
-			if diff.DiffType != tt.wantDiff.DiffType {
-				t.Errorf("DiffType = %v, want %v", diff.DiffType, tt.wantDiff.DiffType)
+			if diffStr := cmp.Diff(tt.wantDiff.DiffType, diff.DiffType); diffStr != "" {
+				t.Errorf("DiffType mismatch (-want +got):\n%s", diffStr)
 			}
 
 			// Check for line diffs - should be non-empty for changed resources
@@ -143,12 +143,12 @@ func TestGenerateDiffWithOptions(t *testing.T) {
 			}
 
 			// Check Current and Desired references
-			if diff.Current != tt.wantDiff.Current && !cmp.Equal(diff.Current, tt.wantDiff.Current) {
-				t.Errorf("Current resource doesn't match expected")
+			if diffStr := cmp.Diff(tt.wantDiff.Current, diff.Current); diffStr != "" {
+				t.Errorf("Current resource mismatch (-want +got):\n%s", diffStr)
 			}
 
-			if diff.Desired != tt.wantDiff.Desired && !cmp.Equal(diff.Desired, tt.wantDiff.Desired) {
-				t.Errorf("Desired resource doesn't match expected")
+			if diffStr := cmp.Diff(tt.wantDiff.Desired, diff.Desired); diffStr != "" {
+				t.Errorf("Desired resource mismatch (-want +got):\n%s", diffStr)
 			}
 		})
 	}
