@@ -6,6 +6,7 @@ import (
 	xp "github.com/crossplane-contrib/crossplane-diff/cmd/diff/client/crossplane"
 	k8 "github.com/crossplane-contrib/crossplane-diff/cmd/diff/client/kubernetes"
 	"github.com/crossplane-contrib/crossplane-diff/cmd/diff/renderer"
+	gcmp "github.com/google/go-cmp/cmp"
 )
 
 func TestNewDiffProcessor(t *testing.T) {
@@ -88,12 +89,12 @@ func TestDiffOptions(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			got := tt.config.GetDiffOptions()
 
-			if got.UseColors != tt.expected.UseColors {
-				t.Errorf("GetDiffOptions().UseColors = %v, want %v", got.UseColors, tt.expected.UseColors)
+			if diff := gcmp.Diff(tt.expected.UseColors, got.UseColors); diff != "" {
+				t.Errorf("GetDiffOptions().UseColors mismatch (-want +got):\n%s", diff)
 			}
 
-			if got.Compact != tt.expected.Compact {
-				t.Errorf("GetDiffOptions().Compact = %v, want %v", got.Compact, tt.expected.Compact)
+			if diff := gcmp.Diff(tt.expected.Compact, got.Compact); diff != "" {
+				t.Errorf("GetDiffOptions().Compact mismatch (-want +got):\n%s", diff)
 			}
 		})
 	}
@@ -146,18 +147,18 @@ func TestWithOptions(t *testing.T) {
 			}
 
 			// Check namespace
-			if config.Namespace != tt.expected.Namespace {
-				t.Errorf("Namespace = %v, want %v", config.Namespace, tt.expected.Namespace)
+			if diff := gcmp.Diff(tt.expected.Namespace, config.Namespace); diff != "" {
+				t.Errorf("Namespace mismatch (-want +got):\n%s", diff)
 			}
 
 			// Check colorize
-			if config.Colorize != tt.expected.Colorize {
-				t.Errorf("Colorize = %v, want %v", config.Colorize, tt.expected.Colorize)
+			if diff := gcmp.Diff(tt.expected.Colorize, config.Colorize); diff != "" {
+				t.Errorf("Colorize mismatch (-want +got):\n%s", diff)
 			}
 
 			// Check compact
-			if config.Compact != tt.expected.Compact {
-				t.Errorf("Compact = %v, want %v", config.Compact, tt.expected.Compact)
+			if diff := gcmp.Diff(tt.expected.Compact, config.Compact); diff != "" {
+				t.Errorf("Compact mismatch (-want +got):\n%s", diff)
 			}
 		})
 	}
