@@ -16,6 +16,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	k8stypes "k8s.io/apimachinery/pkg/types"
 
+	xpv1 "github.com/crossplane/crossplane-runtime/v2/apis/common/v1"
 	"github.com/crossplane/crossplane-runtime/v2/pkg/errors"
 	cpd "github.com/crossplane/crossplane-runtime/v2/pkg/resource/unstructured/composed"
 	cmp "github.com/crossplane/crossplane-runtime/v2/pkg/resource/unstructured/composite"
@@ -1804,8 +1805,25 @@ func (b *CompositionBuilder) WithPipelineMode() *CompositionBuilder {
 	return b
 }
 
+// PipelineStepOption is a functional option for configuring a pipeline step.
+type PipelineStepOption func(*xpextv1.PipelineStep)
+
+// WithCredentials adds credentials to a pipeline step.
+func WithCredentials(name, namespace, secretName string) PipelineStepOption {
+	return func(step *xpextv1.PipelineStep) {
+		step.Credentials = append(step.Credentials, xpextv1.FunctionCredentials{
+			Name:   name,
+			Source: xpextv1.FunctionCredentialsSourceSecret,
+			SecretRef: &xpv1.SecretReference{
+				Namespace: namespace,
+				Name:      secretName,
+			},
+		})
+	}
+}
+
 // WithPipelineStep adds a pipeline step to the composition.
-func (b *CompositionBuilder) WithPipelineStep(step, functionName string, input map[string]any) *CompositionBuilder {
+func (b *CompositionBuilder) WithPipelineStep(step, functionName string, input map[string]any, opts ...PipelineStepOption) *CompositionBuilder {
 	var rawInput *runtime.RawExtension
 
 	if input != nil {
@@ -1818,11 +1836,17 @@ func (b *CompositionBuilder) WithPipelineStep(step, functionName string, input m
 		}
 	}
 
-	b.composition.Spec.Pipeline = append(b.composition.Spec.Pipeline, xpextv1.PipelineStep{
+	pipelineStep := xpextv1.PipelineStep{
 		Step:        step,
 		FunctionRef: xpextv1.FunctionReference{Name: functionName},
 		Input:       rawInput,
-	})
+	}
+
+	for _, opt := range opts {
+		opt(&pipelineStep)
+	}
+
+	b.composition.Spec.Pipeline = append(b.composition.Spec.Pipeline, pipelineStep)
 
 	return b
 }

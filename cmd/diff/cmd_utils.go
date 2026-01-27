@@ -65,7 +65,8 @@ func initializeAppContext(timeout time.Duration, appCtx *AppContext, log logging
 
 // defaultProcessorOptions returns the standard default options used by both XR and composition processors.
 // This is the single source of truth for behavior defaults in the CLI layer.
-func defaultProcessorOptions(fields CommonCmdFields, namespace string, logger logging.Logger) []dp.ProcessorOption {
+// Note: Function credentials should be loaded separately and passed via WithFunctionCredentials option.
+func defaultProcessorOptions(fields CommonCmdFields, namespace string) []dp.ProcessorOption {
 	// Default ignored paths - always filtered from diffs
 	// Preallocate with capacity for default + user-specified paths
 	allIgnorePaths := make([]string, 0, 1+len(fields.IgnorePaths))
@@ -74,37 +75,19 @@ func defaultProcessorOptions(fields CommonCmdFields, namespace string, logger lo
 	// Combine default paths with user-specified ones
 	allIgnorePaths = append(allIgnorePaths, fields.IgnorePaths...)
 
-	opts := []dp.ProcessorOption{
+	return []dp.ProcessorOption{
 		dp.WithNamespace(namespace),
 		dp.WithColorize(!fields.NoColor),
 		dp.WithCompact(fields.Compact),
 		dp.WithMaxNestedDepth(fields.MaxNestedDepth),
 		dp.WithIgnorePaths(allIgnorePaths),
 	}
-
-	// Load function credentials from file/directory if specified
-	if fields.FunctionCredentials != "" {
-		creds, err := loadFunctionCredentials(fields.FunctionCredentials)
-		if err != nil {
-			// Log warning but don't fail - auto-fetch from cluster may still work
-			logger.Info("Warning: could not load function credentials from file",
-				"path", fields.FunctionCredentials,
-				"error", err)
-		} else if len(creds) > 0 {
-			opts = append(opts, dp.WithFunctionCredentials(creds))
-			logger.Debug("Loaded function credentials from file",
-				"path", fields.FunctionCredentials,
-				"count", len(creds))
-		}
-	}
-
-	return opts
 }
 
-// loadFunctionCredentials loads Secret resources from a YAML file or directory.
+// LoadFunctionCredentials loads Secret resources from a YAML file or directory.
 // The function supports both single files and directories containing YAML files.
 // Only resources of kind "Secret" are returned; other resources are silently skipped.
-func loadFunctionCredentials(path string) ([]corev1.Secret, error) {
+func LoadFunctionCredentials(path string) ([]corev1.Secret, error) {
 	if path == "" {
 		return nil, nil
 	}
@@ -120,7 +103,7 @@ func loadFunctionCredentials(path string) ([]corev1.Secret, error) {
 		return nil, errors.Wrapf(err, "cannot load resources from %q", path)
 	}
 
-	var secrets []corev1.Secret
+	secrets := make([]corev1.Secret, 0, len(resources))
 
 	for _, res := range resources {
 		// Only process Secret resources

@@ -21,7 +21,6 @@ import (
 	un "k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 
-	xpv1 "github.com/crossplane/crossplane-runtime/v2/apis/common/v1"
 	"github.com/crossplane/crossplane-runtime/v2/pkg/errors"
 	"github.com/crossplane/crossplane-runtime/v2/pkg/logging"
 	cpd "github.com/crossplane/crossplane-runtime/v2/pkg/resource/unstructured/composed"
@@ -2552,26 +2551,12 @@ func TestFetchCompositionCredentials(t *testing.T) {
 			wantSecrets: 0,
 		},
 		"FetchesCredentialSecret": {
-			composition: func() *apiextensionsv1.Composition {
-				comp := tu.NewComposition("test-comp").
-					WithCompositeTypeRef("example.org/v1", "XR1").
-					WithPipelineMode().
-					WithPipelineStep("step1", "function-msgraph", nil).
-					Build()
-				// Add credentials to the pipeline step
-				comp.Spec.Pipeline[0].Credentials = []apiextensionsv1.FunctionCredentials{
-					{
-						Name:   "azure-creds",
-						Source: apiextensionsv1.FunctionCredentialsSourceSecret,
-						SecretRef: &xpv1.SecretReference{
-							Namespace: "crossplane-system",
-							Name:      "azure-credentials",
-						},
-					},
-				}
-
-				return comp
-			}(),
+			composition: tu.NewComposition("test-comp").
+				WithCompositeTypeRef("example.org/v1", "XR1").
+				WithPipelineMode().
+				WithPipelineStep("step1", "function-msgraph", nil,
+					tu.WithCredentials("azure-creds", "crossplane-system", "azure-credentials")).
+				Build(),
 			setupMocks: func() k8.ResourceClient {
 				secretUnstructured := tu.NewResource("v1", "Secret", "azure-credentials").
 					WithNamespace("crossplane-system").
@@ -2586,25 +2571,12 @@ func TestFetchCompositionCredentials(t *testing.T) {
 			wantSecrets: 1,
 		},
 		"SkipsMissingSecret": {
-			composition: func() *apiextensionsv1.Composition {
-				comp := tu.NewComposition("test-comp").
-					WithCompositeTypeRef("example.org/v1", "XR1").
-					WithPipelineMode().
-					WithPipelineStep("step1", "function-msgraph", nil).
-					Build()
-				comp.Spec.Pipeline[0].Credentials = []apiextensionsv1.FunctionCredentials{
-					{
-						Name:   "missing-creds",
-						Source: apiextensionsv1.FunctionCredentialsSourceSecret,
-						SecretRef: &xpv1.SecretReference{
-							Namespace: "crossplane-system",
-							Name:      "missing-secret",
-						},
-					},
-				}
-
-				return comp
-			}(),
+			composition: tu.NewComposition("test-comp").
+				WithCompositeTypeRef("example.org/v1", "XR1").
+				WithPipelineMode().
+				WithPipelineStep("step1", "function-msgraph", nil,
+					tu.WithCredentials("missing-creds", "crossplane-system", "missing-secret")).
+				Build(),
 			setupMocks: func() k8.ResourceClient {
 				return tu.NewMockResourceClient().
 					WithResourceNotFound().
@@ -2613,27 +2585,14 @@ func TestFetchCompositionCredentials(t *testing.T) {
 			wantSecrets: 0, // Missing secrets are skipped, not errors
 		},
 		"DeduplicatesSecrets": {
-			composition: func() *apiextensionsv1.Composition {
-				comp := tu.NewComposition("test-comp").
-					WithCompositeTypeRef("example.org/v1", "XR1").
-					WithPipelineMode().
-					WithPipelineStep("step1", "function-a", nil).
-					WithPipelineStep("step2", "function-b", nil).
-					Build()
-				// Both steps reference the same secret
-				secretRef := &xpv1.SecretReference{
-					Namespace: "crossplane-system",
-					Name:      "shared-secret",
-				}
-				comp.Spec.Pipeline[0].Credentials = []apiextensionsv1.FunctionCredentials{
-					{Name: "creds", Source: apiextensionsv1.FunctionCredentialsSourceSecret, SecretRef: secretRef},
-				}
-				comp.Spec.Pipeline[1].Credentials = []apiextensionsv1.FunctionCredentials{
-					{Name: "creds", Source: apiextensionsv1.FunctionCredentialsSourceSecret, SecretRef: secretRef},
-				}
-
-				return comp
-			}(),
+			composition: tu.NewComposition("test-comp").
+				WithCompositeTypeRef("example.org/v1", "XR1").
+				WithPipelineMode().
+				WithPipelineStep("step1", "function-a", nil,
+					tu.WithCredentials("creds", "crossplane-system", "shared-secret")).
+				WithPipelineStep("step2", "function-b", nil,
+					tu.WithCredentials("creds", "crossplane-system", "shared-secret")).
+				Build(),
 			setupMocks: func() k8.ResourceClient {
 				secretUnstructured := tu.NewResource("v1", "Secret", "shared-secret").
 					WithNamespace("crossplane-system").

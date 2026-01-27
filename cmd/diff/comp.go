@@ -82,7 +82,10 @@ func (c *CompCmd) initializeDependencies(ctx *kong.Context, log logging.Logger, 
 		return err
 	}
 
-	proc, fnProvider := makeDefaultCompProc(c, appCtx, log)
+	proc, fnProvider, err := makeDefaultCompProc(c, appCtx, log)
+	if err != nil {
+		return err
+	}
 
 	loader, err := ld.NewCompositeLoader(c.Files)
 	if err != nil {
@@ -96,7 +99,7 @@ func (c *CompCmd) initializeDependencies(ctx *kong.Context, log logging.Logger, 
 	return nil
 }
 
-func makeDefaultCompProc(c *CompCmd, ctx *AppContext, log logging.Logger) (dp.CompDiffProcessor, dp.FunctionProvider) {
+func makeDefaultCompProc(c *CompCmd, ctx *AppContext, log logging.Logger) (dp.CompDiffProcessor, dp.FunctionProvider, error) {
 	// Use provided namespace or default to "default"
 	namespace := c.Namespace
 	if namespace == "" {
@@ -107,7 +110,7 @@ func makeDefaultCompProc(c *CompCmd, ctx *AppContext, log logging.Logger) (dp.Co
 	fnProvider := dp.NewCachedFunctionProvider(ctx.XpClients.Function, log)
 
 	// Both processors share the same options since they're part of the same command
-	opts := defaultProcessorOptions(c.CommonCmdFields, namespace, log)
+	opts := defaultProcessorOptions(c.CommonCmdFields, namespace)
 	opts = append(opts,
 		dp.WithLogger(log),
 		dp.WithRenderMutex(&globalRenderMutex),
@@ -118,11 +121,24 @@ func makeDefaultCompProc(c *CompCmd, ctx *AppContext, log logging.Logger) (dp.Co
 		}),
 	)
 
+	// Load function credentials if specified - fail if path is provided but unusable
+	if c.FunctionCredentials != "" {
+		creds, err := LoadFunctionCredentials(c.FunctionCredentials)
+		if err != nil {
+			return nil, nil, errors.Wrapf(err, "cannot load function credentials from %q", c.FunctionCredentials)
+		}
+
+		opts = append(opts, dp.WithFunctionCredentials(creds))
+		log.Debug("Loaded function credentials from file",
+			"path", c.FunctionCredentials,
+			"count", len(creds))
+	}
+
 	// Create XR processor first (peer processor)
 	xrProc := dp.NewDiffProcessor(ctx.K8sClients, ctx.XpClients, opts...)
 
 	// Inject it into composition processor
-	return dp.NewCompDiffProcessor(xrProc, ctx.XpClients.Composition, opts...), fnProvider
+	return dp.NewCompDiffProcessor(xrProc, ctx.XpClients.Composition, opts...), fnProvider, nil
 }
 
 // Run executes the composition diff command.
