@@ -73,11 +73,68 @@ func IsSchemaValidationError(err error) bool {
 	return errors.As(err, &sve)
 }
 
+// isOnlySchemaValidationErrors checks if ALL errors in the error tree are schema validation errors.
+// Returns false if there are any non-schema-validation errors in the chain.
+// This is used to determine exit code priority: tool errors take precedence over schema validation errors.
+func isOnlySchemaValidationErrors(err error) bool {
+	if err == nil {
+		return true
+	}
+
+	// Check if this is a join error (contains multiple errors) - check this FIRST
+	// before checking if it's a SchemaValidationError, because errors.As would
+	// traverse into the join and find schema validation errors even if there are
+	// non-schema-validation errors in the same join.
+	type unwrapMultiple interface {
+		Unwrap() []error
+	}
+	if joinErr, ok := err.(unwrapMultiple); ok {
+		for _, e := range joinErr.Unwrap() {
+			if !isOnlySchemaValidationErrors(e) {
+				return false
+			}
+		}
+
+		return true
+	}
+
+	// Check if this specific error (not its wrapped errors) is a SchemaValidationError
+	// Use type assertion instead of errors.As to avoid traversing into wrapped errors
+	schemaValidationError := &SchemaValidationError{}
+	if errors.As(err, &schemaValidationError) {
+		// A SchemaValidationError IS a schema validation error - its wrapped Err field
+		// contains the underlying cause/detail (e.g., the original validation library error),
+		// not a different error type. So we return true immediately.
+		return true
+	}
+
+	// Check if this wraps another error using standard Go 1.13+ Unwrap()
+	if unwrapped := errors.Unwrap(err); unwrapped != nil {
+		return isOnlySchemaValidationErrors(unwrapped)
+	}
+
+	// Check if this wraps another error using pkg/errors Cause() interface
+	// (used by github.com/crossplane/crossplane-runtime/v2/pkg/errors)
+	type causer interface {
+		Cause() error
+	}
+	if cause, ok := err.(causer); ok {
+		return isOnlySchemaValidationErrors(cause.Cause())
+	}
+
+	// This is a leaf error that's not a SchemaValidationError
+	return false
+}
+
 // DetermineExitCode determines the appropriate exit code based on the error and diff status.
 // Priority: tool error (1) > schema validation error (2) > diff detected (3) > success (0).
 func DetermineExitCode(err error, hasDiffs bool) int {
 	if err != nil {
-		if IsSchemaValidationError(err) {
+		// If ALL errors are schema validation errors, return schema validation exit code.
+		// If there are ANY non-schema-validation errors (tool errors), return tool error exit code.
+		// Tool errors take priority because they indicate infrastructure/connectivity issues
+		// that prevent the tool from functioning correctly.
+		if isOnlySchemaValidationErrors(err) {
 			return ExitCodeSchemaValidation
 		}
 

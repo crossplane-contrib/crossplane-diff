@@ -24,6 +24,7 @@ import (
 	"testing"
 	"time"
 
+	dp "github.com/crossplane-contrib/crossplane-diff/cmd/diff/diffprocessor"
 	k8sapiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/e2e-framework/pkg/envconf"
@@ -58,7 +59,7 @@ func TestDiffNewResourceV2Cluster(t *testing.T) {
 			Assess("CanDiffNewResource", func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
 				t.Helper()
 
-				output, log, err := RunXRDiff(t, c, "./crossplane-diff", ExitCodeDiffDetected, filepath.Join(manifests, "new-xr.yaml"))
+				output, log, err := RunXRDiff(t, c, "./crossplane-diff", dp.ExitCodeDiffDetected, filepath.Join(manifests, "new-xr.yaml"))
 				if err != nil {
 					t.Fatalf("Error running diff command: %v\nLog output:\n%s", err, log)
 				}
@@ -103,7 +104,7 @@ func TestDiffExistingResourceV2Cluster(t *testing.T) {
 			Assess("CanDiffExistingResource", func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
 				t.Helper()
 
-				output, log, err := RunXRDiff(t, c, "./crossplane-diff", ExitCodeDiffDetected, filepath.Join(manifests, "modified-xr.yaml"))
+				output, log, err := RunXRDiff(t, c, "./crossplane-diff", dp.ExitCodeDiffDetected, filepath.Join(manifests, "modified-xr.yaml"))
 				if err != nil {
 					t.Fatalf("Error running diff command: %v\nLog output:\n%s", err, log)
 				}
@@ -144,7 +145,7 @@ func TestDiffNewResourceV2Namespaced(t *testing.T) {
 			Assess("CanDiffNewResource", func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
 				t.Helper()
 
-				output, log, err := RunXRDiff(t, c, "./crossplane-diff", ExitCodeDiffDetected, filepath.Join(manifests, "new-xr.yaml"))
+				output, log, err := RunXRDiff(t, c, "./crossplane-diff", dp.ExitCodeDiffDetected, filepath.Join(manifests, "new-xr.yaml"))
 				if err != nil {
 					t.Fatalf("Error running diff command: %v\nLog output:\n%s", err, log)
 				}
@@ -193,7 +194,7 @@ func TestDiffExistingResourceV2Namespaced(t *testing.T) {
 			Assess("CanDiffExistingResource", func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
 				t.Helper()
 
-				output, log, err := RunXRDiff(t, c, "./crossplane-diff", ExitCodeDiffDetected, filepath.Join(manifests, "modified-xr.yaml"))
+				output, log, err := RunXRDiff(t, c, "./crossplane-diff", dp.ExitCodeDiffDetected, filepath.Join(manifests, "modified-xr.yaml"))
 				if err != nil {
 					t.Fatalf("Error running diff command: %v\nLog output:\n%s", err, log)
 				}
@@ -241,7 +242,7 @@ func TestDiffNewResourceV1(t *testing.T) {
 			Assess("CanDiffNewResource", func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
 				t.Helper()
 
-				output, log, err := RunXRDiff(t, c, "./crossplane-diff", ExitCodeDiffDetected, filepath.Join(manifests, "new-xr.yaml"))
+				output, log, err := RunXRDiff(t, c, "./crossplane-diff", dp.ExitCodeDiffDetected, filepath.Join(manifests, "new-xr.yaml"))
 				if err != nil {
 					t.Fatalf("Error running diff command: %v\nLog output:\n%s", err, log)
 				}
@@ -291,7 +292,7 @@ func TestDiffExistingResourceV1(t *testing.T) {
 			Assess("CanDiffExistingResource", func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
 				t.Helper()
 
-				output, log, err := RunXRDiff(t, c, "./crossplane-diff", ExitCodeDiffDetected, filepath.Join(manifests, "modified-xr.yaml"))
+				output, log, err := RunXRDiff(t, c, "./crossplane-diff", dp.ExitCodeDiffDetected, filepath.Join(manifests, "modified-xr.yaml"))
 				if err != nil {
 					t.Fatalf("Error running diff command: %v\nLog output:\n%s", err, log)
 				}

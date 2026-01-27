@@ -23,6 +23,7 @@ import (
 	"testing"
 	"time"
 
+	dp "github.com/crossplane-contrib/crossplane-diff/cmd/diff/diffprocessor"
 	"sigs.k8s.io/e2e-framework/pkg/envconf"
 	"sigs.k8s.io/e2e-framework/pkg/features"
 
@@ -62,7 +63,7 @@ func TestDiffExistingComposition(t *testing.T) {
 			Assess("CanDiffComposition", func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
 				t.Helper()
 
-				output, log, err := RunCompDiff(t, c, "./crossplane-diff", ExitCodeDiffDetected, filepath.Join(manifests, "updated-composition.yaml"))
+				output, log, err := RunCompDiff(t, c, "./crossplane-diff", dp.ExitCodeDiffDetected, filepath.Join(manifests, "updated-composition.yaml"))
 				if err != nil {
 					t.Fatalf("Error running comp diff command: %v\nLog output:\n%s", err, log)
 				}
@@ -113,7 +114,7 @@ func TestCompDiffLargeFanout(t *testing.T) {
 			Assess("CanDiffCompositionWithLargeFanout", func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
 				t.Helper()
 
-				output, log, err := RunCompDiff(t, c, "./crossplane-diff", ExitCodeDiffDetected, filepath.Join(manifests, "updated-composition.yaml"))
+				output, log, err := RunCompDiff(t, c, "./crossplane-diff", dp.ExitCodeDiffDetected, filepath.Join(manifests, "updated-composition.yaml"))
 				if err != nil {
 					t.Fatalf("Error running comp diff command: %v\nLog output:\n%s", err, log)
 				}
@@ -159,7 +160,7 @@ func TestDiffCompositionWithGetComposedResource(t *testing.T) {
 			Assess("CanDiffCompositionWithGetComposedResource", func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
 				t.Helper()
 
-				output, log, err := RunCompDiff(t, c, "./crossplane-diff", ExitCodeDiffDetected, filepath.Join(manifests, "updated-composition.yaml"))
+				output, log, err := RunCompDiff(t, c, "./crossplane-diff", dp.ExitCodeDiffDetected, filepath.Join(manifests, "updated-composition.yaml"))
 				if err != nil {
 					t.Fatalf("Error running comp diff command: %v\nLog output:\n%s", err, log)
 				}
@@ -206,7 +207,7 @@ func TestDiffCompositionWithClaims(t *testing.T) {
 			Assess("CanDiffCompositionWithClaim", func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
 				t.Helper()
 
-				output, log, err := RunCompDiff(t, c, "./crossplane-diff", ExitCodeDiffDetected, filepath.Join(manifests, "updated-composition.yaml"))
+				output, log, err := RunCompDiff(t, c, "./crossplane-diff", dp.ExitCodeDiffDetected, filepath.Join(manifests, "updated-composition.yaml"))
 				if err != nil {
 					t.Fatalf("Error running comp diff command: %v\nLog output:\n%s", err, log)
 				}

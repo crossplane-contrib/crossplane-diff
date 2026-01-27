@@ -23,6 +23,7 @@ import (
 	"testing"
 	"time"
 
+	dp "github.com/crossplane-contrib/crossplane-diff/cmd/diff/diffprocessor"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/e2e-framework/pkg/envconf"
 	"sigs.k8s.io/e2e-framework/pkg/features"
@@ -70,7 +71,7 @@ func TestDiffConcurrentDirectory(t *testing.T) {
 				}
 
 				// Run diff on all XR files - this tests concurrent function processing
-				output, log, err := RunXRDiff(t, c, "./crossplane-diff", ExitCodeDiffDetected, xrFiles...)
+				output, log, err := RunXRDiff(t, c, "./crossplane-diff", dp.ExitCodeDiffDetected, xrFiles...)
 
 				// Always log output for debugging
 				t.Logf("crossplane-diff stdout: %s", output)
@@ -121,7 +122,7 @@ func TestDiffNewNestedResourceV2(t *testing.T) {
 			Assess("CanDiffNewNestedResource", func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
 				t.Helper()
 
-				output, log, err := RunXRDiff(t, c, "./crossplane-diff", ExitCodeDiffDetected, filepath.Join(manifests, "new-parent-xr.yaml"))
+				output, log, err := RunXRDiff(t, c, "./crossplane-diff", dp.ExitCodeDiffDetected, filepath.Join(manifests, "new-parent-xr.yaml"))
 				if err != nil {
 					t.Fatalf("Error running diff command: %v\nLog output:\n%s", err, log)
 				}
@@ -168,7 +169,7 @@ func TestDiffExistingNestedResourceV2(t *testing.T) {
 			Assess("CanDiffExistingNestedResource", func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
 				t.Helper()
 
-				output, log, err := RunXRDiff(t, c, "./crossplane-diff", ExitCodeDiffDetected, filepath.Join(manifests, "modified-parent-xr.yaml"))
+				output, log, err := RunXRDiff(t, c, "./crossplane-diff", dp.ExitCodeDiffDetected, filepath.Join(manifests, "modified-parent-xr.yaml"))
 				if err != nil {
 					t.Fatalf("Error running diff command: %v\nLog output:\n%s", err, log)
 				}
@@ -234,7 +235,7 @@ func TestDiffExistingNestedResourceV2WithGenerateName(t *testing.T) {
 			Assess("CanDiffExistingNestedResourceWithGenerateName", func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
 				t.Helper()
 
-				output, log, err := RunXRDiff(t, c, "./crossplane-diff", ExitCodeDiffDetected, filepath.Join(manifests, "modified-parent-xr.yaml"))
+				output, log, err := RunXRDiff(t, c, "./crossplane-diff", dp.ExitCodeDiffDetected, filepath.Join(manifests, "modified-parent-xr.yaml"))
 				if err != nil {
 					t.Fatalf("Error running diff command: %v\nLog output:\n%s", err, log)
 				}

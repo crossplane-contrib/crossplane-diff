@@ -82,17 +82,8 @@ var (
 	ansiEscapeRegex                   = regexp.MustCompile(`\x1b\[[0-9;]*m`)
 )
 
-// Exit codes returned by crossplane-diff.
-const (
-	// ExitCodeSuccess indicates no differences were detected.
-	ExitCodeSuccess = 0
-	// ExitCodeToolError indicates a tool execution error (e.g., cluster access issues).
-	ExitCodeToolError = 1
-	// ExitCodeSchemaValidation indicates a schema validation error.
-	ExitCodeSchemaValidation = 2
-	// ExitCodeDiffDetected indicates differences were found.
-	ExitCodeDiffDetected = 3
-)
+// Exit code constants are imported from diffprocessor package.
+// Use dp.ExitCodeSuccess, dp.ExitCodeToolError, dp.ExitCodeSchemaValidation, dp.ExitCodeDiffDetected.
 
 // runCrossplaneDiff runs the crossplane diff command with the specified subcommand on the provided resources.
 // It returns the stdout, stderr, exit code, and any error that is not an ExitError.

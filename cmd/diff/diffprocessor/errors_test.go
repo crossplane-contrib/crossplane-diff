@@ -18,9 +18,12 @@ package diffprocessor
 
 import (
 	"errors"
+	"fmt"
 	"testing"
 
 	gcmp "github.com/google/go-cmp/cmp"
+
+	xperrors "github.com/crossplane/crossplane-runtime/v2/pkg/errors"
 )
 
 func TestSchemaValidationError_Error(t *testing.T) {
@@ -134,6 +137,161 @@ func TestNewSchemaValidationError(t *testing.T) {
 	}
 }
 
+func TestIsOnlySchemaValidationErrors(t *testing.T) {
+	tests := map[string]struct {
+		err  error
+		want bool
+	}{
+		"NilError": {
+			err:  nil,
+			want: true,
+		},
+		"SingleSchemaValidationError": {
+			err:  &SchemaValidationError{Message: "test"},
+			want: true,
+		},
+		"SingleToolError": {
+			err:  errors.New("tool error"),
+			want: false,
+		},
+		"MultipleSchemaValidationErrors": {
+			err: errors.Join(
+				&SchemaValidationError{ResourceID: "Kind1/res1", Message: "error1"},
+				&SchemaValidationError{ResourceID: "Kind2/res2", Message: "error2"},
+			),
+			want: true,
+		},
+		"MixedErrors_ToolFirst": {
+			err: errors.Join(
+				errors.New("tool error"),
+				&SchemaValidationError{ResourceID: "Kind/res", Message: "validation"},
+			),
+			want: false,
+		},
+		"MixedErrors_SchemaFirst": {
+			err: errors.Join(
+				&SchemaValidationError{ResourceID: "Kind/res", Message: "validation"},
+				errors.New("tool error"),
+			),
+			want: false,
+		},
+		"NestedSchemaValidationError": {
+			err: &SchemaValidationError{
+				ResourceID: "Kind/res",
+				Message:    "outer",
+				Err:        &SchemaValidationError{Message: "inner"},
+			},
+			want: true,
+		},
+		"SchemaValidationWrappingUnderlyingError": {
+			// A SchemaValidationError wrapping an underlying error (from the validation library)
+			// is still a schema validation error as a whole. The wrapped error is just the cause/detail.
+			err: &SchemaValidationError{
+				ResourceID: "Kind/res",
+				Message:    "wrapper",
+				Err:        errors.New("underlying validation error"),
+			},
+			want: true,
+		},
+		"DeeplyNestedAllSchemaValidation": {
+			err: errors.Join(
+				&SchemaValidationError{Message: "level1"},
+				errors.Join(
+					&SchemaValidationError{Message: "level2a"},
+					&SchemaValidationError{Message: "level2b"},
+				),
+			),
+			want: true,
+		},
+		"DeeplyNestedWithToolError": {
+			err: errors.Join(
+				&SchemaValidationError{Message: "level1"},
+				errors.Join(
+					&SchemaValidationError{Message: "level2a"},
+					errors.New("buried tool error"),
+				),
+			),
+			want: false,
+		},
+		"PkgErrorsWrappedSchemaValidation": {
+			// Simulates errors.Wrap from pkg/errors wrapping a SchemaValidationError
+			err: &causedError{
+				msg:   "wrapped",
+				cause: &SchemaValidationError{Message: "inner"},
+			},
+			want: true,
+		},
+		"PkgErrorsWrappedToolError": {
+			err: &causedError{
+				msg:   "wrapped",
+				cause: errors.New("tool error"),
+			},
+			want: false,
+		},
+		"PkgErrorsDoubleWrappedSchemaValidation": {
+			err: &causedError{
+				msg: "outer",
+				cause: &causedError{
+					msg:   "inner",
+					cause: &SchemaValidationError{Message: "validation"},
+				},
+			},
+			want: true,
+		},
+		"CrossplaneRuntimeWrappedSchemaValidation": {
+			// This simulates the actual wrapping pattern used in diff_processor.go:
+			// errors.Wrap(schemaValidationError, "cannot validate resources")
+			err:  xperrors.Wrap(&SchemaValidationError{Message: "inner"}, "wrapped"),
+			want: true,
+		},
+		"CrossplaneRuntimeDoubleWrappedSchemaValidation": {
+			// errors.Wrap wrapping another errors.Wrap wrapping SchemaValidationError
+			err:  xperrors.Wrap(xperrors.Wrap(&SchemaValidationError{Message: "inner"}, "inner wrap"), "outer wrap"),
+			want: true,
+		},
+		"CrossplaneRuntimeWrappedToolError": {
+			err:  xperrors.Wrap(errors.New("tool error"), "wrapped"),
+			want: false,
+		},
+		"CrossplaneRuntimeJoinedSchemaValidationErrors": {
+			// This simulates the actual pattern in PerformDiff where errors are joined
+			err: xperrors.Join(
+				xperrors.Wrapf(
+					xperrors.Wrap(&SchemaValidationError{Message: "validation"}, "cannot validate resources"),
+					"unable to process resource %s", "Kind/name",
+				),
+			),
+			want: true,
+		},
+		"CrossplaneRuntimeJoinedMixedErrors": {
+			// Mix of tool error and schema validation error via xperrors.Join
+			err: xperrors.Join(
+				xperrors.Wrap(errors.New("tool error"), "wrapped"),
+				xperrors.Wrap(&SchemaValidationError{Message: "validation"}, "cannot validate resources"),
+			),
+			want: false,
+		},
+	}
+
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			got := isOnlySchemaValidationErrors(tc.err)
+			if got != tc.want {
+				t.Errorf("isOnlySchemaValidationErrors() = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+// causedError is a test helper that implements the Cause() interface used by pkg/errors.
+type causedError struct {
+	msg   string
+	cause error
+}
+
+func (e *causedError) Error() string { return e.msg }
+func (e *causedError) Cause() error  { return e.cause }
+
 func TestDetermineExitCode(t *testing.T) {
 	tests := map[string]struct {
 		err      error
@@ -171,9 +329,56 @@ func TestDetermineExitCode(t *testing.T) {
 			want:     ExitCodeSchemaValidation,
 		},
 		"WrappedSchemaValidationError": {
-			err:      errors.Join(errors.New("outer"), &SchemaValidationError{Message: "inner"}),
+			// A schema validation error wrapped with fmt.Errorf %w should still be detected
+			// as a schema validation error (the wrapper doesn't introduce a new error type)
+			err:      fmt.Errorf("context: %w", &SchemaValidationError{Message: "inner"}),
 			hasDiffs: false,
 			want:     ExitCodeSchemaValidation,
+		},
+		// Edge cases for batch processing with multiple errors
+		"MultipleSchemaValidationErrors": {
+			err: errors.Join(
+				&SchemaValidationError{ResourceID: "Kind1/res1", Message: "field1 invalid"},
+				&SchemaValidationError{ResourceID: "Kind2/res2", Message: "field2 invalid"},
+				&SchemaValidationError{ResourceID: "Kind3/res3", Message: "field3 invalid"},
+			),
+			hasDiffs: false,
+			want:     ExitCodeSchemaValidation,
+		},
+		"MultipleSchemaValidationErrorsWithDiffs": {
+			err: errors.Join(
+				&SchemaValidationError{ResourceID: "Kind1/res1", Message: "field1 invalid"},
+				&SchemaValidationError{ResourceID: "Kind2/res2", Message: "field2 invalid"},
+			),
+			hasDiffs: true,
+			want:     ExitCodeSchemaValidation,
+		},
+		"MixedToolAndSchemaValidationErrors_ToolErrorTakesPriority": {
+			// When there's a mix of tool errors and schema validation errors,
+			// tool error (exit code 1) should take priority over schema validation (exit code 2)
+			err: errors.Join(
+				errors.New("connection refused"),
+				&SchemaValidationError{ResourceID: "Kind/res", Message: "invalid field"},
+			),
+			hasDiffs: false,
+			want:     ExitCodeToolError,
+		},
+		"MixedToolAndSchemaValidationErrors_SchemaFirst": {
+			// Order shouldn't matter - tool error still takes priority
+			err: errors.Join(
+				&SchemaValidationError{ResourceID: "Kind/res", Message: "invalid field"},
+				errors.New("connection refused"),
+			),
+			hasDiffs: false,
+			want:     ExitCodeToolError,
+		},
+		"MixedToolAndSchemaValidationErrorsWithDiffs": {
+			err: errors.Join(
+				errors.New("partial failure"),
+				&SchemaValidationError{ResourceID: "Kind/res", Message: "invalid"},
+			),
+			hasDiffs: true,
+			want:     ExitCodeToolError,
 		},
 	}
 
