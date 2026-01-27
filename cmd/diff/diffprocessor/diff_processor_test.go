@@ -2449,24 +2449,24 @@ func TestDefaultDiffProcessor_synthesizeDummyBackingXRForNewClaim(t *testing.T) 
 
 func TestMergeCredentials(t *testing.T) {
 	tests := map[string]struct {
-		cliCredentials        []corev1.Secret
+		cliCredentials         []corev1.Secret
 		autoFetchedCredentials []corev1.Secret
-		want                  map[string]bool // expected namespace/name keys in result
-		wantCount             int
+		want                   map[string]bool // expected namespace/name keys in result
+		wantCount              int
 	}{
 		"EmptyBoth": {
-			cliCredentials:        nil,
+			cliCredentials:         nil,
 			autoFetchedCredentials: nil,
-			want:                  map[string]bool{},
-			wantCount:             0,
+			want:                   map[string]bool{},
+			wantCount:              0,
 		},
 		"OnlyCLI": {
 			cliCredentials: []corev1.Secret{
 				{ObjectMeta: metav1.ObjectMeta{Name: "secret1", Namespace: "ns1"}},
 			},
 			autoFetchedCredentials: nil,
-			want:                  map[string]bool{"ns1/secret1": true},
-			wantCount:             1,
+			want:                   map[string]bool{"ns1/secret1": true},
+			wantCount:              1,
 		},
 		"OnlyAutoFetched": {
 			cliCredentials: nil,
@@ -2525,16 +2525,14 @@ func TestMergeCredentials(t *testing.T) {
 
 func TestFetchCompositionCredentials(t *testing.T) {
 	tests := map[string]struct {
-		composition   *apiextensionsv1.Composition
-		setupMocks    func() k8.ResourceClient
-		wantSecrets   int
-		wantErr       bool
+		composition *apiextensionsv1.Composition
+		setupMocks  func() k8.ResourceClient
+		wantSecrets int
 	}{
 		"NilComposition": {
-			composition:   nil,
-			setupMocks:    func() k8.ResourceClient { return nil },
-			wantSecrets:   0,
-			wantErr:       false,
+			composition: nil,
+			setupMocks:  func() k8.ResourceClient { return nil },
+			wantSecrets: 0,
 		},
 		"NoPipelineSteps": {
 			composition: &apiextensionsv1.Composition{
@@ -2543,7 +2541,6 @@ func TestFetchCompositionCredentials(t *testing.T) {
 			},
 			setupMocks:  func() k8.ResourceClient { return nil },
 			wantSecrets: 0,
-			wantErr:     false,
 		},
 		"NoCredentialsInPipeline": {
 			composition: tu.NewComposition("test-comp").
@@ -2553,7 +2550,6 @@ func TestFetchCompositionCredentials(t *testing.T) {
 				Build(),
 			setupMocks:  func() k8.ResourceClient { return nil },
 			wantSecrets: 0,
-			wantErr:     false,
 		},
 		"FetchesCredentialSecret": {
 			composition: func() *apiextensionsv1.Composition {
@@ -2573,6 +2569,7 @@ func TestFetchCompositionCredentials(t *testing.T) {
 						},
 					},
 				}
+
 				return comp
 			}(),
 			setupMocks: func() k8.ResourceClient {
@@ -2587,7 +2584,6 @@ func TestFetchCompositionCredentials(t *testing.T) {
 					Build()
 			},
 			wantSecrets: 1,
-			wantErr:     false,
 		},
 		"SkipsMissingSecret": {
 			composition: func() *apiextensionsv1.Composition {
@@ -2606,6 +2602,7 @@ func TestFetchCompositionCredentials(t *testing.T) {
 						},
 					},
 				}
+
 				return comp
 			}(),
 			setupMocks: func() k8.ResourceClient {
@@ -2614,7 +2611,6 @@ func TestFetchCompositionCredentials(t *testing.T) {
 					Build()
 			},
 			wantSecrets: 0, // Missing secrets are skipped, not errors
-			wantErr:     false,
 		},
 		"DeduplicatesSecrets": {
 			composition: func() *apiextensionsv1.Composition {
@@ -2635,18 +2631,19 @@ func TestFetchCompositionCredentials(t *testing.T) {
 				comp.Spec.Pipeline[1].Credentials = []apiextensionsv1.FunctionCredentials{
 					{Name: "creds", Source: apiextensionsv1.FunctionCredentialsSourceSecret, SecretRef: secretRef},
 				}
+
 				return comp
 			}(),
 			setupMocks: func() k8.ResourceClient {
 				secretUnstructured := tu.NewResource("v1", "Secret", "shared-secret").
 					WithNamespace("crossplane-system").
 					Build()
+
 				return tu.NewMockResourceClient().
 					WithResourcesExist(secretUnstructured).
 					Build()
 			},
 			wantSecrets: 1, // Only one secret despite two references
-			wantErr:     false,
 		},
 	}
 
@@ -2661,14 +2658,7 @@ func TestFetchCompositionCredentials(t *testing.T) {
 				},
 			}
 
-			secrets, err := processor.fetchCompositionCredentials(t.Context(), tc.composition)
-
-			if tc.wantErr && err == nil {
-				t.Errorf("fetchCompositionCredentials() expected error, got nil")
-			}
-			if !tc.wantErr && err != nil {
-				t.Errorf("fetchCompositionCredentials() unexpected error: %v", err)
-			}
+			secrets := processor.fetchCompositionCredentials(t.Context(), tc.composition)
 
 			if len(secrets) != tc.wantSecrets {
 				t.Errorf("fetchCompositionCredentials() returned %d secrets, want %d", len(secrets), tc.wantSecrets)

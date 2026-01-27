@@ -1,0 +1,6 @@
+apiVersion: creds.diff.example.org/v1alpha1
+kind: XFunctionCredResource
+metadata:
+  name: test-cred-resource
+spec:
+  testField: hello

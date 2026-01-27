@@ -6,9 +6,9 @@ import (
 	xp "github.com/crossplane-contrib/crossplane-diff/cmd/diff/client/crossplane"
 	k8 "github.com/crossplane-contrib/crossplane-diff/cmd/diff/client/kubernetes"
 	"github.com/crossplane-contrib/crossplane-diff/cmd/diff/renderer"
+	corev1 "k8s.io/api/core/v1"
 
 	"github.com/crossplane/crossplane-runtime/v2/pkg/logging"
-	corev1 "k8s.io/api/core/v1"
 )
 
 // ProcessorConfig contains configuration for the DiffProcessor.

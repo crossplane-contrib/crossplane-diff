@@ -2089,7 +2089,7 @@ Summary: 3 modified`,
 			noColor:          true,
 		},
 		"FunctionCredentialsAutoFetch": {
-			reason: "Successfully renders XR when composition references credentials that exist in cluster",
+			reason:     "Successfully renders XR when composition references credentials that exist in cluster",
 			inputFiles: []string{"testdata/diff/new-xr-with-creds.yaml"},
 			setupFiles: []string{
 				"testdata/diff/resources/xrd.yaml",
@@ -2132,7 +2132,7 @@ Summary: 3 modified`,
 			expectedError: false,
 		},
 		"FunctionCredentialsFromCLI": {
-			reason: "Successfully renders XR when credentials provided via --function-credentials flag",
+			reason:     "Successfully renders XR when credentials provided via --function-credentials flag",
 			inputFiles: []string{"testdata/diff/new-xr-with-creds.yaml"},
 			setupFiles: []string{
 				"testdata/diff/resources/xrd.yaml",

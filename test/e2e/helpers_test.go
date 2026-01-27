@@ -88,11 +88,14 @@ var (
 
 // runCrossplaneDiff runs the crossplane diff command with the specified subcommand on the provided resources.
 // It returns the stdout, stderr, exit code, and any error that is not an ExitError.
-func runCrossplaneDiff(t *testing.T, c *envconf.Config, binPath, subcommand string, resourcePaths ...string) (string, string, int, error) {
+func runCrossplaneDiff(t *testing.T, c *envconf.Config, binPath, subcommand string, extraArgs []string, resourcePaths ...string) (string, string, int, error) {
 	t.Helper()
 
 	// Prepare the command to run
-	args := append([]string{"--verbose", subcommand, "--timeout=2m"}, resourcePaths...)
+	args := make([]string, 0, 3+len(extraArgs)+len(resourcePaths))
+	args = append(args, "--verbose", subcommand, "--timeout=2m")
+	args = append(args, extraArgs...)
+	args = append(args, resourcePaths...)
 	t.Logf("Running command: %s %s", binPath, strings.Join(args, " "))
 	cmd := exec.Command(binPath, args...)
 
@@ -127,8 +130,16 @@ func runCrossplaneDiff(t *testing.T, c *envconf.Config, binPath, subcommand stri
 // expectedExitCode specifies which exit code is expected.
 func RunXRDiff(t *testing.T, c *envconf.Config, binPath string, expectedExitCode int, resourcePaths ...string) (string, string, error) {
 	t.Helper()
+	return RunXRDiffWithArgs(t, c, binPath, expectedExitCode, nil, resourcePaths...)
+}
 
-	stdout, stderr, exitCode, err := runCrossplaneDiff(t, c, binPath, "xr", resourcePaths...)
+// RunXRDiffWithArgs runs the crossplane xr diff command with extra CLI arguments.
+// Extra args are inserted after the subcommand but before resource paths.
+// expectedExitCode specifies which exit code is expected.
+func RunXRDiffWithArgs(t *testing.T, c *envconf.Config, binPath string, expectedExitCode int, extraArgs []string, resourcePaths ...string) (string, string, error) {
+	t.Helper()
+
+	stdout, stderr, exitCode, err := runCrossplaneDiff(t, c, binPath, "xr", extraArgs, resourcePaths...)
 	if err != nil {
 		return stdout, stderr, err
 	}
@@ -146,7 +157,7 @@ func RunXRDiff(t *testing.T, c *envconf.Config, binPath string, expectedExitCode
 func RunCompDiff(t *testing.T, c *envconf.Config, binPath string, expectedExitCode int, compositionPaths ...string) (string, string, error) {
 	t.Helper()
 
-	stdout, stderr, exitCode, err := runCrossplaneDiff(t, c, binPath, "comp", compositionPaths...)
+	stdout, stderr, exitCode, err := runCrossplaneDiff(t, c, binPath, "comp", nil, compositionPaths...)
 	if err != nil {
 		return stdout, stderr, err
 	}

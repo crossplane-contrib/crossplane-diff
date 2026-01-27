@@ -996,12 +996,7 @@ func (p *DefaultDiffProcessor) RenderWithRequirements(
 	observedResources []cpd.Unstructured,
 ) (render.Outputs, error) {
 	// Fetch function credentials from composition pipeline and merge with CLI-provided credentials
-	autoFetchedCredentials, err := p.fetchCompositionCredentials(ctx, comp)
-	if err != nil {
-		p.config.Logger.Debug("Error fetching composition credentials (continuing without them)",
-			"resource", resourceID,
-			"error", err)
-	}
+	autoFetchedCredentials := p.fetchCompositionCredentials(ctx, comp)
 
 	functionCredentials := mergeCredentials(p.config.FunctionCredentials, autoFetchedCredentials)
 	if len(functionCredentials) > 0 {
@@ -1332,14 +1327,17 @@ func (p *DefaultDiffProcessor) applyXRDDefaults(ctx context.Context, xr *cmp.Uns
 
 // fetchCompositionCredentials extracts credential references from a composition's pipeline steps
 // and fetches the referenced secrets from the cluster. The returned secrets are suitable for
-// passing to render.Inputs.FunctionCredentials.
-func (p *DefaultDiffProcessor) fetchCompositionCredentials(ctx context.Context, comp *apiextensionsv1.Composition) ([]corev1.Secret, error) {
+// passing to render.Inputs.FunctionCredentials. Secrets that cannot be fetched are silently
+// skipped (logged at debug level) since they may not exist on cluster (e.g., workload identity).
+func (p *DefaultDiffProcessor) fetchCompositionCredentials(ctx context.Context, comp *apiextensionsv1.Composition) []corev1.Secret {
 	if comp == nil || comp.Spec.Pipeline == nil {
-		return nil, nil
+		return nil
 	}
 
 	// Track unique secrets to avoid duplicates (key: namespace/name)
 	secretMap := make(map[string]corev1.Secret)
+	// Track unique credential references we attempted to fetch (for logging)
+	attemptedRefs := make(map[string]bool)
 	secretGVK := schema.GroupVersionKind{Group: "", Version: "v1", Kind: "Secret"}
 
 	for _, step := range comp.Spec.Pipeline {
@@ -1349,6 +1347,8 @@ func (p *DefaultDiffProcessor) fetchCompositionCredentials(ctx context.Context, 
 			}
 
 			key := fmt.Sprintf("%s/%s", cred.SecretRef.Namespace, cred.SecretRef.Name)
+			attemptedRefs[key] = true
+
 			if _, exists := secretMap[key]; exists {
 				// Already fetched this secret
 				continue
@@ -1395,13 +1395,25 @@ func (p *DefaultDiffProcessor) fetchCompositionCredentials(ctx context.Context, 
 		secrets = append(secrets, secret)
 	}
 
-	if len(secrets) > 0 {
-		p.config.Logger.Debug("Fetched function credential secrets from cluster",
-			"composition", comp.GetName(),
-			"secretCount", len(secrets))
+	// Log the outcome with semantic distinction:
+	// - No credentials referenced: no log (nothing to fetch)
+	// - All credentials fetched successfully: debug log
+	// - Some credentials couldn't be fetched: info log (user should know)
+	if len(attemptedRefs) > 0 {
+		if len(secrets) == len(attemptedRefs) {
+			p.config.Logger.Debug("Fetched all function credential secrets from cluster",
+				"composition", comp.GetName(),
+				"secretCount", len(secrets))
+		} else {
+			p.config.Logger.Info("Some function credential secrets could not be fetched from cluster",
+				"composition", comp.GetName(),
+				"referenced", len(attemptedRefs),
+				"fetched", len(secrets),
+				"hint", "Use --function-credentials to provide secrets that don't exist on cluster")
+		}
 	}
 
-	return secrets, nil
+	return secrets
 }
 
 // mergeCredentials combines CLI-provided credentials with auto-fetched credentials.

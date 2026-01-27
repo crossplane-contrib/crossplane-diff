@@ -1,0 +1,52 @@
+apiVersion: apiextensions.crossplane.io/v1
+kind: Composition
+metadata:
+  name: xfunctioncredresources.creds.diff.example.org
+spec:
+  compositeTypeRef:
+    apiVersion: creds.diff.example.org/v1alpha1
+    kind: XFunctionCredResource
+  mode: Pipeline
+  pipeline:
+    - step: render-with-credentials
+      functionRef:
+        name: function-go-templating
+      credentials:
+        - name: test-creds
+          source: Secret
+          secretRef:
+            namespace: crossplane-system
+            name: function-test-credentials
+      input:
+        apiVersion: gotemplating.fn.crossplane.io/v1beta1
+        kind: GoTemplate
+        source: Inline
+        inline:
+          template: |
+            apiVersion: nop.crossplane.io/v1alpha1
+            kind: NopResource
+            metadata:
+              name: {{ .observed.composite.resource.metadata.name }}-nop
+              namespace: default
+              annotations:
+                gotemplating.fn.crossplane.io/composition-resource-name: nop-resource
+                {{- $cred := index .credentials "test-creds" }}
+                {{- if $cred }}
+                credential-present: "true"
+                {{- $data := $cred.credentialData.data }}
+                {{- if $data }}
+                {{- $testKey := index $data "test-key" }}
+                credential-test-key: {{ $testKey | default "not-found" }}
+                {{- end }}
+                {{- else }}
+                credential-present: "false"
+                {{- end }}
+            spec:
+              forProvider:
+                conditionAfter:
+                  - conditionType: Ready
+                    conditionStatus: "True"
+                    time: 0s
+    - step: auto-ready
+      functionRef:
+        name: function-auto-ready
