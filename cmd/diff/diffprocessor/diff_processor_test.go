@@ -2431,6 +2431,7 @@ func TestDefaultDiffProcessor_synthesizeDummyBackingXRForNewClaim(t *testing.T) 
 				if !found {
 					t.Errorf("synthesizeDummyBackingXRForNewClaim() spec.coolField not found")
 				}
+
 				if diff := gcmp.Diff("test-value", coolField); diff != "" {
 					t.Errorf("synthesizeDummyBackingXRForNewClaim() spec.coolField mismatch (-want +got):\n%s", diff)
 				}
