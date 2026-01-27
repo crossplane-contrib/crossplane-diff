@@ -53,6 +53,7 @@ type IntegrationTestCase struct {
 	namespace                  string        // For composition tests (optional)
 	xrdAPIVersion              XrdAPIVersion // For XR tests (optional)
 	ignorePaths                []string      // Paths to ignore in diffs
+	functionCredentials        string        // Path to function credentials file (optional)
 	skip                       bool
 	skipReason                 string
 }
@@ -198,6 +199,11 @@ func runIntegrationTest(t *testing.T, testType DiffTestType, scheme *runtime.Sch
 		for _, path := range tt.ignorePaths {
 			args = append(args, fmt.Sprintf("--ignore-paths=%s", path))
 		}
+	}
+
+	// Add function-credentials if specified
+	if tt.functionCredentials != "" {
+		args = append(args, fmt.Sprintf("--function-credentials=%s", tt.functionCredentials))
 	}
 
 	// Add files as positional arguments
@@ -2081,6 +2087,94 @@ Summary: 3 modified`,
 			expectedError:    false,
 			expectedExitCode: dp.ExitCodeDiffDetected,
 			noColor:          true,
+		},
+		"FunctionCredentialsAutoFetch": {
+			reason: "Successfully renders XR when composition references credentials that exist in cluster",
+			inputFiles: []string{"testdata/diff/new-xr-with-creds.yaml"},
+			setupFiles: []string{
+				"testdata/diff/resources/xrd.yaml",
+				"testdata/diff/resources/credentials/composition-with-creds.yaml",
+				"testdata/diff/resources/credentials/function-credentials-secret.yaml",
+				"testdata/diff/resources/functions.yaml",
+			},
+			// The diff should succeed and show new resources (credentials fetched from cluster)
+			expectedOutput: strings.Join([]string{
+				`+++ XDownstreamResource/test-resource-with-creds
+`, tu.Green(`+ apiVersion: ns.nop.example.org/v1alpha1
++ kind: XDownstreamResource
++ metadata:
++   annotations:
++     crossplane.io/composition-resource-name: nop-resource
++   labels:
++     crossplane.io/composite: test-resource-with-creds
++   name: test-resource-with-creds
++   namespace: default
++ spec:
++   forProvider:
++     configData: test-value-creds
+`), `
+---
++++ XNopResource/test-resource-with-creds
+`, tu.Green(`+ apiVersion: ns.diff.example.org/v1alpha1
++ kind: XNopResource
++ metadata:
++   name: test-resource-with-creds
++   namespace: default
++ spec:
++   coolField: test-value-creds
++   crossplane:
++     compositionRef:
++       name: xnopresources-with-creds.diff.example.org
+`), `
+---
+`,
+			}, ""),
+			expectedError: false,
+		},
+		"FunctionCredentialsFromCLI": {
+			reason: "Successfully renders XR when credentials provided via --function-credentials flag",
+			inputFiles: []string{"testdata/diff/new-xr-with-creds.yaml"},
+			setupFiles: []string{
+				"testdata/diff/resources/xrd.yaml",
+				"testdata/diff/resources/credentials/composition-with-creds.yaml",
+				// Note: NOT setting up the secret in cluster - testing CLI override
+				"testdata/diff/resources/functions.yaml",
+			},
+			// Credentials loaded from CLI flag file
+			functionCredentials: "testdata/diff/resources/credentials/cli-credentials.yaml",
+			// The diff should succeed with credentials from CLI
+			expectedOutput: strings.Join([]string{
+				`+++ XDownstreamResource/test-resource-with-creds
+`, tu.Green(`+ apiVersion: ns.nop.example.org/v1alpha1
++ kind: XDownstreamResource
++ metadata:
++   annotations:
++     crossplane.io/composition-resource-name: nop-resource
++   labels:
++     crossplane.io/composite: test-resource-with-creds
++   name: test-resource-with-creds
++   namespace: default
++ spec:
++   forProvider:
++     configData: test-value-creds
+`), `
+---
++++ XNopResource/test-resource-with-creds
+`, tu.Green(`+ apiVersion: ns.diff.example.org/v1alpha1
++ kind: XNopResource
++ metadata:
++   name: test-resource-with-creds
++   namespace: default
++ spec:
++   coolField: test-value-creds
++   crossplane:
++     compositionRef:
++       name: xnopresources-with-creds.diff.example.org
+`), `
+---
+`,
+			}, ""),
+			expectedError: false,
 		},
 	}
 

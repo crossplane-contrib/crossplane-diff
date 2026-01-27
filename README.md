@@ -125,6 +125,9 @@ Flags:
                                (e.g., 'metadata.annotations') and map key paths with
                                bracket notation (e.g., 'metadata.annotations[key]').
                                Can be specified multiple times.
+      --function-credentials=PATH  Path to YAML file or directory containing Secret
+                               resources to pass as function credentials. Overrides
+                               auto-fetched credentials from cluster.
 ```
 
 **Note**: XR namespaces are read directly from the YAML files being diffed, not from command-line flags.
@@ -154,6 +157,9 @@ Flags:
                                (e.g., 'metadata.annotations') and map key paths with
                                bracket notation (e.g., 'metadata.annotations[key]').
                                Can be specified multiple times.
+      --function-credentials=PATH  Path to YAML file or directory containing Secret
+                               resources to pass as function credentials. Overrides
+                               auto-fetched credentials from cluster.
 ```
 
 **Note**: The `diff` subcommand is deprecated. Use `xr` instead.
@@ -179,6 +185,58 @@ The tool performs the following steps:
 7. **Calculate diffs** by comparing rendered resources against current cluster state
 8. **Display formatted output** showing what would change
 
+## Function Credentials
+
+Some Crossplane functions require credentials to operate (e.g., `function-msgraph` for Microsoft Graph API access). These credentials are typically referenced in composition pipelines via `credentials[].secretRef`.
+
+### Automatic Credential Fetching
+
+By default, `crossplane-diff` automatically fetches credentials referenced in compositions from the cluster:
+
+```yaml
+# In your composition
+spec:
+  pipeline:
+    - step: call-graph-api
+      functionRef:
+        name: function-msgraph
+      credentials:
+        - name: azure-creds
+          source: Secret
+          secretRef:
+            namespace: crossplane-system
+            name: msgraph-credentials
+```
+
+When diffing an XR that uses this composition, the tool will automatically fetch `msgraph-credentials` from the cluster and pass it to the function.
+
+### Providing Credentials via CLI
+
+For cases where credentials don't exist in the cluster (e.g., when using workload identity that's injected at runtime, or testing locally), you can provide credentials via the `--function-credentials` flag:
+
+```bash
+# Provide credentials from a file
+crossplane-diff xr xr.yaml --function-credentials ./secrets/credentials.yaml
+
+# Provide credentials from a directory (all YAML files containing Secrets)
+crossplane-diff xr xr.yaml --function-credentials ./secrets/
+```
+
+The credentials file should contain Kubernetes Secret resources:
+
+```yaml
+apiVersion: v1
+kind: Secret
+metadata:
+  name: msgraph-credentials
+  namespace: crossplane-system
+type: Opaque
+data:
+  credentials: <base64-encoded-credentials>
+```
+
+**Note**: CLI-provided credentials take precedence over auto-fetched credentials from the cluster. This allows you to override cluster secrets for testing or development purposes.
+
 ## Crossplane v2 Support
 
 This tool fully supports both Crossplane v1 and v2, including:
@@ -199,6 +257,7 @@ The tool requires read access to:
 - **Crossplane definitions**: XRDs, Compositions, Functions
 - **Crossplane runtime resources**: XRs, Claims, Managed Resources
 - **Crossplane configuration**: EnvironmentConfigs
+- **Function credentials**: Secrets referenced in composition pipelines (for auto-fetch)
 - **Kubernetes resources**: CRDs, referenced resources
 - **Resource hierarchies**: Owner references and relationships
 

@@ -23,10 +23,14 @@ import (
 
 	"github.com/alecthomas/kong"
 	dp "github.com/crossplane-contrib/crossplane-diff/cmd/diff/diffprocessor"
+	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/rest"
 
 	"github.com/crossplane/crossplane-runtime/v2/pkg/errors"
 	"github.com/crossplane/crossplane-runtime/v2/pkg/logging"
+
+	ld "github.com/crossplane/crossplane/v2/cmd/crank/common/load"
 )
 
 // globalRenderMutex serializes all render operations globally across all diff processors.
@@ -61,7 +65,7 @@ func initializeAppContext(timeout time.Duration, appCtx *AppContext, log logging
 
 // defaultProcessorOptions returns the standard default options used by both XR and composition processors.
 // This is the single source of truth for behavior defaults in the CLI layer.
-func defaultProcessorOptions(fields CommonCmdFields, namespace string) []dp.ProcessorOption {
+func defaultProcessorOptions(fields CommonCmdFields, namespace string, logger logging.Logger) []dp.ProcessorOption {
 	// Default ignored paths - always filtered from diffs
 	// Preallocate with capacity for default + user-specified paths
 	allIgnorePaths := make([]string, 0, 1+len(fields.IgnorePaths))
@@ -70,11 +74,70 @@ func defaultProcessorOptions(fields CommonCmdFields, namespace string) []dp.Proc
 	// Combine default paths with user-specified ones
 	allIgnorePaths = append(allIgnorePaths, fields.IgnorePaths...)
 
-	return []dp.ProcessorOption{
+	opts := []dp.ProcessorOption{
 		dp.WithNamespace(namespace),
 		dp.WithColorize(!fields.NoColor),
 		dp.WithCompact(fields.Compact),
 		dp.WithMaxNestedDepth(fields.MaxNestedDepth),
 		dp.WithIgnorePaths(allIgnorePaths),
 	}
+
+	// Load function credentials from file/directory if specified
+	if fields.FunctionCredentials != "" {
+		creds, err := loadFunctionCredentials(fields.FunctionCredentials)
+		if err != nil {
+			// Log warning but don't fail - auto-fetch from cluster may still work
+			logger.Info("Warning: could not load function credentials from file",
+				"path", fields.FunctionCredentials,
+				"error", err)
+		} else if len(creds) > 0 {
+			opts = append(opts, dp.WithFunctionCredentials(creds))
+			logger.Debug("Loaded function credentials from file",
+				"path", fields.FunctionCredentials,
+				"count", len(creds))
+		}
+	}
+
+	return opts
+}
+
+// loadFunctionCredentials loads Secret resources from a YAML file or directory.
+// The function supports both single files and directories containing YAML files.
+// Only resources of kind "Secret" are returned; other resources are silently skipped.
+func loadFunctionCredentials(path string) ([]corev1.Secret, error) {
+	if path == "" {
+		return nil, nil
+	}
+
+	// Use the crossplane loader which handles files, directories, and multi-document YAML
+	loader, err := ld.NewLoader(path)
+	if err != nil {
+		return nil, errors.Wrapf(err, "cannot create loader for path %q", path)
+	}
+
+	resources, err := loader.Load()
+	if err != nil {
+		return nil, errors.Wrapf(err, "cannot load resources from %q", path)
+	}
+
+	var secrets []corev1.Secret
+
+	for _, res := range resources {
+		// Only process Secret resources
+		if res.GetKind() != "Secret" || res.GetAPIVersion() != "v1" {
+			continue
+		}
+
+		// Convert unstructured to corev1.Secret
+		secret := corev1.Secret{}
+
+		err := runtime.DefaultUnstructuredConverter.FromUnstructured(res.UnstructuredContent(), &secret)
+		if err != nil {
+			return nil, errors.Wrapf(err, "cannot convert Secret %q to corev1.Secret", res.GetName())
+		}
+
+		secrets = append(secrets, secret)
+	}
+
+	return secrets, nil
 }

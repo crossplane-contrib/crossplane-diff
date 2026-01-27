@@ -1,0 +1,10 @@
+apiVersion: ns.diff.example.org/v1alpha1
+kind: XNopResource
+metadata:
+  name: test-resource-with-creds
+  namespace: default
+spec:
+  coolField: test-value-creds
+  crossplane:
+    compositionRef:
+      name: xnopresources-with-creds.diff.example.org

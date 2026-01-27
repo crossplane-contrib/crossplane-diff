@@ -8,6 +8,7 @@ import (
 	"github.com/crossplane-contrib/crossplane-diff/cmd/diff/renderer"
 
 	"github.com/crossplane/crossplane-runtime/v2/pkg/logging"
+	corev1 "k8s.io/api/core/v1"
 )
 
 // ProcessorConfig contains configuration for the DiffProcessor.
@@ -29,6 +30,9 @@ type ProcessorConfig struct {
 
 	// IgnorePaths is a list of paths to ignore when calculating diffs
 	IgnorePaths []string
+
+	// FunctionCredentials holds Secret credentials to pass to Functions during rendering
+	FunctionCredentials []corev1.Secret
 
 	// Logger is the logger to use
 	Logger logging.Logger
@@ -106,6 +110,13 @@ func WithIncludeManual(includeManual bool) ProcessorOption {
 func WithIgnorePaths(ignorePaths []string) ProcessorOption {
 	return func(config *ProcessorConfig) {
 		config.IgnorePaths = ignorePaths
+	}
+}
+
+// WithFunctionCredentials sets the credentials to pass to Functions during rendering.
+func WithFunctionCredentials(creds []corev1.Secret) ProcessorOption {
+	return func(config *ProcessorConfig) {
+		config.FunctionCredentials = creds
 	}
 }
 

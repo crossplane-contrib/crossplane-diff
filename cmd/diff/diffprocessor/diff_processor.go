@@ -16,8 +16,10 @@ import (
 	dt "github.com/crossplane-contrib/crossplane-diff/cmd/diff/renderer/types"
 	"github.com/crossplane-contrib/crossplane-diff/cmd/diff/serial"
 	"github.com/crossplane-contrib/crossplane-diff/cmd/diff/types"
+	corev1 "k8s.io/api/core/v1"
 	un "k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/util/uuid"
 
 	"github.com/crossplane/crossplane-runtime/v2/pkg/errors"
@@ -51,6 +53,7 @@ type DefaultDiffProcessor struct {
 	compClient           xp.CompositionClient
 	defClient            xp.DefinitionClient
 	schemaClient         k8.SchemaClient
+	resourceClient       k8.ResourceClient
 	resourceManager      ResourceManager
 	config               ProcessorConfig
 	functionProvider     FunctionProvider
@@ -99,6 +102,7 @@ func NewDiffProcessor(k8cs k8.Clients, xpcs xp.Clients, opts ...ProcessorOption)
 		compClient:           xpcs.Composition,
 		defClient:            xpcs.Definition,
 		schemaClient:         k8cs.Schema,
+		resourceClient:       k8cs.Resource,
 		resourceManager:      resourceManager,
 		config:               config,
 		functionProvider:     functionProvider,
@@ -991,6 +995,23 @@ func (p *DefaultDiffProcessor) RenderWithRequirements(
 	resourceID string,
 	observedResources []cpd.Unstructured,
 ) (render.Outputs, error) {
+	// Fetch function credentials from composition pipeline and merge with CLI-provided credentials
+	autoFetchedCredentials, err := p.fetchCompositionCredentials(ctx, comp)
+	if err != nil {
+		p.config.Logger.Debug("Error fetching composition credentials (continuing without them)",
+			"resource", resourceID,
+			"error", err)
+	}
+
+	functionCredentials := mergeCredentials(p.config.FunctionCredentials, autoFetchedCredentials)
+	if len(functionCredentials) > 0 {
+		p.config.Logger.Debug("Using function credentials for rendering",
+			"resource", resourceID,
+			"credentialCount", len(functionCredentials),
+			"cliProvided", len(p.config.FunctionCredentials),
+			"autoFetched", len(autoFetchedCredentials))
+	}
+
 	// Start with environment configs as baseline extra resources
 	var renderResources []un.Unstructured
 
@@ -1022,11 +1043,12 @@ func (p *DefaultDiffProcessor) RenderWithRequirements(
 
 		// Perform render to get requirements
 		output, renderErr := p.config.RenderFunc(ctx, p.config.Logger, render.Inputs{
-			CompositeResource: xr,
-			Composition:       comp,
-			Functions:         fns,
-			RequiredResources: renderResources,
-			ObservedResources: observedResources,
+			CompositeResource:   xr,
+			Composition:         comp,
+			Functions:           fns,
+			FunctionCredentials: functionCredentials,
+			RequiredResources:   renderResources,
+			ObservedResources:   observedResources,
 		})
 
 		lastOutput = output
@@ -1306,4 +1328,109 @@ func (p *DefaultDiffProcessor) applyXRDDefaults(ctx context.Context, xr *cmp.Uns
 	p.config.Logger.Debug("Successfully applied XRD defaults", "resource", resourceID)
 
 	return nil
+}
+
+// fetchCompositionCredentials extracts credential references from a composition's pipeline steps
+// and fetches the referenced secrets from the cluster. The returned secrets are suitable for
+// passing to render.Inputs.FunctionCredentials.
+func (p *DefaultDiffProcessor) fetchCompositionCredentials(ctx context.Context, comp *apiextensionsv1.Composition) ([]corev1.Secret, error) {
+	if comp == nil || comp.Spec.Pipeline == nil {
+		return nil, nil
+	}
+
+	// Track unique secrets to avoid duplicates (key: namespace/name)
+	secretMap := make(map[string]corev1.Secret)
+	secretGVK := schema.GroupVersionKind{Group: "", Version: "v1", Kind: "Secret"}
+
+	for _, step := range comp.Spec.Pipeline {
+		for _, cred := range step.Credentials {
+			if cred.Source != apiextensionsv1.FunctionCredentialsSourceSecret || cred.SecretRef == nil {
+				continue
+			}
+
+			key := fmt.Sprintf("%s/%s", cred.SecretRef.Namespace, cred.SecretRef.Name)
+			if _, exists := secretMap[key]; exists {
+				// Already fetched this secret
+				continue
+			}
+
+			p.config.Logger.Debug("Fetching function credential secret",
+				"step", step.Step,
+				"credentialName", cred.Name,
+				"secretNamespace", cred.SecretRef.Namespace,
+				"secretName", cred.SecretRef.Name)
+
+			// Fetch the secret from the cluster
+			secretUnstructured, err := p.resourceClient.GetResource(ctx, secretGVK, cred.SecretRef.Namespace, cred.SecretRef.Name)
+			if err != nil {
+				// Log warning but continue - the secret might not exist (e.g., workload identity)
+				p.config.Logger.Debug("Could not fetch function credential secret, skipping",
+					"step", step.Step,
+					"credentialName", cred.Name,
+					"secretNamespace", cred.SecretRef.Namespace,
+					"secretName", cred.SecretRef.Name,
+					"error", err)
+
+				continue
+			}
+
+			// Convert unstructured to corev1.Secret
+			secret := corev1.Secret{}
+			if err := runtime.DefaultUnstructuredConverter.FromUnstructured(secretUnstructured.UnstructuredContent(), &secret); err != nil {
+				p.config.Logger.Debug("Could not convert secret to corev1.Secret, skipping",
+					"step", step.Step,
+					"credentialName", cred.Name,
+					"error", err)
+
+				continue
+			}
+
+			secretMap[key] = secret
+		}
+	}
+
+	// Convert map to slice
+	secrets := make([]corev1.Secret, 0, len(secretMap))
+	for _, secret := range secretMap {
+		secrets = append(secrets, secret)
+	}
+
+	if len(secrets) > 0 {
+		p.config.Logger.Debug("Fetched function credential secrets from cluster",
+			"composition", comp.GetName(),
+			"secretCount", len(secrets))
+	}
+
+	return secrets, nil
+}
+
+// mergeCredentials combines CLI-provided credentials with auto-fetched credentials.
+// CLI-provided credentials take precedence (override) over auto-fetched ones.
+func mergeCredentials(cliCredentials, autoFetchedCredentials []corev1.Secret) []corev1.Secret {
+	if len(cliCredentials) == 0 && len(autoFetchedCredentials) == 0 {
+		return nil
+	}
+
+	// Create a map to deduplicate by namespace/name, with CLI credentials taking precedence
+	credMap := make(map[string]corev1.Secret)
+
+	// Add auto-fetched credentials first
+	for _, cred := range autoFetchedCredentials {
+		key := fmt.Sprintf("%s/%s", cred.Namespace, cred.Name)
+		credMap[key] = cred
+	}
+
+	// Override with CLI-provided credentials
+	for _, cred := range cliCredentials {
+		key := fmt.Sprintf("%s/%s", cred.Namespace, cred.Name)
+		credMap[key] = cred
+	}
+
+	// Convert map to slice
+	result := make([]corev1.Secret, 0, len(credMap))
+	for _, cred := range credMap {
+		result = append(result, cred)
+	}
+
+	return result
 }

@@ -107,7 +107,7 @@ func makeDefaultCompProc(c *CompCmd, ctx *AppContext, log logging.Logger) (dp.Co
 	fnProvider := dp.NewCachedFunctionProvider(ctx.XpClients.Function, log)
 
 	// Both processors share the same options since they're part of the same command
-	opts := defaultProcessorOptions(c.CommonCmdFields, namespace)
+	opts := defaultProcessorOptions(c.CommonCmdFields, namespace, log)
 	opts = append(opts,
 		dp.WithLogger(log),
 		dp.WithRenderMutex(&globalRenderMutex),

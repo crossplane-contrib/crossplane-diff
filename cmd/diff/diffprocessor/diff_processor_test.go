@@ -15,11 +15,13 @@ import (
 	tu "github.com/crossplane-contrib/crossplane-diff/cmd/diff/testutils"
 	gcmp "github.com/google/go-cmp/cmp"
 	"github.com/sergi/go-diff/diffmatchpatch"
+	corev1 "k8s.io/api/core/v1"
 	extv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	un "k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 
+	xpv1 "github.com/crossplane/crossplane-runtime/v2/apis/common/v1"
 	"github.com/crossplane/crossplane-runtime/v2/pkg/errors"
 	"github.com/crossplane/crossplane-runtime/v2/pkg/logging"
 	cpd "github.com/crossplane/crossplane-runtime/v2/pkg/resource/unstructured/composed"
@@ -2440,6 +2442,236 @@ func TestDefaultDiffProcessor_synthesizeDummyBackingXRForNewClaim(t *testing.T) 
 			// Verify UID is set
 			if result.xrForRendering.GetUID() == "" {
 				t.Errorf("synthesizeDummyBackingXRForNewClaim() UID not set on result")
+			}
+		})
+	}
+}
+
+func TestMergeCredentials(t *testing.T) {
+	tests := map[string]struct {
+		cliCredentials        []corev1.Secret
+		autoFetchedCredentials []corev1.Secret
+		want                  map[string]bool // expected namespace/name keys in result
+		wantCount             int
+	}{
+		"EmptyBoth": {
+			cliCredentials:        nil,
+			autoFetchedCredentials: nil,
+			want:                  map[string]bool{},
+			wantCount:             0,
+		},
+		"OnlyCLI": {
+			cliCredentials: []corev1.Secret{
+				{ObjectMeta: metav1.ObjectMeta{Name: "secret1", Namespace: "ns1"}},
+			},
+			autoFetchedCredentials: nil,
+			want:                  map[string]bool{"ns1/secret1": true},
+			wantCount:             1,
+		},
+		"OnlyAutoFetched": {
+			cliCredentials: nil,
+			autoFetchedCredentials: []corev1.Secret{
+				{ObjectMeta: metav1.ObjectMeta{Name: "secret2", Namespace: "ns2"}},
+			},
+			want:      map[string]bool{"ns2/secret2": true},
+			wantCount: 1,
+		},
+		"CLIOverridesAutoFetched": {
+			cliCredentials: []corev1.Secret{
+				{ObjectMeta: metav1.ObjectMeta{Name: "secret1", Namespace: "ns1"}, Data: map[string][]byte{"key": []byte("cli-value")}},
+			},
+			autoFetchedCredentials: []corev1.Secret{
+				{ObjectMeta: metav1.ObjectMeta{Name: "secret1", Namespace: "ns1"}, Data: map[string][]byte{"key": []byte("auto-value")}},
+			},
+			want:      map[string]bool{"ns1/secret1": true},
+			wantCount: 1,
+		},
+		"MergesDifferentSecrets": {
+			cliCredentials: []corev1.Secret{
+				{ObjectMeta: metav1.ObjectMeta{Name: "cli-secret", Namespace: "ns1"}},
+			},
+			autoFetchedCredentials: []corev1.Secret{
+				{ObjectMeta: metav1.ObjectMeta{Name: "auto-secret", Namespace: "ns2"}},
+			},
+			want:      map[string]bool{"ns1/cli-secret": true, "ns2/auto-secret": true},
+			wantCount: 2,
+		},
+	}
+
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			got := mergeCredentials(tc.cliCredentials, tc.autoFetchedCredentials)
+
+			if len(got) != tc.wantCount {
+				t.Errorf("mergeCredentials() returned %d secrets, want %d", len(got), tc.wantCount)
+			}
+
+			for _, secret := range got {
+				key := fmt.Sprintf("%s/%s", secret.Namespace, secret.Name)
+				if !tc.want[key] {
+					t.Errorf("mergeCredentials() unexpected secret %s", key)
+				}
+			}
+
+			// Test CLI override behavior specifically
+			if name == "CLIOverridesAutoFetched" && len(got) == 1 {
+				if string(got[0].Data["key"]) != "cli-value" {
+					t.Errorf("mergeCredentials() CLI credentials should override auto-fetched, got value %q", string(got[0].Data["key"]))
+				}
+			}
+		})
+	}
+}
+
+func TestFetchCompositionCredentials(t *testing.T) {
+	tests := map[string]struct {
+		composition   *apiextensionsv1.Composition
+		setupMocks    func() k8.ResourceClient
+		wantSecrets   int
+		wantErr       bool
+	}{
+		"NilComposition": {
+			composition:   nil,
+			setupMocks:    func() k8.ResourceClient { return nil },
+			wantSecrets:   0,
+			wantErr:       false,
+		},
+		"NoPipelineSteps": {
+			composition: &apiextensionsv1.Composition{
+				ObjectMeta: metav1.ObjectMeta{Name: "test-comp"},
+				Spec:       apiextensionsv1.CompositionSpec{},
+			},
+			setupMocks:  func() k8.ResourceClient { return nil },
+			wantSecrets: 0,
+			wantErr:     false,
+		},
+		"NoCredentialsInPipeline": {
+			composition: tu.NewComposition("test-comp").
+				WithCompositeTypeRef("example.org/v1", "XR1").
+				WithPipelineMode().
+				WithPipelineStep("step1", "function-test", nil).
+				Build(),
+			setupMocks:  func() k8.ResourceClient { return nil },
+			wantSecrets: 0,
+			wantErr:     false,
+		},
+		"FetchesCredentialSecret": {
+			composition: func() *apiextensionsv1.Composition {
+				comp := tu.NewComposition("test-comp").
+					WithCompositeTypeRef("example.org/v1", "XR1").
+					WithPipelineMode().
+					WithPipelineStep("step1", "function-msgraph", nil).
+					Build()
+				// Add credentials to the pipeline step
+				comp.Spec.Pipeline[0].Credentials = []apiextensionsv1.FunctionCredentials{
+					{
+						Name:   "azure-creds",
+						Source: apiextensionsv1.FunctionCredentialsSourceSecret,
+						SecretRef: &xpv1.SecretReference{
+							Namespace: "crossplane-system",
+							Name:      "azure-credentials",
+						},
+					},
+				}
+				return comp
+			}(),
+			setupMocks: func() k8.ResourceClient {
+				secretUnstructured := tu.NewResource("v1", "Secret", "azure-credentials").
+					WithNamespace("crossplane-system").
+					Build()
+				// Add data to the secret
+				un.SetNestedStringMap(secretUnstructured.Object, map[string]string{"credentials": "test-creds"}, "stringData")
+
+				return tu.NewMockResourceClient().
+					WithResourcesExist(secretUnstructured).
+					Build()
+			},
+			wantSecrets: 1,
+			wantErr:     false,
+		},
+		"SkipsMissingSecret": {
+			composition: func() *apiextensionsv1.Composition {
+				comp := tu.NewComposition("test-comp").
+					WithCompositeTypeRef("example.org/v1", "XR1").
+					WithPipelineMode().
+					WithPipelineStep("step1", "function-msgraph", nil).
+					Build()
+				comp.Spec.Pipeline[0].Credentials = []apiextensionsv1.FunctionCredentials{
+					{
+						Name:   "missing-creds",
+						Source: apiextensionsv1.FunctionCredentialsSourceSecret,
+						SecretRef: &xpv1.SecretReference{
+							Namespace: "crossplane-system",
+							Name:      "missing-secret",
+						},
+					},
+				}
+				return comp
+			}(),
+			setupMocks: func() k8.ResourceClient {
+				return tu.NewMockResourceClient().
+					WithResourceNotFound().
+					Build()
+			},
+			wantSecrets: 0, // Missing secrets are skipped, not errors
+			wantErr:     false,
+		},
+		"DeduplicatesSecrets": {
+			composition: func() *apiextensionsv1.Composition {
+				comp := tu.NewComposition("test-comp").
+					WithCompositeTypeRef("example.org/v1", "XR1").
+					WithPipelineMode().
+					WithPipelineStep("step1", "function-a", nil).
+					WithPipelineStep("step2", "function-b", nil).
+					Build()
+				// Both steps reference the same secret
+				secretRef := &xpv1.SecretReference{
+					Namespace: "crossplane-system",
+					Name:      "shared-secret",
+				}
+				comp.Spec.Pipeline[0].Credentials = []apiextensionsv1.FunctionCredentials{
+					{Name: "creds", Source: apiextensionsv1.FunctionCredentialsSourceSecret, SecretRef: secretRef},
+				}
+				comp.Spec.Pipeline[1].Credentials = []apiextensionsv1.FunctionCredentials{
+					{Name: "creds", Source: apiextensionsv1.FunctionCredentialsSourceSecret, SecretRef: secretRef},
+				}
+				return comp
+			}(),
+			setupMocks: func() k8.ResourceClient {
+				secretUnstructured := tu.NewResource("v1", "Secret", "shared-secret").
+					WithNamespace("crossplane-system").
+					Build()
+				return tu.NewMockResourceClient().
+					WithResourcesExist(secretUnstructured).
+					Build()
+			},
+			wantSecrets: 1, // Only one secret despite two references
+			wantErr:     false,
+		},
+	}
+
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			resourceClient := tc.setupMocks()
+
+			processor := &DefaultDiffProcessor{
+				resourceClient: resourceClient,
+				config: ProcessorConfig{
+					Logger: tu.TestLogger(t, false),
+				},
+			}
+
+			secrets, err := processor.fetchCompositionCredentials(t.Context(), tc.composition)
+
+			if tc.wantErr && err == nil {
+				t.Errorf("fetchCompositionCredentials() expected error, got nil")
+			}
+			if !tc.wantErr && err != nil {
+				t.Errorf("fetchCompositionCredentials() unexpected error: %v", err)
+			}
+
+			if len(secrets) != tc.wantSecrets {
+				t.Errorf("fetchCompositionCredentials() returned %d secrets, want %d", len(secrets), tc.wantSecrets)
 			}
 		})
 	}

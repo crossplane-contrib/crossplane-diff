@@ -89,7 +89,7 @@ func makeDefaultXRProc(c *XRCmd, ctx *AppContext, log logging.Logger) dp.DiffPro
 	// Use default namespace for processor options (not actually used for XR diffs)
 	namespace := "default"
 
-	opts := defaultProcessorOptions(c.CommonCmdFields, namespace)
+	opts := defaultProcessorOptions(c.CommonCmdFields, namespace, log)
 	opts = append(opts,
 		dp.WithLogger(log),
 		dp.WithRenderMutex(&globalRenderMutex),
