@@ -254,3 +254,72 @@ func TestDiffExistingNestedResourceV2WithGenerateName(t *testing.T) {
 			Feature(),
 	)
 }
+
+// TestDiffFunctionCredentials tests that function credentials are correctly fetched from the cluster
+// and passed to composition functions. The test verifies the entire credential flow:
+// 1. Secret exists in cluster
+// 2. Composition references the secret via credentials[].secretRef
+// 3. crossplane-diff fetches the secret and passes it to the function
+// 4. Function (go-templating) can access and use the credentials.
+func TestDiffFunctionCredentials(t *testing.T) {
+	imageTag := strings.Split(environment.GetCrossplaneImage(), ":")[1]
+	manifests := filepath.Join("test/e2e/manifests/beta/diff", imageTag, "function-credentials")
+	setupPath := filepath.Join(manifests, "setup")
+
+	environment.Test(t,
+		features.New("DiffFunctionCredentials").
+			WithLabel(e2e.LabelArea, LabelAreaDiff).
+			WithLabel(e2e.LabelSize, e2e.LabelSizeSmall).
+			WithLabel(config.LabelTestSuite, config.TestSuiteDefault).
+			WithLabel(LabelCrossplaneVersion, CrossplaneVersionMain).
+			WithSetup("CreatePrerequisites", funcs.AllOf(
+				funcs.ApplyResources(e2e.FieldManager, setupPath, "*.yaml"),
+				funcs.ResourcesCreatedWithin(30*time.Second, setupPath, "*.yaml"),
+			)).
+			WithSetup("PrerequisitesAreReady", funcs.AllOf(
+				funcs.ResourcesHaveConditionWithin(1*time.Minute, setupPath, "definition.yaml", apiextensionsv1.WatchingComposite()),
+			)).
+			Assess("CredentialsAreFetchedAndPassedToFunction", func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
+				t.Helper()
+
+				output, log, err := RunXRDiff(t, c, "./crossplane-diff", exitCodeDiffDetected, filepath.Join(manifests, "new-xr.yaml"))
+
+				// Always log output for debugging
+				t.Logf("crossplane-diff stdout: %s", output)
+				t.Logf("crossplane-diff stderr: %s", log)
+
+				if err != nil {
+					t.Fatalf("Error running diff command: %v", err)
+				}
+
+				// Verify that the credential was passed to the function and rendered into the output.
+				// The composition templates the credential value into annotations:
+				// - credential-present: "true" if credentials were passed
+				// - credential-test-key: the decoded value from the secret
+				// The secret contains test-key: "test-credential-value" (base64 encoded as dGVzdC1jcmVkZW50aWFsLXZhbHVl)
+				if !strings.Contains(output, `credential-present: "true"`) {
+					// Check if it shows "false" which means credentials weren't passed
+					if strings.Contains(output, `credential-present: "false"`) {
+						t.Errorf("Credentials were NOT passed to the function (credential-present: false). " +
+							"Expected credentials to be fetched from cluster and passed to function-go-templating")
+					} else {
+						t.Errorf("Expected output to contain 'credential-present: \"true\"' annotation, got: %s", output)
+					}
+				}
+
+				// Check that the actual credential value was templated into the output.
+				// The secret's test-key contains "test-credential-value" which should appear
+				// in the credential-test-key annotation after go-templating processes it.
+				if !strings.Contains(output, "credential-test-key: test-credential-value") {
+					t.Errorf("Expected output to contain 'credential-test-key: test-credential-value' showing the actual credential value was used. Got: %s", output)
+				}
+
+				return ctx
+			}).
+			WithTeardown("DeletePrerequisites", funcs.AllOf(
+				funcs.DeleteResourcesWithPropagationPolicy(setupPath, "*.yaml", metav1.DeletePropagationForeground),
+				funcs.ResourcesDeletedWithin(3*time.Minute, setupPath, "*.yaml"),
+			)).
+			Feature(),
+	)
+}

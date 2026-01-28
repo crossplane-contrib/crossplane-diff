@@ -7,6 +7,7 @@ import (
 	"io"
 	"maps"
 	"reflect"
+	"sort"
 	"strings"
 
 	"dario.cat/mergo"
@@ -16,6 +17,7 @@ import (
 	dt "github.com/crossplane-contrib/crossplane-diff/cmd/diff/renderer/types"
 	"github.com/crossplane-contrib/crossplane-diff/cmd/diff/serial"
 	"github.com/crossplane-contrib/crossplane-diff/cmd/diff/types"
+	corev1 "k8s.io/api/core/v1"
 	un "k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/util/uuid"
@@ -49,6 +51,7 @@ type DiffProcessor interface {
 // DefaultDiffProcessor implements DiffProcessor with modular components.
 type DefaultDiffProcessor struct {
 	compClient           xp.CompositionClient
+	credentialClient     xp.CredentialClient
 	defClient            xp.DefinitionClient
 	schemaClient         k8.SchemaClient
 	resourceManager      ResourceManager
@@ -97,6 +100,7 @@ func NewDiffProcessor(k8cs k8.Clients, xpcs xp.Clients, opts ...ProcessorOption)
 
 	processor := &DefaultDiffProcessor{
 		compClient:           xpcs.Composition,
+		credentialClient:     xpcs.Credential,
 		defClient:            xpcs.Definition,
 		schemaClient:         k8cs.Schema,
 		resourceManager:      resourceManager,
@@ -991,6 +995,18 @@ func (p *DefaultDiffProcessor) RenderWithRequirements(
 	resourceID string,
 	observedResources []cpd.Unstructured,
 ) (render.Outputs, error) {
+	// Fetch function credentials from composition pipeline and merge with CLI-provided credentials
+	autoFetchedCredentials := p.fetchCompositionCredentials(ctx, comp)
+
+	functionCredentials := mergeCredentials(p.config.FunctionCredentials, autoFetchedCredentials)
+	if len(functionCredentials) > 0 {
+		p.config.Logger.Debug("Using function credentials for rendering",
+			"resource", resourceID,
+			"credentialCount", len(functionCredentials),
+			"cliProvided", len(p.config.FunctionCredentials),
+			"autoFetched", len(autoFetchedCredentials))
+	}
+
 	// Start with environment configs as baseline extra resources
 	var renderResources []un.Unstructured
 
@@ -1022,11 +1038,12 @@ func (p *DefaultDiffProcessor) RenderWithRequirements(
 
 		// Perform render to get requirements
 		output, renderErr := p.config.RenderFunc(ctx, p.config.Logger, render.Inputs{
-			CompositeResource: xr,
-			Composition:       comp,
-			Functions:         fns,
-			RequiredResources: renderResources,
-			ObservedResources: observedResources,
+			CompositeResource:   xr,
+			Composition:         comp,
+			Functions:           fns,
+			FunctionCredentials: functionCredentials,
+			RequiredResources:   renderResources,
+			ObservedResources:   observedResources,
 		})
 
 		lastOutput = output
@@ -1306,4 +1323,54 @@ func (p *DefaultDiffProcessor) applyXRDDefaults(ctx context.Context, xr *cmp.Uns
 	p.config.Logger.Debug("Successfully applied XRD defaults", "resource", resourceID)
 
 	return nil
+}
+
+// fetchCompositionCredentials delegates to the credential client to fetch credential secrets
+// referenced in a composition's pipeline steps from the cluster.
+func (p *DefaultDiffProcessor) fetchCompositionCredentials(ctx context.Context, comp *apiextensionsv1.Composition) []corev1.Secret {
+	if comp == nil || p.credentialClient == nil {
+		return nil
+	}
+
+	return p.credentialClient.FetchCompositionCredentials(ctx, comp)
+}
+
+// mergeCredentials combines CLI-provided credentials with auto-fetched credentials.
+// CLI-provided credentials take precedence (override) over auto-fetched ones.
+// The result is sorted by namespace/name for deterministic ordering.
+func mergeCredentials(cliCredentials, autoFetchedCredentials []corev1.Secret) []corev1.Secret {
+	if len(cliCredentials) == 0 && len(autoFetchedCredentials) == 0 {
+		return nil
+	}
+
+	// Create a map to deduplicate by namespace/name, with CLI credentials taking precedence
+	credMap := make(map[string]corev1.Secret)
+
+	// Add auto-fetched credentials first
+	for _, cred := range autoFetchedCredentials {
+		key := fmt.Sprintf("%s/%s", cred.Namespace, cred.Name)
+		credMap[key] = cred
+	}
+
+	// Override with CLI-provided credentials
+	for _, cred := range cliCredentials {
+		key := fmt.Sprintf("%s/%s", cred.Namespace, cred.Name)
+		credMap[key] = cred
+	}
+
+	// Collect and sort keys for deterministic ordering
+	keys := make([]string, 0, len(credMap))
+	for key := range credMap {
+		keys = append(keys, key)
+	}
+
+	sort.Strings(keys)
+
+	// Convert map to slice in sorted order
+	result := make([]corev1.Secret, 0, len(credMap))
+	for _, key := range keys {
+		result = append(result, credMap[key])
+	}
+
+	return result
 }

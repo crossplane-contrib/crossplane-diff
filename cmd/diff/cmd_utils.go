@@ -23,10 +23,14 @@ import (
 
 	"github.com/alecthomas/kong"
 	dp "github.com/crossplane-contrib/crossplane-diff/cmd/diff/diffprocessor"
+	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/rest"
 
 	"github.com/crossplane/crossplane-runtime/v2/pkg/errors"
 	"github.com/crossplane/crossplane-runtime/v2/pkg/logging"
+
+	ld "github.com/crossplane/crossplane/v2/cmd/crank/common/load"
 )
 
 // globalRenderMutex serializes all render operations globally across all diff processors.
@@ -70,11 +74,59 @@ func defaultProcessorOptions(fields CommonCmdFields, namespace string) []dp.Proc
 	// Combine default paths with user-specified ones
 	allIgnorePaths = append(allIgnorePaths, fields.IgnorePaths...)
 
-	return []dp.ProcessorOption{
+	opts := []dp.ProcessorOption{
 		dp.WithNamespace(namespace),
 		dp.WithColorize(!fields.NoColor),
 		dp.WithCompact(fields.Compact),
 		dp.WithMaxNestedDepth(fields.MaxNestedDepth),
 		dp.WithIgnorePaths(allIgnorePaths),
 	}
+
+	// Add function credentials if provided (empty path with no secrets errors in FunctionCredentials.Decode)
+	if len(fields.FunctionCredentials.Secrets) > 0 {
+		opts = append(opts, dp.WithFunctionCredentials(fields.FunctionCredentials.Secrets))
+	}
+
+	return opts
+}
+
+// LoadFunctionCredentials loads Secret resources from a YAML file or directory.
+// The function supports both single files and directories containing YAML files.
+// Only resources of kind "Secret" are returned; other resources are silently skipped.
+func LoadFunctionCredentials(path string) ([]corev1.Secret, error) {
+	if path == "" {
+		return nil, nil
+	}
+
+	// Use the crossplane loader which handles files, directories, and multi-document YAML
+	loader, err := ld.NewLoader(path)
+	if err != nil {
+		return nil, errors.Wrapf(err, "cannot create loader for path %q", path)
+	}
+
+	resources, err := loader.Load()
+	if err != nil {
+		return nil, errors.Wrapf(err, "cannot load resources from %q", path)
+	}
+
+	secrets := make([]corev1.Secret, 0, len(resources))
+
+	for _, res := range resources {
+		// Only process Secret resources
+		if res.GetKind() != "Secret" || res.GetAPIVersion() != "v1" {
+			continue
+		}
+
+		// Convert unstructured to corev1.Secret
+		secret := corev1.Secret{}
+
+		err := runtime.DefaultUnstructuredConverter.FromUnstructured(res.UnstructuredContent(), &secret)
+		if err != nil {
+			return nil, errors.Wrapf(err, "cannot convert Secret %q to corev1.Secret", res.GetName())
+		}
+
+		secrets = append(secrets, secret)
+	}
+
+	return secrets, nil
 }

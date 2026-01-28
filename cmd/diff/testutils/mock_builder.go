@@ -2,6 +2,7 @@ package testutils
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -16,6 +17,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	k8stypes "k8s.io/apimachinery/pkg/types"
 
+	xpv1 "github.com/crossplane/crossplane-runtime/v2/apis/common/v1"
 	"github.com/crossplane/crossplane-runtime/v2/pkg/errors"
 	cpd "github.com/crossplane/crossplane-runtime/v2/pkg/resource/unstructured/composed"
 	cmp "github.com/crossplane/crossplane-runtime/v2/pkg/resource/unstructured/composite"
@@ -1390,6 +1392,23 @@ func (b *ResourceBuilder) WithStatusField(name string, value any) *ResourceBuild
 	return b
 }
 
+// WithData sets the data field for Secret resources.
+// The byte slices are base64-encoded as they would be in Kubernetes.
+func (b *ResourceBuilder) WithData(data map[string][]byte) *ResourceBuilder {
+	if data == nil {
+		return b
+	}
+
+	encoded := make(map[string]any, len(data))
+	for k, v := range data {
+		encoded[k] = base64.StdEncoding.EncodeToString(v)
+	}
+
+	b.resource.Object["data"] = encoded
+
+	return b
+}
+
 // WithOwnerReference appends an owner ref to a resource.
 func (b *ResourceBuilder) WithOwnerReference(kind, name, apiVersion, uid string) *ResourceBuilder {
 	// Get existing owner references, or create an empty slice if none exist
@@ -1483,6 +1502,12 @@ func (b *ResourceBuilder) BuildUComposed() *cpd.Unstructured {
 	built.SetUnstructuredContent(b.Build().UnstructuredContent())
 
 	return built
+}
+
+// BuildTyped converts the built unstructured resource into a typed Kubernetes object.
+// The 'into' parameter should be a pointer to the target type (e.g., &corev1.Secret{}).
+func (b *ResourceBuilder) BuildTyped(into runtime.Object) {
+	_ = runtime.DefaultUnstructuredConverter.FromUnstructured(b.Build().Object, into)
 }
 
 // endregion
@@ -1804,8 +1829,25 @@ func (b *CompositionBuilder) WithPipelineMode() *CompositionBuilder {
 	return b
 }
 
+// PipelineStepOption is a functional option for configuring a pipeline step.
+type PipelineStepOption func(*xpextv1.PipelineStep)
+
+// WithCredentials adds credentials to a pipeline step.
+func WithCredentials(name, namespace, secretName string) PipelineStepOption {
+	return func(step *xpextv1.PipelineStep) {
+		step.Credentials = append(step.Credentials, xpextv1.FunctionCredentials{
+			Name:   name,
+			Source: xpextv1.FunctionCredentialsSourceSecret,
+			SecretRef: &xpv1.SecretReference{
+				Namespace: namespace,
+				Name:      secretName,
+			},
+		})
+	}
+}
+
 // WithPipelineStep adds a pipeline step to the composition.
-func (b *CompositionBuilder) WithPipelineStep(step, functionName string, input map[string]any) *CompositionBuilder {
+func (b *CompositionBuilder) WithPipelineStep(step, functionName string, input map[string]any, opts ...PipelineStepOption) *CompositionBuilder {
 	var rawInput *runtime.RawExtension
 
 	if input != nil {
@@ -1818,11 +1860,17 @@ func (b *CompositionBuilder) WithPipelineStep(step, functionName string, input m
 		}
 	}
 
-	b.composition.Spec.Pipeline = append(b.composition.Spec.Pipeline, xpextv1.PipelineStep{
+	pipelineStep := xpextv1.PipelineStep{
 		Step:        step,
 		FunctionRef: xpextv1.FunctionReference{Name: functionName},
 		Input:       rawInput,
-	})
+	}
+
+	for _, opt := range opts {
+		opt(&pipelineStep)
+	}
+
+	b.composition.Spec.Pipeline = append(b.composition.Spec.Pipeline, pipelineStep)
 
 	return b
 }
