@@ -72,7 +72,7 @@ Examples:
 
 // AfterApply implements kong's AfterApply method to bind command-specific dependencies.
 // AppContext is received via dependency injection - Kong resolves it through the provider chain:
-// ContextProvider (bound in CommonCmdFields.BeforeApply) -> provideRestConfig -> provideAppContext
+// ContextProvider (bound in CommonCmdFields.BeforeApply) -> provideRestConfig -> provideAppContext.
 func (c *CompCmd) AfterApply(ctx *kong.Context, log logging.Logger, appCtx *AppContext) error {
 	proc, fnProvider := makeDefaultCompProc(c, appCtx, log)
 

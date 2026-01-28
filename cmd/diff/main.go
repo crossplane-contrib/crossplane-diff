@@ -215,8 +215,28 @@ func provideRestConfig(cp ContextProvider) (*rest.Config, error) {
 	return config, nil
 }
 
+// cachedAppContext stores the singleton AppContext instance.
+// Kong providers are called each time a dependency is requested, but we need
+// the same AppContext instance throughout the command lifecycle so that
+// initialization in Run() affects the same clients used by processors created in AfterApply.
+//
+//nolint:gochecknoglobals // Required for singleton pattern with Kong providers
+var cachedAppContext *AppContext
+
 // provideAppContext creates the application context with all initialized clients.
 // This provider depends on *rest.Config and logging.Logger, which Kong resolves first.
+// The result is cached to ensure the same instance is used throughout the command lifecycle.
 func provideAppContext(config *rest.Config, log logging.Logger) (*AppContext, error) {
-	return NewAppContext(config, log)
+	if cachedAppContext != nil {
+		return cachedAppContext, nil
+	}
+
+	appCtx, err := NewAppContext(config, log)
+	if err != nil {
+		return nil, err
+	}
+
+	cachedAppContext = appCtx
+
+	return appCtx, nil
 }

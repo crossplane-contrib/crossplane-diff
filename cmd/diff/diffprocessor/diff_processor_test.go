@@ -2578,7 +2578,6 @@ func TestMergeCredentials(t *testing.T) {
 func TestFetchCompositionCredentials(t *testing.T) {
 	// This tests that fetchCompositionCredentials correctly delegates to the CredentialClient.
 	// The detailed credential fetching logic is tested in credential_client_test.go.
-
 	var azureCredentials corev1.Secret
 	tu.NewResource("v1", "Secret", "azure-credentials").
 		InNamespace("crossplane-system").
