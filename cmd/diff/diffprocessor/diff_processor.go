@@ -7,6 +7,7 @@ import (
 	"io"
 	"maps"
 	"reflect"
+	"sort"
 	"strings"
 
 	"dario.cat/mergo"
@@ -1336,6 +1337,7 @@ func (p *DefaultDiffProcessor) fetchCompositionCredentials(ctx context.Context, 
 
 // mergeCredentials combines CLI-provided credentials with auto-fetched credentials.
 // CLI-provided credentials take precedence (override) over auto-fetched ones.
+// The result is sorted by namespace/name for deterministic ordering.
 func mergeCredentials(cliCredentials, autoFetchedCredentials []corev1.Secret) []corev1.Secret {
 	if len(cliCredentials) == 0 && len(autoFetchedCredentials) == 0 {
 		return nil
@@ -1356,10 +1358,18 @@ func mergeCredentials(cliCredentials, autoFetchedCredentials []corev1.Secret) []
 		credMap[key] = cred
 	}
 
-	// Convert map to slice
+	// Collect and sort keys for deterministic ordering
+	keys := make([]string, 0, len(credMap))
+	for key := range credMap {
+		keys = append(keys, key)
+	}
+
+	sort.Strings(keys)
+
+	// Convert map to slice in sorted order
 	result := make([]corev1.Secret, 0, len(credMap))
-	for _, cred := range credMap {
-		result = append(result, cred)
+	for _, key := range keys {
+		result = append(result, credMap[key])
 	}
 
 	return result

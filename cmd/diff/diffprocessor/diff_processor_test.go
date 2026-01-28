@@ -2514,6 +2514,15 @@ func TestMergeCredentials(t *testing.T) {
 			want:      map[string]bool{"ns1/cli-secret": true, "ns2/auto-secret": true},
 			wantCount: 2,
 		},
+		"DuplicatesInCLIInputLastWins": {
+			cliCredentials: []corev1.Secret{
+				{ObjectMeta: metav1.ObjectMeta{Name: "secret1", Namespace: "ns1"}, Data: map[string][]byte{"key": []byte("first")}},
+				{ObjectMeta: metav1.ObjectMeta{Name: "secret1", Namespace: "ns1"}, Data: map[string][]byte{"key": []byte("second")}},
+			},
+			autoFetchedCredentials: nil,
+			want:                   map[string]bool{"ns1/secret1": true},
+			wantCount:              1,
+		},
 	}
 
 	for name, tc := range tests {
@@ -2535,6 +2544,13 @@ func TestMergeCredentials(t *testing.T) {
 			if name == "CLIOverridesAutoFetched" && len(got) == 1 {
 				if string(got[0].Data["key"]) != "cli-value" {
 					t.Errorf("mergeCredentials() CLI credentials should override auto-fetched, got value %q", string(got[0].Data["key"]))
+				}
+			}
+
+			// Test that duplicates in CLI input use last-write-wins
+			if name == "DuplicatesInCLIInputLastWins" && len(got) == 1 {
+				if string(got[0].Data["key"]) != "second" {
+					t.Errorf("mergeCredentials() duplicate CLI credentials should use last value, got %q want %q", string(got[0].Data["key"]), "second")
 				}
 			}
 		})
