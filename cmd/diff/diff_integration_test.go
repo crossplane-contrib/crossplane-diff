@@ -2097,6 +2097,7 @@ Summary: 3 modified`,
 				"testdata/diff/resources/credentials/function-credentials-secret.yaml",
 				"testdata/diff/resources/functions.yaml",
 			},
+			expectedExitCode: dp.ExitCodeDiffDetected,
 			// The diff should succeed and show new resources (credentials fetched from cluster)
 			expectedOutput: strings.Join([]string{
 				`+++ XDownstreamResource/test-resource-with-creds
@@ -2142,6 +2143,7 @@ Summary: 3 modified`,
 			},
 			// Credentials loaded from CLI flag file
 			functionCredentials: "testdata/diff/resources/credentials/cli-credentials.yaml",
+			expectedExitCode:    dp.ExitCodeDiffDetected,
 			// The diff should succeed with credentials from CLI
 			expectedOutput: strings.Join([]string{
 				`+++ XDownstreamResource/test-resource-with-creds
