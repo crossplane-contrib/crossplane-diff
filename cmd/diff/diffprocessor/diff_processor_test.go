@@ -2466,6 +2466,39 @@ func TestDefaultDiffProcessor_synthesizeDummyBackingXRForNewClaim(t *testing.T) 
 }
 
 func TestMergeCredentials(t *testing.T) {
+	// Define common test secrets
+	var secret1NS1 corev1.Secret
+	tu.NewResource("v1", "Secret", "secret1").InNamespace("ns1").BuildTyped(&secret1NS1)
+
+	var secret2NS2 corev1.Secret
+	tu.NewResource("v1", "Secret", "secret2").InNamespace("ns2").BuildTyped(&secret2NS2)
+
+	var secret1CLIValue corev1.Secret
+	tu.NewResource("v1", "Secret", "secret1").InNamespace("ns1").
+		WithData(map[string][]byte{"key": []byte("cli-value")}).
+		BuildTyped(&secret1CLIValue)
+
+	var secret1AutoValue corev1.Secret
+	tu.NewResource("v1", "Secret", "secret1").InNamespace("ns1").
+		WithData(map[string][]byte{"key": []byte("auto-value")}).
+		BuildTyped(&secret1AutoValue)
+
+	var cliSecretNS1 corev1.Secret
+	tu.NewResource("v1", "Secret", "cli-secret").InNamespace("ns1").BuildTyped(&cliSecretNS1)
+
+	var autoSecretNS2 corev1.Secret
+	tu.NewResource("v1", "Secret", "auto-secret").InNamespace("ns2").BuildTyped(&autoSecretNS2)
+
+	var secret1First corev1.Secret
+	tu.NewResource("v1", "Secret", "secret1").InNamespace("ns1").
+		WithData(map[string][]byte{"key": []byte("first")}).
+		BuildTyped(&secret1First)
+
+	var secret1Second corev1.Secret
+	tu.NewResource("v1", "Secret", "secret1").InNamespace("ns1").
+		WithData(map[string][]byte{"key": []byte("second")}).
+		BuildTyped(&secret1Second)
+
 	tests := map[string]struct {
 		cliCredentials         []corev1.Secret
 		autoFetchedCredentials []corev1.Secret
@@ -2479,46 +2512,31 @@ func TestMergeCredentials(t *testing.T) {
 			wantCount:              0,
 		},
 		"OnlyCLI": {
-			cliCredentials: []corev1.Secret{
-				{ObjectMeta: metav1.ObjectMeta{Name: "secret1", Namespace: "ns1"}},
-			},
+			cliCredentials:         []corev1.Secret{secret1NS1},
 			autoFetchedCredentials: nil,
 			want:                   map[string]bool{"ns1/secret1": true},
 			wantCount:              1,
 		},
 		"OnlyAutoFetched": {
-			cliCredentials: nil,
-			autoFetchedCredentials: []corev1.Secret{
-				{ObjectMeta: metav1.ObjectMeta{Name: "secret2", Namespace: "ns2"}},
-			},
-			want:      map[string]bool{"ns2/secret2": true},
-			wantCount: 1,
+			cliCredentials:         nil,
+			autoFetchedCredentials: []corev1.Secret{secret2NS2},
+			want:                   map[string]bool{"ns2/secret2": true},
+			wantCount:              1,
 		},
 		"CLIOverridesAutoFetched": {
-			cliCredentials: []corev1.Secret{
-				{ObjectMeta: metav1.ObjectMeta{Name: "secret1", Namespace: "ns1"}, Data: map[string][]byte{"key": []byte("cli-value")}},
-			},
-			autoFetchedCredentials: []corev1.Secret{
-				{ObjectMeta: metav1.ObjectMeta{Name: "secret1", Namespace: "ns1"}, Data: map[string][]byte{"key": []byte("auto-value")}},
-			},
-			want:      map[string]bool{"ns1/secret1": true},
-			wantCount: 1,
+			cliCredentials:         []corev1.Secret{secret1CLIValue},
+			autoFetchedCredentials: []corev1.Secret{secret1AutoValue},
+			want:                   map[string]bool{"ns1/secret1": true},
+			wantCount:              1,
 		},
 		"MergesDifferentSecrets": {
-			cliCredentials: []corev1.Secret{
-				{ObjectMeta: metav1.ObjectMeta{Name: "cli-secret", Namespace: "ns1"}},
-			},
-			autoFetchedCredentials: []corev1.Secret{
-				{ObjectMeta: metav1.ObjectMeta{Name: "auto-secret", Namespace: "ns2"}},
-			},
-			want:      map[string]bool{"ns1/cli-secret": true, "ns2/auto-secret": true},
-			wantCount: 2,
+			cliCredentials:         []corev1.Secret{cliSecretNS1},
+			autoFetchedCredentials: []corev1.Secret{autoSecretNS2},
+			want:                   map[string]bool{"ns1/cli-secret": true, "ns2/auto-secret": true},
+			wantCount:              2,
 		},
 		"DuplicatesInCLIInputLastWins": {
-			cliCredentials: []corev1.Secret{
-				{ObjectMeta: metav1.ObjectMeta{Name: "secret1", Namespace: "ns1"}, Data: map[string][]byte{"key": []byte("first")}},
-				{ObjectMeta: metav1.ObjectMeta{Name: "secret1", Namespace: "ns1"}, Data: map[string][]byte{"key": []byte("second")}},
-			},
+			cliCredentials:         []corev1.Secret{secret1First, secret1Second},
 			autoFetchedCredentials: nil,
 			want:                   map[string]bool{"ns1/secret1": true},
 			wantCount:              1,
@@ -2560,6 +2578,12 @@ func TestMergeCredentials(t *testing.T) {
 func TestFetchCompositionCredentials(t *testing.T) {
 	// This tests that fetchCompositionCredentials correctly delegates to the CredentialClient.
 	// The detailed credential fetching logic is tested in credential_client_test.go.
+
+	var azureCredentials corev1.Secret
+	tu.NewResource("v1", "Secret", "azure-credentials").
+		InNamespace("crossplane-system").
+		BuildTyped(&azureCredentials)
+
 	tests := map[string]struct {
 		composition     *apiextensionsv1.Composition
 		mockCredentials []corev1.Secret
@@ -2577,15 +2601,8 @@ func TestFetchCompositionCredentials(t *testing.T) {
 				WithPipelineStep("step1", "function-msgraph", nil,
 					tu.WithCredentials("azure-creds", "crossplane-system", "azure-credentials")).
 				Build(),
-			mockCredentials: []corev1.Secret{
-				{
-					ObjectMeta: metav1.ObjectMeta{
-						Name:      "azure-credentials",
-						Namespace: "crossplane-system",
-					},
-				},
-			},
-			wantSecrets: 1,
+			mockCredentials: []corev1.Secret{azureCredentials},
+			wantSecrets:     1,
 		},
 		"ReturnsEmptyWhenNoCredentials": {
 			composition: tu.NewComposition("test-comp").
