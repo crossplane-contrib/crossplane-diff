@@ -59,7 +59,9 @@ func (r *XRDiffResult) HasError() bool {
 
 // CompDiffProcessor defines the interface for composition diffing.
 type CompDiffProcessor interface {
-	DiffComposition(ctx context.Context, stdout io.Writer, compositions []*un.Unstructured, namespace string) error
+	// DiffComposition processes composition changes and shows impact on existing XRs.
+	// Returns (hasDiffs, error) where hasDiffs indicates if any differences were detected.
+	DiffComposition(ctx context.Context, stdout io.Writer, compositions []*un.Unstructured, namespace string) (bool, error)
 	Initialize(ctx context.Context) error
 }
 
@@ -111,14 +113,17 @@ func (p *DefaultCompDiffProcessor) Initialize(ctx context.Context) error {
 }
 
 // DiffComposition processes composition changes and shows impact on existing XRs.
-func (p *DefaultCompDiffProcessor) DiffComposition(ctx context.Context, stdout io.Writer, compositions []*un.Unstructured, namespace string) error {
+// Returns (hasDiffs, error) where hasDiffs indicates if any differences were detected.
+func (p *DefaultCompDiffProcessor) DiffComposition(ctx context.Context, stdout io.Writer, compositions []*un.Unstructured, namespace string) (bool, error) {
 	p.config.Logger.Debug("Processing composition diff", "compositionCount", len(compositions), "namespace", namespace)
 
 	if len(compositions) == 0 {
-		return errors.New("no compositions provided")
+		return false, errors.New("no compositions provided")
 	}
 
 	var errs []error
+
+	hasDiffs := false
 
 	// Process each composition, filtering out non-Composition objects
 	for i, comp := range compositions {
@@ -132,18 +137,23 @@ func (p *DefaultCompDiffProcessor) DiffComposition(ctx context.Context, stdout i
 		p.config.Logger.Debug("Processing composition", "name", compositionID)
 
 		// Process this single composition
-		if err := p.processSingleComposition(ctx, stdout, comp, namespace); err != nil {
+		compHasDiffs, err := p.processSingleComposition(ctx, stdout, comp, namespace)
+		if err != nil {
 			p.config.Logger.Debug("Failed to process composition", "composition", compositionID, "error", err)
 			errs = append(errs, errors.Wrapf(err, "cannot process composition %s", compositionID))
 
 			continue
 		}
 
+		if compHasDiffs {
+			hasDiffs = true
+		}
+
 		// Add separator between compositions if processing multiple
 		if len(compositions) > 1 && i < len(compositions)-1 {
 			separator := "\n" + strings.Repeat("=", 80) + "\n\n"
 			if _, err := fmt.Fprint(stdout, separator); err != nil {
-				return errors.Wrap(err, "cannot write composition separator")
+				return hasDiffs, errors.Wrap(err, "cannot write composition separator")
 			}
 		}
 	}
@@ -152,7 +162,7 @@ func (p *DefaultCompDiffProcessor) DiffComposition(ctx context.Context, stdout i
 	if len(errs) > 0 {
 		if len(errs) == len(compositions) {
 			// All compositions failed - this is a complete failure
-			return errors.New("failed to process all compositions")
+			return hasDiffs, errors.New("failed to process all compositions")
 		}
 		// Some compositions failed - log the errors but don't fail completely
 		p.config.Logger.Info("Some compositions failed to process", "failedCount", len(errs), "totalCount", len(compositions))
@@ -162,15 +172,19 @@ func (p *DefaultCompDiffProcessor) DiffComposition(ctx context.Context, stdout i
 		}
 	}
 
-	return nil
+	return hasDiffs, nil
 }
 
 // processSingleComposition processes a single composition and shows its impact on existing XRs.
-func (p *DefaultCompDiffProcessor) processSingleComposition(ctx context.Context, stdout io.Writer, newComp *un.Unstructured, namespace string) error {
+// Returns (hasDiffs, error) where hasDiffs indicates if any differences were detected.
+func (p *DefaultCompDiffProcessor) processSingleComposition(ctx context.Context, stdout io.Writer, newComp *un.Unstructured, namespace string) (bool, error) {
 	// First, show the composition diff itself
-	if err := p.displayCompositionDiff(ctx, stdout, newComp); err != nil {
-		return errors.Wrap(err, "cannot display composition diff")
+	compDiffDetected, err := p.displayCompositionDiff(ctx, stdout, newComp)
+	if err != nil {
+		return false, errors.Wrap(err, "cannot display composition diff")
 	}
+
+	hasDiffs := compDiffDetected
 
 	// Find all composites (XRs and Claims) that use this composition
 	affectedXRs, err := p.compositionClient.FindCompositesUsingComposition(ctx, newComp.GetName(), namespace)
@@ -182,10 +196,10 @@ func (p *DefaultCompDiffProcessor) processSingleComposition(ctx context.Context,
 
 		// Display the "no XRs found" message for net-new compositions
 		if _, err := fmt.Fprintf(stdout, "No XRs found using composition %s\n", newComp.GetName()); err != nil {
-			return errors.Wrap(err, "cannot write no XRs message")
+			return hasDiffs, errors.Wrap(err, "cannot write no XRs message")
 		}
 
-		return nil
+		return hasDiffs, nil
 	}
 
 	p.config.Logger.Debug("Found affected XRs", "composition", newComp.GetName(), "count", len(affectedXRs))
@@ -200,7 +214,7 @@ func (p *DefaultCompDiffProcessor) processSingleComposition(ctx context.Context,
 		"includeManual", p.config.IncludeManual)
 
 	if len(filteredXRs) == 0 {
-		return p.handleNoXRsFound(stdout, newComp.GetName(), len(affectedXRs))
+		return hasDiffs, p.handleNoXRsFound(stdout, newComp.GetName(), len(affectedXRs))
 	}
 
 	// Use filtered XRs for the rest of the processing
@@ -211,9 +225,17 @@ func (p *DefaultCompDiffProcessor) processSingleComposition(ctx context.Context,
 
 	results := p.collectXRDiffs(ctx, stdout, affectedXRs, newComp)
 
+	// Check if any XRs had changes
+	for _, result := range results {
+		if result.HasChanges() {
+			hasDiffs = true
+			break
+		}
+	}
+
 	// Render the impact analysis (XR list and diffs)
 	if err := p.renderXRImpactAnalysis(stdout, affectedXRs, results); err != nil {
-		return err
+		return hasDiffs, err
 	}
 
 	// Collect any errors from the results and return them
@@ -226,10 +248,10 @@ func (p *DefaultCompDiffProcessor) processSingleComposition(ctx context.Context,
 	}
 
 	if len(processingErrs) > 0 {
-		return errors.Join(processingErrs...)
+		return hasDiffs, errors.Join(processingErrs...)
 	}
 
-	return nil
+	return hasDiffs, nil
 }
 
 // handleNoXRsFound writes appropriate messages when no XRs are found or all are filtered.
@@ -354,7 +376,8 @@ func (p *DefaultCompDiffProcessor) renderXRImpactAnalysis(stdout io.Writer, xrs 
 
 // displayCompositionDiff shows the diff between the cluster composition and the file composition.
 // If the composition doesn't exist in the cluster, it shows it as a new composition.
-func (p *DefaultCompDiffProcessor) displayCompositionDiff(ctx context.Context, stdout io.Writer, newComp *un.Unstructured) error {
+// Returns (hasDiffs, error) where hasDiffs indicates if the composition has changes.
+func (p *DefaultCompDiffProcessor) displayCompositionDiff(ctx context.Context, stdout io.Writer, newComp *un.Unstructured) (bool, error) {
 	p.config.Logger.Debug("Displaying composition diff", "composition", newComp.GetName())
 
 	var originalCompUnstructured *un.Unstructured
@@ -371,7 +394,7 @@ func (p *DefaultCompDiffProcessor) displayCompositionDiff(ctx context.Context, s
 		// Convert original composition to unstructured for comparison
 		unstructuredObj, err := runtime.DefaultUnstructuredConverter.ToUnstructured(originalComp)
 		if err != nil {
-			return errors.Wrap(err, "cannot convert original composition to unstructured")
+			return false, errors.Wrap(err, "cannot convert original composition to unstructured")
 		}
 
 		originalCompUnstructured = &un.Unstructured{Object: unstructuredObj}
@@ -404,7 +427,7 @@ func (p *DefaultCompDiffProcessor) displayCompositionDiff(ctx context.Context, s
 
 	compDiff, err := renderer.GenerateDiffWithOptions(ctx, originalCompUnstructured, newCompUnstructured, p.config.Logger, diffOptions)
 	if err != nil {
-		return errors.Wrap(err, "cannot calculate composition diff")
+		return false, errors.Wrap(err, "cannot calculate composition diff")
 	}
 
 	p.config.Logger.Debug("Calculated composition diff",
@@ -414,7 +437,7 @@ func (p *DefaultCompDiffProcessor) displayCompositionDiff(ctx context.Context, s
 
 	// Add header for composition changes (common to all cases)
 	if _, err := fmt.Fprintf(stdout, "=== Composition Changes ===\n\n"); err != nil {
-		return errors.Wrap(err, "cannot write composition changes header")
+		return false, errors.Wrap(err, "cannot write composition changes header")
 	}
 
 	// Display the composition diff if there are changes
@@ -424,8 +447,10 @@ func (p *DefaultCompDiffProcessor) displayCompositionDiff(ctx context.Context, s
 		p.config.Logger.Info("No changes detected in composition", "composition", newComp.GetName())
 
 		if _, err := fmt.Fprintf(stdout, "No changes detected in composition %s\n\n", newComp.GetName()); err != nil {
-			return errors.Wrap(err, "cannot write no changes message")
+			return false, errors.Wrap(err, "cannot write no changes message")
 		}
+
+		return false, nil
 	case dt.DiffTypeAdded, dt.DiffTypeRemoved, dt.DiffTypeModified:
 		// Changes detected - show the diff
 		// Create a diff renderer with proper options
@@ -440,15 +465,17 @@ func (p *DefaultCompDiffProcessor) displayCompositionDiff(ctx context.Context, s
 		}
 
 		if err := diffRenderer.RenderDiffs(stdout, diffs); err != nil {
-			return errors.Wrap(err, "cannot render composition diff")
+			return false, errors.Wrap(err, "cannot render composition diff")
 		}
 
 		if _, err := fmt.Fprintf(stdout, "\n"); err != nil {
-			return errors.Wrap(err, "cannot write separator")
+			return false, errors.Wrap(err, "cannot write separator")
 		}
+
+		return true, nil
 	}
 
-	return nil
+	return false, nil
 }
 
 // filterXRsByUpdatePolicy filters XRs based on the IncludeManual configuration.

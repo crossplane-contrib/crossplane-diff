@@ -1,0 +1,8 @@
+# XR with invalid schema - coolField should be a string, not an integer
+apiVersion: ns.diff.example.org/v1alpha1
+kind: XNopResource
+metadata:
+  name: invalid-schema-xr
+  namespace: default
+spec:
+  coolField: 12345

@@ -103,7 +103,7 @@ func makeDefaultXRLoader(c *XRCmd) (ld.Loader, error) {
 }
 
 // Run executes the XR diff command.
-func (c *XRCmd) Run(k *kong.Context, log logging.Logger, appCtx *AppContext, proc dp.DiffProcessor, loader ld.Loader) error {
+func (c *XRCmd) Run(k *kong.Context, log logging.Logger, appCtx *AppContext, proc dp.DiffProcessor, loader ld.Loader, exitCode *ExitCode) error {
 	// the rest config here is provided by a function in main.go that's only invoked for commands that request it
 	// in their arguments.  that means we won't get "can't find kubeconfig" errors for cases where the config isn't asked for.
 
@@ -116,21 +116,29 @@ func (c *XRCmd) Run(k *kong.Context, log logging.Logger, appCtx *AppContext, pro
 	// TODO:  diff against upgraded composition version that is already available
 	ctx, cancel, err := initializeAppContext(c.Timeout, appCtx, log)
 	if err != nil {
+		exitCode.Code = dp.ExitCodeToolError
 		return err
 	}
 	defer cancel()
 
 	resources, err := loader.Load()
 	if err != nil {
+		exitCode.Code = dp.ExitCodeToolError
 		return errors.Wrap(err, "cannot load resources")
 	}
 
 	err = proc.Initialize(ctx)
 	if err != nil {
+		exitCode.Code = dp.ExitCodeToolError
 		return errors.Wrap(err, "cannot initialize diff processor")
 	}
 
-	if err := proc.PerformDiff(ctx, k.Stdout, resources, appCtx.XpClients.Composition.FindMatchingComposition); err != nil {
+	hasDiffs, err := proc.PerformDiff(ctx, k.Stdout, resources, appCtx.XpClients.Composition.FindMatchingComposition)
+
+	// Determine exit code based on result
+	exitCode.Code = dp.DetermineExitCode(err, hasDiffs)
+
+	if err != nil {
 		return errors.Wrap(err, "unable to process one or more resources")
 	}
 

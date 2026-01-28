@@ -18,9 +18,12 @@ limitations under the License.
 package main
 
 import (
+	"fmt"
+	"os"
 	"time"
 
 	"github.com/alecthomas/kong"
+	dp "github.com/crossplane-contrib/crossplane-diff/cmd/diff/diffprocessor"
 	"github.com/crossplane-contrib/crossplane-diff/cmd/diff/version"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
@@ -37,6 +40,12 @@ type (
 	// Kong will automatically bind this when the --context flag is parsed.
 	KubeContext string
 )
+
+// ExitCode tracks the exit code to return after command execution.
+// Commands set this based on their results (diffs found, validation errors, etc.).
+type ExitCode struct {
+	Code int
+}
 
 // CommonCmdFields contains common fields shared by both XR and Comp commands.
 type CommonCmdFields struct {
@@ -80,12 +89,15 @@ type cli struct {
 
 func main() {
 	logger := logging.NewNopLogger()
+	exitCode := &ExitCode{Code: dp.ExitCodeSuccess} // Default to success
+
 	ctx := kong.Parse(&cli{},
 		kong.Name("crossplane-diff"),
 		kong.Description("A command line tool for diffing  Crossplane resources."),
 		// Binding a variable to kong context makes it available to all commands
 		// at runtime.
 		kong.BindTo(logger, (*logging.Logger)(nil)),
+		kong.Bind(exitCode), // Bind exit code state
 		kong.BindToProvider(getRestConfig),
 		kong.ConfigureHelp(kong.HelpOptions{
 			FlagsLast:      true,
@@ -94,7 +106,20 @@ func main() {
 		}),
 		kong.UsageOnError())
 	err := ctx.Run()
-	ctx.FatalIfErrorf(err)
+	// Handle error output - commands set exitCode.Code based on their results
+	if err != nil {
+		// Schema validation errors are already rendered by the processors as part of the
+		// diff output, so don't duplicate them here. Only print other (tool) errors.
+		if !dp.IsSchemaValidationError(err) {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		}
+		// If the command returned an error but didn't set an exit code, default to tool error
+		if exitCode.Code == dp.ExitCodeSuccess {
+			exitCode.Code = dp.ExitCodeToolError
+		}
+	}
+
+	os.Exit(exitCode.Code)
 }
 
 func getRestConfig(kubeContext KubeContext) (*rest.Config, error) {

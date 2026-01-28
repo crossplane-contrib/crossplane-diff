@@ -596,7 +596,7 @@ func TestDefaultDiffProcessor_PerformDiff(t *testing.T) {
 			compositionProvider := func(ctx context.Context, res *un.Unstructured) (*apiextensionsv1.Composition, error) {
 				return xpClients.Composition.FindMatchingComposition(ctx, res)
 			}
-			err := processor.PerformDiff(ctx, &stdout, tt.resources, compositionProvider)
+			_, err := processor.PerformDiff(ctx, &stdout, tt.resources, compositionProvider)
 
 			// Check output if verification function is provided (do this first, before error checks)
 			if tt.verifyOutput != nil {
