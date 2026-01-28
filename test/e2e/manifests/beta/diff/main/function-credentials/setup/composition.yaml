@@ -36,7 +36,7 @@ spec:
                 {{- $data := $cred.credentialData.data }}
                 {{- if $data }}
                 {{- $testKey := index $data "test-key" }}
-                credential-test-key: {{ $testKey | default "not-found" }}
+                credential-test-key: {{ $testKey | default "" | b64dec | default "not-found" }}
                 {{- end }}
                 {{- else }}
                 credential-present: "false"
