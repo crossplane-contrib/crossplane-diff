@@ -16,41 +16,24 @@ func TestDefaultCredentialClient_FetchCompositionCredentials(t *testing.T) {
 	ctx := t.Context()
 
 	// Define common secrets used across multiple tests
-	secret1Builder := tu.NewResource("v1", "Secret", "my-secret").
-		InNamespace("crossplane-system").
-		WithData(map[string][]byte{"token": []byte("secret-value")})
+	// Two secrets in ns1 (for same-namespace tests), one in ns2 (for different-namespace tests)
+	secret1Builder := tu.NewResource("v1", "Secret", "secret1").
+		InNamespace("ns1").
+		WithData(map[string][]byte{"key1": []byte("val1")})
 	var secret1 corev1.Secret
 	secret1Builder.BuildTyped(&secret1)
 
-	secret2Builder := tu.NewResource("v1", "Secret", "secret1").
+	secret2Builder := tu.NewResource("v1", "Secret", "secret2").
 		InNamespace("ns1").
-		WithData(map[string][]byte{"key1": []byte("val1")})
+		WithData(map[string][]byte{"key2": []byte("val2")})
 	var secret2 corev1.Secret
 	secret2Builder.BuildTyped(&secret2)
 
-	secret3Builder := tu.NewResource("v1", "Secret", "secret2").
+	secret3Builder := tu.NewResource("v1", "Secret", "secret3").
 		InNamespace("ns2").
-		WithData(map[string][]byte{"key2": []byte("val2")})
+		WithData(map[string][]byte{"key3": []byte("val3")})
 	var secret3 corev1.Secret
 	secret3Builder.BuildTyped(&secret3)
-
-	secret4Builder := tu.NewResource("v1", "Secret", "exists").
-		InNamespace("ns1").
-		WithData(map[string][]byte{"data": []byte("value")})
-	var secret4 corev1.Secret
-	secret4Builder.BuildTyped(&secret4)
-
-	secret5Builder := tu.NewResource("v1", "Secret", "secret1").
-		InNamespace("ns").
-		WithData(map[string][]byte{"k1": []byte("v1")})
-	var secret5 corev1.Secret
-	secret5Builder.BuildTyped(&secret5)
-
-	secret6Builder := tu.NewResource("v1", "Secret", "secret2").
-		InNamespace("ns").
-		WithData(map[string][]byte{"k2": []byte("v2")})
-	var secret6 corev1.Secret
-	secret6Builder.BuildTyped(&secret6)
 
 	tests := map[string]struct {
 		reason       string
@@ -82,7 +65,7 @@ func TestDefaultCredentialClient_FetchCompositionCredentials(t *testing.T) {
 				WithCompositeTypeRef("example.org/v1", "XR").
 				WithPipelineMode().
 				WithPipelineStep("step1", "function-test", nil,
-					tu.WithCredentials("creds", "crossplane-system", "my-secret")).
+					tu.WithCredentials("creds", "ns1", "secret1")).
 				Build(),
 			mockResource: *tu.NewMockResourceClient().
 				WithResourcesExist(secret1Builder.Build()).
@@ -97,12 +80,12 @@ func TestDefaultCredentialClient_FetchCompositionCredentials(t *testing.T) {
 				WithPipelineStep("step1", "function-one", nil,
 					tu.WithCredentials("creds1", "ns1", "secret1")).
 				WithPipelineStep("step2", "function-two", nil,
-					tu.WithCredentials("creds2", "ns2", "secret2")).
+					tu.WithCredentials("creds2", "ns2", "secret3")).
 				Build(),
 			mockResource: *tu.NewMockResourceClient().
-				WithResourcesExist(secret2Builder.Build(), secret3Builder.Build()).
+				WithResourcesExist(secret1Builder.Build(), secret3Builder.Build()).
 				Build(),
-			wantSecrets: []corev1.Secret{secret2, secret3},
+			wantSecrets: []corev1.Secret{secret1, secret3},
 		},
 		"CredentialNotFoundSkipped": {
 			reason: "Should skip credentials that cannot be fetched (e.g., runtime-injected)",
@@ -123,15 +106,15 @@ func TestDefaultCredentialClient_FetchCompositionCredentials(t *testing.T) {
 				WithCompositeTypeRef("example.org/v1", "XR").
 				WithPipelineMode().
 				WithPipelineStep("step1", "function-one", nil,
-					tu.WithCredentials("creds1", "ns1", "exists")).
+					tu.WithCredentials("creds1", "ns1", "secret1")).
 				WithPipelineStep("step2", "function-two", nil,
 					tu.WithCredentials("creds2", "ns2", "missing")).
 				Build(),
-			// Only "exists" is in the map; "missing" will return error
+			// Only "secret1" is in the map; "missing" will return error
 			mockResource: *tu.NewMockResourceClient().
-				WithResourcesExist(secret4Builder.Build()).
+				WithResourcesExist(secret1Builder.Build()).
 				Build(),
-			wantSecrets: []corev1.Secret{secret4},
+			wantSecrets: []corev1.Secret{secret1},
 		},
 		"MultipleCredentialsInSameStep": {
 			reason: "Should fetch multiple credentials from the same pipeline step",
@@ -139,13 +122,13 @@ func TestDefaultCredentialClient_FetchCompositionCredentials(t *testing.T) {
 				WithCompositeTypeRef("example.org/v1", "XR").
 				WithPipelineMode().
 				WithPipelineStep("step1", "function-test", nil,
-					tu.WithCredentials("creds1", "ns", "secret1"),
-					tu.WithCredentials("creds2", "ns", "secret2")).
+					tu.WithCredentials("creds1", "ns1", "secret1"),
+					tu.WithCredentials("creds2", "ns1", "secret2")).
 				Build(),
 			mockResource: *tu.NewMockResourceClient().
-				WithResourcesExist(secret5Builder.Build(), secret6Builder.Build()).
+				WithResourcesExist(secret1Builder.Build(), secret2Builder.Build()).
 				Build(),
-			wantSecrets: []corev1.Secret{secret5, secret6},
+			wantSecrets: []corev1.Secret{secret1, secret2},
 		},
 	}
 
