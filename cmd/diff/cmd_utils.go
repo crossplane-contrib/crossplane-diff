@@ -21,11 +21,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/alecthomas/kong"
 	dp "github.com/crossplane-contrib/crossplane-diff/cmd/diff/diffprocessor"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/runtime"
-	"k8s.io/client-go/rest"
 
 	"github.com/crossplane/crossplane-runtime/v2/pkg/errors"
 	"github.com/crossplane/crossplane-runtime/v2/pkg/logging"
@@ -39,18 +37,6 @@ import (
 //
 //nolint:gochecknoglobals // Required for global serialization across processors
 var globalRenderMutex sync.Mutex
-
-// initializeSharedDependencies handles the common initialization logic for both commands.
-func initializeSharedDependencies(ctx *kong.Context, log logging.Logger, config *rest.Config) (*AppContext, error) {
-	appCtx, err := NewAppContext(config, log)
-	if err != nil {
-		return nil, errors.Wrap(err, "cannot create app context")
-	}
-
-	ctx.Bind(appCtx)
-
-	return appCtx, nil
-}
 
 // initializeAppContext initializes the application context with timeout and error handling.
 func initializeAppContext(timeout time.Duration, appCtx *AppContext, log logging.Logger) (context.Context, context.CancelFunc, error) {

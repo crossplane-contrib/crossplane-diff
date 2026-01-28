@@ -219,10 +219,17 @@ func runIntegrationTest(t *testing.T, testType DiffTestType, scheme *runtime.Sch
 
 	logger := tu.TestLogger(t, true)
 	exitCode := &ExitCode{}
+
+	// Create AppContext from the test environment's config
+	appCtx, err := NewAppContext(cfg, logger)
+	if err != nil {
+		t.Fatalf("failed to create app context: %v", err)
+	}
+
 	// Create a Kong context with stdout
 	parser, err := kong.New(cmd,
 		kong.Writers(&stdout, &stdout),
-		kong.Bind(cfg),
+		kong.Bind(appCtx),
 		kong.Bind(exitCode),
 		kong.BindTo(logger, (*logging.Logger)(nil)),
 	)
@@ -235,7 +242,7 @@ func runIntegrationTest(t *testing.T, testType DiffTestType, scheme *runtime.Sch
 		t.Fatalf("failed to parse kong context: %v", err)
 	}
 
-	err = kongCtx.Run(cfg)
+	err = kongCtx.Run()
 
 	// Check exit code matches expected
 	if exitCode.Code != tt.expectedExitCode {
