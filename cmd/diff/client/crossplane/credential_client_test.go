@@ -1,18 +1,12 @@
 package crossplane
 
 import (
-	"context"
 	"testing"
 
 	tu "github.com/crossplane-contrib/crossplane-diff/cmd/diff/testutils"
 	"github.com/google/go-cmp/cmp"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	un "k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
-	"k8s.io/apimachinery/pkg/runtime"
-	"k8s.io/apimachinery/pkg/runtime/schema"
-
-	"github.com/crossplane/crossplane-runtime/v2/pkg/errors"
 
 	apiextensionsv1 "github.com/crossplane/crossplane/v2/apis/apiextensions/v1"
 )
@@ -21,26 +15,6 @@ var _ CredentialClient = (*tu.MockCredentialClient)(nil)
 
 func TestDefaultCredentialClient_FetchCompositionCredentials(t *testing.T) {
 	ctx := t.Context()
-
-	// Helper to create a secret as unstructured
-	makeSecretUnstructured := func(namespace, name string, data map[string][]byte) *un.Unstructured {
-		secret := &corev1.Secret{
-			TypeMeta: metav1.TypeMeta{
-				APIVersion: "v1",
-				Kind:       "Secret",
-			},
-			ObjectMeta: metav1.ObjectMeta{
-				Namespace: namespace,
-				Name:      name,
-			},
-			Data: data,
-		}
-		obj, _ := runtime.DefaultUnstructuredConverter.ToUnstructured(secret)
-
-		return &un.Unstructured{Object: obj}
-	}
-
-	secretGVK := schema.GroupVersionKind{Group: "", Version: "v1", Kind: "Secret"}
 
 	tests := map[string]struct {
 		reason       string
@@ -75,15 +49,12 @@ func TestDefaultCredentialClient_FetchCompositionCredentials(t *testing.T) {
 					tu.WithCredentials("creds", "crossplane-system", "my-secret")).
 				Build(),
 			mockResource: *tu.NewMockResourceClient().
-				WithGetResource(func(_ context.Context, gvk schema.GroupVersionKind, namespace, name string) (*un.Unstructured, error) {
-					if gvk == secretGVK && namespace == "crossplane-system" && name == "my-secret" {
-						return makeSecretUnstructured("crossplane-system", "my-secret", map[string][]byte{
-							"token": []byte("secret-value"),
-						}), nil
-					}
-
-					return nil, errors.New("not found")
-				}).
+				WithResourcesExist(
+					tu.NewResource("v1", "Secret", "my-secret").
+						InNamespace("crossplane-system").
+						WithData(map[string][]byte{"token": []byte("secret-value")}).
+						Build(),
+				).
 				Build(),
 			wantSecrets: []corev1.Secret{
 				{
@@ -107,21 +78,10 @@ func TestDefaultCredentialClient_FetchCompositionCredentials(t *testing.T) {
 					tu.WithCredentials("creds2", "ns2", "secret2")).
 				Build(),
 			mockResource: *tu.NewMockResourceClient().
-				WithGetResource(func(_ context.Context, gvk schema.GroupVersionKind, namespace, name string) (*un.Unstructured, error) {
-					if gvk != secretGVK {
-						return nil, errors.New("unexpected GVK")
-					}
-
-					if namespace == "ns1" && name == "secret1" {
-						return makeSecretUnstructured("ns1", "secret1", map[string][]byte{"key1": []byte("val1")}), nil
-					}
-
-					if namespace == "ns2" && name == "secret2" {
-						return makeSecretUnstructured("ns2", "secret2", map[string][]byte{"key2": []byte("val2")}), nil
-					}
-
-					return nil, errors.New("not found")
-				}).
+				WithResourcesExist(
+					tu.NewResource("v1", "Secret", "secret1").InNamespace("ns1").WithData(map[string][]byte{"key1": []byte("val1")}).Build(),
+					tu.NewResource("v1", "Secret", "secret2").InNamespace("ns2").WithData(map[string][]byte{"key2": []byte("val2")}).Build(),
+				).
 				Build(),
 			wantSecrets: []corev1.Secret{
 				{
@@ -159,14 +119,11 @@ func TestDefaultCredentialClient_FetchCompositionCredentials(t *testing.T) {
 				WithPipelineStep("step2", "function-two", nil,
 					tu.WithCredentials("creds2", "ns2", "missing")).
 				Build(),
+			// Only "exists" is in the map; "missing" will return error
 			mockResource: *tu.NewMockResourceClient().
-				WithGetResource(func(_ context.Context, gvk schema.GroupVersionKind, namespace, name string) (*un.Unstructured, error) {
-					if gvk == secretGVK && namespace == "ns1" && name == "exists" {
-						return makeSecretUnstructured("ns1", "exists", map[string][]byte{"data": []byte("value")}), nil
-					}
-
-					return nil, errors.New("not found")
-				}).
+				WithResourcesExist(
+					tu.NewResource("v1", "Secret", "exists").InNamespace("ns1").WithData(map[string][]byte{"data": []byte("value")}).Build(),
+				).
 				Build(),
 			wantSecrets: []corev1.Secret{
 				{
@@ -186,21 +143,10 @@ func TestDefaultCredentialClient_FetchCompositionCredentials(t *testing.T) {
 					tu.WithCredentials("creds2", "ns", "secret2")).
 				Build(),
 			mockResource: *tu.NewMockResourceClient().
-				WithGetResource(func(_ context.Context, gvk schema.GroupVersionKind, namespace, name string) (*un.Unstructured, error) {
-					if gvk != secretGVK || namespace != "ns" {
-						return nil, errors.New("unexpected request")
-					}
-
-					if name == "secret1" {
-						return makeSecretUnstructured("ns", "secret1", map[string][]byte{"k1": []byte("v1")}), nil
-					}
-
-					if name == "secret2" {
-						return makeSecretUnstructured("ns", "secret2", map[string][]byte{"k2": []byte("v2")}), nil
-					}
-
-					return nil, errors.New("not found")
-				}).
+				WithResourcesExist(
+					tu.NewResource("v1", "Secret", "secret1").InNamespace("ns").WithData(map[string][]byte{"k1": []byte("v1")}).Build(),
+					tu.NewResource("v1", "Secret", "secret2").InNamespace("ns").WithData(map[string][]byte{"k2": []byte("v2")}).Build(),
+				).
 				Build(),
 			wantSecrets: []corev1.Secret{
 				{

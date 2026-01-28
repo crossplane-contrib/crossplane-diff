@@ -2,6 +2,7 @@ package testutils
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -1387,6 +1388,23 @@ func (b *ResourceBuilder) WithStatusField(name string, value any) *ResourceBuild
 
 	status[name] = value
 	_ = un.SetNestedMap(b.resource.Object, status, "status")
+
+	return b
+}
+
+// WithData sets the data field for Secret resources.
+// The byte slices are base64-encoded as they would be in Kubernetes.
+func (b *ResourceBuilder) WithData(data map[string][]byte) *ResourceBuilder {
+	if data == nil {
+		return b
+	}
+
+	encoded := make(map[string]any, len(data))
+	for k, v := range data {
+		encoded[k] = base64.StdEncoding.EncodeToString(v)
+	}
+
+	b.resource.Object["data"] = encoded
 
 	return b
 }
