@@ -6,7 +6,6 @@ import (
 	tu "github.com/crossplane-contrib/crossplane-diff/cmd/diff/testutils"
 	"github.com/google/go-cmp/cmp"
 	corev1 "k8s.io/api/core/v1"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	apiextensionsv1 "github.com/crossplane/crossplane/v2/apis/apiextensions/v1"
 )
@@ -15,6 +14,43 @@ var _ CredentialClient = (*tu.MockCredentialClient)(nil)
 
 func TestDefaultCredentialClient_FetchCompositionCredentials(t *testing.T) {
 	ctx := t.Context()
+
+	// Define common secrets used across multiple tests
+	secret1Builder := tu.NewResource("v1", "Secret", "my-secret").
+		InNamespace("crossplane-system").
+		WithData(map[string][]byte{"token": []byte("secret-value")})
+	var secret1 corev1.Secret
+	secret1Builder.BuildTyped(&secret1)
+
+	secret2Builder := tu.NewResource("v1", "Secret", "secret1").
+		InNamespace("ns1").
+		WithData(map[string][]byte{"key1": []byte("val1")})
+	var secret2 corev1.Secret
+	secret2Builder.BuildTyped(&secret2)
+
+	secret3Builder := tu.NewResource("v1", "Secret", "secret2").
+		InNamespace("ns2").
+		WithData(map[string][]byte{"key2": []byte("val2")})
+	var secret3 corev1.Secret
+	secret3Builder.BuildTyped(&secret3)
+
+	secret4Builder := tu.NewResource("v1", "Secret", "exists").
+		InNamespace("ns1").
+		WithData(map[string][]byte{"data": []byte("value")})
+	var secret4 corev1.Secret
+	secret4Builder.BuildTyped(&secret4)
+
+	secret5Builder := tu.NewResource("v1", "Secret", "secret1").
+		InNamespace("ns").
+		WithData(map[string][]byte{"k1": []byte("v1")})
+	var secret5 corev1.Secret
+	secret5Builder.BuildTyped(&secret5)
+
+	secret6Builder := tu.NewResource("v1", "Secret", "secret2").
+		InNamespace("ns").
+		WithData(map[string][]byte{"k2": []byte("v2")})
+	var secret6 corev1.Secret
+	secret6Builder.BuildTyped(&secret6)
 
 	tests := map[string]struct {
 		reason       string
@@ -49,23 +85,9 @@ func TestDefaultCredentialClient_FetchCompositionCredentials(t *testing.T) {
 					tu.WithCredentials("creds", "crossplane-system", "my-secret")).
 				Build(),
 			mockResource: *tu.NewMockResourceClient().
-				WithResourcesExist(
-					tu.NewResource("v1", "Secret", "my-secret").
-						InNamespace("crossplane-system").
-						WithData(map[string][]byte{"token": []byte("secret-value")}).
-						Build(),
-				).
+				WithResourcesExist(secret1Builder.Build()).
 				Build(),
-			wantSecrets: []corev1.Secret{
-				{
-					TypeMeta: metav1.TypeMeta{APIVersion: "v1", Kind: "Secret"},
-					ObjectMeta: metav1.ObjectMeta{
-						Namespace: "crossplane-system",
-						Name:      "my-secret",
-					},
-					Data: map[string][]byte{"token": []byte("secret-value")},
-				},
-			},
+			wantSecrets: []corev1.Secret{secret1},
 		},
 		"MultipleCredentialsFetched": {
 			reason: "Should fetch multiple credential secrets from different steps",
@@ -78,23 +100,9 @@ func TestDefaultCredentialClient_FetchCompositionCredentials(t *testing.T) {
 					tu.WithCredentials("creds2", "ns2", "secret2")).
 				Build(),
 			mockResource: *tu.NewMockResourceClient().
-				WithResourcesExist(
-					tu.NewResource("v1", "Secret", "secret1").InNamespace("ns1").WithData(map[string][]byte{"key1": []byte("val1")}).Build(),
-					tu.NewResource("v1", "Secret", "secret2").InNamespace("ns2").WithData(map[string][]byte{"key2": []byte("val2")}).Build(),
-				).
+				WithResourcesExist(secret2Builder.Build(), secret3Builder.Build()).
 				Build(),
-			wantSecrets: []corev1.Secret{
-				{
-					TypeMeta:   metav1.TypeMeta{APIVersion: "v1", Kind: "Secret"},
-					ObjectMeta: metav1.ObjectMeta{Namespace: "ns1", Name: "secret1"},
-					Data:       map[string][]byte{"key1": []byte("val1")},
-				},
-				{
-					TypeMeta:   metav1.TypeMeta{APIVersion: "v1", Kind: "Secret"},
-					ObjectMeta: metav1.ObjectMeta{Namespace: "ns2", Name: "secret2"},
-					Data:       map[string][]byte{"key2": []byte("val2")},
-				},
-			},
+			wantSecrets: []corev1.Secret{secret2, secret3},
 		},
 		"CredentialNotFoundSkipped": {
 			reason: "Should skip credentials that cannot be fetched (e.g., runtime-injected)",
@@ -121,17 +129,9 @@ func TestDefaultCredentialClient_FetchCompositionCredentials(t *testing.T) {
 				Build(),
 			// Only "exists" is in the map; "missing" will return error
 			mockResource: *tu.NewMockResourceClient().
-				WithResourcesExist(
-					tu.NewResource("v1", "Secret", "exists").InNamespace("ns1").WithData(map[string][]byte{"data": []byte("value")}).Build(),
-				).
+				WithResourcesExist(secret4Builder.Build()).
 				Build(),
-			wantSecrets: []corev1.Secret{
-				{
-					TypeMeta:   metav1.TypeMeta{APIVersion: "v1", Kind: "Secret"},
-					ObjectMeta: metav1.ObjectMeta{Namespace: "ns1", Name: "exists"},
-					Data:       map[string][]byte{"data": []byte("value")},
-				},
-			},
+			wantSecrets: []corev1.Secret{secret4},
 		},
 		"MultipleCredentialsInSameStep": {
 			reason: "Should fetch multiple credentials from the same pipeline step",
@@ -143,23 +143,9 @@ func TestDefaultCredentialClient_FetchCompositionCredentials(t *testing.T) {
 					tu.WithCredentials("creds2", "ns", "secret2")).
 				Build(),
 			mockResource: *tu.NewMockResourceClient().
-				WithResourcesExist(
-					tu.NewResource("v1", "Secret", "secret1").InNamespace("ns").WithData(map[string][]byte{"k1": []byte("v1")}).Build(),
-					tu.NewResource("v1", "Secret", "secret2").InNamespace("ns").WithData(map[string][]byte{"k2": []byte("v2")}).Build(),
-				).
+				WithResourcesExist(secret5Builder.Build(), secret6Builder.Build()).
 				Build(),
-			wantSecrets: []corev1.Secret{
-				{
-					TypeMeta:   metav1.TypeMeta{APIVersion: "v1", Kind: "Secret"},
-					ObjectMeta: metav1.ObjectMeta{Namespace: "ns", Name: "secret1"},
-					Data:       map[string][]byte{"k1": []byte("v1")},
-				},
-				{
-					TypeMeta:   metav1.TypeMeta{APIVersion: "v1", Kind: "Secret"},
-					ObjectMeta: metav1.ObjectMeta{Namespace: "ns", Name: "secret2"},
-					Data:       map[string][]byte{"k2": []byte("v2")},
-				},
-			},
+			wantSecrets: []corev1.Secret{secret5, secret6},
 		},
 	}
 

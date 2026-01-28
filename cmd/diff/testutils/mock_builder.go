@@ -1504,6 +1504,12 @@ func (b *ResourceBuilder) BuildUComposed() *cpd.Unstructured {
 	return built
 }
 
+// BuildTyped converts the built unstructured resource into a typed Kubernetes object.
+// The 'into' parameter should be a pointer to the target type (e.g., &corev1.Secret{}).
+func (b *ResourceBuilder) BuildTyped(into runtime.Object) {
+	_ = runtime.DefaultUnstructuredConverter.FromUnstructured(b.Build().Object, into)
+}
+
 // endregion
 
 // region CRD builders
