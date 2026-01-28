@@ -82,9 +82,6 @@ var (
 	ansiEscapeRegex                   = regexp.MustCompile(`\x1b\[[0-9;]*m`)
 )
 
-// Exit code constants are imported from diffprocessor package.
-// Use dp.ExitCodeSuccess, dp.ExitCodeToolError, dp.ExitCodeSchemaValidation, dp.ExitCodeDiffDetected.
-
 // runCrossplaneDiff runs the crossplane diff command with the specified subcommand on the provided resources.
 // It returns the stdout, stderr, exit code, and any error that is not an ExitError.
 func runCrossplaneDiff(t *testing.T, c *envconf.Config, binPath, subcommand string, resourcePaths ...string) (string, string, int, error) {
