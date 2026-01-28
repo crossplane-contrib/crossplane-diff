@@ -47,6 +47,10 @@ const (
 	CrossplaneVersionRelease120 = "release-1.20"
 )
 
+// exitCodeDiffDetected is the exit code when diffs are detected.
+// Defined locally to avoid importing cmd/diff/diffprocessor into E2E tests.
+const exitCodeDiffDetected = 3
+
 var v1NopList = composed.NewList(
 	composed.FromReferenceToList(corev1.ObjectReference{
 		APIVersion: "nop.crossplane.io/v1alpha1",

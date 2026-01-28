@@ -24,7 +24,6 @@ import (
 	"testing"
 	"time"
 
-	dp "github.com/crossplane-contrib/crossplane-diff/cmd/diff/diffprocessor"
 	k8sapiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/e2e-framework/pkg/envconf"
@@ -62,7 +61,7 @@ func TestDiffNewClaim(t *testing.T) {
 			Assess("CanDiffNewClaim", func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
 				t.Helper()
 
-				output, log, err := RunXRDiff(t, c, "./crossplane-diff", dp.ExitCodeDiffDetected, filepath.Join(manifests, "new-claim.yaml"))
+				output, log, err := RunXRDiff(t, c, "./crossplane-diff", exitCodeDiffDetected, filepath.Join(manifests, "new-claim.yaml"))
 				if err != nil {
 					t.Fatalf("Error running diff command: %v\nLog output:\n%s", err, log)
 				}
@@ -113,7 +112,7 @@ func TestDiffExistingClaim(t *testing.T) {
 			Assess("CanDiffExistingClaim", func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
 				t.Helper()
 
-				output, log, err := RunXRDiff(t, c, "./crossplane-diff", dp.ExitCodeDiffDetected, filepath.Join(manifests, "modified-claim.yaml"))
+				output, log, err := RunXRDiff(t, c, "./crossplane-diff", exitCodeDiffDetected, filepath.Join(manifests, "modified-claim.yaml"))
 				if err != nil {
 					t.Fatalf("Error running diff command: %v\nLog output:\n%s", err, log)
 				}
@@ -175,7 +174,7 @@ func TestDiffNewClaimWithNestedXRs(t *testing.T) {
 			Assess("CanDiffNewClaimWithNestedXRs", func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
 				t.Helper()
 
-				output, log, err := RunXRDiff(t, c, "./crossplane-diff", dp.ExitCodeDiffDetected, filepath.Join(manifests, "new-claim.yaml"))
+				output, log, err := RunXRDiff(t, c, "./crossplane-diff", exitCodeDiffDetected, filepath.Join(manifests, "new-claim.yaml"))
 				if err != nil {
 					t.Fatalf("Error running diff command: %v\nLog output:\n%s", err, log)
 				}
@@ -235,7 +234,7 @@ func TestDiffExistingClaimWithNestedXRs(t *testing.T) {
 			Assess("CanDiffExistingClaimWithNestedXRs", func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
 				t.Helper()
 
-				output, log, err := RunXRDiff(t, c, "./crossplane-diff", dp.ExitCodeDiffDetected, filepath.Join(manifests, "modified-claim.yaml"))
+				output, log, err := RunXRDiff(t, c, "./crossplane-diff", exitCodeDiffDetected, filepath.Join(manifests, "modified-claim.yaml"))
 				if err != nil {
 					t.Fatalf("Error running diff command: %v\nLog output:\n%s", err, log)
 				}
