@@ -19,7 +19,6 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	un "k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
-	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/util/uuid"
 
 	"github.com/crossplane/crossplane-runtime/v2/pkg/errors"
@@ -51,9 +50,9 @@ type DiffProcessor interface {
 // DefaultDiffProcessor implements DiffProcessor with modular components.
 type DefaultDiffProcessor struct {
 	compClient           xp.CompositionClient
+	credentialClient     xp.CredentialClient
 	defClient            xp.DefinitionClient
 	schemaClient         k8.SchemaClient
-	resourceClient       k8.ResourceClient
 	resourceManager      ResourceManager
 	config               ProcessorConfig
 	functionProvider     FunctionProvider
@@ -100,9 +99,9 @@ func NewDiffProcessor(k8cs k8.Clients, xpcs xp.Clients, opts ...ProcessorOption)
 
 	processor := &DefaultDiffProcessor{
 		compClient:           xpcs.Composition,
+		credentialClient:     xpcs.Credential,
 		defClient:            xpcs.Definition,
 		schemaClient:         k8cs.Schema,
-		resourceClient:       k8cs.Resource,
 		resourceManager:      resourceManager,
 		config:               config,
 		functionProvider:     functionProvider,
@@ -1325,95 +1324,14 @@ func (p *DefaultDiffProcessor) applyXRDDefaults(ctx context.Context, xr *cmp.Uns
 	return nil
 }
 
-// fetchCompositionCredentials extracts credential references from a composition's pipeline steps
-// and fetches the referenced secrets from the cluster. The returned secrets are suitable for
-// passing to render.Inputs.FunctionCredentials. Secrets that cannot be fetched are silently
-// skipped (logged at debug level) since they may not exist on cluster (e.g., workload identity).
+// fetchCompositionCredentials delegates to the credential client to fetch credential secrets
+// referenced in a composition's pipeline steps from the cluster.
 func (p *DefaultDiffProcessor) fetchCompositionCredentials(ctx context.Context, comp *apiextensionsv1.Composition) []corev1.Secret {
-	if comp == nil || comp.Spec.Pipeline == nil {
+	if comp == nil || p.credentialClient == nil {
 		return nil
 	}
 
-	// Track unique secrets to avoid duplicates (key: namespace/name)
-	secretMap := make(map[string]corev1.Secret)
-	// Track unique credential references we attempted to fetch (for logging)
-	attemptedRefs := make(map[string]bool)
-	secretGVK := schema.GroupVersionKind{Group: "", Version: "v1", Kind: "Secret"}
-
-	for _, step := range comp.Spec.Pipeline {
-		for _, cred := range step.Credentials {
-			if cred.Source != apiextensionsv1.FunctionCredentialsSourceSecret || cred.SecretRef == nil {
-				continue
-			}
-
-			key := fmt.Sprintf("%s/%s", cred.SecretRef.Namespace, cred.SecretRef.Name)
-			attemptedRefs[key] = true
-
-			if _, exists := secretMap[key]; exists {
-				// Already fetched this secret
-				continue
-			}
-
-			p.config.Logger.Debug("Fetching function credential secret",
-				"step", step.Step,
-				"credentialName", cred.Name,
-				"secretNamespace", cred.SecretRef.Namespace,
-				"secretName", cred.SecretRef.Name)
-
-			// Fetch the secret from the cluster
-			secretUnstructured, err := p.resourceClient.GetResource(ctx, secretGVK, cred.SecretRef.Namespace, cred.SecretRef.Name)
-			if err != nil {
-				// Log warning but continue - the secret might not exist (e.g., workload identity)
-				p.config.Logger.Debug("Could not fetch function credential secret, skipping",
-					"step", step.Step,
-					"credentialName", cred.Name,
-					"secretNamespace", cred.SecretRef.Namespace,
-					"secretName", cred.SecretRef.Name,
-					"error", err)
-
-				continue
-			}
-
-			// Convert unstructured to corev1.Secret
-			secret := corev1.Secret{}
-			if err := runtime.DefaultUnstructuredConverter.FromUnstructured(secretUnstructured.UnstructuredContent(), &secret); err != nil {
-				p.config.Logger.Debug("Could not convert secret to corev1.Secret, skipping",
-					"step", step.Step,
-					"credentialName", cred.Name,
-					"error", err)
-
-				continue
-			}
-
-			secretMap[key] = secret
-		}
-	}
-
-	// Convert map to slice
-	secrets := make([]corev1.Secret, 0, len(secretMap))
-	for _, secret := range secretMap {
-		secrets = append(secrets, secret)
-	}
-
-	// Log the outcome with semantic distinction:
-	// - No credentials referenced: no log (nothing to fetch)
-	// - All credentials fetched successfully: debug log
-	// - Some credentials couldn't be fetched: info log (user should know)
-	if len(attemptedRefs) > 0 {
-		if len(secrets) == len(attemptedRefs) {
-			p.config.Logger.Debug("Fetched all function credential secrets from cluster",
-				"composition", comp.GetName(),
-				"secretCount", len(secrets))
-		} else {
-			p.config.Logger.Info("Some function credential secrets could not be fetched from cluster",
-				"composition", comp.GetName(),
-				"referenced", len(attemptedRefs),
-				"fetched", len(secrets),
-				"hint", "Use --function-credentials to provide secrets that don't exist on cluster")
-		}
-	}
-
-	return secrets
+	return p.credentialClient.FetchCompositionCredentials(ctx, comp)
 }
 
 // mergeCredentials combines CLI-provided credentials with auto-fetched credentials.

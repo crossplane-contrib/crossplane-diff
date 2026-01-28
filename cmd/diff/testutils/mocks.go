@@ -6,6 +6,7 @@ import (
 
 	dt "github.com/crossplane-contrib/crossplane-diff/cmd/diff/renderer/types"
 	"github.com/crossplane-contrib/crossplane-diff/cmd/diff/types"
+	corev1 "k8s.io/api/core/v1"
 	extv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	un "k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -740,6 +741,20 @@ func (m *MockResourceTreeClient) GetResourceTree(ctx context.Context, root *un.U
 	}
 
 	return nil, errors.New("GetResourceTree not implemented")
+}
+
+// MockCredentialClient implements the crossplane.CredentialClient interface.
+type MockCredentialClient struct {
+	FetchCompositionCredentialsFn func(ctx context.Context, comp *xpextv1.Composition) []corev1.Secret
+}
+
+// FetchCompositionCredentials implements crossplane.CredentialClient.
+func (m *MockCredentialClient) FetchCompositionCredentials(ctx context.Context, comp *xpextv1.Composition) []corev1.Secret {
+	if m.FetchCompositionCredentialsFn != nil {
+		return m.FetchCompositionCredentialsFn(ctx, comp)
+	}
+
+	return nil
 }
 
 // endregion

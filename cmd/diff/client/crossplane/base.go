@@ -31,6 +31,7 @@ func (c *Clients) Initialize(ctx context.Context, logger logging.Logger) error {
 // typically for initialization where the consumer can select which ones they need.
 type Clients struct {
 	Composition  CompositionClient
+	Credential   CredentialClient
 	Definition   DefinitionClient
 	Environment  EnvironmentClient
 	Function     FunctionClient

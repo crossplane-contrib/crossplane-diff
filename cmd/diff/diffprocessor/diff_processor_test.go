@@ -110,6 +110,7 @@ func TestDefaultDiffProcessor_PerformDiff(t *testing.T) {
 				// Create Crossplane client mocks
 				xpClients := xp.Clients{
 					Composition: tu.NewMockCompositionClient().Build(),
+					Credential:  &tu.MockCredentialClient{},
 					Definition:  tu.NewMockDefinitionClient().Build(),
 					Environment: tu.NewMockEnvironmentClient().
 						WithNoEnvironmentConfigs().
@@ -139,6 +140,7 @@ func TestDefaultDiffProcessor_PerformDiff(t *testing.T) {
 					Composition: tu.NewMockCompositionClient().
 						WithNoMatchingComposition().
 						Build(),
+					Credential: &tu.MockCredentialClient{},
 					Definition: tu.NewMockDefinitionClient().Build(),
 					Environment: tu.NewMockEnvironmentClient().
 						WithNoEnvironmentConfigs().
@@ -179,6 +181,7 @@ func TestDefaultDiffProcessor_PerformDiff(t *testing.T) {
 					Composition: tu.NewMockCompositionClient().
 						WithNoMatchingComposition().
 						Build(),
+					Credential: &tu.MockCredentialClient{},
 					Definition: tu.NewMockDefinitionClient().Build(),
 					Environment: tu.NewMockEnvironmentClient().
 						WithNoEnvironmentConfigs().
@@ -225,6 +228,7 @@ func TestDefaultDiffProcessor_PerformDiff(t *testing.T) {
 					Composition: tu.NewMockCompositionClient().
 						WithNoMatchingComposition().
 						Build(),
+					Credential: &tu.MockCredentialClient{},
 					Definition: tu.NewMockDefinitionClient().Build(),
 					Environment: tu.NewMockEnvironmentClient().
 						WithNoEnvironmentConfigs().
@@ -254,6 +258,7 @@ func TestDefaultDiffProcessor_PerformDiff(t *testing.T) {
 					Composition: tu.NewMockCompositionClient().
 						WithSuccessfulCompositionMatch(composition).
 						Build(),
+					Credential: &tu.MockCredentialClient{},
 					Definition: tu.NewMockDefinitionClient().Build(),
 					Environment: tu.NewMockEnvironmentClient().
 						WithNoEnvironmentConfigs().
@@ -365,6 +370,7 @@ func TestDefaultDiffProcessor_PerformDiff(t *testing.T) {
 					Composition: tu.NewMockCompositionClient().
 						WithSuccessfulCompositionMatch(composition).
 						Build(),
+					Credential: &tu.MockCredentialClient{},
 					Definition: tu.NewMockDefinitionClient().
 						WithEmptyXRDsFetch().
 						WithXRDForGVK(schema.GroupVersionKind{Group: testGroup, Version: "v1", Kind: testKind}, mainXRD).
@@ -536,6 +542,7 @@ func TestDefaultDiffProcessor_PerformDiff(t *testing.T) {
 					Composition: tu.NewMockCompositionClient().
 						WithSuccessfulCompositionMatch(composition).
 						Build(),
+					Credential: &tu.MockCredentialClient{},
 					Definition: tu.NewMockDefinitionClient().
 						WithXRDForXR(tu.NewXRD(testXRDName, testGroup, testKind).
 							WithPlural(testPlural).
@@ -657,6 +664,7 @@ func TestDefaultDiffProcessor_Initialize(t *testing.T) {
 				// Create Crossplane client mocks with a failing Definition client
 				xpClients := xp.Clients{
 					Composition: tu.NewMockCompositionClient().Build(),
+					Credential:  &tu.MockCredentialClient{},
 					Definition: tu.NewMockDefinitionClient().
 						WithFailedXRDsFetch("XRD not found").
 						Build(),
@@ -685,6 +693,7 @@ func TestDefaultDiffProcessor_Initialize(t *testing.T) {
 				// Create Crossplane client mocks with a failing Environment client
 				xpClients := xp.Clients{
 					Composition: tu.NewMockCompositionClient().Build(),
+					Credential:  &tu.MockCredentialClient{},
 					Definition: tu.NewMockDefinitionClient().
 						WithEmptyXRDsFetch().
 						Build(),
@@ -717,6 +726,7 @@ func TestDefaultDiffProcessor_Initialize(t *testing.T) {
 				// Create Crossplane client mocks with successful initialization
 				xpClients := xp.Clients{
 					Composition: tu.NewMockCompositionClient().Build(),
+					Credential:  &tu.MockCredentialClient{},
 					Definition: tu.NewMockDefinitionClient().
 						WithSuccessfulXRDsFetch([]*un.Unstructured{xrd1}).
 						Build(),
@@ -1494,6 +1504,7 @@ func TestDefaultDiffProcessor_ProcessNestedXRs(t *testing.T) {
 		"NoComposedResourcesReturnsEmpty": {
 			setupMocks: func() (xp.Clients, k8.Clients) {
 				xpClients := xp.Clients{
+					Credential: &tu.MockCredentialClient{},
 					Definition: tu.NewMockDefinitionClient().Build(),
 				}
 				k8sClients := k8.Clients{}
@@ -1509,6 +1520,7 @@ func TestDefaultDiffProcessor_ProcessNestedXRs(t *testing.T) {
 		"OnlyManagedResourcesReturnsEmpty": {
 			setupMocks: func() (xp.Clients, k8.Clients) {
 				xpClients := xp.Clients{
+					Credential: &tu.MockCredentialClient{},
 					Definition: tu.NewMockDefinitionClient().
 						WithXRDForXRNotFound().
 						Build(),
@@ -1542,17 +1554,18 @@ func TestDefaultDiffProcessor_ProcessNestedXRs(t *testing.T) {
 				}
 
 				xpClients := xp.Clients{
-					Definition: tu.NewMockDefinitionClient().
-						WithXRD(childXRD).
-						Build(),
 					Composition: tu.NewMockCompositionClient().
 						WithComposition(childComposition).
 						Build(),
-					Function: tu.NewMockFunctionClient().
-						WithSuccessfulFunctionsFetch(functions).
+					Credential: &tu.MockCredentialClient{},
+					Definition: tu.NewMockDefinitionClient().
+						WithXRD(childXRD).
 						Build(),
 					Environment: tu.NewMockEnvironmentClient().
 						WithNoEnvironmentConfigs().
+						Build(),
+					Function: tu.NewMockFunctionClient().
+						WithSuccessfulFunctionsFetch(functions).
 						Build(),
 					ResourceTree: tu.NewMockResourceTreeClient().Build(),
 				}
@@ -1599,6 +1612,7 @@ func TestDefaultDiffProcessor_ProcessNestedXRs(t *testing.T) {
 		"MaxDepthExceededReturnsError": {
 			setupMocks: func() (xp.Clients, k8.Clients) {
 				xpClients := xp.Clients{
+					Credential: &tu.MockCredentialClient{},
 					Definition: tu.NewMockDefinitionClient().
 						WithXRD(childXRD).
 						Build(),
@@ -1633,6 +1647,10 @@ func TestDefaultDiffProcessor_ProcessNestedXRs(t *testing.T) {
 				}
 
 				xpClients := xp.Clients{
+					Composition: tu.NewMockCompositionClient().
+						WithComposition(childComposition).
+						Build(),
+					Credential: &tu.MockCredentialClient{},
 					Definition: tu.NewMockDefinitionClient().
 						WithXRD(childXRD).
 						WithXRDForXRNotFoundForGVK(schema.GroupVersionKind{
@@ -1641,14 +1659,11 @@ func TestDefaultDiffProcessor_ProcessNestedXRs(t *testing.T) {
 							Kind:    "NopResource",
 						}).
 						Build(),
-					Composition: tu.NewMockCompositionClient().
-						WithComposition(childComposition).
+					Environment: tu.NewMockEnvironmentClient().
+						WithNoEnvironmentConfigs().
 						Build(),
 					Function: tu.NewMockFunctionClient().
 						WithSuccessfulFunctionsFetch(functions).
-						Build(),
-					Environment: tu.NewMockEnvironmentClient().
-						WithNoEnvironmentConfigs().
 						Build(),
 					ResourceTree: tu.NewMockResourceTreeClient().Build(),
 				}
@@ -1740,17 +1755,18 @@ func TestDefaultDiffProcessor_ProcessNestedXRs(t *testing.T) {
 				}
 
 				xpClients := xp.Clients{
-					Definition: tu.NewMockDefinitionClient().
-						WithXRD(childXRD).
-						Build(),
 					Composition: tu.NewMockCompositionClient().
 						WithComposition(childComposition).
 						Build(),
-					Function: tu.NewMockFunctionClient().
-						WithSuccessfulFunctionsFetch(functions).
+					Credential: &tu.MockCredentialClient{},
+					Definition: tu.NewMockDefinitionClient().
+						WithXRD(childXRD).
 						Build(),
 					Environment: tu.NewMockEnvironmentClient().
 						WithNoEnvironmentConfigs().
+						Build(),
+					Function: tu.NewMockFunctionClient().
+						WithSuccessfulFunctionsFetch(functions).
 						Build(),
 					// Mock resource tree to return existing nested XR and its managed resources
 					ResourceTree: tu.NewMockResourceTreeClient().
@@ -2004,6 +2020,7 @@ func TestDefaultDiffProcessor_DiffSingleResource_WithObservedResources(t *testin
 					Composition: tu.NewMockCompositionClient().
 						WithSuccessfulCompositionMatch(composition).
 						Build(),
+					Credential: &tu.MockCredentialClient{},
 					Definition: tu.NewMockDefinitionClient().
 						WithXRDForXR(xrdUnstructured).
 						Build(),
@@ -2083,6 +2100,7 @@ func TestDefaultDiffProcessor_DiffSingleResource_WithObservedResources(t *testin
 					Composition: tu.NewMockCompositionClient().
 						WithSuccessfulCompositionMatch(composition).
 						Build(),
+					Credential: &tu.MockCredentialClient{},
 					Definition: tu.NewMockDefinitionClient().
 						WithXRDForXR(xrdUnstructured).
 						Build(),
@@ -2156,6 +2174,7 @@ func TestDefaultDiffProcessor_DiffSingleResource_WithObservedResources(t *testin
 					Composition: tu.NewMockCompositionClient().
 						WithSuccessfulCompositionMatch(composition).
 						Build(),
+					Credential: &tu.MockCredentialClient{},
 					Definition: tu.NewMockDefinitionClient().
 						WithXRDForXR(xrdUnstructured).
 						Build(),
@@ -2523,95 +2542,56 @@ func TestMergeCredentials(t *testing.T) {
 }
 
 func TestFetchCompositionCredentials(t *testing.T) {
+	// This tests that fetchCompositionCredentials correctly delegates to the CredentialClient.
+	// The detailed credential fetching logic is tested in credential_client_test.go.
 	tests := map[string]struct {
-		composition *apiextensionsv1.Composition
-		setupMocks  func() k8.ResourceClient
-		wantSecrets int
+		composition     *apiextensionsv1.Composition
+		mockCredentials []corev1.Secret
+		wantSecrets     int
 	}{
 		"NilComposition": {
-			composition: nil,
-			setupMocks:  func() k8.ResourceClient { return nil },
-			wantSecrets: 0,
+			composition:     nil,
+			mockCredentials: nil,
+			wantSecrets:     0,
 		},
-		"NoPipelineSteps": {
-			composition: &apiextensionsv1.Composition{
-				ObjectMeta: metav1.ObjectMeta{Name: "test-comp"},
-				Spec:       apiextensionsv1.CompositionSpec{},
-			},
-			setupMocks:  func() k8.ResourceClient { return nil },
-			wantSecrets: 0,
-		},
-		"NoCredentialsInPipeline": {
-			composition: tu.NewComposition("test-comp").
-				WithCompositeTypeRef("example.org/v1", "XR1").
-				WithPipelineMode().
-				WithPipelineStep("step1", "function-test", nil).
-				Build(),
-			setupMocks:  func() k8.ResourceClient { return nil },
-			wantSecrets: 0,
-		},
-		"FetchesCredentialSecret": {
+		"DelegatesToCredentialClient": {
 			composition: tu.NewComposition("test-comp").
 				WithCompositeTypeRef("example.org/v1", "XR1").
 				WithPipelineMode().
 				WithPipelineStep("step1", "function-msgraph", nil,
 					tu.WithCredentials("azure-creds", "crossplane-system", "azure-credentials")).
 				Build(),
-			setupMocks: func() k8.ResourceClient {
-				secretUnstructured := tu.NewResource("v1", "Secret", "azure-credentials").
-					WithNamespace("crossplane-system").
-					Build()
-				// Add data to the secret
-				un.SetNestedStringMap(secretUnstructured.Object, map[string]string{"credentials": "test-creds"}, "stringData")
-
-				return tu.NewMockResourceClient().
-					WithResourcesExist(secretUnstructured).
-					Build()
+			mockCredentials: []corev1.Secret{
+				{
+					ObjectMeta: metav1.ObjectMeta{
+						Name:      "azure-credentials",
+						Namespace: "crossplane-system",
+					},
+				},
 			},
 			wantSecrets: 1,
 		},
-		"SkipsMissingSecret": {
+		"ReturnsEmptyWhenNoCredentials": {
 			composition: tu.NewComposition("test-comp").
 				WithCompositeTypeRef("example.org/v1", "XR1").
 				WithPipelineMode().
-				WithPipelineStep("step1", "function-msgraph", nil,
-					tu.WithCredentials("missing-creds", "crossplane-system", "missing-secret")).
+				WithPipelineStep("step1", "function-test", nil).
 				Build(),
-			setupMocks: func() k8.ResourceClient {
-				return tu.NewMockResourceClient().
-					WithResourceNotFound().
-					Build()
-			},
-			wantSecrets: 0, // Missing secrets are skipped, not errors
-		},
-		"DeduplicatesSecrets": {
-			composition: tu.NewComposition("test-comp").
-				WithCompositeTypeRef("example.org/v1", "XR1").
-				WithPipelineMode().
-				WithPipelineStep("step1", "function-a", nil,
-					tu.WithCredentials("creds", "crossplane-system", "shared-secret")).
-				WithPipelineStep("step2", "function-b", nil,
-					tu.WithCredentials("creds", "crossplane-system", "shared-secret")).
-				Build(),
-			setupMocks: func() k8.ResourceClient {
-				secretUnstructured := tu.NewResource("v1", "Secret", "shared-secret").
-					WithNamespace("crossplane-system").
-					Build()
-
-				return tu.NewMockResourceClient().
-					WithResourcesExist(secretUnstructured).
-					Build()
-			},
-			wantSecrets: 1, // Only one secret despite two references
+			mockCredentials: nil,
+			wantSecrets:     0,
 		},
 	}
 
 	for name, tc := range tests {
 		t.Run(name, func(t *testing.T) {
-			resourceClient := tc.setupMocks()
+			credentialClient := &tu.MockCredentialClient{
+				FetchCompositionCredentialsFn: func(_ context.Context, _ *apiextensionsv1.Composition) []corev1.Secret {
+					return tc.mockCredentials
+				},
+			}
 
 			processor := &DefaultDiffProcessor{
-				resourceClient: resourceClient,
+				credentialClient: credentialClient,
 				config: ProcessorConfig{
 					Logger: tu.TestLogger(t, false),
 				},
