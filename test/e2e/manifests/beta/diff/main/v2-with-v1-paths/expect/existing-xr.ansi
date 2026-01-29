@@ -1,4 +1,4 @@
-~~~ NopResource/existing-resource-(generated)
+~~~ NopResource/existing-resource-XXXXX
   apiVersion: nop.crossplane.io/v1alpha1
   kind: NopResource
   metadata:
@@ -6,9 +6,13 @@
 -     cool-field: I'm existing with v1-style paths!
 +     cool-field: I'm modified with v1-style paths!
       crossplane.io/composition-resource-name: nop-resource
+      crossplane.io/external-name: existing-resource-XXXXX
+    finalizers:
+    - finalizer.managedresource.crossplane.io
     generateName: existing-resource-
     labels:
       crossplane.io/composite: existing-resource
+    name: existing-resource-XXXXX
     namespace: default
   spec:
     deletionPolicy: Delete
@@ -27,6 +31,10 @@
   apiVersion: v2withv1paths.diff.example.org/v1alpha1
   kind: XNopResource
   metadata:
+    finalizers:
+    - composite.apiextensions.crossplane.io
+    labels:
+      crossplane.io/composite: existing-resource
     name: existing-resource
     namespace: default
   spec:
@@ -34,6 +42,12 @@
       name: xnopresources.v2withv1paths.diff.example.org
 -   coolField: I'm existing with v1-style paths!
 +   coolField: I'm modified with v1-style paths!
+    crossplane:
+      compositionRef:
+        name: xnopresources.v2withv1paths.diff.example.org
+      compositionRevisionRef:
+        name: xnopresources.v2withv1paths.diff.example.org-XXXXXXX
+      compositionUpdatePolicy: Automatic
 
 ---
 
