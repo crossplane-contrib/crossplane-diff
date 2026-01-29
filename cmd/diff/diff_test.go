@@ -49,6 +49,15 @@ import (
 	itu "github.com/crossplane/crossplane/v2/cmd/crank/common/load/testutils"
 )
 
+// testContextProvider implements ContextProvider for testing.
+type testContextProvider struct {
+	context KubeContext
+}
+
+func (t *testContextProvider) GetKubeContext() KubeContext {
+	return t.context
+}
+
 func TestCmd_Run(t *testing.T) {
 	var buf bytes.Buffer
 
@@ -1064,7 +1073,7 @@ users:
 			}
 
 			// Call the function with empty context (use default)
-			config, err := getRestConfig("")
+			config, err := provideRestConfig(&testContextProvider{context: ""})
 
 			// Check error expectations
 			if tc.expectError && err == nil {
@@ -1176,8 +1185,8 @@ users:
 			// Set KUBECONFIG environment variable
 			t.Setenv("KUBECONFIG", kubeconfigPath)
 
-			// Call getRestConfig with the context override
-			config, err := getRestConfig(KubeContext(tc.contextOverride))
+			// Call provideRestConfig with the context override
+			config, err := provideRestConfig(&testContextProvider{context: KubeContext(tc.contextOverride)})
 
 			// Check error expectations
 			if tc.expectError && err == nil {

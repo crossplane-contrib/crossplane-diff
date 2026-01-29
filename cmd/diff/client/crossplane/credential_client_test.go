@@ -20,18 +20,21 @@ func TestDefaultCredentialClient_FetchCompositionCredentials(t *testing.T) {
 	secret1Builder := tu.NewResource("v1", "Secret", "secret1").
 		InNamespace("ns1").
 		WithData(map[string][]byte{"key1": []byte("val1")})
+
 	var secret1 corev1.Secret
 	secret1Builder.BuildTyped(&secret1)
 
 	secret2Builder := tu.NewResource("v1", "Secret", "secret2").
 		InNamespace("ns1").
 		WithData(map[string][]byte{"key2": []byte("val2")})
+
 	var secret2 corev1.Secret
 	secret2Builder.BuildTyped(&secret2)
 
 	secret3Builder := tu.NewResource("v1", "Secret", "secret3").
 		InNamespace("ns2").
 		WithData(map[string][]byte{"key3": []byte("val3")})
+
 	var secret3 corev1.Secret
 	secret3Builder.BuildTyped(&secret3)
 

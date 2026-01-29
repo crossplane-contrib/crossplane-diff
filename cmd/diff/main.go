@@ -38,9 +38,16 @@ var _ = kong.Must(&cli{})
 type (
 	verboseFlag bool
 	// KubeContext represents the Kubernetes context name from the kubeconfig.
-	// Kong will automatically bind this when the --context flag is parsed.
 	KubeContext string
 )
+
+// ContextProvider is an interface for accessing the Kubernetes context configuration.
+// Commands embed CommonCmdFields which implements this interface. By binding a pointer
+// to the command struct via this interface in BeforeApply, providers can access the
+// context value after flag parsing completes (when providers are actually resolved).
+type ContextProvider interface {
+	GetKubeContext() KubeContext
+}
 
 // ExitCode tracks the exit code to return after command execution.
 // Commands set this based on their results (diffs found, validation errors, etc.).
@@ -83,6 +90,8 @@ func (f *FunctionCredentials) Decode(ctx *kong.DecodeContext) error {
 }
 
 // CommonCmdFields contains common fields shared by both XR and Comp commands.
+// It implements ContextProvider to allow providers to access the context value
+// after flag parsing completes.
 type CommonCmdFields struct {
 	// Configuration options
 	Context             KubeContext         `help:"Kubernetes context to use (defaults to current context)."                                   name:"context"`
@@ -94,6 +103,11 @@ type CommonCmdFields struct {
 	FunctionCredentials FunctionCredentials `help:"A YAML file or directory of YAML files specifying Secret credentials to pass to Functions." name:"function-credentials"                   placeholder:"PATH"`
 }
 
+// GetKubeContext implements ContextProvider.
+func (c *CommonCmdFields) GetKubeContext() KubeContext {
+	return c.Context
+}
+
 func (v verboseFlag) BeforeApply(ctx *kong.Context) error { //nolint:unparam // BeforeApply requires this signature.
 	logger := logging.NewLogrLogger(zap.New(zap.UseDevMode(true)))
 	ctx.BindTo(logger, (*logging.Logger)(nil))
@@ -101,10 +115,12 @@ func (v verboseFlag) BeforeApply(ctx *kong.Context) error { //nolint:unparam // 
 	return nil
 }
 
-// BeforeApply binds the context string so it's available to getRestConfig via dependency injection.
+// BeforeApply binds the CommonCmdFields pointer via the ContextProvider interface.
+// This allows providers to access the context value after flag parsing completes.
+// The key insight is that we bind a POINTER here - when providers are resolved later
+// (in AfterApply or Run), they dereference the pointer and get the current field values.
 func (c *CommonCmdFields) BeforeApply(ctx *kong.Context) error { //nolint:unparam // BeforeApply requires this signature.
-	// Bind the context string so getRestConfig can use it
-	ctx.BindTo(c.Context, (*KubeContext)(nil))
+	ctx.BindTo(c, (*ContextProvider)(nil))
 	return nil
 }
 
@@ -134,7 +150,11 @@ func main() {
 		// at runtime.
 		kong.BindTo(logger, (*logging.Logger)(nil)),
 		kong.Bind(exitCode), // Bind exit code state
-		kong.BindToProvider(getRestConfig),
+		// Providers are resolved lazily when dependencies are needed.
+		// provideRestConfig depends on ContextProvider (bound in CommonCmdFields.BeforeApply)
+		// provideAppContext depends on *rest.Config and logging.Logger
+		kong.BindToProvider(provideRestConfig),
+		kong.BindToProvider(provideAppContext),
 		kong.ConfigureHelp(kong.HelpOptions{
 			FlagsLast:      true,
 			Compact:        true,
@@ -158,7 +178,12 @@ func main() {
 	os.Exit(exitCode.Code)
 }
 
-func getRestConfig(kubeContext KubeContext) (*rest.Config, error) {
+// provideRestConfig creates a Kubernetes REST config using the context from ContextProvider.
+// This provider is resolved lazily when dependencies need it (in AfterApply or Run),
+// at which point flag parsing is complete and GetKubeContext() returns the correct value.
+func provideRestConfig(cp ContextProvider) (*rest.Config, error) {
+	kubeContext := cp.GetKubeContext()
+
 	// Use the standard client-go loading rules:
 	// 1. If KUBECONFIG env var is set, use that
 	// 2. Otherwise, use ~/.kube/config
@@ -188,4 +213,30 @@ func getRestConfig(kubeContext KubeContext) (*rest.Config, error) {
 	}
 
 	return config, nil
+}
+
+// cachedAppContext stores the singleton AppContext instance.
+// Kong providers are called each time a dependency is requested, but we need
+// the same AppContext instance throughout the command lifecycle so that
+// initialization in Run() affects the same clients used by processors created in AfterApply.
+//
+//nolint:gochecknoglobals // Required for singleton pattern with Kong providers
+var cachedAppContext *AppContext
+
+// provideAppContext creates the application context with all initialized clients.
+// This provider depends on *rest.Config and logging.Logger, which Kong resolves first.
+// The result is cached to ensure the same instance is used throughout the command lifecycle.
+func provideAppContext(config *rest.Config, log logging.Logger) (*AppContext, error) {
+	if cachedAppContext != nil {
+		return cachedAppContext, nil
+	}
+
+	appCtx, err := NewAppContext(config, log)
+	if err != nil {
+		return nil, err
+	}
+
+	cachedAppContext = appCtx
+
+	return appCtx, nil
 }
