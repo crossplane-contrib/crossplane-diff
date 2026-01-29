@@ -1470,6 +1470,196 @@ func TestDefaultCompositionClient_ResolveCompositionFromRevisions(t *testing.T) 
 	}
 }
 
+func TestGetCrossplaneRefPaths(t *testing.T) {
+	tests := map[string]struct {
+		reason     string
+		apiVersion string
+		path       []string
+		want       [][]string
+	}{
+		"V1XRDReturnsOnlyV1Path": {
+			reason:     "Should return only v1 path for v1 XRD",
+			apiVersion: "apiextensions.crossplane.io/v1",
+			path:       []string{"compositionRef", "name"},
+			want: [][]string{
+				{"spec", "compositionRef", "name"},
+			},
+		},
+		"V2XRDReturnsBothPaths": {
+			reason:     "Should return both v2 and v1 paths for v2 XRD (v2 first)",
+			apiVersion: "apiextensions.crossplane.io/v2",
+			path:       []string{"compositionRef", "name"},
+			want: [][]string{
+				{"spec", "crossplane", "compositionRef", "name"},
+				{"spec", "compositionRef", "name"},
+			},
+		},
+		"NonCrossplaneAPIVersionReturnsBothPaths": {
+			reason:     "Should return both paths for non-Crossplane API version (treated as v2)",
+			apiVersion: "example.org/v1",
+			path:       []string{"compositionRef", "name"},
+			want: [][]string{
+				{"spec", "crossplane", "compositionRef", "name"},
+				{"spec", "compositionRef", "name"},
+			},
+		},
+		"CompositionSelector": {
+			reason:     "Should handle compositionSelector path correctly",
+			apiVersion: "apiextensions.crossplane.io/v2",
+			path:       []string{"compositionSelector", "matchLabels"},
+			want: [][]string{
+				{"spec", "crossplane", "compositionSelector", "matchLabels"},
+				{"spec", "compositionSelector", "matchLabels"},
+			},
+		},
+		"CompositionUpdatePolicy": {
+			reason:     "Should handle compositionUpdatePolicy path correctly",
+			apiVersion: "apiextensions.crossplane.io/v2",
+			path:       []string{"compositionUpdatePolicy"},
+			want: [][]string{
+				{"spec", "crossplane", "compositionUpdatePolicy"},
+				{"spec", "compositionUpdatePolicy"},
+			},
+		},
+	}
+
+	for name, tt := range tests {
+		t.Run(name, func(t *testing.T) {
+			got := getCrossplaneRefPaths(tt.apiVersion, tt.path...)
+
+			if diff := cmp.Diff(tt.want, got); diff != "" {
+				t.Errorf("\n%s\ngetCrossplaneRefPaths(%q, %v): -want, +got:\n%s",
+					tt.reason, tt.apiVersion, tt.path, diff)
+			}
+		})
+	}
+}
+
+func TestDefaultCompositionClient_V2XRDWithV1StylePaths(t *testing.T) {
+	// This test verifies the fix for issue #206 - v2 XRDs using v1-style composition paths.
+	// When an XRD is v2, but the XR specifies composition fields at v1-style paths
+	// (e.g., spec.compositionRef instead of spec.crossplane.compositionRef),
+	// the client should still find them.
+	matchingComp := tu.NewComposition("matching-comp").
+		WithCompositeTypeRef("example.org/v1", "XExampleResource").
+		Build()
+
+	tests := map[string]struct {
+		reason       string
+		mockResource tu.MockResourceClient
+		mockDef      tu.MockDefinitionClient
+		compositions map[string]*apiextensionsv1.Composition
+		res          *un.Unstructured
+		wantComp     *apiextensionsv1.Composition
+		wantErr      string
+	}{
+		"V2XRDWithV1StyleCompositionRef": {
+			reason: "Should find composition when v2 XRD uses v1-style spec.compositionRef path",
+			mockResource: *tu.NewMockResourceClient().
+				WithSuccessfulInitialize().
+				WithEmptyListResources().
+				Build(),
+			mockDef: *tu.NewMockDefinitionClient().
+				WithSuccessfulInitialize().
+				WithEmptyXRDsFetch().
+				WithV2XRDForXR().
+				Build(),
+			compositions: map[string]*apiextensionsv1.Composition{
+				"matching-comp": matchingComp,
+			},
+			res: tu.NewResource("example.org/v1", "XExampleResource", "my-xr").
+				// v1-style path: spec.compositionRef (not spec.crossplane.compositionRef)
+				WithSpecField("compositionRef", map[string]any{
+					"name": "matching-comp",
+				}).
+				Build(),
+			wantComp: matchingComp,
+		},
+		"V2XRDWithV1StyleCompositionSelector": {
+			reason: "Should find composition when v2 XRD uses v1-style spec.compositionSelector path",
+			mockResource: *tu.NewMockResourceClient().
+				WithSuccessfulInitialize().
+				WithEmptyListResources().
+				Build(),
+			mockDef: *tu.NewMockDefinitionClient().
+				WithSuccessfulInitialize().
+				WithEmptyXRDsFetch().
+				WithV2XRDForXR().
+				Build(),
+			compositions: map[string]*apiextensionsv1.Composition{
+				"matching-comp": func() *apiextensionsv1.Composition {
+					comp := tu.NewComposition("matching-comp").
+						WithCompositeTypeRef("example.org/v1", "XExampleResource").
+						Build()
+					comp.SetLabels(map[string]string{
+						"environment": "production",
+					})
+
+					return comp
+				}(),
+			},
+			res: tu.NewResource("example.org/v1", "XExampleResource", "my-xr").
+				// v1-style path: spec.compositionSelector (not spec.crossplane.compositionSelector)
+				WithSpecField("compositionSelector", map[string]any{
+					"matchLabels": map[string]any{
+						"environment": "production",
+					},
+				}).
+				Build(),
+			wantComp: func() *apiextensionsv1.Composition {
+				comp := tu.NewComposition("matching-comp").
+					WithCompositeTypeRef("example.org/v1", "XExampleResource").
+					Build()
+				comp.SetLabels(map[string]string{
+					"environment": "production",
+				})
+
+				return comp
+			}(),
+		},
+	}
+
+	for name, tt := range tests {
+		t.Run(name, func(t *testing.T) {
+			c := &DefaultCompositionClient{
+				resourceClient:   &tt.mockResource,
+				definitionClient: &tt.mockDef,
+				revisionClient:   NewCompositionRevisionClient(&tt.mockResource, tu.TestLogger(t, false)),
+				logger:           tu.TestLogger(t, false),
+				compositions:     tt.compositions,
+			}
+
+			got, err := c.FindMatchingComposition(t.Context(), tt.res)
+
+			if tt.wantErr != "" {
+				if err == nil {
+					t.Errorf("\n%s\nFindMatchingComposition(...): expected error containing %q but got none",
+						tt.reason, tt.wantErr)
+
+					return
+				}
+
+				if !strings.Contains(err.Error(), tt.wantErr) {
+					t.Errorf("\n%s\nFindMatchingComposition(...): expected error containing %q, got %q",
+						tt.reason, tt.wantErr, err.Error())
+				}
+
+				return
+			}
+
+			if err != nil {
+				t.Errorf("\n%s\nFindMatchingComposition(...): unexpected error: %v", tt.reason, err)
+				return
+			}
+
+			if diff := cmp.Diff(tt.wantComp.Name, got.Name); diff != "" {
+				t.Errorf("\n%s\nFindMatchingComposition(...): -want composition name, +got:\n%s",
+					tt.reason, diff)
+			}
+		})
+	}
+}
+
 func TestDefaultCompositionClient_getClaimTypeFromXRD(t *testing.T) {
 	type args struct {
 		xrd *un.Unstructured

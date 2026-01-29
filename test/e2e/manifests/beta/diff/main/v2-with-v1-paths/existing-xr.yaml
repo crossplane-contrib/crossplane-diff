@@ -1,0 +1,11 @@
+# v2 XRD with v1-style spec.compositionRef path (issue #206)
+apiVersion: v2withv1paths.diff.example.org/v1alpha1
+kind: XNopResource
+metadata:
+  name: existing-resource
+  namespace: default
+spec:
+  # v1-style composition reference (at spec.compositionRef instead of spec.crossplane.compositionRef)
+  compositionRef:
+    name: xnopresources.v2withv1paths.diff.example.org
+  coolField: "I'm existing with v1-style paths!"

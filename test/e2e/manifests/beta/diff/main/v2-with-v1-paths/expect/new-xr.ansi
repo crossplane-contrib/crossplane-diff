@@ -1,0 +1,38 @@
++++ NopResource/new-resource-(generated)
++ apiVersion: nop.crossplane.io/v1alpha1
++ kind: NopResource
++ metadata:
++   annotations:
++     cool-field: I'm new with v1-style paths!
++     crossplane.io/composition-resource-name: nop-resource
++   generateName: new-resource-
++   labels:
++     crossplane.io/composite: new-resource
++   namespace: default
++ spec:
++   deletionPolicy: Delete
++   forProvider:
++     conditionAfter:
++     - conditionStatus: "True"
++       conditionType: Ready
++       time: 0s
++   managementPolicies:
++   - '*'
++   providerConfigRef:
++     name: default
+
+---
++++ XNopResource/new-resource
++ apiVersion: v2withv1paths.diff.example.org/v1alpha1
++ kind: XNopResource
++ metadata:
++   name: new-resource
++   namespace: default
++ spec:
++   compositionRef:
++     name: xnopresources.v2withv1paths.diff.example.org
++   coolField: I'm new with v1-style paths!
+
+---
+
+Summary: 2 added

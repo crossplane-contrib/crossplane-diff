@@ -1,0 +1,13 @@
+# v2 XRD with v1-style composition paths test case (issue #206)
+# This XR uses v1-style spec.compositionRef instead of spec.crossplane.compositionRef
+apiVersion: v2withv1paths.diff.example.org/v1alpha1
+kind: XNopResource
+metadata:
+  name: test-v2xrd-v1paths
+  namespace: default
+spec:
+  # v1-style composition reference (at spec.compositionRef instead of spec.crossplane.compositionRef)
+  compositionRef:
+    name: xnopresources.v2withv1paths.diff.example.org
+  compositionUpdatePolicy: Automatic
+  coolField: existing-value

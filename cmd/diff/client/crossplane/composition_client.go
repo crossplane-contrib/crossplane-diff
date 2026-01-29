@@ -165,20 +165,32 @@ func (c *DefaultCompositionClient) GetComposition(ctx context.Context, name stri
 
 // getCompositionRevisionRef reads the compositionRevisionRef from an XR/Claim spec.
 // Returns the revision name and whether it was found.
+// Checks both v2 (spec.crossplane.compositionRevisionRef) and v1 (spec.compositionRevisionRef) paths.
 func (c *DefaultCompositionClient) getCompositionRevisionRef(xrd, res *un.Unstructured) (string, bool) {
-	revisionRefName, found, _ := un.NestedString(res.Object, makeCrossplaneRefPath(xrd.GetAPIVersion(), "compositionRevisionRef", "name")...)
-	return revisionRefName, found && revisionRefName != ""
+	// Try all possible paths for compositionRevisionRef (v2 path first, then v1 fallback)
+	for _, path := range getCrossplaneRefPaths(xrd.GetAPIVersion(), "compositionRevisionRef", "name") {
+		revisionRefName, found, _ := un.NestedString(res.Object, path...)
+		if found && revisionRefName != "" {
+			return revisionRefName, true
+		}
+	}
+
+	return "", false
 }
 
 // getCompositionUpdatePolicy reads the compositionUpdatePolicy from an XR/Claim.
 // Returns the policy value and whether it was found. Defaults to "Automatic" if not found.
+// Checks both v2 (spec.crossplane.compositionUpdatePolicy) and v1 (spec.compositionUpdatePolicy) paths.
 func (c *DefaultCompositionClient) getCompositionUpdatePolicy(xrd, res *un.Unstructured) string {
-	policy, found, _ := un.NestedString(res.Object, makeCrossplaneRefPath(xrd.GetAPIVersion(), "compositionUpdatePolicy")...)
-	if !found || policy == "" {
-		return "Automatic" // Default policy
+	// Try all possible paths for compositionUpdatePolicy (v2 path first, then v1 fallback)
+	for _, path := range getCrossplaneRefPaths(xrd.GetAPIVersion(), "compositionUpdatePolicy") {
+		policy, found, _ := un.NestedString(res.Object, path...)
+		if found && policy != "" {
+			return policy
+		}
 	}
 
-	return policy
+	return "Automatic" // Default policy
 }
 
 // resolveCompositionFromRevisions determines which composition to use based on revision logic.
@@ -470,25 +482,46 @@ func (c *DefaultCompositionClient) labelsMatch(labels, selector map[string]strin
 	return true
 }
 
-func makeCrossplaneRefPath(apiVersion string, path ...string) []string {
-	var specCrossplane []string
+// getCrossplaneRefPaths returns possible paths for crossplane spec fields.
+// For v2 XRDs, returns both the new path (spec.crossplane.x) and legacy path (spec.x)
+// to maintain backward compatibility with XRs that use the v1-style paths.
+func getCrossplaneRefPaths(apiVersion string, path ...string) [][]string {
+	v1Path := append([]string{"spec"}, path...)
+	v2Path := append([]string{"spec", "crossplane"}, path...)
 
 	switch apiVersion {
 	case "apiextensions.crossplane.io/v1":
 		// Crossplane v1 keeps these under spec.x
-		specCrossplane = []string{"spec"}
+		return [][]string{v1Path}
 	default:
-		// Crossplane v2 keeps these under spec.crossplane.x
-		specCrossplane = []string{"spec", "crossplane"}
+		// Crossplane v2 prefers spec.crossplane.x but also supports legacy spec.x
+		// Try v2 path first, then fall back to v1 path for compatibility
+		return [][]string{v2Path, v1Path}
 	}
-
-	return append(specCrossplane, path...)
 }
 
 // findByDirectReference attempts to find a composition directly referenced by name.
+// Checks both v2 (spec.crossplane.compositionRef) and v1 (spec.compositionRef) paths.
 func (c *DefaultCompositionClient) findByDirectReference(ctx context.Context, xrd, res *un.Unstructured, targetGVK schema.GroupVersionKind, resourceID string) (*apiextensionsv1.Composition, error) {
-	compositionRefName, compositionRefFound, err := un.NestedString(res.Object, makeCrossplaneRefPath(xrd.GetAPIVersion(), "compositionRef", "name")...)
-	if err == nil && compositionRefFound && compositionRefName != "" {
+	// Try all possible paths for compositionRef (v2 path first, then v1 fallback)
+	var (
+		compositionRefName  string
+		compositionRefFound bool
+	)
+
+	for _, path := range getCrossplaneRefPaths(xrd.GetAPIVersion(), "compositionRef", "name") {
+		name, found, err := un.NestedString(res.Object, path...)
+		if err == nil && found && name != "" {
+			compositionRefName = name
+			compositionRefFound = true
+
+			c.logger.Debug("Found compositionRef at path", "path", path, "name", name)
+
+			break
+		}
+	}
+
+	if compositionRefFound && compositionRefName != "" {
 		c.logger.Debug("Found direct composition reference",
 			"resource", resourceID,
 			"compositionName", compositionRefName)
@@ -532,9 +565,27 @@ func (c *DefaultCompositionClient) findByDirectReference(ctx context.Context, xr
 }
 
 // findByLabelSelector attempts to find compositions that match label selectors.
+// Checks both v2 (spec.crossplane.compositionSelector) and v1 (spec.compositionSelector) paths.
 func (c *DefaultCompositionClient) findByLabelSelector(ctx context.Context, xrd, res *un.Unstructured, targetGVK schema.GroupVersionKind, resourceID string) (*apiextensionsv1.Composition, error) {
-	matchLabels, selectorFound, err := un.NestedMap(res.Object, makeCrossplaneRefPath(xrd.GetAPIVersion(), "compositionSelector", "matchLabels")...)
-	if err == nil && selectorFound && len(matchLabels) > 0 {
+	// Try all possible paths for compositionSelector (v2 path first, then v1 fallback)
+	var (
+		matchLabels   map[string]any
+		selectorFound bool
+	)
+
+	for _, path := range getCrossplaneRefPaths(xrd.GetAPIVersion(), "compositionSelector", "matchLabels") {
+		labels, found, err := un.NestedMap(res.Object, path...)
+		if err == nil && found && len(labels) > 0 {
+			matchLabels = labels
+			selectorFound = true
+
+			c.logger.Debug("Found compositionSelector at path", "path", path)
+
+			break
+		}
+	}
+
+	if selectorFound && len(matchLabels) > 0 {
 		c.logger.Debug("Found composition selector",
 			"resource", resourceID,
 			"matchLabels", matchLabels)
@@ -758,17 +809,12 @@ func (c *DefaultCompositionClient) FindCompositesUsingComposition(ctx context.Co
 }
 
 // resourceUsesComposition checks if a resource (XR or Claim) uses the specified composition.
+// Checks both v2 (spec.crossplane.compositionRef) and v1 (spec.compositionRef) paths since
+// we don't have access to the XRD to determine which path structure is expected.
 func (c *DefaultCompositionClient) resourceUsesComposition(resource *un.Unstructured, compositionName string) bool {
-	// Check direct composition reference in spec.compositionRef.name or spec.crossplane.compositionRef.name
-	apiVersion := resource.GetAPIVersion()
-
-	// Try both v1 and v2 paths
-	paths := [][]string{
-		makeCrossplaneRefPath(apiVersion, "compositionRef", "name"),
-		{"spec", "compositionRef", "name"}, // fallback for v1
-	}
-
-	for _, path := range paths {
+	// Try both v1 and v2 paths - we use a non-v1 apiVersion to get both paths from getCrossplaneRefPaths
+	// since getCrossplaneRefPaths returns both paths for non-v1 XRDs
+	for _, path := range getCrossplaneRefPaths("apiextensions.crossplane.io/v2", "compositionRef", "name") {
 		if refName, found, _ := un.NestedString(resource.Object, path...); found && refName == compositionName {
 			return true
 		}
