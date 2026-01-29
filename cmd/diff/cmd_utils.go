@@ -22,6 +22,7 @@ import (
 	"time"
 
 	dp "github.com/crossplane-contrib/crossplane-diff/cmd/diff/diffprocessor"
+	"github.com/crossplane-contrib/crossplane-diff/cmd/diff/renderer"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 
@@ -67,6 +68,19 @@ func defaultProcessorOptions(fields CommonCmdFields, namespace string) []dp.Proc
 		dp.WithMaxNestedDepth(fields.MaxNestedDepth),
 		dp.WithIgnorePaths(allIgnorePaths),
 	}
+
+	// Add output format option
+	// Import renderer package to use OutputFormat type
+	var outputFormat renderer.OutputFormat
+	switch fields.Output {
+	case "json":
+		outputFormat = renderer.OutputFormatJSON
+	case "yaml":
+		outputFormat = renderer.OutputFormatYAML
+	default:
+		outputFormat = renderer.OutputFormatDiff
+	}
+	opts = append(opts, dp.WithOutputFormat(outputFormat))
 
 	// Add function credentials if provided (empty path with no secrets errors in FunctionCredentials.Decode)
 	if len(fields.FunctionCredentials.Secrets) > 0 {
