@@ -1,0 +1,12 @@
+apiVersion: ns.nop.example.org/v1alpha1
+kind: XDownstreamResource
+metadata:
+  name: test-v2xrd-v1paths
+  namespace: default
+  annotations:
+    gotemplating.fn.crossplane.io/composition-resource-name: nop-resource
+  labels:
+    crossplane.io/composite: test-v2xrd-v1paths
+spec:
+  forProvider:
+    configData: existing-value

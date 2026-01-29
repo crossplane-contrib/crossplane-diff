@@ -1,0 +1,42 @@
+# v2 XRD that supports both v1-style and v2-style composition paths (issue #206)
+apiVersion: apiextensions.crossplane.io/v2
+kind: CompositeResourceDefinition
+metadata:
+  name: xnopresources.v2withv1paths.diff.example.org
+spec:
+  group: v2withv1paths.diff.example.org
+  names:
+    kind: XNopResource
+    plural: xnopresources
+  scope: Namespaced
+  versions:
+    - name: v1alpha1
+      served: true
+      referenceable: true
+      schema:
+        openAPIV3Schema:
+          type: object
+          properties:
+            spec:
+              type: object
+              properties:
+                coolField:
+                  type: string
+                # v1-style composition fields (for backwards compatibility testing)
+                compositionRef:
+                  type: object
+                  properties:
+                    name:
+                      type: string
+                compositionUpdatePolicy:
+                  type: string
+                  enum:
+                    - Automatic
+                    - Manual
+              required:
+                - coolField
+            status:
+              type: object
+              properties:
+                coolerField:
+                  type: string

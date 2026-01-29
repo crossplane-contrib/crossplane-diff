@@ -327,3 +327,101 @@ func TestDiffExistingResourceV1(t *testing.T) {
 			Feature(),
 	)
 }
+
+// TestDiffNewResourceV2WithV1Paths tests the crossplane diff command against net-new resources
+// using a v2 XRD but with v1-style composition paths (issue #206).
+func TestDiffNewResourceV2WithV1Paths(t *testing.T) {
+	imageTag := strings.Split(environment.GetCrossplaneImage(), ":")[1]
+	manifests := filepath.Join("test/e2e/manifests/beta/diff", imageTag, "v2-with-v1-paths")
+	setupPath := filepath.Join(manifests, "setup")
+	expectPath := filepath.Join(manifests, "expect")
+
+	environment.Test(t,
+		features.New("DiffNewResourceV2WithV1Paths").
+			WithLabel(e2e.LabelArea, LabelAreaDiff).
+			WithLabel(e2e.LabelSize, e2e.LabelSizeSmall).
+			WithLabel(config.LabelTestSuite, config.TestSuiteDefault).
+			WithLabel(LabelCrossplaneVersion, CrossplaneVersionMain).
+			WithSetup("CreatePrerequisites", funcs.AllOf(
+				funcs.ApplyResources(e2e.FieldManager, setupPath, "*.yaml"),
+				funcs.ResourcesCreatedWithin(30*time.Second, setupPath, "*.yaml"),
+			)).
+			WithSetup("PrerequisitesAreReady", funcs.AllOf(
+				funcs.ResourcesHaveConditionWithin(1*time.Minute, setupPath, "definition.yaml", apiextensionsv1.WatchingComposite()),
+			)).
+			Assess("CanDiffNewResource", func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
+				t.Helper()
+
+				output, log, err := RunXRDiff(t, c, "./crossplane-diff", exitCodeDiffDetected, filepath.Join(manifests, "new-xr.yaml"))
+				if err != nil {
+					t.Fatalf("Error running diff command: %v\nLog output:\n%s", err, log)
+				}
+
+				assertDiffMatchesFile(t, output, filepath.Join(expectPath, "new-xr.ansi"), log)
+
+				return ctx
+			}).
+			WithTeardown("DeletePrerequisites", funcs.AllOf(
+				funcs.DeleteResourcesWithPropagationPolicy(setupPath, "*.yaml", metav1.DeletePropagationForeground),
+				funcs.ResourcesDeletedWithin(3*time.Minute, setupPath, "*.yaml"),
+				funcs.ResourceDeletedWithin(3*time.Minute, &k8sapiextensionsv1.CustomResourceDefinition{
+					TypeMeta:   metav1.TypeMeta{Kind: "CustomResourceDefinition", APIVersion: "apiextensions.k8s.io/v1"},
+					ObjectMeta: metav1.ObjectMeta{Name: "xnopresources.v2withv1paths.diff.example.org"},
+				}),
+			)).
+			Feature(),
+	)
+}
+
+// TestDiffExistingResourceV2WithV1Paths tests the crossplane diff command against existing resources
+// using a v2 XRD but with v1-style composition paths (issue #206).
+func TestDiffExistingResourceV2WithV1Paths(t *testing.T) {
+	imageTag := strings.Split(environment.GetCrossplaneImage(), ":")[1]
+	manifests := filepath.Join("test/e2e/manifests/beta/diff", imageTag, "v2-with-v1-paths")
+	setupPath := filepath.Join(manifests, "setup")
+	expectPath := filepath.Join(manifests, "expect")
+
+	environment.Test(t,
+		features.New("DiffExistingResourceV2WithV1Paths").
+			WithLabel(e2e.LabelArea, LabelAreaDiff).
+			WithLabel(e2e.LabelSize, e2e.LabelSizeSmall).
+			WithLabel(config.LabelTestSuite, config.TestSuiteDefault).
+			WithLabel(LabelCrossplaneVersion, CrossplaneVersionMain).
+			WithSetup("CreatePrerequisites", funcs.AllOf(
+				funcs.ApplyResources(e2e.FieldManager, setupPath, "*.yaml"),
+				funcs.ResourcesCreatedWithin(30*time.Second, setupPath, "*.yaml"),
+			)).
+			WithSetup("PrerequisitesAreReady", funcs.AllOf(
+				funcs.ResourcesHaveConditionWithin(1*time.Minute, setupPath, "definition.yaml", apiextensionsv1.WatchingComposite()),
+			)).
+			WithSetup("CreateExistingXR", funcs.AllOf(
+				funcs.ApplyResources(e2e.FieldManager, manifests, "existing-xr.yaml"),
+				funcs.ResourcesCreatedWithin(30*time.Second, manifests, "existing-xr.yaml"),
+				funcs.ResourcesHaveConditionWithin(2*time.Minute, manifests, "existing-xr.yaml", xpv1.Available()),
+			)).
+			Assess("CanDiffExistingResource", func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
+				t.Helper()
+
+				output, log, err := RunXRDiff(t, c, "./crossplane-diff", exitCodeDiffDetected, filepath.Join(manifests, "modified-xr.yaml"))
+				if err != nil {
+					t.Fatalf("Error running diff command: %v\nLog output:\n%s", err, log)
+				}
+
+				assertDiffMatchesFile(t, output, filepath.Join(expectPath, "existing-xr.ansi"), log)
+
+				return ctx
+			}).
+			WithTeardown("DeleteResources", funcs.AllOf(
+				funcs.DeleteResources(manifests, "existing-xr.yaml"),
+				funcs.ResourcesDeletedWithin(2*time.Minute, manifests, "existing-xr.yaml"),
+			)).
+			WithTeardown("DeletePrerequisites", funcs.AllOf(
+				funcs.ResourcesDeletedAfterListedAreGone(3*time.Minute, setupPath, "*.yaml", nsNopList),
+				funcs.ResourceDeletedWithin(3*time.Minute, &k8sapiextensionsv1.CustomResourceDefinition{
+					TypeMeta:   metav1.TypeMeta{Kind: "CustomResourceDefinition", APIVersion: "apiextensions.k8s.io/v1"},
+					ObjectMeta: metav1.ObjectMeta{Name: "xnopresources.v2withv1paths.diff.example.org"},
+				}),
+			)).
+			Feature(),
+	)
+}

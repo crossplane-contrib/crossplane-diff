@@ -1988,6 +1988,55 @@ Summary: 2 added`,
 			expectedExitCode: dp.ExitCodeDiffDetected,
 			noColor:          true,
 		},
+		// v2 XRD with v1-style composition paths (issue #206)
+		"V2XRDWithV1StyleCompositionPaths": {
+			reason: "Validates v2 XRD using v1-style spec.compositionRef paths are correctly recognized (issue #206)",
+			setupFiles: []string{
+				"testdata/diff/resources/v2-xrd-with-v1-paths.yaml",
+				"testdata/diff/resources/v2-xrd-with-v1-paths-composition.yaml",
+				"testdata/diff/resources/v2-xrd-with-v1-paths-composition-revision.yaml",
+				"testdata/diff/resources/functions.yaml",
+				"testdata/diff/resources/existing-v2xrd-v1paths-xr.yaml",
+				"testdata/diff/resources/existing-v2xrd-v1paths-downstream.yaml",
+			},
+			inputFiles: []string{"testdata/diff/resources/modified-v2xrd-v1paths-xr.yaml"},
+			expectedOutput: `
+~~~ XDownstreamResource/test-v2xrd-v1paths
+  apiVersion: ns.nop.example.org/v1alpha1
+  kind: XDownstreamResource
+  metadata:
+    annotations:
++     crossplane.io/composition-resource-name: nop-resource
+      gotemplating.fn.crossplane.io/composition-resource-name: nop-resource
+    labels:
+      crossplane.io/composite: test-v2xrd-v1paths
+    name: test-v2xrd-v1paths
+    namespace: default
+  spec:
+    forProvider:
+-     configData: existing-value
++     configData: modified-value
+
+---
+~~~ XNopResource/test-v2xrd-v1paths
+  apiVersion: v2withv1paths.diff.example.org/v1alpha1
+  kind: XNopResource
+  metadata:
+    name: test-v2xrd-v1paths
+    namespace: default
+  spec:
+    compositionRef:
+      name: xnopresources.v2withv1paths.diff.example.org
+    compositionUpdatePolicy: Automatic
+-   coolField: existing-value
++   coolField: modified-value
+
+---
+`,
+			expectedError:    false,
+			expectedExitCode: dp.ExitCodeDiffDetected,
+			noColor:          true,
+		},
 		"ModifiedClaimWithNestedXRsShowsDiff": {
 			reason: "Validates that modified Claims with nested XRs show proper diff (3 modified resources)",
 			setupFiles: []string{

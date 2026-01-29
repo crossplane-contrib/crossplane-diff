@@ -80,7 +80,7 @@ var (
 	nestedGenerateNameRegex           = regexp.MustCompile(`(test-parent-generatename-child)-[a-z0-9]{12,16}`)
 	nestedClaimGenerateNameRegex      = regexp.MustCompile(`(existing-parent-claim)-[a-z0-9]{5,}(?:-[a-z0-9]{12,16})?`)
 	claimCompositionRevisionRegex     = regexp.MustCompile(`(xnopclaims\.claim\.diff\.example\.org)-[a-z0-9]{7,}`)
-	compositionRevisionRegex          = regexp.MustCompile(`(xnopresources\.(cluster\.|legacy\.)?diff\.example\.org)-[a-z0-9]{7,}`)
+	compositionRevisionRegex          = regexp.MustCompile(`(xnopresources\.(cluster\.|legacy\.|v2withv1paths\.)?diff\.example\.org)-[a-z0-9]{7,}`)
 	nestedCompositionRevisionRegex    = regexp.MustCompile(`(child-nop-composition|parent-nop-composition)-[a-z0-9]{7,}`)
 	compClaimCompositionRevisionRegex = regexp.MustCompile(`(xnopclaimdiffresources\.claimdiff\.example\.org)-[a-z0-9]{7,}`)
 	ansiEscapeRegex                   = regexp.MustCompile(`\x1b\[[0-9;]*m`)
