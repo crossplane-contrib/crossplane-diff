@@ -28,15 +28,15 @@ func TestStructuredDiffRenderer_RenderDiffs_JSON(t *testing.T) {
 				Kind:    "NopResource",
 			},
 			Desired: &unstructured.Unstructured{
-				Object: map[string]interface{}{
+				Object: map[string]any{
 					"apiVersion": "nop.crossplane.io/v1alpha1",
 					"kind":       "NopResource",
-					"metadata": map[string]interface{}{
+					"metadata": map[string]any{
 						"name":      "new-resource",
 						"namespace": "default",
 					},
-					"spec": map[string]interface{}{
-						"forProvider": map[string]interface{}{
+					"spec": map[string]any{
+						"forProvider": map[string]any{
 							"field": "value",
 						},
 					},
@@ -52,23 +52,23 @@ func TestStructuredDiffRenderer_RenderDiffs_JSON(t *testing.T) {
 				Kind:    "XExample",
 			},
 			Current: &unstructured.Unstructured{
-				Object: map[string]interface{}{
-					"metadata": map[string]interface{}{
+				Object: map[string]any{
+					"metadata": map[string]any{
 						"name":      "modified-resource",
 						"namespace": "production",
 					},
-					"spec": map[string]interface{}{
+					"spec": map[string]any{
 						"oldValue": "something",
 					},
 				},
 			},
 			Desired: &unstructured.Unstructured{
-				Object: map[string]interface{}{
-					"metadata": map[string]interface{}{
+				Object: map[string]any{
+					"metadata": map[string]any{
 						"name":      "modified-resource",
 						"namespace": "production",
 					},
-					"spec": map[string]interface{}{
+					"spec": map[string]any{
 						"newValue": "something-else",
 					},
 				},
@@ -83,8 +83,8 @@ func TestStructuredDiffRenderer_RenderDiffs_JSON(t *testing.T) {
 				Kind:    "XNopResource",
 			},
 			Current: &unstructured.Unstructured{
-				Object: map[string]interface{}{
-					"spec": map[string]interface{}{
+				Object: map[string]any{
+					"spec": map[string]any{
 						"coolField": "goodbye",
 					},
 				},
@@ -174,8 +174,8 @@ func TestStructuredDiffRenderer_RenderDiffs_YAML(t *testing.T) {
 				Kind:    "NopResource",
 			},
 			Desired: &unstructured.Unstructured{
-				Object: map[string]interface{}{
-					"spec": map[string]interface{}{
+				Object: map[string]any{
+					"spec": map[string]any{
 						"field": "value",
 					},
 				},

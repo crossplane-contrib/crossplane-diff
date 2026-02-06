@@ -41,12 +41,12 @@ type Summary struct {
 
 // ChangeDetail represents a single resource change.
 type ChangeDetail struct {
-	Type       string                 `json:"type"                yaml:"type"`
-	APIVersion string                 `json:"apiVersion"          yaml:"apiVersion"`
-	Kind       string                 `json:"kind"                yaml:"kind"`
-	Name       string                 `json:"name"                yaml:"name"`
-	Namespace  string                 `json:"namespace,omitempty" yaml:"namespace,omitempty"`
-	Diff       map[string]interface{} `json:"diff"                yaml:"diff"`
+	Type       string         `json:"type"                yaml:"type"`
+	APIVersion string         `json:"apiVersion"          yaml:"apiVersion"`
+	Kind       string         `json:"kind"                yaml:"kind"`
+	Name       string         `json:"name"                yaml:"name"`
+	Namespace  string         `json:"namespace,omitempty" yaml:"namespace,omitempty"`
+	Diff       map[string]any `json:"diff"                yaml:"diff"`
 }
 
 // StructuredDiffRenderer renders diffs in structured formats (JSON/YAML).
@@ -166,8 +166,8 @@ func (r *StructuredDiffRenderer) buildStructuredOutput(diffs map[string]*dt.Reso
 }
 
 // buildDiffDetail creates the diff detail structure for a resource change.
-func (r *StructuredDiffRenderer) buildDiffDetail(diff *dt.ResourceDiff) map[string]interface{} {
-	detail := make(map[string]interface{})
+func (r *StructuredDiffRenderer) buildDiffDetail(diff *dt.ResourceDiff) map[string]any {
+	detail := make(map[string]any)
 
 	switch diff.DiffType {
 	case dt.DiffTypeAdded:
