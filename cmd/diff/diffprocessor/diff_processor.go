@@ -556,18 +556,58 @@ func (p *DefaultDiffProcessor) resolveBackingXRForClaim(ctx context.Context, exi
 	}
 
 	// Merge the Claim's spec into the backing XR's spec
-	// This applies the user's spec changes while preserving the backing XR's identity
+	// This applies the user's spec changes while preserving only Crossplane-managed fields
+	// and avoiding preservation of deprecated fields that the user removed.
+	//
+	// This matches Crossplane's behavior: the Claim's spec is the source of truth for user-provided
+	// fields, while certain Crossplane-managed fields must be preserved from the backing XR.
 	claimSpec, hasClaimSpec, _ := un.NestedFieldCopy(xr.Object, "spec")
 	if hasClaimSpec && claimSpec != nil {
 		if claimSpecMap, ok := claimSpec.(map[string]any); ok {
 			xrSpec, _, _ := un.NestedFieldCopy(xrForRendering.Object, "spec")
 			if xrSpecMap, ok := xrSpec.(map[string]any); ok {
-				// Merge Claim spec into XR spec (Claim values override XR values)
-				if err := mergo.Merge(&xrSpecMap, claimSpecMap, mergo.WithOverride); err != nil {
-					return result, errors.Wrapf(err, "cannot merge Claim spec into backing XR %q", name)
+				// Start with the Claim's spec as the base (this ensures removed fields are gone)
+				mergedSpec := make(map[string]any)
+				for k, v := range claimSpecMap {
+					mergedSpec[k] = v
 				}
 
-				if err := un.SetNestedField(xrForRendering.Object, xrSpecMap, "spec"); err != nil {
+				// Preserve Crossplane-managed fields from the backing XR that are ALWAYS preserved
+				// (regardless of whether the Claim provides them):
+				// - claimRef: System-managed reference back to the Claim
+				// - resourceRefs: System-managed list of composed resources (XR-only field)
+				alwaysPreservedFields := []string{"claimRef", "resourceRefs"}
+				for _, fieldName := range alwaysPreservedFields {
+					if val, ok := xrSpecMap[fieldName]; ok {
+						mergedSpec[fieldName] = val
+					}
+				}
+
+				// Preserve fields from backing XR only if NOT provided in the Claim:
+				// - compositionRef: Claim can override which composition to use
+				// - compositionSelector: Claim can override composition selection
+				// - writeConnectionSecretToRef: Claim can override connection secret
+				conditionalFields := []string{"compositionRef", "compositionSelector", "writeConnectionSecretToRef"}
+				for _, fieldName := range conditionalFields {
+					if _, existsInClaim := claimSpecMap[fieldName]; !existsInClaim {
+						if val, exists := xrSpecMap[fieldName]; exists {
+							mergedSpec[fieldName] = val
+						}
+					}
+				}
+
+				// Handle compositionRevisionRef specially based on update policy
+				// Only preserve from backing XR if update policy is Manual
+				if _, existsInClaim := claimSpecMap["compositionRevisionRef"]; !existsInClaim {
+					updatePolicy := getCompositionUpdatePolicy(xrForRendering)
+					if updatePolicy == "Manual" {
+						if val, exists := xrSpecMap["compositionRevisionRef"]; exists {
+							mergedSpec["compositionRevisionRef"] = val
+						}
+					}
+				}
+
+				if err := un.SetNestedField(xrForRendering.Object, mergedSpec, "spec"); err != nil {
 					return result, errors.Wrapf(err, "cannot set merged spec on backing XR %q", name)
 				}
 			}
@@ -1373,4 +1413,24 @@ func mergeCredentials(cliCredentials, autoFetchedCredentials []corev1.Secret) []
 	}
 
 	return result
+}
+
+// getCompositionUpdatePolicy retrieves the compositionUpdatePolicy from an XR/Claim.
+// It checks both v2 (spec.crossplane.compositionUpdatePolicy) and v1 (spec.compositionUpdatePolicy) field paths.
+// Returns "Automatic" as the default if not found (matching Crossplane behavior).
+func getCompositionUpdatePolicy(xr *cmp.Unstructured) string {
+	// Try v2 path first: spec.crossplane.compositionUpdatePolicy
+	policy, found, err := un.NestedString(xr.Object, "spec", "crossplane", "compositionUpdatePolicy")
+	if err == nil && found && policy != "" {
+		return policy
+	}
+
+	// Try v1 path: spec.compositionUpdatePolicy
+	policy, found, err = un.NestedString(xr.Object, "spec", "compositionUpdatePolicy")
+	if err == nil && found && policy != "" {
+		return policy
+	}
+
+	// Default to Automatic if not found (matching Crossplane default behavior)
+	return "Automatic"
 }

@@ -47,6 +47,24 @@ const (
 // Ensure MockDiffProcessor implements the DiffProcessor interface.
 var _ DiffProcessor = &tu.MockDiffProcessor{}
 
+// mockResourceManagerForSpecMerge is a test helper that returns a backing XR for the spec merge tests.
+// It implements the ResourceManager interface to allow testing resolveBackingXRForClaim.
+type mockResourceManagerForSpecMerge struct {
+	backingXR *un.Unstructured
+}
+
+func (m *mockResourceManagerForSpecMerge) FetchCurrentObject(_ context.Context, _ *un.Unstructured, _ *un.Unstructured) (*un.Unstructured, bool, error) {
+	return m.backingXR, false, nil
+}
+
+func (m *mockResourceManagerForSpecMerge) UpdateOwnerRefs(_ context.Context, _ *un.Unstructured, _ *un.Unstructured) {
+	// No-op for tests
+}
+
+func (m *mockResourceManagerForSpecMerge) FetchObservedResources(_ context.Context, _ *cmp.Unstructured) ([]cpd.Unstructured, error) {
+	return nil, nil
+}
+
 // testProcessorOptions returns sensible default options for tests.
 // Tests can append additional options or override these as needed.
 func testProcessorOptions(t *testing.T) []ProcessorOption {
@@ -2460,6 +2478,534 @@ func TestDefaultDiffProcessor_synthesizeDummyBackingXRForNewClaim(t *testing.T) 
 			// Verify UID is set
 			if result.xrForRendering.GetUID() == "" {
 				t.Errorf("synthesizeDummyBackingXRForNewClaim() UID not set on result")
+			}
+		})
+	}
+}
+
+// TestDefaultDiffProcessor_resolveBackingXRForClaim_SpecMerge tests the spec merge logic
+// for existing claims, ensuring that deprecated fields from the backing XR are not
+// preserved when the user has removed them from the Claim spec.
+func TestDefaultDiffProcessor_resolveBackingXRForClaim_SpecMerge(t *testing.T) {
+	ctx := t.Context()
+
+	tests := map[string]struct {
+		claimSpec                 map[string]any // User's updated claim spec
+		backingXRSpec             map[string]any // Existing backing XR spec with deprecated fields
+		expectedMergedSpec        map[string]any // Expected spec after merge
+		description               string
+	}{
+		"RemoveDeprecatedField": {
+			claimSpec: map[string]any{
+				"newField":  "new-value",
+			},
+			backingXRSpec: map[string]any{
+				"newField":       "new-value",
+				"deprecatedField": "should-be-removed",
+				"claimRef": map[string]any{
+					"name":       "test-claim",
+					"namespace":  "default",
+					"kind":       "TestClaim",
+					"apiVersion": "example.org/v1",
+				},
+			},
+			expectedMergedSpec: map[string]any{
+				"newField": "new-value",
+				"claimRef": map[string]any{
+					"name":       "test-claim",
+					"namespace":  "default",
+					"kind":       "TestClaim",
+					"apiVersion": "example.org/v1",
+				},
+				// deprecatedField should NOT be present in merged spec
+			},
+			description: "User removed deprecatedField from Claim - it should not reappear in merged spec",
+		},
+		"PreserveCrossplaneFields": {
+			claimSpec: map[string]any{
+				"field1": "value1",
+				"field2": "value2",
+			},
+			backingXRSpec: map[string]any{
+				"field1": "value1",
+				"field2": "value2",
+				"claimRef": map[string]any{
+					"name":       "test-claim",
+					"namespace":  "ns",
+					"kind":       "TestClaim",
+					"apiVersion": "example.org/v1",
+				},
+			},
+			expectedMergedSpec: map[string]any{
+				"field1": "value1",
+				"field2": "value2",
+				"claimRef": map[string]any{
+					"name":       "test-claim",
+					"namespace":  "ns",
+					"kind":       "TestClaim",
+					"apiVersion": "example.org/v1",
+				},
+			},
+			description: "claimRef should be preserved in merged spec",
+		},
+		"RemoveMultipleDeprecatedFields": {
+			claimSpec: map[string]any{
+				"activeField": "active",
+			},
+			backingXRSpec: map[string]any{
+				"activeField":    "active",
+				"deprecated1":    "old1",
+				"deprecated2":    "old2",
+				"deprecated3":    "old3",
+				"claimRef": map[string]any{
+					"name": "claim",
+				},
+			},
+			expectedMergedSpec: map[string]any{
+				"activeField": "active",
+				"claimRef": map[string]any{
+					"name": "claim",
+				},
+				// All deprecated fields should be gone
+			},
+			description: "Multiple deprecated fields should all be removed",
+		},
+		"PreserveResourceRefsFromBackingXR": {
+			claimSpec: map[string]any{
+				"activeField": "value",
+			},
+			backingXRSpec: map[string]any{
+				"activeField": "value",
+				"claimRef": map[string]any{
+					"name": "claim",
+				},
+				"resourceRefs": []any{
+					map[string]any{"name": "resource-1", "kind": "NopResource"},
+					map[string]any{"name": "resource-2", "kind": "NopResource"},
+				},
+			},
+			expectedMergedSpec: map[string]any{
+				"activeField": "value",
+				"claimRef": map[string]any{
+					"name": "claim",
+				},
+				"resourceRefs": []any{
+					map[string]any{"name": "resource-1", "kind": "NopResource"},
+					map[string]any{"name": "resource-2", "kind": "NopResource"},
+				},
+			},
+			description: "resourceRefs should always be preserved from backing XR (XR-only field)",
+		},
+		"PreserveCompositionRefIfNotInClaim": {
+			claimSpec: map[string]any{
+				"activeField": "value",
+			},
+			backingXRSpec: map[string]any{
+				"activeField": "value",
+				"claimRef": map[string]any{
+					"name": "claim",
+				},
+				"compositionRef": map[string]any{
+					"name": "my-composition",
+				},
+			},
+			expectedMergedSpec: map[string]any{
+				"activeField": "value",
+				"claimRef": map[string]any{
+					"name": "claim",
+				},
+				"compositionRef": map[string]any{
+					"name": "my-composition",
+				},
+			},
+			description: "compositionRef should be preserved from backing XR if not provided in Claim",
+		},
+		"ClaimOverridesCompositionRef": {
+			claimSpec: map[string]any{
+				"activeField": "value",
+				"compositionRef": map[string]any{
+					"name": "new-composition",
+				},
+			},
+			backingXRSpec: map[string]any{
+				"activeField": "value",
+				"claimRef": map[string]any{
+					"name": "claim",
+				},
+				"compositionRef": map[string]any{
+					"name": "old-composition",
+				},
+			},
+			expectedMergedSpec: map[string]any{
+				"activeField": "value",
+				"claimRef": map[string]any{
+					"name": "claim",
+				},
+				"compositionRef": map[string]any{
+					"name": "new-composition",
+				},
+			},
+			description: "Claim-provided compositionRef should override backing XR value",
+		},
+		"PreserveCompositionSelectorIfNotInClaim": {
+			claimSpec: map[string]any{
+				"activeField": "value",
+			},
+			backingXRSpec: map[string]any{
+				"activeField": "value",
+				"claimRef": map[string]any{
+					"name": "claim",
+				},
+				"compositionSelector": map[string]any{
+					"matchLabels": map[string]any{
+						"env": "production",
+					},
+				},
+			},
+			expectedMergedSpec: map[string]any{
+				"activeField": "value",
+				"claimRef": map[string]any{
+					"name": "claim",
+				},
+				"compositionSelector": map[string]any{
+					"matchLabels": map[string]any{
+						"env": "production",
+					},
+				},
+			},
+			description: "compositionSelector should be preserved from backing XR if not provided in Claim",
+		},
+		"PreserveWriteConnectionSecretToRefIfNotInClaim": {
+			claimSpec: map[string]any{
+				"activeField": "value",
+			},
+			backingXRSpec: map[string]any{
+				"activeField": "value",
+				"claimRef": map[string]any{
+					"name": "claim",
+				},
+				"writeConnectionSecretToRef": map[string]any{
+					"name":      "my-secret",
+					"namespace": "default",
+				},
+			},
+			expectedMergedSpec: map[string]any{
+				"activeField": "value",
+				"claimRef": map[string]any{
+					"name": "claim",
+				},
+				"writeConnectionSecretToRef": map[string]any{
+					"name":      "my-secret",
+					"namespace": "default",
+				},
+			},
+			description: "writeConnectionSecretToRef should be preserved from backing XR if not provided in Claim",
+		},
+	}
+
+	for name, tt := range tests {
+		t.Run(name, func(t *testing.T) {
+			// Create the existing claim as it would be fetched from cluster
+			// This claim has resourceRef pointing to the backing XR
+			existingClaimFromCluster := tu.NewResource("example.org/v1", "TestClaim", "test-claim").
+				InNamespace("default").
+				Build()
+			// Set resourceRef to point to the backing XR
+			if err := un.SetNestedField(existingClaimFromCluster.Object, map[string]any{
+				"name":       "test-claim-abc123",
+				"apiVersion": "example.org/v1",
+				"kind":       "XTest",
+			}, "spec", "resourceRef"); err != nil {
+				t.Fatalf("Failed to set resourceRef: %v", err)
+			}
+
+			// Create backing XR with spec containing deprecated fields
+			backingXR := tu.NewResource("example.org/v1", "XTest", "test-claim-abc123").
+				InNamespace("default").
+				Build()
+			if err := un.SetNestedField(backingXR.Object, tt.backingXRSpec, "spec"); err != nil {
+				t.Fatalf("Failed to set backing XR spec: %v", err)
+			}
+
+			// Create the updated claim (what the user is trying to apply)
+			updatedClaim := tu.NewResource("example.org/v1", "TestClaim", "test-claim").
+				InNamespace("default").
+				Build()
+			if err := un.SetNestedField(updatedClaim.Object, tt.claimSpec, "spec"); err != nil {
+				t.Fatalf("Failed to set updated claim spec: %v", err)
+			}
+
+			// Create mock clients
+			defClient := tu.NewMockDefinitionClient().
+				WithIsClaimResource(func(_ context.Context, _ *un.Unstructured) bool {
+					return true
+				}).
+				Build()
+
+			// Create mock resource manager that returns the backing XR
+			resourceManager := &mockResourceManagerForSpecMerge{
+				backingXR: backingXR,
+			}
+
+			processor := &DefaultDiffProcessor{
+				defClient:       defClient,
+				resourceManager: resourceManager,
+				config: ProcessorConfig{
+					Logger: tu.TestLogger(t, false),
+				},
+			}
+
+			// Convert updated claim to composite.Unstructured
+			updatedClaimCmp := cmp.New()
+			updatedClaimCmp.SetUnstructuredContent(updatedClaim.Object)
+
+			// Call resolveBackingXRForClaim with:
+			// - existingClaimFromCluster: the existing claim (has resourceRef to backing XR)
+			// - updatedClaimCmp: the updated claim spec from user
+			result, err := processor.resolveBackingXRForClaim(ctx, existingClaimFromCluster, updatedClaimCmp)
+
+			if err != nil {
+				t.Fatalf("resolveBackingXRForClaim() unexpected error: %v", err)
+			}
+
+			if result.xrForRendering == nil {
+				t.Fatalf("resolveBackingXRForClaim() returned nil xrForRendering")
+			}
+
+			// Extract the merged spec from xrForRendering
+			gotSpec, _, err := un.NestedFieldCopy(result.xrForRendering.Object, "spec")
+			if err != nil {
+				t.Fatalf("Failed to extract spec from result: %v", err)
+			}
+
+			// Convert to map for comparison
+			gotSpecMap, ok := gotSpec.(map[string]any)
+			if !ok {
+				t.Fatalf("spec is not a map: %T", gotSpec)
+			}
+
+			// Verify the merged spec matches expected
+			if diff := gcmp.Diff(tt.expectedMergedSpec, gotSpecMap); diff != "" {
+				t.Errorf("resolveBackingXRForClaim() merged spec mismatch (-want +got):\n%s\nTest: %s", diff, tt.description)
+			}
+
+			// Verify deprecated fields are NOT in the result
+			if claimSpecLen := len(tt.claimSpec); claimSpecLen > 0 {
+				for _, field := range []string{"deprecated1", "deprecated2", "deprecated3", "deprecatedField"} {
+					if _, found, _ := un.NestedFieldCopy(result.xrForRendering.Object, "spec", field); found {
+						t.Errorf("resolveBackingXRForClaim() deprecated field %q should not be in merged spec", field)
+					}
+				}
+			}
+		})
+	}
+}
+
+// TestDefaultDiffProcessor_resolveBackingXRForClaim_CompositionRevisionRef tests the compositionRevisionRef
+// preservation logic based on the compositionUpdatePolicy field.
+func TestDefaultDiffProcessor_resolveBackingXRForClaim_CompositionRevisionRef(t *testing.T) {
+	ctx := t.Context()
+
+	tests := map[string]struct {
+		claimSpec                 map[string]any
+		backingXRSpec             map[string]any
+		compositionUpdatePolicy   string         // "Automatic" or "Manual"
+		compositionUpdatePolicyV2 bool           // true to use v2 path (spec.crossplane.compositionUpdatePolicy)
+		expectRevisionRefPreserved bool
+		description               string
+	}{
+		"PreserveCompositionRevisionRefWithManualPolicy": {
+			claimSpec: map[string]any{
+				"activeField": "value",
+			},
+			backingXRSpec: map[string]any{
+				"activeField": "value",
+				"claimRef": map[string]any{
+					"name": "claim",
+				},
+				"compositionRevisionRef": map[string]any{
+					"name": "my-composition-rev-1",
+				},
+			},
+			compositionUpdatePolicy:   "Manual",
+			compositionUpdatePolicyV2: false, // v1 path
+			expectRevisionRefPreserved: true,
+			description: "compositionRevisionRef should be preserved when update policy is Manual (v1 path)",
+		},
+		"PreserveCompositionRevisionRefWithManualPolicyV2": {
+			claimSpec: map[string]any{
+				"activeField": "value",
+			},
+			backingXRSpec: map[string]any{
+				"activeField": "value",
+				"claimRef": map[string]any{
+					"name": "claim",
+				},
+				"compositionRevisionRef": map[string]any{
+					"name": "my-composition-rev-1",
+				},
+			},
+			compositionUpdatePolicy:   "Manual",
+			compositionUpdatePolicyV2: true, // v2 path
+			expectRevisionRefPreserved: true,
+			description: "compositionRevisionRef should be preserved when update policy is Manual (v2 path)",
+		},
+		"DoNotPreserveCompositionRevisionRefWithAutomaticPolicy": {
+			claimSpec: map[string]any{
+				"activeField": "value",
+			},
+			backingXRSpec: map[string]any{
+				"activeField": "value",
+				"claimRef": map[string]any{
+					"name": "claim",
+				},
+				"compositionRevisionRef": map[string]any{
+					"name": "my-composition-rev-1",
+				},
+			},
+			compositionUpdatePolicy:   "Automatic",
+			compositionUpdatePolicyV2: false,
+			expectRevisionRefPreserved: false,
+			description: "compositionRevisionRef should NOT be preserved when update policy is Automatic",
+		},
+		"DoNotPreserveCompositionRevisionRefWithDefaultPolicy": {
+			claimSpec: map[string]any{
+				"activeField": "value",
+			},
+			backingXRSpec: map[string]any{
+				"activeField": "value",
+				"claimRef": map[string]any{
+					"name": "claim",
+				},
+				"compositionRevisionRef": map[string]any{
+					"name": "my-composition-rev-1",
+				},
+			},
+			compositionUpdatePolicy:   "", // Empty means default (Automatic)
+			expectRevisionRefPreserved: false,
+			description: "compositionRevisionRef should NOT be preserved when update policy defaults to Automatic",
+		},
+		"ClaimCanOverrideCompositionRevisionRef": {
+			claimSpec: map[string]any{
+				"activeField": "value",
+				"compositionRevisionRef": map[string]any{
+					"name": "my-composition-rev-2",
+				},
+			},
+			backingXRSpec: map[string]any{
+				"activeField": "value",
+				"claimRef": map[string]any{
+					"name": "claim",
+				},
+				"compositionRevisionRef": map[string]any{
+					"name": "my-composition-rev-1",
+				},
+			},
+			compositionUpdatePolicy:   "Manual",
+			expectRevisionRefPreserved: true, // But from Claim, not backing XR
+			description: "Claim can override compositionRevisionRef even with Manual policy",
+		},
+	}
+
+	for name, tt := range tests {
+		t.Run(name, func(t *testing.T) {
+			// Create the existing claim as it would be fetched from cluster
+			// This claim has resourceRef pointing to the backing XR
+			existingClaimFromCluster := tu.NewResource("example.org/v1", "TestClaim", "test-claim").
+				InNamespace("default").
+				Build()
+			// Set resourceRef to point to the backing XR
+			if err := un.SetNestedField(existingClaimFromCluster.Object, map[string]any{
+				"name":       "test-claim-abc123",
+				"apiVersion": "example.org/v1",
+				"kind":       "XTest",
+			}, "spec", "resourceRef"); err != nil {
+				t.Fatalf("Failed to set resourceRef: %v", err)
+			}
+
+			// Create backing XR with spec
+			backingXR := tu.NewResource("example.org/v1", "XTest", "test-claim-abc123").
+				InNamespace("default").
+				Build()
+			if err := un.SetNestedField(backingXR.Object, tt.backingXRSpec, "spec"); err != nil {
+				t.Fatalf("Failed to set backing XR spec: %v", err)
+			}
+
+			// Set compositionUpdatePolicy on backing XR
+			if tt.compositionUpdatePolicy != "" {
+				var policyPath []string
+				if tt.compositionUpdatePolicyV2 {
+					policyPath = []string{"spec", "crossplane", "compositionUpdatePolicy"}
+				} else {
+					policyPath = []string{"spec", "compositionUpdatePolicy"}
+				}
+				if err := un.SetNestedField(backingXR.Object, tt.compositionUpdatePolicy, policyPath...); err != nil {
+					t.Fatalf("Failed to set compositionUpdatePolicy: %v", err)
+				}
+			}
+
+			// Create the updated claim (what the user is trying to apply)
+			updatedClaim := tu.NewResource("example.org/v1", "TestClaim", "test-claim").
+				InNamespace("default").
+				Build()
+			if err := un.SetNestedField(updatedClaim.Object, tt.claimSpec, "spec"); err != nil {
+				t.Fatalf("Failed to set updated claim spec: %v", err)
+			}
+
+			// Create mock clients
+			defClient := tu.NewMockDefinitionClient().
+				WithIsClaimResource(func(_ context.Context, _ *un.Unstructured) bool {
+					return true
+				}).
+				Build()
+
+			// Create mock resource manager that returns the backing XR
+			resourceManager := &mockResourceManagerForSpecMerge{
+				backingXR: backingXR,
+			}
+
+			processor := &DefaultDiffProcessor{
+				defClient:       defClient,
+				resourceManager: resourceManager,
+				config: ProcessorConfig{
+					Logger: tu.TestLogger(t, false),
+				},
+			}
+
+			// Convert updated claim to composite.Unstructured
+			updatedClaimCmp := cmp.New()
+			updatedClaimCmp.SetUnstructuredContent(updatedClaim.Object)
+
+			// Call resolveBackingXRForClaim with:
+			// - existingClaimFromCluster: the existing claim (has resourceRef to backing XR)
+			// - updatedClaimCmp: the updated claim spec from user
+			result, err := processor.resolveBackingXRForClaim(ctx, existingClaimFromCluster, updatedClaimCmp)
+
+			if err != nil {
+				t.Fatalf("resolveBackingXRForClaim() unexpected error: %v", err)
+			}
+
+			if result.xrForRendering == nil {
+				t.Fatalf("resolveBackingXRForClaim() returned nil xrForRendering")
+			}
+
+			// Check if compositionRevisionRef is in the merged spec
+			_, found, _ := un.NestedFieldCopy(result.xrForRendering.Object, "spec", "compositionRevisionRef")
+
+			if tt.expectRevisionRefPreserved && !found {
+				t.Errorf("resolveBackingXRForClaim() compositionRevisionRef should be preserved but was not. Test: %s", tt.description)
+			}
+
+			if !tt.expectRevisionRefPreserved && found {
+				t.Errorf("resolveBackingXRForClaim() compositionRevisionRef should NOT be preserved but was. Test: %s", tt.description)
+			}
+
+			// Special case: verify Claim value takes precedence when Claim provides compositionRevisionRef
+			if claimRevRef, hasClaimRef := tt.claimSpec["compositionRevisionRef"]; hasClaimRef && found {
+				gotRevRef, _, _ := un.NestedFieldCopy(result.xrForRendering.Object, "spec", "compositionRevisionRef")
+				if diff := gcmp.Diff(claimRevRef, gotRevRef); diff != "" {
+					t.Errorf("resolveBackingXRForClaim() compositionRevisionRef should match Claim value (-want +got):\n%s", diff)
+				}
 			}
 		})
 	}

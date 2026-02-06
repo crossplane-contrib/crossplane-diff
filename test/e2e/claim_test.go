@@ -267,3 +267,87 @@ func TestDiffExistingClaimWithNestedXRs(t *testing.T) {
 			Feature(),
 	)
 }
+
+// TestDiffExistingClaimSpecFieldRemoval tests that crossplane-diff correctly handles
+// field removal when diffing existing claims. This is a regression test for a bug where
+// crossplane-diff incorrectly preserved deprecated fields from the backing XR's spec
+// when merging with the new Claim's spec.
+//
+// Test flow:
+// 1. Create XRD and permissive composition that works with oldField
+// 2. Create existing claim with oldField
+// 3. Apply strict composition that rejects oldField and requires newField
+// 4. Run diff with modified claim that removes oldField and adds newField
+// 5. Expected: diff succeeds (oldField is NOT preserved from backing XR)
+// 6. Bug behavior: diff fails with "DEPRECATED: oldField is no longer supported"
+func TestDiffExistingClaimSpecFieldRemoval(t *testing.T) {
+	imageTag := strings.Split(environment.GetCrossplaneImage(), ":")[1]
+	manifests := filepath.Join("test/e2e/manifests/beta/diff", imageTag, "v1-claim-field-removal")
+	setupPath := filepath.Join(manifests, "setup")
+
+	environment.Test(t,
+		features.New("DiffExistingClaimSpecFieldRemoval").
+			WithLabel(e2e.LabelArea, LabelAreaDiff).
+			WithLabel(e2e.LabelSize, e2e.LabelSizeSmall).
+			WithLabel(config.LabelTestSuite, config.TestSuiteDefault).
+			WithLabel(LabelCrossplaneVersion, CrossplaneVersionMain).
+			WithSetup("CreatePrerequisites", funcs.AllOf(
+				funcs.ApplyResources(e2e.FieldManager, setupPath, "*.yaml"),
+				funcs.ResourcesCreatedWithin(30*time.Second, setupPath, "*.yaml"),
+			)).
+			WithSetup("PrerequisitesAreReady", funcs.AllOf(
+				funcs.ResourcesHaveConditionWithin(1*time.Minute, setupPath, "definition.yaml", apiextensionsv1.WatchingComposite()),
+			)).
+			WithSetup("CreateClaimWithOldField", funcs.AllOf(
+				funcs.ApplyResources(e2e.FieldManager, manifests, "existing-claim.yaml"),
+				funcs.ResourcesCreatedWithin(30*time.Second, manifests, "existing-claim.yaml"),
+				// Claims get their status from the backing XR, so wait for the XR to be available
+				funcs.ResourcesHaveConditionWithin(2*time.Minute, manifests, "existing-claim.yaml", xpv1.Available()),
+			)).
+			WithSetup("ApplyStrictComposition", funcs.AllOf(
+				// Apply the strict composition that rejects oldField
+				funcs.ApplyResources(e2e.FieldManager, manifests, "strict-composition.yaml"),
+			)).
+			Assess("CanDiffClaimWithFieldRemoval", func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
+				t.Helper()
+
+				// The modified claim removes oldField and adds newField
+				// If crossplane-diff incorrectly preserves oldField from the backing XR,
+				// the strict composition will fail with "DEPRECATED: oldField is no longer supported"
+				output, log, err := RunXRDiff(t, c, "./crossplane-diff", exitCodeDiffDetected, filepath.Join(manifests, "modified-claim.yaml"))
+				if err != nil {
+					t.Fatalf("Error running diff command: %v\nLog output:\n%s", err, log)
+				}
+
+				// Verify the output does NOT contain the deprecated field error
+				// This is the key assertion - if oldField was incorrectly preserved, this error would appear
+				if strings.Contains(output, "DEPRECATED: oldField is no longer supported") {
+					t.Fatalf("Diff output contains deprecated field error - oldField was incorrectly preserved from backing XR:\n%s", output)
+				}
+
+				// Verify the diff shows the expected field change in the composed resource
+				// The old-field annotation should be removed (marked with -)
+				if !strings.Contains(output, "-     old-field:") {
+					t.Fatalf("Diff output does not show old-field annotation removal:\n%s", output)
+				}
+				// The new-field annotation should be added (marked with +)
+				if !strings.Contains(output, "+     new-field:") {
+					t.Fatalf("Diff output does not show new-field annotation addition:\n%s", output)
+				}
+
+				return ctx
+			}).
+			WithTeardown("DeleteClaim", funcs.AllOf(
+				funcs.DeleteResources(manifests, "existing-claim.yaml"),
+				funcs.ResourcesDeletedWithin(2*time.Minute, manifests, "existing-claim.yaml"),
+			)).
+			WithTeardown("DeletePrerequisites", funcs.AllOf(
+				funcs.ResourcesDeletedAfterListedAreGone(3*time.Minute, setupPath, "*.yaml", clusterNopList),
+				funcs.ResourceDeletedWithin(3*time.Minute, &k8sapiextensionsv1.CustomResourceDefinition{
+					TypeMeta:   metav1.TypeMeta{Kind: "CustomResourceDefinition", APIVersion: "apiextensions.k8s.io/v1"},
+					ObjectMeta: metav1.ObjectMeta{Name: "nopfieldtests.field.diff.example.org"},
+				}),
+			)).
+			Feature(),
+	)
+}
