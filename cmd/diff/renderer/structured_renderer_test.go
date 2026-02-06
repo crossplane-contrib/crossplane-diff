@@ -7,7 +7,7 @@ import (
 	"testing"
 
 	dt "github.com/crossplane-contrib/crossplane-diff/cmd/diff/renderer/types"
-	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	tu "github.com/crossplane-contrib/crossplane-diff/cmd/diff/testutils"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	sigsyaml "sigs.k8s.io/yaml"
 
@@ -27,21 +27,14 @@ func TestStructuredDiffRenderer_RenderDiffs_JSON(t *testing.T) {
 				Version: "v1alpha1",
 				Kind:    "NopResource",
 			},
-			Desired: &unstructured.Unstructured{
-				Object: map[string]any{
-					"apiVersion": "nop.crossplane.io/v1alpha1",
-					"kind":       "NopResource",
-					"metadata": map[string]any{
-						"name":      "new-resource",
-						"namespace": "default",
+			Desired: tu.NewResource("nop.crossplane.io/v1alpha1", "NopResource", "new-resource").
+				InNamespace("default").
+				WithSpec(map[string]any{
+					"forProvider": map[string]any{
+						"field": "value",
 					},
-					"spec": map[string]any{
-						"forProvider": map[string]any{
-							"field": "value",
-						},
-					},
-				},
-			},
+				}).
+				Build(),
 		},
 		"modified": {
 			DiffType:     dt.DiffTypeModified,
@@ -51,28 +44,18 @@ func TestStructuredDiffRenderer_RenderDiffs_JSON(t *testing.T) {
 				Version: "v1alpha1",
 				Kind:    "XExample",
 			},
-			Current: &unstructured.Unstructured{
-				Object: map[string]any{
-					"metadata": map[string]any{
-						"name":      "modified-resource",
-						"namespace": "production",
-					},
-					"spec": map[string]any{
-						"oldValue": "something",
-					},
-				},
-			},
-			Desired: &unstructured.Unstructured{
-				Object: map[string]any{
-					"metadata": map[string]any{
-						"name":      "modified-resource",
-						"namespace": "production",
-					},
-					"spec": map[string]any{
-						"newValue": "something-else",
-					},
-				},
-			},
+			Current: tu.NewResource("example.org/v1alpha1", "XExample", "modified-resource").
+				InNamespace("production").
+				WithSpec(map[string]any{
+					"oldValue": "something",
+				}).
+				Build(),
+			Desired: tu.NewResource("example.org/v1alpha1", "XExample", "modified-resource").
+				InNamespace("production").
+				WithSpec(map[string]any{
+					"newValue": "something-else",
+				}).
+				Build(),
 		},
 		"removed": {
 			DiffType:     dt.DiffTypeRemoved,
@@ -82,13 +65,11 @@ func TestStructuredDiffRenderer_RenderDiffs_JSON(t *testing.T) {
 				Version: "v1alpha1",
 				Kind:    "XNopResource",
 			},
-			Current: &unstructured.Unstructured{
-				Object: map[string]any{
-					"spec": map[string]any{
-						"coolField": "goodbye",
-					},
-				},
-			},
+			Current: tu.NewResource("example.org/v1alpha1", "XNopResource", "removed-resource").
+				WithSpec(map[string]any{
+					"coolField": "goodbye",
+				}).
+				Build(),
 		},
 		"equal": {
 			DiffType:     dt.DiffTypeEqual,
@@ -173,13 +154,11 @@ func TestStructuredDiffRenderer_RenderDiffs_YAML(t *testing.T) {
 				Version: "v1alpha1",
 				Kind:    "NopResource",
 			},
-			Desired: &unstructured.Unstructured{
-				Object: map[string]any{
-					"spec": map[string]any{
-						"field": "value",
-					},
-				},
-			},
+			Desired: tu.NewResource("nop.crossplane.io/v1alpha1", "NopResource", "new-resource").
+				WithSpec(map[string]any{
+					"field": "value",
+				}).
+				Build(),
 		},
 	}
 
