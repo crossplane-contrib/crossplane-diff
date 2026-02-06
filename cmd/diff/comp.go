@@ -157,7 +157,6 @@ func (c *CompCmd) Run(k *kong.Context, log logging.Logger, appCtx *AppContext, p
 
 	// Determine exit code based on result
 	exitCode.Code = dp.DetermineExitCode(err, hasDiffs)
-
 	if err != nil {
 		return errors.Wrap(err, "unable to process composition diff")
 	}

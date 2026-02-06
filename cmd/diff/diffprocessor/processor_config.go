@@ -22,6 +22,9 @@ type ProcessorConfig struct {
 	// Compact determines whether to show a compact diff format
 	Compact bool
 
+	// OutputFormat specifies the output format for diffs (diff, json, yaml)
+	OutputFormat renderer.OutputFormat
+
 	// MaxNestedDepth is the maximum depth for recursive nested XR processing
 	MaxNestedDepth int
 
@@ -89,6 +92,13 @@ func WithColorize(colorize bool) ProcessorOption {
 func WithCompact(compact bool) ProcessorOption {
 	return func(config *ProcessorConfig) {
 		config.Compact = compact
+	}
+}
+
+// WithOutputFormat sets the output format for diffs.
+func WithOutputFormat(format renderer.OutputFormat) ProcessorOption {
+	return func(config *ProcessorConfig) {
+		config.OutputFormat = format
 	}
 }
 
@@ -208,7 +218,17 @@ func (c *ProcessorConfig) SetDefaultFactories() {
 	}
 
 	if c.Factories.DiffRenderer == nil {
-		c.Factories.DiffRenderer = renderer.NewDiffRenderer
+		// Set the appropriate renderer factory based on output format
+		switch c.OutputFormat {
+		case renderer.OutputFormatJSON, renderer.OutputFormatYAML:
+			c.Factories.DiffRenderer = func(logger logging.Logger, _ renderer.DiffOptions) renderer.DiffRenderer {
+				return renderer.NewStructuredDiffRenderer(logger, c.OutputFormat)
+			}
+		case renderer.OutputFormatDiff:
+			c.Factories.DiffRenderer = renderer.NewDiffRenderer
+		default:
+			c.Factories.DiffRenderer = renderer.NewDiffRenderer
+		}
 	}
 
 	if c.Factories.RequirementsProvider == nil {

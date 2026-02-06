@@ -129,7 +129,6 @@ func (c *XRCmd) Run(k *kong.Context, log logging.Logger, appCtx *AppContext, pro
 
 	// Determine exit code based on result
 	exitCode.Code = dp.DetermineExitCode(err, hasDiffs)
-
 	if err != nil {
 		return errors.Wrap(err, "unable to process one or more resources")
 	}

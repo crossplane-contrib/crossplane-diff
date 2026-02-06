@@ -95,6 +95,7 @@ func (f *FunctionCredentials) Decode(ctx *kong.DecodeContext) error {
 type CommonCmdFields struct {
 	// Configuration options
 	Context             KubeContext         `help:"Kubernetes context to use (defaults to current context)."                                   name:"context"`
+	Output              string              `default:"diff"                                                                                    enum:"diff,json,yaml"                         help:"Output format (diff, json, or yaml)." name:"output" short:"o"`
 	NoColor             bool                `help:"Disable colorized output."                                                                  name:"no-color"`
 	Compact             bool                `help:"Show compact diffs with minimal context."                                                   name:"compact"`
 	MaxNestedDepth      int                 `default:"10"                                                                                      help:"Maximum depth for nested XR recursion." name:"max-nested-depth"`
