@@ -1,0 +1,12 @@
+# Modified claim that migrates from oldField to newField
+# The oldField is intentionally removed - should NOT be preserved from backing XR
+apiVersion: field.diff.example.org/v1alpha1
+kind: NopFieldTest
+metadata:
+  name: test-field-removal
+  namespace: default
+spec:
+  newField: new-value
+  compositeDeletePolicy: Background
+  compositionRef:
+    name: xnopfieldtests.field.diff.example.org

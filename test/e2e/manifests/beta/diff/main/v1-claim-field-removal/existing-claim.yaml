@@ -1,0 +1,12 @@
+# Initial claim using the deprecated oldField
+# Created when the permissive composition is in place
+apiVersion: field.diff.example.org/v1alpha1
+kind: NopFieldTest
+metadata:
+  name: test-field-removal
+  namespace: default
+spec:
+  oldField: old-value
+  compositeDeletePolicy: Background
+  compositionRef:
+    name: xnopfieldtests.field.diff.example.org
