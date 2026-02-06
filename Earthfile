@@ -399,7 +399,7 @@ ci-artifacts:
 
 # ci-codeql-setup sets up CodeQL for the ci-codeql target.
 ci-codeql-setup:
-  ARG CODEQL_VERSION=2.24.0
+  ARG CODEQL_VERSION=2.24.1
   FROM curlimages/curl:8.18.0
   RUN curl -fsSL https://github.com/github/codeql-action/releases/download/codeql-bundle-v${CODEQL_VERSION}/codeql-bundle-linux64.tar.gz|tar zx
   SAVE ARTIFACT codeql
