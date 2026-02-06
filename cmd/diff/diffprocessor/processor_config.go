@@ -224,6 +224,8 @@ func (c *ProcessorConfig) SetDefaultFactories() {
 			c.Factories.DiffRenderer = func(logger logging.Logger, _ renderer.DiffOptions) renderer.DiffRenderer {
 				return renderer.NewStructuredDiffRenderer(logger, c.OutputFormat)
 			}
+		case renderer.OutputFormatDiff:
+			c.Factories.DiffRenderer = renderer.NewDiffRenderer
 		default:
 			c.Factories.DiffRenderer = renderer.NewDiffRenderer
 		}

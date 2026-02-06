@@ -8,20 +8,21 @@ import (
 	"slices"
 
 	dt "github.com/crossplane-contrib/crossplane-diff/cmd/diff/renderer/types"
+	sigsyaml "sigs.k8s.io/yaml"
+
 	"github.com/crossplane/crossplane-runtime/v2/pkg/errors"
 	"github.com/crossplane/crossplane-runtime/v2/pkg/logging"
-	sigsyaml "sigs.k8s.io/yaml"
 )
 
 // OutputFormat represents the desired output format for diffs.
 type OutputFormat string
 
 const (
-	// OutputFormatDiff is the default human-readable diff format
+	// OutputFormatDiff is the default human-readable diff format.
 	OutputFormatDiff OutputFormat = "diff"
-	// OutputFormatJSON outputs structured JSON
+	// OutputFormatJSON outputs structured JSON.
 	OutputFormatJSON OutputFormat = "json"
-	// OutputFormatYAML outputs structured YAML
+	// OutputFormatYAML outputs structured YAML.
 	OutputFormatYAML OutputFormat = "yaml"
 )
 
@@ -33,19 +34,19 @@ type StructuredDiffOutput struct {
 
 // Summary contains aggregated counts of changes.
 type Summary struct {
-	Added    int `json:"added" yaml:"added"`
+	Added    int `json:"added"    yaml:"added"`
 	Modified int `json:"modified" yaml:"modified"`
-	Removed  int `json:"removed" yaml:"removed"`
+	Removed  int `json:"removed"  yaml:"removed"`
 }
 
 // ChangeDetail represents a single resource change.
 type ChangeDetail struct {
-	Type       string                 `json:"type" yaml:"type"`
-	APIVersion string                 `json:"apiVersion" yaml:"apiVersion"`
-	Kind       string                 `json:"kind" yaml:"kind"`
-	Name       string                 `json:"name" yaml:"name"`
+	Type       string                 `json:"type"                yaml:"type"`
+	APIVersion string                 `json:"apiVersion"          yaml:"apiVersion"`
+	Kind       string                 `json:"kind"                yaml:"kind"`
+	Name       string                 `json:"name"                yaml:"name"`
 	Namespace  string                 `json:"namespace,omitempty" yaml:"namespace,omitempty"`
-	Diff       map[string]interface{} `json:"diff" yaml:"diff"`
+	Diff       map[string]interface{} `json:"diff"                yaml:"diff"`
 }
 
 // StructuredDiffRenderer renders diffs in structured formats (JSON/YAML).
@@ -70,16 +71,18 @@ func (r *StructuredDiffRenderer) RenderDiffs(stdout io.Writer, diffs map[string]
 
 	output := r.buildStructuredOutput(diffs)
 
-	var data []byte
-	var err error
+	var (
+		data []byte
+		err  error
+	)
 
 	switch r.format {
 	case OutputFormatJSON:
 		data, err = json.MarshalIndent(output, "", "  ")
 	case OutputFormatYAML:
 		data, err = sigsyaml.Marshal(output)
-	default:
-		return errors.Errorf("unsupported output format: %s", r.format)
+	case OutputFormatDiff:
+		return errors.Errorf("unsupported output format for structured renderer: %s", r.format)
 	}
 
 	if err != nil {
@@ -111,10 +114,12 @@ func (r *StructuredDiffRenderer) buildStructuredOutput(diffs map[string]*dt.Reso
 	sortedDiffs := slices.AppendSeq(make([]*dt.ResourceDiff, 0, len(diffs)), maps.Values(diffs))
 	slices.SortFunc(sortedDiffs, func(a, b *dt.ResourceDiff) int {
 		aKey := fmt.Sprintf("%s/%s", a.Gvk.Kind, a.ResourceName)
+
 		bKey := fmt.Sprintf("%s/%s", b.Gvk.Kind, b.ResourceName)
 		if aKey != bKey {
 			return compareStrings(aKey, bKey)
 		}
+
 		return 0
 	})
 
@@ -132,6 +137,8 @@ func (r *StructuredDiffRenderer) buildStructuredOutput(diffs map[string]*dt.Reso
 			output.Summary.Modified++
 		case dt.DiffTypeRemoved:
 			output.Summary.Removed++
+		case dt.DiffTypeEqual:
+			// Equal diffs are filtered above, this case satisfies exhaustive lint check
 		}
 
 		// Extract namespace from resource if available
@@ -175,6 +182,9 @@ func (r *StructuredDiffRenderer) buildDiffDetail(diff *dt.ResourceDiff) map[stri
 			detail["spec"] = diff.Current.Object
 		}
 
+	case dt.DiffTypeEqual:
+		// Equal diffs have no detail to show
+
 	case dt.DiffTypeModified:
 		// For modified resources, show both old and new
 		if diff.Current != nil && diff.Desired != nil {
@@ -191,8 +201,10 @@ func compareStrings(a, b string) int {
 	if a < b {
 		return -1
 	}
+
 	if a > b {
 		return 1
 	}
+
 	return 0
 }

@@ -72,6 +72,7 @@ func defaultProcessorOptions(fields CommonCmdFields, namespace string) []dp.Proc
 	// Add output format option
 	// Import renderer package to use OutputFormat type
 	var outputFormat renderer.OutputFormat
+
 	switch fields.Output {
 	case "json":
 		outputFormat = renderer.OutputFormatJSON
@@ -80,6 +81,7 @@ func defaultProcessorOptions(fields CommonCmdFields, namespace string) []dp.Proc
 	default:
 		outputFormat = renderer.OutputFormatDiff
 	}
+
 	opts = append(opts, dp.WithOutputFormat(outputFormat))
 
 	// Add function credentials if provided (empty path with no secrets errors in FunctionCredentials.Decode)

@@ -7,10 +7,11 @@ import (
 	"testing"
 
 	dt "github.com/crossplane-contrib/crossplane-diff/cmd/diff/renderer/types"
-	"github.com/crossplane/crossplane-runtime/v2/pkg/logging"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	sigsyaml "sigs.k8s.io/yaml"
+
+	"github.com/crossplane/crossplane-runtime/v2/pkg/logging"
 )
 
 func TestStructuredDiffRenderer_RenderDiffs_JSON(t *testing.T) {
@@ -99,6 +100,7 @@ func TestStructuredDiffRenderer_RenderDiffs_JSON(t *testing.T) {
 	}
 
 	var buf bytes.Buffer
+
 	err := renderer.RenderDiffs(&buf, diffs)
 	if err != nil {
 		t.Fatalf("RenderDiffs failed: %v", err)
@@ -106,6 +108,7 @@ func TestStructuredDiffRenderer_RenderDiffs_JSON(t *testing.T) {
 
 	// Parse the JSON output
 	var output StructuredDiffOutput
+
 	err = json.Unmarshal(buf.Bytes(), &output)
 	if err != nil {
 		t.Fatalf("Failed to parse JSON output: %v", err)
@@ -115,9 +118,11 @@ func TestStructuredDiffRenderer_RenderDiffs_JSON(t *testing.T) {
 	if output.Summary.Added != 1 {
 		t.Errorf("Expected 1 added resource, got %d", output.Summary.Added)
 	}
+
 	if output.Summary.Modified != 1 {
 		t.Errorf("Expected 1 modified resource, got %d", output.Summary.Modified)
 	}
+
 	if output.Summary.Removed != 1 {
 		t.Errorf("Expected 1 removed resource, got %d", output.Summary.Removed)
 	}
@@ -129,12 +134,14 @@ func TestStructuredDiffRenderer_RenderDiffs_JSON(t *testing.T) {
 
 	// Find the added resource
 	var addedChange *ChangeDetail
+
 	for i := range output.Changes {
 		if output.Changes[i].Type == string(dt.DiffTypeAdded) {
 			addedChange = &output.Changes[i]
 			break
 		}
 	}
+
 	if addedChange == nil {
 		t.Fatal("Added resource not found in changes")
 	}
@@ -143,9 +150,11 @@ func TestStructuredDiffRenderer_RenderDiffs_JSON(t *testing.T) {
 	if addedChange.Kind != "NopResource" {
 		t.Errorf("Expected Kind 'NopResource', got '%s'", addedChange.Kind)
 	}
+
 	if addedChange.Name != "new-resource" {
 		t.Errorf("Expected Name 'new-resource', got '%s'", addedChange.Name)
 	}
+
 	if addedChange.Namespace != "default" {
 		t.Errorf("Expected Namespace 'default', got '%s'", addedChange.Namespace)
 	}
@@ -175,6 +184,7 @@ func TestStructuredDiffRenderer_RenderDiffs_YAML(t *testing.T) {
 	}
 
 	var buf bytes.Buffer
+
 	err := renderer.RenderDiffs(&buf, diffs)
 	if err != nil {
 		t.Fatalf("RenderDiffs failed: %v", err)
@@ -182,6 +192,7 @@ func TestStructuredDiffRenderer_RenderDiffs_YAML(t *testing.T) {
 
 	// Parse the YAML output
 	var output StructuredDiffOutput
+
 	err = sigsyaml.Unmarshal(buf.Bytes(), &output)
 	if err != nil {
 		t.Fatalf("Failed to parse YAML output: %v", err)
@@ -197,6 +208,7 @@ func TestStructuredDiffRenderer_RenderDiffs_YAML(t *testing.T) {
 	if !strings.Contains(yamlOutput, "summary:") {
 		t.Error("Expected YAML output to contain 'summary:' field")
 	}
+
 	if !strings.Contains(yamlOutput, "changes:") {
 		t.Error("Expected YAML output to contain 'changes:' field")
 	}
@@ -209,6 +221,7 @@ func TestStructuredDiffRenderer_EmptyDiffs(t *testing.T) {
 	diffs := map[string]*dt.ResourceDiff{}
 
 	var buf bytes.Buffer
+
 	err := renderer.RenderDiffs(&buf, diffs)
 	if err != nil {
 		t.Fatalf("RenderDiffs failed: %v", err)
@@ -216,6 +229,7 @@ func TestStructuredDiffRenderer_EmptyDiffs(t *testing.T) {
 
 	// Parse the JSON output
 	var output StructuredDiffOutput
+
 	err = json.Unmarshal(buf.Bytes(), &output)
 	if err != nil {
 		t.Fatalf("Failed to parse JSON output: %v", err)
@@ -254,6 +268,7 @@ func TestStructuredDiffRenderer_OnlyEqualDiffs(t *testing.T) {
 	}
 
 	var buf bytes.Buffer
+
 	err := renderer.RenderDiffs(&buf, diffs)
 	if err != nil {
 		t.Fatalf("RenderDiffs failed: %v", err)
@@ -261,6 +276,7 @@ func TestStructuredDiffRenderer_OnlyEqualDiffs(t *testing.T) {
 
 	// Parse the JSON output
 	var output StructuredDiffOutput
+
 	err = json.Unmarshal(buf.Bytes(), &output)
 	if err != nil {
 		t.Fatalf("Failed to parse JSON output: %v", err)
