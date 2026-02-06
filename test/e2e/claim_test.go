@@ -279,7 +279,7 @@ func TestDiffExistingClaimWithNestedXRs(t *testing.T) {
 // 3. Apply strict composition that rejects oldField and requires newField
 // 4. Run diff with modified claim that removes oldField and adds newField
 // 5. Expected: diff succeeds (oldField is NOT preserved from backing XR)
-// 6. Bug behavior: diff fails with "DEPRECATED: oldField is no longer supported"
+// 6. Bug behavior: diff fails with "DEPRECATED: oldField is no longer supported".
 func TestDiffExistingClaimSpecFieldRemoval(t *testing.T) {
 	imageTag := strings.Split(environment.GetCrossplaneImage(), ":")[1]
 	manifests := filepath.Join("test/e2e/manifests/beta/diff", imageTag, "v1-claim-field-removal")
@@ -318,6 +318,11 @@ func TestDiffExistingClaimSpecFieldRemoval(t *testing.T) {
 				if err != nil {
 					t.Fatalf("Error running diff command: %v\nLog output:\n%s", err, log)
 				}
+
+				// Note: We use content-based assertions rather than exact file matching
+				// because resource names contain random suffixes (e.g., test-claim-abc123)
+				// that change on each test run. Content-based assertions are more robust
+				// for validating the behavior we care about.
 
 				// Verify the output does NOT contain the deprecated field error
 				// This is the key assertion - if oldField was incorrectly preserved, this error would appear

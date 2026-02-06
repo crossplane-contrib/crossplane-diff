@@ -2490,17 +2490,17 @@ func TestDefaultDiffProcessor_resolveBackingXRForClaim_SpecMerge(t *testing.T) {
 	ctx := t.Context()
 
 	tests := map[string]struct {
-		claimSpec                 map[string]any // User's updated claim spec
-		backingXRSpec             map[string]any // Existing backing XR spec with deprecated fields
-		expectedMergedSpec        map[string]any // Expected spec after merge
-		description               string
+		claimSpec          map[string]any // User's updated claim spec
+		backingXRSpec      map[string]any // Existing backing XR spec with deprecated fields
+		expectedMergedSpec map[string]any // Expected spec after merge
+		description        string
 	}{
 		"RemoveDeprecatedField": {
 			claimSpec: map[string]any{
-				"newField":  "new-value",
+				"newField": "new-value",
 			},
 			backingXRSpec: map[string]any{
-				"newField":       "new-value",
+				"newField":        "new-value",
 				"deprecatedField": "should-be-removed",
 				"claimRef": map[string]any{
 					"name":       "test-claim",
@@ -2553,10 +2553,10 @@ func TestDefaultDiffProcessor_resolveBackingXRForClaim_SpecMerge(t *testing.T) {
 				"activeField": "active",
 			},
 			backingXRSpec: map[string]any{
-				"activeField":    "active",
-				"deprecated1":    "old1",
-				"deprecated2":    "old2",
-				"deprecated3":    "old3",
+				"activeField": "active",
+				"deprecated1": "old1",
+				"deprecated2": "old2",
+				"deprecated3": "old3",
 				"claimRef": map[string]any{
 					"name": "claim",
 				},
@@ -2763,7 +2763,6 @@ func TestDefaultDiffProcessor_resolveBackingXRForClaim_SpecMerge(t *testing.T) {
 			// - existingClaimFromCluster: the existing claim (has resourceRef to backing XR)
 			// - updatedClaimCmp: the updated claim spec from user
 			result, err := processor.resolveBackingXRForClaim(ctx, existingClaimFromCluster, updatedClaimCmp)
-
 			if err != nil {
 				t.Fatalf("resolveBackingXRForClaim() unexpected error: %v", err)
 			}
@@ -2807,12 +2806,12 @@ func TestDefaultDiffProcessor_resolveBackingXRForClaim_CompositionRevisionRef(t 
 	ctx := t.Context()
 
 	tests := map[string]struct {
-		claimSpec                 map[string]any
-		backingXRSpec             map[string]any
-		compositionUpdatePolicy   string         // "Automatic" or "Manual"
-		compositionUpdatePolicyV2 bool           // true to use v2 path (spec.crossplane.compositionUpdatePolicy)
+		claimSpec                  map[string]any
+		backingXRSpec              map[string]any
+		compositionUpdatePolicy    string // "Automatic" or "Manual"
+		compositionUpdatePolicyV2  bool   // true to use v2 path (spec.crossplane.compositionUpdatePolicy)
 		expectRevisionRefPreserved bool
-		description               string
+		description                string
 	}{
 		"PreserveCompositionRevisionRefWithManualPolicy": {
 			claimSpec: map[string]any{
@@ -2827,10 +2826,10 @@ func TestDefaultDiffProcessor_resolveBackingXRForClaim_CompositionRevisionRef(t 
 					"name": "my-composition-rev-1",
 				},
 			},
-			compositionUpdatePolicy:   "Manual",
-			compositionUpdatePolicyV2: false, // v1 path
+			compositionUpdatePolicy:    "Manual",
+			compositionUpdatePolicyV2:  false, // v1 path
 			expectRevisionRefPreserved: true,
-			description: "compositionRevisionRef should be preserved when update policy is Manual (v1 path)",
+			description:                "compositionRevisionRef should be preserved when update policy is Manual (v1 path)",
 		},
 		"PreserveCompositionRevisionRefWithManualPolicyV2": {
 			claimSpec: map[string]any{
@@ -2845,10 +2844,10 @@ func TestDefaultDiffProcessor_resolveBackingXRForClaim_CompositionRevisionRef(t 
 					"name": "my-composition-rev-1",
 				},
 			},
-			compositionUpdatePolicy:   "Manual",
-			compositionUpdatePolicyV2: true, // v2 path
+			compositionUpdatePolicy:    "Manual",
+			compositionUpdatePolicyV2:  true, // v2 path
 			expectRevisionRefPreserved: true,
-			description: "compositionRevisionRef should be preserved when update policy is Manual (v2 path)",
+			description:                "compositionRevisionRef should be preserved when update policy is Manual (v2 path)",
 		},
 		"DoNotPreserveCompositionRevisionRefWithAutomaticPolicy": {
 			claimSpec: map[string]any{
@@ -2863,10 +2862,10 @@ func TestDefaultDiffProcessor_resolveBackingXRForClaim_CompositionRevisionRef(t 
 					"name": "my-composition-rev-1",
 				},
 			},
-			compositionUpdatePolicy:   "Automatic",
-			compositionUpdatePolicyV2: false,
+			compositionUpdatePolicy:    "Automatic",
+			compositionUpdatePolicyV2:  false,
 			expectRevisionRefPreserved: false,
-			description: "compositionRevisionRef should NOT be preserved when update policy is Automatic",
+			description:                "compositionRevisionRef should NOT be preserved when update policy is Automatic",
 		},
 		"DoNotPreserveCompositionRevisionRefWithDefaultPolicy": {
 			claimSpec: map[string]any{
@@ -2881,9 +2880,9 @@ func TestDefaultDiffProcessor_resolveBackingXRForClaim_CompositionRevisionRef(t 
 					"name": "my-composition-rev-1",
 				},
 			},
-			compositionUpdatePolicy:   "", // Empty means default (Automatic)
+			compositionUpdatePolicy:    "", // Empty means default (Automatic)
 			expectRevisionRefPreserved: false,
-			description: "compositionRevisionRef should NOT be preserved when update policy defaults to Automatic",
+			description:                "compositionRevisionRef should NOT be preserved when update policy defaults to Automatic",
 		},
 		"ClaimCanOverrideCompositionRevisionRef": {
 			claimSpec: map[string]any{
@@ -2901,9 +2900,9 @@ func TestDefaultDiffProcessor_resolveBackingXRForClaim_CompositionRevisionRef(t 
 					"name": "my-composition-rev-1",
 				},
 			},
-			compositionUpdatePolicy:   "Manual",
+			compositionUpdatePolicy:    "Manual",
 			expectRevisionRefPreserved: true, // But from Claim, not backing XR
-			description: "Claim can override compositionRevisionRef even with Manual policy",
+			description:                "Claim can override compositionRevisionRef even with Manual policy",
 		},
 	}
 
@@ -2939,6 +2938,7 @@ func TestDefaultDiffProcessor_resolveBackingXRForClaim_CompositionRevisionRef(t 
 				} else {
 					policyPath = []string{"spec", "compositionUpdatePolicy"}
 				}
+
 				if err := un.SetNestedField(backingXR.Object, tt.compositionUpdatePolicy, policyPath...); err != nil {
 					t.Fatalf("Failed to set compositionUpdatePolicy: %v", err)
 				}
@@ -2980,7 +2980,6 @@ func TestDefaultDiffProcessor_resolveBackingXRForClaim_CompositionRevisionRef(t 
 			// - existingClaimFromCluster: the existing claim (has resourceRef to backing XR)
 			// - updatedClaimCmp: the updated claim spec from user
 			result, err := processor.resolveBackingXRForClaim(ctx, existingClaimFromCluster, updatedClaimCmp)
-
 			if err != nil {
 				t.Fatalf("resolveBackingXRForClaim() unexpected error: %v", err)
 			}
