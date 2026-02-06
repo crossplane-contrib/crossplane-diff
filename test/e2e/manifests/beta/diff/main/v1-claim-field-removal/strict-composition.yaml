@@ -1,0 +1,46 @@
+# Strict composition that rejects oldField and requires newField
+# Applied AFTER the existing claim is created to test field removal during diff
+apiVersion: apiextensions.crossplane.io/v1
+kind: Composition
+metadata:
+  name: xnopfieldtests.field.diff.example.org
+spec:
+  compositeTypeRef:
+    apiVersion: field.diff.example.org/v1alpha1
+    kind: XNopFieldTest
+  mode: Pipeline
+  pipeline:
+    - step: validate-and-generate
+      functionRef:
+        name: function-go-templating
+      input:
+        apiVersion: gotemplating.fn.crossplane.io/v1beta1
+        kind: GoTemplate
+        source: Inline
+        inline:
+          template: |
+            {{- $xr := .observed.composite.resource }}
+            {{- $oldField := index $xr.spec "oldField" | default "" }}
+            {{- if ne $oldField "" }}
+            {{- fail "DEPRECATED: oldField is no longer supported. Please use newField instead." }}
+            {{- end }}
+            {{- $newField := index $xr.spec "newField" | default "" }}
+            {{- if eq $newField "" }}
+            {{- fail "newField is required" }}
+            {{- end }}
+            ---
+            apiVersion: nop.crossplane.io/v1alpha1
+            kind: ClusterNopResource
+            metadata:
+              annotations:
+                gotemplating.fn.crossplane.io/composition-resource-name: nop-resource
+                new-field: {{ $newField | quote }}
+            spec:
+              forProvider:
+                conditionAfter:
+                  - conditionType: Ready
+                    conditionStatus: "True"
+                    time: 0s
+    - step: detect-ready-resources
+      functionRef:
+        name: function-auto-ready
