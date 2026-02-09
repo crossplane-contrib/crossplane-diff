@@ -105,6 +105,7 @@ func TestStructuredDiffRenderer_RenderDiffs(t *testing.T) {
 
 				// Find and verify added resource
 				var addedChange *ChangeDetail
+
 				for i := range parsed.Changes {
 					if parsed.Changes[i].Type == string(dt.DiffTypeAdded) {
 						addedChange = &parsed.Changes[i]
