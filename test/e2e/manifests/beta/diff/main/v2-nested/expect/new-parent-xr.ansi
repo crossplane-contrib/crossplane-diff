@@ -5,7 +5,7 @@
 +   annotations:
 +     crossplane.io/composition-resource-name: nop-resource
 +   labels:
-+     crossplane.io/composite: test-parent-new-child
++     crossplane.io/composite: test-parent-new
 +   name: test-parent-new-child-nop
 +   namespace: default
 + spec:
