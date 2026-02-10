@@ -92,10 +92,14 @@ func createTestScheme() *runtime.Scheme {
 }
 
 // runIntegrationTest runs a single integration test case for both XR and composition diff commands.
-func runIntegrationTest(t *testing.T, testType DiffTestType, scheme *runtime.Scheme, tt IntegrationTestCase) {
+func runIntegrationTest(t *testing.T, testType DiffTestType, tt IntegrationTestCase) {
 	t.Helper()
 
 	t.Parallel() // Enable parallel test execution
+
+	// Create a fresh scheme for each test to avoid concurrent map access.
+	// Each parallel test needs its own scheme because envtest modifies it during CRD installation.
+	scheme := createTestScheme()
 
 	// Skip test if requested
 	if tt.skip {
@@ -297,8 +301,6 @@ func TestDiffIntegration(t *testing.T) {
 
 	// Set up logger for controller-runtime (global setup, once per test function)
 	tu.SetupKubeTestLogger(t)
-
-	scheme := createTestScheme()
 
 	tests := map[string]IntegrationTestCase{
 		"NewResourceDiff": {
@@ -2238,7 +2240,7 @@ Summary: 3 modified`,
 
 	for name, tt := range tests {
 		t.Run(name, func(t *testing.T) {
-			runIntegrationTest(t, XRDiffTest, scheme, tt)
+			runIntegrationTest(t, XRDiffTest, tt)
 		})
 	}
 }
@@ -2249,8 +2251,6 @@ func TestCompDiffIntegration(t *testing.T) {
 
 	// Set up logger for controller-runtime (global setup, once per test function)
 	tu.SetupKubeTestLogger(t)
-
-	scheme := createTestScheme()
 
 	tests := map[string]IntegrationTestCase{
 		"CompositionChangeImpactsXRs": {
@@ -3326,7 +3326,7 @@ Summary: 1 modified`,
 
 	for name, tt := range tests {
 		t.Run(name, func(t *testing.T) {
-			runIntegrationTest(t, CompositionDiffTest, scheme, tt)
+			runIntegrationTest(t, CompositionDiffTest, tt)
 		})
 	}
 }
