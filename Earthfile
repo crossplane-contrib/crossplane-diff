@@ -212,7 +212,7 @@ go-build:
   ARG TARGETOS
   ARG GOARCH=${TARGETARCH}
   ARG GOOS=${TARGETOS}
-  ARG LDFLAGS="-s -w -X=github.com/crossplane-contrib/crossplane-diff/internal/version.version=${CROSSPLANE_DIFF_VERSION}"
+  ARG LDFLAGS="-s -w -X=github.com/crossplane-contrib/crossplane-diff/internal/versioninfo.version=${CROSSPLANE_DIFF_VERSION}"
   ARG CGO_ENABLED=0
   ARG BIN_NAME=crossplane-diff
   ARG RELEASE_ARTIFACTS=false
