@@ -212,7 +212,7 @@ go-build:
   ARG TARGETOS
   ARG GOARCH=${TARGETARCH}
   ARG GOOS=${TARGETOS}
-  ARG LDFLAGS="-s -w -X=github.com/crossplane-contrib/crossplane-diff/internal/version.version=${CROSSPLANE_DIFF_VERSION}"
+  ARG LDFLAGS="-s -w -X=github.com/crossplane-contrib/crossplane-diff/internal/versioninfo.version=${CROSSPLANE_DIFF_VERSION}"
   ARG CGO_ENABLED=0
   ARG BIN_NAME=crossplane-diff
   ARG RELEASE_ARTIFACTS=false
@@ -292,7 +292,7 @@ go-test:
 
 # go-lint lints Go code.
 go-lint:
-  ARG GOLANGCI_LINT_VERSION=v2.8.0
+  ARG GOLANGCI_LINT_VERSION=v2.9.0
   FROM +go-modules
   # This cache is private because golangci-lint doesn't support concurrent runs.
   CACHE --id go-lint --sharing private /root/.cache/golangci-lint

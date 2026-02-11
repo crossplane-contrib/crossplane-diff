@@ -24,7 +24,7 @@ import (
 
 	"github.com/alecthomas/kong"
 	dp "github.com/crossplane-contrib/crossplane-diff/cmd/diff/diffprocessor"
-	"github.com/crossplane-contrib/crossplane-diff/cmd/diff/version"
+	"github.com/crossplane-contrib/crossplane-diff/cmd/diff/versioncmd"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
@@ -134,7 +134,7 @@ type cli struct {
 	Comp CompCmd `cmd:""         help:"Show impact of composition changes on existing XRs."`
 	XR   XRCmd   `aliases:"diff" cmd:""                                                     help:"See what changes will be made against a live cluster when a given Crossplane resource would be applied."`
 
-	Version version.Cmd `cmd:"" help:"Print the client and server version information for the current context."`
+	Version versioncmd.Cmd `cmd:"" help:"Print the client and server version information for the current context."`
 
 	// Flags.
 	Verbose verboseFlag `help:"Print verbose logging statements." name:"verbose"`

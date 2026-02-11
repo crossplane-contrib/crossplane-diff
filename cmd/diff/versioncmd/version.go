@@ -14,8 +14,8 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-// Package version contains version cmd
-package version
+// Package versioncmd contains version cmd
+package versioncmd
 
 import (
 	"context"
@@ -23,7 +23,7 @@ import (
 	"time"
 
 	"github.com/alecthomas/kong"
-	"github.com/crossplane-contrib/crossplane-diff/internal/version"
+	"github.com/crossplane-contrib/crossplane-diff/internal/versioninfo"
 	"github.com/pkg/errors"
 
 	xpversion "github.com/crossplane/crossplane/v2/cmd/crank/version"
@@ -40,7 +40,7 @@ type Cmd struct {
 
 // Run runs the version command.
 func (c *Cmd) Run(k *kong.Context) error {
-	_, _ = fmt.Fprintln(k.Stdout, "Client Version: "+version.New().GetVersionString())
+	_, _ = fmt.Fprintln(k.Stdout, "Client Version: "+versioninfo.New().GetVersionString())
 
 	if c.Client {
 		return nil
