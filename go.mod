@@ -2,7 +2,7 @@ module github.com/crossplane-contrib/crossplane-diff
 
 go 1.25.6
 
-toolchain go1.25.7
+toolchain go1.26.0
 
 require (
 	dario.cat/mergo v1.0.2
