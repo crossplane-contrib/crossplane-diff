@@ -201,6 +201,7 @@ func TestMain(m *testing.M) {
 			obj := fn.DeepCopy()
 			if err := wait.For(conditions.New(client.Resources()).ResourceMatch(obj, func(object k8s.Object) bool {
 				fn := object.(*pkgv1.Function)
+
 				return fn.Status.GetCondition(pkgv1.TypeHealthy).Status == "True" &&
 					fn.Status.GetCondition(pkgv1.TypeInstalled).Status == "True"
 			}), wait.WithTimeout(3*time.Minute)); err != nil {
@@ -222,6 +223,7 @@ func TestMain(m *testing.M) {
 			obj := prov.DeepCopy()
 			if err := wait.For(conditions.New(client.Resources()).ResourceMatch(obj, func(object k8s.Object) bool {
 				prov := object.(*pkgv1.Provider)
+
 				return prov.Status.GetCondition(pkgv1.TypeHealthy).Status == "True" &&
 					prov.Status.GetCondition(pkgv1.TypeInstalled).Status == "True"
 			}), wait.WithTimeout(2*time.Minute)); err != nil {
