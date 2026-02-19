@@ -374,13 +374,15 @@ func createResources(ctx context.Context, c client.Client, resources []*un.Unstr
 // applyResourceWithSSA applies a resource using Server-Side Apply with the specified field manager.
 // This simulates how Crossplane applies composed resources, allowing us to test field ownership behavior.
 func applyResourceWithSSA(ctx context.Context, c client.Client, resource *un.Unstructured, fieldManager string) error {
-	// Use Patch with Apply to perform Server-Side Apply
+	// Use Apply to perform Server-Side Apply
 	resourceCopy := resource.DeepCopy()
 
 	// For SSA, we need to set the resource version to empty to indicate this is an apply
 	resourceCopy.SetResourceVersion("")
 
-	err := c.Patch(ctx, resourceCopy, client.Apply, client.FieldOwner(fieldManager), client.ForceOwnership)
+	applyConfig := client.ApplyConfigurationFromUnstructured(resourceCopy)
+
+	err := c.Apply(ctx, applyConfig, client.FieldOwner(fieldManager), client.ForceOwnership)
 	if err != nil {
 		return fmt.Errorf("failed to apply resource %s/%s with field manager %s: %w",
 			resource.GetNamespace(), resource.GetName(), fieldManager, err)
