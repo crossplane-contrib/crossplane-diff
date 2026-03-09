@@ -274,9 +274,9 @@ func generateContainerName(pkg, instanceID string) string {
 
 	// Handle SHA256 digest references: name@sha256:digest
 	// Extract just the function name and a truncated digest
-	if idx := strings.Index(nameAndVersion, "@sha256:"); idx != -1 {
-		funcName := nameAndVersion[:idx]
-		digest := nameAndVersion[idx+8:] // Skip "@sha256:"
+	if before, after, ok := strings.Cut(nameAndVersion, "@sha256:"); ok {
+		funcName := before
+		digest := after // Skip "@sha256:"
 
 		// Use first 12 chars of digest (like Docker short image IDs)
 		if len(digest) > 12 {

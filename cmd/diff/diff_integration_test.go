@@ -3322,6 +3322,94 @@ Summary: 1 modified`,
 			expectedExitCode: dp.ExitCodeDiffDetected,
 			noColor:          true,
 		},
+		"SHA256DigestFunctionReference": {
+			reason: "Validates composition diff works with functions referenced by SHA256 digest instead of tag",
+			setupFiles: []string{
+				"testdata/comp/resources/xrd.yaml",
+				"testdata/comp/resources/sha256-composition.yaml",
+				"testdata/comp/resources/functions-sha256.yaml",
+				"testdata/comp/resources/existing-sha256-xr.yaml",
+				"testdata/comp/resources/existing-sha256-downstream.yaml",
+			},
+			inputFiles: []string{"testdata/comp/updated-sha256-composition.yaml"},
+			namespace:  "default",
+			expectedOutput: `
+=== Composition Changes ===
+
+~~~ Composition/xnopresources-sha256.diff.example.org
+  apiVersion: apiextensions.crossplane.io/v1
+  kind: Composition
+  metadata:
+    name: xnopresources-sha256.diff.example.org
+  spec:
+    compositeTypeRef:
+      apiVersion: ns.diff.example.org/v1alpha1
+      kind: XNopResource
+    mode: Pipeline
+    pipeline:
+    - functionRef:
+        name: function-go-templating-sha256
+      input:
+        apiVersion: template.fn.crossplane.io/v1beta1
+        inline:
+          template: |
+            apiVersion: ns.nop.example.org/v1alpha1
+            kind: XDownstreamResource
+            metadata:
+              name: {{ .observed.composite.resource.metadata.name }}
+              namespace: {{ .observed.composite.resource.metadata.namespace }}
+              annotations:
+                gotemplating.fn.crossplane.io/composition-resource-name: nop-resource
+            spec:
+              forProvider:
+-               configData: {{ .observed.composite.resource.spec.coolField }}
+-               resourceTier: basic
++               configData: updated-{{ .observed.composite.resource.spec.coolField }}
++               resourceTier: premium
+        kind: GoTemplate
+        source: Inline
+      step: generate-resources
+    - functionRef:
+        name: function-auto-ready
+      step: automatically-detect-ready-composed-resources
+
+---
+
+Summary: 1 modified
+
+=== Affected Composite Resources ===
+
+  ⚠ XNopResource/sha256-test-resource (namespace: default)
+
+Summary: 1 resource with changes
+
+=== Impact Analysis ===
+
+~~~ XDownstreamResource/sha256-test-resource
+  apiVersion: ns.nop.example.org/v1alpha1
+  kind: XDownstreamResource
+  metadata:
+    annotations:
++     crossplane.io/composition-resource-name: nop-resource
+      gotemplating.fn.crossplane.io/composition-resource-name: nop-resource
+    labels:
+      crossplane.io/composite: sha256-test-resource
+    name: sha256-test-resource
+    namespace: default
+  spec:
+    forProvider:
+-     configData: sha256-value
+-     resourceTier: basic
++     configData: updated-sha256-value
++     resourceTier: premium
+
+---
+
+Summary: 1 modified`,
+			expectedError:    false,
+			expectedExitCode: dp.ExitCodeDiffDetected,
+			noColor:          true,
+		},
 	}
 
 	for name, tt := range tests {

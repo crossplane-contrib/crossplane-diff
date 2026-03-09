@@ -132,15 +132,15 @@ func (r *DefaultDiffRenderer) RenderDiffs(stdout io.Writer, diffs map[string]*dt
 		summary.WriteString("\nSummary: ")
 
 		if addedCount > 0 {
-			summary.WriteString(fmt.Sprintf("%d added, ", addedCount))
+			fmt.Fprintf(&summary, "%d added, ", addedCount)
 		}
 
 		if modifiedCount > 0 {
-			summary.WriteString(fmt.Sprintf("%d modified, ", modifiedCount))
+			fmt.Fprintf(&summary, "%d modified, ", modifiedCount)
 		}
 
 		if removedCount > 0 {
-			summary.WriteString(fmt.Sprintf("%d removed, ", removedCount))
+			fmt.Fprintf(&summary, "%d removed, ", removedCount)
 		}
 
 		// Remove trailing comma and space

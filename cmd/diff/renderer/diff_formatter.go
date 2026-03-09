@@ -196,7 +196,7 @@ func (f *CompactDiffFormatter) stringBlocksWithContext(changes []changeBlock, li
 			// add a separator
 			if contextStart > prevContextEnd {
 				// Add separator
-				builder.WriteString(fmt.Sprintf("%s\n", opts.ChunkSeparator))
+				fmt.Fprintf(&builder, "%s\n", opts.ChunkSeparator)
 
 				lastPrintedIdx = -1 // Reset to force printing of context lines
 			} else {
