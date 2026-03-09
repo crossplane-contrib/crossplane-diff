@@ -293,7 +293,7 @@ go-test:
 
 # go-lint lints Go code.
 go-lint:
-  ARG GOLANGCI_LINT_VERSION=v2.10.1
+  ARG GOLANGCI_LINT_VERSION=v2.11.2
   FROM +go-modules
   # This cache is private because golangci-lint doesn't support concurrent runs.
   CACHE --id go-lint --sharing private /root/.cache/golangci-lint
