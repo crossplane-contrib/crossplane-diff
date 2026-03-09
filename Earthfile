@@ -277,7 +277,8 @@ go-test:
   # Fetch the cluster directory from the crossplane repo at the specified tag
   COPY (+fetch-crossplane-cluster/${CROSSPLANE_IMAGE_TAG} --CROSSPLANE_IMAGE_TAG=${CROSSPLANE_IMAGE_TAG}) cluster/${CROSSPLANE_IMAGE_TAG}
   COPY --dir +envtest-setup/envtest /usr/local/kubebuilder/bin
-  # a bit dirty but preload the cache with the images we use in IT (found in functions.yaml)
+  # a bit dirty but preload the cache with the images we use in IT (found in functions.yaml and functions-sha256.yaml)
+  # Note: functions-sha256.yaml uses digest reference for function-go-templating which resolves to the same image as :v0.11.0
   WITH DOCKER \
     --pull xpkg.crossplane.io/crossplane-contrib/function-go-templating:v0.11.0 \
     --pull xpkg.crossplane.io/crossplane-contrib/function-auto-ready:v0.4.2 \

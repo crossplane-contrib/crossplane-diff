@@ -19,6 +19,7 @@ package diffprocessor
 import (
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
 	"strings"
@@ -241,29 +242,90 @@ func (p *CachedFunctionProvider) Cleanup(ctx context.Context) error {
 	return nil
 }
 
+// maxContainerNameLength is the maximum length for Docker container names.
+// While Docker doesn't enforce a strict limit, DNS hostname compatibility
+// and various orchestration tools typically limit names to 63 characters.
+const maxContainerNameLength = 63
+
 // generateContainerName creates a stable Docker container name from a function package reference and instance ID.
 // The instance ID ensures containers are unique across provider instances and test runs to avoid race conditions.
 // Example: xpkg.crossplane.io/crossplane-contrib/function-go-templating:v0.11.0 with instanceID "a1b2c3d4"
-// Returns: function-go-templating-v0.11.0-comp-a1b2c3d4.
+// Returns: function-go-templating-v0.11.0-comp-a1b2c3d4
+//
+// For SHA256 digest references, the digest is truncated to 12 characters (similar to Docker short IDs):
+// Example: function-go-templating@sha256:54726c28b78f... -> function-go-templating-54726c28b78f-comp-a1b2c3d4
+//
+// If the resulting name exceeds 63 characters, the function name is truncated and a hash suffix is added
+// to maintain uniqueness.
 func generateContainerName(pkg, instanceID string) string {
 	// Handle empty package string
 	if pkg == "" {
 		return fmt.Sprintf("unknown-comp-%s", instanceID)
 	}
 
-	// Split package into path and version
-	// Format: registry/org/name:version
+	// Split package into path and version/digest
+	// Format: registry/org/name:version or registry/org/name@sha256:digest
 	parts := strings.Split(pkg, "/")
 
-	// Get the last part (name:version)
+	// Get the last part (name:version or name@sha256:digest)
 	nameAndVersion := parts[len(parts)-1]
 
-	// Replace colon with hyphen to make it container-name friendly
-	// function-go-templating:v0.11.0 -> function-go-templating-v0.11.0
-	containerName := strings.ReplaceAll(nameAndVersion, ":", "-")
+	var containerName string
 
-	// Add suffix and instance ID to make it unique per provider instance
-	containerName += fmt.Sprintf("-comp-%s", instanceID)
+	// Handle SHA256 digest references: name@sha256:digest
+	// Extract just the function name and a truncated digest
+	if before, after, ok := strings.Cut(nameAndVersion, "@sha256:"); ok {
+		funcName := before
+		digest := after // Skip "@sha256:"
+
+		// Use first 12 chars of digest (like Docker short image IDs)
+		if len(digest) > 12 {
+			digest = digest[:12]
+		}
+
+		containerName = fmt.Sprintf("%s-%s-comp-%s", funcName, digest, instanceID)
+	} else {
+		// Standard tag reference: name:version
+		// Replace colon with hyphen to make it container-name friendly
+		// function-go-templating:v0.11.0 -> function-go-templating-v0.11.0
+		containerName = strings.ReplaceAll(nameAndVersion, ":", "-")
+
+		// Add suffix and instance ID to make it unique per provider instance
+		containerName += fmt.Sprintf("-comp-%s", instanceID)
+	}
+
+	// Truncate if needed to respect DNS hostname length limits
+	if len(containerName) > maxContainerNameLength {
+		containerName = truncateContainerName(containerName, pkg, instanceID)
+	}
 
 	return containerName
+}
+
+// truncateContainerName shortens a container name to fit within maxContainerNameLength
+// while maintaining uniqueness via a hash suffix derived from the original package name.
+func truncateContainerName(name, pkg, instanceID string) string {
+	// Create a hash of the full package name for uniqueness
+	hash := sha256.Sum256([]byte(pkg))
+	hashSuffix := hex.EncodeToString(hash[:])[:8]
+
+	// Format: <truncated-name>-<hash>-comp-<instanceID>
+	// Suffix length: 1 (dash) + 8 (hash) + 6 (-comp-) + 8 (instanceID) = 23 chars
+	suffixLen := 1 + 8 + 6 + len(instanceID)
+	maxNameLen := maxContainerNameLength - suffixLen
+
+	// Truncate the base name (everything before -comp-)
+	baseName := name
+	if idx := strings.LastIndex(name, "-comp-"); idx != -1 {
+		baseName = name[:idx]
+	}
+
+	if len(baseName) > maxNameLen {
+		baseName = baseName[:maxNameLen]
+	}
+
+	// Remove trailing hyphens from truncation
+	baseName = strings.TrimRight(baseName, "-")
+
+	return fmt.Sprintf("%s-%s-comp-%s", baseName, hashSuffix, instanceID)
 }

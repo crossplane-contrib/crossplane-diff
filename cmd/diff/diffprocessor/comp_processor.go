@@ -606,11 +606,11 @@ func buildXRStatusList(xrs []*un.Unstructured, results map[string]*XRDiffResult,
 			unchangedCount++
 		}
 
-		sb.WriteString(fmt.Sprintf("%s  %s %s/%s (%s)%s\n",
+		fmt.Fprintf(&sb, "%s  %s %s/%s (%s)%s\n",
 			color,
 			indicator,
 			xr.GetKind(), xr.GetName(), scope,
-			colorReset))
+			colorReset)
 	}
 
 	return sb.String(), changedCount, unchangedCount, errorCount

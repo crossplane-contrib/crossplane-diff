@@ -1,0 +1,10 @@
+apiVersion: ns.diff.example.org/v1alpha1
+kind: XNopResource
+metadata:
+  name: sha256-test-resource
+  namespace: default
+spec:
+  coolField: sha256-value
+  crossplane:
+    compositionRef:
+      name: xnopresources-sha256.diff.example.org

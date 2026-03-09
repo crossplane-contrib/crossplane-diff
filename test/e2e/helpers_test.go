@@ -335,7 +335,7 @@ func makeStringReadable(s string) string {
 		case r == ' ':
 			result.WriteString("\\space")
 		case !unicode.IsPrint(r):
-			result.WriteString(fmt.Sprintf("\\x%02x", r))
+			fmt.Fprintf(&result, "\\x%02x", r)
 		default:
 			result.WriteRune(r)
 		}

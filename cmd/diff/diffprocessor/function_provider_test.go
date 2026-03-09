@@ -447,6 +447,58 @@ func TestCachedFunctionProvider_TracksContainerNames(t *testing.T) {
 	}
 }
 
+func TestGenerateContainerName_LengthConstraint(t *testing.T) {
+	const testInstanceID = "test1234"
+
+	// Test that SHA256 digest container names stay under 63 characters
+	tests := map[string]struct {
+		pkg string
+	}{
+		"SHA256Digest": {
+			pkg: "xpkg.io/crossplane-contrib/function-go-templating@sha256:54726c28b78f51a7e88b87db33de79721d8be60890b71dad96276aea4a3397d1",
+		},
+		"SHA256DigestWithFIPS": {
+			pkg: "ghcr.io/crossplane-contrib/function-go-templating-fips@sha256:54726c28b78f51a7e88b87db33de79721d8be60890b71dad96276aea4a3397d1",
+		},
+		"LongFunctionName": {
+			pkg: "xpkg.io/org/my-very-long-function-name-that-might-cause-issues@sha256:54726c28b78f51a7e88b87db33de79721d8be60890b71dad96276aea4a3397d1",
+		},
+	}
+
+	for name, tt := range tests {
+		t.Run(name, func(t *testing.T) {
+			got := generateContainerName(tt.pkg, testInstanceID)
+			if len(got) > maxContainerNameLength {
+				t.Errorf("generateContainerName() returned name with length %d, want <= %d: %q",
+					len(got), maxContainerNameLength, got)
+			}
+		})
+	}
+}
+
+func TestGenerateContainerName_TruncationStability(t *testing.T) {
+	const testInstanceID = "test1234"
+
+	// Test that truncated names are stable (same input always produces same output)
+	pkg := "xpkg.io/org/my-very-long-function-name-that-might-cause-issues@sha256:54726c28b78f51a7e88b87db33de79721d8be60890b71dad96276aea4a3397d1"
+
+	first := generateContainerName(pkg, testInstanceID)
+	second := generateContainerName(pkg, testInstanceID)
+
+	if first != second {
+		t.Errorf("generateContainerName() not stable: first=%q, second=%q", first, second)
+	}
+
+	// Verify the truncated name still contains identifiable parts
+	if !strings.Contains(first, "my-very-long") {
+		t.Errorf("truncated name should contain start of function name: %q", first)
+	}
+
+	if !strings.Contains(first, "-comp-test1234") {
+		t.Errorf("truncated name should contain instance suffix: %q", first)
+	}
+}
+
 func TestGenerateContainerName(t *testing.T) {
 	const testInstanceID = "test1234"
 
@@ -477,6 +529,21 @@ func TestGenerateContainerName(t *testing.T) {
 		"OnlyName": {
 			pkg:  "my-function",
 			want: "my-function-comp-test1234",
+		},
+		"SHA256Digest": {
+			// SHA256 digest is truncated to 12 chars (like Docker short IDs)
+			pkg:  "xpkg.io/crossplane-contrib/function-go-templating@sha256:54726c28b78f51a7e88b87db33de79721d8be60890b71dad96276aea4a3397d1",
+			want: "function-go-templating-54726c28b78f-comp-test1234",
+		},
+		"SHA256DigestWithFIPS": {
+			// SHA256 digest is truncated to 12 chars (like Docker short IDs)
+			pkg:  "ghcr.io/crossplane-contrib/function-go-templating-fips@sha256:54726c28b78f51a7e88b87db33de79721d8be60890b71dad96276aea4a3397d1",
+			want: "function-go-templating-fips-54726c28b78f-comp-test1234",
+		},
+		"SHA256DigestShort": {
+			// Short digest (less than 12 chars) is used as-is
+			pkg:  "xpkg.io/test/function@sha256:abc123",
+			want: "function-abc123-comp-test1234",
 		},
 	}
 
