@@ -1,0 +1,25 @@
+---
+# Function referenced by SHA256 digest instead of tag.
+# This tests that container name generation handles digest references correctly.
+# The digest is for function-go-templating:v0.11.0 - same image, different reference format.
+#
+# NOTE: We intentionally do NOT set render.crossplane.io/runtime-docker-name annotation
+# so that CachedFunctionProvider will generate a container name using generateContainerName().
+apiVersion: pkg.crossplane.io/v1beta1
+kind: Function
+metadata:
+  name: function-go-templating-sha256
+  annotations:
+    render.crossplane.io/runtime-docker-cleanup: "Orphan"
+spec:
+  package: xpkg.crossplane.io/crossplane-contrib/function-go-templating@sha256:34f1ca0ff2e1702ae0a5088a96f31e992eb9b15356af3b0f1a2068603e767753
+---
+apiVersion: pkg.crossplane.io/v1beta1
+kind: Function
+metadata:
+  name: function-auto-ready
+  annotations:
+    render.crossplane.io/runtime-docker-name: "function-auto-ready-v0.4.2-it"
+    render.crossplane.io/runtime-docker-cleanup: "Orphan"
+spec:
+  package: xpkg.crossplane.io/crossplane-contrib/function-auto-ready:v0.4.2
