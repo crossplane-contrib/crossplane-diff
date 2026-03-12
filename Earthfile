@@ -365,7 +365,7 @@ helm-docs-setup:
 
 # helm-setup is used by other targets to setup helm.
 helm-setup:
-  ARG HELM_VERSION=v4.1.1
+  ARG HELM_VERSION=v4.1.3
   ARG NATIVEPLATFORM
   ARG TARGETOS
   ARG TARGETARCH
