@@ -6,7 +6,7 @@ require (
 	dario.cat/mergo v1.0.2
 	github.com/Masterminds/semver v1.5.0
 	github.com/alecthomas/kong v1.15.0
-	github.com/crossplane/cli/v2 v2.4.0-rc.0.0.20260615182009-ba59fbfac34b
+	github.com/crossplane/cli/v2 v2.4.0-rc.0.0.20260617170926-a416505fb016
 	github.com/crossplane/crossplane-runtime/v2 v2.4.0-rc.0
 	github.com/crossplane/crossplane/apis/v2 v2.4.0-rc.0
 	github.com/crossplane/crossplane/v2 v2.3.2

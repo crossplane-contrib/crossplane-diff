@@ -22,6 +22,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"os"
 	"strings"
 	"time"
 
@@ -46,6 +47,35 @@ type FunctionProvider interface {
 	// Cleanup stops and removes any resources created during function execution.
 	// For providers that don't create resources (like DefaultFunctionProvider), this is a no-op.
 	Cleanup(ctx context.Context) error
+}
+
+// EnvDockerNetwork is the environment variable that specifies which Docker
+// network function containers should join. This is needed when crossplane-diff
+// runs inside a Docker container (e.g. a GitHub Actions container job) so that
+// function containers are on the same network and reachable via container IP.
+const EnvDockerNetwork = "CROSSPLANE_DIFF_DOCKER_NETWORK"
+
+// annotationRuntimeDockerNetwork is the render annotation that configures the
+// Docker network for function containers.
+const annotationRuntimeDockerNetwork = "render.crossplane.io/runtime-docker-network"
+
+// applyDockerNetworkAnnotation sets the Docker network annotation on functions
+// if the CROSSPLANE_DIFF_DOCKER_NETWORK environment variable is set.
+func applyDockerNetworkAnnotation(fns []pkgv1.Function, log logging.Logger) {
+	network := os.Getenv(EnvDockerNetwork)
+	if network == "" {
+		return
+	}
+
+	log.Debug("Setting Docker network annotation on functions", "network", network)
+
+	for i := range fns {
+		if fns[i].Annotations == nil {
+			fns[i].Annotations = make(map[string]string)
+		}
+
+		fns[i].Annotations[annotationRuntimeDockerNetwork] = network
+	}
 }
 
 // DefaultFunctionProvider fetches functions from the cluster on each call.
@@ -73,6 +103,8 @@ func (p *DefaultFunctionProvider) GetFunctionsForComposition(comp *apiextensions
 	}
 
 	p.logger.Debug("Fetched functions from pipeline", "composition", comp.GetName(), "count", len(fns))
+
+	applyDockerNetworkAnnotation(fns, p.logger)
 
 	return fns, nil
 }
@@ -167,6 +199,8 @@ func (p *CachedFunctionProvider) GetFunctionsForComposition(comp *apiextensionsv
 
 	// Cache for future calls
 	p.cache[compName] = fns
+
+	applyDockerNetworkAnnotation(fns, p.logger)
 
 	return fns, nil
 }
