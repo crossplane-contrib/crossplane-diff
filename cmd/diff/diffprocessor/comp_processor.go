@@ -280,14 +280,84 @@ func (p *DefaultCompDiffProcessor) handleNoXRsFound(stdout io.Writer, compositio
 
 // collectXRDiffs processes XRs and collects their diffs, returning results for each XR.
 func (p *DefaultCompDiffProcessor) collectXRDiffs(ctx context.Context, stdout io.Writer, xrs []*un.Unstructured, newComp *un.Unstructured) map[string]*XRDiffResult {
-	// Composition provider function for getting the updated composition
-	compositionProvider := func(context.Context, *un.Unstructured) (*apiextensionsv1.Composition, error) {
-		comp := &apiextensionsv1.Composition{}
-		if err := runtime.DefaultUnstructuredConverter.FromUnstructured(newComp.Object, comp); err != nil {
-			return nil, errors.Wrap(err, "cannot convert unstructured to Composition")
+	// Convert the CLI composition to typed once for reuse
+	cliComp := &apiextensionsv1.Composition{}
+	if err := runtime.DefaultUnstructuredConverter.FromUnstructured(newComp.Object, cliComp); err != nil {
+		// If we can't convert, return an error result for all XRs
+		results := make(map[string]*XRDiffResult)
+
+		for _, xr := range xrs {
+			resourceID := fmt.Sprintf("%s/%s", xr.GetKind(), xr.GetName())
+			results[resourceID] = &XRDiffResult{
+				Diffs: make(map[string]*dt.ResourceDiff),
+				Error: errors.Wrap(err, "cannot convert CLI composition to typed"),
+			}
 		}
 
-		return comp, nil
+		return results
+	}
+
+	// Extract the target GVK from the CLI composition's compositeTypeRef
+	cliCompTargetAPIVersion := cliComp.Spec.CompositeTypeRef.APIVersion
+	cliCompTargetKind := cliComp.Spec.CompositeTypeRef.Kind
+
+	p.config.Logger.Debug("CLI composition targets",
+		"apiVersion", cliCompTargetAPIVersion,
+		"kind", cliCompTargetKind)
+
+	// Build a set of root-level resource keys (apiVersion/kind/namespace/name) for quick lookup.
+	// Root-level resources are XRs and Claims found by FindCompositesUsingComposition
+	// that use the CLI composition. These should always use the CLI composition.
+	// We include namespace to avoid collisions between resources with the same name
+	// in different namespaces (e.g., two claims with the same name).
+	rootResourceKeys := make(map[string]bool)
+
+	for _, xr := range xrs {
+		key := makeRootResourceKey(xr)
+		rootResourceKeys[key] = true
+	}
+
+	// Composition provider that returns CLI composition for:
+	// 1. Root-level resources (XRs and Claims that use this composition)
+	// 2. XRs whose type matches the CLI composition's compositeTypeRef
+	//
+	// For nested XRs with different types, looks up from the cluster.
+	compositionProvider := func(ctx context.Context, res *un.Unstructured) (*apiextensionsv1.Composition, error) {
+		resGVK := res.GroupVersionKind()
+		resAPIVersion := resGVK.GroupVersion().String()
+		resKind := resGVK.Kind
+		resourceID := fmt.Sprintf("%s/%s", res.GetKind(), res.GetName())
+
+		// Check 1: Is this a root-level resource (XR or Claim found by FindCompositesUsingComposition)?
+		// Root-level resources always use the CLI composition, even claims whose GVK differs from the XR type.
+		key := makeRootResourceKey(res)
+		if rootResourceKeys[key] {
+			p.config.Logger.Debug("Resource is root-level (uses this composition), using CLI composition",
+				"resource", resourceID,
+				"composition", cliComp.GetName())
+
+			return cliComp, nil
+		}
+
+		// Check 2: Does this resource's type match the CLI composition's target type?
+		// This handles XRs encountered during rendering that match the composition's type.
+		if resAPIVersion == cliCompTargetAPIVersion && resKind == cliCompTargetKind {
+			p.config.Logger.Debug("Resource matches CLI composition type, using CLI composition",
+				"resource", resourceID,
+				"composition", cliComp.GetName())
+
+			return cliComp, nil
+		}
+
+		// This is a nested XR with a different type - look up its composition from the cluster
+		p.config.Logger.Debug("Resource does not match CLI composition type, looking up from cluster",
+			"resource", resourceID,
+			"resourceAPIVersion", resAPIVersion,
+			"resourceKind", resKind,
+			"cliCompTargetAPIVersion", cliCompTargetAPIVersion,
+			"cliCompTargetKind", cliCompTargetKind)
+
+		return p.compositionClient.FindMatchingComposition(ctx, res)
 	}
 
 	results := make(map[string]*XRDiffResult)
@@ -534,6 +604,17 @@ func pluralize(count int) string {
 	}
 
 	return "s"
+}
+
+// makeRootResourceKey creates a unique key for a root-level resource using apiVersion/kind/namespace/name.
+// This includes namespace to avoid collisions between resources with the same name in different namespaces.
+//
+// TODO(#xxx): Investigate if MakeDiffKey throughout the codebase should also include namespace
+// to prevent collisions. Currently MakeDiffKey uses apiVersion/kind/name without namespace,
+// which could cause issues when processing namespaced resources with the same name in different
+// namespaces (e.g., claims).
+func makeRootResourceKey(res *un.Unstructured) string {
+	return fmt.Sprintf("%s/%s/%s/%s", res.GetAPIVersion(), res.GetKind(), res.GetNamespace(), res.GetName())
 }
 
 // formatXRStatusSummary generates the summary line with correct pluralization.
