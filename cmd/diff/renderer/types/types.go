@@ -48,7 +48,7 @@ const (
 
 // GetDiffKey returns a key that can be used to identify this object for use in a map.
 func (d *ResourceDiff) GetDiffKey() string {
-	return MakeDiffKey(d.Gvk.Group+"/"+d.Gvk.Version, d.Gvk.Kind, d.Namespace, d.ResourceName)
+	return MakeDiffKey(d.Gvk.GroupVersion().String(), d.Gvk.Kind, d.Namespace, d.ResourceName)
 }
 
 // MakeDiffKey creates a unique key for a resource diff.
