@@ -1,0 +1,49 @@
+# Parent composition that creates a nested XNopResource.
+# The nested XNopResource uses its OWN composition (xnopresources.diff.example.org)
+# to create its downstream resources.
+apiVersion: apiextensions.crossplane.io/v1
+kind: Composition
+metadata:
+  name: xparentresources.parent.diff.example.org
+spec:
+  compositeTypeRef:
+    apiVersion: parent.diff.example.org/v1alpha1
+    kind: XParentResource
+  mode: Pipeline
+  pipeline:
+    - step: generate-resources
+      functionRef:
+        name: function-go-templating
+      input:
+        apiVersion: template.fn.crossplane.io/v1beta1
+        kind: GoTemplate
+        source: Inline
+        inline:
+          template: |
+            ---
+            # Direct downstream resource owned by the parent XR
+            apiVersion: ns.nop.example.org/v1alpha1
+            kind: XDownstreamResource
+            metadata:
+              name: {{ .observed.composite.resource.metadata.name }}-direct
+              namespace: {{ .observed.composite.resource.metadata.namespace }}
+              annotations:
+                gotemplating.fn.crossplane.io/composition-resource-name: direct-resource
+            spec:
+              forProvider:
+                configData: parent-{{ .observed.composite.resource.spec.parentField }}
+                resourceTier: parent-tier
+            ---
+            # Nested XR of type XNopResource - this should use its OWN composition
+            apiVersion: ns.diff.example.org/v1alpha1
+            kind: XNopResource
+            metadata:
+              name: {{ .observed.composite.resource.metadata.name }}-nested
+              namespace: {{ .observed.composite.resource.metadata.namespace }}
+              annotations:
+                gotemplating.fn.crossplane.io/composition-resource-name: nested-xr
+            spec:
+              coolField: {{ .observed.composite.resource.spec.childConfig }}
+    - step: automatically-detect-ready-composed-resources
+      functionRef:
+        name: function-auto-ready

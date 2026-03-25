@@ -1,0 +1,12 @@
+# Existing parent XR that uses the parent composition
+apiVersion: parent.diff.example.org/v1alpha1
+kind: XParentResource
+metadata:
+  name: test-parent
+  namespace: default
+spec:
+  parentField: parent-value
+  childConfig: child-config-value
+  crossplane:
+    compositionRef:
+      name: xparentresources.parent.diff.example.org

@@ -20,6 +20,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"strings"
 	"testing"
@@ -611,6 +612,137 @@ func Test_formatXRStatusSummary(t *testing.T) {
 			if got != tt.want {
 				t.Errorf("formatXRStatusSummary(%d, %d, %d) = %q, want %q",
 					tt.changedCount, tt.unchangedCount, tt.errorCount, got, tt.want)
+			}
+		})
+	}
+}
+
+// TestDefaultCompDiffProcessor_collectXRDiffs_NestedXRCompositionLookup verifies that
+// when processing nested XRs, the composition provider correctly distinguishes between:
+// - Root XR type (matching the CLI composition's compositeTypeRef): returns CLI composition
+// - Nested XR types (different GVK): should look up from cluster, not return CLI composition
+//
+// This test documents a bug where the composition provider always returns the CLI composition
+// regardless of the resource type, causing nested XRs to be rendered with the wrong composition.
+func TestDefaultCompDiffProcessor_collectXRDiffs_NestedXRCompositionLookup(t *testing.T) {
+	ctx := t.Context()
+
+	// Create the CLI composition targeting XParentResource
+	parentComposition := tu.NewComposition("parent-composition").
+		WithCompositeTypeRef("parent.example.org/v1", "XParentResource").
+		WithPipelineMode().
+		Build()
+
+	parentCompUnstructured := tu.NewComposition("parent-composition").
+		WithCompositeTypeRef("parent.example.org/v1", "XParentResource").
+		WithPipelineMode().
+		BuildAsUnstructured()
+
+	// Create a composition for the nested XR (different type)
+	childComposition := tu.NewComposition("child-composition").
+		WithCompositeTypeRef("child.example.org/v1", "XChildResource").
+		WithPipelineMode().
+		Build()
+
+	// Create the root XR (matches CLI composition type)
+	// Root XR is identified by GVK+name+namespace, which matches what's in the xrs slice
+	rootXR := tu.NewResource("parent.example.org/v1", "XParentResource", "test-parent").
+		Build()
+
+	// Create a nested XR (different type - does NOT match CLI composition)
+	// Nested XR has different GVK, so it should look up its composition from cluster
+	nestedXR := tu.NewResource("child.example.org/v1", "XChildResource", "test-child").
+		Build()
+
+	tests := map[string]struct {
+		description        string
+		setupMocks         func() (xp.CompositionClient, *tu.MockDiffProcessor, *[]string)
+		xrs                []*un.Unstructured
+		cliComposition     *un.Unstructured
+		wantRootCompName   string // Expected composition name for root XR
+		wantNestedCompName string // Expected composition name for nested XR (if any)
+	}{
+		"RootXR_ReceivesCLIComposition_NestedXR_ReceivesClusterComposition": {
+			description: "Verifies correct behavior: root XR gets CLI composition, nested XR gets its own composition from cluster",
+			setupMocks: func() (xp.CompositionClient, *tu.MockDiffProcessor, *[]string) {
+				// Track which compositions are returned for which resources
+				compositionRequests := make([]string, 0)
+
+				mockXRProc := &tu.MockDiffProcessor{
+					DiffSingleResourceFn: func(ctx context.Context, res *un.Unstructured, compositionProvider types.CompositionProvider) (map[string]*dt.ResourceDiff, error) {
+						// For the root XR, test what composition is returned
+						comp, err := compositionProvider(ctx, res)
+						if err != nil {
+							return nil, err
+						}
+
+						compositionRequests = append(compositionRequests, fmt.Sprintf("%s/%s->%s", res.GetKind(), res.GetName(), comp.GetName()))
+
+						// Simulate processing a nested XR by calling the provider with a different resource type
+						// This is what ProcessNestedXRs does when it encounters nested XRs
+						nestedComp, err := compositionProvider(ctx, nestedXR)
+						if err != nil {
+							return nil, err
+						}
+
+						compositionRequests = append(compositionRequests, fmt.Sprintf("%s/%s->%s", nestedXR.GetKind(), nestedXR.GetName(), nestedComp.GetName()))
+
+						return make(map[string]*dt.ResourceDiff), nil
+					},
+				}
+
+				mockCompClient := tu.NewMockCompositionClient().
+					WithSuccessfulCompositionFetch(parentComposition).
+					WithResourcesForComposition("parent-composition", "", []*un.Unstructured{rootXR}).
+					// This will be called when looking up composition for nested XR
+					WithSuccessfulCompositionMatch(childComposition).
+					Build()
+
+				return mockCompClient, mockXRProc, &compositionRequests
+			},
+			xrs:            []*un.Unstructured{rootXR},
+			cliComposition: parentCompUnstructured,
+			// Correct behavior: root XR gets CLI composition, nested XR gets its own from cluster
+			wantRootCompName:   "parent-composition",
+			wantNestedCompName: "child-composition",
+		},
+	}
+
+	for name, tt := range tests {
+		t.Run(name, func(t *testing.T) {
+			mockCompClient, mockXRProc, compositionRequests := tt.setupMocks()
+
+			processor := &DefaultCompDiffProcessor{
+				compositionClient: mockCompClient,
+				xrProc:            mockXRProc,
+				config: ProcessorConfig{
+					Logger: tu.TestLogger(t, false),
+				},
+			}
+
+			var stdout bytes.Buffer
+
+			_ = processor.collectXRDiffs(ctx, &stdout, tt.xrs, tt.cliComposition)
+
+			// Verify the composition requests
+			if len(*compositionRequests) < 2 {
+				t.Fatalf("Expected at least 2 composition requests, got %d: %v", len(*compositionRequests), *compositionRequests)
+			}
+
+			// Check root XR composition
+			rootRequest := (*compositionRequests)[0]
+
+			expectedRoot := fmt.Sprintf("XParentResource/test-parent->%s", tt.wantRootCompName)
+			if rootRequest != expectedRoot {
+				t.Errorf("Root XR composition request mismatch: got %q, want %q", rootRequest, expectedRoot)
+			}
+
+			// Check nested XR composition - nested XR should get its own composition from cluster
+			nestedRequest := (*compositionRequests)[1]
+			expectedNested := fmt.Sprintf("XChildResource/test-child->%s", tt.wantNestedCompName)
+
+			if nestedRequest != expectedNested {
+				t.Errorf("Nested XR composition request mismatch: got %q, want %q", nestedRequest, expectedNested)
 			}
 		})
 	}

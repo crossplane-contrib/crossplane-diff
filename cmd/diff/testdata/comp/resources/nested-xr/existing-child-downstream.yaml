@@ -1,0 +1,19 @@
+# Downstream resource created by the CHILD'S composition (xnopresources.diff.example.org).
+# This resource should NOT be affected when we diff the parent composition,
+# because the nested XR should use its own composition.
+apiVersion: ns.nop.example.org/v1alpha1
+kind: XDownstreamResource
+metadata:
+  name: test-parent-nested
+  namespace: default
+  annotations:
+    crossplane.io/composition-resource-name: nop-resource
+  labels:
+    # Note: This label points to the nested child XR, not the parent
+    crossplane.io/composite: test-parent-nested
+spec:
+  forProvider:
+    # This value comes from the CHILD's composition (xnopresources.diff.example.org)
+    # which uses: configData: {{ .observed.composite.resource.spec.coolField }}
+    configData: child-config-value
+    resourceTier: basic

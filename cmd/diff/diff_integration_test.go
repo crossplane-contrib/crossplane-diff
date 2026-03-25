@@ -3410,6 +3410,72 @@ Summary: 1 modified`,
 			expectedExitCode: dp.ExitCodeDiffDetected,
 			noColor:          true,
 		},
+		"NestedXRUsesOwnComposition": {
+			reason: "Validates that nested XRs use their own composition from the cluster, not the parent's CLI composition",
+			// Set up XRDs, compositions, and functions
+			setupFiles: []string{
+				// Child XRD and composition (XNopResource uses xnopresources.diff.example.org)
+				"testdata/comp/resources/xrd.yaml",
+				"testdata/comp/resources/original-composition.yaml",
+				"testdata/comp/resources/functions.yaml",
+				// Parent XRD and composition
+				"testdata/comp/resources/nested-xr/parent-xrd.yaml",
+				"testdata/comp/resources/nested-xr/parent-composition.yaml",
+			},
+			// Use crossplaneManagedResources to set up proper ownership hierarchy
+			crossplaneManagedResources: []HierarchicalOwnershipRelation{
+				{
+					// Parent XR owns both direct downstream and nested child XR
+					OwnerFile: "testdata/comp/resources/nested-xr/existing-parent-xr.yaml",
+					OwnedFiles: map[string]*HierarchicalOwnershipRelation{
+						// Direct downstream owned by parent XR
+						"testdata/comp/resources/nested-xr/existing-parent-direct-downstream.yaml": nil,
+						// Nested child XR owned by parent XR, which owns its own downstream
+						"testdata/comp/resources/nested-xr/existing-nested-child-xr.yaml": {
+							OwnedFiles: map[string]*HierarchicalOwnershipRelation{
+								// Child's downstream owned by nested child XR
+								"testdata/comp/resources/nested-xr/existing-child-downstream.yaml": nil,
+							},
+						},
+					},
+				},
+			},
+			// Diff the updated parent composition
+			inputFiles: []string{"testdata/comp/updated-parent-composition.yaml"},
+			namespace:  "default",
+			// Expected: Only the parent's direct downstream shows changes (tier change).
+			// The nested child's downstream should NOT change because:
+			// 1. The nested XR (XNopResource) uses its own composition (xnopresources.diff.example.org)
+			// 2. That child composition was NOT modified
+			// Bug scenario: If nested XR incorrectly uses parent composition, we'd see wrong changes to child's downstream.
+			// Expected output: Only the parent's direct downstream should show in the Impact Analysis.
+			// The child's downstream (XDownstreamResource/test-parent-nested) should NOT appear here.
+			// If it did, it would mean the nested XR incorrectly used the parent's CLI composition.
+			expectedOutput: `=== Impact Analysis ===
+
+~~~ XDownstreamResource/test-parent-direct
+  apiVersion: ns.nop.example.org/v1alpha1
+  kind: XDownstreamResource
+  metadata:
+    annotations:
+      crossplane.io/composition-resource-name: direct-resource
+    labels:
+      crossplane.io/composite: test-parent
+    name: test-parent-direct
+    namespace: default
+  spec:
+    forProvider:
+      configData: parent-parent-value
+-     resourceTier: parent-tier
++     resourceTier: premium-tier
+
+---
+
+Summary: 1 modified`,
+			expectedError:    false,
+			expectedExitCode: dp.ExitCodeDiffDetected,
+			noColor:          true,
+		},
 	}
 
 	for name, tt := range tests {
