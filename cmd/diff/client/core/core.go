@@ -19,7 +19,7 @@ import (
 	"github.com/crossplane/crossplane/v2/cmd/crank/common/resource/xrm"
 )
 
-//nolint:gochecknoinits // Registering Kubernetes types with a package-scoped scheme in init is idiomatic.
+//nolint:gochecknoinits // Registering types with the global client-go scheme in init avoids race conditions.
 func init() {
 	// Register Crossplane package types with the global scheme at init time.
 	// This follows the standard Kubernetes pattern of building the scheme during
