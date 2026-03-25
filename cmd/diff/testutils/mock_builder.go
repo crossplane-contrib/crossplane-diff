@@ -86,24 +86,31 @@ func (b *MockResourceClientBuilder) WithGetResource(fn func(context.Context, sch
 }
 
 // WithResourcesExist sets up GetResource to return resources from a map.
+// Resources are keyed by namespace/name/kind to correctly handle same-named resources in different namespaces.
 func (b *MockResourceClientBuilder) WithResourcesExist(resources ...*un.Unstructured) *MockResourceClientBuilder {
 	resourceMap := make(map[string]*un.Unstructured)
 
 	// Build a map for fast lookup
 	for _, res := range resources {
-		// Use name + kind as a unique key
-		key := res.GetName() + "|" + res.GetKind()
+		// Use namespace/name/kind as a unique key (namespace may be empty for cluster-scoped resources)
+		key := res.GetNamespace() + "/" + res.GetName() + "/" + res.GetKind()
 		resourceMap[key] = res
 	}
 
-	return b.WithGetResource(func(_ context.Context, gvk schema.GroupVersionKind, _, name string) (*un.Unstructured, error) {
-		// Try to find the resource by name and kind
-		key := name + "|" + gvk.Kind
+	return b.WithGetResource(func(_ context.Context, gvk schema.GroupVersionKind, namespace, name string) (*un.Unstructured, error) {
+		// Try to find the resource by namespace, name, and kind
+		key := namespace + "/" + name + "/" + gvk.Kind
 		if res, found := resourceMap[key]; found {
 			return res, nil
 		}
 
-		return nil, errors.Errorf("resource %q not found", name)
+		return nil, apierrors.NewNotFound(
+			schema.GroupResource{
+				Group:    gvk.Group,
+				Resource: strings.ToLower(gvk.Kind) + "s",
+			},
+			name,
+		)
 	})
 }
 
