@@ -320,7 +320,7 @@ func (p *DefaultDiffProcessor) diffSingleResourceInternal(ctx context.Context, r
 			"backingXR", xrForRendering.GetName())
 	}
 
-	// Fetch observed resources for use in rendering (needed for getComposedResource template function
+	// Fetch observed resources for use in rendering (needed for getComposedResource template function)
 	// and for function-sequencer to know which resources already exist in the cluster)
 	if observedResources == nil && existingXRFromCluster != nil {
 		observedResources = p.fetchObservedResourcesFromClusterXR(ctx, existingXRFromCluster, resourceID)
