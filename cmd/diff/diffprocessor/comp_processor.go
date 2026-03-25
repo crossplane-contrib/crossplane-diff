@@ -313,7 +313,7 @@ func (p *DefaultCompDiffProcessor) collectXRDiffs(ctx context.Context, stdout io
 	rootResourceKeys := make(map[string]bool)
 
 	for _, xr := range xrs {
-		key := dt.MakeDiffKey(xr.GetAPIVersion(), xr.GetKind(), xr.GetNamespace(), xr.GetName())
+		key := dt.MakeDiffKeyFromResource(xr)
 		rootResourceKeys[key] = true
 	}
 
@@ -330,7 +330,7 @@ func (p *DefaultCompDiffProcessor) collectXRDiffs(ctx context.Context, stdout io
 
 		// Check 1: Is this a root-level resource (XR or Claim found by FindCompositesUsingComposition)?
 		// Root-level resources always use the CLI composition, even claims whose GVK differs from the XR type.
-		key := dt.MakeDiffKey(res.GetAPIVersion(), res.GetKind(), res.GetNamespace(), res.GetName())
+		key := dt.MakeDiffKeyFromResource(res)
 		if rootResourceKeys[key] {
 			p.config.Logger.Debug("Resource is root-level (uses this composition), using CLI composition",
 				"resource", resourceID,

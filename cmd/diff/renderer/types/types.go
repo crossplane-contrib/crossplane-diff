@@ -56,3 +56,9 @@ func (d *ResourceDiff) GetDiffKey() string {
 func MakeDiffKey(apiVersion, kind, namespace, name string) string {
 	return fmt.Sprintf("%s/%s/%s/%s", apiVersion, kind, namespace, name)
 }
+
+// MakeDiffKeyFromResource creates a unique key for a resource diff from an Unstructured resource.
+// This is a convenience wrapper around MakeDiffKey that extracts all fields from the resource.
+func MakeDiffKeyFromResource(res *un.Unstructured) string {
+	return MakeDiffKey(res.GetAPIVersion(), res.GetKind(), res.GetNamespace(), res.GetName())
+}

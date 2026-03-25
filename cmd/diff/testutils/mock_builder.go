@@ -8,7 +8,8 @@ import (
 	"io"
 	"strings"
 
-	"github.com/crossplane-contrib/crossplane-diff/cmd/diff/types"
+	"github.com/crossplane-contrib/crossplane-diff/cmd/diff/renderer/types"
+	dtypes "github.com/crossplane-contrib/crossplane-diff/cmd/diff/types"
 	extv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -86,20 +87,19 @@ func (b *MockResourceClientBuilder) WithGetResource(fn func(context.Context, sch
 }
 
 // WithResourcesExist sets up GetResource to return resources from a map.
-// Resources are keyed by namespace/name/kind to correctly handle same-named resources in different namespaces.
+// Resources are keyed using MakeDiffKey (apiVersion/kind/namespace/name) to correctly handle
+// same-named resources in different namespaces.
 func (b *MockResourceClientBuilder) WithResourcesExist(resources ...*un.Unstructured) *MockResourceClientBuilder {
 	resourceMap := make(map[string]*un.Unstructured)
 
-	// Build a map for fast lookup
+	// Build a map for fast lookup using the same key format as diff keys
 	for _, res := range resources {
-		// Use namespace/name/kind as a unique key (namespace may be empty for cluster-scoped resources)
-		key := res.GetNamespace() + "/" + res.GetName() + "/" + res.GetKind()
+		key := types.MakeDiffKeyFromResource(res)
 		resourceMap[key] = res
 	}
 
 	return b.WithGetResource(func(_ context.Context, gvk schema.GroupVersionKind, namespace, name string) (*un.Unstructured, error) {
-		// Try to find the resource by namespace, name, and kind
-		key := namespace + "/" + name + "/" + gvk.Kind
+		key := types.MakeDiffKey(gvk.GroupVersion().String(), gvk.Kind, namespace, name)
 		if res, found := resourceMap[key]; found {
 			return res, nil
 		}
@@ -1249,28 +1249,28 @@ func (b *DiffProcessorBuilder) WithFailedInitialize(errMsg string) *DiffProcesso
 }
 
 // WithPerformDiff adds an implementation for the PerformDiff method.
-func (b *DiffProcessorBuilder) WithPerformDiff(fn func(context.Context, io.Writer, []*un.Unstructured, types.CompositionProvider) (bool, error)) *DiffProcessorBuilder {
+func (b *DiffProcessorBuilder) WithPerformDiff(fn func(context.Context, io.Writer, []*un.Unstructured, dtypes.CompositionProvider) (bool, error)) *DiffProcessorBuilder {
 	b.mock.PerformDiffFn = fn
 	return b
 }
 
 // WithSuccessfulPerformDiff sets a successful PerformDiff implementation with no diffs.
 func (b *DiffProcessorBuilder) WithSuccessfulPerformDiff() *DiffProcessorBuilder {
-	return b.WithPerformDiff(func(context.Context, io.Writer, []*un.Unstructured, types.CompositionProvider) (bool, error) {
+	return b.WithPerformDiff(func(context.Context, io.Writer, []*un.Unstructured, dtypes.CompositionProvider) (bool, error) {
 		return false, nil
 	})
 }
 
 // WithSuccessfulPerformDiffWithChanges sets a successful PerformDiff implementation with diffs.
 func (b *DiffProcessorBuilder) WithSuccessfulPerformDiffWithChanges() *DiffProcessorBuilder {
-	return b.WithPerformDiff(func(context.Context, io.Writer, []*un.Unstructured, types.CompositionProvider) (bool, error) {
+	return b.WithPerformDiff(func(context.Context, io.Writer, []*un.Unstructured, dtypes.CompositionProvider) (bool, error) {
 		return true, nil
 	})
 }
 
 // WithDiffOutput sets a PerformDiff implementation that writes a specific output.
 func (b *DiffProcessorBuilder) WithDiffOutput(output string) *DiffProcessorBuilder {
-	return b.WithPerformDiff(func(_ context.Context, stdout io.Writer, _ []*un.Unstructured, _ types.CompositionProvider) (bool, error) {
+	return b.WithPerformDiff(func(_ context.Context, stdout io.Writer, _ []*un.Unstructured, _ dtypes.CompositionProvider) (bool, error) {
 		if stdout != nil {
 			_, _ = io.WriteString(stdout, output)
 		}
@@ -1281,7 +1281,7 @@ func (b *DiffProcessorBuilder) WithDiffOutput(output string) *DiffProcessorBuild
 
 // WithFailedPerformDiff sets a failing PerformDiff implementation.
 func (b *DiffProcessorBuilder) WithFailedPerformDiff(errMsg string) *DiffProcessorBuilder {
-	return b.WithPerformDiff(func(context.Context, io.Writer, []*un.Unstructured, types.CompositionProvider) (bool, error) {
+	return b.WithPerformDiff(func(context.Context, io.Writer, []*un.Unstructured, dtypes.CompositionProvider) (bool, error) {
 		return false, errors.New(errMsg)
 	})
 }
