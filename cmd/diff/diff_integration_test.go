@@ -778,6 +778,106 @@ Summary: 2 modified, 2 removed`,
 			expectedExitCode: dp.ExitCodeDiffDetected,
 			noColor:          true,
 		},
+		// Issue #259: function-sequencer hides resources from later stages, but those
+		// resources should be shown as removed if they exist in the cluster.
+		// https://github.com/crossplane-contrib/crossplane-diff/issues/259
+		"FunctionSequencerPreservesExistingResources": {
+			reason: "Function-sequencer should NOT hide resources that already exist in the cluster (fix for issue #259)",
+			crossplaneManagedResources: []HierarchicalOwnershipRelation{
+				{
+					OwnerFile: "testdata/diff/resources/sequencer-xr.yaml",
+					OwnedFiles: map[string]*HierarchicalOwnershipRelation{
+						// Stage 0 resource - exists in cluster
+						"testdata/diff/resources/sequencer-stage0-downstream.yaml": nil,
+						// Stage 1 resource - exists in cluster, should NOT be hidden by sequencer
+						// because observed resources are passed correctly to the function pipeline
+						"testdata/diff/resources/sequencer-stage1-downstream.yaml": nil,
+					},
+				},
+			},
+			setupFiles: []string{
+				"testdata/diff/resources/xrd.yaml",
+				"testdata/diff/resources/sequencer-composition.yaml",
+				"testdata/diff/resources/sequencer-composition-revision.yaml",
+				"testdata/diff/resources/functions.yaml",
+			},
+			inputFiles: []string{"testdata/diff/resources/sequencer-xr.yaml"},
+			// Expected: With the fix, observed resources ARE passed to function-sequencer.
+			// Function-sequencer sees both resources exist and does NOT remove them from desired state.
+			// Since existing resources match rendered resources, there should be no changes.
+			// XR diff outputs nothing when there are no changes (unlike comp diff which says "No changes detected").
+			expectedOutput:   ``,
+			expectedError:    false,
+			expectedExitCode: dp.ExitCodeSuccess,
+			noColor:          true,
+		},
+		// Issue #259: Validates that removal detection works even when the XR has no changes.
+		// This is the core fix for the function-sequencer bug where existingXR was nil because
+		// the XR diff wasn't stored when there were no changes.
+		// https://github.com/crossplane-contrib/crossplane-diff/issues/259
+		"ResourceRemovalWithUnmodifiedXR": {
+			reason: "Validates resource removal detection works when XR has no changes (uses existingXRFromCluster fallback)",
+			crossplaneManagedResources: []HierarchicalOwnershipRelation{
+				{
+					OwnerFile: "testdata/diff/resources/existing-xr.yaml",
+					OwnedFiles: map[string]*HierarchicalOwnershipRelation{
+						"testdata/diff/resources/removal-test-ns-downstream-resource1.yaml": nil, // Will be kept
+						"testdata/diff/resources/removal-test-ns-downstream-resource2.yaml": {
+							// This resource will be removed and has a child
+							OwnedFiles: map[string]*HierarchicalOwnershipRelation{
+								"testdata/diff/resources/removal-test-ns-downstream-resource2-child.yaml": nil, // Child will also be removed
+							},
+						},
+					},
+				},
+			},
+			setupFiles: []string{
+				"testdata/diff/resources/xrd.yaml",
+				"testdata/diff/resources/removal-test-composition.yaml",
+				"testdata/diff/resources/removal-test-composition-revision.yaml",
+				"testdata/diff/resources/functions.yaml",
+			},
+			inputFiles: []string{"testdata/diff/unmodified-xr.yaml"}, // XR has NO changes
+			// Expected: resource2 and its child are removed, but XR and resource1 have no changes
+			expectedOutput: `
+--- XDownstreamResource/resource-to-be-removed
+- apiVersion: ns.nop.example.org/v1alpha1
+- kind: XDownstreamResource
+- metadata:
+-   annotations:
+-     crossplane.io/composition-resource-name: resource2
+-   generateName: test-resource-
+-   labels:
+-     crossplane.io/composite: test-resource
+-   name: resource-to-be-removed
+-   namespace: default
+- spec:
+-   forProvider:
+-     configData: existing-value
+
+---
+--- XDownstreamResource/resource-to-be-removed-child
+- apiVersion: ns.nop.example.org/v1alpha1
+- kind: XDownstreamResource
+- metadata:
+-   annotations:
+-     crossplane.io/composition-resource-name: resource2-child
+-   generateName: test-resource-child-
+-   labels:
+-     crossplane.io/composite: test-resource
+-   name: resource-to-be-removed-child
+-   namespace: default
+- spec:
+-   forProvider:
+-     configData: child-value
+
+---
+
+Summary: 2 removed`,
+			expectedError:    false,
+			expectedExitCode: dp.ExitCodeDiffDetected,
+			noColor:          true,
+		},
 		"ResourceRemovalHierarchyV2Namespaced": {
 			reason: "Validates resource removal detection with hierarchy using v2 style resourceRefs and namespaced downstreams",
 			crossplaneManagedResources: []HierarchicalOwnershipRelation{

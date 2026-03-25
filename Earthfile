@@ -283,7 +283,8 @@ go-test:
     --pull xpkg.crossplane.io/crossplane-contrib/function-go-templating:v0.11.0 \
     --pull xpkg.crossplane.io/crossplane-contrib/function-auto-ready:v0.4.2 \
     --pull xpkg.crossplane.io/crossplane-contrib/function-environment-configs:v0.4.0 \
-    --pull xpkg.crossplane.io/crossplane-contrib/function-extra-resources:v0.2.0
+    --pull xpkg.crossplane.io/crossplane-contrib/function-extra-resources:v0.2.0 \
+    --pull xpkg.crossplane.io/crossplane-contrib/function-sequencer:v0.5.0
     # this is silly, but we put these files into the default KUBEBUILDER_ASSETS location, because if we set
     # KUBEBUILDER_ASSETS on `go test` to the artifact path, which is perhaps more intuitive, the syntax highlighting
     # in intellij breaks due to the word BUILD in all caps.

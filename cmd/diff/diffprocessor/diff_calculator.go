@@ -237,10 +237,12 @@ func (c *DefaultDiffCalculator) CalculateNonRemovalDiffs(ctx context.Context, xr
 	xrDiff, err := c.CalculateDiff(ctx, compositeParent, desiredXR)
 	if err != nil || xrDiff == nil {
 		return nil, nil, errors.Wrap(err, "cannot calculate diff for XR")
-	} else if xrDiff.DiffType != dt.DiffTypeEqual {
-		key := xrDiff.GetDiffKey()
-		diffs[key] = xrDiff
 	}
+
+	// Always store the XR diff, even when DiffTypeEqual.
+	// We need xrDiff.Current for removal detection downstream, regardless of whether the XR itself changed.
+	key := xrDiff.GetDiffKey()
+	diffs[key] = xrDiff
 
 	// Then calculate diffs for all composed resources
 	for _, d := range desired.ComposedResources {

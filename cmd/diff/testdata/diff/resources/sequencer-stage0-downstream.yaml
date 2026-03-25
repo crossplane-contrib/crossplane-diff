@@ -1,0 +1,12 @@
+apiVersion: ns.nop.example.org/v1alpha1
+kind: XDownstreamResource
+metadata:
+  annotations:
+    crossplane.io/composition-resource-name: stage0-resource
+  labels:
+    crossplane.io/composite: sequencer-test
+  name: 0-stage0-resource
+  namespace: default
+spec:
+  forProvider:
+    configData: test-value
