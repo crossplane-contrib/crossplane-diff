@@ -49,7 +49,15 @@ type XRDiffResult struct {
 
 // HasChanges returns true if this XR has downstream resource changes.
 func (r *XRDiffResult) HasChanges() bool {
-	return len(r.Diffs) > 0
+	// Count only non-equal diffs as "having changes".
+	// The diffs map may contain DiffTypeEqual entries (e.g., XR stored for removal detection).
+	for _, diff := range r.Diffs {
+		if diff.DiffType != dt.DiffTypeEqual {
+			return true
+		}
+	}
+
+	return false
 }
 
 // HasError returns true if this XR encountered a processing error.
