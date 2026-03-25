@@ -1,0 +1,14 @@
+# Downstream resource for XR in ns-b
+apiVersion: ns.nop.example.org/v1alpha1
+kind: XDownstreamResource
+metadata:
+  name: xr-in-ns-b
+  namespace: ns-b
+  annotations:
+    crossplane.io/composition-resource-name: collision-resource
+  labels:
+    crossplane.io/composite: xr-in-ns-b
+spec:
+  forProvider:
+    # Current value from the ConfigMap in ns-b
+    configData: from-ns-b

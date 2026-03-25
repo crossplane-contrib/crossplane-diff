@@ -1,0 +1,8 @@
+# ConfigMap in namespace ns-a - will be fetched by XR in ns-a
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: collision-config
+  namespace: ns-a
+data:
+  value: from-ns-a

@@ -1,0 +1,52 @@
+# Composition that fetches a ConfigMap by name from the XR's namespace.
+# This is used to test the namespace collision bug where resources with
+# the same name in different namespaces collide in the cache.
+apiVersion: apiextensions.crossplane.io/v1
+kind: Composition
+metadata:
+  name: xnopresources.collision.example.org
+spec:
+  compositeTypeRef:
+    apiVersion: ns.diff.example.org/v1alpha1
+    kind: XNopResource
+  mode: Pipeline
+  pipeline:
+    - step: fetch-external-resources
+      functionRef:
+        name: function-extra-resources
+      input:
+        apiVersion: extra-resources.fn.crossplane.io/v1beta1
+        kind: Input
+        spec:
+          extraResources:
+            # Fetch ConfigMap by name - uses XR's namespace since no namespace specified
+            - apiVersion: v1
+              kind: ConfigMap
+              into: nsConfig
+              type: Reference
+              ref:
+                name: collision-config
+    - step: generate-resources
+      functionRef:
+        name: function-go-templating
+      input:
+        apiVersion: template.fn.crossplane.io/v1beta1
+        kind: GoTemplate
+        source: Inline
+        inline:
+          template: |
+            {{- $config := index .context "apiextensions.crossplane.io/extra-resources" "nsConfig" 0 -}}
+            apiVersion: ns.nop.example.org/v1alpha1
+            kind: XDownstreamResource
+            metadata:
+              name: {{ .observed.composite.resource.metadata.name }}
+              namespace: {{ .observed.composite.resource.metadata.namespace }}
+              annotations:
+                gotemplating.fn.crossplane.io/composition-resource-name: collision-resource
+            spec:
+              forProvider:
+                # This should contain the ConfigMap data from the XR's namespace
+                configData: {{ index $config "data" "value" }}
+    - step: automatically-detect-ready-composed-resources
+      functionRef:
+        name: function-auto-ready

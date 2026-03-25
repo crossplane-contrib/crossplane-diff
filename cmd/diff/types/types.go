@@ -15,7 +15,7 @@ limitations under the License.
 */
 
 // Package types defines shared type definitions and interfaces used across the crossplane-diff application.
-package types //nolint:revive // types is an appropriate name for a package containing shared type definitions
+package types
 
 import (
 	"context"

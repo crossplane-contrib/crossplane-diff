@@ -313,7 +313,7 @@ func (p *DefaultCompDiffProcessor) collectXRDiffs(ctx context.Context, stdout io
 	rootResourceKeys := make(map[string]bool)
 
 	for _, xr := range xrs {
-		key := makeRootResourceKey(xr)
+		key := dt.MakeDiffKey(xr.GetAPIVersion(), xr.GetKind(), xr.GetNamespace(), xr.GetName())
 		rootResourceKeys[key] = true
 	}
 
@@ -330,7 +330,7 @@ func (p *DefaultCompDiffProcessor) collectXRDiffs(ctx context.Context, stdout io
 
 		// Check 1: Is this a root-level resource (XR or Claim found by FindCompositesUsingComposition)?
 		// Root-level resources always use the CLI composition, even claims whose GVK differs from the XR type.
-		key := makeRootResourceKey(res)
+		key := dt.MakeDiffKey(res.GetAPIVersion(), res.GetKind(), res.GetNamespace(), res.GetName())
 		if rootResourceKeys[key] {
 			p.config.Logger.Debug("Resource is root-level (uses this composition), using CLI composition",
 				"resource", resourceID,
@@ -604,17 +604,6 @@ func pluralize(count int) string {
 	}
 
 	return "s"
-}
-
-// makeRootResourceKey creates a unique key for a root-level resource using apiVersion/kind/namespace/name.
-// This includes namespace to avoid collisions between resources with the same name in different namespaces.
-//
-// TODO(#xxx): Investigate if MakeDiffKey throughout the codebase should also include namespace
-// to prevent collisions. Currently MakeDiffKey uses apiVersion/kind/name without namespace,
-// which could cause issues when processing namespaced resources with the same name in different
-// namespaces (e.g., claims).
-func makeRootResourceKey(res *un.Unstructured) string {
-	return fmt.Sprintf("%s/%s/%s/%s", res.GetAPIVersion(), res.GetKind(), res.GetNamespace(), res.GetName())
 }
 
 // formatXRStatusSummary generates the summary line with correct pluralization.

@@ -1,0 +1,11 @@
+# XR in namespace ns-b
+apiVersion: ns.diff.example.org/v1alpha1
+kind: XNopResource
+metadata:
+  name: xr-in-ns-b
+  namespace: ns-b
+spec:
+  coolField: test-value-b
+  crossplane:
+    compositionRef:
+      name: xnopresources.collision.example.org

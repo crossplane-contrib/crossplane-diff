@@ -3476,6 +3476,85 @@ Summary: 1 modified`,
 			expectedExitCode: dp.ExitCodeDiffDetected,
 			noColor:          true,
 		},
+		"CrossNamespaceResourceCollision": {
+			reason: "Validates that resources with the same name in different namespaces are correctly distinguished",
+			// This test catches a bug where the cache key didn't include namespace, causing
+			// ConfigMaps with the same name in different namespaces to collide.
+			// The XR in ns-a should get ConfigMap from ns-a (value: from-ns-a)
+			// The XR in ns-b should get ConfigMap from ns-b (value: from-ns-b)
+			// Bug: Both XRs would get the same ConfigMap (whichever was cached first)
+			setupFiles: []string{
+				// Create namespaces first
+				"testdata/comp/resources/namespace-collision/namespace-ns-a.yaml",
+				"testdata/comp/resources/namespace-collision/namespace-ns-b.yaml",
+				"testdata/comp/resources/xrd.yaml",
+				"testdata/comp/resources/functions.yaml",
+				"testdata/comp/resources/namespace-collision/collision-composition.yaml",
+				// ConfigMaps with same name in different namespaces
+				"testdata/comp/resources/namespace-collision/configmap-ns-a.yaml",
+				"testdata/comp/resources/namespace-collision/configmap-ns-b.yaml",
+			},
+			// XRs and their downstream resources in different namespaces
+			crossplaneManagedResources: []HierarchicalOwnershipRelation{
+				{
+					OwnerFile: "testdata/comp/resources/namespace-collision/existing-xr-ns-a.yaml",
+					OwnedFiles: map[string]*HierarchicalOwnershipRelation{
+						"testdata/comp/resources/namespace-collision/existing-downstream-ns-a.yaml": nil,
+					},
+				},
+				{
+					OwnerFile: "testdata/comp/resources/namespace-collision/existing-xr-ns-b.yaml",
+					OwnedFiles: map[string]*HierarchicalOwnershipRelation{
+						"testdata/comp/resources/namespace-collision/existing-downstream-ns-b.yaml": nil,
+					},
+				},
+			},
+			inputFiles: []string{"testdata/comp/updated-collision-composition.yaml"},
+			// Expected: Each XR's downstream should show the correct prefix applied to its namespace's ConfigMap value.
+			// XR in ns-a: from-ns-a → prefix-from-ns-a
+			// XR in ns-b: from-ns-b → prefix-from-ns-b
+			// Bug scenario: If namespace collision occurs, ns-b would incorrectly show:
+			//   from-ns-b → prefix-from-ns-a (wrong ConfigMap cached from ns-a)
+			expectedOutput: `=== Impact Analysis ===
+
+~~~ XDownstreamResource/xr-in-ns-a
+  apiVersion: ns.nop.example.org/v1alpha1
+  kind: XDownstreamResource
+  metadata:
+    annotations:
+      crossplane.io/composition-resource-name: collision-resource
+    labels:
+      crossplane.io/composite: xr-in-ns-a
+    name: xr-in-ns-a
+    namespace: ns-a
+  spec:
+    forProvider:
+-     configData: from-ns-a
++     configData: prefix-from-ns-a
+
+---
+~~~ XDownstreamResource/xr-in-ns-b
+  apiVersion: ns.nop.example.org/v1alpha1
+  kind: XDownstreamResource
+  metadata:
+    annotations:
+      crossplane.io/composition-resource-name: collision-resource
+    labels:
+      crossplane.io/composite: xr-in-ns-b
+    name: xr-in-ns-b
+    namespace: ns-b
+  spec:
+    forProvider:
+-     configData: from-ns-b
++     configData: prefix-from-ns-b
+
+---
+
+Summary: 2 modified`,
+			expectedError:    false,
+			expectedExitCode: dp.ExitCodeDiffDetected,
+			noColor:          true,
+		},
 	}
 
 	for name, tt := range tests {
