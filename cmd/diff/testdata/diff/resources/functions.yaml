@@ -45,3 +45,13 @@ metadata:
     render.crossplane.io/runtime-docker-cleanup: "Orphan"
 spec:
   package: xpkg.crossplane.io/crossplane-contrib/function-extra-resources:v0.2.0
+---
+apiVersion: pkg.crossplane.io/v1beta1
+kind: Function
+metadata:
+  name: function-sequencer
+  annotations:
+    render.crossplane.io/runtime-docker-name: "function-sequencer-v0.5.0-it"
+    render.crossplane.io/runtime-docker-cleanup: "Orphan"
+spec:
+  package: xpkg.crossplane.io/crossplane-contrib/function-sequencer:v0.5.0

@@ -611,8 +611,10 @@ func TestDefaultDiffCalculator_CalculateDiffs(t *testing.T) {
 				}(),
 				ComposedResources: []cpd.Unstructured{*composedResource1},
 			},
+			// XR diff is always stored (even when DiffTypeEqual) for removal detection
 			expectedDiffs: map[string]dt.DiffType{
 				"example.org/v1/Composed//cpd-1": dt.DiffTypeModified,
+				"example.org/v1/XR//test-xr":     dt.DiffTypeEqual,
 			},
 			wantErr: false,
 		},
@@ -813,8 +815,9 @@ func TestDefaultDiffCalculator_CalculateDiffs(t *testing.T) {
 					t.Errorf("CalculateDiffs() diff type for key %s mismatch (-want +got):\n%s", expectedKey, diff)
 				}
 
-				// Check that LineDiffs is not empty for non-nil diffs
-				if len(diff.LineDiffs) == 0 {
+				// Check that LineDiffs is not empty for non-equal diffs
+				// DiffTypeEqual entries may have empty LineDiffs since there are no changes
+				if diff.DiffType != dt.DiffTypeEqual && len(diff.LineDiffs) == 0 {
 					t.Errorf("CalculateDiffs() returned diff with empty LineDiffs for key %s", expectedKey)
 				}
 			}

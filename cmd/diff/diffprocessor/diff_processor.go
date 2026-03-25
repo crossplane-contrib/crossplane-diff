@@ -198,7 +198,7 @@ func (p *DefaultDiffProcessor) PerformDiff(ctx context.Context, stdout io.Writer
 		}
 	}
 
-	// Only render diffs if we found some
+	// Only render diffs if we found some that need rendering
 	if len(allDiffs) > 0 {
 		// Render all diffs in a single pass
 		err := p.diffRenderer.RenderDiffs(stdout, allDiffs)
@@ -208,7 +208,16 @@ func (p *DefaultDiffProcessor) PerformDiff(ctx context.Context, stdout io.Writer
 		}
 	}
 
-	hasDiffs := len(allDiffs) > 0
+	// Count only non-equal diffs as "having diffs".
+	// The diffs map may contain DiffTypeEqual entries (e.g., XR stored for removal detection).
+	hasDiffs := false
+
+	for _, diff := range allDiffs {
+		if diff.DiffType != dt.DiffTypeEqual {
+			hasDiffs = true
+			break
+		}
+	}
 
 	p.config.Logger.Debug("Processing complete",
 		"resourceCount", len(resources),
@@ -312,19 +321,9 @@ func (p *DefaultDiffProcessor) diffSingleResourceInternal(ctx context.Context, r
 	}
 
 	// Fetch observed resources for use in rendering (needed for getComposedResource template function)
-	// For new XRs that don't exist in the cluster yet, this will return an empty list
-	// Skip if we already fetched backing XR's observed resources for a Claim
-	if observedResources == nil {
-		observedResources, err = p.resourceManager.FetchObservedResources(ctx, xrForRendering)
-		if err != nil {
-			// Log the error but continue with empty observed resources
-			// This handles the case where the XR doesn't exist in the cluster yet
-			p.config.Logger.Debug("Could not fetch observed resources (continuing with empty list)",
-				"resource", resourceID,
-				"error", err)
-
-			observedResources = nil
-		}
+	// and for function-sequencer to know which resources already exist in the cluster)
+	if observedResources == nil && existingXRFromCluster != nil {
+		observedResources = p.fetchObservedResourcesFromClusterXR(ctx, existingXRFromCluster, resourceID)
 	}
 
 	// Perform iterative rendering and requirements reconciliation
@@ -452,6 +451,32 @@ func (p *DefaultDiffProcessor) diffSingleResourceInternal(ctx context.Context, r
 		"hasErrors", err != nil)
 
 	return diffs, renderedResources, err
+}
+
+// fetchObservedResourcesFromClusterXR fetches observed resources using the cluster XR.
+// We must use the cluster XR (not the input XR) because the XRM client uses spec.resourceRefs
+// to find children. The input XR doesn't have resourceRefs, but the cluster XR does.
+// This ensures that function-sequencer and other functions that check observed resources work correctly.
+func (p *DefaultDiffProcessor) fetchObservedResourcesFromClusterXR(ctx context.Context, existingXRFromCluster *un.Unstructured, resourceID string) []cpd.Unstructured {
+	clusterXR := cmp.New()
+	if err := runtime.DefaultUnstructuredConverter.FromUnstructured(existingXRFromCluster.Object, clusterXR); err != nil {
+		p.config.Logger.Debug("Could not convert cluster XR for observed resources fetch",
+			"resource", resourceID,
+			"error", err)
+
+		return nil
+	}
+
+	observedResources, err := p.resourceManager.FetchObservedResources(ctx, clusterXR)
+	if err != nil {
+		p.config.Logger.Debug("Could not fetch observed resources (continuing with empty list)",
+			"resource", resourceID,
+			"error", err)
+
+		return nil
+	}
+
+	return observedResources
 }
 
 // backingXRInfo holds information about a Claim's backing XR.

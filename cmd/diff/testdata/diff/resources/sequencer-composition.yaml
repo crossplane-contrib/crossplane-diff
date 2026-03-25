@@ -1,0 +1,53 @@
+apiVersion: apiextensions.crossplane.io/v1
+kind: Composition
+metadata:
+  name: sequencer-composition
+spec:
+  compositeTypeRef:
+    apiVersion: ns.diff.example.org/v1alpha1
+    kind: XNopResource
+  mode: Pipeline
+  pipeline:
+    - step: generate-all-resources
+      functionRef:
+        name: function-go-templating
+      input:
+        apiVersion: template.fn.crossplane.io/v1beta1
+        kind: GoTemplate
+        source: Inline
+        inline:
+          template: |
+            apiVersion: ns.nop.example.org/v1alpha1
+            kind: XDownstreamResource
+            metadata:
+              name: 0-stage0-resource
+              namespace: {{ .observed.composite.resource.metadata.namespace }}
+              annotations:
+                gotemplating.fn.crossplane.io/composition-resource-name: stage0-resource
+            spec:
+              forProvider:
+                configData: {{ .observed.composite.resource.spec.coolField }}
+            ---
+            apiVersion: ns.nop.example.org/v1alpha1
+            kind: XDownstreamResource
+            metadata:
+              name: 1-stage1-resource
+              namespace: {{ .observed.composite.resource.metadata.namespace }}
+              annotations:
+                gotemplating.fn.crossplane.io/composition-resource-name: stage1-resource
+            spec:
+              forProvider:
+                configData: {{ .observed.composite.resource.spec.coolField }}
+    - step: sequence-resources
+      functionRef:
+        name: function-sequencer
+      input:
+        apiVersion: sequencer.fn.crossplane.io/v1beta1
+        kind: Input
+        rules:
+          - sequence:
+              - ^0-  # Stage 0 resources (rendered first)
+              - ^1-  # Stage 1 resources (hidden until stage 0 is ready)
+    - step: automatically-detect-ready-composed-resources
+      functionRef:
+        name: function-auto-ready
