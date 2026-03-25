@@ -1,0 +1,50 @@
+# Updated parent composition - changes the direct downstream resource tier from parent-tier to premium-tier.
+# The nested XNopResource and its downstream should NOT be affected because:
+# 1. The nested XR uses its own composition (xnopresources.diff.example.org)
+# 2. That composition is NOT being diffed here
+apiVersion: apiextensions.crossplane.io/v1
+kind: Composition
+metadata:
+  name: xparentresources.parent.diff.example.org
+spec:
+  compositeTypeRef:
+    apiVersion: parent.diff.example.org/v1alpha1
+    kind: XParentResource
+  mode: Pipeline
+  pipeline:
+    - step: generate-resources
+      functionRef:
+        name: function-go-templating
+      input:
+        apiVersion: template.fn.crossplane.io/v1beta1
+        kind: GoTemplate
+        source: Inline
+        inline:
+          template: |
+            ---
+            # Direct downstream resource owned by the parent XR - CHANGED tier
+            apiVersion: ns.nop.example.org/v1alpha1
+            kind: XDownstreamResource
+            metadata:
+              name: {{ .observed.composite.resource.metadata.name }}-direct
+              namespace: {{ .observed.composite.resource.metadata.namespace }}
+              annotations:
+                gotemplating.fn.crossplane.io/composition-resource-name: direct-resource
+            spec:
+              forProvider:
+                configData: parent-{{ .observed.composite.resource.spec.parentField }}
+                resourceTier: premium-tier
+            ---
+            # Nested XR of type XNopResource - unchanged
+            apiVersion: ns.diff.example.org/v1alpha1
+            kind: XNopResource
+            metadata:
+              name: {{ .observed.composite.resource.metadata.name }}-nested
+              namespace: {{ .observed.composite.resource.metadata.namespace }}
+              annotations:
+                gotemplating.fn.crossplane.io/composition-resource-name: nested-xr
+            spec:
+              coolField: {{ .observed.composite.resource.spec.childConfig }}
+    - step: automatically-detect-ready-composed-resources
+      functionRef:
+        name: function-auto-ready

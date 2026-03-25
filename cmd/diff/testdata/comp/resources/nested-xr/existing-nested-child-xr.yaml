@@ -1,0 +1,13 @@
+# Nested XNopResource created by the parent composition.
+# This XR uses its OWN composition (xnopresources.diff.example.org) to create downstream resources.
+apiVersion: ns.diff.example.org/v1alpha1
+kind: XNopResource
+metadata:
+  name: test-parent-nested
+  namespace: default
+  annotations:
+    crossplane.io/composition-resource-name: nested-xr
+  labels:
+    crossplane.io/composite: test-parent
+spec:
+  coolField: child-config-value

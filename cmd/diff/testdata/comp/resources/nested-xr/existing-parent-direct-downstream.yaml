@@ -1,0 +1,14 @@
+# Direct downstream resource created by the parent composition
+apiVersion: ns.nop.example.org/v1alpha1
+kind: XDownstreamResource
+metadata:
+  name: test-parent-direct
+  namespace: default
+  annotations:
+    crossplane.io/composition-resource-name: direct-resource
+  labels:
+    crossplane.io/composite: test-parent
+spec:
+  forProvider:
+    configData: parent-parent-value
+    resourceTier: parent-tier
