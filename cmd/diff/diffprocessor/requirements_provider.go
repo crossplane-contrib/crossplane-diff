@@ -76,7 +76,7 @@ func (p *RequirementsProvider) cacheResources(resources []*un.Unstructured) {
 	defer p.cacheMutex.Unlock()
 
 	for _, res := range resources {
-		key := dt.MakeDiffKey(res.GetAPIVersion(), res.GetKind(), res.GetNamespace(), res.GetName())
+		key := dt.MakeDiffKeyFromResource(res)
 		p.resourceCache[key] = res
 	}
 }

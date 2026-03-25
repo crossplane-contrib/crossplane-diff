@@ -19,6 +19,15 @@ import (
 	"github.com/crossplane/crossplane/v2/cmd/crank/common/resource/xrm"
 )
 
+//nolint:gochecknoinits // Registering types with the global client-go scheme in init avoids race conditions.
+func init() {
+	// Register Crossplane package types with the global scheme at init time.
+	// This follows the standard Kubernetes pattern of building the scheme during
+	// initialization and treating it as read-only thereafter, which is safe for
+	// concurrent access.
+	_ = pkg.AddToScheme(scheme.Scheme)
+}
+
 // Initializable is an interface for any client that can be initialized.
 type Initializable interface {
 	Initialize(ctx context.Context) error
@@ -67,8 +76,6 @@ func makeXrmClient(config *rest.Config) (*xrm.Client, error) {
 	if err != nil {
 		return nil, errors.Wrap(err, "cannot create controller runtime client")
 	}
-
-	_ = pkg.AddToScheme(c.Scheme())
 
 	xrmClient, err := xrm.NewClient(c,
 		xrm.WithConnectionSecrets(false),

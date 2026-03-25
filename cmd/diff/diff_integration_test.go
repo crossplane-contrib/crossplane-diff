@@ -75,7 +75,7 @@ func (s XrdAPIVersion) String() string {
 }
 
 // createTestScheme creates a runtime scheme with all required types registered.
-// This can be shared across tests since it's just a type registry.
+// Each parallel test needs its own scheme because envtest modifies it during CRD installation.
 func createTestScheme() *runtime.Scheme {
 	scheme := runtime.NewScheme()
 
