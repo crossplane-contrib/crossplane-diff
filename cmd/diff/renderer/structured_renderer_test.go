@@ -107,7 +107,7 @@ func sharedDiffFixtures() []testDiffFixture {
 				var addedChange *ChangeDetail
 
 				for i := range output.Changes {
-					if output.Changes[i].Type == string(dt.DiffTypeAdded) {
+					if output.Changes[i].Type == dt.DiffTypeWordAdded {
 						addedChange = &output.Changes[i]
 						break
 					}

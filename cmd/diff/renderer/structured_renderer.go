@@ -255,7 +255,7 @@ func (r *StructuredDiffRenderer) buildStructuredOutput(diffs map[string]*dt.Reso
 
 		// Build change detail
 		change := ChangeDetail{
-			Type:       string(diff.DiffType),
+			Type:       diff.DiffType.ToWord(),
 			APIVersion: diff.Gvk.GroupVersion().String(),
 			Kind:       diff.Gvk.Kind,
 			Name:       diff.ResourceName,
