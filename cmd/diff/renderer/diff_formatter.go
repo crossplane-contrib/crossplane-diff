@@ -349,19 +349,28 @@ func GenerateDiffWithOptions(_ context.Context, current, desired *un.Unstructure
 
 	logger.Debug("Diff calculation complete", "resource", resourceKey, "diff_chunks", len(lineDiffs))
 
-	// Extract resource kind and name
+	// Extract resource kind, namespace, and name
 	var (
-		name string
-		gvk  schema.GroupVersionKind
+		name      string
+		namespace string
+		gvk       schema.GroupVersionKind
 	)
-	// For removed resources, use current's kind and name
+	// For removed resources, use current's kind, namespace, and name
 
 	if diffType == t.DiffTypeRemoved { // current != nil
 		name = current.GetName()
+		namespace = current.GetNamespace()
 		gvk = current.GroupVersionKind()
 	} else { // desired != nil
 		// For added or modified resources, use desired's kind
 		gvk = desired.GroupVersionKind()
+
+		// For namespace, prefer current (existing resource) over desired
+		if current != nil && current.GetNamespace() != "" {
+			namespace = current.GetNamespace()
+		} else {
+			namespace = desired.GetNamespace()
+		}
 
 		// For name, prefer the current resource name if it exists (for generateName cases)
 		if current != nil && current.GetName() != "" {
@@ -380,6 +389,7 @@ func GenerateDiffWithOptions(_ context.Context, current, desired *un.Unstructure
 
 	return &t.ResourceDiff{
 		Gvk:          gvk,
+		Namespace:    namespace,
 		ResourceName: name,
 		DiffType:     diffType,
 		LineDiffs:    lineDiffs,
@@ -391,6 +401,7 @@ func GenerateDiffWithOptions(_ context.Context, current, desired *un.Unstructure
 func equalDiff(current *un.Unstructured, desired *un.Unstructured) *t.ResourceDiff {
 	return &t.ResourceDiff{
 		Gvk:          current.GroupVersionKind(),
+		Namespace:    current.GetNamespace(),
 		ResourceName: current.GetName(),
 		DiffType:     t.DiffTypeEqual,
 		LineDiffs:    []diffmatchpatch.Diff{},

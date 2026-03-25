@@ -1,5 +1,5 @@
 // Package types provides types used in the renderer in order to facilitate code reuse in test
-package types //nolint:revive // types is an appropriate name for a types package
+package types
 
 import (
 	"fmt"
@@ -12,6 +12,7 @@ import (
 // ResourceDiff represents the diff for a specific resource.
 type ResourceDiff struct {
 	Gvk          schema.GroupVersionKind
+	Namespace    string
 	ResourceName string
 	DiffType     DiffType
 	LineDiffs    []diffmatchpatch.Diff
@@ -47,10 +48,11 @@ const (
 
 // GetDiffKey returns a key that can be used to identify this object for use in a map.
 func (d *ResourceDiff) GetDiffKey() string {
-	return MakeDiffKey(d.Gvk.Group+"/"+d.Gvk.Version, d.Gvk.Kind, d.ResourceName)
+	return MakeDiffKey(d.Gvk.Group+"/"+d.Gvk.Version, d.Gvk.Kind, d.Namespace, d.ResourceName)
 }
 
 // MakeDiffKey creates a unique key for a resource diff.
-func MakeDiffKey(apiVersion, kind, name string) string {
-	return fmt.Sprintf("%s/%s/%s", apiVersion, kind, name)
+// Format: apiVersion/kind/namespace/name (namespace may be empty for cluster-scoped resources).
+func MakeDiffKey(apiVersion, kind, namespace, name string) string {
+	return fmt.Sprintf("%s/%s/%s/%s", apiVersion, kind, namespace, name)
 }

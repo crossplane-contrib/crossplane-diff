@@ -76,17 +76,17 @@ func (p *RequirementsProvider) cacheResources(resources []*un.Unstructured) {
 	defer p.cacheMutex.Unlock()
 
 	for _, res := range resources {
-		key := dt.MakeDiffKey(res.GetAPIVersion(), res.GetKind(), res.GetName())
+		key := dt.MakeDiffKey(res.GetAPIVersion(), res.GetKind(), res.GetNamespace(), res.GetName())
 		p.resourceCache[key] = res
 	}
 }
 
 // getCachedResource retrieves a resource from cache if available.
-func (p *RequirementsProvider) getCachedResource(apiVersion, kind, name string) *un.Unstructured {
+func (p *RequirementsProvider) getCachedResource(apiVersion, kind, namespace, name string) *un.Unstructured {
 	p.cacheMutex.RLock()
 	defer p.cacheMutex.RUnlock()
 
-	key := dt.MakeDiffKey(apiVersion, kind, name)
+	key := dt.MakeDiffKey(apiVersion, kind, namespace, name)
 
 	return p.resourceCache[key]
 }
@@ -205,14 +205,14 @@ func (p *RequirementsProvider) processSelector(ctx context.Context, stepName, re
 
 	switch {
 	case selector.GetMatchName() != "":
-		resources, err := p.processNameSelector(ctx, selector, gvk, xrNamespace, stepName)
+		resources, fromCache, err := p.processNameSelector(ctx, selector, gvk, xrNamespace, stepName)
 		if err != nil {
 			return nil, nil, err
 		}
 
-		// Check if any resources were fetched (not from cache)
+		// Return resources as newly fetched only if not from cache
 		var newlyFetched []*un.Unstructured
-		if !p.isResourceCached(selector.GetApiVersion(), selector.GetKind(), selector.GetMatchName()) {
+		if !fromCache {
 			newlyFetched = resources
 		}
 
@@ -234,11 +234,6 @@ func (p *RequirementsProvider) processSelector(ctx context.Context, stepName, re
 
 		return nil, nil, nil
 	}
-}
-
-// isResourceCached checks if a resource is in the cache.
-func (p *RequirementsProvider) isResourceCached(apiVersion, kind, name string) bool {
-	return p.getCachedResource(apiVersion, kind, name) != nil
 }
 
 // parseGroupFromAPIVersion extracts the group from an apiVersion string.
@@ -272,23 +267,27 @@ func (p *RequirementsProvider) resolveNamespace(ctx context.Context, gvk schema.
 }
 
 // processNameSelector handles resource selection by name.
-func (p *RequirementsProvider) processNameSelector(ctx context.Context, selector *v1.ResourceSelector, gvk schema.GroupVersionKind, xrNamespace, stepName string) ([]*un.Unstructured, error) {
+// Returns (resources, fromCache, error) where fromCache indicates if the resource was found in cache.
+func (p *RequirementsProvider) processNameSelector(ctx context.Context, selector *v1.ResourceSelector, gvk schema.GroupVersionKind, xrNamespace, stepName string) ([]*un.Unstructured, bool, error) {
 	name := selector.GetMatchName()
 
-	// Try cache first
-	if cached := p.getCachedResource(selector.GetApiVersion(), selector.GetKind(), name); cached != nil {
+	// Resolve namespace FIRST so we can check cache correctly.
+	// This prevents returning wrong resources when same-named resources exist
+	// in different namespaces (e.g., ConfigMap/my-config in both ns-a and ns-b).
+	ns, err := p.resolveNamespace(ctx, gvk, selector, xrNamespace, stepName)
+	if err != nil {
+		return nil, false, err
+	}
+
+	// Now check cache with correct namespace
+	if cached := p.getCachedResource(selector.GetApiVersion(), selector.GetKind(), ns, name); cached != nil {
 		p.logger.Debug("Found resource in cache",
 			"apiVersion", selector.GetApiVersion(),
 			"kind", selector.GetKind(),
+			"namespace", ns,
 			"name", name)
 
-		return []*un.Unstructured{cached}, nil
-	}
-
-	// Resolve namespace
-	ns, err := p.resolveNamespace(ctx, gvk, selector, xrNamespace, stepName)
-	if err != nil {
-		return nil, err
+		return []*un.Unstructured{cached}, true, nil
 	}
 
 	p.logger.Debug("Fetching reference by name",
@@ -298,10 +297,10 @@ func (p *RequirementsProvider) processNameSelector(ctx context.Context, selector
 
 	resource, err := p.client.GetResource(ctx, gvk, ns, name)
 	if err != nil {
-		return nil, errors.Wrapf(err, "cannot get referenced resource %s/%s", ns, name)
+		return nil, false, errors.Wrapf(err, "cannot get referenced resource %s/%s", ns, name)
 	}
 
-	return []*un.Unstructured{resource}, nil
+	return []*un.Unstructured{resource}, false, nil
 }
 
 // processLabelSelector handles resource selection by labels.

@@ -395,7 +395,7 @@ func (p *DefaultDiffProcessor) diffSingleResourceInternal(ctx context.Context, r
 	// which is only available on the existing cluster XR, not the modified XR from the input file.
 	var existingXR *cmp.Unstructured
 
-	xrDiffKey := dt.MakeDiffKey(xr.GetAPIVersion(), xr.GetKind(), xr.GetName())
+	xrDiffKey := dt.MakeDiffKey(xr.GetAPIVersion(), xr.GetKind(), xr.GetNamespace(), xr.GetName())
 	if xrDiff, ok := diffs[xrDiffKey]; ok && xrDiff.Current != nil {
 		// Convert from unstructured.Unstructured to composite.Unstructured
 		existingXR = cmp.New()

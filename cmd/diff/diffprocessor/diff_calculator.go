@@ -353,7 +353,7 @@ func (c *DefaultDiffCalculator) CalculateRemovedResourceDiffs(ctx context.Contex
 			resourceID := fmt.Sprintf("%s/%s", kind, name)
 
 			// Use the same key format as in CalculateDiffs to check if this resource was rendered
-			key := dt.MakeDiffKey(apiVersion, kind, name)
+			key := dt.MakeDiffKey(apiVersion, kind, node.Unstructured.GetNamespace(), name)
 
 			if !renderedResources[key] {
 				// This resource exists but wasn't rendered - it will be removed

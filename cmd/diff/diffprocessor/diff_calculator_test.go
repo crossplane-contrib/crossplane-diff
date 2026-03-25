@@ -570,8 +570,8 @@ func TestDefaultDiffCalculator_CalculateDiffs(t *testing.T) {
 				ComposedResources: []cpd.Unstructured{*composedResource1},
 			},
 			expectedDiffs: map[string]dt.DiffType{
-				"example.org/v1/XR/test-xr":     dt.DiffTypeModified,
-				"example.org/v1/Composed/cpd-1": dt.DiffTypeModified,
+				"example.org/v1/XR//test-xr":     dt.DiffTypeModified,
+				"example.org/v1/Composed//cpd-1": dt.DiffTypeModified,
 			},
 			wantErr: false,
 		},
@@ -612,7 +612,7 @@ func TestDefaultDiffCalculator_CalculateDiffs(t *testing.T) {
 				ComposedResources: []cpd.Unstructured{*composedResource1},
 			},
 			expectedDiffs: map[string]dt.DiffType{
-				"example.org/v1/Composed/cpd-1": dt.DiffTypeModified,
+				"example.org/v1/Composed//cpd-1": dt.DiffTypeModified,
 			},
 			wantErr: false,
 		},
@@ -688,9 +688,9 @@ func TestDefaultDiffCalculator_CalculateDiffs(t *testing.T) {
 				ComposedResources: []cpd.Unstructured{*composedResource1},
 			},
 			expectedDiffs: map[string]dt.DiffType{
-				"example.org/v1/XR/test-xr":     dt.DiffTypeModified,
-				"example.org/v1/Composed/cpd-1": dt.DiffTypeModified,
-				"example.org/v1/Composed/cpd-2": dt.DiffTypeRemoved,
+				"example.org/v1/XR//test-xr":     dt.DiffTypeModified,
+				"example.org/v1/Composed//cpd-1": dt.DiffTypeModified,
+				"example.org/v1/Composed//cpd-2": dt.DiffTypeRemoved,
 			},
 			wantErr: false,
 		},
@@ -750,9 +750,9 @@ func TestDefaultDiffCalculator_CalculateDiffs(t *testing.T) {
 					BuildUComposed()},
 			},
 			expectedDiffs: map[string]dt.DiffType{
-				"example.org/v1/XR/test-xr":                  dt.DiffTypeModified,
-				"example.org/v1/Composed/cpd-1":              dt.DiffTypeModified,
-				"example.org/v1/Composed/resource-to-remove": dt.DiffTypeRemoved,
+				"example.org/v1/XR//test-xr":                  dt.DiffTypeModified,
+				"example.org/v1/Composed//cpd-1":              dt.DiffTypeModified,
+				"example.org/v1/Composed//resource-to-remove": dt.DiffTypeRemoved,
 			},
 			wantErr: false,
 		},
@@ -876,8 +876,8 @@ func TestDefaultDiffCalculator_CalculateRemovedResourceDiffs(t *testing.T) {
 			},
 			// Only include the "resource-to-keep" in rendered resources
 			renderedResources: map[string]bool{
-				"example.org/v1/Composed/resource-to-keep": true,
-				// "example.org/v1/Composed/resource-to-remove" intentionally not included
+				"example.org/v1/Composed//resource-to-keep": true,
+				// "example.org/v1/Composed//resource-to-remove" intentionally not included
 			},
 			expectedRemoved: []string{"resource-to-remove"},
 			wantErr:         false,
@@ -905,8 +905,8 @@ func TestDefaultDiffCalculator_CalculateRemovedResourceDiffs(t *testing.T) {
 			},
 			// Include all resources in rendered resources (nothing to remove)
 			renderedResources: map[string]bool{
-				"example.org/v1/Composed/resource-to-keep":   true,
-				"example.org/v1/Composed/resource-to-remove": true,
+				"example.org/v1/Composed//resource-to-keep":   true,
+				"example.org/v1/Composed//resource-to-remove": true,
 			},
 			expectedRemoved: []string{},
 			wantErr:         false,
