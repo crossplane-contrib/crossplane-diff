@@ -260,6 +260,8 @@ go-build-e2e:
   ARG CGO_ENABLED=0
   FROM +go-modules
   CACHE --id go-build --sharing shared /root/.cache/go-build
+  # E2E tests import cmd/diff/testutils for structured diff assertions
+  COPY --dir cmd/ .
   COPY --dir test/ .
   RUN go test -c -o e2e ./test/e2e
   SAVE ARTIFACT e2e

@@ -29,6 +29,7 @@ import (
 	"sigs.k8s.io/e2e-framework/pkg/envconf"
 	"sigs.k8s.io/e2e-framework/pkg/features"
 
+	tu "github.com/crossplane-contrib/crossplane-diff/cmd/diff/testutils"
 	xpv1 "github.com/crossplane/crossplane-runtime/v2/apis/common/v1"
 
 	apiextensionsv1 "github.com/crossplane/crossplane/v2/apis/apiextensions/v1"
@@ -87,7 +88,6 @@ func TestDiffExistingClaim(t *testing.T) {
 	imageTag := strings.Split(environment.GetCrossplaneImage(), ":")[1]
 	manifests := filepath.Join("test/e2e/manifests/beta/diff", imageTag, "v1-claim")
 	setupPath := filepath.Join(manifests, "setup")
-	expectPath := filepath.Join(manifests, "expect")
 
 	environment.Test(t,
 		features.New("DiffExistingClaim").
@@ -112,12 +112,22 @@ func TestDiffExistingClaim(t *testing.T) {
 			Assess("CanDiffExistingClaim", func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
 				t.Helper()
 
-				output, log, err := RunXRDiff(t, c, "./crossplane-diff", exitCodeDiffDetected, filepath.Join(manifests, "modified-claim.yaml"))
+				_, jsonOutput, log, err := RunXRDiffJSON(t, c, "./crossplane-diff", exitCodeDiffDetected, filepath.Join(manifests, "modified-claim.yaml"))
 				if err != nil {
 					t.Fatalf("Error running diff command: %v\nLog output:\n%s", err, log)
 				}
 
-				assertDiffMatchesFile(t, output, filepath.Join(expectPath, "existing-claim.ansi"), log)
+				// Verify the diff shows modified resources:
+				// 1. The Claim (NopClaim)
+				// 2. The composed managed resource (ClusterNopResource)
+				// Note: The backing XR is not shown in claim diffs, only the claim itself
+				AssertStructuredDiff(t, jsonOutput, tu.ExpectDiff().
+					WithSummary(0, 2, 0).
+					WithModifiedResource("ClusterNopResource", "", "").
+					WithAnyName().
+					And().
+					WithModifiedResource("NopClaim", "test-claim", "default").
+					And())
 
 				return ctx
 			}).
@@ -234,13 +244,26 @@ func TestDiffExistingClaimWithNestedXRs(t *testing.T) {
 			Assess("CanDiffExistingClaimWithNestedXRs", func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
 				t.Helper()
 
-				output, log, err := RunXRDiff(t, c, "./crossplane-diff", exitCodeDiffDetected, filepath.Join(manifests, "modified-claim.yaml"))
+				_, jsonOutput, log, err := RunXRDiffJSON(t, c, "./crossplane-diff", exitCodeDiffDetected, filepath.Join(manifests, "modified-claim.yaml"))
 				if err != nil {
 					t.Fatalf("Error running diff command: %v\nLog output:\n%s", err, log)
 				}
 
-				expectPath := filepath.Join(manifests, "expect")
-				assertDiffMatchesFile(t, output, filepath.Join(expectPath, "existing-claim.ansi"), log)
+				// Verify the diff shows modified resources:
+				// 1. The Claim (ParentNopClaim)
+				// 2. The nested child XR (XChildNopClaim)
+				// 3. The composed managed resource from child (ClusterNopResource)
+				// Note: The backing XRs are not shown in claim diffs, only claims and nested XRs
+				AssertStructuredDiff(t, jsonOutput, tu.ExpectDiff().
+					WithSummary(0, 3, 0).
+					WithModifiedResource("ClusterNopResource", "", "").
+					WithAnyName().
+					And().
+					WithModifiedResource("ParentNopClaim", "existing-parent-claim", "default").
+					And().
+					WithModifiedResource("XChildNopClaim", "", "").
+					WithAnyName().
+					And())
 
 				return ctx
 			}).
