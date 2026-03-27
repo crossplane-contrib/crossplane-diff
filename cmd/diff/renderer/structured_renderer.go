@@ -45,8 +45,8 @@ type OutputError = dt.OutputError
 
 // StructuredDiffOutput represents the structured output format for diffs.
 type StructuredDiffOutput struct {
-	Summary Summary          `json:"summary" yaml:"summary"`
-	Changes []ChangeDetail   `json:"changes" yaml:"changes"`
+	Summary Summary          `json:"summary"          yaml:"summary"`
+	Changes []ChangeDetail   `json:"changes"          yaml:"changes"`
 	Errors  []dt.OutputError `json:"errors,omitempty" yaml:"errors,omitempty"`
 }
 
@@ -123,7 +123,7 @@ type XRImpact struct {
 
 // compDiffJSONOutput is the JSON schema for composition diffs.
 type compDiffJSONOutput struct {
-	Compositions []compositionDiffJSON `json:"compositions" yaml:"compositions"`
+	Compositions []compositionDiffJSON `json:"compositions"     yaml:"compositions"`
 	Errors       []dt.OutputError      `json:"errors,omitempty" yaml:"errors,omitempty"`
 }
 

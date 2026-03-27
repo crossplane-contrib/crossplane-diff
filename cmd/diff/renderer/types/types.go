@@ -66,6 +66,6 @@ func MakeDiffKeyFromResource(res *un.Unstructured) string {
 // OutputError represents an error in structured output.
 // Used consistently by both XR diff and comp diff for machine-readable error handling.
 type OutputError struct {
-	ResourceID string `json:"resourceId,omitempty" yaml:"resourceId,omitempty"`
-	Message    string `json:"message" yaml:"message"`
+	ResourceID string `json:"resourceID,omitempty" yaml:"resourceId,omitempty"`
+	Message    string `json:"message"              yaml:"message"`
 }

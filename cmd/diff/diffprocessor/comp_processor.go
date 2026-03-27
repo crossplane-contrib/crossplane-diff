@@ -160,6 +160,7 @@ func (p *DefaultCompDiffProcessor) DiffComposition(ctx context.Context, stdout i
 		compResult, err := p.processSingleComposition(ctx, comp, namespace)
 		if err != nil {
 			p.config.Logger.Debug("Failed to process composition", "composition", compositionID, "error", err)
+
 			compositionErrors++
 
 			// Include failed composition with error instead of skipping
@@ -178,6 +179,7 @@ func (p *DefaultCompDiffProcessor) DiffComposition(ctx context.Context, stdout i
 			if compResult.HasChanges() {
 				hasDiffs = true
 			}
+
 			output.Compositions = append(output.Compositions, *compResult)
 		}
 	}
