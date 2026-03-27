@@ -64,6 +64,9 @@ type ComponentFactories struct {
 	// DiffRenderer creates a DiffRenderer
 	DiffRenderer func(logger logging.Logger, diffOptions renderer.DiffOptions) renderer.DiffRenderer
 
+	// CompDiffRenderer creates a CompDiffRenderer for composition diffs
+	CompDiffRenderer func(logger logging.Logger, diffRenderer renderer.DiffRenderer, colorize bool) renderer.CompDiffRenderer
+
 	// RequirementsProvider creates an ExtraResourceProvider
 	RequirementsProvider func(res k8.ResourceClient, def xp.EnvironmentClient, renderFunc RenderFunc, logger logging.Logger) *RequirementsProvider
 
@@ -228,6 +231,22 @@ func (c *ProcessorConfig) SetDefaultFactories() {
 			c.Factories.DiffRenderer = renderer.NewDiffRenderer
 		default:
 			c.Factories.DiffRenderer = renderer.NewDiffRenderer
+		}
+	}
+
+	if c.Factories.CompDiffRenderer == nil {
+		// Set the appropriate renderer factory based on output format
+		switch c.OutputFormat {
+		case renderer.OutputFormatJSON, renderer.OutputFormatYAML:
+			c.Factories.CompDiffRenderer = func(logger logging.Logger, _ renderer.DiffRenderer, _ bool) renderer.CompDiffRenderer {
+				return renderer.NewStructuredCompDiffRenderer(logger, c.OutputFormat)
+			}
+		case renderer.OutputFormatDiff:
+			fallthrough
+		default:
+			c.Factories.CompDiffRenderer = func(logger logging.Logger, diffRenderer renderer.DiffRenderer, colorize bool) renderer.CompDiffRenderer {
+				return renderer.NewDefaultCompDiffRenderer(logger, diffRenderer, colorize)
+			}
 		}
 	}
 

@@ -26,6 +26,18 @@ const (
 	OutputFormatYAML OutputFormat = "yaml"
 )
 
+// XRStatus represents the processing status of an XR in composition diffs.
+type XRStatus string
+
+const (
+	// XRStatusChanged indicates the XR has downstream resource changes.
+	XRStatusChanged XRStatus = "changed"
+	// XRStatusUnchanged indicates the XR has no downstream resource changes.
+	XRStatusUnchanged XRStatus = "unchanged"
+	// XRStatusError indicates an error occurred while processing the XR.
+	XRStatusError XRStatus = "error"
+)
+
 // StructuredDiffOutput represents the structured output format for diffs.
 type StructuredDiffOutput struct {
 	Summary Summary        `json:"summary" yaml:"summary"`
@@ -47,6 +59,85 @@ type ChangeDetail struct {
 	Name       string         `json:"name"                yaml:"name"`
 	Namespace  string         `json:"namespace,omitempty" yaml:"namespace,omitempty"`
 	Diff       map[string]any `json:"diff"                yaml:"diff"`
+}
+
+// CompDiffOutput is the top-level output for composition diffs (internal representation).
+// This stores rich ResourceDiff data. Conversion to JSON happens in the renderer.
+type CompDiffOutput struct {
+	Compositions []CompositionDiff
+}
+
+// CompositionDiff represents the diff result for a single composition (internal).
+// This stores rich ResourceDiff data. Conversion to JSON happens in the renderer.
+type CompositionDiff struct {
+	Name              string
+	CompositionDiff   *dt.ResourceDiff // the actual composition diff (nil if unchanged)
+	AffectedResources AffectedResourcesSummary
+	ImpactAnalysis    []XRImpact
+}
+
+// HasChanges returns true if this composition diff has any changes.
+func (c *CompositionDiff) HasChanges() bool {
+	if c.CompositionDiff != nil && c.CompositionDiff.DiffType != dt.DiffTypeEqual {
+		return true
+	}
+	for _, impact := range c.ImpactAnalysis {
+		if impact.Status == XRStatusChanged {
+			return true
+		}
+	}
+	return false
+}
+
+// AffectedResourcesSummary contains counts of affected resources by status.
+type AffectedResourcesSummary struct {
+	Total            int `json:"total"                      yaml:"total"`
+	WithChanges      int `json:"withChanges"                yaml:"withChanges"`
+	Unchanged        int `json:"unchanged"                  yaml:"unchanged"`
+	WithErrors       int `json:"withErrors"                 yaml:"withErrors"`
+	FilteredByPolicy int `json:"filteredByPolicy,omitempty" yaml:"filteredByPolicy,omitempty"`
+}
+
+// XRImpact represents the impact analysis for a single XR (internal).
+// This stores rich ResourceDiff data. Conversion to JSON happens in the renderer.
+type XRImpact struct {
+	APIVersion string
+	Kind       string
+	Name       string
+	Namespace  string
+	Status     XRStatus
+	Error      error                        // store actual error, not string
+	Diffs      map[string]*dt.ResourceDiff // downstream diffs (nil if unchanged/error)
+}
+
+// --- JSON Output Types (used by StructuredCompDiffRenderer) ---
+
+// compDiffJSONOutput is the JSON schema for composition diffs.
+type compDiffJSONOutput struct {
+	Compositions []compositionDiffJSON `json:"compositions" yaml:"compositions"`
+}
+
+type compositionDiffJSON struct {
+	Name               string                   `json:"name"                         yaml:"name"`
+	CompositionChanges *ChangeDetail            `json:"compositionChanges,omitempty" yaml:"compositionChanges,omitempty"`
+	AffectedResources  AffectedResourcesSummary `json:"affectedResources"            yaml:"affectedResources"`
+	ImpactAnalysis     []xrImpactJSON           `json:"impactAnalysis"               yaml:"impactAnalysis"`
+}
+
+type xrImpactJSON struct {
+	APIVersion        string             `json:"apiVersion"                  yaml:"apiVersion"`
+	Kind              string             `json:"kind"                        yaml:"kind"`
+	Name              string             `json:"name"                        yaml:"name"`
+	Namespace         string             `json:"namespace,omitempty"         yaml:"namespace,omitempty"`
+	Status            XRStatus           `json:"status"                      yaml:"status"`
+	Error             string             `json:"error,omitempty"             yaml:"error,omitempty"`
+	DownstreamChanges *DownstreamChanges `json:"downstreamChanges,omitempty" yaml:"downstreamChanges,omitempty"`
+}
+
+// DownstreamChanges contains the downstream resource changes for an XR.
+type DownstreamChanges struct {
+	Summary Summary        `json:"summary" yaml:"summary"`
+	Changes []ChangeDetail `json:"changes" yaml:"changes"`
 }
 
 // StructuredDiffRenderer renders diffs in structured formats (JSON/YAML).
@@ -207,4 +298,77 @@ func compareStrings(a, b string) int {
 	}
 
 	return 0
+}
+
+// resourceDiffToChangeDetail converts a ResourceDiff to a ChangeDetail for JSON output.
+func resourceDiffToChangeDetail(diff *dt.ResourceDiff) *ChangeDetail {
+	change := &ChangeDetail{
+		Type:       string(diff.DiffType),
+		APIVersion: diff.Gvk.GroupVersion().String(),
+		Kind:       diff.Gvk.Kind,
+		Name:       diff.ResourceName,
+		Namespace:  diff.Namespace,
+		Diff:       make(map[string]any),
+	}
+
+	// Build the diff detail structure
+	switch diff.DiffType {
+	case dt.DiffTypeAdded:
+		if diff.Desired != nil {
+			change.Diff["spec"] = diff.Desired.Object
+		}
+	case dt.DiffTypeRemoved:
+		if diff.Current != nil {
+			change.Diff["spec"] = diff.Current.Object
+		}
+	case dt.DiffTypeModified:
+		if diff.Current != nil && diff.Desired != nil {
+			change.Diff["old"] = diff.Current.Object
+			change.Diff["new"] = diff.Desired.Object
+		}
+	case dt.DiffTypeEqual:
+		// Equal diffs have no detail to show
+	}
+
+	return change
+}
+
+// buildDownstreamChanges builds DownstreamChanges from a map of ResourceDiffs.
+func buildDownstreamChanges(diffs map[string]*dt.ResourceDiff) *DownstreamChanges {
+	if len(diffs) == 0 {
+		return nil
+	}
+
+	changes := &DownstreamChanges{
+		Summary: Summary{},
+		Changes: make([]ChangeDetail, 0),
+	}
+
+	for _, diff := range diffs {
+		// Skip equal diffs
+		if diff.DiffType == dt.DiffTypeEqual {
+			continue
+		}
+
+		// Update summary counts
+		switch diff.DiffType {
+		case dt.DiffTypeAdded:
+			changes.Summary.Added++
+		case dt.DiffTypeModified:
+			changes.Summary.Modified++
+		case dt.DiffTypeRemoved:
+			changes.Summary.Removed++
+		case dt.DiffTypeEqual:
+			// Equal diffs already filtered above, this case satisfies exhaustive lint check
+		}
+
+		changes.Changes = append(changes.Changes, *resourceDiffToChangeDetail(diff))
+	}
+
+	// Return nil if no non-equal changes
+	if len(changes.Changes) == 0 {
+		return nil
+	}
+
+	return changes
 }
