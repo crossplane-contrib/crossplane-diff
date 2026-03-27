@@ -99,7 +99,7 @@ func (r *DefaultCompDiffRenderer) renderCompositionChanges(stdout io.Writer, com
 		fmt.Sprintf("Composition/%s", comp.Name): comp.CompositionDiff,
 	}
 
-	if err := r.diffRenderer.RenderDiffs(stdout, diffs); err != nil {
+	if err := r.diffRenderer.RenderDiffs(stdout, diffs, nil); err != nil {
 		return errors.Wrap(err, "cannot render composition diff")
 	}
 
@@ -168,7 +168,7 @@ func (r *DefaultCompDiffRenderer) renderImpactAnalysis(stdout io.Writer, comp *C
 
 	// Render all diffs if we found some, or show a message if empty
 	if len(allDiffs) > 0 {
-		if err := r.diffRenderer.RenderDiffs(stdout, allDiffs); err != nil {
+		if err := r.diffRenderer.RenderDiffs(stdout, allDiffs, nil); err != nil {
 			r.logger.Debug("Failed to render diffs", "error", err)
 			return errors.Wrap(err, "failed to render diffs")
 		}
@@ -228,6 +228,11 @@ func (r *DefaultCompDiffRenderer) buildXRStatusList(impacts []XRImpact) string {
 			indicator,
 			impact.Kind, impact.Name, scope,
 			colorReset)
+
+		// Include error details for XRStatusError impacts so users can diagnose issues.
+		if impact.Status == XRStatusError && impact.Error != nil {
+			fmt.Fprintf(&sb, "%s    Error: %s%s\n", color, impact.Error.Error(), colorReset)
+		}
 	}
 
 	return sb.String()
@@ -263,6 +268,8 @@ func (r *StructuredCompDiffRenderer) RenderCompDiff(stdout io.Writer, output *Co
 	case OutputFormatYAML:
 		data, err = sigsyaml.Marshal(jsonOutput)
 	case OutputFormatDiff:
+		fallthrough
+	default:
 		return errors.Errorf("unsupported format for structured comp diff renderer: %s", r.format)
 	}
 
@@ -279,6 +286,7 @@ func (r *StructuredCompDiffRenderer) RenderCompDiff(stdout io.Writer, output *Co
 func (r *StructuredCompDiffRenderer) buildStructuredCompOutput(output *CompDiffOutput) *compDiffJSONOutput {
 	result := &compDiffJSONOutput{
 		Compositions: make([]compositionDiffJSON, 0, len(output.Compositions)),
+		Errors:       output.Errors,
 	}
 
 	for _, comp := range output.Compositions {
@@ -286,6 +294,11 @@ func (r *StructuredCompDiffRenderer) buildStructuredCompOutput(output *CompDiffO
 			Name:              comp.Name,
 			AffectedResources: comp.AffectedResources,
 			ImpactAnalysis:    make([]xrImpactJSON, 0, len(comp.ImpactAnalysis)),
+		}
+
+		// Include per-composition error if present
+		if comp.Error != nil {
+			jsonComp.Error = comp.Error.Error()
 		}
 
 		// Convert composition diff if present and not equal

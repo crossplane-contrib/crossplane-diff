@@ -174,7 +174,8 @@ func TestDefaultDiffProcessor_PerformDiff(t *testing.T) {
 			verifyOutput: func(t *testing.T, output string) {
 				t.Helper()
 				// Verify that the error message was written to stdout
-				if !strings.Contains(output, "ERROR: Failed to process XR1/my-xr-1") {
+				// Format: ERROR: {ResourceID}: {Message}
+				if !strings.Contains(output, "ERROR: XR1/my-xr-1:") {
 					t.Errorf("Expected stdout to contain error message, got: %s", output)
 				}
 				// Also verify it contains the composition not found error
@@ -215,11 +216,12 @@ func TestDefaultDiffProcessor_PerformDiff(t *testing.T) {
 			verifyOutput: func(t *testing.T, output string) {
 				t.Helper()
 				// Verify that error messages for both resources were written to stdout
-				if !strings.Contains(output, "ERROR: Failed to process XR1/my-xr-1") {
+				// Format: ERROR: {ResourceID}: {Message}
+				if !strings.Contains(output, "ERROR: XR1/my-xr-1:") {
 					t.Errorf("Expected stdout to contain error message for my-xr-1, got: %s", output)
 				}
 
-				if !strings.Contains(output, "ERROR: Failed to process XR1/my-xr-2") {
+				if !strings.Contains(output, "ERROR: XR1/my-xr-2:") {
 					t.Errorf("Expected stdout to contain error message for my-xr-2, got: %s", output)
 				}
 				// Both should contain the composition not found error
@@ -480,7 +482,7 @@ func TestDefaultDiffProcessor_PerformDiff(t *testing.T) {
 				// Override the diff renderer factory to produce actual output
 				WithDiffRendererFactory(func(logging.Logger, renderer.DiffOptions) renderer.DiffRenderer {
 					return &tu.MockDiffRenderer{
-						RenderDiffsFn: func(w io.Writer, _ map[string]*dt.ResourceDiff) error {
+						RenderDiffsFn: func(w io.Writer, _ map[string]*dt.ResourceDiff, _ []dt.OutputError) error {
 							// Write a simple summary to the output
 							_, err := fmt.Fprintln(w, "Changes will be applied to 2 resources:")
 							if err != nil {

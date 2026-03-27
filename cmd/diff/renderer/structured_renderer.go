@@ -39,10 +39,15 @@ const (
 	XRStatusError XRStatus = "error"
 )
 
+// OutputError is an alias for dt.OutputError for convenience.
+// Use this type for error handling in structured output.
+type OutputError = dt.OutputError
+
 // StructuredDiffOutput represents the structured output format for diffs.
 type StructuredDiffOutput struct {
-	Summary Summary        `json:"summary" yaml:"summary"`
-	Changes []ChangeDetail `json:"changes" yaml:"changes"`
+	Summary Summary          `json:"summary" yaml:"summary"`
+	Changes []ChangeDetail   `json:"changes" yaml:"changes"`
+	Errors  []dt.OutputError `json:"errors,omitempty" yaml:"errors,omitempty"`
 }
 
 // Summary contains aggregated counts of changes.
@@ -66,12 +71,14 @@ type ChangeDetail struct {
 // This stores rich ResourceDiff data. Conversion to JSON happens in the renderer.
 type CompDiffOutput struct {
 	Compositions []CompositionDiff
+	Errors       []dt.OutputError // top-level errors (e.g., XRs that failed impact analysis)
 }
 
 // CompositionDiff represents the diff result for a single composition (internal).
 // This stores rich ResourceDiff data. Conversion to JSON happens in the renderer.
 type CompositionDiff struct {
 	Name              string
+	Error             error            // per-composition error (nil if successful)
 	CompositionDiff   *dt.ResourceDiff // the actual composition diff (nil if unchanged)
 	AffectedResources AffectedResourcesSummary
 	ImpactAnalysis    []XRImpact
@@ -117,10 +124,12 @@ type XRImpact struct {
 // compDiffJSONOutput is the JSON schema for composition diffs.
 type compDiffJSONOutput struct {
 	Compositions []compositionDiffJSON `json:"compositions" yaml:"compositions"`
+	Errors       []dt.OutputError      `json:"errors,omitempty" yaml:"errors,omitempty"`
 }
 
 type compositionDiffJSON struct {
 	Name               string                   `json:"name"                         yaml:"name"`
+	Error              string                   `json:"error,omitempty"              yaml:"error,omitempty"`
 	CompositionChanges *ChangeDetail            `json:"compositionChanges,omitempty" yaml:"compositionChanges,omitempty"`
 	AffectedResources  AffectedResourcesSummary `json:"affectedResources"            yaml:"affectedResources"`
 	ImpactAnalysis     []xrImpactJSON           `json:"impactAnalysis"               yaml:"impactAnalysis"`
@@ -155,12 +164,14 @@ func NewStructuredDiffRenderer(logger logging.Logger, format OutputFormat) DiffR
 }
 
 // RenderDiffs renders the diffs in the configured structured format.
-func (r *StructuredDiffRenderer) RenderDiffs(stdout io.Writer, diffs map[string]*dt.ResourceDiff) error {
+func (r *StructuredDiffRenderer) RenderDiffs(stdout io.Writer, diffs map[string]*dt.ResourceDiff, errs []dt.OutputError) error {
 	r.logger.Debug("Rendering diffs in structured format",
 		"format", r.format,
-		"diffCount", len(diffs))
+		"diffCount", len(diffs),
+		"errorCount", len(errs))
 
 	output := r.buildStructuredOutput(diffs)
+	output.Errors = errs
 
 	var (
 		data []byte

@@ -194,7 +194,7 @@ func TestStructuredDiffRenderer_RenderDiffs(t *testing.T) {
 
 			var buf bytes.Buffer
 
-			err := renderer.RenderDiffs(&buf, tt.diffs)
+			err := renderer.RenderDiffs(&buf, tt.diffs, nil)
 			if err != nil {
 				t.Fatalf("RenderDiffs() failed: %v", err)
 			}

@@ -138,9 +138,10 @@ func (p *DefaultCompDiffProcessor) DiffComposition(ctx context.Context, stdout i
 
 	output := &renderer.CompDiffOutput{
 		Compositions: make([]renderer.CompositionDiff, 0, len(compositions)),
+		Errors:       []dt.OutputError{},
 	}
 
-	var errs []error
+	var compositionErrors int
 
 	hasDiffs := false
 
@@ -159,35 +160,57 @@ func (p *DefaultCompDiffProcessor) DiffComposition(ctx context.Context, stdout i
 		compResult, err := p.processSingleComposition(ctx, comp, namespace)
 		if err != nil {
 			p.config.Logger.Debug("Failed to process composition", "composition", compositionID, "error", err)
-			errs = append(errs, errors.Wrapf(err, "cannot process composition %s", compositionID))
+			compositionErrors++
 
-			continue
-		}
-
-		if compResult.HasChanges() {
-			hasDiffs = true
-		}
-
-		output.Compositions = append(output.Compositions, *compResult)
-	}
-
-	// Handle any errors that occurred during processing
-	if len(errs) > 0 {
-		if len(errs) == len(compositions) {
-			// All compositions failed - this is a complete failure
-			return hasDiffs, errors.New("failed to process all compositions")
-		}
-		// Some compositions failed - log the errors but don't fail completely
-		p.config.Logger.Info("Some compositions failed to process", "failedCount", len(errs), "totalCount", len(compositions))
-
-		for _, err := range errs {
-			p.config.Logger.Debug("Composition processing error", "error", err)
+			// Include failed composition with error instead of skipping
+			output.Compositions = append(output.Compositions, renderer.CompositionDiff{
+				Name:  compositionID,
+				Error: err,
+				AffectedResources: renderer.AffectedResourcesSummary{
+					Total:       0,
+					WithChanges: 0,
+					Unchanged:   0,
+					WithErrors:  0,
+				},
+				ImpactAnalysis: []renderer.XRImpact{},
+			})
+		} else {
+			if compResult.HasChanges() {
+				hasDiffs = true
+			}
+			output.Compositions = append(output.Compositions, *compResult)
 		}
 	}
 
-	// Delegate rendering to the configured renderer (human-readable or structured)
+	// Collect XR errors with their resource IDs for top-level errors
+	for _, comp := range output.Compositions {
+		for _, impact := range comp.ImpactAnalysis {
+			if impact.Status == renderer.XRStatusError && impact.Error != nil {
+				resourceID := fmt.Sprintf("%s/%s", impact.Kind, impact.Name)
+				output.Errors = append(output.Errors, dt.OutputError{
+					ResourceID: resourceID,
+					Message:    impact.Error.Error(),
+				})
+			}
+		}
+	}
+
+	// Always render output (even if all compositions failed) to ensure valid structured output
 	if err := p.compDiffRenderer.RenderCompDiff(stdout, output); err != nil {
 		return hasDiffs, errors.Wrap(err, "failed to render composition diff")
+	}
+
+	// Check for XR processing errors after rendering (so users see the output first).
+	// Return an error so CI/CD pipelines get a non-zero exit code when impact analysis failed.
+	totalXRErrors := len(output.Errors)
+
+	if totalXRErrors > 0 {
+		return hasDiffs, errors.Errorf("impact analysis failed for %d XR(s)", totalXRErrors)
+	}
+
+	// Return error if all compositions failed
+	if compositionErrors > 0 && compositionErrors == len(output.Compositions) {
+		return hasDiffs, errors.New("failed to process all compositions")
 	}
 
 	return hasDiffs, nil

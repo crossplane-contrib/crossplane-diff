@@ -171,7 +171,7 @@ func TestDefaultDiffRenderer_RenderDiffs(t *testing.T) {
 			var buffer bytes.Buffer
 
 			// Call the method under test
-			err := renderer.RenderDiffs(&buffer, tt.diffs)
+			err := renderer.RenderDiffs(&buffer, tt.diffs, nil)
 			if err != nil {
 				t.Fatalf("RenderDiffs() failed with error: %v", err)
 			}

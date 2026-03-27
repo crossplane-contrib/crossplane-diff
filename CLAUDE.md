@@ -236,6 +236,25 @@ The tool prioritizes **accuracy over convenience**:
 - Do not emit partial results for a given XR
 - When diffing multiple resources, it's acceptable to emit results for successful ones while reporting failures for others
 
+### Machine-Readable Error Handling
+
+When using structured output (`--output json` or `--output yaml`):
+
+1. **Errors go to BOTH places**: Write errors to stderr (for human visibility) AND include them in the structured output (for machine parsing). This ensures:
+   - CI/CD tools can parse errors programmatically from stdout
+   - Humans see errors immediately in stderr
+   - The structured output is always valid JSON/YAML, even when errors occur
+
+2. **Consistent error structure**: Use the same `OutputError` type (defined in `renderer/types/types.go`) across all commands:
+   ```go
+   type OutputError struct {
+       ResourceID string `json:"resourceId,omitempty"` // optional - identifies which resource failed
+       Message    string `json:"message"`              // required - the error message
+   }
+   ```
+
+3. **Always render output**: Even if all operations fail, render valid structured output with errors. Never return before rendering in structured output mode.
+
 ### Testing Requirements
 
 **E2E Test Composition Structure**

@@ -177,6 +177,9 @@ func (p *DefaultDiffProcessor) PerformDiff(ctx context.Context, stdout io.Writer
 	// Collect all diffs across all resources
 	allDiffs := make(map[string]*dt.ResourceDiff)
 
+	// Collect errors for structured output
+	var outputErrors []dt.OutputError
+
 	var errs []error
 
 	for _, res := range resources {
@@ -187,25 +190,23 @@ func (p *DefaultDiffProcessor) PerformDiff(ctx context.Context, stdout io.Writer
 			p.config.Logger.Debug("Failed to process resource", "resource", resourceID, "error", err)
 			errs = append(errs, errors.Wrapf(err, "unable to process resource %s", resourceID))
 
-			// Write error message to stdout so user can see it
-			errMsg := fmt.Sprintf("ERROR: Failed to process %s: %v\n\n", resourceID, err)
-			if _, writeErr := fmt.Fprint(stdout, errMsg); writeErr != nil {
-				p.config.Logger.Debug("Failed to write error message", "error", writeErr)
-			}
+			// Collect error for structured output instead of writing plain text
+			outputErrors = append(outputErrors, dt.OutputError{
+				ResourceID: resourceID,
+				Message:    err.Error(),
+			})
 		} else {
 			// Merge the diffs into our combined map
 			maps.Copy(allDiffs, diffs)
 		}
 	}
 
-	// Only render diffs if we found some that need rendering
-	if len(allDiffs) > 0 {
-		// Render all diffs in a single pass
-		err := p.diffRenderer.RenderDiffs(stdout, allDiffs)
-		if err != nil {
-			p.config.Logger.Debug("Failed to render diffs", "error", err)
-			errs = append(errs, errors.Wrap(err, "failed to render diffs"))
-		}
+	// Always render (even if only errors exist) to ensure valid structured output
+	// The renderer will include errors in the structured output
+	err := p.diffRenderer.RenderDiffs(stdout, allDiffs, outputErrors)
+	if err != nil {
+		p.config.Logger.Debug("Failed to render diffs", "error", err)
+		errs = append(errs, errors.Wrap(err, "failed to render diffs"))
 	}
 
 	// Count only non-equal diffs as "having diffs".
