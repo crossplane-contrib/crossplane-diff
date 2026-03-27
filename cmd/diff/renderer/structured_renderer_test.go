@@ -6,10 +6,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/google/go-cmp/cmp"
-
 	dt "github.com/crossplane-contrib/crossplane-diff/cmd/diff/renderer/types"
 	tu "github.com/crossplane-contrib/crossplane-diff/cmd/diff/testutils"
+	"github.com/google/go-cmp/cmp"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	sigsyaml "sigs.k8s.io/yaml"
 )
@@ -263,6 +262,7 @@ func TestStructuredDiffRenderer_ErrorSerialization(t *testing.T) {
 			}
 
 			var buf bytes.Buffer
+
 			err := renderer.RenderDiffs(&buf, map[string]*dt.ResourceDiff{}, inputErrs)
 			if err != nil {
 				t.Fatalf("RenderDiffs() failed: %v", err)
@@ -270,6 +270,7 @@ func TestStructuredDiffRenderer_ErrorSerialization(t *testing.T) {
 
 			// Parse output
 			var output StructuredDiffOutput
+
 			switch tt.format {
 			case OutputFormatJSON:
 				if err := json.Unmarshal(buf.Bytes(), &output); err != nil {

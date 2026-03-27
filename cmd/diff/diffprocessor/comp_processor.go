@@ -20,6 +20,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"os"
 
 	xp "github.com/crossplane-contrib/crossplane-diff/cmd/diff/client/crossplane"
 	"github.com/crossplane-contrib/crossplane-diff/cmd/diff/renderer"
@@ -87,6 +88,7 @@ func NewCompDiffProcessor(xrProc DiffProcessor, compositionClient xp.Composition
 		Namespace:  "",
 		Colorize:   true,
 		Compact:    false,
+		Stderr:     os.Stderr,
 		Logger:     logging.NewNopLogger(),
 		RenderFunc: render.Render,
 	}
@@ -200,6 +202,12 @@ func (p *DefaultCompDiffProcessor) DiffComposition(ctx context.Context, stdout i
 	// Always render output (even if all compositions failed) to ensure valid structured output
 	if err := p.compDiffRenderer.RenderCompDiff(stdout, output); err != nil {
 		return hasDiffs, errors.Wrap(err, "failed to render composition diff")
+	}
+
+	// Emit detailed errors to stderr for human visibility alongside structured output.
+	// This ensures CI logs show actual error details even when using JSON/YAML output.
+	for _, err := range output.Errors {
+		_, _ = fmt.Fprintln(p.config.Stderr, err.FormatError())
 	}
 
 	// Check for XR processing errors after rendering (so users see the output first).

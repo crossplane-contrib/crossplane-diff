@@ -398,6 +398,7 @@ The structured output includes:
 - **Full resource details**: apiVersion, kind, name, namespace
 - **Diff content**: old/new values for modifications, full spec for additions/removals
 - **Impact analysis** (comp only): which XRs are affected by composition changes and their status
+- **Errors**: A top-level `errors` array with entries of the form `{ "resourceID": "...", "message": "..." }`, plus per-XR `error` fields in `impactAnalysis` for composition diffs
 
 ## Exit Codes
 

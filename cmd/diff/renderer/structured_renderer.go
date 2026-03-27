@@ -357,7 +357,11 @@ func buildDownstreamChanges(diffs map[string]*dt.ResourceDiff) *DownstreamChange
 		Changes: make([]ChangeDetail, 0),
 	}
 
-	for _, diff := range diffs {
+	// Sort by key for deterministic output order
+	sortedKeys := slices.Sorted(maps.Keys(diffs))
+	for _, key := range sortedKeys {
+		diff := diffs[key]
+
 		// Skip equal diffs
 		if diff.DiffType == dt.DiffTypeEqual {
 			continue

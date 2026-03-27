@@ -196,6 +196,60 @@ func TestDefaultDiffRenderer_RenderDiffs(t *testing.T) {
 	}
 }
 
+func TestDefaultDiffRenderer_RenderDiffs_WithErrors(t *testing.T) {
+	tests := map[string]struct {
+		errs     []dt.OutputError
+		expected []string
+	}{
+		"ErrorsWithResourceID": {
+			errs: []dt.OutputError{
+				{ResourceID: "Resource/my-resource", Message: "failed to render"},
+				{ResourceID: "OtherResource/other", Message: "connection refused"},
+			},
+			expected: []string{
+				"ERROR: Resource/my-resource: failed to render",
+				"ERROR: OtherResource/other: connection refused",
+			},
+		},
+		"ErrorsWithEmptyResourceID": {
+			errs: []dt.OutputError{
+				{ResourceID: "", Message: "cluster connection timeout"},
+				{ResourceID: "Resource/has-id", Message: "specific error"},
+			},
+			expected: []string{
+				"ERROR: <global>: cluster connection timeout",
+				"ERROR: Resource/has-id: specific error",
+			},
+		},
+		"NoErrors": {
+			errs:     []dt.OutputError{},
+			expected: []string{},
+		},
+	}
+
+	for name, tt := range tests {
+		t.Run(name, func(t *testing.T) {
+			logger := tu.TestLogger(t, false)
+			renderer := NewDiffRenderer(logger, DefaultDiffOptions())
+
+			var buffer bytes.Buffer
+
+			err := renderer.RenderDiffs(&buffer, map[string]*dt.ResourceDiff{}, tt.errs)
+			if err != nil {
+				t.Fatalf("RenderDiffs() failed with error: %v", err)
+			}
+
+			output := buffer.String()
+
+			for _, expectedMsg := range tt.expected {
+				if !strings.Contains(output, expectedMsg) {
+					t.Errorf("Expected output to contain %q but it didn't\nOutput: %s", expectedMsg, output)
+				}
+			}
+		})
+	}
+}
+
 func TestGetLineDiff(t *testing.T) {
 	tests := map[string]struct {
 		oldText  string

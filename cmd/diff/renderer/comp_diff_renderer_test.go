@@ -85,18 +85,35 @@ func TestStructuredCompDiffRenderer_RenderCompDiff(t *testing.T) {
 					t.Fatalf("Failed to parse raw JSON: %v", err)
 				}
 
-				comps := rawParsed["compositions"].([]any)
-				comp := comps[0].(map[string]any)
-				impacts := comp["impactAnalysis"].([]any)
-				impact := impacts[0].(map[string]any)
+				comps, ok := rawParsed["compositions"].([]any)
+				if !ok {
+					t.Fatalf("Expected 'compositions' to be array, got %T", rawParsed["compositions"])
+				}
+
+				comp, ok := comps[0].(map[string]any)
+				if !ok {
+					t.Fatalf("Expected compositions[0] to be object, got %T", comps[0])
+				}
+
+				impacts, ok := comp["impactAnalysis"].([]any)
+				if !ok {
+					t.Fatalf("Expected 'impactAnalysis' to be array, got %T", comp["impactAnalysis"])
+				}
+
+				impact, ok := impacts[0].(map[string]any)
+				if !ok {
+					t.Fatalf("Expected impacts[0] to be object, got %T", impacts[0])
+				}
 
 				// Verify apiVersion, kind, name are top-level keys (not nested under "objectReference")
 				if _, ok := impact["apiVersion"]; !ok {
 					t.Error("Expected 'apiVersion' to be a top-level field in xrImpactJSON (embedded from ObjectReference)")
 				}
+
 				if _, ok := impact["kind"]; !ok {
 					t.Error("Expected 'kind' to be a top-level field in xrImpactJSON (embedded from ObjectReference)")
 				}
+
 				if _, ok := impact["name"]; !ok {
 					t.Error("Expected 'name' to be a top-level field in xrImpactJSON (embedded from ObjectReference)")
 				}
@@ -202,6 +219,43 @@ func TestDefaultCompDiffRenderer_RenderCompDiff(t *testing.T) {
 
 				if !strings.Contains(result, "Manual update policy") {
 					t.Error("Expected Manual update policy message")
+				}
+			},
+		},
+		"CompositionWithError": {
+			output: &CompDiffOutput{
+				Compositions: []CompositionDiff{{
+					Name:  "error-comp",
+					Error: errors.New("failed to fetch composition from cluster"),
+					AffectedResources: AffectedResourcesSummary{
+						Total:       0,
+						WithChanges: 0,
+						Unchanged:   0,
+						WithErrors:  0,
+					},
+					ImpactAnalysis: []XRImpact{},
+				}},
+			},
+			colorize: false,
+			validate: func(t *testing.T, result string) {
+				t.Helper()
+
+				// Should show the error message
+				if !strings.Contains(result, "Error processing composition error-comp") {
+					t.Error("Expected error processing message")
+				}
+
+				if !strings.Contains(result, "failed to fetch composition from cluster") {
+					t.Error("Expected error details")
+				}
+
+				// Should NOT show affected resources or impact analysis sections
+				if strings.Contains(result, "=== Affected Composite Resources ===") {
+					t.Error("Should not show affected resources header when composition has error")
+				}
+
+				if strings.Contains(result, "=== Impact Analysis ===") {
+					t.Error("Should not show impact analysis header when composition has error")
 				}
 			},
 		},

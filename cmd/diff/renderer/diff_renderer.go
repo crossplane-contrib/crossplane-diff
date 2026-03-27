@@ -159,8 +159,7 @@ func (r *DefaultDiffRenderer) RenderDiffs(stdout io.Writer, diffs map[string]*dt
 
 	// Write errors at the end (for human-readable output)
 	for _, e := range errs {
-		errMsg := fmt.Sprintf("ERROR: %s: %s", e.ResourceID, e.Message)
-		if _, err := fmt.Fprintln(stdout, errMsg); err != nil {
+		if _, err := fmt.Fprintln(stdout, e.FormatError()); err != nil {
 			return errors.Wrap(err, "failed to write error to output")
 		}
 	}

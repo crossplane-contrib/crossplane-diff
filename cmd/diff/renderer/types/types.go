@@ -70,3 +70,15 @@ type OutputError struct {
 	ResourceID string `json:"resourceID,omitempty"`
 	Message    string `json:"message"`
 }
+
+// FormatError returns a human-readable error string.
+// If ResourceID is empty, it uses "<global>" to indicate a system-level error
+// not tied to any specific resource (e.g., cluster connection issues).
+func (e OutputError) FormatError() string {
+	resourceID := e.ResourceID
+	if resourceID == "" {
+		resourceID = "<global>"
+	}
+
+	return fmt.Sprintf("ERROR: %s: %s", resourceID, e.Message)
+}

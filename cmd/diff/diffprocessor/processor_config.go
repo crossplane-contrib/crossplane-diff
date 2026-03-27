@@ -1,6 +1,7 @@
 package diffprocessor
 
 import (
+	"io"
 	"sync"
 
 	xp "github.com/crossplane-contrib/crossplane-diff/cmd/diff/client/crossplane"
@@ -36,6 +37,9 @@ type ProcessorConfig struct {
 
 	// FunctionCredentials holds Secret credentials to pass to Functions during rendering
 	FunctionCredentials []corev1.Secret
+
+	// Stderr is the writer for error output (defaults to os.Stderr)
+	Stderr io.Writer
 
 	// Logger is the logger to use
 	Logger logging.Logger
@@ -130,6 +134,13 @@ func WithIgnorePaths(ignorePaths []string) ProcessorOption {
 func WithFunctionCredentials(creds []corev1.Secret) ProcessorOption {
 	return func(config *ProcessorConfig) {
 		config.FunctionCredentials = creds
+	}
+}
+
+// WithStderr sets the writer for error output.
+func WithStderr(w io.Writer) ProcessorOption {
+	return func(config *ProcessorConfig) {
+		config.Stderr = w
 	}
 }
 

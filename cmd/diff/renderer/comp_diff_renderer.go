@@ -67,6 +67,11 @@ func (r *DefaultCompDiffRenderer) RenderCompDiff(stdout io.Writer, output *CompD
 			return err
 		}
 
+		// Skip remaining sections if composition had a processing error
+		if comp.Error != nil {
+			continue
+		}
+
 		// Render affected XRs list with status indicators
 		if err := r.renderAffectedResourcesList(stdout, &comp); err != nil {
 			return err
@@ -85,6 +90,15 @@ func (r *DefaultCompDiffRenderer) RenderCompDiff(stdout io.Writer, output *CompD
 func (r *DefaultCompDiffRenderer) renderCompositionChanges(stdout io.Writer, comp *CompositionDiff) error {
 	if _, err := fmt.Fprintf(stdout, "=== Composition Changes ===\n\n"); err != nil {
 		return errors.Wrap(err, "cannot write composition changes header")
+	}
+
+	// Check for composition processing error first
+	if comp.Error != nil {
+		if _, err := fmt.Fprintf(stdout, "Error processing composition %s: %s\n\n", comp.Name, comp.Error.Error()); err != nil {
+			return errors.Wrap(err, "cannot write composition error")
+		}
+
+		return nil
 	}
 
 	if comp.CompositionDiff == nil || comp.CompositionDiff.DiffType == dt.DiffTypeEqual {
