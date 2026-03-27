@@ -6,6 +6,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/google/go-cmp/cmp"
+
 	dt "github.com/crossplane-contrib/crossplane-diff/cmd/diff/renderer/types"
 	tu "github.com/crossplane-contrib/crossplane-diff/cmd/diff/testutils"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -236,6 +238,54 @@ func TestStructuredDiffRenderer_RenderDiffs(t *testing.T) {
 			// Run additional output checks if provided
 			if tt.checkOutput != nil {
 				tt.checkOutput(t, buf.String())
+			}
+		})
+	}
+}
+
+func TestStructuredDiffRenderer_ErrorSerialization(t *testing.T) {
+	// Test that errors are properly serialized in structured output
+	tests := map[string]struct {
+		format OutputFormat
+	}{
+		"JSON": {format: OutputFormatJSON},
+		"YAML": {format: OutputFormatYAML},
+	}
+
+	for name, tt := range tests {
+		t.Run(name, func(t *testing.T) {
+			logger := tu.TestLogger(t, false)
+			renderer := NewStructuredDiffRenderer(logger, tt.format)
+
+			inputErrs := []dt.OutputError{
+				{ResourceID: "example.org/v1/XResource/my-xr", Message: "failed to render XR: missing composition"},
+				{Message: "cluster connection timeout"},
+			}
+
+			var buf bytes.Buffer
+			err := renderer.RenderDiffs(&buf, map[string]*dt.ResourceDiff{}, inputErrs)
+			if err != nil {
+				t.Fatalf("RenderDiffs() failed: %v", err)
+			}
+
+			// Parse output
+			var output StructuredDiffOutput
+			switch tt.format {
+			case OutputFormatJSON:
+				if err := json.Unmarshal(buf.Bytes(), &output); err != nil {
+					t.Fatalf("Failed to parse JSON output: %v", err)
+				}
+			case OutputFormatYAML:
+				if err := sigsyaml.Unmarshal(buf.Bytes(), &output); err != nil {
+					t.Fatalf("Failed to parse YAML output: %v", err)
+				}
+			case OutputFormatDiff:
+				t.Fatal("OutputFormatDiff should not be used with StructuredDiffRenderer")
+			}
+
+			// Verify errors round-trip correctly
+			if diff := cmp.Diff(inputErrs, output.Errors); diff != "" {
+				t.Errorf("Errors mismatch (-want +got):\n%s", diff)
 			}
 		})
 	}

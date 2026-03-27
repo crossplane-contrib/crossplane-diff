@@ -65,7 +65,8 @@ func MakeDiffKeyFromResource(res *un.Unstructured) string {
 
 // OutputError represents an error in structured output.
 // Used consistently by both XR diff and comp diff for machine-readable error handling.
+// Note: Only JSON tags are used because sigs.k8s.io/yaml uses JSON tags for YAML serialization.
 type OutputError struct {
-	ResourceID string `json:"resourceID,omitempty" yaml:"resourceId,omitempty"`
-	Message    string `json:"message"              yaml:"message"`
+	ResourceID string `json:"resourceID,omitempty"`
+	Message    string `json:"message"`
 }

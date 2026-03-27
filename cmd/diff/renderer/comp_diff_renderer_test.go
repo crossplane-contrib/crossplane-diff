@@ -77,6 +77,33 @@ func TestStructuredCompDiffRenderer_RenderCompDiff(t *testing.T) {
 				if parsed.Compositions[0].CompositionChanges == nil {
 					t.Error("Expected compositionChanges to be present")
 				}
+
+				// Verify embedded ObjectReference fields are at top level (not nested)
+				// This tests that json:",inline" works correctly
+				var rawParsed map[string]any
+				if err := json.Unmarshal([]byte(result), &rawParsed); err != nil {
+					t.Fatalf("Failed to parse raw JSON: %v", err)
+				}
+
+				comps := rawParsed["compositions"].([]any)
+				comp := comps[0].(map[string]any)
+				impacts := comp["impactAnalysis"].([]any)
+				impact := impacts[0].(map[string]any)
+
+				// Verify apiVersion, kind, name are top-level keys (not nested under "objectReference")
+				if _, ok := impact["apiVersion"]; !ok {
+					t.Error("Expected 'apiVersion' to be a top-level field in xrImpactJSON (embedded from ObjectReference)")
+				}
+				if _, ok := impact["kind"]; !ok {
+					t.Error("Expected 'kind' to be a top-level field in xrImpactJSON (embedded from ObjectReference)")
+				}
+				if _, ok := impact["name"]; !ok {
+					t.Error("Expected 'name' to be a top-level field in xrImpactJSON (embedded from ObjectReference)")
+				}
+				// ObjectReference should NOT be nested
+				if _, ok := impact["objectReference"]; ok {
+					t.Error("ObjectReference should be inlined, not a nested field")
+				}
 			},
 		},
 		"YAMLFormat": {

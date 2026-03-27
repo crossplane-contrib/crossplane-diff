@@ -248,10 +248,11 @@ When using structured output (`--output json` or `--output yaml`):
 2. **Consistent error structure**: Use the same `OutputError` type (defined in `renderer/types/types.go`) across all commands:
    ```go
    type OutputError struct {
-       ResourceID string `json:"resourceId,omitempty"` // optional - identifies which resource failed
+       ResourceID string `json:"resourceID,omitempty"` // optional - identifies which resource failed
        Message    string `json:"message"`              // required - the error message
    }
    ```
+   Note: Only JSON tags are used because `sigs.k8s.io/yaml` uses JSON tags for YAML serialization.
 
 3. **Always render output**: Even if all operations fail, render valid structured output with errors. Never return before rendering in structured output mode.
 

@@ -44,27 +44,28 @@ const (
 type OutputError = dt.OutputError
 
 // StructuredDiffOutput represents the structured output format for diffs.
+// Note: Only JSON tags are used because sigs.k8s.io/yaml uses JSON tags for YAML serialization.
 type StructuredDiffOutput struct {
-	Summary Summary          `json:"summary"          yaml:"summary"`
-	Changes []ChangeDetail   `json:"changes"          yaml:"changes"`
-	Errors  []dt.OutputError `json:"errors,omitempty" yaml:"errors,omitempty"`
+	Summary Summary          `json:"summary"`
+	Changes []ChangeDetail   `json:"changes"`
+	Errors  []dt.OutputError `json:"errors,omitempty"`
 }
 
 // Summary contains aggregated counts of changes.
 type Summary struct {
-	Added    int `json:"added"    yaml:"added"`
-	Modified int `json:"modified" yaml:"modified"`
-	Removed  int `json:"removed"  yaml:"removed"`
+	Added    int `json:"added"`
+	Modified int `json:"modified"`
+	Removed  int `json:"removed"`
 }
 
 // ChangeDetail represents a single resource change.
 type ChangeDetail struct {
-	Type       string         `json:"type"                yaml:"type"`
-	APIVersion string         `json:"apiVersion"          yaml:"apiVersion"`
-	Kind       string         `json:"kind"                yaml:"kind"`
-	Name       string         `json:"name"                yaml:"name"`
-	Namespace  string         `json:"namespace,omitempty" yaml:"namespace,omitempty"`
-	Diff       map[string]any `json:"diff"                yaml:"diff"`
+	Type       string         `json:"type"`
+	APIVersion string         `json:"apiVersion"`
+	Kind       string         `json:"kind"`
+	Name       string         `json:"name"`
+	Namespace  string         `json:"namespace,omitempty"`
+	Diff       map[string]any `json:"diff"`
 }
 
 // CompDiffOutput is the top-level output for composition diffs (internal representation).
@@ -101,11 +102,11 @@ func (c *CompositionDiff) HasChanges() bool {
 
 // AffectedResourcesSummary contains counts of affected resources by status.
 type AffectedResourcesSummary struct {
-	Total            int `json:"total"                      yaml:"total"`
-	WithChanges      int `json:"withChanges"                yaml:"withChanges"`
-	Unchanged        int `json:"unchanged"                  yaml:"unchanged"`
-	WithErrors       int `json:"withErrors"                 yaml:"withErrors"`
-	FilteredByPolicy int `json:"filteredByPolicy,omitempty" yaml:"filteredByPolicy,omitempty"`
+	Total            int `json:"total"`
+	WithChanges      int `json:"withChanges"`
+	Unchanged        int `json:"unchanged"`
+	WithErrors       int `json:"withErrors"`
+	FilteredByPolicy int `json:"filteredByPolicy,omitempty"`
 }
 
 // XRImpact represents the impact analysis for a single XR (internal).
@@ -120,33 +121,34 @@ type XRImpact struct {
 }
 
 // --- JSON Output Types (used by StructuredCompDiffRenderer) ---
+// Note: Only JSON tags are used because sigs.k8s.io/yaml uses JSON tags for YAML serialization.
 
 // compDiffJSONOutput is the JSON schema for composition diffs.
 type compDiffJSONOutput struct {
-	Compositions []compositionDiffJSON `json:"compositions"     yaml:"compositions"`
-	Errors       []dt.OutputError      `json:"errors,omitempty" yaml:"errors,omitempty"`
+	Compositions []compositionDiffJSON `json:"compositions"`
+	Errors       []dt.OutputError      `json:"errors,omitempty"`
 }
 
 type compositionDiffJSON struct {
-	Name               string                   `json:"name"                         yaml:"name"`
-	Error              string                   `json:"error,omitempty"              yaml:"error,omitempty"`
-	CompositionChanges *ChangeDetail            `json:"compositionChanges,omitempty" yaml:"compositionChanges,omitempty"`
-	AffectedResources  AffectedResourcesSummary `json:"affectedResources"            yaml:"affectedResources"`
-	ImpactAnalysis     []xrImpactJSON           `json:"impactAnalysis"               yaml:"impactAnalysis"`
+	Name               string                   `json:"name"`
+	Error              string                   `json:"error,omitempty"`
+	CompositionChanges *ChangeDetail            `json:"compositionChanges,omitempty"`
+	AffectedResources  AffectedResourcesSummary `json:"affectedResources"`
+	ImpactAnalysis     []xrImpactJSON           `json:"impactAnalysis"`
 }
 
 type xrImpactJSON struct {
 	corev1.ObjectReference `json:",inline"`
 
-	Status            XRStatus           `json:"status"                      yaml:"status"`
-	Error             string             `json:"error,omitempty"             yaml:"error,omitempty"`
-	DownstreamChanges *DownstreamChanges `json:"downstreamChanges,omitempty" yaml:"downstreamChanges,omitempty"`
+	Status            XRStatus           `json:"status"`
+	Error             string             `json:"error,omitempty"`
+	DownstreamChanges *DownstreamChanges `json:"downstreamChanges,omitempty"`
 }
 
 // DownstreamChanges contains the downstream resource changes for an XR.
 type DownstreamChanges struct {
-	Summary Summary        `json:"summary" yaml:"summary"`
-	Changes []ChangeDetail `json:"changes" yaml:"changes"`
+	Summary Summary        `json:"summary"`
+	Changes []ChangeDetail `json:"changes"`
 }
 
 // StructuredDiffRenderer renders diffs in structured formats (JSON/YAML).
