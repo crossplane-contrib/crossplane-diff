@@ -8,6 +8,7 @@ import (
 	"slices"
 
 	dt "github.com/crossplane-contrib/crossplane-diff/cmd/diff/renderer/types"
+	corev1 "k8s.io/api/core/v1"
 	sigsyaml "sigs.k8s.io/yaml"
 
 	"github.com/crossplane/crossplane-runtime/v2/pkg/errors"
@@ -81,11 +82,13 @@ func (c *CompositionDiff) HasChanges() bool {
 	if c.CompositionDiff != nil && c.CompositionDiff.DiffType != dt.DiffTypeEqual {
 		return true
 	}
+
 	for _, impact := range c.ImpactAnalysis {
 		if impact.Status == XRStatusChanged {
 			return true
 		}
 	}
+
 	return false
 }
 
@@ -100,14 +103,13 @@ type AffectedResourcesSummary struct {
 
 // XRImpact represents the impact analysis for a single XR (internal).
 // This stores rich ResourceDiff data. Conversion to JSON happens in the renderer.
+// Embeds corev1.ObjectReference for the common resource identity fields.
 type XRImpact struct {
-	APIVersion string
-	Kind       string
-	Name       string
-	Namespace  string
-	Status     XRStatus
-	Error      error                        // store actual error, not string
-	Diffs      map[string]*dt.ResourceDiff // downstream diffs (nil if unchanged/error)
+	corev1.ObjectReference
+
+	Status XRStatus
+	Error  error                       // store actual error, not string
+	Diffs  map[string]*dt.ResourceDiff // downstream diffs (nil if unchanged/error)
 }
 
 // --- JSON Output Types (used by StructuredCompDiffRenderer) ---
@@ -125,10 +127,8 @@ type compositionDiffJSON struct {
 }
 
 type xrImpactJSON struct {
-	APIVersion        string             `json:"apiVersion"                  yaml:"apiVersion"`
-	Kind              string             `json:"kind"                        yaml:"kind"`
-	Name              string             `json:"name"                        yaml:"name"`
-	Namespace         string             `json:"namespace,omitempty"         yaml:"namespace,omitempty"`
+	corev1.ObjectReference `json:",inline"`
+
 	Status            XRStatus           `json:"status"                      yaml:"status"`
 	Error             string             `json:"error,omitempty"             yaml:"error,omitempty"`
 	DownstreamChanges *DownstreamChanges `json:"downstreamChanges,omitempty" yaml:"downstreamChanges,omitempty"`

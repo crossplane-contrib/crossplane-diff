@@ -9,6 +9,7 @@ import (
 
 	dt "github.com/crossplane-contrib/crossplane-diff/cmd/diff/renderer/types"
 	tu "github.com/crossplane-contrib/crossplane-diff/cmd/diff/testutils"
+	corev1 "k8s.io/api/core/v1"
 	un "k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 )
@@ -24,10 +25,12 @@ func TestStructuredCompDiffRenderer_RenderCompDiff(t *testing.T) {
 			output: &CompDiffOutput{Compositions: []CompositionDiff{}},
 			validate: func(t *testing.T, result string) {
 				t.Helper()
+
 				var parsed compDiffJSONOutput
 				if err := json.Unmarshal([]byte(result), &parsed); err != nil {
 					t.Fatalf("Failed to parse JSON: %v", err)
 				}
+
 				if len(parsed.Compositions) != 0 {
 					t.Errorf("Expected 0 compositions, got %d", len(parsed.Compositions))
 				}
@@ -46,23 +49,27 @@ func TestStructuredCompDiffRenderer_RenderCompDiff(t *testing.T) {
 					},
 					AffectedResources: AffectedResourcesSummary{Total: 2, WithChanges: 1, Unchanged: 1},
 					ImpactAnalysis: []XRImpact{
-						{APIVersion: "example.org/v1", Kind: "XResource", Name: "xr-1", Status: XRStatusChanged},
-						{APIVersion: "example.org/v1", Kind: "XResource", Name: "xr-2", Status: XRStatusUnchanged},
+						{ObjectReference: corev1.ObjectReference{APIVersion: "example.org/v1", Kind: "XResource", Name: "xr-1"}, Status: XRStatusChanged},
+						{ObjectReference: corev1.ObjectReference{APIVersion: "example.org/v1", Kind: "XResource", Name: "xr-2"}, Status: XRStatusUnchanged},
 					},
 				}},
 			},
 			validate: func(t *testing.T, result string) {
 				t.Helper()
+
 				var parsed compDiffJSONOutput
 				if err := json.Unmarshal([]byte(result), &parsed); err != nil {
 					t.Fatalf("Failed to parse JSON: %v", err)
 				}
+
 				if len(parsed.Compositions) != 1 {
 					t.Fatalf("Expected 1 composition, got %d", len(parsed.Compositions))
 				}
+
 				if parsed.Compositions[0].Name != "test-comp" {
 					t.Errorf("Expected name 'test-comp', got '%s'", parsed.Compositions[0].Name)
 				}
+
 				if parsed.Compositions[0].AffectedResources.Total != 2 {
 					t.Errorf("Expected total 2, got %d", parsed.Compositions[0].AffectedResources.Total)
 				}
@@ -78,14 +85,16 @@ func TestStructuredCompDiffRenderer_RenderCompDiff(t *testing.T) {
 				Compositions: []CompositionDiff{{
 					Name:              "test-comp",
 					AffectedResources: AffectedResourcesSummary{Total: 1, Unchanged: 1},
-					ImpactAnalysis:    []XRImpact{{APIVersion: "example.org/v1", Kind: "XResource", Name: "xr-1", Status: XRStatusUnchanged}},
+					ImpactAnalysis:    []XRImpact{{ObjectReference: corev1.ObjectReference{APIVersion: "example.org/v1", Kind: "XResource", Name: "xr-1"}, Status: XRStatusUnchanged}},
 				}},
 			},
 			validate: func(t *testing.T, result string) {
 				t.Helper()
+
 				if !strings.Contains(result, "compositions:") {
 					t.Error("Expected YAML to contain 'compositions:'")
 				}
+
 				if !strings.Contains(result, "name: test-comp") {
 					t.Error("Expected YAML to contain 'name: test-comp'")
 				}
@@ -97,11 +106,14 @@ func TestStructuredCompDiffRenderer_RenderCompDiff(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			logger := tu.TestLogger(t, false)
 			renderer := NewStructuredCompDiffRenderer(logger, tt.format)
+
 			var buf bytes.Buffer
+
 			err := renderer.RenderCompDiff(&buf, tt.output)
 			if err != nil {
 				t.Fatalf("RenderCompDiff() failed: %v", err)
 			}
+
 			tt.validate(t, buf.String())
 		})
 	}
@@ -118,6 +130,7 @@ func TestDefaultCompDiffRenderer_RenderCompDiff(t *testing.T) {
 			colorize: false,
 			validate: func(t *testing.T, result string) {
 				t.Helper()
+
 				if result != "" {
 					t.Errorf("Expected empty output, got: %q", result)
 				}
@@ -128,18 +141,21 @@ func TestDefaultCompDiffRenderer_RenderCompDiff(t *testing.T) {
 				Compositions: []CompositionDiff{{
 					Name:              "test-comp",
 					AffectedResources: AffectedResourcesSummary{Total: 1, Unchanged: 1},
-					ImpactAnalysis:    []XRImpact{{APIVersion: "example.org/v1", Kind: "XResource", Name: "xr-1", Status: XRStatusUnchanged}},
+					ImpactAnalysis:    []XRImpact{{ObjectReference: corev1.ObjectReference{APIVersion: "example.org/v1", Kind: "XResource", Name: "xr-1"}, Status: XRStatusUnchanged}},
 				}},
 			},
 			colorize: false,
 			validate: func(t *testing.T, result string) {
 				t.Helper()
+
 				if !strings.Contains(result, "=== Composition Changes ===") {
 					t.Error("Expected composition changes header")
 				}
+
 				if !strings.Contains(result, "No changes detected in composition test-comp") {
 					t.Error("Expected no changes message")
 				}
+
 				if !strings.Contains(result, "=== Affected Composite Resources ===") {
 					t.Error("Expected affected resources header")
 				}
@@ -156,6 +172,7 @@ func TestDefaultCompDiffRenderer_RenderCompDiff(t *testing.T) {
 			colorize: false,
 			validate: func(t *testing.T, result string) {
 				t.Helper()
+
 				if !strings.Contains(result, "Manual update policy") {
 					t.Error("Expected Manual update policy message")
 				}
@@ -168,11 +185,14 @@ func TestDefaultCompDiffRenderer_RenderCompDiff(t *testing.T) {
 			logger := tu.TestLogger(t, false)
 			diffRenderer := NewDiffRenderer(logger, DefaultDiffOptions())
 			renderer := NewDefaultCompDiffRenderer(logger, diffRenderer, tt.colorize)
+
 			var buf bytes.Buffer
+
 			err := renderer.RenderCompDiff(&buf, tt.output)
 			if err != nil {
 				t.Fatalf("RenderCompDiff() failed: %v", err)
 			}
+
 			tt.validate(t, buf.String())
 		})
 	}
@@ -202,9 +222,11 @@ func Test_pluralize(t *testing.T) {
 	if pluralize(1) != "" {
 		t.Error("pluralize(1) should return empty string")
 	}
+
 	if pluralize(0) != "s" {
 		t.Error("pluralize(0) should return 's'")
 	}
+
 	if pluralize(2) != "s" {
 		t.Error("pluralize(2) should return 's'")
 	}
@@ -225,7 +247,8 @@ func TestCompDiffOutput_JSONSchema(t *testing.T) {
 			AffectedResources: AffectedResourcesSummary{Total: 5, WithChanges: 2, Unchanged: 2, WithErrors: 1},
 			ImpactAnalysis: []XRImpact{
 				{
-					APIVersion: "example.org/v1", Kind: "XBucket", Name: "bucket-1", Status: XRStatusChanged,
+					ObjectReference: corev1.ObjectReference{APIVersion: "example.org/v1", Kind: "XBucket", Name: "bucket-1"},
+					Status:          XRStatusChanged,
 					Diffs: map[string]*dt.ResourceDiff{
 						"s3.aws.upbound.io/v1beta1/Bucket//new-bucket": {
 							DiffType:     dt.DiffTypeAdded,
@@ -242,8 +265,8 @@ func TestCompDiffOutput_JSONSchema(t *testing.T) {
 						},
 					},
 				},
-				{APIVersion: "example.org/v1", Kind: "XBucket", Name: "bucket-2", Status: XRStatusUnchanged},
-				{APIVersion: "example.org/v1", Kind: "XBucket", Name: "bucket-3", Status: XRStatusError, Error: errors.New("render failed")},
+				{ObjectReference: corev1.ObjectReference{APIVersion: "example.org/v1", Kind: "XBucket", Name: "bucket-2"}, Status: XRStatusUnchanged},
+				{ObjectReference: corev1.ObjectReference{APIVersion: "example.org/v1", Kind: "XBucket", Name: "bucket-3"}, Status: XRStatusError, Error: errors.New("render failed")},
 			},
 		}},
 	}
@@ -251,6 +274,7 @@ func TestCompDiffOutput_JSONSchema(t *testing.T) {
 	// Test via the structured renderer (JSON)
 	logger := tu.TestLogger(t, false)
 	jsonRenderer := NewStructuredCompDiffRenderer(logger, OutputFormatJSON)
+
 	var jsonBuf bytes.Buffer
 	if err := jsonRenderer.RenderCompDiff(&jsonBuf, output); err != nil {
 		t.Fatalf("Failed to render JSON: %v", err)
@@ -264,10 +288,12 @@ func TestCompDiffOutput_JSONSchema(t *testing.T) {
 	if len(parsed.Compositions) != 1 {
 		t.Fatalf("Expected 1 composition, got %d", len(parsed.Compositions))
 	}
+
 	comp := parsed.Compositions[0]
 	if comp.AffectedResources.Total != 5 {
 		t.Errorf("Expected total 5, got %d", comp.AffectedResources.Total)
 	}
+
 	if len(comp.ImpactAnalysis) != 3 {
 		t.Errorf("Expected 3 impacts, got %d", len(comp.ImpactAnalysis))
 	}
@@ -276,6 +302,7 @@ func TestCompDiffOutput_JSONSchema(t *testing.T) {
 	if comp.CompositionChanges == nil {
 		t.Error("Expected compositionChanges to be present")
 	}
+
 	if comp.CompositionChanges.Type != "~" {
 		t.Errorf("Expected compositionChanges.type '~', got '%s'", comp.CompositionChanges.Type)
 	}
@@ -289,19 +316,23 @@ func TestCompDiffOutput_JSONSchema(t *testing.T) {
 	if comp.ImpactAnalysis[0].DownstreamChanges == nil {
 		t.Error("Expected downstreamChanges for changed XR")
 	}
+
 	if comp.ImpactAnalysis[0].DownstreamChanges.Summary.Added != 1 {
 		t.Errorf("Expected 1 added, got %d", comp.ImpactAnalysis[0].DownstreamChanges.Summary.Added)
 	}
+
 	if comp.ImpactAnalysis[0].DownstreamChanges.Summary.Modified != 1 {
 		t.Errorf("Expected 1 modified, got %d", comp.ImpactAnalysis[0].DownstreamChanges.Summary.Modified)
 	}
 
 	// Test via the structured renderer (YAML)
 	yamlRenderer := NewStructuredCompDiffRenderer(logger, OutputFormatYAML)
+
 	var yamlBuf bytes.Buffer
 	if err := yamlRenderer.RenderCompDiff(&yamlBuf, output); err != nil {
 		t.Fatalf("Failed to render YAML: %v", err)
 	}
+
 	if !strings.Contains(yamlBuf.String(), "compositions:") {
 		t.Error("YAML should contain 'compositions:'")
 	}

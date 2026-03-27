@@ -244,9 +244,7 @@ func (c *ProcessorConfig) SetDefaultFactories() {
 		case renderer.OutputFormatDiff:
 			fallthrough
 		default:
-			c.Factories.CompDiffRenderer = func(logger logging.Logger, diffRenderer renderer.DiffRenderer, colorize bool) renderer.CompDiffRenderer {
-				return renderer.NewDefaultCompDiffRenderer(logger, diffRenderer, colorize)
-			}
+			c.Factories.CompDiffRenderer = renderer.NewDefaultCompDiffRenderer
 		}
 	}
 

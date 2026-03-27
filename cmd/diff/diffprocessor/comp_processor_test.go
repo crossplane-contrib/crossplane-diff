@@ -263,10 +263,10 @@ func TestDefaultCompDiffProcessor_DiffComposition(t *testing.T) {
 			// Create processor using constructor to ensure all fields are initialized
 			logger := tu.TestLogger(t, false)
 			config := ProcessorConfig{
-				Namespace:  tt.namespace,
-				Colorize:   false,
-				Compact:    false,
-				Logger:     logger,
+				Namespace: tt.namespace,
+				Colorize:  false,
+				Compact:   false,
+				Logger:    logger,
 				RenderFunc: func(_ context.Context, _ logging.Logger, in render.Inputs) (render.Outputs, error) {
 					return render.Outputs{
 						CompositeResource: in.CompositeResource,

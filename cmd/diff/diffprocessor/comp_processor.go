@@ -24,6 +24,7 @@ import (
 	xp "github.com/crossplane-contrib/crossplane-diff/cmd/diff/client/crossplane"
 	"github.com/crossplane-contrib/crossplane-diff/cmd/diff/renderer"
 	dt "github.com/crossplane-contrib/crossplane-diff/cmd/diff/renderer/types"
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	un "k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -212,6 +213,7 @@ func (p *DefaultCompDiffProcessor) processSingleComposition(ctx context.Context,
 	if err != nil {
 		return nil, errors.Wrap(err, "cannot calculate composition diff")
 	}
+
 	result.CompositionDiff = compDiff
 
 	// Find all composites (XRs and Claims) that use this composition
@@ -257,7 +259,6 @@ func (p *DefaultCompDiffProcessor) processSingleComposition(ctx context.Context,
 
 	return result, nil
 }
-
 
 // collectXRDiffs processes XRs and collects their diffs, returning results for each XR.
 func (p *DefaultCompDiffProcessor) collectXRDiffs(ctx context.Context, xrs []*un.Unstructured, newComp *un.Unstructured) map[string]*XRDiffResult {
@@ -366,7 +367,6 @@ func (p *DefaultCompDiffProcessor) collectXRDiffs(ctx context.Context, xrs []*un
 
 	return results
 }
-
 
 // calculateCompositionDiff calculates the diff between the cluster composition and the file composition.
 // Returns the ResourceDiff (nil if no changes) and any error.
@@ -498,10 +498,12 @@ func (p *DefaultCompDiffProcessor) buildImpactAnalysis(xrs []*un.Unstructured, r
 		result := results[resourceID]
 
 		impact := renderer.XRImpact{
-			APIVersion: xr.GetAPIVersion(),
-			Kind:       xr.GetKind(),
-			Name:       xr.GetName(),
-			Namespace:  xr.GetNamespace(),
+			ObjectReference: corev1.ObjectReference{
+				APIVersion: xr.GetAPIVersion(),
+				Kind:       xr.GetKind(),
+				Name:       xr.GetName(),
+				Namespace:  xr.GetNamespace(),
+			},
 		}
 
 		switch {
@@ -523,4 +525,3 @@ func (p *DefaultCompDiffProcessor) buildImpactAnalysis(xrs []*un.Unstructured, r
 
 	return impacts, summary
 }
-

@@ -23,9 +23,10 @@ import (
 	"strings"
 
 	dt "github.com/crossplane-contrib/crossplane-diff/cmd/diff/renderer/types"
+	sigsyaml "sigs.k8s.io/yaml"
+
 	"github.com/crossplane/crossplane-runtime/v2/pkg/errors"
 	"github.com/crossplane/crossplane-runtime/v2/pkg/logging"
-	sigsyaml "sigs.k8s.io/yaml"
 )
 
 // CompDiffRenderer renders composition diff results.
@@ -76,6 +77,7 @@ func (r *DefaultCompDiffRenderer) RenderCompDiff(stdout io.Writer, output *CompD
 			return err
 		}
 	}
+
 	return nil
 }
 
@@ -89,6 +91,7 @@ func (r *DefaultCompDiffRenderer) renderCompositionChanges(stdout io.Writer, com
 		if _, err := fmt.Fprintf(stdout, "No changes detected in composition %s\n\n", comp.Name); err != nil {
 			return errors.Wrap(err, "cannot write no changes message")
 		}
+
 		return nil
 	}
 
@@ -121,6 +124,7 @@ func (r *DefaultCompDiffRenderer) renderAffectedResourcesList(stdout io.Writer, 
 				return errors.Wrap(err, "cannot write no XRs message")
 			}
 		}
+
 		return nil
 	}
 
@@ -150,6 +154,7 @@ func (r *DefaultCompDiffRenderer) renderImpactAnalysis(stdout io.Writer, comp *C
 
 	// Collect all diffs from the impact analysis using stored ResourceDiffs.
 	allDiffs := make(map[string]*dt.ResourceDiff)
+
 	for _, impact := range comp.ImpactAnalysis {
 		if impact.Status == XRStatusChanged && impact.Diffs != nil {
 			for key, diff := range impact.Diffs {
@@ -205,6 +210,7 @@ func (r *DefaultCompDiffRenderer) buildXRStatusList(impacts []XRImpact) string {
 
 		// Determine status indicator and color based on status
 		var indicator, color string
+
 		switch impact.Status {
 		case XRStatusError:
 			indicator = errorMark
@@ -212,7 +218,7 @@ func (r *DefaultCompDiffRenderer) buildXRStatusList(impacts []XRImpact) string {
 		case XRStatusChanged:
 			indicator = warningMark
 			color = colorYellow
-		default:
+		case XRStatusUnchanged:
 			indicator = checkMark
 			color = colorGreen
 		}
@@ -226,7 +232,6 @@ func (r *DefaultCompDiffRenderer) buildXRStatusList(impacts []XRImpact) string {
 
 	return sb.String()
 }
-
 
 // StructuredCompDiffRenderer renders composition diffs in JSON/YAML format.
 type StructuredCompDiffRenderer struct {
@@ -247,15 +252,17 @@ func (r *StructuredCompDiffRenderer) RenderCompDiff(stdout io.Writer, output *Co
 	// Convert internal representation to JSON output structure
 	jsonOutput := r.buildStructuredCompOutput(output)
 
-	var data []byte
-	var err error
+	var (
+		data []byte
+		err  error
+	)
 
 	switch r.format {
 	case OutputFormatJSON:
 		data, err = json.MarshalIndent(jsonOutput, "", "  ")
 	case OutputFormatYAML:
 		data, err = sigsyaml.Marshal(jsonOutput)
-	default:
+	case OutputFormatDiff:
 		return errors.Errorf("unsupported format for structured comp diff renderer: %s", r.format)
 	}
 
@@ -264,6 +271,7 @@ func (r *StructuredCompDiffRenderer) RenderCompDiff(stdout io.Writer, output *Co
 	}
 
 	_, err = stdout.Write(append(data, '\n'))
+
 	return errors.Wrap(err, "failed to write output")
 }
 
@@ -288,18 +296,17 @@ func (r *StructuredCompDiffRenderer) buildStructuredCompOutput(output *CompDiffO
 		// Convert each XR impact
 		for _, impact := range comp.ImpactAnalysis {
 			jsonImpact := xrImpactJSON{
-				APIVersion: impact.APIVersion,
-				Kind:       impact.Kind,
-				Name:       impact.Name,
-				Namespace:  impact.Namespace,
-				Status:     impact.Status,
+				ObjectReference: impact.ObjectReference,
+				Status:          impact.Status,
 			}
 			if impact.Error != nil {
 				jsonImpact.Error = impact.Error.Error()
 			}
+
 			if impact.Status == XRStatusChanged && len(impact.Diffs) > 0 {
 				jsonImpact.DownstreamChanges = buildDownstreamChanges(impact.Diffs)
 			}
+
 			jsonComp.ImpactAnalysis = append(jsonComp.ImpactAnalysis, jsonImpact)
 		}
 
@@ -337,6 +344,6 @@ func pluralize(count int) string {
 	if count == 1 {
 		return ""
 	}
+
 	return "s"
 }
-
