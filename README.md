@@ -71,6 +71,12 @@ crossplane-diff xr xr.yaml --compact
 # Disable color output
 crossplane-diff xr xr.yaml --no-color
 
+# Output in JSON format (for CI/CD pipelines or programmatic processing)
+crossplane-diff xr xr.yaml --output json
+
+# Output in YAML format
+crossplane-diff xr xr.yaml -o yaml
+
 # Ignore specific fields in diffs (useful for filtering out metadata like ArgoCD annotations)
 crossplane-diff xr xr.yaml \
   --ignore-paths 'metadata.annotations[argocd.argoproj.io/tracking-id]' \
@@ -101,6 +107,12 @@ crossplane-diff comp updated-composition.yaml --include-manual
 crossplane-diff comp updated-composition.yaml \
   --ignore-paths 'metadata.annotations[argocd.argoproj.io/tracking-id]' \
   --ignore-paths 'metadata.labels[argocd.argoproj.io/instance]'
+
+# Output in JSON format (for CI/CD pipelines or programmatic processing)
+crossplane-diff comp updated-composition.yaml --output json
+
+# Output in YAML format
+crossplane-diff comp updated-composition.yaml -o yaml
 ```
 
 ### Command Options
@@ -117,6 +129,7 @@ Flags:
   -h, --help                   Show context-sensitive help.
       --verbose                Print verbose logging statements.
       --context=STRING         Kubernetes context to use (defaults to current context).
+  -o, --output=diff            Output format: diff (human-readable), json, or yaml.
       --no-color               Disable colorized output.
       --compact                Show compact diffs with minimal context.
       --max-nested-depth=10    Maximum depth for nested XR recursion.
@@ -146,6 +159,7 @@ Flags:
   -h, --help                   Show context-sensitive help.
       --verbose                Print verbose logging statements.
       --context=STRING         Kubernetes context to use (defaults to current context).
+  -o, --output=diff            Output format: diff (human-readable), json, or yaml.
       --no-color               Disable colorized output.
       --compact                Show compact diffs with minimal context.
       --max-nested-depth=10    Maximum depth for nested XR recursion.
@@ -263,7 +277,9 @@ The tool requires read access to:
 
 ## Output Format
 
-The output follows familiar diff conventions with colorized output (unless disabled):
+### Human-Readable Diff (default)
+
+The default output follows familiar diff conventions with colorized output (unless disabled):
 
 ```diff
 +++ Resource/new-resource-(generated)
@@ -294,6 +310,94 @@ The output follows familiar diff conventions with colorized output (unless disab
 
 Summary: 1 added, 1 modified, 1 removed
 ```
+
+### Structured Output (JSON/YAML)
+
+For CI/CD pipelines or programmatic processing, use `--output json` or `--output yaml`:
+
+**XR Diff JSON output** (`crossplane-diff xr xr.yaml -o json`):
+
+```json
+{
+  "summary": {
+    "added": 1,
+    "modified": 1,
+    "removed": 0
+  },
+  "changes": [
+    {
+      "type": "+",
+      "apiVersion": "nop.crossplane.io/v1alpha1",
+      "kind": "NopResource",
+      "name": "new-resource",
+      "diff": { "spec": { ... } }
+    },
+    {
+      "type": "~",
+      "apiVersion": "nop.crossplane.io/v1alpha1",
+      "kind": "NopResource",
+      "name": "modified-resource",
+      "diff": { "old": { ... }, "new": { ... } }
+    }
+  ]
+}
+```
+
+**Composition Diff JSON output** (`crossplane-diff comp composition.yaml -o json`):
+
+```json
+{
+  "compositions": [
+    {
+      "name": "xbuckets.example.org",
+      "compositionChanges": {
+        "type": "~",
+        "apiVersion": "apiextensions.crossplane.io/v1",
+        "kind": "Composition",
+        "name": "xbuckets.example.org",
+        "diff": { "old": { ... }, "new": { ... } }
+      },
+      "affectedResources": {
+        "total": 5,
+        "withChanges": 2,
+        "unchanged": 2,
+        "withErrors": 1
+      },
+      "impactAnalysis": [
+        {
+          "apiVersion": "example.org/v1",
+          "kind": "XBucket",
+          "name": "bucket-1",
+          "status": "changed",
+          "downstreamChanges": {
+            "summary": { "added": 1, "modified": 1, "removed": 0 },
+            "changes": [ ... ]
+          }
+        },
+        {
+          "apiVersion": "example.org/v1",
+          "kind": "XBucket",
+          "name": "bucket-2",
+          "status": "unchanged"
+        },
+        {
+          "apiVersion": "example.org/v1",
+          "kind": "XBucket",
+          "name": "bucket-3",
+          "status": "error",
+          "error": "render failed: ..."
+        }
+      ]
+    }
+  ]
+}
+```
+
+The structured output includes:
+- **Change types**: `+` (added), `~` (modified), `-` (removed)
+- **Full resource details**: apiVersion, kind, name, namespace
+- **Diff content**: old/new values for modifications, full spec for additions/removals
+- **Impact analysis** (comp only): which XRs are affected by composition changes and their status
 
 ## Exit Codes
 
