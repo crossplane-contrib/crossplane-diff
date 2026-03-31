@@ -302,7 +302,7 @@ func (p *DefaultCompDiffProcessor) collectXRDiffs(ctx context.Context, xrs []*un
 		results := make(map[string]*XRDiffResult)
 
 		for _, xr := range xrs {
-			resourceID := fmt.Sprintf("%s/%s", xr.GetKind(), xr.GetName())
+			resourceID := dt.MakeDiffKeyFromResource(xr)
 			results[resourceID] = &XRDiffResult{
 				Diffs: make(map[string]*dt.ResourceDiff),
 				Error: errors.Wrap(err, "cannot convert CLI composition to typed"),
@@ -378,7 +378,7 @@ func (p *DefaultCompDiffProcessor) collectXRDiffs(ctx context.Context, xrs []*un
 	results := make(map[string]*XRDiffResult)
 
 	for _, xr := range xrs {
-		resourceID := fmt.Sprintf("%s/%s", xr.GetKind(), xr.GetName())
+		resourceID := dt.MakeDiffKeyFromResource(xr)
 
 		diffs, err := p.xrProc.DiffSingleResource(ctx, xr, compositionProvider)
 		if err != nil {
@@ -527,7 +527,7 @@ func (p *DefaultCompDiffProcessor) buildImpactAnalysis(xrs []*un.Unstructured, r
 	}
 
 	for _, xr := range xrs {
-		resourceID := fmt.Sprintf("%s/%s", xr.GetKind(), xr.GetName())
+		resourceID := dt.MakeDiffKeyFromResource(xr)
 		result := results[resourceID]
 
 		impact := renderer.XRImpact{
