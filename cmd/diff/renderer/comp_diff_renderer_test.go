@@ -14,30 +14,38 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 )
 
-func TestStructuredCompDiffRenderer_RenderCompDiff(t *testing.T) {
-	tests := map[string]struct {
-		format   OutputFormat
-		output   *CompDiffOutput
-		validate func(t *testing.T, result string)
-	}{
-		"JSONEmptyCompositions": {
-			format: OutputFormatJSON,
+// testCompDiffFixture defines a reusable test case with input and expected output.
+type testCompDiffFixture struct {
+	name     string
+	output   *CompDiffOutput
+	validate func(t *testing.T, format OutputFormat, result string)
+}
+
+// sharedCompDiffFixtures returns test fixtures that should be run through both JSON and YAML renderers.
+func sharedCompDiffFixtures() []testCompDiffFixture {
+	return []testCompDiffFixture{
+		{
+			name:   "EmptyCompositions",
 			output: &CompDiffOutput{Compositions: []CompositionDiff{}},
-			validate: func(t *testing.T, result string) {
+			validate: func(t *testing.T, format OutputFormat, result string) {
 				t.Helper()
 
-				var parsed compDiffJSONOutput
-				if err := json.Unmarshal([]byte(result), &parsed); err != nil {
-					t.Fatalf("Failed to parse JSON: %v", err)
-				}
+				if format == OutputFormatJSON {
+					var parsed compDiffJSONOutput
+					if err := json.Unmarshal([]byte(result), &parsed); err != nil {
+						t.Fatalf("Failed to parse JSON: %v", err)
+					}
 
-				if len(parsed.Compositions) != 0 {
-					t.Errorf("Expected 0 compositions, got %d", len(parsed.Compositions))
+					if len(parsed.Compositions) != 0 {
+						t.Errorf("Expected 0 compositions, got %d", len(parsed.Compositions))
+					}
+				} else if !strings.Contains(result, "compositions:") {
+					t.Error("Expected YAML to contain 'compositions:'")
 				}
 			},
 		},
-		"JSONWithChanges": {
-			format: OutputFormatJSON,
+		{
+			name: "WithChanges",
 			output: &CompDiffOutput{
 				Compositions: []CompositionDiff{{
 					Name: "test-comp",
@@ -54,112 +62,111 @@ func TestStructuredCompDiffRenderer_RenderCompDiff(t *testing.T) {
 					},
 				}},
 			},
-			validate: func(t *testing.T, result string) {
+			validate: func(t *testing.T, format OutputFormat, result string) {
 				t.Helper()
 
-				var parsed compDiffJSONOutput
-				if err := json.Unmarshal([]byte(result), &parsed); err != nil {
-					t.Fatalf("Failed to parse JSON: %v", err)
-				}
+				if format == OutputFormatJSON {
+					var parsed compDiffJSONOutput
+					if err := json.Unmarshal([]byte(result), &parsed); err != nil {
+						t.Fatalf("Failed to parse JSON: %v", err)
+					}
 
-				if len(parsed.Compositions) != 1 {
-					t.Fatalf("Expected 1 composition, got %d", len(parsed.Compositions))
-				}
+					if len(parsed.Compositions) != 1 {
+						t.Fatalf("Expected 1 composition, got %d", len(parsed.Compositions))
+					}
 
-				if parsed.Compositions[0].Name != "test-comp" {
-					t.Errorf("Expected name 'test-comp', got '%s'", parsed.Compositions[0].Name)
-				}
+					if parsed.Compositions[0].Name != "test-comp" {
+						t.Errorf("Expected name 'test-comp', got '%s'", parsed.Compositions[0].Name)
+					}
 
-				if parsed.Compositions[0].AffectedResources.Total != 2 {
-					t.Errorf("Expected total 2, got %d", parsed.Compositions[0].AffectedResources.Total)
-				}
-				// Verify compositionChanges is present in JSON
-				if parsed.Compositions[0].CompositionChanges == nil {
-					t.Error("Expected compositionChanges to be present")
-				}
+					if parsed.Compositions[0].AffectedResources.Total != 2 {
+						t.Errorf("Expected total 2, got %d", parsed.Compositions[0].AffectedResources.Total)
+					}
 
-				// Verify embedded ObjectReference fields are at top level (not nested)
-				// This tests that json:",inline" works correctly
-				var rawParsed map[string]any
-				if err := json.Unmarshal([]byte(result), &rawParsed); err != nil {
-					t.Fatalf("Failed to parse raw JSON: %v", err)
-				}
+					// Verify compositionChanges is present in JSON
+					if parsed.Compositions[0].CompositionChanges == nil {
+						t.Error("Expected compositionChanges to be present")
+					}
 
-				comps, ok := rawParsed["compositions"].([]any)
-				if !ok {
-					t.Fatalf("Expected 'compositions' to be array, got %T", rawParsed["compositions"])
-				}
+					// Verify embedded ObjectReference fields are at top level (not nested)
+					// This tests that json:",inline" works correctly
+					var rawParsed map[string]any
+					if err := json.Unmarshal([]byte(result), &rawParsed); err != nil {
+						t.Fatalf("Failed to parse raw JSON: %v", err)
+					}
 
-				comp, ok := comps[0].(map[string]any)
-				if !ok {
-					t.Fatalf("Expected compositions[0] to be object, got %T", comps[0])
-				}
+					comps, ok := rawParsed["compositions"].([]any)
+					if !ok {
+						t.Fatalf("Expected 'compositions' to be array, got %T", rawParsed["compositions"])
+					}
 
-				impacts, ok := comp["impactAnalysis"].([]any)
-				if !ok {
-					t.Fatalf("Expected 'impactAnalysis' to be array, got %T", comp["impactAnalysis"])
-				}
+					comp, ok := comps[0].(map[string]any)
+					if !ok {
+						t.Fatalf("Expected compositions[0] to be object, got %T", comps[0])
+					}
 
-				impact, ok := impacts[0].(map[string]any)
-				if !ok {
-					t.Fatalf("Expected impacts[0] to be object, got %T", impacts[0])
-				}
+					impacts, ok := comp["impactAnalysis"].([]any)
+					if !ok {
+						t.Fatalf("Expected 'impactAnalysis' to be array, got %T", comp["impactAnalysis"])
+					}
 
-				// Verify apiVersion, kind, name are top-level keys (not nested under "objectReference")
-				if _, ok := impact["apiVersion"]; !ok {
-					t.Error("Expected 'apiVersion' to be a top-level field in xrImpactJSON (embedded from ObjectReference)")
-				}
+					impact, ok := impacts[0].(map[string]any)
+					if !ok {
+						t.Fatalf("Expected impacts[0] to be object, got %T", impacts[0])
+					}
 
-				if _, ok := impact["kind"]; !ok {
-					t.Error("Expected 'kind' to be a top-level field in xrImpactJSON (embedded from ObjectReference)")
-				}
+					// Verify apiVersion, kind, name are top-level keys (not nested under "objectReference")
+					if _, ok := impact["apiVersion"]; !ok {
+						t.Error("Expected 'apiVersion' to be a top-level field in xrImpactJSON (embedded from ObjectReference)")
+					}
 
-				if _, ok := impact["name"]; !ok {
-					t.Error("Expected 'name' to be a top-level field in xrImpactJSON (embedded from ObjectReference)")
-				}
-				// ObjectReference should NOT be nested
-				if _, ok := impact["objectReference"]; ok {
-					t.Error("ObjectReference should be inlined, not a nested field")
-				}
-			},
-		},
-		"YAMLFormat": {
-			format: OutputFormatYAML,
-			output: &CompDiffOutput{
-				Compositions: []CompositionDiff{{
-					Name:              "test-comp",
-					AffectedResources: AffectedResourcesSummary{Total: 1, Unchanged: 1},
-					ImpactAnalysis:    []XRImpact{{ObjectReference: corev1.ObjectReference{APIVersion: "example.org/v1", Kind: "XResource", Name: "xr-1"}, Status: XRStatusUnchanged}},
-				}},
-			},
-			validate: func(t *testing.T, result string) {
-				t.Helper()
+					if _, ok := impact["kind"]; !ok {
+						t.Error("Expected 'kind' to be a top-level field in xrImpactJSON (embedded from ObjectReference)")
+					}
 
-				if !strings.Contains(result, "compositions:") {
-					t.Error("Expected YAML to contain 'compositions:'")
-				}
+					if _, ok := impact["name"]; !ok {
+						t.Error("Expected 'name' to be a top-level field in xrImpactJSON (embedded from ObjectReference)")
+					}
 
-				if !strings.Contains(result, "name: test-comp") {
-					t.Error("Expected YAML to contain 'name: test-comp'")
+					// ObjectReference should NOT be nested
+					if _, ok := impact["objectReference"]; ok {
+						t.Error("ObjectReference should be inlined, not a nested field")
+					}
+				} else {
+					if !strings.Contains(result, "compositions:") {
+						t.Error("Expected YAML to contain 'compositions:'")
+					}
+
+					if !strings.Contains(result, "name: test-comp") {
+						t.Error("Expected YAML to contain 'name: test-comp'")
+					}
 				}
 			},
 		},
 	}
+}
 
-	for name, tt := range tests {
-		t.Run(name, func(t *testing.T) {
-			logger := tu.TestLogger(t, false)
-			renderer := NewStructuredCompDiffRenderer(logger, tt.format)
+func TestStructuredCompDiffRenderer_RenderCompDiff(t *testing.T) {
+	formats := []OutputFormat{OutputFormatJSON, OutputFormatYAML}
+	fixtures := sharedCompDiffFixtures()
 
-			var buf bytes.Buffer
+	for _, format := range formats {
+		for _, fixture := range fixtures {
+			testName := string(format) + "/" + fixture.name
+			t.Run(testName, func(t *testing.T) {
+				logger := tu.TestLogger(t, false)
+				renderer := NewStructuredCompDiffRenderer(logger, format)
 
-			err := renderer.RenderCompDiff(&buf, tt.output)
-			if err != nil {
-				t.Fatalf("RenderCompDiff() failed: %v", err)
-			}
+				var buf bytes.Buffer
 
-			tt.validate(t, buf.String())
-		})
+				err := renderer.RenderCompDiff(&buf, fixture.output)
+				if err != nil {
+					t.Fatalf("RenderCompDiff() failed: %v", err)
+				}
+
+				fixture.validate(t, format, buf.String())
+			})
+		}
 	}
 }
 
