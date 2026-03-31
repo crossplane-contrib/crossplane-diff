@@ -644,3 +644,90 @@ func TestDefaultCompDiffProcessor_collectXRDiffs_NestedXRCompositionLookup(t *te
 
 // Note: Test_buildXRStatusList has been moved to renderer/comp_diff_renderer_test.go
 // since the function is now in the renderer package.
+
+// TestDefaultCompDiffProcessor_DiffComposition_StderrErrorOutput verifies that when
+// XR processing fails, detailed errors are written to stderr for human visibility.
+// This tests the WithStderr option and the stderr error output path.
+func TestDefaultCompDiffProcessor_DiffComposition_StderrErrorOutput(t *testing.T) {
+	ctx := t.Context()
+
+	// Create test composition
+	testComp := tu.NewComposition("test-composition").
+		WithCompositeTypeRef("example.org/v1", "XResource").
+		WithPipelineMode().
+		Build()
+
+	// Create test XRs - one will succeed, one will fail
+	successXR := tu.NewResource("example.org/v1", "XResource", "success-xr").
+		WithNamespace("default").
+		Build()
+	failXR := tu.NewResource("example.org/v1", "XResource", "fail-xr").
+		WithNamespace("default").
+		Build()
+
+	// Setup mocks
+	xpClients := xp.Clients{
+		Composition: tu.NewMockCompositionClient().
+			WithSuccessfulCompositionFetch(testComp).
+			WithResourcesForComposition("test-composition", "default", []*un.Unstructured{successXR, failXR}).
+			Build(),
+		Definition:   tu.NewMockDefinitionClient().Build(),
+		Environment:  tu.NewMockEnvironmentClient().Build(),
+		Function:     tu.NewMockFunctionClient().Build(),
+		ResourceTree: tu.NewMockResourceTreeClient().Build(),
+	}
+
+	// Create mock XR processor that fails for one XR
+	mockXRProc := &tu.MockDiffProcessor{
+		DiffSingleResourceFn: func(_ context.Context, res *un.Unstructured, _ types.CompositionProvider) (map[string]*dt.ResourceDiff, error) {
+			if res.GetName() == "fail-xr" {
+				return nil, fmt.Errorf("render pipeline failed: function timeout")
+			}
+
+			return make(map[string]*dt.ResourceDiff), nil
+		},
+	}
+
+	// Create stderr buffer to capture error output
+	var stderrBuf bytes.Buffer
+
+	// Create processor with custom stderr
+	logger := tu.TestLogger(t, false)
+	processor := NewCompDiffProcessor(
+		mockXRProc,
+		xpClients.Composition,
+		WithLogger(logger),
+		WithColorize(false),
+		WithCompact(false),
+		WithStderr(&stderrBuf), // Use WithStderr to inject test buffer
+	)
+
+	var stdout bytes.Buffer
+
+	// Run the diff - should succeed but report XR errors
+	_, err := processor.DiffComposition(ctx, &stdout, []*un.Unstructured{
+		tu.NewComposition("test-composition").
+			WithCompositeTypeRef("example.org/v1", "XResource").
+			WithPipelineMode().
+			BuildAsUnstructured(),
+	}, "default")
+
+	// Should return error because one XR failed
+	if err == nil {
+		t.Error("Expected error due to XR processing failure, got nil")
+	}
+
+	// Verify stderr contains the error details
+	stderrOutput := stderrBuf.String()
+	if !strings.Contains(stderrOutput, "ERROR:") {
+		t.Errorf("Expected stderr to contain 'ERROR:', got: %q", stderrOutput)
+	}
+
+	if !strings.Contains(stderrOutput, "XResource/fail-xr") {
+		t.Errorf("Expected stderr to contain resource ID 'XResource/fail-xr', got: %q", stderrOutput)
+	}
+
+	if !strings.Contains(stderrOutput, "render pipeline failed") {
+		t.Errorf("Expected stderr to contain error message 'render pipeline failed', got: %q", stderrOutput)
+	}
+}
