@@ -510,9 +510,6 @@ func TestDefaultCompDiffProcessor_getCompositionUpdatePolicy(t *testing.T) {
 	}
 }
 
-// Note: Tests for pluralize and formatXRStatusSummary have been moved to
-// renderer/comp_diff_renderer_test.go since the functions are now in the renderer package.
-
 // TestDefaultCompDiffProcessor_collectXRDiffs_NestedXRCompositionLookup verifies that
 // when processing nested XRs, the composition provider correctly distinguishes between:
 // - Root XR type (matching the CLI composition's compositeTypeRef): returns CLI composition
@@ -641,9 +638,6 @@ func TestDefaultCompDiffProcessor_collectXRDiffs_NestedXRCompositionLookup(t *te
 		})
 	}
 }
-
-// Note: Test_buildXRStatusList has been moved to renderer/comp_diff_renderer_test.go
-// since the function is now in the renderer package.
 
 // TestDefaultCompDiffProcessor_DiffComposition_StderrErrorOutput verifies that when
 // XR processing fails, detailed errors are written to stderr for human visibility.
