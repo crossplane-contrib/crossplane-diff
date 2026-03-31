@@ -320,8 +320,17 @@ func Test_pluralize(t *testing.T) {
 	}
 }
 
+// TestCompDiffOutput_JSONSchema validates that the internal CompDiffOutput type
+// serializes to JSON with the correct schema structure. This includes verifying:
+// - compositionChanges field appears with correct type symbol
+// - downstreamChanges is present for changed XRs with proper summary counts
+// - error field serializes correctly on error impacts
+// - nested structures (ImpactAnalysis, AffectedResources) serialize properly
+//
+// YAML serialization uses the same JSON tags (via sigs.k8s.io/yaml), so if JSON
+// serializes correctly, YAML will too. YAML format coverage is provided by
+// TestStructuredCompDiffRenderer_RenderCompDiff.
 func TestCompDiffOutput_JSONSchema(t *testing.T) {
-	// Create internal representation with ResourceDiff
 	output := &CompDiffOutput{
 		Compositions: []CompositionDiff{{
 			Name: "xbuckets.example.org",
@@ -411,17 +420,5 @@ func TestCompDiffOutput_JSONSchema(t *testing.T) {
 
 	if comp.ImpactAnalysis[0].DownstreamChanges.Summary.Modified != 1 {
 		t.Errorf("Expected 1 modified, got %d", comp.ImpactAnalysis[0].DownstreamChanges.Summary.Modified)
-	}
-
-	// Test via the structured renderer (YAML)
-	yamlRenderer := NewStructuredCompDiffRenderer(logger, OutputFormatYAML)
-
-	var yamlBuf bytes.Buffer
-	if err := yamlRenderer.RenderCompDiff(&yamlBuf, output); err != nil {
-		t.Fatalf("Failed to render YAML: %v", err)
-	}
-
-	if !strings.Contains(yamlBuf.String(), "compositions:") {
-		t.Error("YAML should contain 'compositions:'")
 	}
 }
