@@ -74,7 +74,7 @@ func (c *DefaultApplyClient) DryRunApply(ctx context.Context, obj *un.Unstructur
 		fieldOwner = FieldOwnerDefault
 	}
 
-	c.logger.Debug("Performing dry-run apply", "resource", resourceID, "fieldOwner", fieldOwner)
+	c.logger.Debug("Performing dry-run apply", "resource", resourceID, "namespace", obj.GetNamespace(), "fieldOwner", fieldOwner)
 
 	// Get the GVK from the object
 	gvk := obj.GroupVersionKind()

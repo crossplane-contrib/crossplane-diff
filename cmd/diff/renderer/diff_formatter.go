@@ -255,28 +255,32 @@ func GenerateDiffWithOptions(_ context.Context, current, desired *un.Unstructure
 
 	// Determine resource identifiers upfront
 	resourceKey := "unknown/unknown"
+	resourceNamespace := ""
+
 	if desired != nil {
 		resourceKey = fmt.Sprintf("%s/%s", desired.GetKind(), desired.GetName())
+		resourceNamespace = desired.GetNamespace()
 	} else if current != nil {
 		resourceKey = fmt.Sprintf("%s/%s", current.GetKind(), current.GetName())
+		resourceNamespace = current.GetNamespace()
 	}
 
-	logger.Debug("Generating diff", "resource", resourceKey)
+	logger.Debug("Generating diff", "resource", resourceKey, "namespace", resourceNamespace)
 
 	// Determine diff type
 	switch {
 	case current == nil && desired != nil:
 		diffType = t.DiffTypeAdded
 
-		logger.Debug("Diff type: Resource is being added", "resource", resourceKey)
+		logger.Debug("Diff type: Resource is being added", "resource", resourceKey, "namespace", resourceNamespace)
 	case current != nil && desired == nil:
 		diffType = t.DiffTypeRemoved
 
-		logger.Debug("Diff type: Resource is being removed", "resource", resourceKey)
+		logger.Debug("Diff type: Resource is being removed", "resource", resourceKey, "namespace", resourceNamespace)
 	case current != nil: // && desired != nil:
 		diffType = t.DiffTypeModified
 
-		logger.Debug("Diff type: Resource is being modified", "resource", resourceKey)
+		logger.Debug("Diff type: Resource is being modified", "resource", resourceKey, "namespace", resourceNamespace)
 	default:
 		logger.Debug("Error: both current and desired are nil")
 		return nil, errors.New("both current and desired cannot be nil")
@@ -286,7 +290,7 @@ func GenerateDiffWithOptions(_ context.Context, current, desired *un.Unstructure
 	if diffType == t.DiffTypeModified {
 		// Check for deep equality first
 		if equality.Semantic.DeepEqual(current, desired) {
-			logger.Debug("Resources are semantically equal", "resource", resourceKey)
+			logger.Debug("Resources are semantically equal", "resource", resourceKey, "namespace", resourceNamespace)
 			return equalDiff(current, desired), nil
 		}
 
@@ -296,11 +300,11 @@ func GenerateDiffWithOptions(_ context.Context, current, desired *un.Unstructure
 
 		// Check if the cleaned objects are equal
 		if equality.Semantic.DeepEqual(currentClean.Object, desiredClean.Object) {
-			logger.Debug("Resources are equal after cleanup (only metadata differences)", "resource", resourceKey)
+			logger.Debug("Resources are equal after cleanup (only metadata differences)", "resource", resourceKey, "namespace", resourceNamespace)
 			return equalDiff(current, desired), nil
 		}
 
-		logger.Debug("Resources are not equal after cleanup", "resource", resourceKey)
+		logger.Debug("Resources are not equal after cleanup", "resource", resourceKey, "namespace", resourceNamespace)
 	}
 
 	// Convert to YAML for text diff
@@ -333,21 +337,21 @@ func GenerateDiffWithOptions(_ context.Context, current, desired *un.Unstructure
 
 	// Return nil if content is identical
 	if desiredStr == currentStr {
-		logger.Debug("Resources have identical YAML representation", "resource", resourceKey)
+		logger.Debug("Resources have identical YAML representation", "resource", resourceKey, "namespace", resourceNamespace)
 		return equalDiff(current, desired), nil
 	}
 
 	// Get the line by line diff
-	logger.Debug("Computing line-by-line diff", "resource", resourceKey)
+	logger.Debug("Computing line-by-line diff", "resource", resourceKey, "namespace", resourceNamespace)
 
 	lineDiffs := GetLineDiff(currentStr, desiredStr)
 
 	if len(lineDiffs) == 0 {
-		logger.Debug("No differences found in line-by-line comparison", "resource", resourceKey)
+		logger.Debug("No differences found in line-by-line comparison", "resource", resourceKey, "namespace", resourceNamespace)
 		return equalDiff(current, desired), nil
 	}
 
-	logger.Debug("Diff calculation complete", "resource", resourceKey, "diff_chunks", len(lineDiffs))
+	logger.Debug("Diff calculation complete", "resource", resourceKey, "namespace", resourceNamespace, "diff_chunks", len(lineDiffs))
 
 	// Extract resource kind, namespace, and name
 	var (

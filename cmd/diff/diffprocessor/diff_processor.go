@@ -177,6 +177,9 @@ func (p *DefaultDiffProcessor) PerformDiff(ctx context.Context, stdout io.Writer
 	// Collect all diffs across all resources
 	allDiffs := make(map[string]*dt.ResourceDiff)
 
+	// Collect errors for structured output
+	var outputErrors []dt.OutputError
+
 	var errs []error
 
 	for _, res := range resources {
@@ -184,28 +187,26 @@ func (p *DefaultDiffProcessor) PerformDiff(ctx context.Context, stdout io.Writer
 
 		diffs, err := p.DiffSingleResource(ctx, res, compositionProvider)
 		if err != nil {
-			p.config.Logger.Debug("Failed to process resource", "resource", resourceID, "error", err)
+			p.config.Logger.Debug("Failed to process resource", "resource", resourceID, "namespace", res.GetNamespace(), "error", err)
 			errs = append(errs, errors.Wrapf(err, "unable to process resource %s", resourceID))
 
-			// Write error message to stdout so user can see it
-			errMsg := fmt.Sprintf("ERROR: Failed to process %s: %v\n\n", resourceID, err)
-			if _, writeErr := fmt.Fprint(stdout, errMsg); writeErr != nil {
-				p.config.Logger.Debug("Failed to write error message", "error", writeErr)
-			}
+			// Collect error for structured output instead of writing plain text
+			outputErrors = append(outputErrors, dt.OutputError{
+				ResourceID: resourceID,
+				Message:    err.Error(),
+			})
 		} else {
 			// Merge the diffs into our combined map
 			maps.Copy(allDiffs, diffs)
 		}
 	}
 
-	// Only render diffs if we found some that need rendering
-	if len(allDiffs) > 0 {
-		// Render all diffs in a single pass
-		err := p.diffRenderer.RenderDiffs(stdout, allDiffs)
-		if err != nil {
-			p.config.Logger.Debug("Failed to render diffs", "error", err)
-			errs = append(errs, errors.Wrap(err, "failed to render diffs"))
-		}
+	// Always render (even if only errors exist) to ensure valid structured output
+	// The renderer will include errors in the structured output
+	err := p.diffRenderer.RenderDiffs(stdout, allDiffs, outputErrors)
+	if err != nil {
+		p.config.Logger.Debug("Failed to render diffs", "error", err)
+		errs = append(errs, errors.Wrap(err, "failed to render diffs"))
 	}
 
 	// Count only non-equal diffs as "having diffs".
@@ -245,7 +246,7 @@ func (p *DefaultDiffProcessor) DiffSingleResource(ctx context.Context, res *un.U
 // detectRemovals should be true for top-level XRs and false for nested XRs (which don't own their composed resources).
 func (p *DefaultDiffProcessor) diffSingleResourceInternal(ctx context.Context, res *un.Unstructured, compositionProvider types.CompositionProvider, parentXR *cmp.Unstructured, detectRemovals bool) (map[string]*dt.ResourceDiff, map[string]bool, error) {
 	resourceID := fmt.Sprintf("%s/%s", res.GetKind(), res.GetName())
-	p.config.Logger.Debug("Processing resource", "resource", resourceID)
+	p.config.Logger.Debug("Processing resource", "resource", resourceID, "namespace", res.GetNamespace())
 
 	xr, done, err := p.SanitizeXR(res, resourceID)
 	if done {
@@ -255,7 +256,7 @@ func (p *DefaultDiffProcessor) diffSingleResourceInternal(ctx context.Context, r
 	// Get the composition using the provided function
 	comp, err := compositionProvider(ctx, res)
 	if err != nil {
-		p.config.Logger.Debug("Failed to get composition", "resource", resourceID, "error", err)
+		p.config.Logger.Debug("Failed to get composition", "resource", resourceID, "namespace", res.GetNamespace(), "error", err)
 		return nil, nil, errors.Wrap(err, "cannot get composition")
 	}
 
@@ -1144,7 +1145,7 @@ func (p *DefaultDiffProcessor) RenderWithRequirements(
 		newResourcesFound := false
 
 		for _, res := range additionalResources {
-			resourceKey := fmt.Sprintf("%s/%s", res.GetAPIVersion(), res.GetName())
+			resourceKey := dt.MakeDiffKeyFromResource(res)
 			if !discoveredResourcesMap[resourceKey] {
 				discoveredResourcesMap[resourceKey] = true
 				newResourcesFound = true

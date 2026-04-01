@@ -79,6 +79,7 @@ func (v *DefaultSchemaValidator) GetCRDs() []*extv1.CustomResourceDefinition {
 func (v *DefaultSchemaValidator) ValidateResources(ctx context.Context, xr *un.Unstructured, composed []cpd.Unstructured) error {
 	v.logger.Debug("Validating resources",
 		"xr", fmt.Sprintf("%s/%s", xr.GetKind(), xr.GetName()),
+		"namespace", xr.GetNamespace(),
 		"composedCount", len(composed))
 
 	// Collect all resources that need to be validated
@@ -235,10 +236,10 @@ func (v *DefaultSchemaValidator) ValidateScopeConstraints(ctx context.Context, r
 		// Claims are allowed to create cluster-scoped managed resources even if the claim is namespaced
 		if expectedNamespace != "" && isClaimRoot {
 			v.logger.Debug("Allowing namespaced claim to create cluster-scoped managed resource",
-				"resource", resourceID, "claimNamespace", expectedNamespace)
+				"resource", resourceID, "namespace", resourceNamespace, "claimNamespace", expectedNamespace)
 		}
 	default:
-		v.logger.Debug("Unknown resource scope", "resource", resourceID, "scope", scope)
+		v.logger.Debug("Unknown resource scope", "resource", resourceID, "namespace", resourceNamespace, "scope", scope)
 	}
 
 	return nil

@@ -16,8 +16,9 @@ import (
 
 // DiffRenderer handles rendering diffs to output.
 type DiffRenderer interface {
-	// RenderDiffs formats and outputs diffs to the provided writer
-	RenderDiffs(stdout io.Writer, diffs map[string]*dt.ResourceDiff) error
+	// RenderDiffs formats and outputs diffs to the provided writer.
+	// The errs parameter contains any resource processing errors to include in output.
+	RenderDiffs(stdout io.Writer, diffs map[string]*dt.ResourceDiff, errs []dt.OutputError) error
 }
 
 // DefaultDiffRenderer implements the DiffRenderer interface.
@@ -50,9 +51,11 @@ func getKindName(d *dt.ResourceDiff) string {
 }
 
 // RenderDiffs formats and prints the diffs to the provided writer.
-func (r *DefaultDiffRenderer) RenderDiffs(stdout io.Writer, diffs map[string]*dt.ResourceDiff) error {
+// For human-readable output, errors are written at the end after the summary.
+func (r *DefaultDiffRenderer) RenderDiffs(stdout io.Writer, diffs map[string]*dt.ResourceDiff, errs []dt.OutputError) error {
 	r.logger.Debug("Rendering diffs to output",
 		"diffCount", len(diffs),
+		"errorCount", len(errs),
 		"useColors", r.diffOpts.UseColors,
 		"compact", r.diffOpts.Compact)
 
@@ -151,6 +154,13 @@ func (r *DefaultDiffRenderer) RenderDiffs(stdout io.Writer, diffs map[string]*dt
 			if err != nil {
 				return errors.Wrap(err, "failed to write summary to output")
 			}
+		}
+	}
+
+	// Write errors at the end (for human-readable output)
+	for _, e := range errs {
+		if _, err := fmt.Fprintln(stdout, e.FormatError()); err != nil {
+			return errors.Wrap(err, "failed to write error to output")
 		}
 	}
 

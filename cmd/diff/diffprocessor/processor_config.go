@@ -1,6 +1,7 @@
 package diffprocessor
 
 import (
+	"io"
 	"sync"
 
 	xp "github.com/crossplane-contrib/crossplane-diff/cmd/diff/client/crossplane"
@@ -37,6 +38,9 @@ type ProcessorConfig struct {
 	// FunctionCredentials holds Secret credentials to pass to Functions during rendering
 	FunctionCredentials []corev1.Secret
 
+	// Stderr is the writer for error output (defaults to os.Stderr)
+	Stderr io.Writer
+
 	// Logger is the logger to use
 	Logger logging.Logger
 
@@ -63,6 +67,9 @@ type ComponentFactories struct {
 
 	// DiffRenderer creates a DiffRenderer
 	DiffRenderer func(logger logging.Logger, diffOptions renderer.DiffOptions) renderer.DiffRenderer
+
+	// CompDiffRenderer creates a CompDiffRenderer for composition diffs
+	CompDiffRenderer func(logger logging.Logger, diffRenderer renderer.DiffRenderer, colorize bool) renderer.CompDiffRenderer
 
 	// RequirementsProvider creates an ExtraResourceProvider
 	RequirementsProvider func(res k8.ResourceClient, def xp.EnvironmentClient, renderFunc RenderFunc, logger logging.Logger) *RequirementsProvider
@@ -127,6 +134,13 @@ func WithIgnorePaths(ignorePaths []string) ProcessorOption {
 func WithFunctionCredentials(creds []corev1.Secret) ProcessorOption {
 	return func(config *ProcessorConfig) {
 		config.FunctionCredentials = creds
+	}
+}
+
+// WithStderr sets the writer for error output.
+func WithStderr(w io.Writer) ProcessorOption {
+	return func(config *ProcessorConfig) {
+		config.Stderr = w
 	}
 }
 
@@ -228,6 +242,20 @@ func (c *ProcessorConfig) SetDefaultFactories() {
 			c.Factories.DiffRenderer = renderer.NewDiffRenderer
 		default:
 			c.Factories.DiffRenderer = renderer.NewDiffRenderer
+		}
+	}
+
+	if c.Factories.CompDiffRenderer == nil {
+		// Set the appropriate renderer factory based on output format
+		switch c.OutputFormat {
+		case renderer.OutputFormatJSON, renderer.OutputFormatYAML:
+			c.Factories.CompDiffRenderer = func(logger logging.Logger, _ renderer.DiffRenderer, _ bool) renderer.CompDiffRenderer {
+				return renderer.NewStructuredCompDiffRenderer(logger, c.OutputFormat)
+			}
+		case renderer.OutputFormatDiff:
+			fallthrough
+		default:
+			c.Factories.CompDiffRenderer = renderer.NewDefaultCompDiffRenderer
 		}
 	}
 

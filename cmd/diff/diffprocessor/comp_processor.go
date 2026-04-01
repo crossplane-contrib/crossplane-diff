@@ -20,12 +20,12 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"maps"
-	"strings"
+	"os"
 
 	xp "github.com/crossplane-contrib/crossplane-diff/cmd/diff/client/crossplane"
 	"github.com/crossplane-contrib/crossplane-diff/cmd/diff/renderer"
 	dt "github.com/crossplane-contrib/crossplane-diff/cmd/diff/renderer/types"
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	un "k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -78,6 +78,7 @@ type DefaultCompDiffProcessor struct {
 	compositionClient xp.CompositionClient
 	config            ProcessorConfig
 	xrProc            DiffProcessor
+	compDiffRenderer  renderer.CompDiffRenderer
 }
 
 // NewCompDiffProcessor creates a new DefaultCompDiffProcessor.
@@ -87,6 +88,7 @@ func NewCompDiffProcessor(xrProc DiffProcessor, compositionClient xp.Composition
 		Namespace:  "",
 		Colorize:   true,
 		Compact:    false,
+		Stderr:     os.Stderr,
 		Logger:     logging.NewNopLogger(),
 		RenderFunc: render.Render,
 	}
@@ -99,10 +101,17 @@ func NewCompDiffProcessor(xrProc DiffProcessor, compositionClient xp.Composition
 	// Set default factories if not provided
 	config.SetDefaultFactories()
 
+	// Create diff renderer first (needed by DefaultCompDiffRenderer for human-readable output)
+	diffRenderer := config.Factories.DiffRenderer(config.Logger, config.GetDiffOptions())
+
+	// Create comp diff renderer using factory
+	compDiffRenderer := config.Factories.CompDiffRenderer(config.Logger, diffRenderer, config.Colorize)
+
 	return &DefaultCompDiffProcessor{
 		compositionClient: compositionClient,
 		config:            config,
 		xrProc:            xrProc,
+		compDiffRenderer:  compDiffRenderer,
 	}
 }
 
@@ -129,12 +138,17 @@ func (p *DefaultCompDiffProcessor) DiffComposition(ctx context.Context, stdout i
 		return false, errors.New("no compositions provided")
 	}
 
-	var errs []error
+	output := &renderer.CompDiffOutput{
+		Compositions: make([]renderer.CompositionDiff, 0, len(compositions)),
+		Errors:       []dt.OutputError{},
+	}
+
+	var compositionErrors int
 
 	hasDiffs := false
 
 	// Process each composition, filtering out non-Composition objects
-	for i, comp := range compositions {
+	for _, comp := range compositions {
 		// Skip non-Composition objects (e.g., GoTemplate objects extracted from pipeline steps)
 		if comp.GetKind() != "Composition" {
 			p.config.Logger.Debug("Skipping non-Composition object", "kind", comp.GetKind(), "apiVersion", comp.GetAPIVersion())
@@ -144,55 +158,96 @@ func (p *DefaultCompDiffProcessor) DiffComposition(ctx context.Context, stdout i
 		compositionID := comp.GetName() // Use actual name from unstructured
 		p.config.Logger.Debug("Processing composition", "name", compositionID)
 
-		// Process this single composition
-		compHasDiffs, err := p.processSingleComposition(ctx, stdout, comp, namespace)
+		// Process this single composition and build the result
+		compResult, err := p.processSingleComposition(ctx, comp, namespace)
 		if err != nil {
 			p.config.Logger.Debug("Failed to process composition", "composition", compositionID, "error", err)
-			errs = append(errs, errors.Wrapf(err, "cannot process composition %s", compositionID))
 
-			continue
+			compositionErrors++
+
+			// Include failed composition with error instead of skipping
+			output.Compositions = append(output.Compositions, renderer.CompositionDiff{
+				Name:  compositionID,
+				Error: err,
+				AffectedResources: renderer.AffectedResourcesSummary{
+					Total:       0,
+					WithChanges: 0,
+					Unchanged:   0,
+					WithErrors:  0,
+				},
+				ImpactAnalysis: []renderer.XRImpact{},
+			})
+		} else {
+			if compResult.HasChanges() {
+				hasDiffs = true
+			}
+
+			output.Compositions = append(output.Compositions, *compResult)
 		}
+	}
 
-		if compHasDiffs {
-			hasDiffs = true
-		}
-
-		// Add separator between compositions if processing multiple
-		if len(compositions) > 1 && i < len(compositions)-1 {
-			separator := "\n" + strings.Repeat("=", 80) + "\n\n"
-			if _, err := fmt.Fprint(stdout, separator); err != nil {
-				return hasDiffs, errors.Wrap(err, "cannot write composition separator")
+	// Collect XR errors with their resource IDs for top-level errors
+	for _, comp := range output.Compositions {
+		for _, impact := range comp.ImpactAnalysis {
+			if impact.Status == renderer.XRStatusError && impact.Error != nil {
+				resourceID := fmt.Sprintf("%s/%s", impact.Kind, impact.Name)
+				output.Errors = append(output.Errors, dt.OutputError{
+					ResourceID: resourceID,
+					Message:    impact.Error.Error(),
+				})
 			}
 		}
 	}
 
-	// Handle any errors that occurred during processing
-	if len(errs) > 0 {
-		if len(errs) == len(compositions) {
-			// All compositions failed - this is a complete failure
-			return hasDiffs, errors.New("failed to process all compositions")
-		}
-		// Some compositions failed - log the errors but don't fail completely
-		p.config.Logger.Info("Some compositions failed to process", "failedCount", len(errs), "totalCount", len(compositions))
+	// Always render output (even if all compositions failed) to ensure valid structured output
+	if err := p.compDiffRenderer.RenderCompDiff(stdout, output); err != nil {
+		return hasDiffs, errors.Wrap(err, "failed to render composition diff")
+	}
 
-		for _, err := range errs {
-			p.config.Logger.Debug("Composition processing error", "error", err)
-		}
+	// Emit detailed errors to stderr for human visibility alongside structured output.
+	// This ensures CI logs show actual error details even when using JSON/YAML output.
+	for _, err := range output.Errors {
+		_, _ = fmt.Fprintln(p.config.Stderr, err.FormatError())
+	}
+
+	// Check for XR processing errors after rendering (so users see the output first).
+	// Return an error so CI/CD pipelines get a non-zero exit code when impact analysis failed.
+	totalXRErrors := len(output.Errors)
+
+	if totalXRErrors > 0 {
+		return hasDiffs, errors.Errorf("impact analysis failed for %d XR(s)", totalXRErrors)
+	}
+
+	// Return error if all compositions failed
+	if compositionErrors > 0 && compositionErrors == len(output.Compositions) {
+		return hasDiffs, errors.New("failed to process all compositions")
 	}
 
 	return hasDiffs, nil
 }
 
-// processSingleComposition processes a single composition and shows its impact on existing XRs.
-// Returns (hasDiffs, error) where hasDiffs indicates if any differences were detected.
-func (p *DefaultCompDiffProcessor) processSingleComposition(ctx context.Context, stdout io.Writer, newComp *un.Unstructured, namespace string) (bool, error) {
-	// First, show the composition diff itself
-	compDiffDetected, err := p.displayCompositionDiff(ctx, stdout, newComp)
-	if err != nil {
-		return false, errors.Wrap(err, "cannot display composition diff")
+// processSingleComposition processes a single composition and builds the result.
+// Returns (*CompositionDiff, error).
+func (p *DefaultCompDiffProcessor) processSingleComposition(ctx context.Context, newComp *un.Unstructured, namespace string) (*renderer.CompositionDiff, error) {
+	result := &renderer.CompositionDiff{
+		Name:           newComp.GetName(),
+		ImpactAnalysis: []renderer.XRImpact{},
+		AffectedResources: renderer.AffectedResourcesSummary{
+			Total:            0,
+			WithChanges:      0,
+			Unchanged:        0,
+			WithErrors:       0,
+			FilteredByPolicy: 0,
+		},
 	}
 
-	hasDiffs := compDiffDetected
+	// First, calculate the composition diff itself
+	compDiff, err := p.calculateCompositionDiff(ctx, newComp)
+	if err != nil {
+		return nil, errors.Wrap(err, "cannot calculate composition diff")
+	}
+
+	result.CompositionDiff = compDiff
 
 	// Find all composites (XRs and Claims) that use this composition
 	affectedXRs, err := p.compositionClient.FindCompositesUsingComposition(ctx, newComp.GetName(), namespace)
@@ -201,19 +256,15 @@ func (p *DefaultCompDiffProcessor) processSingleComposition(ctx context.Context,
 		// so FindCompositesUsingComposition will fail. This is expected behavior.
 		p.config.Logger.Debug("Cannot find composites using composition (likely net-new composition)",
 			"composition", newComp.GetName(), "error", err)
-
-		// Display the "no XRs found" message for net-new compositions
-		if _, err := fmt.Fprintf(stdout, "No XRs found using composition %s\n", newComp.GetName()); err != nil {
-			return hasDiffs, errors.Wrap(err, "cannot write no XRs message")
-		}
-
-		return hasDiffs, nil
+		// Return result with empty impact analysis for net-new compositions
+		return result, nil
 	}
 
 	p.config.Logger.Debug("Found affected XRs", "composition", newComp.GetName(), "count", len(affectedXRs))
 
 	// Filter XRs based on IncludeManual flag
 	filteredXRs := p.filterXRsByUpdatePolicy(affectedXRs)
+	filteredByPolicy := len(affectedXRs) - len(filteredXRs)
 
 	p.config.Logger.Debug("Filtered XRs by update policy",
 		"composition", newComp.GetName(),
@@ -222,7 +273,9 @@ func (p *DefaultCompDiffProcessor) processSingleComposition(ctx context.Context,
 		"includeManual", p.config.IncludeManual)
 
 	if len(filteredXRs) == 0 {
-		return hasDiffs, p.handleNoXRsFound(stdout, newComp.GetName(), len(affectedXRs))
+		// All XRs were filtered by policy
+		result.AffectedResources.FilteredByPolicy = filteredByPolicy
+		return result, nil
 	}
 
 	// Use filtered XRs for the rest of the processing
@@ -231,63 +284,17 @@ func (p *DefaultCompDiffProcessor) processSingleComposition(ctx context.Context,
 	// Process affected XRs and collect diffs to determine which ones have changes
 	p.config.Logger.Debug("Processing XRs to collect diff information", "count", len(affectedXRs))
 
-	results := p.collectXRDiffs(ctx, stdout, affectedXRs, newComp)
+	xrResults := p.collectXRDiffs(ctx, affectedXRs, newComp)
 
-	// Check if any XRs had changes
-	for _, result := range results {
-		if result.HasChanges() {
-			hasDiffs = true
-			break
-		}
-	}
+	// Build impact analysis and counts from results
+	result.ImpactAnalysis, result.AffectedResources = p.buildImpactAnalysis(affectedXRs, xrResults)
+	result.AffectedResources.FilteredByPolicy = filteredByPolicy
 
-	// Render the impact analysis (XR list and diffs)
-	if err := p.renderXRImpactAnalysis(stdout, affectedXRs, results); err != nil {
-		return hasDiffs, err
-	}
-
-	// Collect any errors from the results and return them
-	var processingErrs []error
-
-	for _, result := range results {
-		if result.HasError() {
-			processingErrs = append(processingErrs, result.Error)
-		}
-	}
-
-	if len(processingErrs) > 0 {
-		return hasDiffs, errors.Join(processingErrs...)
-	}
-
-	return hasDiffs, nil
-}
-
-// handleNoXRsFound writes appropriate messages when no XRs are found or all are filtered.
-func (p *DefaultCompDiffProcessor) handleNoXRsFound(stdout io.Writer, compositionName string, totalXRs int) error {
-	if !p.config.IncludeManual && totalXRs > 0 {
-		// XRs exist but were filtered out due to Manual policy
-		p.config.Logger.Info("All XRs using composition have Manual update policy (use --include-manual to see them)",
-			"composition", compositionName,
-			"filteredCount", totalXRs)
-
-		if _, err := fmt.Fprintf(stdout, "All %d XR(s) using composition %s have Manual update policy (use --include-manual to see them)\n",
-			totalXRs, compositionName); err != nil {
-			return errors.Wrap(err, "cannot write filtered XRs message")
-		}
-	} else {
-		// No XRs found at all
-		p.config.Logger.Info("No XRs found using composition", "composition", compositionName)
-
-		if _, err := fmt.Fprintf(stdout, "No XRs found using composition %s\n", compositionName); err != nil {
-			return errors.Wrap(err, "cannot write no XRs message")
-		}
-	}
-
-	return nil
+	return result, nil
 }
 
 // collectXRDiffs processes XRs and collects their diffs, returning results for each XR.
-func (p *DefaultCompDiffProcessor) collectXRDiffs(ctx context.Context, stdout io.Writer, xrs []*un.Unstructured, newComp *un.Unstructured) map[string]*XRDiffResult {
+func (p *DefaultCompDiffProcessor) collectXRDiffs(ctx context.Context, xrs []*un.Unstructured, newComp *un.Unstructured) map[string]*XRDiffResult {
 	// Convert the CLI composition to typed once for reuse
 	cliComp := &apiextensionsv1.Composition{}
 	if err := runtime.DefaultUnstructuredConverter.FromUnstructured(newComp.Object, cliComp); err != nil {
@@ -295,7 +302,7 @@ func (p *DefaultCompDiffProcessor) collectXRDiffs(ctx context.Context, stdout io
 		results := make(map[string]*XRDiffResult)
 
 		for _, xr := range xrs {
-			resourceID := fmt.Sprintf("%s/%s", xr.GetKind(), xr.GetName())
+			resourceID := dt.MakeDiffKeyFromResource(xr)
 			results[resourceID] = &XRDiffResult{
 				Diffs: make(map[string]*dt.ResourceDiff),
 				Error: errors.Wrap(err, "cannot convert CLI composition to typed"),
@@ -371,17 +378,11 @@ func (p *DefaultCompDiffProcessor) collectXRDiffs(ctx context.Context, stdout io
 	results := make(map[string]*XRDiffResult)
 
 	for _, xr := range xrs {
-		resourceID := fmt.Sprintf("%s/%s", xr.GetKind(), xr.GetName())
+		resourceID := dt.MakeDiffKeyFromResource(xr)
 
 		diffs, err := p.xrProc.DiffSingleResource(ctx, xr, compositionProvider)
 		if err != nil {
 			p.config.Logger.Debug("Failed to process resource", "resource", resourceID, "error", err)
-
-			// Write error message to stdout so user can see it
-			errMsg := fmt.Sprintf("ERROR: Failed to process %s: %v\n\n", resourceID, err)
-			if _, writeErr := fmt.Fprint(stdout, errMsg); writeErr != nil {
-				p.config.Logger.Debug("Failed to write error message", "error", writeErr)
-			}
 
 			// Store the error in the result
 			results[resourceID] = &XRDiffResult{
@@ -400,63 +401,10 @@ func (p *DefaultCompDiffProcessor) collectXRDiffs(ctx context.Context, stdout io
 	return results
 }
 
-// renderXRImpactAnalysis renders the XR list with status indicators and all collected diffs.
-func (p *DefaultCompDiffProcessor) renderXRImpactAnalysis(stdout io.Writer, xrs []*un.Unstructured, results map[string]*XRDiffResult) error {
-	// Build the XR list with status indicators and counts
-	xrList, changedCount, unchangedCount, errorCount := buildXRStatusList(xrs, results, p.config.Colorize)
-
-	// Generate summary line
-	summary := formatXRStatusSummary(changedCount, unchangedCount, errorCount)
-
-	// Write the XR list with summary
-	if _, err := fmt.Fprintf(stdout, "=== Affected Composite Resources ===\n\n%s%s\n=== Impact Analysis ===\n\n",
-		xrList, summary); err != nil {
-		return errors.Wrap(err, "cannot write XR list and headers")
-	}
-
-	// Collect all diffs from the results
-	allDiffs := make(map[string]*dt.ResourceDiff)
-
-	for _, result := range results {
-		if !result.HasError() && result.HasChanges() {
-			maps.Copy(allDiffs, result.Diffs)
-		}
-	}
-
-	// Render all diffs if we found some, or show a message if empty
-	if len(allDiffs) > 0 {
-		diffRenderer := p.config.Factories.DiffRenderer(
-			p.config.Logger,
-			renderer.DiffOptions{
-				UseColors:      p.config.Colorize,
-				AddPrefix:      "+ ",
-				DeletePrefix:   "- ",
-				ContextPrefix:  "  ",
-				ContextLines:   3,
-				ChunkSeparator: "...",
-				Compact:        p.config.Compact,
-			},
-		)
-
-		if err := diffRenderer.RenderDiffs(stdout, allDiffs); err != nil {
-			p.config.Logger.Debug("Failed to render diffs", "error", err)
-			return errors.Wrap(err, "failed to render diffs")
-		}
-	} else {
-		// No diffs found - write explanatory message
-		if _, err := fmt.Fprint(stdout, "All composite resources are up-to-date. No downstream resource changes detected.\n\n"); err != nil {
-			return errors.Wrap(err, "cannot write empty impact message")
-		}
-	}
-
-	return nil
-}
-
-// displayCompositionDiff shows the diff between the cluster composition and the file composition.
-// If the composition doesn't exist in the cluster, it shows it as a new composition.
-// Returns (hasDiffs, error) where hasDiffs indicates if the composition has changes.
-func (p *DefaultCompDiffProcessor) displayCompositionDiff(ctx context.Context, stdout io.Writer, newComp *un.Unstructured) (bool, error) {
-	p.config.Logger.Debug("Displaying composition diff", "composition", newComp.GetName())
+// calculateCompositionDiff calculates the diff between the cluster composition and the file composition.
+// Returns the ResourceDiff (nil if no changes) and any error.
+func (p *DefaultCompDiffProcessor) calculateCompositionDiff(ctx context.Context, newComp *un.Unstructured) (*dt.ResourceDiff, error) {
+	p.config.Logger.Debug("Calculating composition diff", "composition", newComp.GetName())
 
 	var originalCompUnstructured *un.Unstructured
 
@@ -472,7 +420,7 @@ func (p *DefaultCompDiffProcessor) displayCompositionDiff(ctx context.Context, s
 		// Convert original composition to unstructured for comparison
 		unstructuredObj, err := runtime.DefaultUnstructuredConverter.ToUnstructured(originalComp)
 		if err != nil {
-			return false, errors.Wrap(err, "cannot convert original composition to unstructured")
+			return nil, errors.Wrap(err, "cannot convert original composition to unstructured")
 		}
 
 		originalCompUnstructured = &un.Unstructured{Object: unstructuredObj}
@@ -505,7 +453,7 @@ func (p *DefaultCompDiffProcessor) displayCompositionDiff(ctx context.Context, s
 
 	compDiff, err := renderer.GenerateDiffWithOptions(ctx, originalCompUnstructured, newCompUnstructured, p.config.Logger, diffOptions)
 	if err != nil {
-		return false, errors.Wrap(err, "cannot calculate composition diff")
+		return nil, errors.Wrap(err, "cannot calculate composition diff")
 	}
 
 	p.config.Logger.Debug("Calculated composition diff",
@@ -513,47 +461,13 @@ func (p *DefaultCompDiffProcessor) displayCompositionDiff(ctx context.Context, s
 		"hasChanges", compDiff != nil,
 		"isNewComposition", originalCompUnstructured == nil)
 
-	// Add header for composition changes (common to all cases)
-	if _, err := fmt.Fprintf(stdout, "=== Composition Changes ===\n\n"); err != nil {
-		return false, errors.Wrap(err, "cannot write composition changes header")
-	}
-
-	// Display the composition diff if there are changes
-	switch compDiff.DiffType {
-	case dt.DiffTypeEqual:
-		// No changes detected (only possible for existing compositions)
+	// Return nil if no changes
+	if compDiff.DiffType == dt.DiffTypeEqual {
 		p.config.Logger.Info("No changes detected in composition", "composition", newComp.GetName())
-
-		if _, err := fmt.Fprintf(stdout, "No changes detected in composition %s\n\n", newComp.GetName()); err != nil {
-			return false, errors.Wrap(err, "cannot write no changes message")
-		}
-
-		return false, nil
-	case dt.DiffTypeAdded, dt.DiffTypeRemoved, dt.DiffTypeModified:
-		// Changes detected - show the diff
-		// Create a diff renderer with proper options
-		rendererOptions := renderer.DefaultDiffOptions()
-		rendererOptions.UseColors = p.config.Colorize
-		rendererOptions.Compact = p.config.Compact
-		diffRenderer := renderer.NewDiffRenderer(p.config.Logger, rendererOptions)
-
-		// Create a map with the single composition diff
-		diffs := map[string]*dt.ResourceDiff{
-			fmt.Sprintf("Composition/%s", newComp.GetName()): compDiff,
-		}
-
-		if err := diffRenderer.RenderDiffs(stdout, diffs); err != nil {
-			return false, errors.Wrap(err, "cannot render composition diff")
-		}
-
-		if _, err := fmt.Fprintf(stdout, "\n"); err != nil {
-			return false, errors.Wrap(err, "cannot write separator")
-		}
-
-		return true, nil
+		return nil, nil
 	}
 
-	return false, nil
+	return compDiff, nil
 }
 
 // filterXRsByUpdatePolicy filters XRs based on the IncludeManual configuration.
@@ -605,91 +519,42 @@ func (p *DefaultCompDiffProcessor) getCompositionUpdatePolicy(xr *un.Unstructure
 	return "Automatic"
 }
 
-// pluralize returns "s" if count is not 1, otherwise returns empty string.
-func pluralize(count int) string {
-	if count == 1 {
-		return ""
-	}
-
-	return "s"
-}
-
-// formatXRStatusSummary generates the summary line with correct pluralization.
-func formatXRStatusSummary(changedCount, unchangedCount, errorCount int) string {
-	parts := []string{}
-
-	if changedCount > 0 {
-		parts = append(parts, fmt.Sprintf("%d resource%s with changes", changedCount, pluralize(changedCount)))
-	}
-
-	if unchangedCount > 0 {
-		parts = append(parts, fmt.Sprintf("%d resource%s unchanged", unchangedCount, pluralize(unchangedCount)))
-	}
-
-	if errorCount > 0 {
-		parts = append(parts, fmt.Sprintf("%d resource%s with errors", errorCount, pluralize(errorCount)))
-	}
-
-	return fmt.Sprintf("\nSummary: %s\n", strings.Join(parts, ", "))
-}
-
-// buildXRStatusList builds the XR list with status indicators and returns the formatted string with counts.
-func buildXRStatusList(xrs []*un.Unstructured, results map[string]*XRDiffResult, colorize bool) (xrList string, changedCount, unchangedCount, errorCount int) {
-	var sb strings.Builder
-
-	// Color codes and indicators (colors remain empty strings when colorization is disabled)
-	checkMark := "✓"
-	warningMark := "⚠"
-	errorMark := "✗"
-	colorGreen := ""
-	colorYellow := ""
-	colorRed := ""
-	colorReset := ""
-
-	if colorize {
-		colorGreen = dt.ColorGreen
-		colorYellow = dt.ColorYellow
-		colorRed = dt.ColorRed
-		colorReset = dt.ColorReset
+// buildImpactAnalysis builds the impact analysis and summary from XR results.
+func (p *DefaultCompDiffProcessor) buildImpactAnalysis(xrs []*un.Unstructured, results map[string]*XRDiffResult) ([]renderer.XRImpact, renderer.AffectedResourcesSummary) {
+	impacts := make([]renderer.XRImpact, 0, len(xrs))
+	summary := renderer.AffectedResourcesSummary{
+		Total: len(xrs),
 	}
 
 	for _, xr := range xrs {
-		resourceID := fmt.Sprintf("%s/%s", xr.GetKind(), xr.GetName())
+		resourceID := dt.MakeDiffKeyFromResource(xr)
+		result := results[resourceID]
 
-		// Format namespace/scope information
-		scope := fmt.Sprintf("namespace: %s", xr.GetNamespace())
-		if xr.GetNamespace() == "" {
-			scope = "cluster-scoped"
+		impact := renderer.XRImpact{
+			ObjectReference: corev1.ObjectReference{
+				APIVersion: xr.GetAPIVersion(),
+				Kind:       xr.GetKind(),
+				Name:       xr.GetName(),
+				Namespace:  xr.GetNamespace(),
+			},
 		}
 
-		// Determine status indicator and color based on result
-		var indicator, color string
-
-		result := results[resourceID]
 		switch {
 		case result != nil && result.HasError():
-			// Processing error - show red X
-			indicator = errorMark
-			color = colorRed
-			errorCount++
+			impact.Status = renderer.XRStatusError
+			impact.Error = result.Error
+			summary.WithErrors++
 		case result != nil && result.HasChanges():
-			// Has changes - show yellow warning
-			indicator = warningMark
-			color = colorYellow
-			changedCount++
+			impact.Status = renderer.XRStatusChanged
+			impact.Diffs = result.Diffs
+			summary.WithChanges++
 		default:
-			// No changes - show green check
-			indicator = checkMark
-			color = colorGreen
-			unchangedCount++
+			impact.Status = renderer.XRStatusUnchanged
+			summary.Unchanged++
 		}
 
-		fmt.Fprintf(&sb, "%s  %s %s/%s (%s)%s\n",
-			color,
-			indicator,
-			xr.GetKind(), xr.GetName(), scope,
-			colorReset)
+		impacts = append(impacts, impact)
 	}
 
-	return sb.String(), changedCount, unchangedCount, errorCount
+	return impacts, summary
 }

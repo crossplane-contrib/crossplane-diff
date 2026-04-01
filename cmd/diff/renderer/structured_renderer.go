@@ -8,6 +8,7 @@ import (
 	"slices"
 
 	dt "github.com/crossplane-contrib/crossplane-diff/cmd/diff/renderer/types"
+	corev1 "k8s.io/api/core/v1"
 	sigsyaml "sigs.k8s.io/yaml"
 
 	"github.com/crossplane/crossplane-runtime/v2/pkg/errors"
@@ -26,27 +27,128 @@ const (
 	OutputFormatYAML OutputFormat = "yaml"
 )
 
+// XRStatus represents the processing status of an XR in composition diffs.
+type XRStatus string
+
+const (
+	// XRStatusChanged indicates the XR has downstream resource changes.
+	XRStatusChanged XRStatus = "changed"
+	// XRStatusUnchanged indicates the XR has no downstream resource changes.
+	XRStatusUnchanged XRStatus = "unchanged"
+	// XRStatusError indicates an error occurred while processing the XR.
+	XRStatusError XRStatus = "error"
+)
+
+// OutputError is an alias for dt.OutputError for convenience.
+// Use this type for error handling in structured output.
+type OutputError = dt.OutputError
+
 // StructuredDiffOutput represents the structured output format for diffs.
+// Note: Only JSON tags are used because sigs.k8s.io/yaml uses JSON tags for YAML serialization.
 type StructuredDiffOutput struct {
-	Summary Summary        `json:"summary" yaml:"summary"`
-	Changes []ChangeDetail `json:"changes" yaml:"changes"`
+	Summary Summary          `json:"summary"`
+	Changes []ChangeDetail   `json:"changes"`
+	Errors  []dt.OutputError `json:"errors,omitempty"`
 }
 
 // Summary contains aggregated counts of changes.
 type Summary struct {
-	Added    int `json:"added"    yaml:"added"`
-	Modified int `json:"modified" yaml:"modified"`
-	Removed  int `json:"removed"  yaml:"removed"`
+	Added    int `json:"added"`
+	Modified int `json:"modified"`
+	Removed  int `json:"removed"`
 }
 
 // ChangeDetail represents a single resource change.
 type ChangeDetail struct {
-	Type       string         `json:"type"                yaml:"type"`
-	APIVersion string         `json:"apiVersion"          yaml:"apiVersion"`
-	Kind       string         `json:"kind"                yaml:"kind"`
-	Name       string         `json:"name"                yaml:"name"`
-	Namespace  string         `json:"namespace,omitempty" yaml:"namespace,omitempty"`
-	Diff       map[string]any `json:"diff"                yaml:"diff"`
+	Type       string         `json:"type"`
+	APIVersion string         `json:"apiVersion"`
+	Kind       string         `json:"kind"`
+	Name       string         `json:"name"`
+	Namespace  string         `json:"namespace,omitempty"`
+	Diff       map[string]any `json:"diff"`
+}
+
+// CompDiffOutput is the top-level output for composition diffs (internal representation).
+// This stores rich ResourceDiff data. Conversion to JSON happens in the renderer.
+type CompDiffOutput struct {
+	Compositions []CompositionDiff
+	Errors       []dt.OutputError // top-level errors (e.g., XRs that failed impact analysis)
+}
+
+// CompositionDiff represents the diff result for a single composition (internal).
+// This stores rich ResourceDiff data. Conversion to JSON happens in the renderer.
+type CompositionDiff struct {
+	Name              string
+	Error             error            // per-composition error (nil if successful)
+	CompositionDiff   *dt.ResourceDiff // the actual composition diff (nil if unchanged)
+	AffectedResources AffectedResourcesSummary
+	ImpactAnalysis    []XRImpact
+}
+
+// HasChanges returns true if this composition diff has any changes.
+func (c *CompositionDiff) HasChanges() bool {
+	if c.CompositionDiff != nil && c.CompositionDiff.DiffType != dt.DiffTypeEqual {
+		return true
+	}
+
+	for _, impact := range c.ImpactAnalysis {
+		if impact.Status == XRStatusChanged {
+			return true
+		}
+	}
+
+	return false
+}
+
+// AffectedResourcesSummary contains counts of affected resources by status.
+type AffectedResourcesSummary struct {
+	Total            int `json:"total"`
+	WithChanges      int `json:"withChanges"`
+	Unchanged        int `json:"unchanged"`
+	WithErrors       int `json:"withErrors"`
+	FilteredByPolicy int `json:"filteredByPolicy,omitempty"`
+}
+
+// XRImpact represents the impact analysis for a single XR (internal).
+// This stores rich ResourceDiff data. Conversion to JSON happens in the renderer.
+// Embeds corev1.ObjectReference for the common resource identity fields.
+type XRImpact struct {
+	corev1.ObjectReference
+
+	Status XRStatus
+	Error  error                       // store actual error, not string
+	Diffs  map[string]*dt.ResourceDiff // downstream diffs (nil if unchanged/error)
+}
+
+// --- JSON Output Types (used by StructuredCompDiffRenderer) ---
+// Note: Only JSON tags are used because sigs.k8s.io/yaml uses JSON tags for YAML serialization.
+
+// compDiffJSONOutput is the JSON schema for composition diffs.
+type compDiffJSONOutput struct {
+	Compositions []compositionDiffJSON `json:"compositions"`
+	Errors       []dt.OutputError      `json:"errors,omitempty"`
+}
+
+type compositionDiffJSON struct {
+	Name               string                   `json:"name"`
+	Error              string                   `json:"error,omitempty"`
+	CompositionChanges *ChangeDetail            `json:"compositionChanges,omitempty"`
+	AffectedResources  AffectedResourcesSummary `json:"affectedResources"`
+	ImpactAnalysis     []xrImpactJSON           `json:"impactAnalysis"`
+}
+
+type xrImpactJSON struct {
+	corev1.ObjectReference `json:",inline"`
+
+	Status            XRStatus           `json:"status"`
+	Error             string             `json:"error,omitempty"`
+	DownstreamChanges *DownstreamChanges `json:"downstreamChanges,omitempty"`
+}
+
+// DownstreamChanges contains the downstream resource changes for an XR.
+type DownstreamChanges struct {
+	Summary Summary        `json:"summary"`
+	Changes []ChangeDetail `json:"changes"`
 }
 
 // StructuredDiffRenderer renders diffs in structured formats (JSON/YAML).
@@ -64,12 +166,14 @@ func NewStructuredDiffRenderer(logger logging.Logger, format OutputFormat) DiffR
 }
 
 // RenderDiffs renders the diffs in the configured structured format.
-func (r *StructuredDiffRenderer) RenderDiffs(stdout io.Writer, diffs map[string]*dt.ResourceDiff) error {
+func (r *StructuredDiffRenderer) RenderDiffs(stdout io.Writer, diffs map[string]*dt.ResourceDiff, errs []dt.OutputError) error {
 	r.logger.Debug("Rendering diffs in structured format",
 		"format", r.format,
-		"diffCount", len(diffs))
+		"diffCount", len(diffs),
+		"errorCount", len(errs))
 
 	output := r.buildStructuredOutput(diffs)
+	output.Errors = errs
 
 	var (
 		data []byte
@@ -207,4 +311,81 @@ func compareStrings(a, b string) int {
 	}
 
 	return 0
+}
+
+// resourceDiffToChangeDetail converts a ResourceDiff to a ChangeDetail for JSON output.
+func resourceDiffToChangeDetail(diff *dt.ResourceDiff) *ChangeDetail {
+	change := &ChangeDetail{
+		Type:       string(diff.DiffType),
+		APIVersion: diff.Gvk.GroupVersion().String(),
+		Kind:       diff.Gvk.Kind,
+		Name:       diff.ResourceName,
+		Namespace:  diff.Namespace,
+		Diff:       make(map[string]any),
+	}
+
+	// Build the diff detail structure
+	switch diff.DiffType {
+	case dt.DiffTypeAdded:
+		if diff.Desired != nil {
+			change.Diff["spec"] = diff.Desired.Object
+		}
+	case dt.DiffTypeRemoved:
+		if diff.Current != nil {
+			change.Diff["spec"] = diff.Current.Object
+		}
+	case dt.DiffTypeModified:
+		if diff.Current != nil && diff.Desired != nil {
+			change.Diff["old"] = diff.Current.Object
+			change.Diff["new"] = diff.Desired.Object
+		}
+	case dt.DiffTypeEqual:
+		// Equal diffs have no detail to show
+	}
+
+	return change
+}
+
+// buildDownstreamChanges builds DownstreamChanges from a map of ResourceDiffs.
+func buildDownstreamChanges(diffs map[string]*dt.ResourceDiff) *DownstreamChanges {
+	if len(diffs) == 0 {
+		return nil
+	}
+
+	changes := &DownstreamChanges{
+		Summary: Summary{},
+		Changes: make([]ChangeDetail, 0),
+	}
+
+	// Sort by key for deterministic output order
+	sortedKeys := slices.Sorted(maps.Keys(diffs))
+	for _, key := range sortedKeys {
+		diff := diffs[key]
+
+		// Skip equal diffs
+		if diff.DiffType == dt.DiffTypeEqual {
+			continue
+		}
+
+		// Update summary counts
+		switch diff.DiffType {
+		case dt.DiffTypeAdded:
+			changes.Summary.Added++
+		case dt.DiffTypeModified:
+			changes.Summary.Modified++
+		case dt.DiffTypeRemoved:
+			changes.Summary.Removed++
+		case dt.DiffTypeEqual:
+			// Equal diffs already filtered above, this case satisfies exhaustive lint check
+		}
+
+		changes.Changes = append(changes.Changes, *resourceDiffToChangeDetail(diff))
+	}
+
+	// Return nil if no non-equal changes
+	if len(changes.Changes) == 0 {
+		return nil
+	}
+
+	return changes
 }

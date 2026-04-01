@@ -62,3 +62,23 @@ func MakeDiffKey(apiVersion, kind, namespace, name string) string {
 func MakeDiffKeyFromResource(res *un.Unstructured) string {
 	return MakeDiffKey(res.GetAPIVersion(), res.GetKind(), res.GetNamespace(), res.GetName())
 }
+
+// OutputError represents an error in structured output.
+// Used consistently by both XR diff and comp diff for machine-readable error handling.
+// Note: Only JSON tags are used because sigs.k8s.io/yaml uses JSON tags for YAML serialization.
+type OutputError struct {
+	ResourceID string `json:"resourceID,omitempty"`
+	Message    string `json:"message"`
+}
+
+// FormatError returns a human-readable error string.
+// If ResourceID is empty, it uses "<global>" to indicate a system-level error
+// not tied to any specific resource (e.g., cluster connection issues).
+func (e OutputError) FormatError() string {
+	resourceID := e.ResourceID
+	if resourceID == "" {
+		resourceID = "<global>"
+	}
+
+	return fmt.Sprintf("ERROR: %s: %s", resourceID, e.Message)
+}
