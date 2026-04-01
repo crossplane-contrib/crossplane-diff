@@ -299,14 +299,13 @@ func TestDiffCompositionWithClaims(t *testing.T) {
 					WithFieldChange("spec.forProvider.fields.resourceTier", "basic", "premium").
 					AndXR().
 					AndComp().
-					// Claim impact
+					// Claim impact - downstream includes both the claim and the backing XR's composed resources
 					WithXRImpact("NopClaimDiffResource", "test-comp-claim", "default", "changed").
-					WithDownstreamSummary(0, 1, 0). // The Claim itself is modified in downstream
+					WithDownstreamSummary(0, 2, 0). // Claim + ClusterNopResource modified
 					WithDownstreamResource("modified", "NopClaimDiffResource", "test-comp-claim", "default").
 					WithFieldAdded("spec.compositionUpdatePolicy", "Automatic").
 					AndXR().
-					AndComp().
-					And())
+					AndComp())
 
 				return ctx
 			}).
