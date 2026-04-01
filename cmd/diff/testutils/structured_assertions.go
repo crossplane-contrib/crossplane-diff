@@ -17,6 +17,7 @@ import (
 type StructuredDiffOutput struct {
 	Summary Summary        `json:"summary"`
 	Changes []ChangeDetail `json:"changes"`
+	Errors  []OutputError  `json:"errors,omitempty"`
 }
 
 // Summary mirrors renderer.Summary.
@@ -50,17 +51,17 @@ type expectedSummary struct {
 
 // ResourceExpectation defines expectations for a single resource change.
 type ResourceExpectation struct {
-	parent              *ExpectedDiff
-	changeType          string // "added", "modified", "removed"
-	kind                string
-	name                string
-	namePattern         *regexp.Regexp
-	namespace           string
-	fieldValues         map[string]any            // For added/removed: field path -> expected value
-	fieldChanges        map[string][2]any         // For modified: field path -> [old, new]
-	fieldValuePatterns  map[string]*regexp.Regexp // For pattern matching field values
-	specMatch           map[string]any            // For strict spec matching
-	anyNameAllowed      bool                      // If true, any name is accepted
+	parent             *ExpectedDiff
+	changeType         string // "added", "modified", "removed"
+	kind               string
+	name               string
+	namePattern        *regexp.Regexp
+	namespace          string
+	fieldValues        map[string]any            // For added/removed: field path -> expected value
+	fieldChanges       map[string][2]any         // For modified: field path -> [old, new]
+	fieldValuePatterns map[string]*regexp.Regexp // For pattern matching field values
+	specMatch          map[string]any            // For strict spec matching
+	anyNameAllowed     bool                      // If true, any name is accepted
 }
 
 // ExpectDiff creates a new ExpectedDiff builder.
@@ -77,6 +78,7 @@ func (e *ExpectedDiff) WithSummary(added, modified, removed int) *ExpectedDiff {
 		modified: modified,
 		removed:  removed,
 	}
+
 	return e
 }
 
@@ -93,6 +95,7 @@ func (e *ExpectedDiff) WithAddedResource(kind, name, namespace string) *Resource
 		fieldValuePatterns: make(map[string]*regexp.Regexp),
 	}
 	e.resources = append(e.resources, r)
+
 	return r
 }
 
@@ -109,6 +112,7 @@ func (e *ExpectedDiff) WithModifiedResource(kind, name, namespace string) *Resou
 		fieldValuePatterns: make(map[string]*regexp.Regexp),
 	}
 	e.resources = append(e.resources, r)
+
 	return r
 }
 
@@ -125,6 +129,7 @@ func (e *ExpectedDiff) WithRemovedResource(kind, name, namespace string) *Resour
 		fieldValuePatterns: make(map[string]*regexp.Regexp),
 	}
 	e.resources = append(e.resources, r)
+
 	return r
 }
 
@@ -169,6 +174,7 @@ func (r *ResourceExpectation) WithSpec(spec map[string]any) *ResourceExpectation
 func (r *ResourceExpectation) WithNamePattern(pattern string) *ResourceExpectation {
 	r.namePattern = regexp.MustCompile(pattern)
 	r.anyNameAllowed = false
+
 	return r
 }
 
@@ -189,10 +195,13 @@ func ParseStructuredOutput(jsonOutput string) (StructuredDiffOutput, error) {
 	if err := json.Unmarshal([]byte(jsonOutput), &output); err != nil {
 		return output, fmt.Errorf("failed to parse JSON output: %w", err)
 	}
+
 	return output, nil
 }
 
 // AssertStructuredDiff compares actual JSON output against expected.
+//
+//nolint:gocognit // Test assertion function with necessary branching for comprehensive validation
 func AssertStructuredDiff(t *testing.T, jsonOutput string, expected *ExpectedDiff) {
 	t.Helper()
 
@@ -206,9 +215,11 @@ func AssertStructuredDiff(t *testing.T, jsonOutput string, expected *ExpectedDif
 		if output.Summary.Added != expected.summary.added {
 			t.Errorf("Summary.Added: expected %d, got %d", expected.summary.added, output.Summary.Added)
 		}
+
 		if output.Summary.Modified != expected.summary.modified {
 			t.Errorf("Summary.Modified: expected %d, got %d", expected.summary.modified, output.Summary.Modified)
 		}
+
 		if output.Summary.Removed != expected.summary.removed {
 			t.Errorf("Summary.Removed: expected %d, got %d", expected.summary.removed, output.Summary.Removed)
 		}
@@ -223,8 +234,10 @@ func AssertStructuredDiff(t *testing.T, jsonOutput string, expected *ExpectedDif
 			for _, c := range output.Changes {
 				actualResources = append(actualResources, fmt.Sprintf("%s %s/%s (ns=%s)", c.Type, c.Kind, c.Name, c.Namespace))
 			}
+
 			t.Errorf("Expected %s resource %s/%s (ns=%s) not found in output. Actual resources: %v",
 				expectRes.changeType, expectRes.kind, expectRes.name, expectRes.namespace, actualResources)
+
 			continue
 		}
 
@@ -246,6 +259,7 @@ func AssertStructuredDiff(t *testing.T, jsonOutput string, expected *ExpectedDif
 				t.Errorf("%s %s/%s: field %s old value: expected %v, got %v",
 					expectRes.changeType, expectRes.kind, expectRes.name, path, change[0], oldVal)
 			}
+
 			if !valuesEqual(newVal, change[1]) {
 				t.Errorf("%s %s/%s: field %s new value: expected %v, got %v",
 					expectRes.changeType, expectRes.kind, expectRes.name, path, change[1], newVal)
@@ -255,6 +269,7 @@ func AssertStructuredDiff(t *testing.T, jsonOutput string, expected *ExpectedDif
 		// Validate field value patterns
 		for path, pattern := range expectRes.fieldValuePatterns {
 			actualValue := getNewFieldValue(found.Diff, expectRes.changeType, path)
+
 			actualStr := fmt.Sprintf("%v", actualValue)
 			if !pattern.MatchString(actualStr) {
 				t.Errorf("%s %s/%s: field %s value %q does not match pattern %q",
@@ -290,9 +305,11 @@ func findMatchingChange(changes []ChangeDetail, expect *ResourceExpectation) *Ch
 		if change.Type != expect.changeType {
 			continue
 		}
+
 		if change.Kind != expect.kind {
 			continue
 		}
+
 		if expect.namespace != "" && change.Namespace != expect.namespace {
 			continue
 		}
@@ -301,16 +318,20 @@ func findMatchingChange(changes []ChangeDetail, expect *ResourceExpectation) *Ch
 		if expect.anyNameAllowed {
 			return change
 		}
+
 		if expect.namePattern != nil {
 			if expect.namePattern.MatchString(change.Name) {
 				return change
 			}
+
 			continue
 		}
+
 		if change.Name == expect.name {
 			return change
 		}
 	}
+
 	return nil
 }
 
@@ -319,11 +340,13 @@ func findMatchingChange(changes []ChangeDetail, expect *ResourceExpectation) *Ch
 func getFieldFromDiff(diff map[string]any, key, path string) any {
 	// Handle special keys for modified resources
 	var root any
-	if key == "old" || key == "new" {
+
+	switch key {
+	case "old", "new":
 		root = diff[key]
-	} else if key == dt.DiffTypeWordAdded || key == dt.DiffTypeWordRemoved {
+	case dt.DiffTypeWordAdded, dt.DiffTypeWordRemoved:
 		root = diff["spec"]
-	} else {
+	default:
 		root = diff[key]
 	}
 
@@ -341,6 +364,7 @@ func getNewFieldValue(diff map[string]any, changeType, path string) any {
 	if changeType == dt.DiffTypeWordModified {
 		return getFieldFromDiff(diff, "new", path)
 	}
+
 	return getFieldFromDiff(diff, changeType, path)
 }
 
@@ -401,6 +425,7 @@ func valuesEqual(a, b any) bool {
 	if a == nil && b == nil {
 		return true
 	}
+
 	if a == nil || b == nil {
 		return false
 	}
@@ -443,6 +468,7 @@ func mapsMatch(actual, expected map[string]any) bool {
 	if len(actual) != len(expected) {
 		return false
 	}
+
 	for k, ev := range expected {
 		av, exists := actual[k]
 		if !exists {
@@ -454,12 +480,15 @@ func mapsMatch(actual, expected map[string]any) bool {
 			if !ok || !mapsMatch(am, em) {
 				return false
 			}
+
 			continue
 		}
+
 		if !valuesEqual(av, ev) {
 			return false
 		}
 	}
+
 	return true
 }
 
@@ -473,7 +502,7 @@ type StructuredCompDiffOutput struct {
 
 // OutputError mirrors dt.OutputError.
 type OutputError struct {
-	ResourceID string `json:"resourceId,omitempty"`
+	ResourceID string `json:"resourceID,omitempty"`
 	Message    string `json:"message"`
 }
 
@@ -519,6 +548,7 @@ func ParseStructuredCompOutput(jsonOutput string) (StructuredCompDiffOutput, err
 	if err := json.Unmarshal([]byte(jsonOutput), &output); err != nil {
 		return output, fmt.Errorf("failed to parse comp diff JSON output: %w", err)
 	}
+
 	return output, nil
 }
 
@@ -529,14 +559,13 @@ type ExpectedCompDiff struct {
 
 // CompositionExpectation defines expectations for a single composition in the diff.
 type CompositionExpectation struct {
-	parent                   *ExpectedCompDiff
-	name                     string
-	affectedTotal            *int
-	affectedWithChanges      *int
-	affectedUnchanged        *int
-	affectedWithErrors       *int
-	affectedFilteredByPolicy *int
-	xrImpacts                []*XRImpactExpectation
+	parent              *ExpectedCompDiff
+	name                string
+	affectedTotal       *int
+	affectedWithChanges *int
+	affectedUnchanged   *int
+	affectedWithErrors  *int
+	xrImpacts           []*XRImpactExpectation
 	// Composition changes expectations
 	compositionChangeType   string            // "modified" - composition changes are always modifications
 	compositionFieldChanges map[string][2]any // For modified: field path -> [old, new]
@@ -569,6 +598,7 @@ func (e *ExpectedCompDiff) WithComposition(name string) *CompositionExpectation 
 		xrImpacts: make([]*XRImpactExpectation, 0),
 	}
 	e.compositions = append(e.compositions, c)
+
 	return c
 }
 
@@ -578,6 +608,7 @@ func (c *CompositionExpectation) WithAffectedResources(total, withChanges, uncha
 	c.affectedWithChanges = &withChanges
 	c.affectedUnchanged = &unchanged
 	c.affectedWithErrors = &withErrors
+
 	return c
 }
 
@@ -587,6 +618,7 @@ func (c *CompositionExpectation) WithCompositionModified() *CompositionExpectati
 	if c.compositionFieldChanges == nil {
 		c.compositionFieldChanges = make(map[string][2]any)
 	}
+
 	return c
 }
 
@@ -595,7 +627,9 @@ func (c *CompositionExpectation) WithCompositionFieldChange(path string, oldValu
 	if c.compositionFieldChanges == nil {
 		c.compositionFieldChanges = make(map[string][2]any)
 	}
+
 	c.compositionFieldChanges[path] = [2]any{oldValue, newValue}
+
 	return c
 }
 
@@ -609,6 +643,7 @@ func (c *CompositionExpectation) WithXRImpact(kind, name, namespace, status stri
 		status:    status,
 	}
 	c.xrImpacts = append(c.xrImpacts, x)
+
 	return x
 }
 
@@ -625,6 +660,7 @@ func (x *XRImpactExpectation) WithDownstreamSummary(added, modified, removed int
 		modified: modified,
 		removed:  removed,
 	}
+
 	return x
 }
 
@@ -642,6 +678,7 @@ func (x *XRImpactExpectation) WithDownstreamResource(changeType, kind, name, nam
 		fieldValuePatterns: make(map[string]*regexp.Regexp),
 	}
 	x.downstreamResources = append(x.downstreamResources, r)
+
 	return r
 }
 
@@ -718,6 +755,8 @@ func (c *CompositionExpectation) And() *ExpectedCompDiff {
 }
 
 // AssertStructuredCompDiff compares actual JSON output against expected.
+//
+//nolint:gocognit // Test assertion function with necessary branching for comprehensive validation
 func AssertStructuredCompDiff(t *testing.T, jsonOutput string, expected *ExpectedCompDiff) {
 	t.Helper()
 
@@ -734,8 +773,10 @@ func AssertStructuredCompDiff(t *testing.T, jsonOutput string, expected *Expecte
 			for _, c := range output.Compositions {
 				actualComps = append(actualComps, c.Name)
 			}
+
 			t.Errorf("Expected composition %s not found in output. Actual compositions: %v",
 				expectComp.name, actualComps)
+
 			continue
 		}
 
@@ -744,14 +785,17 @@ func AssertStructuredCompDiff(t *testing.T, jsonOutput string, expected *Expecte
 			t.Errorf("Composition %s: AffectedResources.Total: expected %d, got %d",
 				expectComp.name, *expectComp.affectedTotal, found.AffectedResources.Total)
 		}
+
 		if expectComp.affectedWithChanges != nil && found.AffectedResources.WithChanges != *expectComp.affectedWithChanges {
 			t.Errorf("Composition %s: AffectedResources.WithChanges: expected %d, got %d",
 				expectComp.name, *expectComp.affectedWithChanges, found.AffectedResources.WithChanges)
 		}
+
 		if expectComp.affectedUnchanged != nil && found.AffectedResources.Unchanged != *expectComp.affectedUnchanged {
 			t.Errorf("Composition %s: AffectedResources.Unchanged: expected %d, got %d",
 				expectComp.name, *expectComp.affectedUnchanged, found.AffectedResources.Unchanged)
 		}
+
 		if expectComp.affectedWithErrors != nil && found.AffectedResources.WithErrors != *expectComp.affectedWithErrors {
 			t.Errorf("Composition %s: AffectedResources.WithErrors: expected %d, got %d",
 				expectComp.name, *expectComp.affectedWithErrors, found.AffectedResources.WithErrors)
@@ -776,6 +820,7 @@ func AssertStructuredCompDiff(t *testing.T, jsonOutput string, expected *Expecte
 						t.Errorf("Composition %s: field %s old value: expected %v, got %v",
 							expectComp.name, path, expected[0], oldVal)
 					}
+
 					if !valuesEqual(newVal, expected[1]) {
 						t.Errorf("Composition %s: field %s new value: expected %v, got %v",
 							expectComp.name, path, expected[1], newVal)
@@ -792,8 +837,10 @@ func AssertStructuredCompDiff(t *testing.T, jsonOutput string, expected *Expecte
 				for _, x := range found.ImpactAnalysis {
 					actualXRs = append(actualXRs, fmt.Sprintf("%s/%s (ns=%s, status=%s)", x.Kind, x.Name, x.Namespace, x.Status))
 				}
+
 				t.Errorf("Composition %s: Expected XR impact %s/%s (ns=%s) not found. Actual XRs: %v",
 					expectComp.name, expectXR.kind, expectXR.name, expectXR.namespace, actualXRs)
+
 				continue
 			}
 
@@ -809,10 +856,12 @@ func AssertStructuredCompDiff(t *testing.T, jsonOutput string, expected *Expecte
 					t.Errorf("Composition %s: XR %s/%s: DownstreamChanges.Summary.Added: expected %d, got %d",
 						expectComp.name, expectXR.kind, expectXR.name, expectXR.downstreamSummary.added, foundXR.DownstreamChanges.Summary.Added)
 				}
+
 				if foundXR.DownstreamChanges.Summary.Modified != expectXR.downstreamSummary.modified {
 					t.Errorf("Composition %s: XR %s/%s: DownstreamChanges.Summary.Modified: expected %d, got %d",
 						expectComp.name, expectXR.kind, expectXR.name, expectXR.downstreamSummary.modified, foundXR.DownstreamChanges.Summary.Modified)
 				}
+
 				if foundXR.DownstreamChanges.Summary.Removed != expectXR.downstreamSummary.removed {
 					t.Errorf("Composition %s: XR %s/%s: DownstreamChanges.Summary.Removed: expected %d, got %d",
 						expectComp.name, expectXR.kind, expectXR.name, expectXR.downstreamSummary.removed, foundXR.DownstreamChanges.Summary.Removed)
@@ -824,6 +873,7 @@ func AssertStructuredCompDiff(t *testing.T, jsonOutput string, expected *Expecte
 				if foundXR.DownstreamChanges == nil {
 					t.Errorf("Composition %s: XR %s/%s: expected downstream resource %s/%s but no downstream changes present",
 						expectComp.name, expectXR.kind, expectXR.name, expectRes.kind, expectRes.name)
+
 					continue
 				}
 
@@ -833,8 +883,10 @@ func AssertStructuredCompDiff(t *testing.T, jsonOutput string, expected *Expecte
 					for _, c := range foundXR.DownstreamChanges.Changes {
 						actualRes = append(actualRes, fmt.Sprintf("%s/%s (type=%s)", c.Kind, c.Name, c.Type))
 					}
+
 					t.Errorf("Composition %s: XR %s/%s: expected downstream resource %s/%s not found. Actual: %v",
 						expectComp.name, expectXR.kind, expectXR.name, expectRes.kind, expectRes.name, actualRes)
+
 					continue
 				}
 
@@ -871,6 +923,7 @@ func findMatchingComposition(comps []CompositionDiffJSON, name string) *Composit
 			return &comps[i]
 		}
 	}
+
 	return nil
 }
 
@@ -881,6 +934,7 @@ func findMatchingXRImpact(impacts []XRImpactJSON, expect *XRImpactExpectation) *
 		if impact.Kind != expect.kind {
 			continue
 		}
+
 		if expect.namespace != "" && impact.Namespace != expect.namespace {
 			continue
 		}
@@ -889,10 +943,12 @@ func findMatchingXRImpact(impacts []XRImpactJSON, expect *XRImpactExpectation) *
 		if expect.anyNameAllowed {
 			return impact
 		}
+
 		if impact.Name == expect.name {
 			return impact
 		}
 	}
+
 	return nil
 }
 
@@ -903,9 +959,11 @@ func findMatchingDownstreamChange(changes []ChangeDetail, expect *DownstreamReso
 		if change.Type != expect.changeType {
 			continue
 		}
+
 		if change.Kind != expect.kind {
 			continue
 		}
+
 		if expect.namespace != "" && change.Namespace != expect.namespace {
 			continue
 		}
@@ -914,16 +972,20 @@ func findMatchingDownstreamChange(changes []ChangeDetail, expect *DownstreamReso
 		if expect.anyNameAllowed {
 			return change
 		}
+
 		if expect.namePattern != nil {
 			if expect.namePattern.MatchString(change.Name) {
 				return change
 			}
+
 			continue
 		}
+
 		if change.Name == expect.name {
 			return change
 		}
 	}
+
 	return nil
 }
 
@@ -939,6 +1001,7 @@ func assertDownstreamFieldChange(t *testing.T, compName string, expectXR *XRImpa
 		t.Errorf("Composition %s: XR %s/%s: downstream %s/%s: field %s old value: expected %v, got %v",
 			compName, expectXR.kind, expectXR.name, expectRes.kind, foundRes.Name, path, expectedOld, actualOld)
 	}
+
 	if !valuesEqual(actualNew, expectedNew) {
 		t.Errorf("Composition %s: XR %s/%s: downstream %s/%s: field %s new value: expected %v, got %v",
 			compName, expectXR.kind, expectXR.name, expectRes.kind, foundRes.Name, path, expectedNew, actualNew)
@@ -963,6 +1026,7 @@ func assertDownstreamFieldValuePattern(t *testing.T, compName string, expectXR *
 	t.Helper()
 
 	actualValue := getNewFieldValue(foundRes.Diff, expectRes.changeType, path)
+
 	actualStr := fmt.Sprintf("%v", actualValue)
 	if !pattern.MatchString(actualStr) {
 		t.Errorf("Composition %s: XR %s/%s: downstream %s/%s: field %s value %q does not match pattern %q",

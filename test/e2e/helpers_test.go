@@ -30,10 +30,10 @@ import (
 	"testing"
 	"unicode"
 
+	tu "github.com/crossplane-contrib/crossplane-diff/cmd/diff/testutils"
 	corev1 "k8s.io/api/core/v1"
 	"sigs.k8s.io/e2e-framework/pkg/envconf"
 
-	tu "github.com/crossplane-contrib/crossplane-diff/cmd/diff/testutils"
 	"github.com/crossplane/crossplane-runtime/v2/pkg/resource/unstructured/composed"
 )
 
@@ -402,133 +402,4 @@ func AssertStructuredCompDiff(t *testing.T, jsonOutput string, expected *tu.Expe
 func AssertStructuredDiff(t *testing.T, jsonOutput string, expected *tu.ExpectedDiff) {
 	t.Helper()
 	tu.AssertStructuredDiff(t, jsonOutput, expected)
-}
-
-// assertStructuredDiffMatchesFile compares JSON diff output against an expected JSON file.
-// If E2E_DUMP_EXPECTED is set, writes the actual output to the expected file for regeneration.
-func assertStructuredDiffMatchesFile(t *testing.T, actual string, expectedPath string, log string) {
-	t.Helper()
-
-	// If E2E_DUMP_EXPECTED is set, write the actual output to the expected file
-	if os.Getenv("E2E_DUMP_EXPECTED") != "" {
-		// Ensure the directory exists
-		if err := os.MkdirAll(filepath.Dir(expectedPath), 0o755); err != nil {
-			t.Fatalf("Failed to create directory for expected file: %v", err)
-		}
-
-		// Parse and re-marshal to get consistent formatting
-		var parsed tu.StructuredDiffOutput
-		if err := json.Unmarshal([]byte(actual), &parsed); err != nil {
-			t.Fatalf("Failed to parse actual JSON output: %v", err)
-		}
-
-		// Normalize dynamic values before writing
-		normalizeStructuredOutput(&parsed)
-
-		formatted, err := json.MarshalIndent(parsed, "", "  ")
-		if err != nil {
-			t.Fatalf("Failed to format JSON output: %v", err)
-		}
-
-		// Add trailing newline for clean file endings
-		formatted = append(formatted, '\n')
-
-		if err := os.WriteFile(expectedPath, formatted, 0o644); err != nil {
-			t.Fatalf("Failed to write expected file: %v", err)
-		}
-
-		t.Logf("Wrote normalized expected JSON to %s", expectedPath)
-
-		return
-	}
-
-	// Read expected file
-	expected, err := os.ReadFile(expectedPath)
-	if err != nil {
-		t.Fatalf("Failed to read expected file %s: %v", expectedPath, err)
-	}
-
-	// Parse both actual and expected
-	var actualParsed, expectedParsed tu.StructuredDiffOutput
-	if err := json.Unmarshal([]byte(actual), &actualParsed); err != nil {
-		t.Fatalf("Failed to parse actual JSON output: %v\nRaw output:\n%s", err, actual)
-	}
-
-	if err := json.Unmarshal(expected, &expectedParsed); err != nil {
-		t.Fatalf("Failed to parse expected JSON file %s: %v", expectedPath, err)
-	}
-
-	// Normalize dynamic values for comparison
-	normalizeStructuredOutput(&actualParsed)
-
-	// Compare summaries
-	if actualParsed.Summary.Added != expectedParsed.Summary.Added {
-		t.Errorf("Summary.Added: expected %d, got %d", expectedParsed.Summary.Added, actualParsed.Summary.Added)
-	}
-
-	if actualParsed.Summary.Modified != expectedParsed.Summary.Modified {
-		t.Errorf("Summary.Modified: expected %d, got %d", expectedParsed.Summary.Modified, actualParsed.Summary.Modified)
-	}
-
-	if actualParsed.Summary.Removed != expectedParsed.Summary.Removed {
-		t.Errorf("Summary.Removed: expected %d, got %d", expectedParsed.Summary.Removed, actualParsed.Summary.Removed)
-	}
-
-	// Compare change counts
-	if len(actualParsed.Changes) != len(expectedParsed.Changes) {
-		t.Errorf("Change count mismatch: expected %d, got %d", len(expectedParsed.Changes), len(actualParsed.Changes))
-		t.Logf("Expected changes: %v", summarizeChanges(expectedParsed.Changes))
-		t.Logf("Actual changes: %v", summarizeChanges(actualParsed.Changes))
-	}
-
-	// Compare individual changes
-	for i, expectedChange := range expectedParsed.Changes {
-		if i >= len(actualParsed.Changes) {
-			t.Errorf("Missing change at index %d: expected %s %s/%s", i, expectedChange.Type, expectedChange.Kind, expectedChange.Name)
-
-			continue
-		}
-
-		actualChange := actualParsed.Changes[i]
-		if actualChange.Type != expectedChange.Type {
-			t.Errorf("Change %d: type mismatch - expected %s, got %s", i, expectedChange.Type, actualChange.Type)
-		}
-
-		if actualChange.Kind != expectedChange.Kind {
-			t.Errorf("Change %d: kind mismatch - expected %s, got %s", i, expectedChange.Kind, actualChange.Kind)
-		}
-
-		// Normalize names for comparison
-		normalizedActualName := normalizeLine(actualChange.Name)
-		normalizedExpectedName := normalizeLine(expectedChange.Name)
-		if normalizedActualName != normalizedExpectedName {
-			t.Errorf("Change %d: name mismatch - expected %s, got %s (normalized: %s vs %s)",
-				i, expectedChange.Name, actualChange.Name, normalizedExpectedName, normalizedActualName)
-		}
-	}
-
-	if t.Failed() {
-		t.Logf("Log output:\n%s", log)
-	}
-}
-
-// normalizeStructuredOutput normalizes dynamic values in a StructuredDiffOutput for comparison.
-func normalizeStructuredOutput(output *tu.StructuredDiffOutput) {
-	for i := range output.Changes {
-		output.Changes[i].Name = normalizeLine(output.Changes[i].Name)
-		// Normalize namespace if present
-		if output.Changes[i].Namespace != "" {
-			output.Changes[i].Namespace = normalizeLine(output.Changes[i].Namespace)
-		}
-	}
-}
-
-// summarizeChanges returns a string summarizing the changes for debug output.
-func summarizeChanges(changes []tu.ChangeDetail) string {
-	var parts []string
-	for _, c := range changes {
-		parts = append(parts, fmt.Sprintf("%s %s/%s", c.Type, c.Kind, c.Name))
-	}
-
-	return strings.Join(parts, ", ")
 }

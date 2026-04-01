@@ -34,6 +34,7 @@ func TestParseStructuredOutput(t *testing.T) {
 				t.Errorf("ParseStructuredOutput() error = %v, wantErr %v", err, tt.wantErr)
 				return
 			}
+
 			if !tt.wantErr && output.Summary.Added != tt.wantAdded {
 				t.Errorf("Summary.Added = %d, want %d", output.Summary.Added, tt.wantAdded)
 			}
@@ -41,7 +42,7 @@ func TestParseStructuredOutput(t *testing.T) {
 	}
 }
 
-func TestAssertStructuredDiff_Summary(t *testing.T) {
+func TestAssertStructuredDiff_Summary(_ *testing.T) {
 	jsonOutput := `{
 		"summary": {"added": 1, "modified": 2, "removed": 3},
 		"changes": []
@@ -52,7 +53,7 @@ func TestAssertStructuredDiff_Summary(t *testing.T) {
 	AssertStructuredDiff(mockT, jsonOutput, ExpectDiff().WithSummary(1, 2, 3))
 }
 
-func TestAssertStructuredDiff_AddedResource(t *testing.T) {
+func TestAssertStructuredDiff_AddedResource(_ *testing.T) {
 	jsonOutput := `{
 		"summary": {"added": 1, "modified": 0, "removed": 0},
 		"changes": [{
@@ -82,7 +83,7 @@ func TestAssertStructuredDiff_AddedResource(t *testing.T) {
 			And())
 }
 
-func TestAssertStructuredDiff_ModifiedResource(t *testing.T) {
+func TestAssertStructuredDiff_ModifiedResource(_ *testing.T) {
 	jsonOutput := `{
 		"summary": {"added": 0, "modified": 1, "removed": 0},
 		"changes": [{
@@ -107,7 +108,7 @@ func TestAssertStructuredDiff_ModifiedResource(t *testing.T) {
 			And())
 }
 
-func TestAssertStructuredDiff_RemovedResource(t *testing.T) {
+func TestAssertStructuredDiff_RemovedResource(_ *testing.T) {
 	jsonOutput := `{
 		"summary": {"added": 0, "modified": 0, "removed": 1},
 		"changes": [{
@@ -137,7 +138,7 @@ func TestAssertStructuredDiff_RemovedResource(t *testing.T) {
 			And())
 }
 
-func TestAssertStructuredDiff_NamePattern(t *testing.T) {
+func TestAssertStructuredDiff_NamePattern(_ *testing.T) {
 	jsonOutput := `{
 		"summary": {"added": 1, "modified": 0, "removed": 0},
 		"changes": [{
@@ -305,7 +306,7 @@ func TestGetNestedFieldWithBracketNotation(t *testing.T) {
 	obj := map[string]any{
 		"metadata": map[string]any{
 			"annotations": map[string]any{
-				"getcomposed.example.org/source-bucket": "bucket-name-abc123",
+				"getcomposed.example.org/source-bucket":   "bucket-name-abc123",
 				"crossplane.io/composition-resource-name": "test-resource",
 				"simple-key": "simple-value",
 			},
@@ -378,7 +379,7 @@ func TestValuesEqual(t *testing.T) {
 	}
 }
 
-func TestAssertStructuredCompDiff_DownstreamFieldChanges(t *testing.T) {
+func TestAssertStructuredCompDiff_DownstreamFieldChanges(_ *testing.T) {
 	jsonOutput := `{
 		"compositions": [{
 			"name": "test-composition",
@@ -487,6 +488,7 @@ func TestFindMatchingDownstreamChange(t *testing.T) {
 					kind:       "ClusterNopResource",
 				}
 				d.WithNamePattern(`test-resource-[a-z0-9]+`)
+
 				return d
 			}(),
 			want: true,
@@ -521,7 +523,7 @@ func TestFindMatchingDownstreamChange(t *testing.T) {
 	}
 }
 
-func TestAssertStructuredCompDiff_FieldValuePattern(t *testing.T) {
+func TestAssertStructuredCompDiff_FieldValuePattern(_ *testing.T) {
 	jsonOutput := `{
 		"compositions": [{
 			"name": "test-composition",

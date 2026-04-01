@@ -23,11 +23,11 @@ import (
 	"testing"
 	"time"
 
+	tu "github.com/crossplane-contrib/crossplane-diff/cmd/diff/testutils"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/e2e-framework/pkg/envconf"
 	"sigs.k8s.io/e2e-framework/pkg/features"
 
-	tu "github.com/crossplane-contrib/crossplane-diff/cmd/diff/testutils"
 	xpv1 "github.com/crossplane/crossplane-runtime/v2/apis/common/v1"
 
 	apiextensionsv1 "github.com/crossplane/crossplane/v2/apis/apiextensions/v1"

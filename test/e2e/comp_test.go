@@ -23,10 +23,10 @@ import (
 	"testing"
 	"time"
 
+	tu "github.com/crossplane-contrib/crossplane-diff/cmd/diff/testutils"
 	"sigs.k8s.io/e2e-framework/pkg/envconf"
 	"sigs.k8s.io/e2e-framework/pkg/features"
 
-	tu "github.com/crossplane-contrib/crossplane-diff/cmd/diff/testutils"
 	xpv1 "github.com/crossplane/crossplane-runtime/v2/apis/common/v1"
 
 	apiextensionsv1 "github.com/crossplane/crossplane/v2/apis/apiextensions/v1"
@@ -140,10 +140,12 @@ func TestCompDiffLargeFanout(t *testing.T) {
 				if len(output.Compositions) != 1 {
 					t.Fatalf("Expected 1 composition, got %d", len(output.Compositions))
 				}
+
 				comp := output.Compositions[0]
 				if comp.AffectedResources.Total != 29 {
 					t.Errorf("Expected 29 affected XRs, got %d", comp.AffectedResources.Total)
 				}
+
 				if comp.AffectedResources.WithChanges != 29 {
 					t.Errorf("Expected 29 XRs with changes, got %d", comp.AffectedResources.WithChanges)
 				}
@@ -216,7 +218,7 @@ func TestDiffCompositionWithGetComposedResource(t *testing.T) {
 				//   metadata.annotations.getcomposed.example.org/source-bucket: <bucket-name> (added)
 				AssertStructuredCompDiff(t, jsonOutput, tu.ExpectCompDiff().
 					WithComposition("xgetcomposedresources.getcomposed.example.org").
-					WithCompositionModified(). // Composition itself is modified (adds go-templating step)
+					WithCompositionModified().         // Composition itself is modified (adds go-templating step)
 					WithAffectedResources(1, 1, 0, 0). // total=1, changed=1, unchanged=0, errors=0
 					WithXRImpact("XGetComposedResource", "test-getcomposed-resource", "", "changed").
 					WithDownstreamSummary(0, 1, 0). // ClusterNopResource modified
@@ -285,11 +287,11 @@ func TestDiffCompositionWithClaims(t *testing.T) {
 				//   spec.compositionUpdatePolicy: Automatic (added field)
 				AssertStructuredCompDiff(t, jsonOutput, tu.ExpectCompDiff().
 					WithComposition("xnopclaimdiffresources.claimdiff.example.org").
-					WithCompositionModified(). // Composition itself is modified
+					WithCompositionModified().         // Composition itself is modified
 					WithAffectedResources(2, 2, 0, 0). // Both XR and Claim have changes
 					// XR impact - backing XR with generated name
 					WithXRImpact("XNopClaimDiffResource", "", "", "changed").
-					WithAnyName(). // XR name is generated (test-comp-claim-XXXXX)
+					WithAnyName().                  // XR name is generated (test-comp-claim-XXXXX)
 					WithDownstreamSummary(0, 1, 0). // ClusterNopResource modified
 					WithDownstreamResource("modified", "ClusterNopResource", "", "").
 					WithAnyName(). // ClusterNopResource name matches XR name
