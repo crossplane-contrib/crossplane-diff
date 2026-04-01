@@ -353,14 +353,16 @@ func TestDiffExistingClaimSpecFieldRemoval(t *testing.T) {
 				// Verify the composed resource (ClusterNopResource) shows the annotation changes:
 				// - old-field annotation removed
 				// - new-field annotation added
-				// Resource names contain random suffixes (e.g., test-claim-abc123)
+				// Resource names contain random suffixes (e.g., test-field-removal-abc123)
+				// The claim itself (NopFieldTest) is also shown as modified
 				AssertStructuredDiff(t, jsonOutput, tu.ExpectDiff().
-					WithSummary(0, 1, 0). // 1 modified resource
+					WithSummary(0, 2, 0). // 2 modified: ClusterNopResource + NopFieldTest claim
 					WithModifiedResource("ClusterNopResource", "", "").
-					WithNamePattern(`test-field-claim-[a-z0-9]+`).
+					WithNamePattern(`test-field-removal-[a-z0-9]+-[a-z0-9]+`).
 					WithFieldRemoved("metadata.annotations.old-field", "old-value").
 					WithFieldAdded("metadata.annotations.new-field", "new-value").
-					And())
+					And().
+					WithModifiedResource("NopFieldTest", "test-field-removal", "default"))
 
 				return ctx
 			}).
