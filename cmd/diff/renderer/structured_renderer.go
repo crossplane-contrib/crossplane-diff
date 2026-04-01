@@ -316,7 +316,7 @@ func compareStrings(a, b string) int {
 // resourceDiffToChangeDetail converts a ResourceDiff to a ChangeDetail for JSON output.
 func resourceDiffToChangeDetail(diff *dt.ResourceDiff) *ChangeDetail {
 	change := &ChangeDetail{
-		Type:       string(diff.DiffType),
+		Type:       diff.DiffType.ToWord(),
 		APIVersion: diff.Gvk.GroupVersion().String(),
 		Kind:       diff.Gvk.Kind,
 		Name:       diff.ResourceName,

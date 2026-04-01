@@ -337,31 +337,30 @@ func TestDiffExistingClaimSpecFieldRemoval(t *testing.T) {
 				// The modified claim removes oldField and adds newField
 				// If crossplane-diff incorrectly preserves oldField from the backing XR,
 				// the strict composition will fail with "DEPRECATED: oldField is no longer supported"
-				output, log, err := RunXRDiff(t, c, "./crossplane-diff", exitCodeDiffDetected, filepath.Join(manifests, "modified-claim.yaml"))
+				output, jsonOutput, log, err := RunXRDiffJSON(t, c, "./crossplane-diff", exitCodeDiffDetected, filepath.Join(manifests, "modified-claim.yaml"))
 				if err != nil {
 					t.Fatalf("Error running diff command: %v\nLog output:\n%s", err, log)
 				}
 
-				// Note: We use content-based assertions rather than exact file matching
-				// because resource names contain random suffixes (e.g., test-claim-abc123)
-				// that change on each test run. Content-based assertions are more robust
-				// for validating the behavior we care about.
-
-				// Verify the output does NOT contain the deprecated field error
-				// This is the key assertion - if oldField was incorrectly preserved, this error would appear
-				if strings.Contains(output, "DEPRECATED: oldField is no longer supported") {
-					t.Fatalf("Diff output contains deprecated field error - oldField was incorrectly preserved from backing XR:\n%s", output)
+				// Key assertion: If oldField was incorrectly preserved from the backing XR,
+				// the strict composition would fail with "DEPRECATED: oldField is no longer supported"
+				// and the diff would contain errors. The presence of a successful modified resource
+				// proves oldField was correctly excluded.
+				if len(output.Errors) > 0 {
+					t.Fatalf("Diff output contains errors (oldField may have been incorrectly preserved):\n%v", output.Errors)
 				}
 
-				// Verify the diff shows the expected field change in the composed resource
-				// The old-field annotation should be removed (marked with -)
-				if !strings.Contains(output, "-     old-field:") {
-					t.Fatalf("Diff output does not show old-field annotation removal:\n%s", output)
-				}
-				// The new-field annotation should be added (marked with +)
-				if !strings.Contains(output, "+     new-field:") {
-					t.Fatalf("Diff output does not show new-field annotation addition:\n%s", output)
-				}
+				// Verify the composed resource (ClusterNopResource) shows the annotation changes:
+				// - old-field annotation removed
+				// - new-field annotation added
+				// Resource names contain random suffixes (e.g., test-claim-abc123)
+				AssertStructuredDiff(t, jsonOutput, tu.ExpectDiff().
+					WithSummary(0, 1, 0). // 1 modified resource
+					WithModifiedResource("ClusterNopResource", "", "").
+					WithNamePattern(`test-field-claim-[a-z0-9]+`).
+					WithFieldRemoved("metadata.annotations.old-field", "old-value").
+					WithFieldAdded("metadata.annotations.new-field", "new-value").
+					And())
 
 				return ctx
 			}).

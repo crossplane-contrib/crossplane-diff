@@ -368,9 +368,9 @@ func RunXRDiffJSON(t *testing.T, c *envconf.Config, binPath string, expectedExit
 }
 
 // RunCompDiffJSON runs the crossplane comp diff command with JSON output format.
-// It returns the parsed structured output, raw JSON string, log output, and any error.
+// It returns the parsed structured comp diff output, raw JSON string, log output, and any error.
 // expectedExitCode specifies which exit code is expected.
-func RunCompDiffJSON(t *testing.T, c *envconf.Config, binPath string, expectedExitCode int, compositionPaths ...string) (*tu.StructuredDiffOutput, string, string, error) {
+func RunCompDiffJSON(t *testing.T, c *envconf.Config, binPath string, expectedExitCode int, compositionPaths ...string) (*tu.StructuredCompDiffOutput, string, string, error) {
 	t.Helper()
 
 	stdout, stderr, exitCode, err := runCrossplaneDiff(t, c, binPath, "comp", []string{"--output=json"}, compositionPaths...)
@@ -382,12 +382,19 @@ func RunCompDiffJSON(t *testing.T, c *envconf.Config, binPath string, expectedEx
 		return nil, stdout, stderr, fmt.Errorf("unexpected exit code %d, expected %d", exitCode, expectedExitCode)
 	}
 
-	var output tu.StructuredDiffOutput
+	var output tu.StructuredCompDiffOutput
 	if err := json.Unmarshal([]byte(stdout), &output); err != nil {
-		return nil, stdout, stderr, fmt.Errorf("failed to parse JSON output: %w\nRaw output:\n%s", err, stdout)
+		return nil, stdout, stderr, fmt.Errorf("failed to parse comp diff JSON output: %w\nRaw output:\n%s", err, stdout)
 	}
 
 	return &output, stdout, stderr, nil
+}
+
+// AssertStructuredCompDiff validates JSON comp diff output against an ExpectedCompDiff specification.
+// This is a wrapper around tu.AssertStructuredCompDiff for E2E test convenience.
+func AssertStructuredCompDiff(t *testing.T, jsonOutput string, expected *tu.ExpectedCompDiff) {
+	t.Helper()
+	tu.AssertStructuredCompDiff(t, jsonOutput, expected)
 }
 
 // AssertStructuredDiff validates JSON diff output against an ExpectedDiff specification.

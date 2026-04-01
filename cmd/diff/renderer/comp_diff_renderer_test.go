@@ -400,8 +400,8 @@ func TestCompDiffOutput_JSONSchema(t *testing.T) {
 		t.Error("Expected compositionChanges to be present")
 	}
 
-	if comp.CompositionChanges.Type != "~" {
-		t.Errorf("Expected compositionChanges.type '~', got '%s'", comp.CompositionChanges.Type)
+	if comp.CompositionChanges.Type != "modified" {
+		t.Errorf("Expected compositionChanges.type 'modified', got '%s'", comp.CompositionChanges.Type)
 	}
 
 	// Verify error impact in JSON
