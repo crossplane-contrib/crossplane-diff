@@ -74,6 +74,7 @@ var clusterNopList = composed.NewList(composed.FromReferenceToList(corev1.Object
 var (
 	resourceNameRegex                 = regexp.MustCompile(`(existing-resource)-[a-z0-9]{5,}(?:-nop-resource)?`)
 	compResourceNameRegex             = regexp.MustCompile(`(test-comp-resource)-[a-z0-9]{5,}`)
+	getComposedResourceNameRegex      = regexp.MustCompile(`(test-getcomposed-resource)-[a-z0-9]{5,}`)
 	fanoutResourceNameRegex           = regexp.MustCompile(`(test-fanout-resource-\d{2})-[a-z0-9]{5,}`)
 	claimNameRegex                    = regexp.MustCompile(`(test-claim)-[a-z0-9]{5,}(?:-[a-z0-9]{5,})?`)
 	compClaimNameRegex                = regexp.MustCompile(`(test-comp-claim)-[a-z0-9]{5,}`)
@@ -177,6 +178,7 @@ func normalizeLine(line string) string {
 	// Replace resource names with random suffixes
 	line = resourceNameRegex.ReplaceAllString(line, "${1}-XXXXX")
 	line = compResourceNameRegex.ReplaceAllString(line, "${1}-XXXXX")
+	line = getComposedResourceNameRegex.ReplaceAllString(line, "${1}-XXXXX")
 	line = fanoutResourceNameRegex.ReplaceAllString(line, "${1}-XXXXX")
 	line = claimNameRegex.ReplaceAllString(line, "${1}-XXXXX")
 	line = compClaimNameRegex.ReplaceAllString(line, "${1}-XXXXX")

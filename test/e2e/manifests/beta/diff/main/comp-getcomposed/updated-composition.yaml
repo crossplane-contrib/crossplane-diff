@@ -53,12 +53,19 @@ spec:
         inline:
           template: |
             {{ $bucket := getComposedResource . "test-bucket" }}
+            {{ $lifecycle := getComposedResource . "test-lifecycle" }}
             ---
-            apiVersion: getcomposed.example.org/v1alpha1
-            kind: XGetComposedResource
-            status:
-              bucketRef:
-                name: {{ $bucket.metadata.name }}
+            apiVersion: {{ $lifecycle.apiVersion }}
+            kind: {{ $lifecycle.kind }}
+            metadata:
+              name: {{ $lifecycle.metadata.name }}
+              annotations:
+                gotemplating.fn.crossplane.io/composition-resource-name: test-lifecycle
+                {{ range $k, $v := $lifecycle.metadata.annotations }}
+                {{ $k }}: {{ $v | quote }}
+                {{ end }}
+                getcomposed.example.org/source-bucket: {{ $bucket.metadata.name }}
+            spec: {{ $lifecycle.spec | toYaml | nindent 14 }}
     - step: detect-ready-resources
       functionRef:
         name: function-auto-ready
