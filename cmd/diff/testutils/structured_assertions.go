@@ -38,11 +38,19 @@ type ChangeDetail struct {
 	Diff       map[string]any `json:"diff"`
 }
 
+// DiffExpectation is an interface that allows AssertStructuredDiff to accept
+// either *ExpectedDiff or *ResourceExpectation, eliminating the need for And().
+type DiffExpectation interface {
+	expectation() *ExpectedDiff
+}
+
 // ExpectedDiff is a fluent builder for test expectations on structured diff output.
 type ExpectedDiff struct {
 	summary   *expectedSummary
 	resources []*ResourceExpectation
 }
+
+func (e *ExpectedDiff) expectation() *ExpectedDiff { return e }
 
 type expectedSummary struct {
 	added    int
@@ -64,6 +72,8 @@ type ResourceExpectation struct {
 	specMatch          map[string]any            // For strict spec matching
 	anyNameAllowed     bool                      // If true, any name is accepted
 }
+
+func (r *ResourceExpectation) expectation() *ExpectedDiff { return r.parent }
 
 // ExpectDiff creates a new ExpectedDiff builder.
 func ExpectDiff() *ExpectedDiff {
@@ -185,7 +195,8 @@ func (r *ResourceExpectation) WithAnyName() *ResourceExpectation {
 	return r
 }
 
-// And returns the parent ExpectedDiff to chain more resource expectations.
+// And returns to parent to chain more resource expectations.
+// Not needed at the end of a chain - AssertStructuredDiff accepts ResourceExpectation directly.
 func (r *ResourceExpectation) And() *ExpectedDiff {
 	return r.parent
 }
@@ -201,10 +212,13 @@ func ParseStructuredOutput(jsonOutput string) (StructuredDiffOutput, error) {
 }
 
 // AssertStructuredDiff compares actual JSON output against expected.
+// Accepts DiffExpectation interface so callers don't need to call And() to return to root.
 //
 //nolint:gocognit // Test assertion function with necessary branching for comprehensive validation
-func AssertStructuredDiff(t *testing.T, jsonOutput string, expected *ExpectedDiff) {
+func AssertStructuredDiff(t *testing.T, jsonOutput string, e DiffExpectation) {
 	t.Helper()
+
+	expected := e.expectation()
 
 	output, err := ParseStructuredOutput(jsonOutput)
 	if err != nil {
@@ -485,10 +499,18 @@ func ParseStructuredCompOutput(jsonOutput string) (StructuredCompDiffOutput, err
 	return output, nil
 }
 
+// CompDiffExpectation is an interface that allows AssertStructuredCompDiff to accept
+// any level of the builder hierarchy, eliminating the need for And()/AndXR()/AndComp().
+type CompDiffExpectation interface {
+	compExpectation() *ExpectedCompDiff
+}
+
 // ExpectedCompDiff is a fluent builder for test expectations on composition diff output.
 type ExpectedCompDiff struct {
 	compositions []*CompositionExpectation
 }
+
+func (e *ExpectedCompDiff) compExpectation() *ExpectedCompDiff { return e }
 
 // CompositionExpectation defines expectations for a single composition in the diff.
 type CompositionExpectation struct {
@@ -504,6 +526,8 @@ type CompositionExpectation struct {
 	compositionFieldChanges map[string][2]any // For modified: field path -> [old, new]
 }
 
+func (c *CompositionExpectation) compExpectation() *ExpectedCompDiff { return c.parent }
+
 // XRImpactExpectation defines expectations for a single XR impact.
 type XRImpactExpectation struct {
 	parent              *CompositionExpectation
@@ -515,6 +539,8 @@ type XRImpactExpectation struct {
 	downstreamSummary   *expectedSummary
 	downstreamResources []*DownstreamResourceExpectation
 }
+
+func (x *XRImpactExpectation) compExpectation() *ExpectedCompDiff { return x.parent.parent }
 
 // ExpectCompDiff creates a new ExpectedCompDiff builder.
 func ExpectCompDiff() *ExpectedCompDiff {
@@ -629,6 +655,10 @@ type DownstreamResourceExpectation struct {
 	fieldValuePatterns map[string]*regexp.Regexp // For pattern matching field values
 }
 
+func (d *DownstreamResourceExpectation) compExpectation() *ExpectedCompDiff {
+	return d.parent.parent.parent
+}
+
 // WithFieldChange asserts a field changed from old to new value (for modified resources).
 func (d *DownstreamResourceExpectation) WithFieldChange(path string, oldValue, newValue any) *DownstreamResourceExpectation {
 	d.fieldChanges[path] = [2]any{oldValue, newValue}
@@ -672,26 +702,32 @@ func (d *DownstreamResourceExpectation) WithNamePattern(pattern string) *Downstr
 	return d
 }
 
-// AndXR returns the parent XRImpactExpectation to chain more downstream resources.
+// AndXR returns to parent to chain more downstream resource expectations.
+// Not needed at the end of a chain - AssertStructuredCompDiff accepts DownstreamResourceExpectation directly.
 func (d *DownstreamResourceExpectation) AndXR() *XRImpactExpectation {
 	return d.parent
 }
 
-// AndComp returns the parent CompositionExpectation to chain more XR impacts.
+// AndComp returns to parent to chain more XR impact expectations.
+// Not needed at the end of a chain - AssertStructuredCompDiff accepts XRImpactExpectation directly.
 func (x *XRImpactExpectation) AndComp() *CompositionExpectation {
 	return x.parent
 }
 
-// And returns the parent ExpectedCompDiff to chain more compositions.
+// And returns to parent to chain more composition expectations.
+// Not needed at the end of a chain - AssertStructuredCompDiff accepts CompositionExpectation directly.
 func (c *CompositionExpectation) And() *ExpectedCompDiff {
 	return c.parent
 }
 
 // AssertStructuredCompDiff compares actual JSON output against expected.
+// Accepts CompDiffExpectation interface so callers don't need to call And()/AndXR()/AndComp().
 //
 //nolint:gocognit // Test assertion function with necessary branching for comprehensive validation
-func AssertStructuredCompDiff(t *testing.T, jsonOutput string, expected *ExpectedCompDiff) {
+func AssertStructuredCompDiff(t *testing.T, jsonOutput string, e CompDiffExpectation) {
 	t.Helper()
+
+	expected := e.compExpectation()
 
 	output, err := ParseStructuredCompOutput(jsonOutput)
 	if err != nil {
