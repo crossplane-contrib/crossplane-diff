@@ -1,6 +1,7 @@
 package testutils
 
 import (
+	"reflect"
 	"testing"
 )
 
@@ -182,7 +183,7 @@ func TestGetNestedField(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.path, func(t *testing.T) {
 			got := getNestedField(obj, tt.path)
-			if !valuesEqual(got, tt.want) {
+			if !reflect.DeepEqual(got, tt.want) {
 				t.Errorf("getNestedField(%q) = %v, want %v", tt.path, got, tt.want)
 			}
 		})
@@ -294,7 +295,7 @@ func TestGetNestedFieldWithArrayIndex(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			got := getNestedField(obj, tt.path)
-			if !valuesEqual(got, tt.want) {
+			if !reflect.DeepEqual(got, tt.want) {
 				t.Errorf("getNestedField(%q) = %v, want %v", tt.path, got, tt.want)
 			}
 		})
@@ -348,32 +349,8 @@ func TestGetNestedFieldWithBracketNotation(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			got := getNestedField(obj, tt.path)
-			if !valuesEqual(got, tt.want) {
+			if !reflect.DeepEqual(got, tt.want) {
 				t.Errorf("getNestedField(%q) = %v, want %v", tt.path, got, tt.want)
-			}
-		})
-	}
-}
-
-func TestValuesEqual(t *testing.T) {
-	tests := []struct {
-		name string
-		a, b any
-		want bool
-	}{
-		{"nil == nil", nil, nil, true},
-		{"string match", "foo", "foo", true},
-		{"string mismatch", "foo", "bar", false},
-		{"int == float64", 42, float64(42), true},
-		{"float64 == int", float64(42), 42, true},
-		{"bool match", true, true, true},
-		{"bool mismatch", true, false, false},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if got := valuesEqual(tt.a, tt.b); got != tt.want {
-				t.Errorf("valuesEqual(%v, %v) = %v, want %v", tt.a, tt.b, got, tt.want)
 			}
 		})
 	}

@@ -4,6 +4,7 @@ package testutils
 import (
 	"encoding/json"
 	"fmt"
+	"reflect"
 	"regexp"
 	"strings"
 	"testing"
@@ -244,7 +245,7 @@ func AssertStructuredDiff(t *testing.T, jsonOutput string, expected *ExpectedDif
 		// Validate field values for added/removed resources
 		for path, expectedValue := range expectRes.fieldValues {
 			actualValue := getFieldFromDiff(found.Diff, expectRes.changeType, path)
-			if !valuesEqual(actualValue, expectedValue) {
+			if !reflect.DeepEqual(actualValue, expectedValue) {
 				t.Errorf("%s %s/%s: field %s: expected %v, got %v",
 					expectRes.changeType, expectRes.kind, expectRes.name, path, expectedValue, actualValue)
 			}
@@ -255,12 +256,12 @@ func AssertStructuredDiff(t *testing.T, jsonOutput string, expected *ExpectedDif
 			oldVal := getFieldFromDiff(found.Diff, "old", path)
 			newVal := getFieldFromDiff(found.Diff, "new", path)
 
-			if !valuesEqual(oldVal, change[0]) {
+			if !reflect.DeepEqual(oldVal, change[0]) {
 				t.Errorf("%s %s/%s: field %s old value: expected %v, got %v",
 					expectRes.changeType, expectRes.kind, expectRes.name, path, change[0], oldVal)
 			}
 
-			if !valuesEqual(newVal, change[1]) {
+			if !reflect.DeepEqual(newVal, change[1]) {
 				t.Errorf("%s %s/%s: field %s new value: expected %v, got %v",
 					expectRes.changeType, expectRes.kind, expectRes.name, path, change[1], newVal)
 			}
@@ -281,7 +282,7 @@ func AssertStructuredDiff(t *testing.T, jsonOutput string, expected *ExpectedDif
 		if expectRes.specMatch != nil {
 			spec := getFieldFromDiff(found.Diff, expectRes.changeType, "spec")
 			if specMap, ok := spec.(map[string]any); ok {
-				if !mapsMatch(specMap, expectRes.specMatch) {
+				if !reflect.DeepEqual(specMap, expectRes.specMatch) {
 					t.Errorf("%s %s/%s: spec mismatch: expected %v, got %v",
 						expectRes.changeType, expectRes.kind, expectRes.name, expectRes.specMatch, specMap)
 				}
@@ -419,80 +420,12 @@ func convertBracketNotation(path string) string {
 	})
 }
 
-// valuesEqual compares two values for equality.
-func valuesEqual(a, b any) bool {
-	// Handle nil cases
-	if a == nil && b == nil {
-		return true
-	}
-
-	if a == nil || b == nil {
-		return false
-	}
-
-	// For numeric comparisons, handle type coercion
-	// JSON numbers are float64, but we might compare with int
-	switch av := a.(type) {
-	case float64:
-		switch bv := b.(type) {
-		case float64:
-			return av == bv
-		case int:
-			return av == float64(bv)
-		case int64:
-			return av == float64(bv)
-		}
-	case int:
-		switch bv := b.(type) {
-		case float64:
-			return float64(av) == bv
-		case int:
-			return av == bv
-		}
-	case bool:
-		if bv, ok := b.(bool); ok {
-			return av == bv
-		}
-	case string:
-		if bv, ok := b.(string); ok {
-			return av == bv
-		}
-	}
-
-	// Fall back to direct comparison
-	return fmt.Sprintf("%v", a) == fmt.Sprintf("%v", b)
-}
-
-// mapsMatch checks if two maps have the same keys and values (recursively).
-func mapsMatch(actual, expected map[string]any) bool {
-	if len(actual) != len(expected) {
-		return false
-	}
-
-	for k, ev := range expected {
-		av, exists := actual[k]
-		if !exists {
-			return false
-		}
-		// Recursive map comparison
-		if em, ok := ev.(map[string]any); ok {
-			am, ok := av.(map[string]any)
-			if !ok || !mapsMatch(am, em) {
-				return false
-			}
-
-			continue
-		}
-
-		if !valuesEqual(av, ev) {
-			return false
-		}
-	}
-
-	return true
-}
-
 // --- Composition Diff Types and Assertions ---
+//
+// Note: We use reflect.DeepEqual for value comparisons. This works because all
+// field values in our test expectations are strings. If we ever need to compare
+// numeric values (where JSON decodes everything as float64), we can switch to
+// YAML output format which preserves int vs float64 distinction.
 
 // StructuredCompDiffOutput mirrors the JSON schema for composition diffs.
 type StructuredCompDiffOutput struct {
@@ -816,12 +749,12 @@ func AssertStructuredCompDiff(t *testing.T, jsonOutput string, expected *Expecte
 					oldVal := getFieldFromDiff(found.CompositionChanges.Diff, "old", path)
 					newVal := getFieldFromDiff(found.CompositionChanges.Diff, "new", path)
 
-					if !valuesEqual(oldVal, expected[0]) {
+					if !reflect.DeepEqual(oldVal, expected[0]) {
 						t.Errorf("Composition %s: field %s old value: expected %v, got %v",
 							expectComp.name, path, expected[0], oldVal)
 					}
 
-					if !valuesEqual(newVal, expected[1]) {
+					if !reflect.DeepEqual(newVal, expected[1]) {
 						t.Errorf("Composition %s: field %s new value: expected %v, got %v",
 							expectComp.name, path, expected[1], newVal)
 					}
@@ -997,12 +930,12 @@ func assertDownstreamFieldChange(t *testing.T, compName string, expectXR *XRImpa
 	actualOld := getFieldFromDiff(foundRes.Diff, "old", path)
 	actualNew := getFieldFromDiff(foundRes.Diff, "new", path)
 
-	if !valuesEqual(actualOld, expectedOld) {
+	if !reflect.DeepEqual(actualOld, expectedOld) {
 		t.Errorf("Composition %s: XR %s/%s: downstream %s/%s: field %s old value: expected %v, got %v",
 			compName, expectXR.kind, expectXR.name, expectRes.kind, foundRes.Name, path, expectedOld, actualOld)
 	}
 
-	if !valuesEqual(actualNew, expectedNew) {
+	if !reflect.DeepEqual(actualNew, expectedNew) {
 		t.Errorf("Composition %s: XR %s/%s: downstream %s/%s: field %s new value: expected %v, got %v",
 			compName, expectXR.kind, expectXR.name, expectRes.kind, foundRes.Name, path, expectedNew, actualNew)
 	}
@@ -1015,7 +948,7 @@ func assertDownstreamFieldValue(t *testing.T, compName string, expectXR *XRImpac
 	// For added/removed resources, the value is in "spec" key
 	actualValue := getFieldFromDiff(foundRes.Diff, expectRes.changeType, path)
 
-	if !valuesEqual(actualValue, expectedValue) {
+	if !reflect.DeepEqual(actualValue, expectedValue) {
 		t.Errorf("Composition %s: XR %s/%s: downstream %s/%s: field %s: expected %v, got %v",
 			compName, expectXR.kind, expectXR.name, expectRes.kind, foundRes.Name, path, expectedValue, actualValue)
 	}
