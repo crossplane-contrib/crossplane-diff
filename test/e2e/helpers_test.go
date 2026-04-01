@@ -74,7 +74,7 @@ var clusterNopList = composed.NewList(composed.FromReferenceToList(corev1.Object
 var (
 	resourceNameRegex                 = regexp.MustCompile(`(existing-resource)-[a-z0-9]{5,}(?:-nop-resource)?`)
 	compResourceNameRegex             = regexp.MustCompile(`(test-comp-resource)-[a-z0-9]{5,}`)
-	getComposedResourceNameRegex      = regexp.MustCompile(`(test-getcomposed-resource)-[a-z0-9]{10,16}`)
+	getComposedResourceNameRegex      = regexp.MustCompile(`(test-getcomposed-resource)-[a-z0-9]{5,}`)
 	fanoutResourceNameRegex           = regexp.MustCompile(`(test-fanout-resource-\d{2})-[a-z0-9]{5,}`)
 	claimNameRegex                    = regexp.MustCompile(`(test-claim)-[a-z0-9]{5,}(?:-[a-z0-9]{5,})?`)
 	compClaimNameRegex                = regexp.MustCompile(`(test-comp-claim)-[a-z0-9]{5,}`)
