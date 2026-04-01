@@ -61,9 +61,9 @@
 +             name: {{ $lifecycle.metadata.name }}
 +             annotations:
 +               gotemplating.fn.crossplane.io/composition-resource-name: test-lifecycle
-+               {{- range $k, $v := $lifecycle.metadata.annotations }}
++               {{ range $k, $v := $lifecycle.metadata.annotations }}
 +               {{ $k }}: {{ $v | quote }}
-+               {{- end }}
++               {{ end }}
 +               getcomposed.example.org/source-bucket: {{ $bucket.metadata.name }}
 +           spec: {{ $lifecycle.spec | toYaml | nindent 14 }}
 +       kind: GoTemplate
