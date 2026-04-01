@@ -392,14 +392,14 @@ func RunCompDiffJSON(t *testing.T, c *envconf.Config, binPath string, expectedEx
 
 // AssertStructuredCompDiff validates JSON comp diff output against an ExpectedCompDiff specification.
 // This is a wrapper around tu.AssertStructuredCompDiff for E2E test convenience.
-func AssertStructuredCompDiff(t *testing.T, jsonOutput string, expected *tu.ExpectedCompDiff) {
+func AssertStructuredCompDiff(t *testing.T, jsonOutput string, expected tu.CompDiffExpectation) {
 	t.Helper()
 	tu.AssertStructuredCompDiff(t, jsonOutput, expected)
 }
 
 // AssertStructuredDiff validates JSON diff output against an ExpectedDiff specification.
 // This is a wrapper around tu.AssertStructuredDiff for E2E test convenience.
-func AssertStructuredDiff(t *testing.T, jsonOutput string, expected *tu.ExpectedDiff) {
+func AssertStructuredDiff(t *testing.T, jsonOutput string, expected tu.DiffExpectation) {
 	t.Helper()
 	tu.AssertStructuredDiff(t, jsonOutput, expected)
 }
