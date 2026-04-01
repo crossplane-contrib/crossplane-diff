@@ -31,6 +31,10 @@ type XRCmd struct {
 	// Embed common fields
 	CommonCmdFields
 
+	// EventualState enables iterative simulation to show eventual state after all reconciliation
+	// cycles complete. Useful with function-sequencer which hides later stage resources.
+	EventualState bool `help:"Show eventual state after all reconciliation cycles complete (useful with function-sequencer)." default:"false" name:"eventual-state"`
+
 	Files []string `arg:"" help:"YAML files containing Crossplane resources to diff." optional:""`
 }
 
@@ -57,6 +61,9 @@ Examples:
 
   # Show the changes in a compact format with minimal context.
   crossplane-diff xr xr.yaml --compact
+
+  # Show eventual state with function-sequencer (all stages, not just first).
+  crossplane-diff xr xr.yaml --eventual-state
 `
 }
 
@@ -85,6 +92,7 @@ func makeDefaultXRProc(c *XRCmd, ctx *AppContext, log logging.Logger) dp.DiffPro
 	opts = append(opts,
 		dp.WithLogger(log),
 		dp.WithRenderMutex(&globalRenderMutex),
+		dp.WithEventualState(c.EventualState),
 	)
 
 	return dp.NewDiffProcessor(ctx.K8sClients, ctx.XpClients, opts...)

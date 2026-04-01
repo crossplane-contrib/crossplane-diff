@@ -327,6 +327,25 @@ func (p *DefaultDiffProcessor) diffSingleResourceInternal(ctx context.Context, r
 		observedResources = p.fetchObservedResourcesFromClusterXR(ctx, existingXRFromCluster, resourceID)
 	}
 
+	// If eventual state mode is enabled, run iterative simulation to reveal all stages
+	// that would eventually be rendered after multiple reconciliation cycles.
+	// This is useful with function-sequencer which hides later stage resources.
+	if p.config.EventualState {
+		simulator := NewEventualStateSimulator(p.config.RenderFunc, p.config.Logger, p.config.FunctionCredentials)
+
+		augmentedObserved, simErr := simulator.SimulateToStableState(
+			ctx, xrForRendering, comp, fns, observedResources, nil)
+		if simErr != nil {
+			p.config.Logger.Debug("Eventual state simulation failed", "resource", resourceID, "error", simErr)
+			return nil, nil, errors.Wrap(simErr, "eventual state simulation failed")
+		}
+
+		observedResources = augmentedObserved
+		p.config.Logger.Debug("Using augmented observed resources from eventual state simulation",
+			"resource", resourceID,
+			"augmentedCount", len(observedResources))
+	}
+
 	// Perform iterative rendering and requirements reconciliation
 	desired, err := p.RenderWithRequirements(ctx, xrForRendering, comp, fns, resourceID, observedResources)
 	if err != nil {

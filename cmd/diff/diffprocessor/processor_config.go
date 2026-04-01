@@ -32,6 +32,10 @@ type ProcessorConfig struct {
 	// IncludeManual determines whether to include XRs with Manual update policy in composition diffs
 	IncludeManual bool
 
+	// EventualState enables iterative simulation to show eventual state after all reconciliation
+	// cycles complete. Useful with function-sequencer which hides later stage resources.
+	EventualState bool
+
 	// IgnorePaths is a list of paths to ignore when calculating diffs
 	IgnorePaths []string
 
@@ -120,6 +124,16 @@ func WithMaxNestedDepth(depth int) ProcessorOption {
 func WithIncludeManual(includeManual bool) ProcessorOption {
 	return func(config *ProcessorConfig) {
 		config.IncludeManual = includeManual
+	}
+}
+
+// WithEventualState sets whether to show eventual state after all reconciliation cycles complete.
+// When enabled, the processor runs an iterative simulation that synthesizes Ready status on
+// rendered resources until no new resources appear. This is useful with function-sequencer
+// which hides later stage resources until earlier stages become Ready.
+func WithEventualState(enabled bool) ProcessorOption {
+	return func(config *ProcessorConfig) {
+		config.EventualState = enabled
 	}
 }
 
