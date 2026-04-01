@@ -81,6 +81,9 @@ crossplane-diff xr xr.yaml -o yaml
 crossplane-diff xr xr.yaml \
   --ignore-paths 'metadata.annotations[argocd.argoproj.io/tracking-id]' \
   --ignore-paths 'metadata.labels[argocd.argoproj.io/instance]'
+
+# Show eventual state with function-sequencer (all stages, not just first)
+crossplane-diff xr xr.yaml --eventual-state
 ```
 
 ### Composition Diff - Analyze Impact of Composition Changes
@@ -141,6 +144,9 @@ Flags:
       --function-credentials=PATH  Path to YAML file or directory containing Secret
                                resources to pass as function credentials. Overrides
                                auto-fetched credentials from cluster.
+      --eventual-state         Show eventual state after all reconciliation cycles
+                               complete. Useful with function-sequencer which hides
+                               later stage resources until earlier stages become Ready.
 ```
 
 **Note**: XR namespaces are read directly from the YAML files being diffed, not from command-line flags.
