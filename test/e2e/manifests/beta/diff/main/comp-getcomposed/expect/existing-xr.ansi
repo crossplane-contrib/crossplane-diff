@@ -53,12 +53,19 @@
 +       inline:
 +         template: |
 +           {{ $bucket := getComposedResource . "test-bucket" }}
++           {{ $lifecycle := getComposedResource . "test-lifecycle" }}
 +           ---
-+           apiVersion: getcomposed.example.org/v1alpha1
-+           kind: XGetComposedResource
-+           status:
-+             bucketRef:
-+               name: {{ $bucket.metadata.name }}
++           apiVersion: {{ $lifecycle.apiVersion }}
++           kind: {{ $lifecycle.kind }}
++           metadata:
++             name: {{ $lifecycle.metadata.name }}
++             annotations:
++               gotemplating.fn.crossplane.io/composition-resource-name: test-lifecycle
++               {{- range $k, $v := $lifecycle.metadata.annotations }}
++               {{ $k }}: {{ $v | quote }}
++               {{- end }}
++               getcomposed.example.org/source-bucket: {{ $bucket.metadata.name }}
++           spec: {{ $lifecycle.spec | toYaml | nindent 14 }}
 +       kind: GoTemplate
 +       source: Inline
 +     step: use-getcomposed
@@ -72,11 +79,39 @@ Summary: 1 modified
 
 === Affected Composite Resources ===
 
-  ✓ XGetComposedResource/test-getcomposed-resource (cluster-scoped)
+  ⚠ XGetComposedResource/test-getcomposed-resource (cluster-scoped)
 
-Summary: 1 resource unchanged
+Summary: 1 resource with changes
 
 === Impact Analysis ===
 
-All composite resources are up-to-date. No downstream resource changes detected.
+~~~ ClusterNopResource/test-getcomposed-resource-XXXXX
+  apiVersion: nop.crossplane.io/v1alpha1
+  kind: ClusterNopResource
+  metadata:
+    annotations:
+      crossplane.io/composition-resource-name: test-lifecycle
+      crossplane.io/external-name: test-getcomposed-resource-XXXXX
+      for-bucket: test-bucket-123
++     getcomposed.example.org/source-bucket: test-getcomposed-resource-XXXXX
+    finalizers:
+    - finalizer.managedresource.crossplane.io
+    generateName: test-getcomposed-resource-
+    labels:
+      crossplane.io/composite: test-getcomposed-resource
+    name: test-getcomposed-resource-XXXXX
+  spec:
+    deletionPolicy: Delete
+    forProvider:
+      conditionAfter:
+      - conditionStatus: "True"
+        conditionType: Ready
+        time: 0s
+    managementPolicies:
+    - '*'
+    providerConfigRef:
+      name: default
 
+---
+
+Summary: 1 modified
