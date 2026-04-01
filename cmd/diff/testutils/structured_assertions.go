@@ -253,8 +253,8 @@ func AssertStructuredDiff(t *testing.T, jsonOutput string, expected *ExpectedDif
 
 		// Validate field changes for modified resources
 		for path, change := range expectRes.fieldChanges {
-			oldVal := getFieldFromDiff(found.Diff, "old", path)
-			newVal := getFieldFromDiff(found.Diff, "new", path)
+			oldVal := getFieldFromDiff(found.Diff, dt.DiffKeyOld, path)
+			newVal := getFieldFromDiff(found.Diff, dt.DiffKeyNew, path)
 
 			if !reflect.DeepEqual(oldVal, change[0]) {
 				t.Errorf("%s %s/%s: field %s old value: expected %v, got %v",
@@ -343,10 +343,10 @@ func getFieldFromDiff(diff map[string]any, key, path string) any {
 	var root any
 
 	switch key {
-	case "old", "new":
+	case dt.DiffKeyOld, dt.DiffKeyNew:
 		root = diff[key]
 	case dt.DiffTypeWordAdded, dt.DiffTypeWordRemoved:
-		root = diff["spec"]
+		root = diff[dt.DiffKeySpec]
 	default:
 		root = diff[key]
 	}
@@ -363,7 +363,7 @@ func getFieldFromDiff(diff map[string]any, key, path string) any {
 // For added/removed resources, it returns the value from the "spec".
 func getNewFieldValue(diff map[string]any, changeType, path string) any {
 	if changeType == dt.DiffTypeWordModified {
-		return getFieldFromDiff(diff, "new", path)
+		return getFieldFromDiff(diff, dt.DiffKeyNew, path)
 	}
 
 	return getFieldFromDiff(diff, changeType, path)
@@ -547,7 +547,7 @@ func (c *CompositionExpectation) WithAffectedResources(total, withChanges, uncha
 
 // WithCompositionModified asserts that the composition itself is modified.
 func (c *CompositionExpectation) WithCompositionModified() *CompositionExpectation {
-	c.compositionChangeType = "modified"
+	c.compositionChangeType = dt.DiffTypeWordModified
 	if c.compositionFieldChanges == nil {
 		c.compositionFieldChanges = make(map[string][2]any)
 	}
@@ -746,8 +746,8 @@ func AssertStructuredCompDiff(t *testing.T, jsonOutput string, expected *Expecte
 
 				// Check composition field changes
 				for path, expected := range expectComp.compositionFieldChanges {
-					oldVal := getFieldFromDiff(found.CompositionChanges.Diff, "old", path)
-					newVal := getFieldFromDiff(found.CompositionChanges.Diff, "new", path)
+					oldVal := getFieldFromDiff(found.CompositionChanges.Diff, dt.DiffKeyOld, path)
+					newVal := getFieldFromDiff(found.CompositionChanges.Diff, dt.DiffKeyNew, path)
 
 					if !reflect.DeepEqual(oldVal, expected[0]) {
 						t.Errorf("Composition %s: field %s old value: expected %v, got %v",
@@ -927,8 +927,8 @@ func assertDownstreamFieldChange(t *testing.T, compName string, expectXR *XRImpa
 	t.Helper()
 
 	// For modified resources, the diff structure has "old" and "new" keys
-	actualOld := getFieldFromDiff(foundRes.Diff, "old", path)
-	actualNew := getFieldFromDiff(foundRes.Diff, "new", path)
+	actualOld := getFieldFromDiff(foundRes.Diff, dt.DiffKeyOld, path)
+	actualNew := getFieldFromDiff(foundRes.Diff, dt.DiffKeyNew, path)
 
 	if !reflect.DeepEqual(actualOld, expectedOld) {
 		t.Errorf("Composition %s: XR %s/%s: downstream %s/%s: field %s old value: expected %v, got %v",

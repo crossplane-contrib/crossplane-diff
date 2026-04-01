@@ -277,13 +277,13 @@ func (r *StructuredDiffRenderer) buildDiffDetail(diff *dt.ResourceDiff) map[stri
 	case dt.DiffTypeAdded:
 		// For added resources, include the full spec
 		if diff.Desired != nil {
-			detail["spec"] = diff.Desired.Object
+			detail[dt.DiffKeySpec] = diff.Desired.Object
 		}
 
 	case dt.DiffTypeRemoved:
 		// For removed resources, include the old spec
 		if diff.Current != nil {
-			detail["spec"] = diff.Current.Object
+			detail[dt.DiffKeySpec] = diff.Current.Object
 		}
 
 	case dt.DiffTypeEqual:
@@ -292,8 +292,8 @@ func (r *StructuredDiffRenderer) buildDiffDetail(diff *dt.ResourceDiff) map[stri
 	case dt.DiffTypeModified:
 		// For modified resources, show both old and new
 		if diff.Current != nil && diff.Desired != nil {
-			detail["old"] = diff.Current.Object
-			detail["new"] = diff.Desired.Object
+			detail[dt.DiffKeyOld] = diff.Current.Object
+			detail[dt.DiffKeyNew] = diff.Desired.Object
 		}
 	}
 
@@ -328,16 +328,16 @@ func resourceDiffToChangeDetail(diff *dt.ResourceDiff) *ChangeDetail {
 	switch diff.DiffType {
 	case dt.DiffTypeAdded:
 		if diff.Desired != nil {
-			change.Diff["spec"] = diff.Desired.Object
+			change.Diff[dt.DiffKeySpec] = diff.Desired.Object
 		}
 	case dt.DiffTypeRemoved:
 		if diff.Current != nil {
-			change.Diff["spec"] = diff.Current.Object
+			change.Diff[dt.DiffKeySpec] = diff.Current.Object
 		}
 	case dt.DiffTypeModified:
 		if diff.Current != nil && diff.Desired != nil {
-			change.Diff["old"] = diff.Current.Object
-			change.Diff["new"] = diff.Desired.Object
+			change.Diff[dt.DiffKeyOld] = diff.Current.Object
+			change.Diff[dt.DiffKeyNew] = diff.Desired.Object
 		}
 	case dt.DiffTypeEqual:
 		// Equal diffs have no detail to show

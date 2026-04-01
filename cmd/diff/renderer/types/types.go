@@ -43,6 +43,14 @@ const (
 	DiffTypeWordEqual    = "equal"
 )
 
+// DiffKey constants for structured diff output.
+// These are the keys used in the diff map to hold resource states.
+const (
+	DiffKeyOld  = "old"  // Current state for modified resources
+	DiffKeyNew  = "new"  // Desired state for modified resources
+	DiffKeySpec = "spec" // Full spec for added/removed resources
+)
+
 // ToWord converts a DiffType symbol to its human-readable word.
 func (d DiffType) ToWord() string {
 	switch d {
