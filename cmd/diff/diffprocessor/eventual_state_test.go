@@ -231,7 +231,10 @@ func TestSynthesizeReadyStatus(t *testing.T) {
 		makeTestComposedResource("resource-b", "stage-2"),
 	}
 
-	result := synthesizeReadyStatus(resources)
+	result, err := synthesizeReadyStatus(resources)
+	if err != nil {
+		t.Fatalf("synthesizeReadyStatus() unexpected error: %v", err)
+	}
 
 	if len(result) != 2 {
 		t.Fatalf("synthesizeReadyStatus() returned %d resources, want 2", len(result))

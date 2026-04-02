@@ -121,7 +121,10 @@ func (s *EventualStateSimulator) SimulateToStableState(
 			"newResourceCount", len(newResources))
 
 		// Synthesize Ready status on all composed resources from this render
-		readyResources := synthesizeReadyStatus(output.ComposedResources)
+		readyResources, err := synthesizeReadyStatus(output.ComposedResources)
+		if err != nil {
+			return nil, errors.Wrapf(err, "failed to synthesize Ready status at iteration %d", i+1)
+		}
 
 		// Merge with existing observed resources
 		observed = mergeObservedResources(observed, readyResources)
@@ -164,7 +167,7 @@ func makeResourceKey(res *cpd.Unstructured) string {
 
 // synthesizeReadyStatus adds Ready=True condition to all resources.
 // This simulates what Crossplane does when resources become healthy.
-func synthesizeReadyStatus(resources []cpd.Unstructured) []cpd.Unstructured {
+func synthesizeReadyStatus(resources []cpd.Unstructured) ([]cpd.Unstructured, error) {
 	result := make([]cpd.Unstructured, len(resources))
 	now := metav1.Now()
 
@@ -172,14 +175,17 @@ func synthesizeReadyStatus(resources []cpd.Unstructured) []cpd.Unstructured {
 		// Deep copy to avoid modifying the original
 		copied := res.DeepCopy()
 		result[i] = *copied
-		setReadyCondition(&result[i], now)
+
+		if err := setReadyCondition(&result[i], now); err != nil {
+			return nil, errors.Wrapf(err, "cannot set Ready condition on resource %s", res.GetName())
+		}
 	}
 
-	return result
+	return result, nil
 }
 
 // setReadyCondition sets a Ready=True condition on the resource's status.conditions field.
-func setReadyCondition(res *cpd.Unstructured, now metav1.Time) {
+func setReadyCondition(res *cpd.Unstructured, now metav1.Time) error {
 	// Get or initialize conditions
 	conditionsRaw, _, _ := un.NestedSlice(res.Object, "status", "conditions")
 	conditions := make([]any, 0, len(conditionsRaw)+1)
@@ -206,8 +212,12 @@ func setReadyCondition(res *cpd.Unstructured, now metav1.Time) {
 	}
 	conditions = append(conditions, readyCondition)
 
-	// Set the conditions back
-	_ = un.SetNestedSlice(res.Object, conditions, "status", "conditions")
+	// Set the conditions back - this can fail if there's a type mismatch in the object structure
+	if err := un.SetNestedSlice(res.Object, conditions, "status", "conditions"); err != nil {
+		return errors.Wrap(err, "cannot set status.conditions")
+	}
+
+	return nil
 }
 
 // mergeObservedResources merges newResources with existing observed resources.
