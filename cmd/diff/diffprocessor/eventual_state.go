@@ -154,6 +154,7 @@ func findNewResources(rendered, observed []cpd.Unstructured) []cpd.Unstructured 
 
 // makeResourceKey creates a unique key for a resource based on its composition-resource-name
 // annotation and GVK. This is how Crossplane matches composed resources across renders.
+// Note: composition-resource-name must be unique within a composition, so namespace is not needed.
 func makeResourceKey(res *cpd.Unstructured) string {
 	compResName := res.GetAnnotations()["crossplane.io/composition-resource-name"]
 	gvk := res.GroupVersionKind()
