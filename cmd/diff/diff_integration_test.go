@@ -54,6 +54,7 @@ type IntegrationTestCase struct {
 	xrdAPIVersion              XrdAPIVersion // For XR tests (optional)
 	ignorePaths                []string      // Paths to ignore in diffs
 	functionCredentials        string        // Path to function credentials file (optional)
+	eventualState              bool          // For XR tests: enable eventual state simulation (optional)
 	skip                       bool
 	skipReason                 string
 	// JSON output support: set outputFormat to "json" to use structured assertions
@@ -216,6 +217,11 @@ func runIntegrationTest(t *testing.T, testType DiffTestType, tt IntegrationTestC
 	// Add function-credentials if specified
 	if tt.functionCredentials != "" {
 		args = append(args, fmt.Sprintf("--function-credentials=%s", tt.functionCredentials))
+	}
+
+	// Add eventual-state flag if specified (XR tests only)
+	if tt.eventualState && testType == XRDiffTest {
+		args = append(args, "--eventual-state")
 	}
 
 	// Add files as positional arguments
@@ -1472,6 +1478,34 @@ Summary: 2 modified, 2 removed`,
 				And().
 				WithAddedResource("XNopResource", "test-resource-with-creds", "default").
 				WithField("spec.coolField", "test-value-creds").
+				And(),
+			expectedError: false,
+		},
+		"EventualStateWithSequencer": {
+			reason: "Shows eventual state after all stages complete when using function-sequencer with --eventual-state",
+			// The sequencer composition has 2 stages: stage0-resource (shown immediately) and stage1-resource (hidden until stage0 is Ready)
+			// Without --eventual-state, only stage0-resource would appear
+			// With --eventual-state, both stage0-resource and stage1-resource should appear
+			outputFormat:  "json",
+			eventualState: true,
+			inputFiles:    []string{"testdata/diff/resources/sequencer-xr.yaml"},
+			setupFiles: []string{
+				"testdata/diff/resources/xrd.yaml",
+				"testdata/diff/resources/sequencer-composition.yaml",
+				"testdata/diff/resources/sequencer-composition-revision.yaml",
+				"testdata/diff/resources/functions.yaml",
+			},
+			expectedExitCode: dp.ExitCodeDiffDetected,
+			expectedStructuredOutput: tu.ExpectDiff().
+				WithSummary(3, 0, 0). // 2 downstream resources + 1 XR
+				WithAddedResource("XDownstreamResource", "0-stage0-resource", "default").
+				WithField("spec.forProvider.configData", "test-value").
+				And().
+				WithAddedResource("XDownstreamResource", "1-stage1-resource", "default").
+				WithField("spec.forProvider.configData", "test-value").
+				And().
+				WithAddedResource("XNopResource", "sequencer-test", "default").
+				WithField("spec.coolField", "test-value").
 				And(),
 			expectedError: false,
 		},
