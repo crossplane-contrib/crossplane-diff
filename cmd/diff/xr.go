@@ -33,7 +33,7 @@ type XRCmd struct {
 
 	// EventualState enables iterative simulation to show eventual state after all reconciliation
 	// cycles complete. Useful with function-sequencer which hides later stage resources.
-	EventualState bool `help:"Show eventual state after all reconciliation cycles complete (useful with function-sequencer)." default:"false" name:"eventual-state"`
+	EventualState bool `default:"false" help:"Show eventual state after all reconciliation cycles complete (useful with function-sequencer)." name:"eventual-state"`
 
 	Files []string `arg:"" help:"YAML files containing Crossplane resources to diff." optional:""`
 }
