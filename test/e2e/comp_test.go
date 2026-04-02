@@ -23,6 +23,7 @@ import (
 	"testing"
 	"time"
 
+	tu "github.com/crossplane-contrib/crossplane-diff/cmd/diff/testutils"
 	"sigs.k8s.io/e2e-framework/pkg/envconf"
 	"sigs.k8s.io/e2e-framework/pkg/features"
 
@@ -39,7 +40,6 @@ func TestDiffExistingComposition(t *testing.T) {
 	imageTag := strings.Split(environment.GetCrossplaneImage(), ":")[1]
 	manifests := filepath.Join("test/e2e/manifests/beta/diff", imageTag, "comp")
 	setupPath := filepath.Join(manifests, "setup")
-	expectPath := filepath.Join(manifests, "expect")
 
 	environment.Test(t,
 		features.New("DiffExistingComposition").
@@ -62,12 +62,31 @@ func TestDiffExistingComposition(t *testing.T) {
 			Assess("CanDiffComposition", func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
 				t.Helper()
 
-				output, log, err := RunCompDiff(t, c, "./crossplane-diff", exitCodeDiffDetected, filepath.Join(manifests, "updated-composition.yaml"))
+				_, jsonOutput, log, err := RunCompDiffJSON(t, c, "./crossplane-diff", exitCodeDiffDetected, filepath.Join(manifests, "updated-composition.yaml"))
 				if err != nil {
 					t.Fatalf("Error running comp diff command: %v\nLog output:\n%s", err, log)
 				}
 
-				assertDiffMatchesFile(t, output, filepath.Join(expectPath, "existing-xr.ansi"), log)
+				// Verify composition diff has 1 XR with changes
+				// Golden file shows composition changes:
+				//   - Adds transforms to first patch (updated-%s)
+				//   - Changes fmt in second patch from basic-%s to premium-%s
+				// And downstream ClusterNopResource changes:
+				//   config-data: existing-value → updated-existing-value
+				//   resource-tier: basic-existing-value → premium-existing-value
+				AssertStructuredCompDiff(t, jsonOutput, tu.ExpectCompDiff().
+					WithComposition("xcompdiffresources.compdiff.example.org").
+					WithCompositionModified(). // Composition itself is modified
+					WithAffectedResources(1, 1, 0, 0).
+					WithXRImpact("XCompDiffResource", "test-comp-resource", "", "changed").
+					WithDownstreamSummary(0, 1, 0). // ClusterNopResource modified (downstream = composed resources only)
+					WithDownstreamResource("modified", "ClusterNopResource", "", "").
+					WithAnyName(). // Name is generated with random suffix
+					WithFieldChange("metadata.annotations.config-data", "existing-value", "updated-existing-value").
+					WithFieldChange("metadata.annotations.resource-tier", "basic-existing-value", "premium-existing-value").
+					AndXR().
+					AndComp().
+					And())
 
 				return ctx
 			}).
@@ -90,7 +109,6 @@ func TestCompDiffLargeFanout(t *testing.T) {
 	imageTag := strings.Split(environment.GetCrossplaneImage(), ":")[1]
 	manifests := filepath.Join("test/e2e/manifests/beta/diff", imageTag, "comp-fanout")
 	setupPath := filepath.Join(manifests, "setup")
-	expectPath := filepath.Join(manifests, "expect")
 
 	environment.Test(t,
 		features.New("CompDiffLargeFanout").
@@ -113,12 +131,42 @@ func TestCompDiffLargeFanout(t *testing.T) {
 			Assess("CanDiffCompositionWithLargeFanout", func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
 				t.Helper()
 
-				output, log, err := RunCompDiff(t, c, "./crossplane-diff", exitCodeDiffDetected, filepath.Join(manifests, "updated-composition.yaml"))
+				output, jsonOutput, log, err := RunCompDiffJSON(t, c, "./crossplane-diff", exitCodeDiffDetected, filepath.Join(manifests, "updated-composition.yaml"))
 				if err != nil {
 					t.Fatalf("Error running comp diff command: %v\nLog output:\n%s", err, log)
 				}
 
-				assertDiffMatchesFile(t, output, filepath.Join(expectPath, "existing-xrs.ansi"), log)
+				// With 29 XRs, each with changes, we should see 29 XRs with changes
+				if len(output.Compositions) != 1 {
+					t.Fatalf("Expected 1 composition, got %d", len(output.Compositions))
+				}
+
+				comp := output.Compositions[0]
+				if comp.AffectedResources.Total != 29 {
+					t.Errorf("Expected 29 affected XRs, got %d", comp.AffectedResources.Total)
+				}
+
+				if comp.AffectedResources.WithChanges != 29 {
+					t.Errorf("Expected 29 XRs with changes, got %d", comp.AffectedResources.WithChanges)
+				}
+
+				// Verify composition is modified and field-level changes for one XR (all 29 follow the same pattern)
+				// Golden file shows for test-fanout-resource-01:
+				//   config-data: value-01 → updated-value-01
+				//   resource-tier: basic-value-01 → premium-value-01
+				AssertStructuredCompDiff(t, jsonOutput, tu.ExpectCompDiff().
+					WithComposition("xcompdiffresources.fanout.example.org").
+					WithCompositionModified(). // Composition itself is modified
+					WithAffectedResources(29, 29, 0, 0).
+					WithXRImpact("XCompDiffFanoutResource", "test-fanout-resource-01", "", "changed").
+					WithDownstreamSummary(0, 1, 0).
+					WithDownstreamResource("modified", "ClusterNopResource", "", "").
+					WithAnyName(). // Name has generated suffix
+					WithFieldChange("metadata.annotations.config-data", "value-01", "updated-value-01").
+					WithFieldChange("metadata.annotations.resource-tier", "basic-value-01", "premium-value-01").
+					AndXR().
+					AndComp().
+					And())
 
 				return ctx
 			}).
@@ -136,7 +184,6 @@ func TestDiffCompositionWithGetComposedResource(t *testing.T) {
 	imageTag := strings.Split(environment.GetCrossplaneImage(), ":")[1]
 	manifests := filepath.Join("test/e2e/manifests/beta/diff", imageTag, "comp-getcomposed")
 	setupPath := filepath.Join(manifests, "setup")
-	expectPath := filepath.Join(manifests, "expect")
 
 	environment.Test(t,
 		features.New("DiffCompositionWithGetComposedResource").
@@ -159,12 +206,28 @@ func TestDiffCompositionWithGetComposedResource(t *testing.T) {
 			Assess("CanDiffCompositionWithGetComposedResource", func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
 				t.Helper()
 
-				output, log, err := RunCompDiff(t, c, "./crossplane-diff", exitCodeDiffDetected, filepath.Join(manifests, "updated-composition.yaml"))
+				_, jsonOutput, log, err := RunCompDiffJSON(t, c, "./crossplane-diff", exitCodeDiffDetected, filepath.Join(manifests, "updated-composition.yaml"))
 				if err != nil {
 					t.Fatalf("Error running comp diff command: %v\nLog output:\n%s", err, log)
 				}
 
-				assertDiffMatchesFile(t, output, filepath.Join(expectPath, "existing-xr.ansi"), log)
+				// Verify composition is modified and XR has downstream changes
+				// The updated composition uses getComposedResource to add an annotation
+				// referencing another composed resource's name
+				// Golden file shows for ClusterNopResource:
+				//   metadata.annotations.getcomposed.example.org/source-bucket: <bucket-name> (added)
+				AssertStructuredCompDiff(t, jsonOutput, tu.ExpectCompDiff().
+					WithComposition("xgetcomposedresources.getcomposed.example.org").
+					WithCompositionModified().         // Composition itself is modified (adds go-templating step)
+					WithAffectedResources(1, 1, 0, 0). // total=1, changed=1, unchanged=0, errors=0
+					WithXRImpact("XGetComposedResource", "test-getcomposed-resource", "", "changed").
+					WithDownstreamSummary(0, 1, 0). // ClusterNopResource modified
+					WithDownstreamResource("modified", "ClusterNopResource", "", "").
+					WithAnyName(). // Name has generated suffix
+					WithFieldValuePattern("metadata.annotations['getcomposed.example.org/source-bucket']", `test-getcomposed-resource-[a-z0-9]+`).
+					AndXR().
+					AndComp().
+					And())
 
 				return ctx
 			}).
@@ -182,7 +245,6 @@ func TestDiffCompositionWithClaims(t *testing.T) {
 	imageTag := strings.Split(environment.GetCrossplaneImage(), ":")[1]
 	manifests := filepath.Join("test/e2e/manifests/beta/diff", imageTag, "comp-claim")
 	setupPath := filepath.Join(manifests, "setup")
-	expectPath := filepath.Join(manifests, "expect")
 
 	environment.Test(t,
 		features.New("DiffCompositionWithClaims").
@@ -206,12 +268,44 @@ func TestDiffCompositionWithClaims(t *testing.T) {
 			Assess("CanDiffCompositionWithClaim", func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
 				t.Helper()
 
-				output, log, err := RunCompDiff(t, c, "./crossplane-diff", exitCodeDiffDetected, filepath.Join(manifests, "updated-composition.yaml"))
+				_, jsonOutput, log, err := RunCompDiffJSON(t, c, "./crossplane-diff", exitCodeDiffDetected, filepath.Join(manifests, "updated-composition.yaml"))
 				if err != nil {
 					t.Fatalf("Error running comp diff command: %v\nLog output:\n%s", err, log)
 				}
 
-				assertDiffMatchesFile(t, output, filepath.Join(expectPath, "existing-claim.ansi"), log)
+				// Verify composition diff has 2 affected resources:
+				// 1. XNopClaimDiffResource (backing XR with generated name suffix, cluster-scoped)
+				// 2. NopClaimDiffResource/test-comp-claim (the Claim, namespaced)
+				//
+				// Golden file shows composition changes:
+				//   - configData: {{ .observed.composite.resource.spec.coolField }} → updated-{{ ... }}
+				//   - resourceTier: basic → premium
+				// Golden file shows for ClusterNopResource:
+				//   spec.forProvider.fields.configData: claim-value-1 → updated-claim-value-1
+				//   spec.forProvider.fields.resourceTier: basic → premium
+				// Golden file shows for NopClaimDiffResource (the Claim):
+				//   spec.compositionUpdatePolicy: Automatic (added field)
+				AssertStructuredCompDiff(t, jsonOutput, tu.ExpectCompDiff().
+					WithComposition("xnopclaimdiffresources.claimdiff.example.org").
+					WithCompositionModified().         // Composition itself is modified
+					WithAffectedResources(2, 2, 0, 0). // Both XR and Claim have changes
+					// XR impact - backing XR with generated name
+					WithXRImpact("XNopClaimDiffResource", "", "", "changed").
+					WithAnyName().                  // XR name is generated (test-comp-claim-XXXXX)
+					WithDownstreamSummary(0, 1, 0). // ClusterNopResource modified
+					WithDownstreamResource("modified", "ClusterNopResource", "", "").
+					WithAnyName(). // ClusterNopResource name matches XR name
+					WithFieldChange("spec.forProvider.fields.configData", "claim-value-1", "updated-claim-value-1").
+					WithFieldChange("spec.forProvider.fields.resourceTier", "basic", "premium").
+					AndXR().
+					AndComp().
+					// Claim impact - downstream includes both the claim and the backing XR's composed resources
+					WithXRImpact("NopClaimDiffResource", "test-comp-claim", "default", "changed").
+					WithDownstreamSummary(0, 2, 0). // Claim + ClusterNopResource modified
+					WithDownstreamResource("modified", "NopClaimDiffResource", "test-comp-claim", "default").
+					WithFieldAdded("spec.compositionUpdatePolicy", "Automatic").
+					AndXR().
+					AndComp())
 
 				return ctx
 			}).

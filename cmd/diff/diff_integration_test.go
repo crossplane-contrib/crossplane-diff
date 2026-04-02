@@ -56,6 +56,9 @@ type IntegrationTestCase struct {
 	functionCredentials        string        // Path to function credentials file (optional)
 	skip                       bool
 	skipReason                 string
+	// JSON output support: set outputFormat to "json" to use structured assertions
+	outputFormat             string           // "json" or "" (default=visual diff)
+	expectedStructuredOutput *tu.ExpectedDiff // for JSON output assertions
 }
 
 type XrdAPIVersion int
@@ -198,6 +201,11 @@ func runIntegrationTest(t *testing.T, testType DiffTestType, tt IntegrationTestC
 		args = append(args, "--no-color")
 	}
 
+	// Add JSON output format if specified
+	if tt.outputFormat == "json" {
+		args = append(args, "--output=json")
+	}
+
 	// Add ignore-paths if specified
 	if len(tt.ignorePaths) > 0 {
 		for _, path := range tt.ignorePaths {
@@ -279,6 +287,13 @@ func runIntegrationTest(t *testing.T, testType DiffTestType, tt IntegrationTestC
 
 	// Check the output
 	outputStr := stdout.String()
+
+	// Handle JSON output format with structured assertions
+	if tt.outputFormat == "json" && tt.expectedStructuredOutput != nil {
+		tu.AssertStructuredDiff(t, outputStr, tt.expectedStructuredOutput)
+		return
+	}
+
 	// Using TrimSpace because the output might have trailing newlines
 	if !strings.Contains(strings.TrimSpace(outputStr), strings.TrimSpace(tt.expectedOutput)) {
 		// Strings aren't equal, *including* ansi.  but we can compare ignoring ansi to determine what output to
@@ -347,41 +362,22 @@ func TestDiffIntegration(t *testing.T) {
 			expectedExitCode: dp.ExitCodeDiffDetected,
 		},
 		"AutomaticNamespacePropagation": {
-			reason:     "Validates automatic namespace propagation for namespaced managed resources",
-			inputFiles: []string{"testdata/diff/new-xr.yaml"},
+			reason:       "Validates automatic namespace propagation for namespaced managed resources",
+			outputFormat: "json",
+			inputFiles:   []string{"testdata/diff/new-xr.yaml"},
 			setupFiles: []string{
 				"testdata/diff/resources/xrd.yaml",
 				"testdata/diff/resources/composition-no-namespace-patch.yaml",
 				"testdata/diff/resources/functions.yaml",
 			},
-			expectedOutput: strings.Join([]string{
-				`+++ XDownstreamResource/test-resource
-`, tu.Green(`+ apiVersion: ns.nop.example.org/v1alpha1
-+ kind: XDownstreamResource
-+ metadata:
-+   annotations:
-+     crossplane.io/composition-resource-name: nop-resource
-+   labels:
-+     crossplane.io/composite: test-resource
-+   name: test-resource
-+   namespace: default
-+ spec:
-+   forProvider:
-+     configData: new-value
-`), `
----
-+++ XNopResource/test-resource
-`, tu.Green(`+ apiVersion: ns.diff.example.org/v1alpha1
-+ kind: XNopResource
-+ metadata:
-+   name: test-resource
-+   namespace: default
-+ spec:
-+   coolField: new-value
-`), `
----
-`,
-			}, ""),
+			expectedStructuredOutput: tu.ExpectDiff().
+				WithSummary(2, 0, 0).
+				WithAddedResource("XDownstreamResource", "test-resource", "default").
+				WithField("spec.forProvider.configData", "new-value").
+				And().
+				WithAddedResource("XNopResource", "test-resource", "default").
+				WithField("spec.coolField", "new-value").
+				And(),
 			expectedError:    false,
 			expectedExitCode: dp.ExitCodeDiffDetected,
 		},
@@ -447,11 +443,13 @@ Summary: 2 modified`,
 				"metadata.annotations[argocd.argoproj.io/tracking-id]",
 				"metadata.labels[argocd.argoproj.io/instance]",
 			},
-			expectedOutput: ``,
-			expectedError:  false,
+			outputFormat:             "json",
+			expectedStructuredOutput: tu.ExpectDiff().WithSummary(0, 0, 0),
+			expectedError:            false,
 		},
 		"ModifiedXRCreatesDownstream": {
-			reason: "Shows color diff when modified XR creates new downstream resource",
+			reason:       "Shows diff when modified XR creates new downstream resource",
+			outputFormat: "json",
 			setupFiles: []string{
 				"testdata/diff/resources/xrd.yaml",
 				"testdata/diff/resources/composition.yaml",
@@ -460,40 +458,20 @@ Summary: 2 modified`,
 				"testdata/diff/resources/existing-xr.yaml",
 			},
 			inputFiles: []string{"testdata/diff/modified-xr.yaml"},
-			expectedOutput: `
-+++ XDownstreamResource/test-resource
-` + tu.Green(`+ apiVersion: ns.nop.example.org/v1alpha1
-+ kind: XDownstreamResource
-+ metadata:
-+   annotations:
-+     crossplane.io/composition-resource-name: nop-resource
-+   labels:
-+     crossplane.io/composite: test-resource
-+   name: test-resource
-+   namespace: default
-+ spec:
-+   forProvider:
-+     configData: modified-value
-`) + `
----
-~~~ XNopResource/test-resource
-  apiVersion: ns.diff.example.org/v1alpha1
-  kind: XNopResource
-  metadata:
-    name: test-resource
-    namespace: default
-  spec:
-` + tu.Red("-   coolField: existing-value") + `
-` + tu.Green("+   coolField: modified-value") + `
-
----
-
-Summary: 1 added, 1 modified`,
+			expectedStructuredOutput: tu.ExpectDiff().
+				WithSummary(1, 1, 0).
+				WithAddedResource("XDownstreamResource", "test-resource", "default").
+				WithField("spec.forProvider.configData", "modified-value").
+				And().
+				WithModifiedResource("XNopResource", "test-resource", "default").
+				WithFieldChange("spec.coolField", "existing-value", "modified-value").
+				And(),
 			expectedError:    false,
 			expectedExitCode: dp.ExitCodeDiffDetected,
 		},
 		"EnvironmentConfigIncorporation": {
-			reason: "Validates EnvironmentConfig (v1beta1) incorporation in diff",
+			reason:       "Validates EnvironmentConfig (v1beta1) incorporation in diff",
+			outputFormat: "json",
 			setupFiles: []string{
 				"testdata/diff/resources/xdownstreamenvresource-xrd.yaml",
 				"testdata/diff/resources/env-xrd.yaml",
@@ -504,45 +482,20 @@ Summary: 1 added, 1 modified`,
 				"testdata/diff/resources/existing-env-xr.yaml",
 			},
 			inputFiles: []string{"testdata/diff/modified-env-xr.yaml"},
-			expectedOutput: `
-~~~ XDownstreamEnvResource/test-env-resource
-  apiVersion: nop.example.org/v1alpha1
-  kind: XDownstreamEnvResource
-  metadata:
-    annotations:
-      crossplane.io/composition-resource-name: env-resource
-    generateName: test-env-resource-
-    labels:
-      crossplane.io/composite: test-env-resource
-    name: test-env-resource
-  spec:
-    compositionUpdatePolicy: Automatic
-    forProvider:
--     configData: existing-config-value
-+     configData: modified-config-value
-      environment: staging
-      region: us-west-2
-      serviceLevel: premium
-
----
-~~~ XEnvResource/test-env-resource
-  apiVersion: ns.diff.example.org/v1alpha1
-  kind: XEnvResource
-  metadata:
-    name: test-env-resource
-  spec:
-    compositionUpdatePolicy: Automatic
--   configKey: existing-config-value
-+   configKey: modified-config-value
-
----
-`,
+			expectedStructuredOutput: tu.ExpectDiff().
+				WithSummary(0, 2, 0).
+				WithModifiedResource("XDownstreamEnvResource", "test-env-resource", "").
+				WithFieldChange("spec.forProvider.configData", "existing-config-value", "modified-config-value").
+				And().
+				WithModifiedResource("XEnvResource", "test-env-resource", "").
+				WithFieldChange("spec.configKey", "existing-config-value", "modified-config-value").
+				And(),
 			expectedError:    false,
 			expectedExitCode: dp.ExitCodeDiffDetected,
-			noColor:          true,
 		},
 		"ExternalResourceDependencies": {
-			reason: "Validates diff with external resource dependencies via fn-external-resources",
+			reason:       "Validates diff with external resource dependencies via fn-external-resources",
+			outputFormat: "json",
 			// this test does a weird thing where it changes the XR but all the downstream changes come from external
 			// resources, including a field path from the XR itself.
 			setupFiles: []string{
@@ -555,46 +508,22 @@ Summary: 1 added, 1 modified`,
 				"testdata/diff/resources/external-named-clusterrole.yaml",
 			},
 			inputFiles: []string{"testdata/diff/modified-xr-with-external-dep.yaml"},
-			expectedOutput: `
-~~~ XDownstreamResource/test-resource
-  apiVersion: ns.nop.example.org/v1alpha1
-  kind: XDownstreamResource
-  metadata:
-    annotations:
-      crossplane.io/composition-resource-name: nop-resource
-    generateName: test-resource-
-    labels:
-      crossplane.io/composite: test-resource
-    name: test-resource
-    namespace: default
-  spec:
-    forProvider:
--     configData: existing-value
--     roleName: old-role-name
-+     configData: testing-external-resource-data
-+     roleName: external-named-clusterrole
-
----
-~~~ XNopResource/test-resource
-  apiVersion: ns.diff.example.org/v1alpha1
-  kind: XNopResource
-  metadata:
-    name: test-resource
-    namespace: default
-  spec:
--   coolField: existing-value
--   environment: staging
-+   coolField: modified-with-external-dep
-+   environment: testing
-
----
-`,
+			expectedStructuredOutput: tu.ExpectDiff().
+				WithSummary(0, 2, 0).
+				WithModifiedResource("XDownstreamResource", "test-resource", "default").
+				WithFieldChange("spec.forProvider.configData", "existing-value", "testing-external-resource-data").
+				WithFieldChange("spec.forProvider.roleName", "old-role-name", "external-named-clusterrole").
+				And().
+				WithModifiedResource("XNopResource", "test-resource", "default").
+				WithFieldChange("spec.coolField", "existing-value", "modified-with-external-dep").
+				WithFieldChange("spec.environment", "staging", "testing").
+				And(),
 			expectedError:    false,
 			expectedExitCode: dp.ExitCodeDiffDetected,
-			noColor:          true,
 		},
 		"TemplatedExtraResources": {
-			reason: "Validates diff with templated ExtraResources embedded in go-templating function",
+			reason:       "Validates diff with templated ExtraResources embedded in go-templating function",
+			outputFormat: "json",
 			setupFiles: []string{
 				"testdata/diff/resources/xrd.yaml",
 				"testdata/diff/resources/functions.yaml",
@@ -604,46 +533,22 @@ Summary: 1 added, 1 modified`,
 				"testdata/diff/resources/existing-downstream-with-external-dep.yaml",
 			},
 			inputFiles: []string{"testdata/diff/modified-xr-with-external-dep.yaml"},
-			expectedOutput: `
-~~~ XDownstreamResource/test-resource
-  apiVersion: ns.nop.example.org/v1alpha1
-  kind: XDownstreamResource
-  metadata:
-    annotations:
-      crossplane.io/composition-resource-name: nop-resource
-    generateName: test-resource-
-    labels:
-      crossplane.io/composite: test-resource
-    name: test-resource
-    namespace: default
-  spec:
-    forProvider:
--     configData: existing-value
--     roleName: old-role-name
-+     configData: modified-with-external-dep
-+     roleName: templated-external-resource-testing
-
----
-~~~ XNopResource/test-resource
-  apiVersion: ns.diff.example.org/v1alpha1
-  kind: XNopResource
-  metadata:
-    name: test-resource
-    namespace: default
-  spec:
--   coolField: existing-value
--   environment: staging
-+   coolField: modified-with-external-dep
-+   environment: testing
-
----
-`,
+			expectedStructuredOutput: tu.ExpectDiff().
+				WithSummary(0, 2, 0).
+				WithModifiedResource("XDownstreamResource", "test-resource", "default").
+				WithFieldChange("spec.forProvider.configData", "existing-value", "modified-with-external-dep").
+				WithFieldChange("spec.forProvider.roleName", "old-role-name", "templated-external-resource-testing").
+				And().
+				WithModifiedResource("XNopResource", "test-resource", "default").
+				WithFieldChange("spec.coolField", "existing-value", "modified-with-external-dep").
+				WithFieldChange("spec.environment", "staging", "testing").
+				And(),
 			expectedError:    false,
 			expectedExitCode: dp.ExitCodeDiffDetected,
-			noColor:          true,
 		},
 		"CrossNamespaceResourceDependencies": {
-			reason: "Validates cross-namespace resource dependencies via fn-external-resources",
+			reason:       "Validates cross-namespace resource dependencies via fn-external-resources",
+			outputFormat: "json",
 			setupFiles: []string{
 				"testdata/diff/resources/xrd.yaml",
 				"testdata/diff/resources/functions.yaml",
@@ -654,41 +559,17 @@ Summary: 1 added, 1 modified`,
 				"testdata/diff/resources/external-named-clusterrole.yaml",
 			},
 			inputFiles: []string{"testdata/diff/modified-cross-ns-xr.yaml"},
-			expectedOutput: `
-~~~ XDownstreamResource/test-cross-ns-resource
-  apiVersion: ns.nop.example.org/v1alpha1
-  kind: XDownstreamResource
-  metadata:
-    annotations:
-      crossplane.io/composition-resource-name: cross-ns-resource
-    generateName: test-cross-ns-resource-
-    labels:
-      crossplane.io/composite: test-cross-ns-resource
-    name: test-cross-ns-resource
-    namespace: default
-  spec:
-    forProvider:
--     configData: existing-cross-ns-data-existing-named-data-old-cross-ns-role
-+     configData: cross-namespace-data-another-cross-namespace-data-external-named-clusterrole
-
----
-~~~ XNopResource/test-cross-ns-resource
-  apiVersion: ns.diff.example.org/v1alpha1
-  kind: XNopResource
-  metadata:
-    name: test-cross-ns-resource
-    namespace: default
-  spec:
--   coolField: existing-cross-ns-value
--   environment: staging
-+   coolField: modified-cross-ns-value
-+   environment: production
-
----
-`,
+			expectedStructuredOutput: tu.ExpectDiff().
+				WithSummary(0, 2, 0).
+				WithModifiedResource("XDownstreamResource", "test-cross-ns-resource", "default").
+				WithFieldChange("spec.forProvider.configData", "existing-cross-ns-data-existing-named-data-old-cross-ns-role", "cross-namespace-data-another-cross-namespace-data-external-named-clusterrole").
+				And().
+				WithModifiedResource("XNopResource", "test-cross-ns-resource", "default").
+				WithFieldChange("spec.coolField", "existing-cross-ns-value", "modified-cross-ns-value").
+				WithFieldChange("spec.environment", "staging", "production").
+				And(),
 			expectedError:    false,
 			expectedExitCode: dp.ExitCodeDiffDetected,
-			noColor:          true,
 		},
 		"ResourceRemovalHierarchyV1ClusterScoped": {
 			reason:        "Validates resource removal detection with hierarchy using v1 style resourceRefs and cluster scoped downstreams",
@@ -801,22 +682,23 @@ Summary: 2 modified, 2 removed`,
 				"testdata/diff/resources/sequencer-composition-revision.yaml",
 				"testdata/diff/resources/functions.yaml",
 			},
-			inputFiles: []string{"testdata/diff/resources/sequencer-xr.yaml"},
+			inputFiles:   []string{"testdata/diff/resources/sequencer-xr.yaml"},
+			outputFormat: "json",
 			// Expected: With the fix, observed resources ARE passed to function-sequencer.
 			// Function-sequencer sees both resources exist and does NOT remove them from desired state.
 			// Since existing resources match rendered resources, there should be no changes.
 			// XR diff outputs nothing when there are no changes (unlike comp diff which says "No changes detected").
-			expectedOutput:   ``,
-			expectedError:    false,
-			expectedExitCode: dp.ExitCodeSuccess,
-			noColor:          true,
+			expectedStructuredOutput: tu.ExpectDiff().WithSummary(0, 0, 0),
+			expectedError:            false,
+			expectedExitCode:         dp.ExitCodeSuccess,
 		},
 		// Issue #259: Validates that removal detection works even when the XR has no changes.
 		// This is the core fix for the function-sequencer bug where existingXR was nil because
 		// the XR diff wasn't stored when there were no changes.
 		// https://github.com/crossplane-contrib/crossplane-diff/issues/259
 		"ResourceRemovalWithUnmodifiedXR": {
-			reason: "Validates resource removal detection works when XR has no changes (uses existingXRFromCluster fallback)",
+			reason:       "Validates resource removal detection works when XR has no changes (uses existingXRFromCluster fallback)",
+			outputFormat: "json",
 			crossplaneManagedResources: []HierarchicalOwnershipRelation{
 				{
 					OwnerFile: "testdata/diff/resources/existing-xr.yaml",
@@ -839,47 +721,20 @@ Summary: 2 modified, 2 removed`,
 			},
 			inputFiles: []string{"testdata/diff/unmodified-xr.yaml"}, // XR has NO changes
 			// Expected: resource2 and its child are removed, but XR and resource1 have no changes
-			expectedOutput: `
---- XDownstreamResource/resource-to-be-removed
-- apiVersion: ns.nop.example.org/v1alpha1
-- kind: XDownstreamResource
-- metadata:
--   annotations:
--     crossplane.io/composition-resource-name: resource2
--   generateName: test-resource-
--   labels:
--     crossplane.io/composite: test-resource
--   name: resource-to-be-removed
--   namespace: default
-- spec:
--   forProvider:
--     configData: existing-value
-
----
---- XDownstreamResource/resource-to-be-removed-child
-- apiVersion: ns.nop.example.org/v1alpha1
-- kind: XDownstreamResource
-- metadata:
--   annotations:
--     crossplane.io/composition-resource-name: resource2-child
--   generateName: test-resource-child-
--   labels:
--     crossplane.io/composite: test-resource
--   name: resource-to-be-removed-child
--   namespace: default
-- spec:
--   forProvider:
--     configData: child-value
-
----
-
-Summary: 2 removed`,
+			expectedStructuredOutput: tu.ExpectDiff().
+				WithSummary(0, 0, 2).
+				WithRemovedResource("XDownstreamResource", "resource-to-be-removed", "default").
+				WithField("spec.forProvider.configData", "existing-value").
+				And().
+				WithRemovedResource("XDownstreamResource", "resource-to-be-removed-child", "default").
+				WithField("spec.forProvider.configData", "child-value").
+				And(),
 			expectedError:    false,
 			expectedExitCode: dp.ExitCodeDiffDetected,
-			noColor:          true,
 		},
 		"ResourceRemovalHierarchyV2Namespaced": {
-			reason: "Validates resource removal detection with hierarchy using v2 style resourceRefs and namespaced downstreams",
+			reason:       "Validates resource removal detection with hierarchy using v2 style resourceRefs and namespaced downstreams",
+			outputFormat: "json",
 			crossplaneManagedResources: []HierarchicalOwnershipRelation{
 				{
 					OwnerFile: "testdata/diff/resources/existing-xr.yaml",
@@ -901,75 +756,26 @@ Summary: 2 removed`,
 				"testdata/diff/resources/functions.yaml",
 			},
 			inputFiles: []string{"testdata/diff/modified-xr.yaml"},
-			expectedOutput: `
-~~~ XDownstreamResource/resource-to-be-kept
-  apiVersion: ns.nop.example.org/v1alpha1
-  kind: XDownstreamResource
-  metadata:
-    annotations:
-      crossplane.io/composition-resource-name: resource1
-    generateName: test-resource-
-    labels:
-      crossplane.io/composite: test-resource
-    name: resource-to-be-kept
-    namespace: default
-  spec:
-    forProvider:
--     configData: existing-value
-+     configData: modified-value
-
----
---- XDownstreamResource/resource-to-be-removed
-- apiVersion: ns.nop.example.org/v1alpha1
-- kind: XDownstreamResource
-- metadata:
--   annotations:
--     crossplane.io/composition-resource-name: resource2
--   generateName: test-resource-
--   labels:
--     crossplane.io/composite: test-resource
--   name: resource-to-be-removed
--   namespace: default
-- spec:
--   forProvider:
--     configData: existing-value
-
----
---- XDownstreamResource/resource-to-be-removed-child
-- apiVersion: ns.nop.example.org/v1alpha1
-- kind: XDownstreamResource
-- metadata:
--   annotations:
--     crossplane.io/composition-resource-name: resource2-child
--   generateName: test-resource-child-
--   labels:
--     crossplane.io/composite: test-resource
--   name: resource-to-be-removed-child
--   namespace: default
-- spec:
--   forProvider:
--     configData: child-value
-
----
-~~~ XNopResource/test-resource
-  apiVersion: ns.diff.example.org/v1alpha1
-  kind: XNopResource
-  metadata:
-    name: test-resource
-    namespace: default
-  spec:
--   coolField: existing-value
-+   coolField: modified-value
-
----
-
-Summary: 2 modified, 2 removed`,
+			expectedStructuredOutput: tu.ExpectDiff().
+				WithSummary(0, 2, 2).
+				WithModifiedResource("XDownstreamResource", "resource-to-be-kept", "default").
+				WithFieldChange("spec.forProvider.configData", "existing-value", "modified-value").
+				And().
+				WithRemovedResource("XDownstreamResource", "resource-to-be-removed", "default").
+				WithField("spec.forProvider.configData", "existing-value").
+				And().
+				WithRemovedResource("XDownstreamResource", "resource-to-be-removed-child", "default").
+				WithField("spec.forProvider.configData", "child-value").
+				And().
+				WithModifiedResource("XNopResource", "test-resource", "default").
+				WithFieldChange("spec.coolField", "existing-value", "modified-value").
+				And(),
 			expectedError:    false,
 			expectedExitCode: dp.ExitCodeDiffDetected,
-			noColor:          true,
 		},
 		"ResourceRemovalHierarchyV2ClusterScoped": {
-			reason: "Validates resource removal detection with hierarchy using v2 style resourceRefs and cluster scoped downstreams",
+			reason:       "Validates resource removal detection with hierarchy using v2 style resourceRefs and cluster scoped downstreams",
+			outputFormat: "json",
 			crossplaneManagedResources: []HierarchicalOwnershipRelation{
 				{
 					OwnerFile: "testdata/diff/resources/existing-cluster-xr.yaml",
@@ -991,71 +797,26 @@ Summary: 2 modified, 2 removed`,
 				"testdata/diff/resources/functions.yaml",
 			},
 			inputFiles: []string{"testdata/diff/modified-cluster-xr.yaml"},
-			expectedOutput: `
-~~~ XDownstreamResource/resource-to-be-kept
-  apiVersion: nop.example.org/v1alpha1
-  kind: XDownstreamResource
-  metadata:
-    annotations:
-      crossplane.io/composition-resource-name: resource1
-    generateName: test-resource-
-    labels:
-      crossplane.io/composite: test-resource
-    name: resource-to-be-kept
-  spec:
-    forProvider:
--     configData: existing-value
-+     configData: modified-value
-
----
---- XDownstreamResource/resource-to-be-removed
-- apiVersion: nop.example.org/v1alpha1
-- kind: XDownstreamResource
-- metadata:
--   annotations:
--     crossplane.io/composition-resource-name: resource2
--   generateName: test-resource-
--   labels:
--     crossplane.io/composite: test-resource
--   name: resource-to-be-removed
-- spec:
--   forProvider:
--     configData: existing-value
-
----
---- XDownstreamResource/resource-to-be-removed-child
-- apiVersion: nop.example.org/v1alpha1
-- kind: XDownstreamResource
-- metadata:
--   annotations:
--     crossplane.io/composition-resource-name: resource2-child
--   generateName: test-resource-child-
--   labels:
--     crossplane.io/composite: test-resource
--   name: resource-to-be-removed-child
-- spec:
--   forProvider:
--     configData: child-value
-
----
-~~~ XNopResource/test-resource
-  apiVersion: diff.example.org/v1alpha1
-  kind: XNopResource
-  metadata:
-    name: test-resource
-  spec:
--   coolField: existing-value
-+   coolField: modified-value
-
----
-
-Summary: 2 modified, 2 removed`,
+			expectedStructuredOutput: tu.ExpectDiff().
+				WithSummary(0, 2, 2).
+				WithModifiedResource("XDownstreamResource", "resource-to-be-kept", "").
+				WithFieldChange("spec.forProvider.configData", "existing-value", "modified-value").
+				And().
+				WithRemovedResource("XDownstreamResource", "resource-to-be-removed", "").
+				WithField("spec.forProvider.configData", "existing-value").
+				And().
+				WithRemovedResource("XDownstreamResource", "resource-to-be-removed-child", "").
+				WithField("spec.forProvider.configData", "child-value").
+				And().
+				WithModifiedResource("XNopResource", "test-resource", "").
+				WithFieldChange("spec.coolField", "existing-value", "modified-value").
+				And(),
 			expectedError:    false,
 			expectedExitCode: dp.ExitCodeDiffDetected,
-			noColor:          true,
 		},
 		"ResourceWithGenerateName": {
-			reason: "Validates handling of resources with generateName",
+			reason:       "Validates handling of resources with generateName",
+			outputFormat: "json",
 			setupFiles: []string{
 				"testdata/diff/resources/xrd.yaml",
 				"testdata/diff/resources/functions.yaml",
@@ -1073,42 +834,20 @@ Summary: 2 modified, 2 removed`,
 			},
 			// Use a composition that uses generateName for composed resources
 			inputFiles: []string{"testdata/diff/new-xr.yaml"},
-			expectedOutput: `
-~~~ XDownstreamResource/test-resource-abc123
-  apiVersion: ns.nop.example.org/v1alpha1
-  kind: XDownstreamResource
-  metadata:
-    annotations:
-      crossplane.io/composition-resource-name: nop-resource
-    generateName: test-resource-
-    labels:
-      crossplane.io/composite: test-resource
-    name: test-resource-abc123
-    namespace: default
-  spec:
-    forProvider:
--     configData: existing-value
-+     configData: new-value
-
----
-~~~ XNopResource/test-resource
-  apiVersion: ns.diff.example.org/v1alpha1
-  kind: XNopResource
-  metadata:
-    name: test-resource
-    namespace: default
-  spec:
--   coolField: existing-value
-+   coolField: new-value
-
----
-`,
+			expectedStructuredOutput: tu.ExpectDiff().
+				WithSummary(0, 2, 0).
+				WithModifiedResource("XDownstreamResource", "test-resource-abc123", "default").
+				WithFieldChange("spec.forProvider.configData", "existing-value", "new-value").
+				And().
+				WithModifiedResource("XNopResource", "test-resource", "default").
+				WithFieldChange("spec.coolField", "existing-value", "new-value").
+				And(),
 			expectedError:    false,
 			expectedExitCode: dp.ExitCodeDiffDetected,
-			noColor:          true,
 		},
 		"NewXRWithGenerateName": {
-			reason: "Shows diff for new XR with generateName",
+			reason:       "Shows diff for new XR with generateName",
+			outputFormat: "json",
 			setupFiles: []string{
 				"testdata/diff/resources/xrd.yaml",
 				"testdata/diff/resources/composition.yaml",
@@ -1116,39 +855,22 @@ Summary: 2 modified, 2 removed`,
 				// We don't add any existing XR, as we're testing creation of a new one
 			},
 			inputFiles: []string{"testdata/diff/generated-name-xr.yaml"},
-			expectedOutput: `
-+++ XDownstreamResource/generated-xr-(generated)
-+ apiVersion: ns.nop.example.org/v1alpha1
-+ kind: XDownstreamResource
-+ metadata:
-+   annotations:
-+     crossplane.io/composition-resource-name: nop-resource
-+   labels:
-+     crossplane.io/composite: generated-xr-(generated)
-+   name: generated-xr-(generated)
-+   namespace: default
-+ spec:
-+   forProvider:
-+     configData: new-value
-
----
-+++ XNopResource/generated-xr-(generated)
-+ apiVersion: ns.diff.example.org/v1alpha1
-+ kind: XNopResource
-+ metadata:
-+   generateName: generated-xr-
-+   namespace: default
-+ spec:
-+   coolField: new-value
-
----
-`,
+			expectedStructuredOutput: tu.ExpectDiff().
+				WithSummary(2, 0, 0).
+				WithAddedResource("XDownstreamResource", "", "default").
+				WithNamePattern(`generated-xr-\(generated\)`).
+				WithField("spec.forProvider.configData", "new-value").
+				And().
+				WithAddedResource("XNopResource", "", "default").
+				WithNamePattern(`generated-xr-\(generated\)`).
+				WithField("spec.coolField", "new-value").
+				And(),
 			expectedError:    false,
 			expectedExitCode: dp.ExitCodeDiffDetected,
-			noColor:          true,
 		},
 		"MultipleXRs": {
-			reason: "Validates diff for multiple XRs",
+			reason:       "Validates diff for multiple XRs",
+			outputFormat: "json",
 			setupFiles: []string{
 				"testdata/diff/resources/xrd.yaml",
 				"testdata/diff/resources/composition.yaml",
@@ -1162,69 +884,26 @@ Summary: 2 modified, 2 removed`,
 				"testdata/diff/first-xr.yaml",
 				"testdata/diff/modified-xr.yaml",
 			},
-			expectedOutput: `
-+++ XDownstreamResource/first-resource
-+ apiVersion: ns.nop.example.org/v1alpha1
-+ kind: XDownstreamResource
-+ metadata:
-+   annotations:
-+     crossplane.io/composition-resource-name: nop-resource
-+   labels:
-+     crossplane.io/composite: first-resource
-+   name: first-resource
-+   namespace: default
-+ spec:
-+   forProvider:
-+     configData: first-value
-
----
-~~~ XDownstreamResource/test-resource
-  apiVersion: ns.nop.example.org/v1alpha1
-  kind: XDownstreamResource
-  metadata:
-    annotations:
-      crossplane.io/composition-resource-name: nop-resource
-    generateName: test-resource-
-    labels:
-      crossplane.io/composite: test-resource
-    name: test-resource
-    namespace: default
-  spec:
-    forProvider:
--     configData: existing-value
-+     configData: modified-value
-
----
-+++ XNopResource/first-resource
-+ apiVersion: ns.diff.example.org/v1alpha1
-+ kind: XNopResource
-+ metadata:
-+   name: first-resource
-+   namespace: default
-+ spec:
-+   coolField: first-value
-
----
-~~~ XNopResource/test-resource
-  apiVersion: ns.diff.example.org/v1alpha1
-  kind: XNopResource
-  metadata:
-    name: test-resource
-    namespace: default
-  spec:
--   coolField: existing-value
-+   coolField: modified-value
-
----
-
-Summary: 2 added, 2 modified
-`,
+			expectedStructuredOutput: tu.ExpectDiff().
+				WithSummary(2, 2, 0).
+				WithAddedResource("XDownstreamResource", "first-resource", "default").
+				WithField("spec.forProvider.configData", "first-value").
+				And().
+				WithModifiedResource("XDownstreamResource", "test-resource", "default").
+				WithFieldChange("spec.forProvider.configData", "existing-value", "modified-value").
+				And().
+				WithAddedResource("XNopResource", "first-resource", "default").
+				WithField("spec.coolField", "first-value").
+				And().
+				WithModifiedResource("XNopResource", "test-resource", "default").
+				WithFieldChange("spec.coolField", "existing-value", "modified-value").
+				And(),
 			expectedError:    false,
 			expectedExitCode: dp.ExitCodeDiffDetected,
-			noColor:          true,
 		},
 		"SelectCompositionByDirectReference": {
-			reason: "Validates composition selection by direct reference",
+			reason:       "Validates composition selection by direct reference",
+			outputFormat: "json",
 			setupFiles: []string{
 				"testdata/diff/resources/xrd.yaml",
 				"testdata/diff/resources/functions.yaml",
@@ -1236,41 +915,21 @@ Summary: 2 added, 2 modified
 			inputFiles: []string{
 				"testdata/diff/xr-with-composition-ref.yaml",
 			},
-			expectedOutput: `
-+++ XDownstreamResource/test-resource
-+ apiVersion: ns.nop.example.org/v1alpha1
-+ kind: XDownstreamResource
-+ metadata:
-+   annotations:
-+     crossplane.io/composition-resource-name: production-resource
-+   labels:
-+     crossplane.io/composite: test-resource
-+   name: test-resource
-+   namespace: default
-+ spec:
-+   forProvider:
-+     configData: test-value
-+     resourceTier: production
-
----
-+++ XNopResource/test-resource
-+ apiVersion: ns.diff.example.org/v1alpha1
-+ kind: XNopResource
-+ metadata:
-+   name: test-resource
-+   namespace: default
-+ spec:
-+   coolField: test-value
-+   crossplane:
-+     compositionRef:
-+       name: production-composition
-`,
+			expectedStructuredOutput: tu.ExpectDiff().
+				WithSummary(2, 0, 0).
+				WithAddedResource("XDownstreamResource", "test-resource", "default").
+				WithField("spec.forProvider.configData", "test-value").
+				WithField("spec.forProvider.resourceTier", "production").
+				And().
+				WithAddedResource("XNopResource", "test-resource", "default").
+				WithField("spec.coolField", "test-value").
+				And(),
 			expectedError:    false,
 			expectedExitCode: dp.ExitCodeDiffDetected,
-			noColor:          true,
 		},
 		"SelectCompositionByLabelSelector": {
-			reason: "Validates composition selection by label selector",
+			reason:       "Validates composition selection by label selector",
+			outputFormat: "json",
 			setupFiles: []string{
 				"testdata/diff/resources/xrd.yaml",
 				"testdata/diff/resources/functions.yaml",
@@ -1282,41 +941,17 @@ Summary: 2 added, 2 modified
 			inputFiles: []string{
 				"testdata/diff/xr-with-composition-selector.yaml",
 			},
-			expectedOutput: `
-+++ XDownstreamResource/test-resource
-+ apiVersion: ns.nop.example.org/v1alpha1
-+ kind: XDownstreamResource
-+ metadata:
-+   annotations:
-+     crossplane.io/composition-resource-name: staging-resource
-+   labels:
-+     crossplane.io/composite: test-resource
-+   name: test-resource
-+   namespace: default
-+ spec:
-+   forProvider:
-+     configData: test-value
-+     resourceTier: staging
-
----
-+++ XNopResource/test-resource
-+ apiVersion: ns.diff.example.org/v1alpha1
-+ kind: XNopResource
-+ metadata:
-+   name: test-resource
-+   namespace: default
-+ spec:
-+   coolField: test-value
-+   crossplane:
-+     compositionSelector:
-+       matchLabels:
-+         environment: staging
-+         provider: aws
-
-`,
+			expectedStructuredOutput: tu.ExpectDiff().
+				WithSummary(2, 0, 0).
+				WithAddedResource("XDownstreamResource", "test-resource", "default").
+				WithField("spec.forProvider.configData", "test-value").
+				WithField("spec.forProvider.resourceTier", "staging").
+				And().
+				WithAddedResource("XNopResource", "test-resource", "default").
+				WithField("spec.coolField", "test-value").
+				And(),
 			expectedError:    false,
 			expectedExitCode: dp.ExitCodeDiffDetected,
-			noColor:          true,
 		},
 		"AmbiguousCompositionSelection": {
 			reason: "Validates error on ambiguous composition selection",
@@ -1352,7 +987,8 @@ Summary: 2 added, 2 modified
 			noColor:               true,
 		},
 		"NewClaimShowsDiff": {
-			reason: "Shows diff for new claim",
+			reason:       "Shows diff for new claim",
+			outputFormat: "json",
 			setupFiles: []string{
 				"testdata/diff/resources/existing-namespace.yaml",
 				// Add the necessary CRDs and compositions for claim diffing
@@ -1362,43 +998,20 @@ Summary: 2 added, 2 modified
 				"testdata/diff/resources/functions.yaml",
 			},
 			inputFiles: []string{"testdata/diff/new-claim.yaml"},
-			expectedOutput: `
-+++ NopClaim/test-claim
-+ apiVersion: diff.example.org/v1alpha1
-+ kind: NopClaim
-+ metadata:
-+   name: test-claim
-+   namespace: existing-namespace
-+ spec:
-+   compositeDeletePolicy: Background
-+   compositionRef:
-+     name: claim-composition
-+   compositionUpdatePolicy: Automatic
-+   coolField: new-value
-
----
-+++ XDownstreamResource/test-claim
-+ apiVersion: nop.example.org/v1alpha1
-+ kind: XDownstreamResource
-+ metadata:
-+   annotations:
-+     crossplane.io/composition-resource-name: nop-resource
-+   labels:
-+     crossplane.io/composite: test-claim
-+   name: test-claim
-+ spec:
-+   forProvider:
-+     configData: new-value
-
----
-
-Summary: 2 added`,
+			expectedStructuredOutput: tu.ExpectDiff().
+				WithSummary(2, 0, 0).
+				WithAddedResource("NopClaim", "test-claim", "existing-namespace").
+				WithField("spec.coolField", "new-value").
+				And().
+				WithAddedResource("XDownstreamResource", "test-claim", "").
+				WithField("spec.forProvider.configData", "new-value").
+				And(),
 			expectedError:    false,
 			expectedExitCode: dp.ExitCodeDiffDetected,
-			noColor:          true,
 		},
 		"NewClaimWithClaimRefComposition": {
-			reason: "Shows diff for new claim when composition uses spec.claimRef - claimRef is synthesized for new claims",
+			reason:       "Shows diff for new claim when composition uses spec.claimRef - claimRef is synthesized for new claims",
+			outputFormat: "json",
 			setupFiles: []string{
 				"testdata/diff/resources/existing-namespace.yaml",
 				"testdata/diff/resources/claim-xrd.yaml",
@@ -1407,43 +1020,20 @@ Summary: 2 added`,
 				"testdata/diff/resources/functions.yaml",
 			},
 			inputFiles: []string{"testdata/diff/new-claim-with-claimref-composition.yaml"},
-			expectedOutput: `
-+++ NopClaim/test-claim
-+ apiVersion: diff.example.org/v1alpha1
-+ kind: NopClaim
-+ metadata:
-+   name: test-claim
-+   namespace: existing-namespace
-+ spec:
-+   compositeDeletePolicy: Background
-+   compositionRef:
-+     name: claim-composition-with-claimref
-+   compositionUpdatePolicy: Automatic
-+   coolField: new-value
-
----
-+++ XDownstreamResource/test-claim
-+ apiVersion: nop.example.org/v1alpha1
-+ kind: XDownstreamResource
-+ metadata:
-+   annotations:
-+     crossplane.io/composition-resource-name: nop-resource
-+   labels:
-+     crossplane.io/composite: test-claim
-+   name: test-claim
-+ spec:
-+   forProvider:
-+     configData: existing-namespace/test-claim
-
----
-
-Summary: 2 added`,
+			expectedStructuredOutput: tu.ExpectDiff().
+				WithSummary(2, 0, 0).
+				WithAddedResource("NopClaim", "test-claim", "existing-namespace").
+				WithField("spec.coolField", "new-value").
+				And().
+				WithAddedResource("XDownstreamResource", "test-claim", "").
+				WithField("spec.forProvider.configData", "existing-namespace/test-claim").
+				And(),
 			expectedError:    false,
 			expectedExitCode: dp.ExitCodeDiffDetected,
-			noColor:          true,
 		},
 		"ModifiedClaimShowsDiff": {
-			reason: "Shows diff for modified claim",
+			reason:       "Shows diff for modified claim",
+			outputFormat: "json",
 			setupFiles: []string{
 				"testdata/diff/resources/existing-namespace.yaml",
 				// Add necessary CRDs and composition
@@ -1456,115 +1046,56 @@ Summary: 2 added`,
 				"testdata/diff/resources/existing-claim-downstream-resource.yaml",
 			},
 			inputFiles: []string{"testdata/diff/modified-claim.yaml"},
-			expectedOutput: `
-~~~ NopClaim/test-claim
-  apiVersion: diff.example.org/v1alpha1
-  kind: NopClaim
-  metadata:
-    name: test-claim
-    namespace: existing-namespace
-  spec:
-    compositeDeletePolicy: Background
-    compositionRef:
-      name: claim-composition
-    compositionUpdatePolicy: Automatic
--   coolField: existing-value
-+   coolField: modified-value
-
----
-~~~ XDownstreamResource/test-claim-82crv
-  apiVersion: nop.example.org/v1alpha1
-  kind: XDownstreamResource
-  metadata:
-    annotations:
-      crossplane.io/composition-resource-name: nop-resource
-    generateName: test-claim-82crv-
-    labels:
-      crossplane.io/claim-name: test-claim
-      crossplane.io/claim-namespace: existing-namespace
-      crossplane.io/composite: test-claim-82crv
-    name: test-claim-82crv
-  spec:
-    forProvider:
--     configData: existing-value
-+     configData: modified-value
-
----
-
-Summary: 2 modified`,
+			expectedStructuredOutput: tu.ExpectDiff().
+				WithSummary(0, 2, 0).
+				WithModifiedResource("NopClaim", "test-claim", "existing-namespace").
+				WithFieldChange("spec.coolField", "existing-value", "modified-value").
+				And().
+				WithModifiedResource("XDownstreamResource", "test-claim-82crv", "").
+				WithFieldChange("spec.forProvider.configData", "existing-value", "modified-value").
+				And(),
 			expectedError:    false,
 			expectedExitCode: dp.ExitCodeDiffDetected,
-			noColor:          true,
 		},
 		"XRDDefaultsAppliedBeforeRendering": {
-			reason:     "Validates that XRD defaults are applied to XR before rendering",
-			inputFiles: []string{"testdata/diff/xr-with-missing-defaults.yaml"},
+			reason:       "Validates that XRD defaults are applied to XR before rendering",
+			outputFormat: "json",
+			inputFiles:   []string{"testdata/diff/xr-with-missing-defaults.yaml"},
 			setupFiles: []string{
 				"testdata/diff/resources/xrd-with-defaults.yaml",
 				"testdata/diff/resources/composition-with-defaults.yaml",
 				"testdata/diff/resources/functions.yaml",
 			},
-			expectedOutput: strings.Join([]string{
-				`+++ XTestDefaultResource/test-resource-with-defaults
-+ apiVersion: ns.diff.example.org/v1alpha1
-+ kind: XTestDefaultResource
-+ metadata:
-+   name: test-resource-with-defaults
-+   namespace: default
-+ spec:
-+   region: us-east-1
-+   settings:
-+     enabled: true
-+     retries: 3
-+     timeout: 30
-+   size: large
-+   tags:
-+     environment: development
-
----
-
-Summary: 1 added`,
-			}, ""),
+			expectedStructuredOutput: tu.ExpectDiff().
+				WithSummary(1, 0, 0).
+				WithAddedResource("XTestDefaultResource", "test-resource-with-defaults", "default").
+				WithField("spec.region", "us-east-1").
+				WithField("spec.size", "large").
+				And(),
 			expectedError:    false,
 			expectedExitCode: dp.ExitCodeDiffDetected,
-			noColor:          true,
 		},
 		"XRDDefaultsNoOverride": {
-			reason:     "Validates that XRD defaults do not override user-specified values",
-			inputFiles: []string{"testdata/diff/xr-with-overridden-defaults.yaml"},
+			reason:       "Validates that XRD defaults do not override user-specified values",
+			outputFormat: "json",
+			inputFiles:   []string{"testdata/diff/xr-with-overridden-defaults.yaml"},
 			setupFiles: []string{
 				"testdata/diff/resources/xrd-with-defaults.yaml",
 				"testdata/diff/resources/composition-with-defaults.yaml",
 				"testdata/diff/resources/functions.yaml",
 			},
-			expectedOutput: strings.Join([]string{
-				`+++ XTestDefaultResource/test-resource-with-overrides
-+ apiVersion: ns.diff.example.org/v1alpha1
-+ kind: XTestDefaultResource
-+ metadata:
-+   name: test-resource-with-overrides
-+   namespace: default
-+ spec:
-+   region: us-west-2
-+   settings:
-+     enabled: false
-+     retries: 3
-+     timeout: 60
-+   size: xlarge
-+   tags:
-+     environment: production
-+     team: platform
-
----
-
-Summary: 1 added`,
-			}, ""),
+			expectedStructuredOutput: tu.ExpectDiff().
+				WithSummary(1, 0, 0).
+				WithAddedResource("XTestDefaultResource", "test-resource-with-overrides", "default").
+				WithField("spec.region", "us-west-2").
+				WithField("spec.size", "xlarge").
+				And(),
 			expectedError:    false,
 			expectedExitCode: dp.ExitCodeDiffDetected,
-			noColor:          true,
 		},
 		"ConcurrentRenderingMultipleXRs": {
-			reason: "Validates concurrent rendering with multiple functions and XRs from directory",
+			reason:       "Validates concurrent rendering with multiple functions and XRs from directory",
+			outputFormat: "json",
 			// This test reproduces issue #59 - concurrent function startup failures
 			// when processing multiple XR files from a directory
 			inputFiles: []string{
@@ -1580,13 +1111,13 @@ Summary: 1 added`,
 			// Each XR should produce 3 base resources + 2 additional resources = 5 resources per XR
 			// Plus the XR itself = 6 additions per XR
 			// Total: 5 XRs * 6 additions = 30 additions
-			expectedOutput:   "Summary: 30 added",
-			expectedError:    false,
-			expectedExitCode: dp.ExitCodeDiffDetected,
-			noColor:          true,
+			expectedStructuredOutput: tu.ExpectDiff().WithSummary(30, 0, 0),
+			expectedError:            false,
+			expectedExitCode:         dp.ExitCodeDiffDetected,
 		},
 		"NewNestedXRCreatesChildren": {
-			reason: "Validates that new nested XR creates child XR and downstream resources",
+			reason:       "Validates that new nested XR creates child XR and downstream resources",
+			outputFormat: "json",
 			setupFiles: []string{
 				// XRDs for parent and child
 				"testdata/diff/resources/nested/parent-xrd.yaml",
@@ -1599,54 +1130,23 @@ Summary: 1 added`,
 				"testdata/diff/resources/functions.yaml",
 			},
 			inputFiles: []string{"testdata/diff/new-nested-xr.yaml"},
-			expectedOutput: `
-+++ XChildResource/test-parent-child
-+ apiVersion: ns.nested.example.org/v1alpha1
-+ kind: XChildResource
-+ metadata:
-+   annotations:
-+     crossplane.io/composition-resource-name: child-xr
-+   labels:
-+     crossplane.io/composite: test-parent
-+   name: test-parent-child
-+   namespace: default
-+ spec:
-+   childField: parent-value
-
----
-+++ XDownstreamResource/test-parent-child-managed
-+ apiVersion: ns.nop.example.org/v1alpha1
-+ kind: XDownstreamResource
-+ metadata:
-+   annotations:
-+     crossplane.io/composition-resource-name: managed-resource
-+   labels:
-+     crossplane.io/composite: test-parent
-+   name: test-parent-child-managed
-+   namespace: default
-+ spec:
-+   forProvider:
-+     configData: parent-value
-
----
-+++ XParentResource/test-parent
-+ apiVersion: ns.nested.example.org/v1alpha1
-+ kind: XParentResource
-+ metadata:
-+   name: test-parent
-+   namespace: default
-+ spec:
-+   parentField: parent-value
-
----
-
-Summary: 3 added`,
+			expectedStructuredOutput: tu.ExpectDiff().
+				WithSummary(3, 0, 0).
+				WithAddedResource("XChildResource", "test-parent-child", "default").
+				WithField("spec.childField", "parent-value").
+				And().
+				WithAddedResource("XDownstreamResource", "test-parent-child-managed", "default").
+				WithField("spec.forProvider.configData", "parent-value").
+				And().
+				WithAddedResource("XParentResource", "test-parent", "default").
+				WithField("spec.parentField", "parent-value").
+				And(),
 			expectedError:    false,
 			expectedExitCode: dp.ExitCodeDiffDetected,
-			noColor:          true,
 		},
 		"ModifiedNestedXRPropagatesChanges": {
-			reason: "Validates that modified nested XR propagates changes through child XR to downstream resources",
+			reason:       "Validates that modified nested XR propagates changes through child XR to downstream resources",
+			outputFormat: "json",
 			setupFiles: []string{
 				// XRDs for parent and child
 				"testdata/diff/resources/nested/parent-xrd.yaml",
@@ -1665,61 +1165,24 @@ Summary: 3 added`,
 				"testdata/diff/resources/nested/existing-managed-resource.yaml",
 			},
 			inputFiles: []string{"testdata/diff/modified-nested-xr.yaml"},
-			expectedOutput: `
-~~~ XChildResource/test-parent-child
-  apiVersion: ns.nested.example.org/v1alpha1
-  kind: XChildResource
-  metadata:
-+   annotations:
-+     crossplane.io/composition-resource-name: child-xr
-+   labels:
-+     crossplane.io/composite: test-parent
-    name: test-parent-child
-    namespace: default
-  spec:
--   childField: existing-value
-+   childField: modified-value
-
----
-~~~ XDownstreamResource/test-parent-child-managed
-  apiVersion: ns.nop.example.org/v1alpha1
-  kind: XDownstreamResource
-  metadata:
-    annotations:
--     gotemplating.fn.crossplane.io/composition-resource-name: managed-resource
-+     crossplane.io/composition-resource-name: managed-resource
-+     gotemplating.fn.crossplane.io/composition-resource-name: managed-resource
-+   labels:
-+     crossplane.io/composite: test-parent
-    name: test-parent-child-managed
-    namespace: default
-  spec:
-    forProvider:
--     configData: existing-value
-+     configData: modified-value
-  
-
----
-~~~ XParentResource/test-parent
-  apiVersion: ns.nested.example.org/v1alpha1
-  kind: XParentResource
-  metadata:
-    name: test-parent
-    namespace: default
-  spec:
--   parentField: existing-value
-+   parentField: modified-value
-
----
-
-Summary: 3 modified`,
+			expectedStructuredOutput: tu.ExpectDiff().
+				WithSummary(0, 3, 0).
+				WithModifiedResource("XChildResource", "test-parent-child", "default").
+				WithFieldChange("spec.childField", "existing-value", "modified-value").
+				And().
+				WithModifiedResource("XDownstreamResource", "test-parent-child-managed", "default").
+				WithFieldChange("spec.forProvider.configData", "existing-value", "modified-value").
+				And().
+				WithModifiedResource("XParentResource", "test-parent", "default").
+				WithFieldChange("spec.parentField", "existing-value", "modified-value").
+				And(),
 			expectedError:    false,
 			expectedExitCode: dp.ExitCodeDiffDetected,
-			noColor:          true,
 		},
 		// Composition Revision tests for v2 XRDs
 		"V2ManualPolicyPinnedRevision": {
-			reason: "Validates v2 XR with Manual update policy stays on pinned revision",
+			reason:       "Validates v2 XR with Manual update policy stays on pinned revision",
+			outputFormat: "json",
 			setupFiles: []string{
 				"testdata/diff/resources/xrd.yaml",
 				"testdata/diff/resources/composition-revision-v1.yaml",
@@ -1730,48 +1193,20 @@ Summary: 3 modified`,
 				"testdata/diff/resources/existing-downstream-manual-v1.yaml",
 			},
 			inputFiles: []string{"testdata/diff/modified-xr-manual-v1.yaml"},
-			expectedOutput: `
-~~~ XDownstreamResource/test-manual-v1
-  apiVersion: ns.nop.example.org/v1alpha1
-  kind: XDownstreamResource
-  metadata:
-    annotations:
-+     crossplane.io/composition-resource-name: nop-resource
-      gotemplating.fn.crossplane.io/composition-resource-name: nop-resource
-    labels:
-      crossplane.io/composite: test-manual-v1
-    name: test-manual-v1
-    namespace: default
-  spec:
-    forProvider:
--     configData: v1-existing-value
-+     configData: v1-modified-value
-
----
-~~~ XNopResource/test-manual-v1
-  apiVersion: ns.diff.example.org/v1alpha1
-  kind: XNopResource
-  metadata:
-    name: test-manual-v1
-    namespace: default
-  spec:
--   coolField: existing-value
-+   coolField: modified-value
-    crossplane:
-      compositionRef:
-        name: xnopresources.diff.example.org
-      compositionRevisionRef:
-        name: xnopresources.diff.example.org-abc123
-      compositionUpdatePolicy: Manual
-
----
-`,
+			expectedStructuredOutput: tu.ExpectDiff().
+				WithSummary(0, 2, 0).
+				WithModifiedResource("XDownstreamResource", "test-manual-v1", "default").
+				WithFieldChange("spec.forProvider.configData", "v1-existing-value", "v1-modified-value").
+				And().
+				WithModifiedResource("XNopResource", "test-manual-v1", "default").
+				WithFieldChange("spec.coolField", "existing-value", "modified-value").
+				And(),
 			expectedError:    false,
 			expectedExitCode: dp.ExitCodeDiffDetected,
-			noColor:          true,
 		},
 		"V2AutomaticPolicyLatestRevision": {
-			reason: "Validates v2 XR with Automatic update policy uses latest revision",
+			reason:       "Validates v2 XR with Automatic update policy uses latest revision",
+			outputFormat: "json",
 			setupFiles: []string{
 				"testdata/diff/resources/xrd.yaml",
 				"testdata/diff/resources/composition-revision-v1.yaml",
@@ -1782,48 +1217,20 @@ Summary: 3 modified`,
 				"testdata/diff/resources/existing-downstream-automatic.yaml", // v1 data
 			},
 			inputFiles: []string{"testdata/diff/modified-xr-automatic.yaml"},
-			expectedOutput: `
-~~~ XDownstreamResource/test-automatic
-  apiVersion: ns.nop.example.org/v1alpha1
-  kind: XDownstreamResource
-  metadata:
-    annotations:
-+     crossplane.io/composition-resource-name: nop-resource
-      gotemplating.fn.crossplane.io/composition-resource-name: nop-resource
-    labels:
-      crossplane.io/composite: test-automatic
-    name: test-automatic
-    namespace: default
-  spec:
-    forProvider:
--     configData: v1-existing-value
-+     configData: v2-modified-value
-
----
-~~~ XNopResource/test-automatic
-  apiVersion: ns.diff.example.org/v1alpha1
-  kind: XNopResource
-  metadata:
-    name: test-automatic
-    namespace: default
-  spec:
--   coolField: existing-value
-+   coolField: modified-value
-    crossplane:
-      compositionRef:
-        name: xnopresources.diff.example.org
-      compositionRevisionRef:
-        name: xnopresources.diff.example.org-abc123
-      compositionUpdatePolicy: Automatic
-
----
-`,
+			expectedStructuredOutput: tu.ExpectDiff().
+				WithSummary(0, 2, 0).
+				WithModifiedResource("XDownstreamResource", "test-automatic", "default").
+				WithFieldChange("spec.forProvider.configData", "v1-existing-value", "v2-modified-value").
+				And().
+				WithModifiedResource("XNopResource", "test-automatic", "default").
+				WithFieldChange("spec.coolField", "existing-value", "modified-value").
+				And(),
 			expectedError:    false,
 			expectedExitCode: dp.ExitCodeDiffDetected,
-			noColor:          true,
 		},
 		"V2ManualRevisionUpgradeDiff": {
-			reason: "Validates v2 XR changing revision in Manual mode shows upgrade diff",
+			reason:       "Validates v2 XR changing revision in Manual mode shows upgrade diff",
+			outputFormat: "json",
 			setupFiles: []string{
 				"testdata/diff/resources/xrd.yaml",
 				"testdata/diff/resources/composition-revision-v1.yaml",
@@ -1834,46 +1241,16 @@ Summary: 3 modified`,
 				"testdata/diff/resources/existing-downstream-manual-v1.yaml",
 			},
 			inputFiles: []string{"testdata/diff/modified-xr-manual-upgrade-to-v2.yaml"},
-			expectedOutput: `
-~~~ XDownstreamResource/test-manual-v1
-  apiVersion: ns.nop.example.org/v1alpha1
-  kind: XDownstreamResource
-  metadata:
-    annotations:
-+     crossplane.io/composition-resource-name: nop-resource
-      gotemplating.fn.crossplane.io/composition-resource-name: nop-resource
-    labels:
-      crossplane.io/composite: test-manual-v1
-    name: test-manual-v1
-    namespace: default
-  spec:
-    forProvider:
--     configData: v1-existing-value
-+     configData: v2-modified-value
-
----
-~~~ XNopResource/test-manual-v1
-  apiVersion: ns.diff.example.org/v1alpha1
-  kind: XNopResource
-  metadata:
-    name: test-manual-v1
-    namespace: default
-  spec:
--   coolField: existing-value
-+   coolField: modified-value
-    crossplane:
-      compositionRef:
-        name: xnopresources.diff.example.org
-      compositionRevisionRef:
--       name: xnopresources.diff.example.org-abc123
-+       name: xnopresources.diff.example.org-def456
-      compositionUpdatePolicy: Manual
-
----
-`,
+			expectedStructuredOutput: tu.ExpectDiff().
+				WithSummary(0, 2, 0).
+				WithModifiedResource("XDownstreamResource", "test-manual-v1", "default").
+				WithFieldChange("spec.forProvider.configData", "v1-existing-value", "v2-modified-value").
+				And().
+				WithModifiedResource("XNopResource", "test-manual-v1", "default").
+				WithFieldChange("spec.coolField", "existing-value", "modified-value").
+				And(),
 			expectedError:    false,
 			expectedExitCode: dp.ExitCodeDiffDetected,
-			noColor:          true,
 		},
 		"CompositionRevisionUpgradesResourceAPIVersion": {
 			// NOTE: This test validates that resources are correctly matched across API version changes,
@@ -1883,7 +1260,8 @@ Summary: 3 modified`,
 			// to v1beta2. From Kubernetes' perspective, the resource exists as both versions simultaneously,
 			// so there's no apiVersion field change to show in the diff. The important thing is that the
 			// resource is matched (shown as ~~~, not ---/+++), preventing delete/recreate operations.
-			reason: "Validates XR upgrading composition revision that changes resource API version shows as update not remove/add",
+			reason:       "Validates XR upgrading composition revision that changes resource API version shows as update not remove/add",
+			outputFormat: "json",
 			setupFiles: []string{
 				"testdata/diff/resources/xrd.yaml",
 				// NOTE: xapimigrate CRD is auto-loaded from testdata/diff/crds/
@@ -1896,47 +1274,19 @@ Summary: 3 modified`,
 				"testdata/diff/resources/existing-api-version-downstream-v1beta1.yaml",
 			},
 			inputFiles: []string{"testdata/diff/modified-api-version-xr-rev2.yaml"},
-			expectedOutput: `
-~~~ XApiMigrateResource/test-api-version-xr-api-resource
-  apiVersion: diff.example.org/v1beta2
-  kind: XApiMigrateResource
-  metadata:
-    annotations:
-+     crossplane.io/composition-resource-name: api-migrate-resource
-      gotemplating.fn.crossplane.io/composition-resource-name: api-migrate-resource
-    labels:
-      crossplane.io/composite: test-api-version-xr
-    name: test-api-version-xr-api-resource
-    namespace: default
-  spec:
-    forProvider:
-      configData: test-value
-
----
-~~~ XNopResource/test-api-version-xr
-  apiVersion: ns.diff.example.org/v1alpha1
-  kind: XNopResource
-  metadata:
-    name: test-api-version-xr
-    namespace: default
-  spec:
-    coolField: test-value
-    crossplane:
-      compositionRef:
-        name: xapimigrateresources.example.org
-      compositionRevisionRef:
--       name: xapimigrateresources.example.org-v1
-+       name: xapimigrateresources.example.org-v2
-      compositionUpdatePolicy: Manual
-
----
-`,
+			// Key assertion: both resources are MODIFIED (not added/removed), proving API version migration works
+			expectedStructuredOutput: tu.ExpectDiff().
+				WithSummary(0, 2, 0).
+				WithModifiedResource("XApiMigrateResource", "test-api-version-xr-api-resource", "default").
+				And().
+				WithModifiedResource("XNopResource", "test-api-version-xr", "default").
+				And(),
 			expectedError:    false,
 			expectedExitCode: dp.ExitCodeDiffDetected,
-			noColor:          true,
 		},
 		"V2SwitchManualToAutomatic": {
-			reason: "Validates v2 XR switching from Manual to Automatic mode uses latest revision",
+			reason:       "Validates v2 XR switching from Manual to Automatic mode uses latest revision",
+			outputFormat: "json",
 			setupFiles: []string{
 				"testdata/diff/resources/xrd.yaml",
 				"testdata/diff/resources/composition-revision-v1.yaml",
@@ -1947,49 +1297,20 @@ Summary: 3 modified`,
 				"testdata/diff/resources/existing-downstream-manual-v1.yaml",
 			},
 			inputFiles: []string{"testdata/diff/modified-xr-switch-to-automatic.yaml"},
-			expectedOutput: `
-~~~ XDownstreamResource/test-manual-v1
-  apiVersion: ns.nop.example.org/v1alpha1
-  kind: XDownstreamResource
-  metadata:
-    annotations:
-+     crossplane.io/composition-resource-name: nop-resource
-      gotemplating.fn.crossplane.io/composition-resource-name: nop-resource
-    labels:
-      crossplane.io/composite: test-manual-v1
-    name: test-manual-v1
-    namespace: default
-  spec:
-    forProvider:
--     configData: v1-existing-value
-+     configData: v2-modified-value
-
----
-~~~ XNopResource/test-manual-v1
-  apiVersion: ns.diff.example.org/v1alpha1
-  kind: XNopResource
-  metadata:
-    name: test-manual-v1
-    namespace: default
-  spec:
--   coolField: existing-value
-+   coolField: modified-value
-    crossplane:
-      compositionRef:
-        name: xnopresources.diff.example.org
-      compositionRevisionRef:
-        name: xnopresources.diff.example.org-abc123
--     compositionUpdatePolicy: Manual
-+     compositionUpdatePolicy: Automatic
-
----
-`,
+			expectedStructuredOutput: tu.ExpectDiff().
+				WithSummary(0, 2, 0).
+				WithModifiedResource("XDownstreamResource", "test-manual-v1", "default").
+				WithFieldChange("spec.forProvider.configData", "v1-existing-value", "v2-modified-value").
+				And().
+				WithModifiedResource("XNopResource", "test-manual-v1", "default").
+				WithFieldChange("spec.coolField", "existing-value", "modified-value").
+				And(),
 			expectedError:    false,
 			expectedExitCode: dp.ExitCodeDiffDetected,
-			noColor:          true,
 		},
 		"V2NetNewManualNoRevRef": {
-			reason: "Validates v2 net new XR with Manual policy but no revision ref uses latest revision",
+			reason:       "Validates v2 net new XR with Manual policy but no revision ref uses latest revision",
+			outputFormat: "json",
 			setupFiles: []string{
 				"testdata/diff/resources/xrd.yaml",
 				"testdata/diff/resources/composition-revision-v1.yaml",
@@ -1998,45 +1319,21 @@ Summary: 3 modified`,
 				"testdata/diff/resources/functions.yaml",
 			},
 			inputFiles: []string{"testdata/diff/new-xr-manual-no-ref.yaml"},
-			expectedOutput: `
-+++ XDownstreamResource/test-manual-no-ref
-+ apiVersion: ns.nop.example.org/v1alpha1
-+ kind: XDownstreamResource
-+ metadata:
-+   annotations:
-+     crossplane.io/composition-resource-name: nop-resource
-+   labels:
-+     crossplane.io/composite: test-manual-no-ref
-+   name: test-manual-no-ref
-+   namespace: default
-+ spec:
-+   forProvider:
-+     configData: v2-new-value
-
----
-+++ XNopResource/test-manual-no-ref
-+ apiVersion: ns.diff.example.org/v1alpha1
-+ kind: XNopResource
-+ metadata:
-+   name: test-manual-no-ref
-+   namespace: default
-+ spec:
-+   coolField: new-value
-+   crossplane:
-+     compositionRef:
-+       name: xnopresources.diff.example.org
-+     compositionUpdatePolicy: Manual
-
----
-
-Summary: 2 added`,
+			expectedStructuredOutput: tu.ExpectDiff().
+				WithSummary(2, 0, 0).
+				WithAddedResource("XDownstreamResource", "test-manual-no-ref", "default").
+				WithField("spec.forProvider.configData", "v2-new-value").
+				And().
+				WithAddedResource("XNopResource", "test-manual-no-ref", "default").
+				WithField("spec.coolField", "new-value").
+				And(),
 			expectedError:    false,
 			expectedExitCode: dp.ExitCodeDiffDetected,
-			noColor:          true,
 		},
 		// Composition Revision tests for v1 XRDs (Crossplane 1.20 compatibility)
 		"V1ManualRevisionUpgradeDiff": {
 			reason:        "Validates v1 XR with Manual update policy changing revision shows upgrade diff",
+			outputFormat:  "json",
 			xrdAPIVersion: V1,
 			setupFiles: []string{
 				"testdata/diff/resources/legacy-xrd.yaml",
@@ -2048,51 +1345,21 @@ Summary: 2 added`,
 				"testdata/diff/resources/existing-legacy-downstream-manual-v1.yaml",
 			},
 			inputFiles: []string{"testdata/diff/modified-legacy-xr-manual-upgrade-to-v2.yaml"},
-			expectedOutput: `
-~~~ XDownstreamResource/test-legacy-manual-v1
-  apiVersion: legacycluster.nop.example.org/v1alpha1
-  kind: XDownstreamResource
-  metadata:
-    annotations:
-+     crossplane.io/composition-resource-name: nop-resource
-      gotemplating.fn.crossplane.io/composition-resource-name: nop-resource
-    labels:
-      crossplane.io/composite: test-legacy-manual-v1
-    name: test-legacy-manual-v1
-  spec:
-    forProvider:
--     configData: v1-existing-value
-+     configData: v2-modified-value
-
----
-~~~ XNopResource/test-legacy-manual-v1
-  apiVersion: legacycluster.diff.example.org/v1alpha1
-  kind: XNopResource
-  metadata:
-    name: test-legacy-manual-v1
-  spec:
-    compositionRef:
-      name: xlegacynopresources.diff.example.org
-    compositionRevisionRef:
--     name: xlegacynopresources.diff.example.org-abc123
--   compositionUpdatePolicy: Manual
--   coolField: existing-value
-+     name: xlegacynopresources.diff.example.org-def456
-+   compositionUpdatePolicy: Manual
-+   coolField: modified-value
-  
-  
-  
-
----
-`,
+			expectedStructuredOutput: tu.ExpectDiff().
+				WithSummary(0, 2, 0).
+				WithModifiedResource("XDownstreamResource", "test-legacy-manual-v1", "").
+				WithFieldChange("spec.forProvider.configData", "v1-existing-value", "v2-modified-value").
+				And().
+				WithModifiedResource("XNopResource", "test-legacy-manual-v1", "").
+				WithFieldChange("spec.coolField", "existing-value", "modified-value").
+				And(),
 			expectedError:    false,
 			expectedExitCode: dp.ExitCodeDiffDetected,
-			noColor:          true,
 		},
 		// v2 XRD with v1-style composition paths (issue #206)
 		"V2XRDWithV1StyleCompositionPaths": {
-			reason: "Validates v2 XRD using v1-style spec.compositionRef paths are correctly recognized (issue #206)",
+			reason:       "Validates v2 XRD using v1-style spec.compositionRef paths are correctly recognized (issue #206)",
+			outputFormat: "json",
 			setupFiles: []string{
 				"testdata/diff/resources/v2-xrd-with-v1-paths.yaml",
 				"testdata/diff/resources/v2-xrd-with-v1-paths-composition.yaml",
@@ -2102,45 +1369,20 @@ Summary: 2 added`,
 				"testdata/diff/resources/existing-v2xrd-v1paths-downstream.yaml",
 			},
 			inputFiles: []string{"testdata/diff/resources/modified-v2xrd-v1paths-xr.yaml"},
-			expectedOutput: `
-~~~ XDownstreamResource/test-v2xrd-v1paths
-  apiVersion: ns.nop.example.org/v1alpha1
-  kind: XDownstreamResource
-  metadata:
-    annotations:
-+     crossplane.io/composition-resource-name: nop-resource
-      gotemplating.fn.crossplane.io/composition-resource-name: nop-resource
-    labels:
-      crossplane.io/composite: test-v2xrd-v1paths
-    name: test-v2xrd-v1paths
-    namespace: default
-  spec:
-    forProvider:
--     configData: existing-value
-+     configData: modified-value
-
----
-~~~ XNopResource/test-v2xrd-v1paths
-  apiVersion: v2withv1paths.diff.example.org/v1alpha1
-  kind: XNopResource
-  metadata:
-    name: test-v2xrd-v1paths
-    namespace: default
-  spec:
-    compositionRef:
-      name: xnopresources.v2withv1paths.diff.example.org
-    compositionUpdatePolicy: Automatic
--   coolField: existing-value
-+   coolField: modified-value
-
----
-`,
+			expectedStructuredOutput: tu.ExpectDiff().
+				WithSummary(0, 2, 0).
+				WithModifiedResource("XDownstreamResource", "test-v2xrd-v1paths", "default").
+				WithFieldChange("spec.forProvider.configData", "existing-value", "modified-value").
+				And().
+				WithModifiedResource("XNopResource", "test-v2xrd-v1paths", "default").
+				WithFieldChange("spec.coolField", "existing-value", "modified-value").
+				And(),
 			expectedError:    false,
 			expectedExitCode: dp.ExitCodeDiffDetected,
-			noColor:          true,
 		},
 		"ModifiedClaimWithNestedXRsShowsDiff": {
-			reason: "Validates that modified Claims with nested XRs show proper diff (3 modified resources)",
+			reason:       "Validates that modified Claims with nested XRs show proper diff (3 modified resources)",
+			outputFormat: "json",
 			setupFiles: []string{
 				"testdata/diff/resources/existing-namespace.yaml",
 				// NOTE: CRDs for parent/child Claims/XRs are auto-loaded from testdata/diff/crds/
@@ -2175,80 +1417,24 @@ Summary: 2 added`,
 				},
 			},
 			inputFiles: []string{"testdata/diff/modified-claim-nested.yaml"},
-			expectedOutput: `
-~~~ ClusterNopResource/existing-parent-claim-82crv-nop
-  apiVersion: nop.crossplane.io/v1alpha1
-  kind: ClusterNopResource
-  metadata:
-    annotations:
--     child-field: existing-parent-value
-+     child-field: modified-parent-value
-      crossplane.io/composition-resource-name: nop-resource
-    generateName: existing-parent-claim-82crv-
-    labels:
-      crossplane.io/claim-name: existing-parent-claim
-      crossplane.io/claim-namespace: default
-      crossplane.io/composite: existing-parent-claim-82crv
-    name: existing-parent-claim-82crv-nop
-  spec:
-    forProvider:
-      conditionAfter:
-      - conditionStatus: "True"
-        conditionType: Ready
-        time: 0s
-
----
-~~~ ParentNopClaim/existing-parent-claim
-  apiVersion: claimnested.diff.example.org/v1alpha1
-  kind: ParentNopClaim
-  metadata:
-+   labels:
-+     new-label: added-value
-    name: existing-parent-claim
-    namespace: default
-  spec:
-    compositeDeletePolicy: Background
-    compositionRef:
-      name: parent-nop-claim-composition
-    compositionUpdatePolicy: Automatic
--   parentField: existing-parent-value
-+   parentField: modified-parent-value
-    resourceRef:
-      apiVersion: claimnested.diff.example.org/v1alpha1
-      kind: XParentNopClaim
-      name: existing-parent-claim-82crv
-
----
-~~~ XChildNopClaim/existing-parent-claim-82crv-child
-  apiVersion: claimnested.diff.example.org/v1alpha1
-  kind: XChildNopClaim
-  metadata:
-    annotations:
-      crossplane.io/composition-resource-name: child-xr
-    generateName: existing-parent-claim-82crv-
-    labels:
-      crossplane.io/claim-name: existing-parent-claim
-      crossplane.io/claim-namespace: default
-      crossplane.io/composite: existing-parent-claim-82crv
-    name: existing-parent-claim-82crv-child
-  spec:
--   childField: existing-parent-value
-+   childField: modified-parent-value
-    compositionRef:
-      name: child-nop-claim-composition
-    compositionUpdatePolicy: Automatic
-
----
-
-Summary: 3 modified`,
+			expectedStructuredOutput: tu.ExpectDiff().
+				WithSummary(0, 3, 0).
+				WithModifiedResource("ClusterNopResource", "existing-parent-claim-82crv-nop", "").
+				And().
+				WithModifiedResource("ParentNopClaim", "existing-parent-claim", "default").
+				WithFieldChange("spec.parentField", "existing-parent-value", "modified-parent-value").
+				And().
+				WithModifiedResource("XChildNopClaim", "existing-parent-claim-82crv-child", "").
+				WithFieldChange("spec.childField", "existing-parent-value", "modified-parent-value").
+				And(),
 			xrdAPIVersion:    V1, // Use V1 style resourceRefs since XRDs have claims
 			expectedError:    false,
 			expectedExitCode: dp.ExitCodeDiffDetected,
-			noColor:          true,
 		},
 		"FunctionCredentialsAutoFetch": {
-			reason:     "Successfully renders XR when composition references credentials that exist in cluster",
-			inputFiles: []string{"testdata/diff/new-xr-with-creds.yaml"},
+			reason:       "Successfully renders XR when composition references credentials that exist in cluster",
+			outputFormat: "json",
+			inputFiles:   []string{"testdata/diff/new-xr-with-creds.yaml"},
 			setupFiles: []string{
 				"testdata/diff/resources/xrd.yaml",
 				"testdata/diff/resources/credentials/composition-with-creds.yaml",
@@ -2256,43 +1442,20 @@ Summary: 3 modified`,
 				"testdata/diff/resources/functions.yaml",
 			},
 			expectedExitCode: dp.ExitCodeDiffDetected,
-			// The diff should succeed and show new resources (credentials fetched from cluster)
-			expectedOutput: strings.Join([]string{
-				`+++ XDownstreamResource/test-resource-with-creds
-`, tu.Green(`+ apiVersion: ns.nop.example.org/v1alpha1
-+ kind: XDownstreamResource
-+ metadata:
-+   annotations:
-+     crossplane.io/composition-resource-name: nop-resource
-+   labels:
-+     crossplane.io/composite: test-resource-with-creds
-+   name: test-resource-with-creds
-+   namespace: default
-+ spec:
-+   forProvider:
-+     configData: test-value-creds
-`), `
----
-+++ XNopResource/test-resource-with-creds
-`, tu.Green(`+ apiVersion: ns.diff.example.org/v1alpha1
-+ kind: XNopResource
-+ metadata:
-+   name: test-resource-with-creds
-+   namespace: default
-+ spec:
-+   coolField: test-value-creds
-+   crossplane:
-+     compositionRef:
-+       name: xnopresources-with-creds.diff.example.org
-`), `
----
-`,
-			}, ""),
+			expectedStructuredOutput: tu.ExpectDiff().
+				WithSummary(2, 0, 0).
+				WithAddedResource("XDownstreamResource", "test-resource-with-creds", "default").
+				WithField("spec.forProvider.configData", "test-value-creds").
+				And().
+				WithAddedResource("XNopResource", "test-resource-with-creds", "default").
+				WithField("spec.coolField", "test-value-creds").
+				And(),
 			expectedError: false,
 		},
 		"FunctionCredentialsFromCLI": {
-			reason:     "Successfully renders XR when credentials provided via --function-credentials flag",
-			inputFiles: []string{"testdata/diff/new-xr-with-creds.yaml"},
+			reason:       "Successfully renders XR when credentials provided via --function-credentials flag",
+			outputFormat: "json",
+			inputFiles:   []string{"testdata/diff/new-xr-with-creds.yaml"},
 			setupFiles: []string{
 				"testdata/diff/resources/xrd.yaml",
 				"testdata/diff/resources/credentials/composition-with-creds.yaml",
@@ -2302,38 +1465,14 @@ Summary: 3 modified`,
 			// Credentials loaded from CLI flag file
 			functionCredentials: "testdata/diff/resources/credentials/cli-credentials.yaml",
 			expectedExitCode:    dp.ExitCodeDiffDetected,
-			// The diff should succeed with credentials from CLI
-			expectedOutput: strings.Join([]string{
-				`+++ XDownstreamResource/test-resource-with-creds
-`, tu.Green(`+ apiVersion: ns.nop.example.org/v1alpha1
-+ kind: XDownstreamResource
-+ metadata:
-+   annotations:
-+     crossplane.io/composition-resource-name: nop-resource
-+   labels:
-+     crossplane.io/composite: test-resource-with-creds
-+   name: test-resource-with-creds
-+   namespace: default
-+ spec:
-+   forProvider:
-+     configData: test-value-creds
-`), `
----
-+++ XNopResource/test-resource-with-creds
-`, tu.Green(`+ apiVersion: ns.diff.example.org/v1alpha1
-+ kind: XNopResource
-+ metadata:
-+   name: test-resource-with-creds
-+   namespace: default
-+ spec:
-+   coolField: test-value-creds
-+   crossplane:
-+     compositionRef:
-+       name: xnopresources-with-creds.diff.example.org
-`), `
----
-`,
-			}, ""),
+			expectedStructuredOutput: tu.ExpectDiff().
+				WithSummary(2, 0, 0).
+				WithAddedResource("XDownstreamResource", "test-resource-with-creds", "default").
+				WithField("spec.forProvider.configData", "test-value-creds").
+				And().
+				WithAddedResource("XNopResource", "test-resource-with-creds", "default").
+				WithField("spec.coolField", "test-value-creds").
+				And(),
 			expectedError: false,
 		},
 	}

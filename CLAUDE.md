@@ -318,6 +318,49 @@ hexdump -C test/e2e/manifests/beta/diff/main/comp/expect/existing-xr.ansi | grep
 earthly -P +e2e --FLAGS="-test.run TestSpecificTest" --E2E_DUMP_EXPECTED=1
 ```
 
+**Structured JSON Testing (Preferred for New Tests)**
+
+For semantic validation of diff output, prefer structured JSON assertions over ANSI golden files. JSON assertions:
+- Eliminate ANSI escape code fragility
+- Enable field-level assertions with exact old/new values
+- Provide clearer error messages (e.g., `spec.forProvider.configData: expected 'old', got 'new'`)
+- Support array indexing via k8s jsonpath syntax (e.g., `spec.pipeline[0].functionRef.name`)
+
+The test helpers in `cmd/diff/testutils/structured_assertions.go` provide a fluent builder API:
+
+```go
+// XR diff assertions
+tu.AssertStructuredDiff(t, jsonOutput, tu.ExpectDiff().
+    WithSummary(1, 0, 0).  // added, modified, removed
+    WithAddedResource("XNopResource", "test-resource", "default").
+    WithField("spec.forProvider.configData", "new-value").
+    And())
+
+// Composition diff assertions with downstream field-level changes
+tu.AssertStructuredCompDiff(t, jsonOutput, tu.ExpectCompDiff().
+    WithComposition("xbuckets.example.org").
+    WithCompositionModified().  // Assert composition itself is modified
+    WithAffectedResources(2, 2, 0, 0).  // total, changed, unchanged, errors
+    WithXRImpact("XBucket", "test-xr", "", "changed").
+    WithDownstreamSummary(0, 1, 0).  // downstream adds, mods, removes
+    WithDownstreamResource("modified", "Bucket", "", "").
+    WithAnyName().  // Generated names with random suffix
+    WithFieldChange("spec.forProvider.region", "us-east-1", "us-west-2").
+    WithFieldAdded("spec.newSetting", "value").      // Field was added
+    WithFieldRemoved("spec.deprecatedSetting", "old-value").  // Field was removed
+    // Use bracket notation for keys with dots (like Kubernetes annotations)
+    WithFieldValuePattern("metadata.annotations['example.org/ref']", `resource-[a-z0-9]+`).
+    AndXR().
+    AndComp().
+    And())
+```
+
+**When to use which approach:**
+- **JSON assertions**: Semantic tests (add/modify/remove resources, field-level changes, composition diffs)
+- **ANSI golden files**: Visual formatting tests (color codes, `+++`/`~~~`/`---` markers, compact mode)
+
+Keep a small set of ANSI tests (~5-7) to smoke test visual output formatting.
+
 ## Code Modification Guidelines
 
 ### Minimizing Change Footprint

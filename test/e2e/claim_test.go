@@ -24,6 +24,7 @@ import (
 	"testing"
 	"time"
 
+	tu "github.com/crossplane-contrib/crossplane-diff/cmd/diff/testutils"
 	k8sapiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/e2e-framework/pkg/envconf"
@@ -87,7 +88,6 @@ func TestDiffExistingClaim(t *testing.T) {
 	imageTag := strings.Split(environment.GetCrossplaneImage(), ":")[1]
 	manifests := filepath.Join("test/e2e/manifests/beta/diff", imageTag, "v1-claim")
 	setupPath := filepath.Join(manifests, "setup")
-	expectPath := filepath.Join(manifests, "expect")
 
 	environment.Test(t,
 		features.New("DiffExistingClaim").
@@ -112,12 +112,22 @@ func TestDiffExistingClaim(t *testing.T) {
 			Assess("CanDiffExistingClaim", func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
 				t.Helper()
 
-				output, log, err := RunXRDiff(t, c, "./crossplane-diff", exitCodeDiffDetected, filepath.Join(manifests, "modified-claim.yaml"))
+				_, jsonOutput, log, err := RunXRDiffJSON(t, c, "./crossplane-diff", exitCodeDiffDetected, filepath.Join(manifests, "modified-claim.yaml"))
 				if err != nil {
 					t.Fatalf("Error running diff command: %v\nLog output:\n%s", err, log)
 				}
 
-				assertDiffMatchesFile(t, output, filepath.Join(expectPath, "existing-claim.ansi"), log)
+				// Verify the diff shows modified resources:
+				// 1. The Claim (NopClaim)
+				// 2. The composed managed resource (ClusterNopResource)
+				// Note: The backing XR is not shown in claim diffs, only the claim itself
+				AssertStructuredDiff(t, jsonOutput, tu.ExpectDiff().
+					WithSummary(0, 2, 0).
+					WithModifiedResource("ClusterNopResource", "", "").
+					WithAnyName().
+					And().
+					WithModifiedResource("NopClaim", "test-claim", "default").
+					And())
 
 				return ctx
 			}).
@@ -234,13 +244,26 @@ func TestDiffExistingClaimWithNestedXRs(t *testing.T) {
 			Assess("CanDiffExistingClaimWithNestedXRs", func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
 				t.Helper()
 
-				output, log, err := RunXRDiff(t, c, "./crossplane-diff", exitCodeDiffDetected, filepath.Join(manifests, "modified-claim.yaml"))
+				_, jsonOutput, log, err := RunXRDiffJSON(t, c, "./crossplane-diff", exitCodeDiffDetected, filepath.Join(manifests, "modified-claim.yaml"))
 				if err != nil {
 					t.Fatalf("Error running diff command: %v\nLog output:\n%s", err, log)
 				}
 
-				expectPath := filepath.Join(manifests, "expect")
-				assertDiffMatchesFile(t, output, filepath.Join(expectPath, "existing-claim.ansi"), log)
+				// Verify the diff shows modified resources:
+				// 1. The Claim (ParentNopClaim)
+				// 2. The nested child XR (XChildNopClaim)
+				// 3. The composed managed resource from child (ClusterNopResource)
+				// Note: The backing XRs are not shown in claim diffs, only claims and nested XRs
+				AssertStructuredDiff(t, jsonOutput, tu.ExpectDiff().
+					WithSummary(0, 3, 0).
+					WithModifiedResource("ClusterNopResource", "", "").
+					WithAnyName().
+					And().
+					WithModifiedResource("ParentNopClaim", "existing-parent-claim", "default").
+					And().
+					WithModifiedResource("XChildNopClaim", "", "").
+					WithAnyName().
+					And())
 
 				return ctx
 			}).
@@ -314,31 +337,32 @@ func TestDiffExistingClaimSpecFieldRemoval(t *testing.T) {
 				// The modified claim removes oldField and adds newField
 				// If crossplane-diff incorrectly preserves oldField from the backing XR,
 				// the strict composition will fail with "DEPRECATED: oldField is no longer supported"
-				output, log, err := RunXRDiff(t, c, "./crossplane-diff", exitCodeDiffDetected, filepath.Join(manifests, "modified-claim.yaml"))
+				output, jsonOutput, log, err := RunXRDiffJSON(t, c, "./crossplane-diff", exitCodeDiffDetected, filepath.Join(manifests, "modified-claim.yaml"))
 				if err != nil {
 					t.Fatalf("Error running diff command: %v\nLog output:\n%s", err, log)
 				}
 
-				// Note: We use content-based assertions rather than exact file matching
-				// because resource names contain random suffixes (e.g., test-claim-abc123)
-				// that change on each test run. Content-based assertions are more robust
-				// for validating the behavior we care about.
-
-				// Verify the output does NOT contain the deprecated field error
-				// This is the key assertion - if oldField was incorrectly preserved, this error would appear
-				if strings.Contains(output, "DEPRECATED: oldField is no longer supported") {
-					t.Fatalf("Diff output contains deprecated field error - oldField was incorrectly preserved from backing XR:\n%s", output)
+				// Key assertion: If oldField was incorrectly preserved from the backing XR,
+				// the strict composition would fail with "DEPRECATED: oldField is no longer supported"
+				// and the diff would contain errors. The presence of a successful modified resource
+				// proves oldField was correctly excluded.
+				if len(output.Errors) > 0 {
+					t.Fatalf("Diff output contains errors (oldField may have been incorrectly preserved):\n%v", output.Errors)
 				}
 
-				// Verify the diff shows the expected field change in the composed resource
-				// The old-field annotation should be removed (marked with -)
-				if !strings.Contains(output, "-     old-field:") {
-					t.Fatalf("Diff output does not show old-field annotation removal:\n%s", output)
-				}
-				// The new-field annotation should be added (marked with +)
-				if !strings.Contains(output, "+     new-field:") {
-					t.Fatalf("Diff output does not show new-field annotation addition:\n%s", output)
-				}
+				// Verify the composed resource (ClusterNopResource) shows the annotation changes:
+				// - old-field annotation removed
+				// - new-field annotation added
+				// Resource names contain random suffixes (e.g., test-field-removal-abc123)
+				// The claim itself (NopFieldTest) is also shown as modified
+				AssertStructuredDiff(t, jsonOutput, tu.ExpectDiff().
+					WithSummary(0, 2, 0). // 2 modified: ClusterNopResource + NopFieldTest claim
+					WithModifiedResource("ClusterNopResource", "", "").
+					WithNamePattern(`test-field-removal-[a-z0-9]+-[a-z0-9]+`).
+					WithFieldRemoved("metadata.annotations.old-field", "old-value").
+					WithFieldAdded("metadata.annotations.new-field", "new-value").
+					And().
+					WithModifiedResource("NopFieldTest", "test-field-removal", "default"))
 
 				return ctx
 			}).

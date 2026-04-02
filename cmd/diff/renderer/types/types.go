@@ -34,6 +34,39 @@ const (
 	DiffTypeEqual DiffType = "="
 )
 
+// DiffTypeWord constants for human-readable JSON output.
+// These are used in structured output (JSON/YAML) for better readability.
+const (
+	DiffTypeWordAdded    = "added"
+	DiffTypeWordRemoved  = "removed"
+	DiffTypeWordModified = "modified"
+	DiffTypeWordEqual    = "equal"
+)
+
+// DiffKey constants for structured diff output.
+// These are the keys used in the diff map to hold resource states.
+const (
+	DiffKeyOld  = "old"  // Current state for modified resources
+	DiffKeyNew  = "new"  // Desired state for modified resources
+	DiffKeySpec = "spec" // Full spec for added/removed resources
+)
+
+// ToWord converts a DiffType symbol to its human-readable word.
+func (d DiffType) ToWord() string {
+	switch d {
+	case DiffTypeAdded:
+		return DiffTypeWordAdded
+	case DiffTypeRemoved:
+		return DiffTypeWordRemoved
+	case DiffTypeModified:
+		return DiffTypeWordModified
+	case DiffTypeEqual:
+		return DiffTypeWordEqual
+	default:
+		return string(d)
+	}
+}
+
 // Colors for terminal output.
 const (
 	// ColorRed an ANSI "begin red" character.

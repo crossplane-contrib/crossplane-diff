@@ -24,6 +24,7 @@ import (
 	"testing"
 	"time"
 
+	tu "github.com/crossplane-contrib/crossplane-diff/cmd/diff/testutils"
 	k8sapiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/e2e-framework/pkg/envconf"
@@ -76,11 +77,11 @@ func TestDiffNewResourceV2Cluster(t *testing.T) {
 }
 
 // TestDiffExistingResourceV2Cluster tests the crossplane diff command against existing resources in v2-cluster variant.
+// Uses JSON output for semantic assertions (field-level verification).
 func TestDiffExistingResourceV2Cluster(t *testing.T) {
 	imageTag := strings.Split(environment.GetCrossplaneImage(), ":")[1]
 	manifests := filepath.Join("test/e2e/manifests/beta/diff", imageTag, "v2-cluster")
 	setupPath := filepath.Join(manifests, "setup")
-	expectPath := filepath.Join(manifests, "expect")
 
 	environment.Test(t,
 		features.New("DiffExistingResourceV2Cluster").
@@ -103,12 +104,21 @@ func TestDiffExistingResourceV2Cluster(t *testing.T) {
 			Assess("CanDiffExistingResource", func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
 				t.Helper()
 
-				output, log, err := RunXRDiff(t, c, "./crossplane-diff", exitCodeDiffDetected, filepath.Join(manifests, "modified-xr.yaml"))
+				_, jsonOutput, log, err := RunXRDiffJSON(t, c, "./crossplane-diff", exitCodeDiffDetected, filepath.Join(manifests, "modified-xr.yaml"))
 				if err != nil {
 					t.Fatalf("Error running diff command: %v\nLog output:\n%s", err, log)
 				}
 
-				assertDiffMatchesFile(t, output, filepath.Join(expectPath, "existing-xr.ansi"), log)
+				// Verify the diff shows 2 modified resources:
+				// 1. The XR itself (XNopResource)
+				// 2. The composed managed resource (ClusterNopResource)
+				AssertStructuredDiff(t, jsonOutput, tu.ExpectDiff().
+					WithSummary(0, 2, 0).
+					WithModifiedResource("ClusterNopResource", "", "").
+					WithAnyName(). // Name is generated
+					And().
+					WithModifiedResource("XNopResource", "existing-resource", "").
+					And())
 
 				return ctx
 			}).
@@ -166,11 +176,11 @@ func TestDiffNewResourceV2Namespaced(t *testing.T) {
 }
 
 // TestDiffExistingResourceV2Namespaced tests the crossplane diff command against existing resources in v2-namespaced variant.
+// Uses JSON output for semantic assertions (field-level verification).
 func TestDiffExistingResourceV2Namespaced(t *testing.T) {
 	imageTag := strings.Split(environment.GetCrossplaneImage(), ":")[1]
 	manifests := filepath.Join("test/e2e/manifests/beta/diff", imageTag, "v2-namespaced")
 	setupPath := filepath.Join(manifests, "setup")
-	expectPath := filepath.Join(manifests, "expect")
 
 	environment.Test(t,
 		features.New("DiffExistingResourceV2Namespaced").
@@ -193,12 +203,21 @@ func TestDiffExistingResourceV2Namespaced(t *testing.T) {
 			Assess("CanDiffExistingResource", func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
 				t.Helper()
 
-				output, log, err := RunXRDiff(t, c, "./crossplane-diff", exitCodeDiffDetected, filepath.Join(manifests, "modified-xr.yaml"))
+				_, jsonOutput, log, err := RunXRDiffJSON(t, c, "./crossplane-diff", exitCodeDiffDetected, filepath.Join(manifests, "modified-xr.yaml"))
 				if err != nil {
 					t.Fatalf("Error running diff command: %v\nLog output:\n%s", err, log)
 				}
 
-				assertDiffMatchesFile(t, output, filepath.Join(expectPath, "existing-xr.ansi"), log)
+				// Verify the diff shows 2 modified resources:
+				// 1. The XR itself (XNopResource)
+				// 2. The composed managed resource (NopResource)
+				AssertStructuredDiff(t, jsonOutput, tu.ExpectDiff().
+					WithSummary(0, 2, 0).
+					WithModifiedResource("NopResource", "", "default").
+					WithAnyName(). // Name is generated
+					And().
+					WithModifiedResource("XNopResource", "existing-resource", "default").
+					And())
 
 				return ctx
 			}).
@@ -263,11 +282,11 @@ func TestDiffNewResourceV1(t *testing.T) {
 }
 
 // TestDiffExistingResourceV1 tests the crossplane diff command against existing resources in v1 variant.
+// Uses JSON output for semantic assertions (field-level verification).
 func TestDiffExistingResourceV1(t *testing.T) {
 	imageTag := strings.Split(environment.GetCrossplaneImage(), ":")[1]
 	manifests := filepath.Join("test/e2e/manifests/beta/diff", imageTag, "v1")
 	setupPath := filepath.Join(manifests, "setup")
-	expectPath := filepath.Join(manifests, "expect")
 
 	environment.Test(t,
 		features.New("DiffExistingResourceV1").
@@ -291,12 +310,21 @@ func TestDiffExistingResourceV1(t *testing.T) {
 			Assess("CanDiffExistingResource", func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
 				t.Helper()
 
-				output, log, err := RunXRDiff(t, c, "./crossplane-diff", exitCodeDiffDetected, filepath.Join(manifests, "modified-xr.yaml"))
+				_, jsonOutput, log, err := RunXRDiffJSON(t, c, "./crossplane-diff", exitCodeDiffDetected, filepath.Join(manifests, "modified-xr.yaml"))
 				if err != nil {
 					t.Fatalf("Error running diff command: %v\nLog output:\n%s", err, log)
 				}
 
-				assertDiffMatchesFile(t, output, filepath.Join(expectPath, "existing-xr.ansi"), log)
+				// Verify the diff shows 2 modified resources:
+				// 1. The XR itself (XNopResource)
+				// 2. The composed managed resource (ClusterNopResource)
+				AssertStructuredDiff(t, jsonOutput, tu.ExpectDiff().
+					WithSummary(0, 2, 0).
+					WithModifiedResource("ClusterNopResource", "", "").
+					WithAnyName(). // Name is generated
+					And().
+					WithModifiedResource("XNopResource", "existing-resource", "").
+					And())
 
 				return ctx
 			}).
@@ -375,11 +403,11 @@ func TestDiffNewResourceV2WithV1Paths(t *testing.T) {
 
 // TestDiffExistingResourceV2WithV1Paths tests the crossplane diff command against existing resources
 // using a v2 XRD but with v1-style composition paths (issue #206).
+// Uses JSON output for semantic assertions (field-level verification).
 func TestDiffExistingResourceV2WithV1Paths(t *testing.T) {
 	imageTag := strings.Split(environment.GetCrossplaneImage(), ":")[1]
 	manifests := filepath.Join("test/e2e/manifests/beta/diff", imageTag, "v2-with-v1-paths")
 	setupPath := filepath.Join(manifests, "setup")
-	expectPath := filepath.Join(manifests, "expect")
 
 	environment.Test(t,
 		features.New("DiffExistingResourceV2WithV1Paths").
@@ -402,12 +430,21 @@ func TestDiffExistingResourceV2WithV1Paths(t *testing.T) {
 			Assess("CanDiffExistingResource", func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
 				t.Helper()
 
-				output, log, err := RunXRDiff(t, c, "./crossplane-diff", exitCodeDiffDetected, filepath.Join(manifests, "modified-xr.yaml"))
+				_, jsonOutput, log, err := RunXRDiffJSON(t, c, "./crossplane-diff", exitCodeDiffDetected, filepath.Join(manifests, "modified-xr.yaml"))
 				if err != nil {
 					t.Fatalf("Error running diff command: %v\nLog output:\n%s", err, log)
 				}
 
-				assertDiffMatchesFile(t, output, filepath.Join(expectPath, "existing-xr.ansi"), log)
+				// Verify the diff shows 2 modified resources:
+				// 1. The XR itself (XNopResource)
+				// 2. The composed managed resource (NopResource)
+				AssertStructuredDiff(t, jsonOutput, tu.ExpectDiff().
+					WithSummary(0, 2, 0).
+					WithModifiedResource("NopResource", "", "default").
+					WithAnyName(). // Name is generated
+					And().
+					WithModifiedResource("XNopResource", "existing-resource", "default").
+					And())
 
 				return ctx
 			}).

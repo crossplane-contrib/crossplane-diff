@@ -23,6 +23,7 @@ import (
 	"testing"
 	"time"
 
+	tu "github.com/crossplane-contrib/crossplane-diff/cmd/diff/testutils"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/e2e-framework/pkg/envconf"
 	"sigs.k8s.io/e2e-framework/pkg/features"
@@ -37,6 +38,7 @@ import (
 
 // TestDiffConcurrentDirectory tests issue #59 - concurrent function startup failures
 // when processing multiple XR files from a directory with a composition using multiple functions.
+// Uses JSON output for semantic assertions.
 func TestDiffConcurrentDirectory(t *testing.T) {
 	imageTag := strings.Split(environment.GetCrossplaneImage(), ":")[1]
 	manifests := filepath.Join("test/e2e/manifests/beta/diff", imageTag, "v2-concurrent-dir")
@@ -70,21 +72,19 @@ func TestDiffConcurrentDirectory(t *testing.T) {
 				}
 
 				// Run diff on all XR files - this tests concurrent function processing
-				output, log, err := RunXRDiff(t, c, "./crossplane-diff", exitCodeDiffDetected, xrFiles...)
+				output, _, log, err := RunXRDiffJSON(t, c, "./crossplane-diff", exitCodeDiffDetected, xrFiles...)
 
 				// Always log output for debugging
-				t.Logf("crossplane-diff stdout: %s", output)
 				t.Logf("crossplane-diff stderr: %s", log)
 
 				if err != nil {
 					t.Fatalf("Error running diff command: %v", err)
 				}
 
-				// Verify we processed all XRs - each XR creates 1 NopResource
-				// With 21 XRs, we should see 21 "+++ NopResource/" lines in the output
-				addedCount := strings.Count(output, "+++ NopResource/")
-				if addedCount != 21 {
-					t.Errorf("Expected 21 NopResource additions, found %d", addedCount)
+				// Verify we processed all XRs - each XR creates 1 NopResource + 1 XR = 2 additions
+				// With 21 XRs, we should see 42 additions total (21 NopResources + 21 XRs)
+				if output.Summary.Added != 42 {
+					t.Errorf("Expected 42 added resources (21 XRs + 21 NopResources), got %d", output.Summary.Added)
 				}
 
 				return ctx
@@ -138,11 +138,11 @@ func TestDiffNewNestedResourceV2(t *testing.T) {
 }
 
 // TestDiffExistingNestedResourceV2 tests the crossplane diff command against existing nested XR resources in v2 variant.
+// Uses JSON output for semantic assertions (field-level verification).
 func TestDiffExistingNestedResourceV2(t *testing.T) {
 	imageTag := strings.Split(environment.GetCrossplaneImage(), ":")[1]
 	manifests := filepath.Join("test/e2e/manifests/beta/diff", imageTag, "v2-nested")
 	setupPath := filepath.Join(manifests, "setup")
-	expectPath := filepath.Join(manifests, "expect")
 
 	environment.Test(t,
 		features.New("DiffExistingNestedResourceV2").
@@ -168,12 +168,22 @@ func TestDiffExistingNestedResourceV2(t *testing.T) {
 			Assess("CanDiffExistingNestedResource", func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
 				t.Helper()
 
-				output, log, err := RunXRDiff(t, c, "./crossplane-diff", exitCodeDiffDetected, filepath.Join(manifests, "modified-parent-xr.yaml"))
+				_, jsonOutput, log, err := RunXRDiffJSON(t, c, "./crossplane-diff", exitCodeDiffDetected, filepath.Join(manifests, "modified-parent-xr.yaml"))
 				if err != nil {
 					t.Fatalf("Error running diff command: %v\nLog output:\n%s", err, log)
 				}
 
-				assertDiffMatchesFile(t, output, filepath.Join(expectPath, "existing-parent-xr.ansi"), log)
+				// Verify the diff shows 2 modified resources:
+				// 1. The parent XR (XParentNop)
+				// 2. The child XR (XChildNop)
+				// Note: NopResource is unchanged (only annotations modified, which are ignored)
+				AssertStructuredDiff(t, jsonOutput, tu.ExpectDiff().
+					WithSummary(0, 2, 0).
+					WithModifiedResource("XChildNop", "", "default").
+					WithAnyName().
+					And().
+					WithModifiedResource("XParentNop", "test-parent-existing", "default").
+					And())
 
 				return ctx
 			}).
@@ -205,6 +215,7 @@ func TestDiffExistingNestedResourceV2(t *testing.T) {
 // This test uses `generateName: {{ .observed.composite.resource.metadata.name }}-child-`
 // which produces non-deterministic names (e.g., "test-parent-generatename-child-abc123").
 // Without identity preservation, each render would get a new random suffix.
+// Uses JSON output for semantic assertions (field-level verification).
 func TestDiffExistingNestedResourceV2WithGenerateName(t *testing.T) {
 	imageTag := strings.Split(environment.GetCrossplaneImage(), ":")[1]
 	manifests := filepath.Join("test/e2e/manifests/beta/diff", imageTag, "v2-nested-generatename")
@@ -234,13 +245,23 @@ func TestDiffExistingNestedResourceV2WithGenerateName(t *testing.T) {
 			Assess("CanDiffExistingNestedResourceWithGenerateName", func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
 				t.Helper()
 
-				output, log, err := RunXRDiff(t, c, "./crossplane-diff", exitCodeDiffDetected, filepath.Join(manifests, "modified-parent-xr.yaml"))
+				_, jsonOutput, log, err := RunXRDiffJSON(t, c, "./crossplane-diff", exitCodeDiffDetected, filepath.Join(manifests, "modified-parent-xr.yaml"))
 				if err != nil {
 					t.Fatalf("Error running diff command: %v\nLog output:\n%s", err, log)
 				}
 
-				expectPath := filepath.Join(manifests, "expect")
-				assertDiffMatchesFile(t, output, filepath.Join(expectPath, "existing-parent-xr.ansi"), log)
+				// Key assertion: All resources should be MODIFIED, not added/removed.
+				// If identity preservation fails, the child XR gets a new generateName suffix,
+				// causing its managed resources to appear as removed+added instead of modified.
+				// Expecting: 2 modified (parent XR, child XR with generateName)
+				// Note: NopResource is unchanged (only annotations modified, which are ignored)
+				AssertStructuredDiff(t, jsonOutput, tu.ExpectDiff().
+					WithSummary(0, 2, 0).
+					WithModifiedResource("XChildNop", "", "default").
+					WithAnyName(). // Uses generateName, so name is dynamic
+					And().
+					WithModifiedResource("XParentNop", "test-parent-generatename", "default").
+					And())
 
 				return ctx
 			}).
