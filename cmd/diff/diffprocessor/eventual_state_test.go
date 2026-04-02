@@ -18,6 +18,7 @@ package diffprocessor
 
 import (
 	"context"
+	"strconv"
 	"testing"
 
 	tu "github.com/crossplane-contrib/crossplane-diff/cmd/diff/testutils"
@@ -171,7 +172,7 @@ func TestSimulateToStableState_MaxIterationsExceeded(t *testing.T) {
 		return render.Outputs{
 			CompositeResource: cmp.New(),
 			ComposedResources: []cpd.Unstructured{
-				makeTestComposedResource("resource", "stage-"+string(rune('0'+resourceCounter))),
+				makeTestComposedResource("resource", "stage-"+strconv.Itoa(resourceCounter)),
 			},
 		}, nil
 	}
