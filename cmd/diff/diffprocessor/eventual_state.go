@@ -48,17 +48,24 @@ const (
 // stages become Ready. The simulator synthesizes Ready status on rendered resources to simulate
 // what Crossplane would do after multiple reconciliation cycles.
 type EventualStateSimulator struct {
-	renderFunc          RenderFunc
-	logger              logging.Logger
-	functionCredentials []corev1.Secret
+	renderFunc           RenderFunc
+	logger               logging.Logger
+	functionCredentials  []corev1.Secret
+	requirementsProvider *RequirementsProvider
 }
 
 // NewEventualStateSimulator creates a new EventualStateSimulator.
-func NewEventualStateSimulator(renderFunc RenderFunc, logger logging.Logger, functionCredentials []corev1.Secret) *EventualStateSimulator {
+func NewEventualStateSimulator(
+	renderFunc RenderFunc,
+	logger logging.Logger,
+	functionCredentials []corev1.Secret,
+	requirementsProvider *RequirementsProvider,
+) *EventualStateSimulator {
 	return &EventualStateSimulator{
-		renderFunc:          renderFunc,
-		logger:              logger,
-		functionCredentials: functionCredentials,
+		renderFunc:           renderFunc,
+		logger:               logger,
+		functionCredentials:  functionCredentials,
+		requirementsProvider: requirementsProvider,
 	}
 }
 
@@ -67,21 +74,25 @@ func NewEventualStateSimulator(renderFunc RenderFunc, logger logging.Logger, fun
 // reconciliation cycles complete.
 //
 // The simulation loop:
-// 1. Render with current observed resources
-// 2. Check if any new resources appeared (compared to previous iteration)
-// 3. If no new resources, we've reached stable state - return current observed
-// 4. Synthesize Ready=True status on all rendered resources
-// 5. Merge with existing observed resources for next iteration
-// 6. Repeat until stable or max iterations exceeded.
+// 1. Render with current observed resources and resolved requirements
+// 2. Process any requirements from the render output (environment configs, etc.)
+// 3. Check if any new resources appeared (compared to previous iteration)
+// 4. If no new resources, we've reached stable state - return current observed
+// 5. Synthesize Ready=True status on all rendered resources
+// 6. Merge with existing observed resources for next iteration
+// 7. Repeat until stable or max iterations exceeded.
 func (s *EventualStateSimulator) SimulateToStableState(
 	ctx context.Context,
 	xr *cmp.Unstructured,
 	comp *apiextensionsv1.Composition,
 	fns []pkgv1.Function,
 	initialObserved []cpd.Unstructured,
-	requiredResources []un.Unstructured,
+	xrNamespace string,
 ) ([]cpd.Unstructured, error) {
 	observed := initialObserved
+
+	// Track required resources across iterations (e.g., environment configs)
+	var requiredResources []un.Unstructured
 
 	s.logger.Debug("Starting eventual state simulation",
 		"xr", xr.GetName(),
@@ -91,9 +102,10 @@ func (s *EventualStateSimulator) SimulateToStableState(
 	for i := range maxSimulationIterations {
 		s.logger.Debug("Simulation iteration",
 			"iteration", i+1,
-			"observedCount", len(observed))
+			"observedCount", len(observed),
+			"requiredResourcesCount", len(requiredResources))
 
-		// Render with current observed state
+		// Render with current observed state and any resolved requirements
 		output, err := s.renderFunc(ctx, s.logger, render.Inputs{
 			CompositeResource:   xr,
 			Composition:         comp,
@@ -102,7 +114,54 @@ func (s *EventualStateSimulator) SimulateToStableState(
 			ObservedResources:   observed,
 			RequiredResources:   requiredResources,
 		})
+
+		// Handle requirements even if render returned an error
+		// (functions may return requirements along with errors)
+		newRequirementsResolved := false
+
+		if len(output.Requirements) > 0 && s.requirementsProvider != nil {
+			s.logger.Debug("Processing requirements from simulation render",
+				"iteration", i+1,
+				"requirementCount", len(output.Requirements))
+
+			prevCount := len(requiredResources)
+
+			additionalResources, resolveErr := s.requirementsProvider.ProvideRequirements(ctx, output.Requirements, xrNamespace)
+			if resolveErr != nil {
+				s.logger.Debug("Failed to resolve requirements in simulation",
+					"iteration", i+1,
+					"error", resolveErr)
+				// Continue without the additional resources - let the original error surface if any
+			} else {
+				// Convert to []un.Unstructured for the next render
+				for _, res := range additionalResources {
+					if res != nil {
+						requiredResources = append(requiredResources, *res)
+					}
+				}
+
+				// Check if we actually added new resources
+				newRequirementsResolved = len(requiredResources) > prevCount
+
+				s.logger.Debug("Resolved requirements for simulation",
+					"iteration", i+1,
+					"newRequiredResourcesCount", len(additionalResources),
+					"totalRequiredResourcesCount", len(requiredResources),
+					"newRequirementsResolved", newRequirementsResolved)
+			}
+		}
+
+		// Check for render errors - but continue if we just resolved new requirements
+		// (the next iteration may succeed with the resolved requirements)
 		if err != nil {
+			if newRequirementsResolved {
+				s.logger.Debug("Render failed but resolved new requirements, continuing simulation",
+					"iteration", i+1,
+					"error", err)
+
+				continue
+			}
+
 			return nil, errors.Wrapf(err, "simulation render failed at iteration %d", i+1)
 		}
 

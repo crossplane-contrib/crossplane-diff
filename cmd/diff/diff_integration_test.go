@@ -1509,6 +1509,40 @@ Summary: 2 modified, 2 removed`,
 				And(),
 			expectedError: false,
 		},
+		"EventualStateWithSequencerAndEnvironmentConfigs": {
+			reason: "Shows eventual state with function-sequencer AND function-environment-configs to verify requirements resolution during simulation",
+			// This test verifies that the eventual state simulation correctly resolves requirements
+			// (like environment configs) during its iterative rendering, not just in the final render.
+			// The composition uses:
+			// 1. function-environment-configs to fetch env config (requires ProvideRequirements)
+			// 2. function-go-templating to generate resources using env config data
+			// 3. function-sequencer to stage resources
+			// 4. function-auto-ready
+			outputFormat:  "json",
+			eventualState: true,
+			inputFiles:    []string{"testdata/diff/resources/sequencer-with-envconfig-xr.yaml"},
+			setupFiles: []string{
+				"testdata/diff/resources/xrd.yaml",
+				"testdata/diff/resources/sequencer-with-envconfig-composition.yaml",
+				"testdata/diff/resources/functions.yaml",
+				"testdata/diff/resources/environment-config-v1beta1.yaml",
+			},
+			expectedExitCode: dp.ExitCodeDiffDetected,
+			expectedStructuredOutput: tu.ExpectDiff().
+				WithSummary(3, 0, 0). // 2 downstream resources + 1 XR
+				WithAddedResource("XDownstreamResource", "0-stage0-resource", "default").
+				WithField("spec.forProvider.configData", "test-value").
+				WithField("spec.forProvider.resourceTier", "staging"). // From environment config
+				And().
+				WithAddedResource("XDownstreamResource", "1-stage1-resource", "default").
+				WithField("spec.forProvider.configData", "test-value").
+				WithField("spec.forProvider.resourceTier", "staging"). // From environment config
+				And().
+				WithAddedResource("XNopResource", "sequencer-envconfig-test", "default").
+				WithField("spec.coolField", "test-value").
+				And(),
+			expectedError: false,
+		},
 	}
 
 	for name, tt := range tests {

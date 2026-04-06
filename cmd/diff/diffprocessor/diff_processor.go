@@ -331,10 +331,19 @@ func (p *DefaultDiffProcessor) diffSingleResourceInternal(ctx context.Context, r
 	// that would eventually be rendered after multiple reconciliation cycles.
 	// This is useful with function-sequencer which hides later stage resources.
 	if p.config.EventualState {
-		simulator := NewEventualStateSimulator(p.config.RenderFunc, p.config.Logger, p.config.FunctionCredentials)
+		// Fetch and merge function credentials the same way RenderWithRequirements does
+		autoFetchedCredentials := p.fetchCompositionCredentials(ctx, comp)
+		simulatorCredentials := mergeCredentials(p.config.FunctionCredentials, autoFetchedCredentials)
+
+		simulator := NewEventualStateSimulator(
+			p.config.RenderFunc,
+			p.config.Logger,
+			simulatorCredentials,
+			p.requirementsProvider,
+		)
 
 		augmentedObserved, simErr := simulator.SimulateToStableState(
-			ctx, xrForRendering, comp, fns, observedResources, nil)
+			ctx, xrForRendering, comp, fns, observedResources, xrForRendering.GetNamespace())
 		if simErr != nil {
 			p.config.Logger.Debug("Eventual state simulation failed", "resource", resourceID, "error", simErr)
 			return nil, nil, errors.Wrap(simErr, "eventual state simulation failed")

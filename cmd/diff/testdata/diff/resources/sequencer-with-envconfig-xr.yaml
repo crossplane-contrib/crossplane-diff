@@ -1,0 +1,12 @@
+apiVersion: ns.diff.example.org/v1alpha1
+kind: XNopResource
+metadata:
+  name: sequencer-envconfig-test
+  namespace: default
+  annotations:
+    crossplane.io/composition-resource-name: ""
+spec:
+  crossplane:
+    compositionRef:
+      name: sequencer-with-envconfig-composition
+  coolField: "test-value"

@@ -39,7 +39,7 @@ func TestNewEventualStateSimulator(t *testing.T) {
 		return render.Outputs{}, nil
 	}
 
-	simulator := NewEventualStateSimulator(renderFunc, logger, nil)
+	simulator := NewEventualStateSimulator(renderFunc, logger, nil, nil)
 
 	if simulator == nil {
 		t.Fatal("NewEventualStateSimulator() returned nil")
@@ -64,7 +64,7 @@ func TestSimulateToStableState_AlreadyStable(t *testing.T) {
 		}, nil
 	}
 
-	simulator := NewEventualStateSimulator(renderFunc, logger, nil)
+	simulator := NewEventualStateSimulator(renderFunc, logger, nil, nil)
 
 	xr := cmp.New()
 	xr.SetName("test-xr")
@@ -76,7 +76,7 @@ func TestSimulateToStableState_AlreadyStable(t *testing.T) {
 	}
 
 	observed, err := simulator.SimulateToStableState(
-		context.Background(), xr, comp, nil, nil, nil)
+		context.Background(), xr, comp, nil, nil, "")
 	if err != nil {
 		t.Fatalf("SimulateToStableState() error = %v", err)
 	}
@@ -132,7 +132,7 @@ func TestSimulateToStableState_MultiStageProgression(t *testing.T) {
 		}
 	}
 
-	simulator := NewEventualStateSimulator(renderFunc, logger, nil)
+	simulator := NewEventualStateSimulator(renderFunc, logger, nil, nil)
 
 	xr := cmp.New()
 	xr.SetName("test-xr")
@@ -144,7 +144,7 @@ func TestSimulateToStableState_MultiStageProgression(t *testing.T) {
 	}
 
 	observed, err := simulator.SimulateToStableState(
-		context.Background(), xr, comp, nil, nil, nil)
+		context.Background(), xr, comp, nil, nil, "")
 	if err != nil {
 		t.Fatalf("SimulateToStableState() error = %v", err)
 	}
@@ -177,7 +177,7 @@ func TestSimulateToStableState_MaxIterationsExceeded(t *testing.T) {
 		}, nil
 	}
 
-	simulator := NewEventualStateSimulator(renderFunc, logger, nil)
+	simulator := NewEventualStateSimulator(renderFunc, logger, nil, nil)
 
 	xr := cmp.New()
 	xr.SetName("test-xr")
@@ -189,7 +189,7 @@ func TestSimulateToStableState_MaxIterationsExceeded(t *testing.T) {
 	}
 
 	_, err := simulator.SimulateToStableState(
-		context.Background(), xr, comp, nil, nil, nil)
+		context.Background(), xr, comp, nil, nil, "")
 	if err == nil {
 		t.Fatal("SimulateToStableState() expected error for max iterations exceeded")
 	}
@@ -207,7 +207,7 @@ func TestSimulateToStableState_RenderError(t *testing.T) {
 		return render.Outputs{}, &testError{msg: "render failed"}
 	}
 
-	simulator := NewEventualStateSimulator(renderFunc, logger, nil)
+	simulator := NewEventualStateSimulator(renderFunc, logger, nil, nil)
 
 	xr := cmp.New()
 	xr.SetName("test-xr")
@@ -219,7 +219,7 @@ func TestSimulateToStableState_RenderError(t *testing.T) {
 	}
 
 	_, err := simulator.SimulateToStableState(
-		context.Background(), xr, comp, nil, nil, nil)
+		context.Background(), xr, comp, nil, nil, "")
 	if err == nil {
 		t.Fatal("SimulateToStableState() expected error for render failure")
 	}
