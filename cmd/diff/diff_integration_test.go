@@ -28,7 +28,8 @@ import (
 )
 
 const (
-	timeout = 60 * time.Second
+	defaultTimeout = 60 * time.Second
+	longTimeout    = 180 * time.Second // For tests with multiple iterations (eventual state, concurrent rendering)
 )
 
 // DiffTestType represents the type of diff test to run.
@@ -55,6 +56,7 @@ type IntegrationTestCase struct {
 	ignorePaths                []string      // Paths to ignore in diffs
 	functionCredentials        string        // Path to function credentials file (optional)
 	eventualState              bool          // For XR tests: enable eventual state simulation (optional)
+	timeout                    time.Duration // Custom timeout for this test (0 = use default)
 	skip                       bool
 	skipReason                 string
 	// JSON output support: set outputFormat to "json" to use structured assertions
@@ -153,7 +155,13 @@ func runIntegrationTest(t *testing.T, testType DiffTestType, tt IntegrationTestC
 		t.Fatalf("failed to create client: %v", err)
 	}
 
-	ctx, cancel := context.WithTimeout(t.Context(), timeout)
+	// Use custom timeout if specified, otherwise use default
+	testTimeout := defaultTimeout
+	if tt.timeout > 0 {
+		testTimeout = tt.timeout
+	}
+
+	ctx, cancel := context.WithTimeout(t.Context(), testTimeout)
 	defer cancel()
 
 	// Apply the setup resources
@@ -189,7 +197,7 @@ func runIntegrationTest(t *testing.T, testType DiffTestType, tt IntegrationTestC
 
 	// Create command line args that match your pre-populated struct
 	args := []string{
-		fmt.Sprintf("--timeout=%s", timeout.String()),
+		fmt.Sprintf("--timeout=%s", testTimeout.String()),
 	}
 
 	// Add namespace if specified (for composition tests only)
@@ -1101,6 +1109,7 @@ Summary: 2 modified, 2 removed`,
 		},
 		"ConcurrentRenderingMultipleXRs": {
 			reason:       "Validates concurrent rendering with multiple functions and XRs from directory",
+			timeout:      longTimeout, // Multiple XRs processed concurrently need more time
 			outputFormat: "json",
 			// This test reproduces issue #59 - concurrent function startup failures
 			// when processing multiple XR files from a directory
@@ -1482,7 +1491,8 @@ Summary: 2 modified, 2 removed`,
 			expectedError: false,
 		},
 		"EventualStateWithSequencer": {
-			reason: "Shows eventual state after all stages complete when using function-sequencer with --eventual-state",
+			reason:  "Shows eventual state after all stages complete when using function-sequencer with --eventual-state",
+			timeout: longTimeout, // Multiple simulation iterations need more time
 			// The sequencer composition has 2 stages: stage0-resource (shown immediately) and stage1-resource (hidden until stage0 is Ready)
 			// Without --eventual-state, only stage0-resource would appear
 			// With --eventual-state, both stage0-resource and stage1-resource should appear
@@ -1510,7 +1520,8 @@ Summary: 2 modified, 2 removed`,
 			expectedError: false,
 		},
 		"EventualStateWithSequencerAndEnvironmentConfigs": {
-			reason: "Shows eventual state with function-sequencer AND function-environment-configs to verify requirements resolution during simulation",
+			reason:  "Shows eventual state with function-sequencer AND function-environment-configs to verify requirements resolution during simulation",
+			timeout: longTimeout, // Multiple simulation iterations with requirements resolution need more time
 			// This test verifies that the eventual state simulation correctly resolves requirements
 			// (like environment configs) during its iterative rendering, not just in the final render.
 			// The composition uses:
@@ -2784,7 +2795,8 @@ Summary: 1 modified`,
 			noColor:          true,
 		},
 		"CrossNamespaceResourceCollision": {
-			reason: "Validates that resources with the same name in different namespaces are correctly distinguished",
+			reason:  "Validates that resources with the same name in different namespaces are correctly distinguished",
+			timeout: longTimeout, // Test involves multiple namespaces and can be slow with Docker contention
 			// This test catches a bug where the cache key didn't include namespace, causing
 			// ConfigMaps with the same name in different namespaces to collide.
 			// The XR in ns-a should get ConfigMap from ns-a (value: from-ns-a)

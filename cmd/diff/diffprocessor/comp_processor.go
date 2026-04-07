@@ -71,6 +71,8 @@ type CompDiffProcessor interface {
 	// Returns (hasDiffs, error) where hasDiffs indicates if any differences were detected.
 	DiffComposition(ctx context.Context, stdout io.Writer, compositions []*un.Unstructured, namespace string) (bool, error)
 	Initialize(ctx context.Context) error
+	// Cleanup releases any resources held by the processor (e.g., Docker containers).
+	Cleanup(ctx context.Context) error
 }
 
 // DefaultCompDiffProcessor implements CompDiffProcessor.
@@ -127,6 +129,12 @@ func (p *DefaultCompDiffProcessor) Initialize(ctx context.Context) error {
 	p.config.Logger.Debug("Composition diff processor initialized")
 
 	return nil
+}
+
+// Cleanup releases any resources held by the processor.
+// Delegates to the underlying XR processor for cleanup.
+func (p *DefaultCompDiffProcessor) Cleanup(ctx context.Context) error {
+	return p.xrProc.Cleanup(ctx)
 }
 
 // DiffComposition processes composition changes and shows impact on existing XRs.

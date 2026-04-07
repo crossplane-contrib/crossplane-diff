@@ -259,6 +259,7 @@ type MockDiffProcessor struct {
 	InitializeFn         func(ctx context.Context) error
 	PerformDiffFn        func(ctx context.Context, stdout io.Writer, resources []*un.Unstructured, compositionProvider types.CompositionProvider) (bool, error)
 	DiffSingleResourceFn func(ctx context.Context, res *un.Unstructured, compositionProvider types.CompositionProvider) (map[string]*dt.ResourceDiff, error)
+	CleanupFn            func(ctx context.Context) error
 }
 
 // Initialize implements the DiffProcessor interface.
@@ -286,6 +287,15 @@ func (m *MockDiffProcessor) DiffSingleResource(ctx context.Context, res *un.Unst
 	}
 
 	return make(map[string]*dt.ResourceDiff), nil
+}
+
+// Cleanup implements the DiffProcessor.Cleanup method.
+func (m *MockDiffProcessor) Cleanup(ctx context.Context) error {
+	if m.CleanupFn != nil {
+		return m.CleanupFn(ctx)
+	}
+
+	return nil
 }
 
 // endregion
@@ -829,4 +839,28 @@ func (m *MockCompositionProvider) GetComposition() (*xpextv1.Composition, error)
 	}
 
 	return &xpextv1.Composition{}, nil
+}
+
+// MockFunctionProvider provides a mock implementation for FunctionProvider.
+type MockFunctionProvider struct {
+	GetFunctionsForCompositionFn func(comp *xpextv1.Composition) ([]pkgv1.Function, error)
+	CleanupFn                    func(ctx context.Context) error
+}
+
+// GetFunctionsForComposition implements FunctionProvider.
+func (m *MockFunctionProvider) GetFunctionsForComposition(comp *xpextv1.Composition) ([]pkgv1.Function, error) {
+	if m.GetFunctionsForCompositionFn != nil {
+		return m.GetFunctionsForCompositionFn(comp)
+	}
+
+	return nil, nil
+}
+
+// Cleanup implements FunctionProvider.
+func (m *MockFunctionProvider) Cleanup(ctx context.Context) error {
+	if m.CleanupFn != nil {
+		return m.CleanupFn(ctx)
+	}
+
+	return nil
 }

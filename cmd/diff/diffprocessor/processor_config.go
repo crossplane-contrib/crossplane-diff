@@ -278,6 +278,9 @@ func (c *ProcessorConfig) SetDefaultFactories() {
 	}
 
 	if c.Factories.FunctionProvider == nil {
-		c.Factories.FunctionProvider = NewDefaultFunctionProvider
+		// Use CachedFunctionProvider by default for container reuse across renders.
+		// This prevents container proliferation with --eventual-state (multiple iterations)
+		// and enables reuse when diffing multiple XRs with the same composition.
+		c.Factories.FunctionProvider = NewCachedFunctionProvider
 	}
 }

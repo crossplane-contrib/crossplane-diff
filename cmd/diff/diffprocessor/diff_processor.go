@@ -58,6 +58,10 @@ type DiffProcessor interface {
 
 	// Initialize loads required resources like CRDs and environment configs
 	Initialize(ctx context.Context) error
+
+	// Cleanup releases any resources held by the processor (e.g., Docker containers).
+	// Should be called when the processor is no longer needed.
+	Cleanup(ctx context.Context) error
 }
 
 // DefaultDiffProcessor implements DiffProcessor with modular components.
@@ -146,6 +150,12 @@ func (p *DefaultDiffProcessor) Initialize(ctx context.Context) error {
 	p.config.Logger.Debug("Diff processor initialized")
 
 	return nil
+}
+
+// Cleanup releases any resources held by the processor.
+// This includes stopping and removing any Docker containers created for function execution.
+func (p *DefaultDiffProcessor) Cleanup(ctx context.Context) error {
+	return p.functionProvider.Cleanup(ctx)
 }
 
 // initializeSchemaValidator initializes the schema validator with CRDs.
