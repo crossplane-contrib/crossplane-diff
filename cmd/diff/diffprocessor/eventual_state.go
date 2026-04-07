@@ -32,6 +32,8 @@ import (
 	apiextensionsv1 "github.com/crossplane/crossplane/v2/apis/apiextensions/v1"
 	pkgv1 "github.com/crossplane/crossplane/v2/apis/pkg/v1"
 	"github.com/crossplane/crossplane/v2/cmd/crank/render"
+
+	dt "github.com/crossplane-contrib/crossplane-diff/cmd/diff/renderer/types"
 )
 
 const (
@@ -51,7 +53,7 @@ type EventualStateSimulator struct {
 	renderFunc           RenderFunc
 	logger               logging.Logger
 	functionCredentials  []corev1.Secret
-	requirementsProvider *RequirementsProvider
+	requirementsResolver RequirementsResolver
 }
 
 // NewEventualStateSimulator creates a new EventualStateSimulator.
@@ -59,13 +61,13 @@ func NewEventualStateSimulator(
 	renderFunc RenderFunc,
 	logger logging.Logger,
 	functionCredentials []corev1.Secret,
-	requirementsProvider *RequirementsProvider,
+	requirementsResolver RequirementsResolver,
 ) *EventualStateSimulator {
 	return &EventualStateSimulator{
 		renderFunc:           renderFunc,
 		logger:               logger,
 		functionCredentials:  functionCredentials,
-		requirementsProvider: requirementsProvider,
+		requirementsResolver: requirementsResolver,
 	}
 }
 
@@ -94,6 +96,10 @@ func (s *EventualStateSimulator) SimulateToStableState(
 	// Track required resources across iterations (e.g., environment configs)
 	var requiredResources []un.Unstructured
 
+	// Track which resources we've already added to avoid duplicates
+	// This mirrors the deduplication logic in RenderWithRequirements
+	requiredResourcesMap := make(map[string]bool)
+
 	s.logger.Debug("Starting eventual state simulation",
 		"xr", xr.GetName(),
 		"composition", comp.GetName(),
@@ -119,33 +125,41 @@ func (s *EventualStateSimulator) SimulateToStableState(
 		// (functions may return requirements along with errors)
 		newRequirementsResolved := false
 
-		if len(output.Requirements) > 0 && s.requirementsProvider != nil {
+		if len(output.Requirements) > 0 && s.requirementsResolver != nil {
 			s.logger.Debug("Processing requirements from simulation render",
 				"iteration", i+1,
 				"requirementCount", len(output.Requirements))
 
-			prevCount := len(requiredResources)
-
-			additionalResources, resolveErr := s.requirementsProvider.ProvideRequirements(ctx, output.Requirements, xrNamespace)
+			additionalResources, resolveErr := s.requirementsResolver.ProvideRequirements(ctx, output.Requirements, xrNamespace)
 			if resolveErr != nil {
 				s.logger.Debug("Failed to resolve requirements in simulation",
 					"iteration", i+1,
 					"error", resolveErr)
 				// Continue without the additional resources - let the original error surface if any
 			} else {
-				// Convert to []un.Unstructured for the next render
+				// Add resources with deduplication (mirrors RenderWithRequirements logic)
+				newResourceCount := 0
+
 				for _, res := range additionalResources {
-					if res != nil {
+					if res == nil {
+						continue
+					}
+
+					resourceKey := dt.MakeDiffKeyFromResource(res)
+					if !requiredResourcesMap[resourceKey] {
+						requiredResourcesMap[resourceKey] = true
 						requiredResources = append(requiredResources, *res)
+						newResourceCount++
 					}
 				}
 
 				// Check if we actually added new resources
-				newRequirementsResolved = len(requiredResources) > prevCount
+				newRequirementsResolved = newResourceCount > 0
 
 				s.logger.Debug("Resolved requirements for simulation",
 					"iteration", i+1,
-					"newRequiredResourcesCount", len(additionalResources),
+					"fetchedCount", len(additionalResources),
+					"newUniqueCount", newResourceCount,
 					"totalRequiredResourcesCount", len(requiredResources),
 					"newRequirementsResolved", newRequirementsResolved)
 			}

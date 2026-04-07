@@ -31,6 +31,7 @@ import (
 
 	apiextensionsv1 "github.com/crossplane/crossplane/v2/apis/apiextensions/v1"
 	"github.com/crossplane/crossplane/v2/cmd/crank/render"
+	fnv1 "github.com/crossplane/crossplane/v2/proto/fn/v1"
 )
 
 func TestNewEventualStateSimulator(t *testing.T) {
@@ -331,6 +332,135 @@ func TestMergeObservedResources(t *testing.T) {
 	if len(merged) != 2 {
 		t.Errorf("mergeObservedResources() returned %d resources, want 2", len(merged))
 	}
+}
+
+// TestSimulateToStableState_RequirementDeduplication tests that requirements (like environment configs)
+// are not added multiple times when the render function returns the same requirements across iterations.
+// This was a bug reported by a customer where the simulation would accumulate duplicate resources:
+// iteration 1: 0 required resources
+// iteration 2: 2 required resources (1 envconfig returned, but added twice somehow)
+// iteration 3: 4 required resources (same envconfig, added again)
+// The fix ensures we deduplicate based on the resource key (apiVersion/kind/namespace/name).
+func TestSimulateToStableState_RequirementDeduplication(t *testing.T) {
+	logger := tu.TestLogger(t, false)
+
+	// Create a mock requirement (environment config)
+	envConfig := &un.Unstructured{}
+	envConfig.SetAPIVersion("apiextensions.crossplane.io/v1alpha1")
+	envConfig.SetKind("EnvironmentConfig")
+	envConfig.SetName("test-env-config")
+	envConfig.SetNamespace("default")
+
+	// Track how many times requirements were added to render inputs
+	renderCount := 0
+	var seenRequiredResourceCounts []int
+
+	renderFunc := func(_ context.Context, _ logging.Logger, in render.Inputs) (render.Outputs, error) {
+		renderCount++
+		seenRequiredResourceCounts = append(seenRequiredResourceCounts, len(in.RequiredResources))
+
+		// Always return a requirement for environment config
+		// This simulates function-environment-configs requesting an env config
+		requirements := map[string]fnv1.Requirements{
+			"step-env-config": {
+				ExtraResources: map[string]*fnv1.ResourceSelector{
+					"environment-config": {
+						ApiVersion: "apiextensions.crossplane.io/v1alpha1",
+						Kind:       "EnvironmentConfig",
+						Match: &fnv1.ResourceSelector_MatchName{
+							MatchName: "test-env-config",
+						},
+					},
+				},
+			},
+		}
+
+		// Simulate progression: first render returns stage-1, second returns stage-1 + stage-2
+		if renderCount == 1 {
+			return render.Outputs{
+				CompositeResource: cmp.New(),
+				ComposedResources: []cpd.Unstructured{
+					makeTestComposedResource("resource-a", "stage-1"),
+				},
+				Requirements: requirements,
+			}, nil
+		}
+
+		// After first iteration, we have stage-1 resource ready
+		// Return both stage-1 and stage-2 to trigger stability check
+		return render.Outputs{
+			CompositeResource: cmp.New(),
+			ComposedResources: []cpd.Unstructured{
+				makeTestComposedResource("resource-a", "stage-1"),
+				makeTestComposedResource("resource-b", "stage-2"),
+			},
+			Requirements: requirements,
+		}, nil
+	}
+
+	// Create a mock requirements resolver that always returns the same env config
+	provideCount := 0
+	mockResolver := &mockRequirementsResolver{
+		provideFunc: func(_ context.Context, _ map[string]fnv1.Requirements, _ string) ([]*un.Unstructured, error) {
+			provideCount++
+			// Always return the same env config
+			return []*un.Unstructured{envConfig}, nil
+		},
+	}
+
+	simulator := NewEventualStateSimulator(renderFunc, logger, nil, mockResolver)
+
+	xr := cmp.New()
+	xr.SetName("test-xr")
+	xr.SetAPIVersion("example.org/v1")
+	xr.SetKind("XR")
+
+	comp := &apiextensionsv1.Composition{
+		ObjectMeta: metav1.ObjectMeta{Name: "test-composition"},
+	}
+
+	observed, err := simulator.SimulateToStableState(
+		context.Background(), xr, comp, nil, nil, "default")
+	if err != nil {
+		t.Fatalf("SimulateToStableState() error = %v", err)
+	}
+
+	// Should reach stability with 2 resources
+	if len(observed) != 2 {
+		t.Errorf("SimulateToStableState() returned %d observed resources, want 2", len(observed))
+	}
+
+	// Should have rendered 3 times (stage 1, stage 2, stability check)
+	if renderCount != 3 {
+		t.Errorf("SimulateToStableState() rendered %d times, want 3", renderCount)
+	}
+
+	// Requirements resolver should have been called 3 times (once per render)
+	if provideCount != 3 {
+		t.Errorf("Requirements resolver called %d times, want 3", provideCount)
+	}
+
+	// KEY ASSERTION: Each render should see at most 1 required resource (the deduplicated env config)
+	// Without the fix, we would see: [0, 1, 2] (accumulating)
+	// With the fix, we should see: [0, 1, 1] (first render has 0, subsequent have 1 - not growing)
+	for i, count := range seenRequiredResourceCounts {
+		if i == 0 && count != 0 {
+			t.Errorf("Render %d saw %d required resources, want 0 (first render)", i+1, count)
+		}
+
+		if i > 0 && count != 1 {
+			t.Errorf("Render %d saw %d required resources, want 1 (should not accumulate)", i+1, count)
+		}
+	}
+}
+
+// mockRequirementsResolver is a mock implementation of RequirementsResolver for testing
+type mockRequirementsResolver struct {
+	provideFunc func(ctx context.Context, requirements map[string]fnv1.Requirements, namespace string) ([]*un.Unstructured, error)
+}
+
+func (m *mockRequirementsResolver) ProvideRequirements(ctx context.Context, requirements map[string]fnv1.Requirements, namespace string) ([]*un.Unstructured, error) {
+	return m.provideFunc(ctx, requirements, namespace)
 }
 
 // Helper functions

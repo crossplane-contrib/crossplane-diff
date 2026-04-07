@@ -18,6 +18,12 @@ import (
 	v1 "github.com/crossplane/crossplane/v2/proto/fn/v1"
 )
 
+// RequirementsResolver provides requirements (like environment configs) for rendering.
+// This interface allows for testing with mock implementations.
+type RequirementsResolver interface {
+	ProvideRequirements(ctx context.Context, requirements map[string]v1.Requirements, xrNamespace string) ([]*un.Unstructured, error)
+}
+
 // RequirementsProvider consolidates requirement processing with caching.
 type RequirementsProvider struct {
 	client    k8.ResourceClient
