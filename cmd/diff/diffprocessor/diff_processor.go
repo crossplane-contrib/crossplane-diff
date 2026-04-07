@@ -1070,11 +1070,7 @@ func (p *DefaultDiffProcessor) RenderToStableState(
 	// Track observed resources (modified when synthesizeReady=true)
 	observed := observedResources
 
-	// Use higher iteration limit when synthesizing Ready (multi-stage pipelines need more iterations)
-	maxIterations := 10
-	if synthesizeReady {
-		maxIterations = 20
-	}
+	maxIterations := p.config.MaxRenderIterations
 
 	var lastOutput render.Outputs
 
@@ -1100,6 +1096,7 @@ func (p *DefaultDiffProcessor) RenderToStableState(
 
 		// Handle requirements (even if render had errors)
 		newReqCount := 0
+
 		if len(output.Requirements) > 0 {
 			additionalResources, err := p.requirementsProvider.ProvideRequirements(ctx, output.Requirements, xr.GetNamespace())
 			if err != nil {
@@ -1129,51 +1126,107 @@ func (p *DefaultDiffProcessor) RenderToStableState(
 		}
 
 		// Check for stability
-		if synthesizeReady {
-			// Eventual state mode: check if new composed resources appeared
-			newComposed := findNewComposedResources(output.ComposedResources, observed)
-			if len(newComposed) == 0 && newReqCount == 0 {
-				p.config.Logger.Debug("Reached stable state",
-					"resource", resourceID,
-					"iterations", iteration,
-					"composedCount", len(output.ComposedResources))
-
-				return lastOutput, nil
-			}
-
-			// Synthesize Ready status and merge into observed for next iteration
-			readyResources, err := synthesizeReadyStatus(output.ComposedResources)
-			if err != nil {
-				return render.Outputs{}, errors.Wrapf(err, "failed to synthesize Ready status at iteration %d", iteration)
-			}
-
-			observed = mergeObservedResources(observed, readyResources)
-
-			p.config.Logger.Debug("Synthesized Ready status for next iteration",
-				"resource", resourceID,
-				"iteration", iteration,
-				"newComposedCount", len(newComposed),
-				"newReqCount", newReqCount,
-				"totalObserved", len(observed))
-		} else {
-			// Normal mode: done when no new requirements
-			if newReqCount == 0 {
-				p.config.Logger.Debug("Requirements resolved",
-					"resource", resourceID,
-					"iterations", iteration)
-
-				return lastOutput, nil
-			}
-
-			p.config.Logger.Debug("Found new requirements, continuing",
-				"resource", resourceID,
-				"iteration", iteration,
-				"newReqCount", newReqCount,
-				"totalRequired", len(requiredResources))
+		result := p.checkStability(output, observed, newReqCount, synthesizeReady, resourceID, iteration, len(requiredResources))
+		if result.err != nil {
+			return render.Outputs{}, result.err
 		}
+
+		if result.stable {
+			return lastOutput, nil
+		}
+
+		observed = result.nextObserved
 	}
 
-	return render.Outputs{}, errors.Errorf("did not stabilize after %d iterations", maxIterations)
+	return render.Outputs{}, errors.Errorf("did not stabilize after %d iterations; try increasing --max-iterations if your pipeline requires more cycles", maxIterations)
+}
+
+// stabilityResult holds the result of a stability check iteration.
+type stabilityResult struct {
+	stable       bool
+	nextObserved []cpd.Unstructured
+	err          error
+}
+
+// checkStability determines if the render loop has reached a stable state.
+// For synthesizeReady mode, it checks for new composed resources and synthesizes Ready status.
+// For normal mode, it checks if requirements have been resolved.
+func (p *DefaultDiffProcessor) checkStability(
+	output render.Outputs,
+	observed []cpd.Unstructured,
+	newReqCount int,
+	synthesizeReady bool,
+	resourceID string,
+	iteration int,
+	totalRequired int,
+) stabilityResult {
+	if synthesizeReady {
+		return p.checkStabilityWithReadySynthesis(output, observed, newReqCount, resourceID, iteration)
+	}
+
+	return p.checkRequirementsResolved(newReqCount, resourceID, iteration, totalRequired, observed)
+}
+
+// checkStabilityWithReadySynthesis checks stability in eventual-state mode.
+func (p *DefaultDiffProcessor) checkStabilityWithReadySynthesis(
+	output render.Outputs,
+	observed []cpd.Unstructured,
+	newReqCount int,
+	resourceID string,
+	iteration int,
+) stabilityResult {
+	newComposed := findNewComposedResources(output.ComposedResources, observed)
+
+	if len(newComposed) == 0 && newReqCount == 0 {
+		p.config.Logger.Debug("Reached stable state",
+			"resource", resourceID,
+			"iterations", iteration,
+			"composedCount", len(output.ComposedResources))
+
+		return stabilityResult{stable: true, nextObserved: observed}
+	}
+
+	// Synthesize Ready status and merge into observed for next iteration
+	readyResources, err := synthesizeReadyStatus(output.ComposedResources)
+	if err != nil {
+		return stabilityResult{err: errors.Wrapf(err, "failed to synthesize Ready status at iteration %d", iteration)}
+	}
+
+	nextObserved := mergeObservedResources(observed, readyResources)
+
+	p.config.Logger.Debug("Synthesized Ready status for next iteration",
+		"resource", resourceID,
+		"iteration", iteration,
+		"newComposedCount", len(newComposed),
+		"newReqCount", newReqCount,
+		"totalObserved", len(nextObserved))
+
+	return stabilityResult{stable: false, nextObserved: nextObserved}
+}
+
+// checkRequirementsResolved checks stability in normal mode.
+func (p *DefaultDiffProcessor) checkRequirementsResolved(
+	newReqCount int,
+	resourceID string,
+	iteration int,
+	totalRequired int,
+	observed []cpd.Unstructured,
+) stabilityResult {
+	if newReqCount == 0 {
+		p.config.Logger.Debug("Requirements resolved",
+			"resource", resourceID,
+			"iterations", iteration)
+
+		return stabilityResult{stable: true, nextObserved: observed}
+	}
+
+	p.config.Logger.Debug("Found new requirements, continuing",
+		"resource", resourceID,
+		"iteration", iteration,
+		"newReqCount", newReqCount,
+		"totalRequired", totalRequired)
+
+	return stabilityResult{stable: false, nextObserved: observed}
 }
 
 // findNewComposedResources identifies resources in rendered that don't exist in observed.

@@ -75,6 +75,7 @@ func testProcessorOptions(t *testing.T) []ProcessorOption {
 		WithColorize(false),
 		WithCompact(false),
 		WithMaxNestedDepth(10),
+		WithMaxRenderIterations(DefaultMaxRenderIterations),
 		WithLogger(tu.TestLogger(t, false)),
 	}
 }
@@ -1381,11 +1382,13 @@ func TestDefaultDiffProcessor_RenderToStableState_SynthesizeReady(t *testing.T) 
 		"MultiStageProgression": {
 			setupRenderFunc: func() RenderFunc {
 				iteration := 0
+
 				return func(_ context.Context, _ logging.Logger, in render.Inputs) (render.Outputs, error) {
 					iteration++
 
 					// Count how many observed resources have Ready=True
 					readyCount := 0
+
 					for _, obs := range in.ObservedResources {
 						if hasReadyCondition(&obs.Unstructured) {
 							readyCount++
@@ -1437,10 +1440,12 @@ func TestDefaultDiffProcessor_RenderToStableState_SynthesizeReady(t *testing.T) 
 		"MaxIterationsExceeded": {
 			setupRenderFunc: func() RenderFunc {
 				resourceNum := 0
+
 				return func(_ context.Context, _ logging.Logger, in render.Inputs) (render.Outputs, error) {
 					// Always produce a new resource - never stabilizes
 					// Key uses crossplane.io/composition-resource-name annotation
 					resourceNum++
+
 					return render.Outputs{
 						CompositeResource: in.CompositeResource,
 						ComposedResources: []cpd.Unstructured{{
@@ -1500,9 +1505,11 @@ func TestDefaultDiffProcessor_RenderToStableState_SynthesizeReady(t *testing.T) 
 					t.Errorf("expected error but got none")
 					return
 				}
+
 				if tt.wantErrContains != "" && !strings.Contains(err.Error(), tt.wantErrContains) {
 					t.Errorf("error %q should contain %q", err.Error(), tt.wantErrContains)
 				}
+
 				return
 			}
 
@@ -1528,15 +1535,18 @@ func hasReadyCondition(res *un.Unstructured) bool {
 	if !found {
 		return false
 	}
+
 	for _, c := range conditions {
 		cond, ok := c.(map[string]any)
 		if !ok {
 			continue
 		}
+
 		if cond["type"] == "Ready" && cond["status"] == "True" {
 			return true
 		}
 	}
+
 	return false
 }
 
