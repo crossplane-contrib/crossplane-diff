@@ -7,7 +7,7 @@ toolchain go1.26.1
 require (
 	dario.cat/mergo v1.0.2
 	github.com/Masterminds/semver v1.5.0
-	github.com/alecthomas/kong v1.14.0
+	github.com/alecthomas/kong v1.15.0
 	github.com/crossplane/crossplane-runtime/v2 v2.2.0
 	github.com/crossplane/crossplane/v2 v2.2.0
 	github.com/docker/docker v28.5.2+incompatible
