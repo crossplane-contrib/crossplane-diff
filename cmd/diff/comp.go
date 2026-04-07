@@ -21,7 +21,6 @@ import (
 	"time"
 
 	"github.com/alecthomas/kong"
-	xp "github.com/crossplane-contrib/crossplane-diff/cmd/diff/client/crossplane"
 	dp "github.com/crossplane-contrib/crossplane-diff/cmd/diff/diffprocessor"
 
 	"github.com/crossplane/crossplane-runtime/v2/pkg/errors"
@@ -74,7 +73,7 @@ Examples:
 // AppContext is received via dependency injection - Kong resolves it through the provider chain:
 // ContextProvider (bound in CommonCmdFields.BeforeApply) -> provideRestConfig -> provideAppContext.
 func (c *CompCmd) AfterApply(ctx *kong.Context, log logging.Logger, appCtx *AppContext) error {
-	proc, fnProvider := makeDefaultCompProc(c, appCtx, log)
+	proc := makeDefaultCompProc(c, appCtx, log)
 
 	loader, err := ld.NewCompositeLoader(c.Files)
 	if err != nil {
@@ -83,20 +82,16 @@ func (c *CompCmd) AfterApply(ctx *kong.Context, log logging.Logger, appCtx *AppC
 
 	ctx.BindTo(proc, (*dp.CompDiffProcessor)(nil))
 	ctx.BindTo(loader, (*ld.Loader)(nil))
-	ctx.BindTo(fnProvider, (*dp.FunctionProvider)(nil))
 
 	return nil
 }
 
-func makeDefaultCompProc(c *CompCmd, ctx *AppContext, log logging.Logger) (dp.CompDiffProcessor, dp.FunctionProvider) {
+func makeDefaultCompProc(c *CompCmd, ctx *AppContext, log logging.Logger) dp.CompDiffProcessor {
 	// Use provided namespace or default to "default"
 	namespace := c.Namespace
 	if namespace == "" {
 		namespace = "default"
 	}
-
-	// Create the cached function provider that we'll return for cleanup
-	fnProvider := dp.NewCachedFunctionProvider(ctx.XpClients.Function, log)
 
 	// Both processors share the same options since they're part of the same command
 	opts := defaultProcessorOptions(c.CommonCmdFields, namespace)
@@ -104,21 +99,17 @@ func makeDefaultCompProc(c *CompCmd, ctx *AppContext, log logging.Logger) (dp.Co
 		dp.WithLogger(log),
 		dp.WithRenderMutex(&globalRenderMutex),
 		dp.WithIncludeManual(c.IncludeManual),
-		// Use the function provider we created above
-		dp.WithFunctionProviderFactory(func(xp.FunctionClient, logging.Logger) dp.FunctionProvider {
-			return fnProvider
-		}),
 	)
 
 	// Create XR processor first (peer processor)
 	xrProc := dp.NewDiffProcessor(ctx.K8sClients, ctx.XpClients, opts...)
 
 	// Inject it into composition processor
-	return dp.NewCompDiffProcessor(xrProc, ctx.XpClients.Composition, opts...), fnProvider
+	return dp.NewCompDiffProcessor(xrProc, ctx.XpClients.Composition, opts...)
 }
 
 // Run executes the composition diff command.
-func (c *CompCmd) Run(k *kong.Context, log logging.Logger, appCtx *AppContext, proc dp.CompDiffProcessor, loader ld.Loader, fnProvider dp.FunctionProvider, exitCode *ExitCode) error {
+func (c *CompCmd) Run(k *kong.Context, log logging.Logger, appCtx *AppContext, proc dp.CompDiffProcessor, loader ld.Loader, exitCode *ExitCode) error {
 	ctx, cancel, err := initializeAppContext(c.Timeout, appCtx, log)
 	if err != nil {
 		exitCode.Code = dp.ExitCodeToolError
@@ -126,7 +117,7 @@ func (c *CompCmd) Run(k *kong.Context, log logging.Logger, appCtx *AppContext, p
 	}
 	defer cancel()
 
-	// Cleanup any resources created by the function provider
+	// Cleanup any resources held by the processor (e.g., Docker containers)
 	defer func() {
 		// Use background context with timeout for cleanup instead of the command context.
 		// The command context may be cancelled (user Ctrl+C, timeout, etc.), which would cause
@@ -136,8 +127,8 @@ func (c *CompCmd) Run(k *kong.Context, log logging.Logger, appCtx *AppContext, p
 		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cleanupCancel()
 
-		if err := fnProvider.Cleanup(cleanupCtx); err != nil {
-			log.Debug("Failed to cleanup function provider resources", "error", err)
+		if err := proc.Cleanup(cleanupCtx); err != nil {
+			log.Debug("Failed to cleanup processor resources", "error", err)
 		}
 	}()
 

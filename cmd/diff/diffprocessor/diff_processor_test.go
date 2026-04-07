@@ -75,6 +75,7 @@ func testProcessorOptions(t *testing.T) []ProcessorOption {
 		WithColorize(false),
 		WithCompact(false),
 		WithMaxNestedDepth(10),
+		WithMaxRenderIterations(DefaultMaxRenderIterations),
 		WithLogger(tu.TestLogger(t, false)),
 	}
 }
@@ -799,7 +800,7 @@ func TestDefaultDiffProcessor_Initialize(t *testing.T) {
 	}
 }
 
-func TestDefaultDiffProcessor_RenderWithRequirements(t *testing.T) {
+func TestDefaultDiffProcessor_RenderToStableState(t *testing.T) {
 	ctx := t.Context()
 
 	// Create test resources
@@ -1305,35 +1306,248 @@ func TestDefaultDiffProcessor_RenderWithRequirements(t *testing.T) {
 			processor := NewDiffProcessor(k8.Clients{}, xp.Clients{}, baseOpts...)
 
 			// Call the method under test
-			output, err := processor.(*DefaultDiffProcessor).RenderWithRequirements(ctx, tt.xr, tt.composition, tt.functions, tt.resourceID, tt.observedResources)
+			output, err := processor.(*DefaultDiffProcessor).RenderToStableState(ctx, tt.xr, tt.composition, tt.functions, tt.resourceID, tt.observedResources, false)
 
 			// Check error expectations
 			if tt.wantErr {
 				if err == nil {
-					t.Errorf("RenderWithRequirements() expected error but got none")
+					t.Errorf("RenderToStableState() expected error but got none")
 				}
 
 				return
 			}
 
 			if err != nil {
-				t.Errorf("RenderWithRequirements() unexpected error: %v", err)
+				t.Errorf("RenderToStableState() unexpected error: %v", err)
 				return
 			}
 
 			// Check render iterations
 			if renderCount != tt.wantRenderIterations {
-				t.Errorf("RenderWithRequirements() called render func %d times, want %d",
+				t.Errorf("RenderToStableState() called render func %d times, want %d",
 					renderCount, tt.wantRenderIterations)
 			}
 
 			// Check composed resource count
 			if len(output.ComposedResources) != tt.wantComposedCount {
-				t.Errorf("RenderWithRequirements() returned %d composed resources, want %d",
+				t.Errorf("RenderToStableState() returned %d composed resources, want %d",
 					len(output.ComposedResources), tt.wantComposedCount)
 			}
 		})
 	}
+}
+
+func TestDefaultDiffProcessor_RenderToStableState_SynthesizeReady(t *testing.T) {
+	ctx := t.Context()
+
+	// Create test resources
+	xr := tu.NewResource("example.org/v1", "XR", "test-xr").BuildUComposite()
+
+	// Create a composition with pipeline mode
+	pipelineMode := apiextensionsv1.CompositionModePipeline
+	composition := &apiextensionsv1.Composition{
+		ObjectMeta: metav1.ObjectMeta{Name: "test-composition"},
+		Spec:       apiextensionsv1.CompositionSpec{Mode: pipelineMode},
+	}
+
+	functions := []pkgv1.Function{{ObjectMeta: metav1.ObjectMeta{Name: "test-function"}}}
+
+	tests := map[string]struct {
+		setupRenderFunc      func() RenderFunc
+		wantComposedCount    int
+		wantRenderIterations int
+		wantErr              bool
+		wantErrContains      string
+	}{
+		"AlreadyStable": {
+			setupRenderFunc: func() RenderFunc {
+				return func(_ context.Context, _ logging.Logger, in render.Inputs) (render.Outputs, error) {
+					// Return same resource every time - already stable
+					return render.Outputs{
+						CompositeResource: in.CompositeResource,
+						ComposedResources: []cpd.Unstructured{{
+							Unstructured: un.Unstructured{Object: map[string]any{
+								"apiVersion": "example.org/v1",
+								"kind":       "ComposedResource",
+								"metadata":   map[string]any{"name": "composed1"},
+							}},
+						}},
+					}, nil
+				}
+			},
+			wantComposedCount:    1,
+			wantRenderIterations: 2, // First render + verification render
+			wantErr:              false,
+		},
+		"MultiStageProgression": {
+			setupRenderFunc: func() RenderFunc {
+				iteration := 0
+
+				return func(_ context.Context, _ logging.Logger, in render.Inputs) (render.Outputs, error) {
+					iteration++
+
+					// Count how many observed resources have Ready=True
+					readyCount := 0
+
+					for _, obs := range in.ObservedResources {
+						if hasReadyCondition(&obs.Unstructured) {
+							readyCount++
+						}
+					}
+
+					// Stage 1: No ready resources -> produce resource1
+					// Stage 2: resource1 is ready -> produce resource1 + resource2
+					// Stage 3: resource1,2 ready -> produce resource1 + resource2 + resource3
+					// Stage 4: All ready, stable
+					resources := []cpd.Unstructured{{
+						Unstructured: un.Unstructured{Object: map[string]any{
+							"apiVersion": "example.org/v1",
+							"kind":       "Stage1Resource",
+							"metadata":   map[string]any{"name": "resource1"},
+						}},
+					}}
+
+					if readyCount >= 1 {
+						resources = append(resources, cpd.Unstructured{
+							Unstructured: un.Unstructured{Object: map[string]any{
+								"apiVersion": "example.org/v1",
+								"kind":       "Stage2Resource",
+								"metadata":   map[string]any{"name": "resource2"},
+							}},
+						})
+					}
+
+					if readyCount >= 2 {
+						resources = append(resources, cpd.Unstructured{
+							Unstructured: un.Unstructured{Object: map[string]any{
+								"apiVersion": "example.org/v1",
+								"kind":       "Stage3Resource",
+								"metadata":   map[string]any{"name": "resource3"},
+							}},
+						})
+					}
+
+					return render.Outputs{
+						CompositeResource: in.CompositeResource,
+						ComposedResources: resources,
+					}, nil
+				}
+			},
+			wantComposedCount:    3, // All three stages rendered
+			wantRenderIterations: 4, // Stage1 -> Stage2 -> Stage3 -> verify stable
+			wantErr:              false,
+		},
+		"MaxIterationsExceeded": {
+			setupRenderFunc: func() RenderFunc {
+				resourceNum := 0
+
+				return func(_ context.Context, _ logging.Logger, in render.Inputs) (render.Outputs, error) {
+					// Always produce a new resource - never stabilizes
+					// Key uses crossplane.io/composition-resource-name annotation
+					resourceNum++
+
+					return render.Outputs{
+						CompositeResource: in.CompositeResource,
+						ComposedResources: []cpd.Unstructured{{
+							Unstructured: un.Unstructured{Object: map[string]any{
+								"apiVersion": "example.org/v1",
+								"kind":       "InfiniteResource",
+								"metadata": map[string]any{
+									"name": fmt.Sprintf("resource%d", resourceNum),
+									"annotations": map[string]any{
+										"crossplane.io/composition-resource-name": fmt.Sprintf("res%d", resourceNum),
+									},
+								},
+							}},
+						}},
+					}, nil
+				}
+			},
+			wantComposedCount:    0,
+			wantRenderIterations: 20, // maxIterations
+			wantErr:              true,
+			wantErrContains:      "did not stabilize",
+		},
+	}
+
+	for name, tt := range tests {
+		t.Run(name, func(t *testing.T) {
+			logger := tu.TestLogger(t, false)
+			renderFunc := tt.setupRenderFunc()
+
+			renderCount := 0
+			countingRenderFunc := func(ctx context.Context, log logging.Logger, in render.Inputs) (render.Outputs, error) {
+				renderCount++
+				return renderFunc(ctx, log, in)
+			}
+
+			resourceClient := tu.NewMockResourceClient().Build()
+			environmentClient := tu.NewMockEnvironmentClient().WithNoEnvironmentConfigs().Build()
+
+			requirementsProvider := NewRequirementsProvider(resourceClient, environmentClient, countingRenderFunc, logger)
+
+			baseOpts := testProcessorOptions(t)
+			customOpts := []ProcessorOption{
+				WithLogger(logger),
+				WithRenderFunc(countingRenderFunc),
+				WithRequirementsProviderFactory(func(k8.ResourceClient, xp.EnvironmentClient, RenderFunc, logging.Logger) *RequirementsProvider {
+					return requirementsProvider
+				}),
+			}
+			baseOpts = append(baseOpts, customOpts...)
+			processor := NewDiffProcessor(k8.Clients{}, xp.Clients{}, baseOpts...)
+
+			// Call with synthesizeReady=true
+			output, err := processor.(*DefaultDiffProcessor).RenderToStableState(ctx, xr, composition, functions, "XR/test-xr", nil, true)
+
+			if tt.wantErr {
+				if err == nil {
+					t.Errorf("expected error but got none")
+					return
+				}
+
+				if tt.wantErrContains != "" && !strings.Contains(err.Error(), tt.wantErrContains) {
+					t.Errorf("error %q should contain %q", err.Error(), tt.wantErrContains)
+				}
+
+				return
+			}
+
+			if err != nil {
+				t.Errorf("unexpected error: %v", err)
+				return
+			}
+
+			if renderCount != tt.wantRenderIterations {
+				t.Errorf("render called %d times, want %d", renderCount, tt.wantRenderIterations)
+			}
+
+			if len(output.ComposedResources) != tt.wantComposedCount {
+				t.Errorf("got %d composed resources, want %d", len(output.ComposedResources), tt.wantComposedCount)
+			}
+		})
+	}
+}
+
+// hasReadyCondition checks if a resource has a Ready=True condition.
+func hasReadyCondition(res *un.Unstructured) bool {
+	conditions, found, _ := un.NestedSlice(res.Object, "status", "conditions")
+	if !found {
+		return false
+	}
+
+	for _, c := range conditions {
+		cond, ok := c.(map[string]any)
+		if !ok {
+			continue
+		}
+
+		if cond["type"] == "Ready" && cond["status"] == "True" {
+			return true
+		}
+	}
+
+	return false
 }
 
 // Helper function to create a test CRD for the given GVK.

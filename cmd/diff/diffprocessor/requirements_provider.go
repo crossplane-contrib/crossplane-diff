@@ -18,6 +18,24 @@ import (
 	v1 "github.com/crossplane/crossplane/v2/proto/fn/v1"
 )
 
+// addUniqueResource adds a resource to the map if not already present.
+// Returns true if the resource was new. Used by RenderToStableState
+// to deduplicate required resources.
+func addUniqueResource(m map[string]un.Unstructured, res *un.Unstructured) bool {
+	if res == nil {
+		return false
+	}
+
+	key := dt.MakeDiffKeyFromResource(res)
+	if _, exists := m[key]; !exists {
+		m[key] = *res
+
+		return true
+	}
+
+	return false
+}
+
 // RequirementsProvider consolidates requirement processing with caching.
 type RequirementsProvider struct {
 	client    k8.ResourceClient

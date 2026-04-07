@@ -136,6 +136,9 @@ Flags:
       --no-color               Disable colorized output.
       --compact                Show compact diffs with minimal context.
       --max-nested-depth=10    Maximum depth for nested XR recursion.
+      --max-iterations=20      Maximum render iterations for requirements resolution
+                               or eventual-state simulation. Increase for complex
+                               pipelines that need more cycles to converge.
       --timeout=1m             How long to run before timing out.
       --ignore-paths=STRING,... Paths to ignore in diffs. Supports simple paths
                                (e.g., 'metadata.annotations') and map key paths with
@@ -169,6 +172,9 @@ Flags:
       --no-color               Disable colorized output.
       --compact                Show compact diffs with minimal context.
       --max-nested-depth=10    Maximum depth for nested XR recursion.
+      --max-iterations=20      Maximum render iterations for requirements resolution.
+                               Increase for complex pipelines that need more cycles
+                               to converge.
       --timeout=1m             How long to run before timing out.
   -n, --namespace=""           Namespace to find Composites (empty = all namespaces).
       --include-manual         Include Composites with Manual update policy (default:

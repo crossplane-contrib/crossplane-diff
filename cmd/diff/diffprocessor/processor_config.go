@@ -12,6 +12,9 @@ import (
 	"github.com/crossplane/crossplane-runtime/v2/pkg/logging"
 )
 
+// DefaultMaxRenderIterations is the default maximum render iterations.
+const DefaultMaxRenderIterations = 20
+
 // ProcessorConfig contains configuration for the DiffProcessor.
 type ProcessorConfig struct {
 	// Namespace is the namespace to use for resources
@@ -35,6 +38,10 @@ type ProcessorConfig struct {
 	// EventualState enables iterative simulation to show eventual state after all reconciliation
 	// cycles complete. Useful with function-sequencer which hides later stage resources.
 	EventualState bool
+
+	// MaxRenderIterations is the maximum number of render iterations when resolving requirements
+	// or simulating eventual state. Higher values may be needed for complex pipelines.
+	MaxRenderIterations int
 
 	// IgnorePaths is a list of paths to ignore when calculating diffs
 	IgnorePaths []string
@@ -134,6 +141,14 @@ func WithIncludeManual(includeManual bool) ProcessorOption {
 func WithEventualState(enabled bool) ProcessorOption {
 	return func(config *ProcessorConfig) {
 		config.EventualState = enabled
+	}
+}
+
+// WithMaxRenderIterations sets the maximum number of render iterations when resolving requirements
+// or simulating eventual state.
+func WithMaxRenderIterations(maxIterations int) ProcessorOption {
+	return func(config *ProcessorConfig) {
+		config.MaxRenderIterations = maxIterations
 	}
 }
 
@@ -278,6 +293,9 @@ func (c *ProcessorConfig) SetDefaultFactories() {
 	}
 
 	if c.Factories.FunctionProvider == nil {
-		c.Factories.FunctionProvider = NewDefaultFunctionProvider
+		// Use CachedFunctionProvider by default for container reuse across renders.
+		// This prevents container proliferation with --eventual-state (multiple iterations)
+		// and enables reuse when diffing multiple XRs with the same composition.
+		c.Factories.FunctionProvider = NewCachedFunctionProvider
 	}
 }
