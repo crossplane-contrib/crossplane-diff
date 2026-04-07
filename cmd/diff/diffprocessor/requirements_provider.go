@@ -18,15 +18,9 @@ import (
 	v1 "github.com/crossplane/crossplane/v2/proto/fn/v1"
 )
 
-// RequirementsResolver provides requirements (like environment configs) for rendering.
-// This interface allows for testing with mock implementations.
-type RequirementsResolver interface {
-	ProvideRequirements(ctx context.Context, requirements map[string]v1.Requirements, xrNamespace string) ([]*un.Unstructured, error)
-}
-
 // addUniqueResource adds a resource to the map if not already present.
-// Returns true if the resource was new. Used by RenderWithRequirements
-// and EventualStateSimulator to deduplicate required resources.
+// Returns true if the resource was new. Used by RenderToStableState
+// to deduplicate required resources.
 func addUniqueResource(m map[string]un.Unstructured, res *un.Unstructured) bool {
 	if res == nil {
 		return false

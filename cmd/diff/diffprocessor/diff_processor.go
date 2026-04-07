@@ -6,10 +6,10 @@ import (
 	"fmt"
 	"io"
 	"maps"
-	"reflect"
 	"slices"
 	"sort"
 	"strings"
+	"time"
 
 	"dario.cat/mergo"
 	xp "github.com/crossplane-contrib/crossplane-diff/cmd/diff/client/crossplane"
@@ -19,6 +19,7 @@ import (
 	"github.com/crossplane-contrib/crossplane-diff/cmd/diff/serial"
 	"github.com/crossplane-contrib/crossplane-diff/cmd/diff/types"
 	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	un "k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/util/uuid"
@@ -338,36 +339,10 @@ func (p *DefaultDiffProcessor) diffSingleResourceInternal(ctx context.Context, r
 		observedResources = p.fetchObservedResourcesFromClusterXR(ctx, existingXRFromCluster, resourceID)
 	}
 
-	// If eventual state mode is enabled, run iterative simulation to reveal all stages
-	// that would eventually be rendered after multiple reconciliation cycles.
-	// This is useful with function-sequencer which hides later stage resources.
-	if p.config.EventualState {
-		// Fetch and merge function credentials the same way RenderWithRequirements does
-		autoFetchedCredentials := p.fetchCompositionCredentials(ctx, comp)
-		simulatorCredentials := mergeCredentials(p.config.FunctionCredentials, autoFetchedCredentials)
-
-		simulator := NewEventualStateSimulator(
-			p.config.RenderFunc,
-			p.config.Logger,
-			simulatorCredentials,
-			p.requirementsProvider,
-		)
-
-		augmentedObserved, simErr := simulator.SimulateToStableState(
-			ctx, xrForRendering, comp, fns, observedResources, xrForRendering.GetNamespace())
-		if simErr != nil {
-			p.config.Logger.Debug("Eventual state simulation failed", "resource", resourceID, "error", simErr)
-			return nil, nil, errors.Wrap(simErr, "eventual state simulation failed")
-		}
-
-		observedResources = augmentedObserved
-		p.config.Logger.Debug("Using augmented observed resources from eventual state simulation",
-			"resource", resourceID,
-			"augmentedCount", len(observedResources))
-	}
-
-	// Perform iterative rendering and requirements reconciliation
-	desired, err := p.RenderWithRequirements(ctx, xrForRendering, comp, fns, resourceID, observedResources)
+	// Perform iterative rendering with requirements resolution.
+	// When EventualState is enabled, also synthesizes Ready status between iterations
+	// to reveal all stages that function-sequencer would eventually render.
+	desired, err := p.RenderToStableState(ctx, xrForRendering, comp, fns, resourceID, observedResources, p.config.EventualState)
 	if err != nil {
 		p.config.Logger.Debug("Resource rendering failed", "resource", resourceID, "error", err)
 		return nil, nil, errors.Wrap(err, "cannot render resources with requirements")
@@ -1061,14 +1036,21 @@ func mergeUnstructured(dest *un.Unstructured, src *un.Unstructured) (*un.Unstruc
 	return result, nil
 }
 
-// RenderWithRequirements performs an iterative rendering process that discovers and fulfills requirements.
-func (p *DefaultDiffProcessor) RenderWithRequirements(
+// RenderToStableState performs iterative rendering until stable state is reached.
+// It handles requirements resolution (environment configs, etc.) and optionally
+// synthesizes Ready status on composed resources between iterations.
+//
+// When synthesizeReady is false (normal mode), the loop terminates once requirements are resolved.
+// When synthesizeReady is true (eventual-state mode), the loop continues until no new composed
+// resources appear, synthesizing Ready=True between iterations to reveal function-sequencer stages.
+func (p *DefaultDiffProcessor) RenderToStableState(
 	ctx context.Context,
 	xr *cmp.Unstructured,
 	comp *apiextensionsv1.Composition,
 	fns []pkgv1.Function,
 	resourceID string,
 	observedResources []cpd.Unstructured,
+	synthesizeReady bool,
 ) (render.Outputs, error) {
 	// Fetch function credentials from composition pipeline and merge with CLI-provided credentials
 	autoFetchedCredentials := p.fetchCompositionCredentials(ctx, comp)
@@ -1082,142 +1064,213 @@ func (p *DefaultDiffProcessor) RenderWithRequirements(
 			"autoFetched", len(autoFetchedCredentials))
 	}
 
-	// Track all discovered extra resources with deduplication
-	discoveredResources := make(map[string]un.Unstructured)
+	// Track required resources with deduplication
+	requiredResources := make(map[string]un.Unstructured)
 
-	// Set up for iterative discovery
-	const maxIterations = 10 // Prevent infinite loops
+	// Track observed resources (modified when synthesizeReady=true)
+	observed := observedResources
 
-	var (
-		lastOutput    render.Outputs
-		lastRenderErr error
-	)
+	// Use higher iteration limit when synthesizing Ready (multi-stage pipelines need more iterations)
+	maxIterations := 10
+	if synthesizeReady {
+		maxIterations = 20
+	}
 
-	// Track the number of iterations for logging
-	iteration := 0
+	var lastOutput render.Outputs
 
-	// Iteratively discover and fetch resources until we have all requirements
-	// or until we hit the max iterations limit
-	for iteration < maxIterations {
-		iteration++
-		p.config.Logger.Debug("Performing render iteration to identify requirements",
+	for iteration := 1; iteration <= maxIterations; iteration++ {
+		p.config.Logger.Debug("Render iteration",
 			"resource", resourceID,
 			"iteration", iteration,
-			"resourceCount", len(discoveredResources))
+			"requiredCount", len(requiredResources),
+			"observedCount", len(observed),
+			"synthesizeReady", synthesizeReady)
 
-		// Perform render to get requirements
+		// Perform render
 		output, renderErr := p.config.RenderFunc(ctx, p.config.Logger, render.Inputs{
 			CompositeResource:   xr,
 			Composition:         comp,
 			Functions:           fns,
 			FunctionCredentials: functionCredentials,
-			RequiredResources:   slices.Collect(maps.Values(discoveredResources)),
-			ObservedResources:   observedResources,
+			RequiredResources:   slices.Collect(maps.Values(requiredResources)),
+			ObservedResources:   observed,
 		})
 
 		lastOutput = output
-		lastRenderErr = renderErr
 
-		// Handle the case where rendering failed but we still have requirements
-		var hasRequirements bool
+		// Handle requirements (even if render had errors)
+		newReqCount := 0
+		if len(output.Requirements) > 0 {
+			additionalResources, err := p.requirementsProvider.ProvideRequirements(ctx, output.Requirements, xr.GetNamespace())
+			if err != nil {
+				return render.Outputs{}, errors.Wrap(err, "failed to process requirements")
+			}
 
-		// Use reflection to safely check if output is non-nil and has Requirements
-		if v := reflect.ValueOf(output); v.IsValid() {
-			// Check if it has a Requirements field
-			if requirements := v.FieldByName("Requirements"); requirements.IsValid() && !requirements.IsNil() {
-				hasRequirements = true
+			for _, res := range additionalResources {
+				if addUniqueResource(requiredResources, res) {
+					newReqCount++
+				}
 			}
 		}
 
-		// If we got an error and there are no usable requirements, fail
-		if renderErr != nil && !hasRequirements {
-			p.config.Logger.Debug("Resource rendering failed completely",
+		// Check for fatal render errors (no requirements to continue with)
+		if renderErr != nil && newReqCount == 0 && len(output.Requirements) == 0 {
+			return render.Outputs{}, errors.Wrap(renderErr, "cannot render resources")
+		}
+
+		// If render failed but we got new requirements, continue to next iteration
+		if renderErr != nil && newReqCount > 0 {
+			p.config.Logger.Debug("Render failed but resolved new requirements, continuing",
 				"resource", resourceID,
 				"iteration", iteration,
 				"error", renderErr)
 
-			return render.Outputs{}, errors.Wrap(renderErr, "cannot render resources")
+			continue
 		}
 
-		// Log if we're continuing despite render errors
-		if renderErr != nil { // && hasRequirements {
-			p.config.Logger.Debug("Resource rendering had errors but returned requirements",
+		// Check for stability
+		if synthesizeReady {
+			// Eventual state mode: check if new composed resources appeared
+			newComposed := findNewComposedResources(output.ComposedResources, observed)
+			if len(newComposed) == 0 && newReqCount == 0 {
+				p.config.Logger.Debug("Reached stable state",
+					"resource", resourceID,
+					"iterations", iteration,
+					"composedCount", len(output.ComposedResources))
+
+				return lastOutput, nil
+			}
+
+			// Synthesize Ready status and merge into observed for next iteration
+			readyResources, err := synthesizeReadyStatus(output.ComposedResources)
+			if err != nil {
+				return render.Outputs{}, errors.Wrapf(err, "failed to synthesize Ready status at iteration %d", iteration)
+			}
+
+			observed = mergeObservedResources(observed, readyResources)
+
+			p.config.Logger.Debug("Synthesized Ready status for next iteration",
 				"resource", resourceID,
 				"iteration", iteration,
-				"error", renderErr,
-				"requirementCount", len(output.Requirements))
-		}
+				"newComposedCount", len(newComposed),
+				"newReqCount", newReqCount,
+				"totalObserved", len(observed))
+		} else {
+			// Normal mode: done when no new requirements
+			if newReqCount == 0 {
+				p.config.Logger.Debug("Requirements resolved",
+					"resource", resourceID,
+					"iterations", iteration)
 
-		// If no requirements, we're done
-		if len(output.Requirements) == 0 {
-			p.config.Logger.Debug("No more requirements found, discovery complete",
-				"iteration", iteration)
-
-			break
-		}
-
-		// Process requirements from the render output
-		p.config.Logger.Debug("Processing requirements from render output",
-			"iteration", iteration,
-			"requirementCount", len(output.Requirements))
-
-		additionalResources, err := p.requirementsProvider.ProvideRequirements(ctx, output.Requirements, xr.GetNamespace())
-		if err != nil {
-			return render.Outputs{}, errors.Wrap(err, "failed to process requirements")
-		}
-
-		// If no new resources were found, we're done
-		if len(additionalResources) == 0 {
-			p.config.Logger.Debug("No new resources found from requirements, discovery complete",
-				"iteration", iteration)
-
-			break
-		}
-
-		// Add resources with deduplication
-		newCount := 0
-		for _, res := range additionalResources {
-			if addUniqueResource(discoveredResources, res) {
-				newCount++
+				return lastOutput, nil
 			}
+
+			p.config.Logger.Debug("Found new requirements, continuing",
+				"resource", resourceID,
+				"iteration", iteration,
+				"newReqCount", newReqCount,
+				"totalRequired", len(requiredResources))
+		}
+	}
+
+	return render.Outputs{}, errors.Errorf("did not stabilize after %d iterations", maxIterations)
+}
+
+// findNewComposedResources identifies resources in rendered that don't exist in observed.
+func findNewComposedResources(rendered, observed []cpd.Unstructured) []cpd.Unstructured {
+	observedKeys := make(map[string]bool)
+
+	for _, obs := range observed {
+		key := composedResourceKey(&obs)
+		observedKeys[key] = true
+	}
+
+	var newResources []cpd.Unstructured
+
+	for _, res := range rendered {
+		key := composedResourceKey(&res)
+		if !observedKeys[key] {
+			newResources = append(newResources, res)
+		}
+	}
+
+	return newResources
+}
+
+// composedResourceKey creates a unique key for a composed resource based on its
+// composition-resource-name annotation and GVK.
+func composedResourceKey(res *cpd.Unstructured) string {
+	compResName := res.GetAnnotations()["crossplane.io/composition-resource-name"]
+	gvk := res.GroupVersionKind()
+
+	return compResName + "/" + gvk.Group + "/" + gvk.Version + "/" + gvk.Kind
+}
+
+// synthesizeReadyStatus adds Ready=True condition to all resources.
+func synthesizeReadyStatus(resources []cpd.Unstructured) ([]cpd.Unstructured, error) {
+	result := make([]cpd.Unstructured, len(resources))
+	now := metav1.Now()
+
+	for i, res := range resources {
+		copied := res.DeepCopy()
+		result[i] = *copied
+
+		if err := setReadyCondition(&result[i], now); err != nil {
+			return nil, errors.Wrapf(err, "cannot set Ready condition on resource %s", res.GetName())
+		}
+	}
+
+	return result, nil
+}
+
+// setReadyCondition sets a Ready=True condition on the resource's status.conditions field.
+func setReadyCondition(res *cpd.Unstructured, now metav1.Time) error {
+	conditionsRaw, _, _ := un.NestedSlice(res.Object, "status", "conditions")
+	conditions := make([]any, 0, len(conditionsRaw)+1)
+
+	// Copy existing conditions, excluding any existing Ready condition
+	for _, c := range conditionsRaw {
+		cond, ok := c.(map[string]any)
+		if !ok {
+			continue
 		}
 
-		// If no new resources were found, we've reached a stable state
-		if newCount == 0 {
-			p.config.Logger.Debug("No new unique resources found, discovery complete",
-				"iteration", iteration)
-
-			break
+		condType, _, _ := un.NestedString(cond, "type")
+		if condType != "Ready" {
+			conditions = append(conditions, cond)
 		}
-
-		p.config.Logger.Debug("Found additional resources to incorporate",
-			"resource", resourceID,
-			"iteration", iteration,
-			"newCount", newCount,
-			"totalResourcesNow", len(discoveredResources))
 	}
 
-	// Log if we hit the iteration limit
-	if iteration >= maxIterations {
-		p.config.Logger.Info("Reached maximum iteration limit for resource discovery",
-			"resource", resourceID,
-			"maxIterations", maxIterations)
+	// Add the Ready condition
+	conditions = append(conditions, map[string]any{
+		"type":               "Ready",
+		"status":             "True",
+		"reason":             "Available",
+		"lastTransitionTime": now.Format(time.RFC3339),
+	})
+
+	if err := un.SetNestedSlice(res.Object, conditions, "status", "conditions"); err != nil {
+		return errors.Wrap(err, "cannot set status.conditions")
 	}
 
-	// If we exited the loop with a render error but still found resources,
-	// log it but don't fail the process
-	if lastRenderErr != nil {
-		p.config.Logger.Debug("Completed resource discovery with render errors",
-			"resource", resourceID,
-			"iterations", iteration,
-			"error", lastRenderErr)
+	return nil
+}
+
+// mergeObservedResources merges newResources with existing observed resources.
+func mergeObservedResources(existing, newResources []cpd.Unstructured) []cpd.Unstructured {
+	result := make(map[string]cpd.Unstructured)
+
+	for _, res := range existing {
+		key := composedResourceKey(&res)
+		result[key] = res
 	}
 
-	p.config.Logger.Debug("Finished discovering and rendering resources",
-		"totalExtraResources", len(discoveredResources),
-		"iterations", iteration)
+	for _, res := range newResources {
+		key := composedResourceKey(&res)
+		result[key] = res
+	}
 
-	return lastOutput, lastRenderErr
+	return slices.Collect(maps.Values(result))
 }
 
 // removeNamespacesFromClusterScopedResources removes namespaces from cluster-scoped resources.
