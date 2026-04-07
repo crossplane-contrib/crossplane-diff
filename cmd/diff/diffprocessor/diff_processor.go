@@ -7,6 +7,7 @@ import (
 	"io"
 	"maps"
 	"reflect"
+	"slices"
 	"sort"
 	"strings"
 
@@ -1081,14 +1082,8 @@ func (p *DefaultDiffProcessor) RenderWithRequirements(
 			"autoFetched", len(autoFetchedCredentials))
 	}
 
-	// Start with environment configs as baseline extra resources
-	var renderResources []un.Unstructured
-
-	// Track all discovered extra resources to return at the end
-	var discoveredResources []*un.Unstructured
-
-	// Track resources we've already discovered to detect when we're done
-	discoveredResourcesMap := make(map[string]bool)
+	// Track all discovered extra resources with deduplication
+	discoveredResources := make(map[string]un.Unstructured)
 
 	// Set up for iterative discovery
 	const maxIterations = 10 // Prevent infinite loops
@@ -1108,7 +1103,7 @@ func (p *DefaultDiffProcessor) RenderWithRequirements(
 		p.config.Logger.Debug("Performing render iteration to identify requirements",
 			"resource", resourceID,
 			"iteration", iteration,
-			"resourceCount", len(renderResources))
+			"resourceCount", len(discoveredResources))
 
 		// Perform render to get requirements
 		output, renderErr := p.config.RenderFunc(ctx, p.config.Logger, render.Inputs{
@@ -1116,7 +1111,7 @@ func (p *DefaultDiffProcessor) RenderWithRequirements(
 			Composition:         comp,
 			Functions:           fns,
 			FunctionCredentials: functionCredentials,
-			RequiredResources:   renderResources,
+			RequiredResources:   slices.Collect(maps.Values(discoveredResources)),
 			ObservedResources:   observedResources,
 		})
 
@@ -1179,25 +1174,16 @@ func (p *DefaultDiffProcessor) RenderWithRequirements(
 			break
 		}
 
-		// Check if we've already discovered these resources
-		newResourcesFound := false
-
+		// Add resources with deduplication
+		newCount := 0
 		for _, res := range additionalResources {
-			resourceKey := dt.MakeDiffKeyFromResource(res)
-			if !discoveredResourcesMap[resourceKey] {
-				discoveredResourcesMap[resourceKey] = true
-				newResourcesFound = true
-
-				// Add to our collection of extra resources
-				discoveredResources = append(discoveredResources, res)
-
-				// Add to render resources for next iteration
-				renderResources = append(renderResources, *res)
+			if addUniqueResource(discoveredResources, res) {
+				newCount++
 			}
 		}
 
 		// If no new resources were found, we've reached a stable state
-		if !newResourcesFound {
+		if newCount == 0 {
 			p.config.Logger.Debug("No new unique resources found, discovery complete",
 				"iteration", iteration)
 
@@ -1207,7 +1193,7 @@ func (p *DefaultDiffProcessor) RenderWithRequirements(
 		p.config.Logger.Debug("Found additional resources to incorporate",
 			"resource", resourceID,
 			"iteration", iteration,
-			"additionalCount", len(additionalResources),
+			"newCount", newCount,
 			"totalResourcesNow", len(discoveredResources))
 	}
 

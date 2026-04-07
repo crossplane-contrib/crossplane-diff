@@ -18,6 +18,8 @@ package diffprocessor
 
 import (
 	"context"
+	"maps"
+	"slices"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
@@ -32,8 +34,6 @@ import (
 	apiextensionsv1 "github.com/crossplane/crossplane/v2/apis/apiextensions/v1"
 	pkgv1 "github.com/crossplane/crossplane/v2/apis/pkg/v1"
 	"github.com/crossplane/crossplane/v2/cmd/crank/render"
-
-	dt "github.com/crossplane-contrib/crossplane-diff/cmd/diff/renderer/types"
 )
 
 const (
@@ -94,11 +94,7 @@ func (s *EventualStateSimulator) SimulateToStableState(
 	observed := initialObserved
 
 	// Track required resources across iterations (e.g., environment configs)
-	var requiredResources []un.Unstructured
-
-	// Track which resources we've already added to avoid duplicates
-	// This mirrors the deduplication logic in RenderWithRequirements
-	requiredResourcesMap := make(map[string]bool)
+	requiredResources := make(map[string]un.Unstructured)
 
 	s.logger.Debug("Starting eventual state simulation",
 		"xr", xr.GetName(),
@@ -118,7 +114,7 @@ func (s *EventualStateSimulator) SimulateToStableState(
 			Functions:           fns,
 			FunctionCredentials: s.functionCredentials,
 			ObservedResources:   observed,
-			RequiredResources:   requiredResources,
+			RequiredResources:   slices.Collect(maps.Values(requiredResources)),
 		})
 
 		// Handle requirements even if render returned an error
@@ -137,29 +133,19 @@ func (s *EventualStateSimulator) SimulateToStableState(
 					"error", resolveErr)
 				// Continue without the additional resources - let the original error surface if any
 			} else {
-				// Add resources with deduplication (mirrors RenderWithRequirements logic)
-				newResourceCount := 0
-
+				// Add resources with deduplication
+				newCount := 0
 				for _, res := range additionalResources {
-					if res == nil {
-						continue
-					}
-
-					resourceKey := dt.MakeDiffKeyFromResource(res)
-					if !requiredResourcesMap[resourceKey] {
-						requiredResourcesMap[resourceKey] = true
-						requiredResources = append(requiredResources, *res)
-						newResourceCount++
+					if addUniqueResource(requiredResources, res) {
+						newCount++
 					}
 				}
-
-				// Check if we actually added new resources
-				newRequirementsResolved = newResourceCount > 0
+				newRequirementsResolved = newCount > 0
 
 				s.logger.Debug("Resolved requirements for simulation",
 					"iteration", i+1,
 					"fetchedCount", len(additionalResources),
-					"newUniqueCount", newResourceCount,
+					"newUniqueCount", newCount,
 					"totalRequiredResourcesCount", len(requiredResources),
 					"newRequirementsResolved", newRequirementsResolved)
 			}
