@@ -17,6 +17,7 @@ limitations under the License.
 package diffprocessor
 
 import (
+	"os"
 	"strings"
 	"testing"
 
@@ -552,6 +553,73 @@ func TestGenerateContainerName(t *testing.T) {
 			got := generateContainerName(tt.pkg, testInstanceID)
 			if got != tt.want {
 				t.Errorf("generateContainerName(%q, %q) = %q, want %q", tt.pkg, testInstanceID, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestApplyDockerNetworkAnnotation(t *testing.T) {
+	tests := map[string]struct {
+		envValue    string
+		fns         []pkgv1.Function
+		wantNetwork string
+	}{
+		"EnvSet": {
+			envValue: "github_network_abc123",
+			fns: []pkgv1.Function{
+				{ObjectMeta: metav1.ObjectMeta{Name: "function-1"}},
+				{ObjectMeta: metav1.ObjectMeta{Name: "function-2"}},
+			},
+			wantNetwork: "github_network_abc123",
+		},
+		"EnvNotSet": {
+			envValue: "",
+			fns: []pkgv1.Function{
+				{ObjectMeta: metav1.ObjectMeta{Name: "function-1"}},
+			},
+			wantNetwork: "",
+		},
+		"ExistingAnnotations": {
+			envValue: "my-network",
+			fns: []pkgv1.Function{
+				{
+					ObjectMeta: metav1.ObjectMeta{
+						Name: "function-1",
+						Annotations: map[string]string{
+							"existing-key": "existing-value",
+						},
+					},
+				},
+			},
+			wantNetwork: "my-network",
+		},
+	}
+
+	for name, tt := range tests {
+		t.Run(name, func(t *testing.T) {
+			if tt.envValue != "" {
+				t.Setenv(EnvDockerNetwork, tt.envValue)
+			} else {
+				os.Unsetenv(EnvDockerNetwork)
+			}
+
+			logger := tu.TestLogger(t, false)
+			applyDockerNetworkAnnotation(tt.fns, logger)
+
+			for _, fn := range tt.fns {
+				got := fn.Annotations[annotationRuntimeDockerNetwork]
+				if got != tt.wantNetwork {
+					t.Errorf("function %q: network annotation = %q, want %q", fn.Name, got, tt.wantNetwork)
+				}
+			}
+
+			// Verify existing annotations are preserved when env is set
+			if tt.wantNetwork != "" {
+				for _, fn := range tt.fns {
+					if v, ok := fn.Annotations["existing-key"]; ok && v != "existing-value" {
+						t.Errorf("existing annotation was modified: got %q, want %q", v, "existing-value")
+					}
+				}
 			}
 		})
 	}
