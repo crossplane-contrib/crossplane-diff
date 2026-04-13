@@ -1264,3 +1264,162 @@ func TestDefaultDiffCalculator_preserveCompositeLabel(t *testing.T) {
 		})
 	}
 }
+
+// TestDefaultDiffCalculator_preserveExistingResourceIdentity tests that the identity
+// of existing resources is preserved correctly, especially for nested XRs where
+// the composition may transform the name but not use generateName.
+func TestDefaultDiffCalculator_preserveExistingResourceIdentity(t *testing.T) {
+	tests := []struct {
+		name                 string
+		current              *un.Unstructured
+		desired              *un.Unstructured
+		renderedName         string
+		expectedName         string
+		expectedGenerateName string
+		expectPreserved      bool // whether identity should be preserved (deep copy made)
+	}{
+		{
+			name: "PreservesIdentityWhenNameSetButGenerateNameEmpty",
+			// This is the key scenario fixed: nested XRs where composition transforms
+			// the name (e.g., adds -sg suffix) but doesn't use generateName
+			current: &un.Unstructured{
+				Object: map[string]any{
+					"apiVersion": "platform.example.org/v1alpha1",
+					"kind":       "XSecurityGroup",
+					"metadata": map[string]any{
+						"name": "dub-glass-redis-sg", // Actual cluster name with suffix
+						// NOTE: generateName is intentionally NOT set (null/empty)
+						"labels": map[string]any{
+							"crossplane.io/composite": "root-xr",
+						},
+					},
+				},
+			},
+			desired: &un.Unstructured{
+				Object: map[string]any{
+					"apiVersion": "platform.example.org/v1alpha1",
+					"kind":       "XSecurityGroup",
+					"metadata": map[string]any{
+						"name": "dub-glass-redis", // Rendered name without suffix
+						"annotations": map[string]any{
+							"crossplane.io/composition-resource-name": "security-group",
+						},
+					},
+				},
+			},
+			renderedName:         "dub-glass-redis",
+			expectedName:         "dub-glass-redis-sg", // Should preserve cluster name
+			expectedGenerateName: "",                   // Should preserve empty generateName
+			expectPreserved:      true,
+		},
+		{
+			name: "PreservesIdentityWithGenerateName",
+			// Traditional generateName scenario - should still work
+			current: &un.Unstructured{
+				Object: map[string]any{
+					"apiVersion": "nop.crossplane.io/v1alpha1",
+					"kind":       "NopResource",
+					"metadata": map[string]any{
+						"name":         "my-resource-abc123",
+						"generateName": "my-resource-",
+						"labels": map[string]any{
+							"crossplane.io/composite": "root-xr",
+						},
+					},
+				},
+			},
+			desired: &un.Unstructured{
+				Object: map[string]any{
+					"apiVersion": "nop.crossplane.io/v1alpha1",
+					"kind":       "NopResource",
+					"metadata": map[string]any{
+						"generateName": "my-resource-",
+						"annotations": map[string]any{
+							"crossplane.io/composition-resource-name": "nop-resource",
+						},
+					},
+				},
+			},
+			renderedName:         "",
+			expectedName:         "my-resource-abc123",
+			expectedGenerateName: "my-resource-",
+			expectPreserved:      true,
+		},
+		{
+			name:    "NoPreservationWhenCurrentIsNil",
+			current: nil,
+			desired: &un.Unstructured{
+				Object: map[string]any{
+					"apiVersion": "nop.crossplane.io/v1alpha1",
+					"kind":       "NopResource",
+					"metadata": map[string]any{
+						"name": "new-resource",
+					},
+				},
+			},
+			renderedName:         "new-resource",
+			expectedName:         "new-resource",
+			expectedGenerateName: "",
+			expectPreserved:      false,
+		},
+		{
+			name: "NoPreservationWhenCurrentHasNoName",
+			current: &un.Unstructured{
+				Object: map[string]any{
+					"apiVersion": "nop.crossplane.io/v1alpha1",
+					"kind":       "NopResource",
+					"metadata": map[string]any{
+						"generateName": "my-resource-",
+						// No name set yet (resource not created)
+					},
+				},
+			},
+			desired: &un.Unstructured{
+				Object: map[string]any{
+					"apiVersion": "nop.crossplane.io/v1alpha1",
+					"kind":       "NopResource",
+					"metadata": map[string]any{
+						"generateName": "my-resource-",
+					},
+				},
+			},
+			renderedName:         "",
+			expectedName:         "",
+			expectedGenerateName: "my-resource-",
+			expectPreserved:      false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Create the calculator
+			calculator := &DefaultDiffCalculator{
+				logger: tu.TestLogger(t, false),
+			}
+
+			// Call the method
+			result := calculator.preserveExistingResourceIdentity(tt.current, tt.desired, "test-resource", tt.renderedName)
+
+			// Check the resulting name
+			if result.GetName() != tt.expectedName {
+				t.Errorf("Expected name %q, got %q", tt.expectedName, result.GetName())
+			}
+
+			// Check the resulting generateName
+			if result.GetGenerateName() != tt.expectedGenerateName {
+				t.Errorf("Expected generateName %q, got %q", tt.expectedGenerateName, result.GetGenerateName())
+			}
+
+			// Check if a deep copy was made when expected
+			if tt.expectPreserved {
+				if result == tt.desired {
+					t.Error("Expected result to be a deep copy when preserving identity, but got the same pointer")
+				}
+			} else {
+				if result != tt.desired {
+					t.Error("Expected result to be the same pointer when not preserving identity, but got a different pointer")
+				}
+			}
+		})
+	}
+}
