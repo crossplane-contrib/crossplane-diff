@@ -338,9 +338,8 @@ func (c *DefaultDiffCalculator) CalculateRemovedResourceDiffs(ctx context.Contex
 	// Try to get the resource tree
 	resourceTree, err := c.treeClient.GetResourceTree(ctx, xr)
 	if err != nil {
-		// Log the error but continue - we just won't detect removed resources
 		c.logger.Debug("Cannot get resource tree; aborting", "error", err)
-		return nil, errors.New("cannot get resource tree")
+		return nil, errors.Wrap(err, "cannot get resource tree")
 	}
 
 	// Create a handler function to recursively traverse the tree and find composed resources
@@ -394,11 +393,15 @@ func (c *DefaultDiffCalculator) CalculateRemovedResourceDiffs(ctx context.Contex
 }
 
 // preserveExistingResourceIdentity preserves the identity (name, generateName, labels) from an existing
-// resource with generateName to ensure dry-run apply works on the correct resource identity.
-// This is critical for claim scenarios where the rendered name differs from the generated name.
+// resource to ensure dry-run apply works on the correct resource identity.
+// This is critical for:
+// - Claim scenarios where the rendered name differs from the generated name
+// - Nested XRs where the composition adds environment-specific prefixes to names.
 func (c *DefaultDiffCalculator) preserveExistingResourceIdentity(current, desired *un.Unstructured, resourceID, renderedName string) *un.Unstructured {
-	// Only preserve identity for existing resources with both generateName and name
-	if current == nil || current.GetGenerateName() == "" || current.GetName() == "" {
+	// Only preserve identity for existing resources with a name
+	// Note: We don't require generateName because nested XRs and other resources may have
+	// fixed names from the composition that differ from the cluster name due to prefixes.
+	if current == nil || current.GetName() == "" {
 		return desired
 	}
 

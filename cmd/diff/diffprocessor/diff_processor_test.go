@@ -652,6 +652,79 @@ func TestDefaultDiffProcessor_PerformDiff(t *testing.T) {
 	}
 }
 
+// TestDefaultDiffProcessor_PerformDiff_StderrErrorOutput verifies that when
+// resource processing fails, detailed errors are written to stderr for human visibility.
+// This tests the WithStderr option and the stderr error output path.
+func TestDefaultDiffProcessor_PerformDiff_StderrErrorOutput(t *testing.T) {
+	ctx := t.Context()
+
+	// Create test resource
+	resource := tu.NewResource("example.org/v1", "XR1", "my-xr-1").
+		WithSpecField("coolField", "test-value-1").
+		Build()
+
+	// Create stderr buffer to capture error output
+	var stderrBuf bytes.Buffer
+
+	// Create Kubernetes client mocks
+	k8sClients := k8.Clients{
+		Apply:    tu.NewMockApplyClient().Build(),
+		Resource: tu.NewMockResourceClient().Build(),
+		Schema:   tu.NewMockSchemaClient().Build(),
+		Type:     tu.NewMockTypeConverter().Build(),
+	}
+
+	// Create Crossplane client mocks with a failing composition match
+	xpClients := xp.Clients{
+		Composition: tu.NewMockCompositionClient().
+			WithNoMatchingComposition().
+			Build(),
+		Credential: &tu.MockCredentialClient{},
+		Definition: tu.NewMockDefinitionClient().Build(),
+		Environment: tu.NewMockEnvironmentClient().
+			WithNoEnvironmentConfigs().
+			Build(),
+		Function:     tu.NewMockFunctionClient().Build(),
+		ResourceTree: tu.NewMockResourceTreeClient().Build(),
+	}
+
+	// Create processor with custom stderr buffer
+	processor := NewDiffProcessor(k8sClients, xpClients,
+		append(testProcessorOptions(t),
+			WithStderr(&stderrBuf), // Inject test buffer to capture stderr
+		)...,
+	)
+
+	// Create a dummy writer for stdout
+	var stdout bytes.Buffer
+
+	// Create composition provider using mock client
+	compositionProvider := func(ctx context.Context, res *un.Unstructured) (*apiextensionsv1.Composition, error) {
+		return xpClients.Composition.FindMatchingComposition(ctx, res)
+	}
+
+	// Run the diff
+	_, err := processor.PerformDiff(ctx, &stdout, []*un.Unstructured{resource}, compositionProvider)
+
+	// Should return an error
+	if err == nil {
+		t.Fatal("PerformDiff() expected error but got none")
+	}
+
+	// Verify stderr contains the error output
+	stderrOutput := stderrBuf.String()
+
+	// The error should be formatted using FormatError() which produces:
+	// "ERROR: {ResourceID}: {Message}"
+	if !strings.Contains(stderrOutput, "ERROR: XR1/my-xr-1:") {
+		t.Errorf("Expected stderr to contain 'ERROR: XR1/my-xr-1:', got: %q", stderrOutput)
+	}
+
+	if !strings.Contains(stderrOutput, "composition not found") {
+		t.Errorf("Expected stderr to contain 'composition not found' error detail, got: %q", stderrOutput)
+	}
+}
+
 func TestDefaultDiffProcessor_Initialize(t *testing.T) {
 	// Setup test context
 	ctx := t.Context()
@@ -2430,7 +2503,8 @@ func TestDefaultDiffProcessor_DiffSingleResource_WithObservedResources(t *testin
 			wantObservedInRender: true,
 			wantObservedCount:    0, // Should pass empty list when fetch fails
 			verifyObservedPassed: true,
-			wantErr:              false, // Should not error, just log and continue
+			wantErr:              true,                         // Should return partial error so user knows removal detection failed
+			wantErrContain:       "cannot get resource tree",   // The resource tree error is now surfaced
 		},
 	}
 
