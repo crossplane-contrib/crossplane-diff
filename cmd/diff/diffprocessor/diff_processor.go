@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"maps"
+	"os"
 	"slices"
 	"sort"
 	"strings"
@@ -87,6 +88,7 @@ func NewDiffProcessor(k8cs k8.Clients, xpcs xp.Clients, opts ...ProcessorOption)
 	// Note: Behavior defaults (Namespace, Colorize, Compact, MaxNestedDepth) are intentionally
 	// not set here. They should be provided via ProcessorOptions from the CLI layer.
 	config := ProcessorConfig{
+		Stderr:     os.Stderr,
 		Logger:     logging.NewNopLogger(),
 		RenderFunc: render.Render,
 	}
@@ -223,6 +225,12 @@ func (p *DefaultDiffProcessor) PerformDiff(ctx context.Context, stdout io.Writer
 	if err != nil {
 		p.config.Logger.Debug("Failed to render diffs", "error", err)
 		errs = append(errs, errors.Wrap(err, "failed to render diffs"))
+	}
+
+	// Emit detailed errors to stderr for human visibility alongside structured output.
+	// This ensures CI logs show actual error details even when using JSON/YAML output.
+	for _, outputErr := range outputErrors {
+		_, _ = fmt.Fprintln(p.config.Stderr, outputErr.FormatError())
 	}
 
 	// Count only non-equal diffs as "having diffs".
