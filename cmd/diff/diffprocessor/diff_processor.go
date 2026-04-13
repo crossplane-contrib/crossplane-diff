@@ -204,7 +204,7 @@ func (p *DefaultDiffProcessor) PerformDiff(ctx context.Context, stdout io.Writer
 				"resource", resourceID,
 				"namespace", res.GetNamespace(),
 				"error", err)
-			errs = append(errs, errors.Wrapf(err, "cannot process resource %s", resourceID))
+			errs = append(errs, errors.Wrapf(err, "unable to process resource %s", resourceID))
 
 			// Collect error for structured output
 			outputErrors = append(outputErrors, dt.OutputError{
