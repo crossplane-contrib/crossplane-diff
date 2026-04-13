@@ -199,16 +199,20 @@ func (p *DefaultDiffProcessor) PerformDiff(ctx context.Context, stdout io.Writer
 
 		diffs, err := p.DiffSingleResource(ctx, res, compositionProvider)
 		if err != nil {
-			p.config.Logger.Debug("Failed to process resource", "resource", resourceID, "namespace", res.GetNamespace(), "error", err)
-			errs = append(errs, errors.Wrapf(err, "unable to process resource %s", resourceID))
+			// Log at Info level so errors are visible without -v 4
+			p.config.Logger.Info("Failed to process resource",
+				"resource", resourceID,
+				"namespace", res.GetNamespace(),
+				"error", err)
+			errs = append(errs, errors.Wrapf(err, "cannot process resource %s", resourceID))
 
-			// Collect error for structured output instead of writing plain text
+			// Collect error for structured output
 			outputErrors = append(outputErrors, dt.OutputError{
 				ResourceID: resourceID,
 				Message:    err.Error(),
 			})
 		} else {
-			// Merge the diffs into our combined map
+			// Only merge diffs on success - we don't emit partial results for a single XR
 			maps.Copy(allDiffs, diffs)
 		}
 	}
@@ -397,8 +401,9 @@ func (p *DefaultDiffProcessor) diffSingleResourceInternal(ctx context.Context, r
 
 	diffs, renderedResources, err := p.diffCalculator.CalculateNonRemovalDiffs(ctx, mergedXR, parentComposite, desired)
 	if err != nil {
-		// We don't fail completely if some diffs couldn't be calculated
-		p.config.Logger.Debug("Partial error calculating diffs", "resource", resourceID, "error", err)
+		// Fail completely rather than emit potentially incorrect partial results (design principle)
+		p.config.Logger.Debug("Error calculating diffs - failing XR", "resource", resourceID, "error", err)
+		return nil, nil, errors.Wrap(err, "cannot calculate diffs for composed resources")
 	}
 
 	// Check for nested XRs in the composed resources and process them recursively
@@ -450,10 +455,13 @@ func (p *DefaultDiffProcessor) diffSingleResourceInternal(ctx context.Context, r
 	if detectRemovals && existingXR != nil {
 		p.config.Logger.Debug("Detecting removed resources", "resource", resourceID, "renderedCount", len(renderedResources))
 
-		removedDiffs, err := p.diffCalculator.CalculateRemovedResourceDiffs(ctx, existingXR.GetUnstructured(), renderedResources)
-		if err != nil {
-			p.config.Logger.Debug("Error detecting removed resources (continuing)", "resource", resourceID, "error", err)
-		} else if len(removedDiffs) > 0 {
+		removedDiffs, removalErr := p.diffCalculator.CalculateRemovedResourceDiffs(ctx, existingXR.GetUnstructured(), renderedResources)
+		if removalErr != nil {
+			// Fail completely rather than emit potentially incorrect partial results (design principle)
+			p.config.Logger.Debug("Error detecting removed resources - failing XR", "resource", resourceID, "error", removalErr)
+			return nil, nil, errors.Wrap(removalErr, "cannot detect removed resources")
+		}
+		if len(removedDiffs) > 0 {
 			maps.Copy(diffs, removedDiffs)
 			p.config.Logger.Debug("Found removed resources", "resource", resourceID, "removedCount", len(removedDiffs))
 		}
@@ -462,10 +470,9 @@ func (p *DefaultDiffProcessor) diffSingleResourceInternal(ctx context.Context, r
 	p.config.Logger.Debug("Resource processing complete",
 		"resource", resourceID,
 		"diffCount", len(diffs),
-		"nestedDiffCount", len(nestedDiffs),
-		"hasErrors", err != nil)
+		"nestedDiffCount", len(nestedDiffs))
 
-	return diffs, renderedResources, err
+	return diffs, renderedResources, nil
 }
 
 // fetchObservedResourcesFromClusterXR fetches observed resources using the cluster XR.

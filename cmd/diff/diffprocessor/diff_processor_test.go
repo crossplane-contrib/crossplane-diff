@@ -184,7 +184,7 @@ func TestDefaultDiffProcessor_PerformDiff(t *testing.T) {
 					t.Errorf("Expected stdout to contain 'composition not found' error detail, got: %s", output)
 				}
 			},
-			want: errors.New("unable to process resource XR1/my-xr-1: cannot get composition: composition not found"),
+			want: errors.New("cannot process resource XR1/my-xr-1: cannot get composition: composition not found"),
 		},
 		"MultipleResourceErrors": {
 			setupMocks: func() (k8.Clients, xp.Clients) {
@@ -231,8 +231,8 @@ func TestDefaultDiffProcessor_PerformDiff(t *testing.T) {
 					t.Errorf("Expected stdout to contain 'composition not found' at least twice, found %d times in: %s", expectedCount, output)
 				}
 			},
-			want: errors.New("[unable to process resource XR1/my-xr-1: cannot get composition: composition not found, " +
-				"unable to process resource XR1/my-xr-2: cannot get composition: composition not found]"),
+			want: errors.New("[cannot process resource XR1/my-xr-1: cannot get composition: composition not found, " +
+				"cannot process resource XR1/my-xr-2: cannot get composition: composition not found]"),
 		},
 		"CompositionNotFound": {
 			setupMocks: func() (k8.Clients, xp.Clients) {
@@ -262,7 +262,7 @@ func TestDefaultDiffProcessor_PerformDiff(t *testing.T) {
 			},
 			resources:     []*un.Unstructured{resource1},
 			processorOpts: testProcessorOptions(t),
-			want:          errors.New("unable to process resource XR1/my-xr-1: cannot get composition: composition not found"),
+			want:          errors.New("cannot process resource XR1/my-xr-1: cannot get composition: composition not found"),
 		},
 		"GetFunctionsError": {
 			setupMocks: func() (k8.Clients, xp.Clients) {
@@ -294,7 +294,7 @@ func TestDefaultDiffProcessor_PerformDiff(t *testing.T) {
 			},
 			resources:     []*un.Unstructured{resource1},
 			processorOpts: testProcessorOptions(t),
-			want:          errors.New("unable to process resource XR1/my-xr-1: cannot get functions for composition: cannot get functions from pipeline: function not found"),
+			want:          errors.New("cannot process resource XR1/my-xr-1: cannot get functions for composition: cannot get functions from pipeline: function not found"),
 		},
 		"SuccessfulDiff": {
 			setupMocks: func() (k8.Clients, xp.Clients) {
@@ -605,7 +605,7 @@ func TestDefaultDiffProcessor_PerformDiff(t *testing.T) {
 					}
 				}),
 			),
-			want:            errors.New("unable to process resource XR1/my-xr-1: cannot validate resources: validation error"),
+			want:            errors.New("cannot process resource XR1/my-xr-1: cannot validate resources: validation error"),
 			validationError: true,
 		},
 	}
@@ -2430,7 +2430,8 @@ func TestDefaultDiffProcessor_DiffSingleResource_WithObservedResources(t *testin
 			wantObservedInRender: true,
 			wantObservedCount:    0, // Should pass empty list when fetch fails
 			verifyObservedPassed: true,
-			wantErr:              false, // Should not error, just log and continue
+			wantErr:              true,                         // Should return partial error so user knows removal detection failed
+			wantErrContain:       "cannot get resource tree",   // The resource tree error is now surfaced
 		},
 	}
 
