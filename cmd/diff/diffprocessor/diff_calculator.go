@@ -278,7 +278,7 @@ func (c *DefaultDiffCalculator) CalculateNonRemovalDiffs(ctx context.Context, xr
 		// because the render pipeline emits empty UIDs when the XR has none.
 		//
 		// Skip for generateName-only XRs: they get a synthetic display name like
-		// "foo-(generated)" that is invalid as a label selector value.
+		// "foo(generated)" that is invalid as a label selector value.
 		composite := xrDiff.Current
 		if composite == nil && xr.GetName() != "" && xr.GetGenerateName() == "" {
 			composite = xr.GetUnstructured()
