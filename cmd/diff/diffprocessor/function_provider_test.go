@@ -545,6 +545,10 @@ func TestGenerateContainerName(t *testing.T) {
 			pkg:  "xpkg.io/test/function@sha256:abc123",
 			want: "function-abc123-comp-test1234",
 		},
+		"TagAndDigest": {
+			pkg:  "registry.io/path/function-auto-ready:v0.6.1-0@sha256:751a4afb65f1abcdef1234567890abcdef1234567890abcdef1234567890abcd",
+			want: "function-auto-ready-v0.6.1-0-751a4afb65f1-comp-test1234",
+		},
 	}
 
 	for name, tt := range tests {
