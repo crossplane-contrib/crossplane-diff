@@ -53,11 +53,11 @@ Examples:
   crossplane-diff xr xr.yaml
 
   # Show the changes that would result from applying xr.yaml (via stdin).
-  cat xr.yaml | crossplane-diff xr --
+  cat xr.yaml | crossplane-diff xr -
 
   # Show the changes that would result from applying multiple files.
   crossplane-diff xr xr1.yaml xr2.yaml
-  cat xr.yaml | crossplane-diff xr xr1.yaml xr2.yaml --
+  cat xr.yaml | crossplane-diff xr xr1.yaml xr2.yaml -
 
   # Show the changes with no color output.
   crossplane-diff xr xr.yaml --no-color
