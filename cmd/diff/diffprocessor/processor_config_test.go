@@ -136,10 +136,10 @@ func TestGetDiffOptions_PropagatesStdoutStderrFormat(t *testing.T) {
 		}
 	})
 
-	t.Run("NilWritersKeepDefaults", func(t *testing.T) {
+	t.Run("ZeroValuesKeepDefaults", func(t *testing.T) {
 		config := ProcessorConfig{
 			Colorize: true,
-			// Stdout and Stderr intentionally left nil
+			// Stdout, Stderr, and OutputFormat intentionally left at zero value
 		}
 
 		got := config.GetDiffOptions()
@@ -152,6 +152,13 @@ func TestGetDiffOptions_PropagatesStdoutStderrFormat(t *testing.T) {
 
 		if got.Stderr != io.Writer(os.Stderr) {
 			t.Errorf("Expected default os.Stderr when config.Stderr is nil, got: %v", got.Stderr)
+		}
+
+		// When the config's OutputFormat is the zero value (""), DefaultDiffOptions()
+		// default (OutputFormatDiff) should be preserved rather than overwritten with "".
+		if got.Format != renderer.OutputFormatDiff {
+			t.Errorf("Expected default Format %q when config.OutputFormat is empty, got %q",
+				renderer.OutputFormatDiff, got.Format)
 		}
 	})
 }
