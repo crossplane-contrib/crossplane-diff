@@ -298,6 +298,101 @@ func TestDefaultCompDiffRenderer_RenderCompDiff(t *testing.T) {
 	}
 }
 
+// TestDefaultCompDiffRenderer_RenderCompDiff_TopLevelErrorsToStderr verifies that
+// top-level errors in CompDiffOutput.Errors are written to stderr (not stdout)
+// to follow Unix conventions.
+func TestDefaultCompDiffRenderer_RenderCompDiff_TopLevelErrorsToStderr(t *testing.T) {
+	output := &CompDiffOutput{
+		Compositions: []CompositionDiff{},
+		Errors: []dt.OutputError{
+			{ResourceID: "xbuckets.example.org", Message: "failed to list XRs for composition"},
+			{Message: "cluster connection lost"},
+		},
+	}
+
+	logger := tu.TestLogger(t, false)
+
+	var (
+		stdout bytes.Buffer
+		stderr bytes.Buffer
+	)
+
+	opts := DefaultDiffOptions()
+	opts.UseColors = false
+	opts.Stdout = &stdout
+	opts.Stderr = &stderr
+
+	diffRenderer := NewDiffRenderer(logger, opts)
+	renderer := NewDefaultCompDiffRenderer(logger, diffRenderer, opts)
+
+	if err := renderer.RenderCompDiff(output); err != nil {
+		t.Fatalf("RenderCompDiff() failed: %v", err)
+	}
+
+	stderrOut := stderr.String()
+	for _, e := range output.Errors {
+		if !strings.Contains(stderrOut, e.FormatError()) {
+			t.Errorf("Expected stderr to contain %q, got: %q", e.FormatError(), stderrOut)
+		}
+
+		// Verify errors were NOT written to stdout
+		if strings.Contains(stdout.String(), e.FormatError()) {
+			t.Errorf("Expected stdout to NOT contain error %q, got: %q", e.FormatError(), stdout.String())
+		}
+	}
+}
+
+// TestStructuredCompDiffRenderer_RenderCompDiff_TopLevelErrorsToStderr verifies that
+// top-level errors in CompDiffOutput.Errors are written to stderr in addition to being
+// included in the structured output.
+func TestStructuredCompDiffRenderer_RenderCompDiff_TopLevelErrorsToStderr(t *testing.T) {
+	output := &CompDiffOutput{
+		Compositions: []CompositionDiff{},
+		Errors: []dt.OutputError{
+			{ResourceID: "xbuckets.example.org", Message: "failed to list XRs for composition"},
+			{Message: "cluster connection lost"},
+		},
+	}
+
+	for _, format := range []OutputFormat{OutputFormatJSON, OutputFormatYAML} {
+		t.Run(string(format), func(t *testing.T) {
+			logger := tu.TestLogger(t, false)
+
+			var (
+				stdout bytes.Buffer
+				stderr bytes.Buffer
+			)
+
+			opts := DefaultDiffOptions()
+			opts.Format = format
+			opts.Stdout = &stdout
+			opts.Stderr = &stderr
+
+			renderer := NewStructuredCompDiffRenderer(logger, opts)
+
+			if err := renderer.RenderCompDiff(output); err != nil {
+				t.Fatalf("RenderCompDiff() failed: %v", err)
+			}
+
+			// Verify errors in stderr
+			stderrOut := stderr.String()
+			for _, e := range output.Errors {
+				if !strings.Contains(stderrOut, e.FormatError()) {
+					t.Errorf("Expected stderr to contain %q, got: %q", e.FormatError(), stderrOut)
+				}
+			}
+
+			// Verify errors are ALSO in structured output (stdout)
+			stdoutStr := stdout.String()
+			for _, e := range output.Errors {
+				if !strings.Contains(stdoutStr, e.Message) {
+					t.Errorf("Expected stdout to contain error message %q, got: %q", e.Message, stdoutStr)
+				}
+			}
+		})
+	}
+}
+
 func Test_formatXRStatusSummary(t *testing.T) {
 	tests := map[string]struct {
 		changed, unchanged, errors int
