@@ -4,6 +4,8 @@ package renderer
 import (
 	"context"
 	"fmt"
+	"io"
+	"os"
 	"strings"
 
 	t "github.com/crossplane-contrib/crossplane-diff/cmd/diff/renderer/types"
@@ -19,6 +21,16 @@ import (
 
 // DiffOptions holds configuration options for the diff output.
 type DiffOptions struct {
+	// Stdout is the writer for diff output (defaults to os.Stdout)
+	Stdout io.Writer
+
+	// Stderr is the writer for error output (defaults to os.Stderr)
+	// Errors are written here following Unix conventions (errors to stderr, output to stdout)
+	Stderr io.Writer
+
+	// Format specifies the output format (diff, json, yaml)
+	Format OutputFormat
+
 	// UseColors determines whether to colorize the output
 	UseColors bool
 
@@ -49,6 +61,9 @@ type DiffOptions struct {
 // DefaultDiffOptions returns the default options with colors enabled.
 func DefaultDiffOptions() DiffOptions {
 	return DiffOptions{
+		Stdout:         os.Stdout,
+		Stderr:         os.Stderr,
+		Format:         OutputFormatDiff,
 		UseColors:      true,
 		AddPrefix:      "+ ",
 		DeletePrefix:   "- ",

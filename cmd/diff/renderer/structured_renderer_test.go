@@ -190,11 +190,17 @@ func TestStructuredDiffRenderer_RenderDiffs(t *testing.T) {
 			testName := string(format) + "/" + fixture.name
 			t.Run(testName, func(t *testing.T) {
 				logger := tu.TestLogger(t, false)
-				renderer := NewStructuredDiffRenderer(logger, format)
 
 				var buf bytes.Buffer
 
-				err := renderer.RenderDiffs(&buf, fixture.diffs, fixture.errs)
+				opts := DefaultDiffOptions()
+				opts.Format = format
+				opts.Stdout = &buf
+				opts.Stderr = &bytes.Buffer{} // discard stderr for these tests
+
+				renderer := NewStructuredDiffRenderer(logger, opts)
+
+				err := renderer.RenderDiffs(fixture.diffs, fixture.errs)
 				if err != nil {
 					t.Fatalf("RenderDiffs() failed: %v", err)
 				}

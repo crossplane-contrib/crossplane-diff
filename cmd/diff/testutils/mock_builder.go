@@ -5,7 +5,6 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
-	"io"
 	"strings"
 
 	"github.com/crossplane-contrib/crossplane-diff/cmd/diff/renderer/types"
@@ -1249,39 +1248,28 @@ func (b *DiffProcessorBuilder) WithFailedInitialize(errMsg string) *DiffProcesso
 }
 
 // WithPerformDiff adds an implementation for the PerformDiff method.
-func (b *DiffProcessorBuilder) WithPerformDiff(fn func(context.Context, io.Writer, []*un.Unstructured, dtypes.CompositionProvider) (bool, error)) *DiffProcessorBuilder {
+func (b *DiffProcessorBuilder) WithPerformDiff(fn func(context.Context, []*un.Unstructured, dtypes.CompositionProvider) (bool, error)) *DiffProcessorBuilder {
 	b.mock.PerformDiffFn = fn
 	return b
 }
 
 // WithSuccessfulPerformDiff sets a successful PerformDiff implementation with no diffs.
 func (b *DiffProcessorBuilder) WithSuccessfulPerformDiff() *DiffProcessorBuilder {
-	return b.WithPerformDiff(func(context.Context, io.Writer, []*un.Unstructured, dtypes.CompositionProvider) (bool, error) {
+	return b.WithPerformDiff(func(context.Context, []*un.Unstructured, dtypes.CompositionProvider) (bool, error) {
 		return false, nil
 	})
 }
 
 // WithSuccessfulPerformDiffWithChanges sets a successful PerformDiff implementation with diffs.
 func (b *DiffProcessorBuilder) WithSuccessfulPerformDiffWithChanges() *DiffProcessorBuilder {
-	return b.WithPerformDiff(func(context.Context, io.Writer, []*un.Unstructured, dtypes.CompositionProvider) (bool, error) {
-		return true, nil
-	})
-}
-
-// WithDiffOutput sets a PerformDiff implementation that writes a specific output.
-func (b *DiffProcessorBuilder) WithDiffOutput(output string) *DiffProcessorBuilder {
-	return b.WithPerformDiff(func(_ context.Context, stdout io.Writer, _ []*un.Unstructured, _ dtypes.CompositionProvider) (bool, error) {
-		if stdout != nil {
-			_, _ = io.WriteString(stdout, output)
-		}
-
+	return b.WithPerformDiff(func(context.Context, []*un.Unstructured, dtypes.CompositionProvider) (bool, error) {
 		return true, nil
 	})
 }
 
 // WithFailedPerformDiff sets a failing PerformDiff implementation.
 func (b *DiffProcessorBuilder) WithFailedPerformDiff(errMsg string) *DiffProcessorBuilder {
-	return b.WithPerformDiff(func(context.Context, io.Writer, []*un.Unstructured, dtypes.CompositionProvider) (bool, error) {
+	return b.WithPerformDiff(func(context.Context, []*un.Unstructured, dtypes.CompositionProvider) (bool, error) {
 		return false, errors.New(errMsg)
 	})
 }

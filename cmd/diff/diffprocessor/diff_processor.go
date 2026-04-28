@@ -4,7 +4,6 @@ package diffprocessor
 import (
 	"context"
 	"fmt"
-	"io"
 	"maps"
 	"os"
 	"slices"
@@ -54,7 +53,7 @@ type RenderFunc func(ctx context.Context, log logging.Logger, in render.Inputs) 
 type DiffProcessor interface {
 	// PerformDiff processes resources using a composition provider function.
 	// Returns (hasDiffs, error) where hasDiffs indicates if any differences were detected.
-	PerformDiff(ctx context.Context, stdout io.Writer, resources []*un.Unstructured, compositionProvider types.CompositionProvider) (bool, error)
+	PerformDiff(ctx context.Context, resources []*un.Unstructured, compositionProvider types.CompositionProvider) (bool, error)
 
 	// DiffSingleResource processes a single resource and returns its diffs
 	DiffSingleResource(ctx context.Context, res *un.Unstructured, compositionProvider types.CompositionProvider) (map[string]*dt.ResourceDiff, error)
@@ -180,7 +179,7 @@ func (p *DefaultDiffProcessor) initializeSchemaValidator(ctx context.Context) er
 
 // PerformDiff processes resources using a composition provider function.
 // Returns (hasDiffs, error) where hasDiffs indicates if any differences were detected.
-func (p *DefaultDiffProcessor) PerformDiff(ctx context.Context, stdout io.Writer, resources []*un.Unstructured, compositionProvider types.CompositionProvider) (bool, error) {
+func (p *DefaultDiffProcessor) PerformDiff(ctx context.Context, resources []*un.Unstructured, compositionProvider types.CompositionProvider) (bool, error) {
 	p.config.Logger.Debug("Processing resources with composition provider", "count", len(resources))
 
 	if len(resources) == 0 {
@@ -220,17 +219,11 @@ func (p *DefaultDiffProcessor) PerformDiff(ctx context.Context, stdout io.Writer
 	}
 
 	// Always render (even if only errors exist) to ensure valid structured output
-	// The renderer will include errors in the structured output
-	err := p.diffRenderer.RenderDiffs(stdout, allDiffs, outputErrors)
+	// The renderer will include errors in the structured output and write them to stderr
+	err := p.diffRenderer.RenderDiffs(allDiffs, outputErrors)
 	if err != nil {
 		p.config.Logger.Debug("Failed to render diffs", "error", err)
 		errs = append(errs, errors.Wrap(err, "failed to render diffs"))
-	}
-
-	// Emit detailed errors to stderr for human visibility alongside structured output.
-	// This ensures CI logs show actual error details even when using JSON/YAML output.
-	for _, outputErr := range outputErrors {
-		_, _ = fmt.Fprintln(p.config.Stderr, outputErr.FormatError())
 	}
 
 	// Count only non-equal diffs as "having diffs".
@@ -469,6 +462,7 @@ func (p *DefaultDiffProcessor) diffSingleResourceInternal(ctx context.Context, r
 			p.config.Logger.Debug("Error detecting removed resources - failing XR", "resource", resourceID, "error", removalErr)
 			return nil, nil, errors.Wrap(removalErr, "cannot detect removed resources")
 		}
+
 		if len(removedDiffs) > 0 {
 			maps.Copy(diffs, removedDiffs)
 			p.config.Logger.Debug("Found removed resources", "resource", resourceID, "removedCount", len(removedDiffs))

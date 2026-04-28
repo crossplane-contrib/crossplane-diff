@@ -3,7 +3,6 @@ package renderer
 import (
 	"cmp"
 	"fmt"
-	"io"
 	"maps"
 	"slices"
 	"strings"
@@ -16,9 +15,10 @@ import (
 
 // DiffRenderer handles rendering diffs to output.
 type DiffRenderer interface {
-	// RenderDiffs formats and outputs diffs to the provided writer.
+	// RenderDiffs formats and outputs diffs.
+	// Diff output goes to DiffOptions.Stdout, errors go to DiffOptions.Stderr.
 	// The errs parameter contains any resource processing errors to include in output.
-	RenderDiffs(stdout io.Writer, diffs map[string]*dt.ResourceDiff, errs []dt.OutputError) error
+	RenderDiffs(diffs map[string]*dt.ResourceDiff, errs []dt.OutputError) error
 }
 
 // DefaultDiffRenderer implements the DiffRenderer interface.
@@ -50,14 +50,17 @@ func getKindName(d *dt.ResourceDiff) string {
 	return fmt.Sprintf("%s/%s", d.Gvk.Kind, d.ResourceName)
 }
 
-// RenderDiffs formats and prints the diffs to the provided writer.
-// For human-readable output, errors are written at the end after the summary.
-func (r *DefaultDiffRenderer) RenderDiffs(stdout io.Writer, diffs map[string]*dt.ResourceDiff, errs []dt.OutputError) error {
+// RenderDiffs formats and prints the diffs.
+// Diff output goes to r.diffOpts.Stdout, errors go to r.diffOpts.Stderr.
+func (r *DefaultDiffRenderer) RenderDiffs(diffs map[string]*dt.ResourceDiff, errs []dt.OutputError) error {
 	r.logger.Debug("Rendering diffs to output",
 		"diffCount", len(diffs),
 		"errorCount", len(errs),
 		"useColors", r.diffOpts.UseColors,
 		"compact", r.diffOpts.Compact)
+
+	stdout := r.diffOpts.Stdout
+	stderr := r.diffOpts.Stderr
 
 	// Sort the keys to ensure a consistent output order
 	d := slices.AppendSeq(make([]*dt.ResourceDiff, 0, len(diffs)), maps.Values(diffs))
@@ -157,10 +160,10 @@ func (r *DefaultDiffRenderer) RenderDiffs(stdout io.Writer, diffs map[string]*dt
 		}
 	}
 
-	// Write errors at the end (for human-readable output)
+	// Write errors to stderr following Unix conventions
 	for _, e := range errs {
-		if _, err := fmt.Fprintln(stdout, e.FormatError()); err != nil {
-			return errors.Wrap(err, "failed to write error to output")
+		if _, err := fmt.Fprintln(stderr, e.FormatError()); err != nil {
+			return errors.Wrap(err, "failed to write error to stderr")
 		}
 	}
 

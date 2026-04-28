@@ -19,7 +19,6 @@ package diffprocessor
 import (
 	"context"
 	"fmt"
-	"io"
 	"os"
 
 	xp "github.com/crossplane-contrib/crossplane-diff/cmd/diff/client/crossplane"
@@ -69,7 +68,7 @@ func (r *XRDiffResult) HasError() bool {
 type CompDiffProcessor interface {
 	// DiffComposition processes composition changes and shows impact on existing XRs.
 	// Returns (hasDiffs, error) where hasDiffs indicates if any differences were detected.
-	DiffComposition(ctx context.Context, stdout io.Writer, compositions []*un.Unstructured, namespace string) (bool, error)
+	DiffComposition(ctx context.Context, compositions []*un.Unstructured, namespace string) (bool, error)
 	Initialize(ctx context.Context) error
 	// Cleanup releases any resources held by the processor (e.g., Docker containers).
 	Cleanup(ctx context.Context) error
@@ -104,10 +103,11 @@ func NewCompDiffProcessor(xrProc DiffProcessor, compositionClient xp.Composition
 	config.SetDefaultFactories()
 
 	// Create diff renderer first (needed by DefaultCompDiffRenderer for human-readable output)
-	diffRenderer := config.Factories.DiffRenderer(config.Logger, config.GetDiffOptions())
+	diffOpts := config.GetDiffOptions()
+	diffRenderer := config.Factories.DiffRenderer(config.Logger, diffOpts)
 
 	// Create comp diff renderer using factory
-	compDiffRenderer := config.Factories.CompDiffRenderer(config.Logger, diffRenderer, config.Colorize)
+	compDiffRenderer := config.Factories.CompDiffRenderer(config.Logger, diffRenderer, diffOpts)
 
 	return &DefaultCompDiffProcessor{
 		compositionClient: compositionClient,
@@ -139,7 +139,7 @@ func (p *DefaultCompDiffProcessor) Cleanup(ctx context.Context) error {
 
 // DiffComposition processes composition changes and shows impact on existing XRs.
 // Returns (hasDiffs, error) where hasDiffs indicates if any differences were detected.
-func (p *DefaultCompDiffProcessor) DiffComposition(ctx context.Context, stdout io.Writer, compositions []*un.Unstructured, namespace string) (bool, error) {
+func (p *DefaultCompDiffProcessor) DiffComposition(ctx context.Context, compositions []*un.Unstructured, namespace string) (bool, error) {
 	p.config.Logger.Debug("Processing composition diff", "compositionCount", len(compositions), "namespace", namespace)
 
 	if len(compositions) == 0 {
@@ -208,14 +208,9 @@ func (p *DefaultCompDiffProcessor) DiffComposition(ctx context.Context, stdout i
 	}
 
 	// Always render output (even if all compositions failed) to ensure valid structured output
-	if err := p.compDiffRenderer.RenderCompDiff(stdout, output); err != nil {
+	// The renderer will include errors in the structured output and write them to stderr
+	if err := p.compDiffRenderer.RenderCompDiff(output); err != nil {
 		return hasDiffs, errors.Wrap(err, "failed to render composition diff")
-	}
-
-	// Emit detailed errors to stderr for human visibility alongside structured output.
-	// This ensures CI logs show actual error details even when using JSON/YAML output.
-	for _, err := range output.Errors {
-		_, _ = fmt.Fprintln(p.config.Stderr, err.FormatError())
 	}
 
 	// Check for XR processing errors after rendering (so users see the output first).

@@ -19,8 +19,6 @@ package main
 import (
 	"bytes"
 	"context"
-	"fmt"
-	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -435,19 +433,7 @@ func TestDiffCommand(t *testing.T) {
 			setupProcessor: func() dp.DiffProcessor {
 				return tu.NewMockDiffProcessor().
 					WithSuccessfulInitialize().
-					WithPerformDiff(func(_ context.Context, w io.Writer, _ []*un.Unstructured, _ types.CompositionProvider) (bool, error) {
-						// Generate a mock diff for our test
-						_, _ = fmt.Fprintf(w, `~ ComposedResource/test-xr-composed-resource
-{
-  "spec": {
-    "coolParam": "test-value",
-    "extraData": "extra-resource-data",
-    "replicas": 3
-  }
-}`)
-
-						return true, nil
-					}).
+					WithSuccessfulPerformDiffWithChanges().
 					Build()
 			},
 			setupLoader: func() *itu.MockLoader {
@@ -478,7 +464,9 @@ spec:
 					},
 				}
 			},
-			expectedOutput: "ComposedResource", // Should mention resource type
+			// Note: Output content is tested in integration tests with real processors.
+			// Mock processors don't produce output - they just return success/failure.
+			expectedOutput: "",
 			notExpected:    nil,
 			expectError:    false,
 		},
@@ -526,7 +514,7 @@ spec:
 			setupProcessor: func() dp.DiffProcessor {
 				return tu.NewMockDiffProcessor().
 					WithSuccessfulInitialize().
-					WithPerformDiff(func(_ context.Context, _ io.Writer, _ []*un.Unstructured, _ types.CompositionProvider) (bool, error) {
+					WithPerformDiff(func(_ context.Context, _ []*un.Unstructured, _ types.CompositionProvider) (bool, error) {
 						return false, errors.New("processing error")
 					}).
 					Build()
@@ -633,7 +621,7 @@ spec:
 			setupProcessor: func() dp.DiffProcessor {
 				return tu.NewMockDiffProcessor().
 					WithSuccessfulInitialize().
-					WithPerformDiff(func(_ context.Context, _ io.Writer, _ []*un.Unstructured, _ types.CompositionProvider) (bool, error) {
+					WithPerformDiff(func(_ context.Context, _ []*un.Unstructured, _ types.CompositionProvider) (bool, error) {
 						// For matching resources, we don't produce any output
 						return false, nil
 					}).
@@ -736,19 +724,7 @@ spec:
 			setupProcessor: func() dp.DiffProcessor {
 				return tu.NewMockDiffProcessor().
 					WithSuccessfulInitialize().
-					WithPerformDiff(func(_ context.Context, w io.Writer, _ []*un.Unstructured, _ types.CompositionProvider) (bool, error) {
-						// Generate output for a new resource
-						_, _ = fmt.Fprintf(w, `+++ ComposedResource/test-xr-composed-resource
-{
-  "spec": {
-    "coolParam": "test-value",
-    "extraData": "extra-resource-data",
-    "replicas": 3
-  }
-}`)
-
-						return true, nil
-					}).
+					WithSuccessfulPerformDiffWithChanges().
 					Build()
 			},
 			setupLoader: func() *itu.MockLoader {
@@ -778,7 +754,9 @@ spec:
 					},
 				}
 			},
-			expectedOutput: "+++ ComposedResource/test-xr-composed-resource", // Should show as new resource
+			// Note: Output content is tested in integration tests with real processors.
+			// Mock processors don't produce output - they just return success/failure.
+			expectedOutput: "",
 			expectError:    false,
 		},
 

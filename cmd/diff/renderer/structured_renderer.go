@@ -3,7 +3,6 @@ package renderer
 import (
 	"encoding/json"
 	"fmt"
-	"io"
 	"maps"
 	"slices"
 
@@ -154,21 +153,21 @@ type DownstreamChanges struct {
 // StructuredDiffRenderer renders diffs in structured formats (JSON/YAML).
 type StructuredDiffRenderer struct {
 	logger logging.Logger
-	format OutputFormat
+	opts   DiffOptions
 }
 
 // NewStructuredDiffRenderer creates a new structured renderer with the specified format.
-func NewStructuredDiffRenderer(logger logging.Logger, format OutputFormat) DiffRenderer {
+func NewStructuredDiffRenderer(logger logging.Logger, opts DiffOptions) DiffRenderer {
 	return &StructuredDiffRenderer{
 		logger: logger,
-		format: format,
+		opts:   opts,
 	}
 }
 
 // RenderDiffs renders the diffs in the configured structured format.
-func (r *StructuredDiffRenderer) RenderDiffs(stdout io.Writer, diffs map[string]*dt.ResourceDiff, errs []dt.OutputError) error {
+func (r *StructuredDiffRenderer) RenderDiffs(diffs map[string]*dt.ResourceDiff, errs []dt.OutputError) error {
 	r.logger.Debug("Rendering diffs in structured format",
-		"format", r.format,
+		"format", r.opts.Format,
 		"diffCount", len(diffs),
 		"errorCount", len(errs))
 
@@ -180,28 +179,35 @@ func (r *StructuredDiffRenderer) RenderDiffs(stdout io.Writer, diffs map[string]
 		err  error
 	)
 
-	switch r.format {
+	switch r.opts.Format {
 	case OutputFormatJSON:
 		data, err = json.MarshalIndent(output, "", "  ")
 	case OutputFormatYAML:
 		data, err = sigsyaml.Marshal(output)
 	case OutputFormatDiff:
-		return errors.Errorf("unsupported output format for structured renderer: %s", r.format)
+		return errors.Errorf("unsupported output format for structured renderer: %s", r.opts.Format)
 	}
 
 	if err != nil {
 		return errors.Wrap(err, "failed to marshal diff output")
 	}
 
-	_, err = stdout.Write(data)
+	_, err = r.opts.Stdout.Write(data)
 	if err != nil {
 		return errors.Wrap(err, "failed to write structured output")
 	}
 
 	// Add newline for cleaner terminal output
-	_, err = stdout.Write([]byte("\n"))
+	_, err = r.opts.Stdout.Write([]byte("\n"))
 	if err != nil {
 		return errors.Wrap(err, "failed to write newline")
+	}
+
+	// Write errors to stderr for human visibility (they're also included in the structured output)
+	for _, e := range errs {
+		if _, err := fmt.Fprintln(r.opts.Stderr, e.FormatError()); err != nil {
+			return errors.Wrap(err, "failed to write error to stderr")
+		}
 	}
 
 	return nil

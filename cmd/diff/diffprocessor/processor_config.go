@@ -49,6 +49,9 @@ type ProcessorConfig struct {
 	// FunctionCredentials holds Secret credentials to pass to Functions during rendering
 	FunctionCredentials []corev1.Secret
 
+	// Stdout is the writer for diff output (defaults to os.Stdout)
+	Stdout io.Writer
+
 	// Stderr is the writer for error output (defaults to os.Stderr)
 	Stderr io.Writer
 
@@ -80,7 +83,7 @@ type ComponentFactories struct {
 	DiffRenderer func(logger logging.Logger, diffOptions renderer.DiffOptions) renderer.DiffRenderer
 
 	// CompDiffRenderer creates a CompDiffRenderer for composition diffs
-	CompDiffRenderer func(logger logging.Logger, diffRenderer renderer.DiffRenderer, colorize bool) renderer.CompDiffRenderer
+	CompDiffRenderer func(logger logging.Logger, diffRenderer renderer.DiffRenderer, opts renderer.DiffOptions) renderer.CompDiffRenderer
 
 	// RequirementsProvider creates an ExtraResourceProvider
 	RequirementsProvider func(res k8.ResourceClient, def xp.EnvironmentClient, renderFunc RenderFunc, logger logging.Logger) *RequirementsProvider
@@ -166,6 +169,13 @@ func WithFunctionCredentials(creds []corev1.Secret) ProcessorOption {
 	}
 }
 
+// WithStdout sets the writer for diff output.
+func WithStdout(w io.Writer) ProcessorOption {
+	return func(config *ProcessorConfig) {
+		config.Stdout = w
+	}
+}
+
 // WithStderr sets the writer for error output.
 func WithStderr(w io.Writer) ProcessorOption {
 	return func(config *ProcessorConfig) {
@@ -242,6 +252,16 @@ func (c *ProcessorConfig) GetDiffOptions() renderer.DiffOptions {
 	opts.UseColors = c.Colorize
 	opts.Compact = c.Compact
 	opts.IgnorePaths = c.IgnorePaths
+	opts.Format = c.OutputFormat
+
+	// Use config's Stdout/Stderr if set, otherwise keep defaults (os.Stdout/os.Stderr)
+	if c.Stdout != nil {
+		opts.Stdout = c.Stdout
+	}
+
+	if c.Stderr != nil {
+		opts.Stderr = c.Stderr
+	}
 
 	return opts
 }
@@ -264,9 +284,7 @@ func (c *ProcessorConfig) SetDefaultFactories() {
 		// Set the appropriate renderer factory based on output format
 		switch c.OutputFormat {
 		case renderer.OutputFormatJSON, renderer.OutputFormatYAML:
-			c.Factories.DiffRenderer = func(logger logging.Logger, _ renderer.DiffOptions) renderer.DiffRenderer {
-				return renderer.NewStructuredDiffRenderer(logger, c.OutputFormat)
-			}
+			c.Factories.DiffRenderer = renderer.NewStructuredDiffRenderer
 		case renderer.OutputFormatDiff:
 			c.Factories.DiffRenderer = renderer.NewDiffRenderer
 		default:
@@ -278,8 +296,8 @@ func (c *ProcessorConfig) SetDefaultFactories() {
 		// Set the appropriate renderer factory based on output format
 		switch c.OutputFormat {
 		case renderer.OutputFormatJSON, renderer.OutputFormatYAML:
-			c.Factories.CompDiffRenderer = func(logger logging.Logger, _ renderer.DiffRenderer, _ bool) renderer.CompDiffRenderer {
-				return renderer.NewStructuredCompDiffRenderer(logger, c.OutputFormat)
+			c.Factories.CompDiffRenderer = func(logger logging.Logger, _ renderer.DiffRenderer, opts renderer.DiffOptions) renderer.CompDiffRenderer {
+				return renderer.NewStructuredCompDiffRenderer(logger, opts)
 			}
 		case renderer.OutputFormatDiff:
 			fallthrough
