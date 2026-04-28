@@ -252,7 +252,9 @@ func (c *ProcessorConfig) GetDiffOptions() renderer.DiffOptions {
 	opts.UseColors = c.Colorize
 	opts.Compact = c.Compact
 	opts.IgnorePaths = c.IgnorePaths
-	opts.Format = c.OutputFormat
+	if c.OutputFormat != "" {
+		opts.Format = c.OutputFormat
+	}
 
 	// Use config's Stdout/Stderr if set, otherwise keep defaults (os.Stdout/os.Stderr)
 	if c.Stdout != nil {

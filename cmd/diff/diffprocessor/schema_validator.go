@@ -257,23 +257,23 @@ func (v *DefaultSchemaValidator) ValidateScopeConstraints(ctx context.Context, r
 // It extracts lines starting with [x] (validation errors) and [!] (warnings/missing schemas),
 // stripping the prefixes for cleaner display.
 func extractValidationErrors(output string) string {
-	var errors []string
+	var validationErrs []string
 
 	for line := range strings.SplitSeq(output, "\n") {
 		line = strings.TrimSpace(line)
 		// Use CutPrefix to check for prefix and strip it in one operation
 		if cleaned, found := strings.CutPrefix(line, "[x]"); found {
-			errors = append(errors, strings.TrimSpace(cleaned))
+			validationErrs = append(validationErrs, strings.TrimSpace(cleaned))
 		} else if cleaned, found := strings.CutPrefix(line, "[!]"); found {
-			errors = append(errors, strings.TrimSpace(cleaned))
+			validationErrs = append(validationErrs, strings.TrimSpace(cleaned))
 		}
 	}
 
-	if len(errors) == 0 {
+	if len(validationErrs) == 0 {
 		return "schema validation failed"
 	}
 
-	return strings.Join(errors, "; ")
+	return strings.Join(validationErrs, "; ")
 }
 
 // stripCrossplaneManagedFields creates a copy of the resource with Crossplane-managed fields removed
