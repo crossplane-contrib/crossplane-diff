@@ -19,7 +19,6 @@ package renderer
 import (
 	"encoding/json"
 	"fmt"
-	"io"
 	"strings"
 
 	dt "github.com/crossplane-contrib/crossplane-diff/cmd/diff/renderer/types"
@@ -33,28 +32,31 @@ import (
 // Both human-readable and structured (JSON/YAML) renderers implement this interface.
 type CompDiffRenderer interface {
 	// RenderCompDiff renders the complete composition diff output.
-	// This includes composition changes, affected XR list, and impact analysis.
-	RenderCompDiff(stdout io.Writer, output *CompDiffOutput) error
+	// Diff output goes to DiffOptions.Stdout, errors go to DiffOptions.Stderr.
+	RenderCompDiff(output *CompDiffOutput) error
 }
 
 // DefaultCompDiffRenderer renders composition diffs in human-readable format.
 type DefaultCompDiffRenderer struct {
 	logger       logging.Logger
 	diffRenderer DiffRenderer
-	colorize     bool
+	opts         DiffOptions
 }
 
 // NewDefaultCompDiffRenderer creates a new human-readable composition diff renderer.
-func NewDefaultCompDiffRenderer(logger logging.Logger, diffRenderer DiffRenderer, colorize bool) CompDiffRenderer {
+func NewDefaultCompDiffRenderer(logger logging.Logger, diffRenderer DiffRenderer, opts DiffOptions) CompDiffRenderer {
 	return &DefaultCompDiffRenderer{
 		logger:       logger,
 		diffRenderer: diffRenderer,
-		colorize:     colorize,
+		opts:         opts,
 	}
 }
 
 // RenderCompDiff renders the composition diff in human-readable format.
-func (r *DefaultCompDiffRenderer) RenderCompDiff(stdout io.Writer, output *CompDiffOutput) error {
+// Diff output goes to r.opts.Stdout, errors go to r.opts.Stderr.
+func (r *DefaultCompDiffRenderer) RenderCompDiff(output *CompDiffOutput) error {
+	stdout := r.opts.Stdout
+
 	for i, comp := range output.Compositions {
 		if i > 0 {
 			if _, err := fmt.Fprint(stdout, "\n"+strings.Repeat("=", 80)+"\n\n"); err != nil {
@@ -63,7 +65,7 @@ func (r *DefaultCompDiffRenderer) RenderCompDiff(stdout io.Writer, output *CompD
 		}
 
 		// Render composition changes section
-		if err := r.renderCompositionChanges(stdout, &comp); err != nil {
+		if err := r.renderCompositionChanges(&comp); err != nil {
 			return err
 		}
 
@@ -73,13 +75,20 @@ func (r *DefaultCompDiffRenderer) RenderCompDiff(stdout io.Writer, output *CompD
 		}
 
 		// Render affected XRs list with status indicators
-		if err := r.renderAffectedResourcesList(stdout, &comp); err != nil {
+		if err := r.renderAffectedResourcesList(&comp); err != nil {
 			return err
 		}
 
 		// Render impact analysis (downstream diffs)
-		if err := r.renderImpactAnalysis(stdout, &comp); err != nil {
+		if err := r.renderImpactAnalysis(&comp); err != nil {
 			return err
+		}
+	}
+
+	// Write top-level errors to stderr
+	for _, e := range output.Errors {
+		if _, err := fmt.Fprintln(r.opts.Stderr, e.FormatError()); err != nil {
+			return errors.Wrap(err, "failed to write error to stderr")
 		}
 	}
 
@@ -87,7 +96,9 @@ func (r *DefaultCompDiffRenderer) RenderCompDiff(stdout io.Writer, output *CompD
 }
 
 // renderCompositionChanges renders the composition changes section.
-func (r *DefaultCompDiffRenderer) renderCompositionChanges(stdout io.Writer, comp *CompositionDiff) error {
+func (r *DefaultCompDiffRenderer) renderCompositionChanges(comp *CompositionDiff) error {
+	stdout := r.opts.Stdout
+
 	if _, err := fmt.Fprintf(stdout, "=== Composition Changes ===\n\n"); err != nil {
 		return errors.Wrap(err, "cannot write composition changes header")
 	}
@@ -113,7 +124,7 @@ func (r *DefaultCompDiffRenderer) renderCompositionChanges(stdout io.Writer, com
 		fmt.Sprintf("Composition/%s", comp.Name): comp.CompositionDiff,
 	}
 
-	if err := r.diffRenderer.RenderDiffs(stdout, diffs, nil); err != nil {
+	if err := r.diffRenderer.RenderDiffs(diffs, nil); err != nil {
 		return errors.Wrap(err, "cannot render composition diff")
 	}
 
@@ -125,7 +136,9 @@ func (r *DefaultCompDiffRenderer) renderCompositionChanges(stdout io.Writer, com
 }
 
 // renderAffectedResourcesList renders the affected XRs list with status indicators.
-func (r *DefaultCompDiffRenderer) renderAffectedResourcesList(stdout io.Writer, comp *CompositionDiff) error {
+func (r *DefaultCompDiffRenderer) renderAffectedResourcesList(comp *CompositionDiff) error {
+	stdout := r.opts.Stdout
+
 	if len(comp.ImpactAnalysis) == 0 {
 		// Check if all resources were filtered by policy
 		if comp.AffectedResources.FilteredByPolicy > 0 {
@@ -161,7 +174,9 @@ func (r *DefaultCompDiffRenderer) renderAffectedResourcesList(stdout io.Writer, 
 }
 
 // renderImpactAnalysis renders the impact analysis section with downstream diffs.
-func (r *DefaultCompDiffRenderer) renderImpactAnalysis(stdout io.Writer, comp *CompositionDiff) error {
+func (r *DefaultCompDiffRenderer) renderImpactAnalysis(comp *CompositionDiff) error {
+	stdout := r.opts.Stdout
+
 	if _, err := fmt.Fprintf(stdout, "=== Impact Analysis ===\n\n"); err != nil {
 		return errors.Wrap(err, "cannot write impact analysis header")
 	}
@@ -182,7 +197,7 @@ func (r *DefaultCompDiffRenderer) renderImpactAnalysis(stdout io.Writer, comp *C
 
 	// Render all diffs if we found some, or show a message if empty
 	if len(allDiffs) > 0 {
-		if err := r.diffRenderer.RenderDiffs(stdout, allDiffs, nil); err != nil {
+		if err := r.diffRenderer.RenderDiffs(allDiffs, nil); err != nil {
 			r.logger.Debug("Failed to render diffs", "error", err)
 			return errors.Wrap(err, "failed to render diffs")
 		}
@@ -208,7 +223,7 @@ func (r *DefaultCompDiffRenderer) buildXRStatusList(impacts []XRImpact) string {
 	colorRed := ""
 	colorReset := ""
 
-	if r.colorize {
+	if r.opts.UseColors {
 		colorGreen = dt.ColorGreen
 		colorYellow = dt.ColorYellow
 		colorRed = dt.ColorRed
@@ -255,19 +270,20 @@ func (r *DefaultCompDiffRenderer) buildXRStatusList(impacts []XRImpact) string {
 // StructuredCompDiffRenderer renders composition diffs in JSON/YAML format.
 type StructuredCompDiffRenderer struct {
 	logger logging.Logger
-	format OutputFormat
+	opts   DiffOptions
 }
 
 // NewStructuredCompDiffRenderer creates a new structured composition diff renderer.
-func NewStructuredCompDiffRenderer(logger logging.Logger, format OutputFormat) CompDiffRenderer {
+func NewStructuredCompDiffRenderer(logger logging.Logger, opts DiffOptions) CompDiffRenderer {
 	return &StructuredCompDiffRenderer{
 		logger: logger,
-		format: format,
+		opts:   opts,
 	}
 }
 
 // RenderCompDiff renders the composition diff in structured format (JSON/YAML).
-func (r *StructuredCompDiffRenderer) RenderCompDiff(stdout io.Writer, output *CompDiffOutput) error {
+// Diff output goes to r.opts.Stdout, errors go to r.opts.Stderr.
+func (r *StructuredCompDiffRenderer) RenderCompDiff(output *CompDiffOutput) error {
 	// Convert internal representation to JSON output structure
 	jsonOutput := r.buildStructuredCompOutput(output)
 
@@ -276,7 +292,7 @@ func (r *StructuredCompDiffRenderer) RenderCompDiff(stdout io.Writer, output *Co
 		err  error
 	)
 
-	switch r.format {
+	switch r.opts.Format {
 	case OutputFormatJSON:
 		data, err = json.MarshalIndent(jsonOutput, "", "  ")
 	case OutputFormatYAML:
@@ -284,16 +300,26 @@ func (r *StructuredCompDiffRenderer) RenderCompDiff(stdout io.Writer, output *Co
 	case OutputFormatDiff:
 		fallthrough
 	default:
-		return errors.Errorf("unsupported format for structured comp diff renderer: %s", r.format)
+		return errors.Errorf("unsupported format for structured comp diff renderer: %s", r.opts.Format)
 	}
 
 	if err != nil {
 		return errors.Wrap(err, "failed to marshal comp diff output")
 	}
 
-	_, err = stdout.Write(append(data, '\n'))
+	_, err = r.opts.Stdout.Write(append(data, '\n'))
+	if err != nil {
+		return errors.Wrap(err, "failed to write output")
+	}
 
-	return errors.Wrap(err, "failed to write output")
+	// Write errors to stderr for human visibility (they're also included in the structured output)
+	for _, e := range output.Errors {
+		if _, err := fmt.Fprintln(r.opts.Stderr, e.FormatError()); err != nil {
+			return errors.Wrap(err, "failed to write error to stderr")
+		}
+	}
+
+	return nil
 }
 
 // buildStructuredCompOutput converts internal CompDiffOutput to JSON-serializable structure.

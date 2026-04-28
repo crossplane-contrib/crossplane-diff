@@ -164,14 +164,19 @@ func TestDefaultDiffRenderer_RenderDiffs(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			logger := tu.TestLogger(t, false)
 
-			// Create a renderer
-			renderer := NewDiffRenderer(logger, tt.options)
-
 			// Create a buffer to capture output
 			var buffer bytes.Buffer
 
+			// Set the buffer as stdout in options
+			opts := tt.options
+			opts.Stdout = &buffer
+			opts.Stderr = &bytes.Buffer{} // discard stderr for these tests
+
+			// Create a renderer with options pointing to buffer
+			renderer := NewDiffRenderer(logger, opts)
+
 			// Call the method under test
-			err := renderer.RenderDiffs(&buffer, tt.diffs, nil)
+			err := renderer.RenderDiffs(tt.diffs, nil)
 			if err != nil {
 				t.Fatalf("RenderDiffs() failed with error: %v", err)
 			}
@@ -230,20 +235,26 @@ func TestDefaultDiffRenderer_RenderDiffs_WithErrors(t *testing.T) {
 	for name, tt := range tests {
 		t.Run(name, func(t *testing.T) {
 			logger := tu.TestLogger(t, false)
-			renderer := NewDiffRenderer(logger, DefaultDiffOptions())
 
-			var buffer bytes.Buffer
+			// Errors go to stderr now, so capture stderr
+			var stderr bytes.Buffer
 
-			err := renderer.RenderDiffs(&buffer, map[string]*dt.ResourceDiff{}, tt.errs)
+			opts := DefaultDiffOptions()
+			opts.Stdout = &bytes.Buffer{} // discard stdout
+			opts.Stderr = &stderr
+
+			renderer := NewDiffRenderer(logger, opts)
+
+			err := renderer.RenderDiffs(map[string]*dt.ResourceDiff{}, tt.errs)
 			if err != nil {
 				t.Fatalf("RenderDiffs() failed with error: %v", err)
 			}
 
-			output := buffer.String()
+			output := stderr.String()
 
 			for _, expectedMsg := range tt.expected {
 				if !strings.Contains(output, expectedMsg) {
-					t.Errorf("Expected output to contain %q but it didn't\nOutput: %s", expectedMsg, output)
+					t.Errorf("Expected stderr to contain %q but it didn't\nStderr: %s", expectedMsg, output)
 				}
 			}
 		})

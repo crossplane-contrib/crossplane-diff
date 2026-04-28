@@ -73,7 +73,7 @@ Examples:
 // AppContext is received via dependency injection - Kong resolves it through the provider chain:
 // ContextProvider (bound in CommonCmdFields.BeforeApply) -> provideRestConfig -> provideAppContext.
 func (c *CompCmd) AfterApply(ctx *kong.Context, log logging.Logger, appCtx *AppContext) error {
-	proc := makeDefaultCompProc(c, appCtx, log)
+	proc := makeDefaultCompProc(c, ctx, appCtx, log)
 
 	loader, err := ld.NewCompositeLoader(c.Files)
 	if err != nil {
@@ -86,7 +86,7 @@ func (c *CompCmd) AfterApply(ctx *kong.Context, log logging.Logger, appCtx *AppC
 	return nil
 }
 
-func makeDefaultCompProc(c *CompCmd, ctx *AppContext, log logging.Logger) dp.CompDiffProcessor {
+func makeDefaultCompProc(c *CompCmd, kongCtx *kong.Context, appCtx *AppContext, log logging.Logger) dp.CompDiffProcessor {
 	// Use provided namespace or default to "default"
 	namespace := c.Namespace
 	if namespace == "" {
@@ -99,17 +99,19 @@ func makeDefaultCompProc(c *CompCmd, ctx *AppContext, log logging.Logger) dp.Com
 		dp.WithLogger(log),
 		dp.WithRenderMutex(&globalRenderMutex),
 		dp.WithIncludeManual(c.IncludeManual),
+		dp.WithStdout(kongCtx.Stdout),
+		dp.WithStderr(kongCtx.Stderr),
 	)
 
 	// Create XR processor first (peer processor)
-	xrProc := dp.NewDiffProcessor(ctx.K8sClients, ctx.XpClients, opts...)
+	xrProc := dp.NewDiffProcessor(appCtx.K8sClients, appCtx.XpClients, opts...)
 
 	// Inject it into composition processor
-	return dp.NewCompDiffProcessor(xrProc, ctx.XpClients.Composition, opts...)
+	return dp.NewCompDiffProcessor(xrProc, appCtx.XpClients.Composition, opts...)
 }
 
 // Run executes the composition diff command.
-func (c *CompCmd) Run(k *kong.Context, log logging.Logger, appCtx *AppContext, proc dp.CompDiffProcessor, loader ld.Loader, exitCode *ExitCode) error {
+func (c *CompCmd) Run(_ *kong.Context, log logging.Logger, appCtx *AppContext, proc dp.CompDiffProcessor, loader ld.Loader, exitCode *ExitCode) error {
 	ctx, cancel, err := initializeAppContext(c.Timeout, appCtx, log)
 	if err != nil {
 		exitCode.Code = dp.ExitCodeToolError
@@ -144,7 +146,7 @@ func (c *CompCmd) Run(k *kong.Context, log logging.Logger, appCtx *AppContext, p
 		return errors.Wrap(err, "cannot load compositions")
 	}
 
-	hasDiffs, err := proc.DiffComposition(ctx, k.Stdout, compositions, c.Namespace)
+	hasDiffs, err := proc.DiffComposition(ctx, compositions, c.Namespace)
 
 	// Determine exit code based on result
 	exitCode.Code = dp.DetermineExitCode(err, hasDiffs)

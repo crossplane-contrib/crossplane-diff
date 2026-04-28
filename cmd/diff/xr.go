@@ -74,7 +74,7 @@ Examples:
 // AppContext is received via dependency injection - Kong resolves it through the provider chain:
 // ContextProvider (bound in CommonCmdFields.BeforeApply) -> provideRestConfig -> provideAppContext.
 func (c *XRCmd) AfterApply(ctx *kong.Context, log logging.Logger, appCtx *AppContext) error {
-	proc := makeDefaultXRProc(c, appCtx, log)
+	proc := makeDefaultXRProc(c, ctx, appCtx, log)
 
 	loader, err := makeDefaultXRLoader(c)
 	if err != nil {
@@ -87,7 +87,7 @@ func (c *XRCmd) AfterApply(ctx *kong.Context, log logging.Logger, appCtx *AppCon
 	return nil
 }
 
-func makeDefaultXRProc(c *XRCmd, ctx *AppContext, log logging.Logger) dp.DiffProcessor {
+func makeDefaultXRProc(c *XRCmd, kongCtx *kong.Context, appCtx *AppContext, log logging.Logger) dp.DiffProcessor {
 	// Use default namespace for processor options (not actually used for XR diffs)
 	namespace := "default"
 
@@ -96,9 +96,11 @@ func makeDefaultXRProc(c *XRCmd, ctx *AppContext, log logging.Logger) dp.DiffPro
 		dp.WithLogger(log),
 		dp.WithRenderMutex(&globalRenderMutex),
 		dp.WithEventualState(c.EventualState),
+		dp.WithStdout(kongCtx.Stdout),
+		dp.WithStderr(kongCtx.Stderr),
 	)
 
-	return dp.NewDiffProcessor(ctx.K8sClients, ctx.XpClients, opts...)
+	return dp.NewDiffProcessor(appCtx.K8sClients, appCtx.XpClients, opts...)
 }
 
 func makeDefaultXRLoader(c *XRCmd) (ld.Loader, error) {
@@ -106,7 +108,7 @@ func makeDefaultXRLoader(c *XRCmd) (ld.Loader, error) {
 }
 
 // Run executes the XR diff command.
-func (c *XRCmd) Run(k *kong.Context, log logging.Logger, appCtx *AppContext, proc dp.DiffProcessor, loader ld.Loader, exitCode *ExitCode) error {
+func (c *XRCmd) Run(_ *kong.Context, log logging.Logger, appCtx *AppContext, proc dp.DiffProcessor, loader ld.Loader, exitCode *ExitCode) error {
 	// the rest config here is provided by a function in main.go that's only invoked for commands that request it
 	// in their arguments.  that means we won't get "can't find kubeconfig" errors for cases where the config isn't asked for.
 
@@ -151,7 +153,7 @@ func (c *XRCmd) Run(k *kong.Context, log logging.Logger, appCtx *AppContext, pro
 		return errors.Wrap(err, "cannot initialize diff processor")
 	}
 
-	hasDiffs, err := proc.PerformDiff(ctx, k.Stdout, resources, appCtx.XpClients.Composition.FindMatchingComposition)
+	hasDiffs, err := proc.PerformDiff(ctx, resources, appCtx.XpClients.Composition.FindMatchingComposition)
 
 	// Determine exit code based on result
 	exitCode.Code = dp.DetermineExitCode(err, hasDiffs)

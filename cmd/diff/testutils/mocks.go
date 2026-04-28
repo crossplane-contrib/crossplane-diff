@@ -257,7 +257,7 @@ func (m *MockResourceInterface) ApplyStatus(_ context.Context, _ string, _ *un.U
 type MockDiffProcessor struct {
 	// Function fields for mocking behavior
 	InitializeFn         func(ctx context.Context) error
-	PerformDiffFn        func(ctx context.Context, stdout io.Writer, resources []*un.Unstructured, compositionProvider types.CompositionProvider) (bool, error)
+	PerformDiffFn        func(ctx context.Context, resources []*un.Unstructured, compositionProvider types.CompositionProvider) (bool, error)
 	DiffSingleResourceFn func(ctx context.Context, res *un.Unstructured, compositionProvider types.CompositionProvider) (map[string]*dt.ResourceDiff, error)
 	CleanupFn            func(ctx context.Context) error
 }
@@ -272,9 +272,9 @@ func (m *MockDiffProcessor) Initialize(ctx context.Context) error {
 }
 
 // PerformDiff implements the DiffProcessor.PerformDiff method.
-func (m *MockDiffProcessor) PerformDiff(ctx context.Context, stdout io.Writer, resources []*un.Unstructured, compositionProvider types.CompositionProvider) (bool, error) {
+func (m *MockDiffProcessor) PerformDiff(ctx context.Context, resources []*un.Unstructured, compositionProvider types.CompositionProvider) (bool, error) {
 	if m.PerformDiffFn != nil {
-		return m.PerformDiffFn(ctx, stdout, resources, compositionProvider)
+		return m.PerformDiffFn(ctx, resources, compositionProvider)
 	}
 
 	return false, nil
@@ -815,13 +815,13 @@ func (m *MockDiffCalculator) CalculateRemovedResourceDiffs(ctx context.Context, 
 
 // MockDiffRenderer provides a mock implementation for DiffRenderer.
 type MockDiffRenderer struct {
-	RenderDiffsFn func(io.Writer, map[string]*dt.ResourceDiff, []dt.OutputError) error
+	RenderDiffsFn func(map[string]*dt.ResourceDiff, []dt.OutputError) error
 }
 
 // RenderDiffs implements RenderDiffs from the DiffRenderer interface.
-func (m *MockDiffRenderer) RenderDiffs(w io.Writer, diffs map[string]*dt.ResourceDiff, errs []dt.OutputError) error {
+func (m *MockDiffRenderer) RenderDiffs(diffs map[string]*dt.ResourceDiff, errs []dt.OutputError) error {
 	if m.RenderDiffsFn != nil {
-		return m.RenderDiffsFn(w, diffs, errs)
+		return m.RenderDiffsFn(diffs, errs)
 	}
 
 	return nil

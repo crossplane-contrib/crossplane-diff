@@ -162,7 +162,7 @@ func TestDefaultSchemaValidator_ValidateResources(t *testing.T) {
 			composed:       []cpd.Unstructured{*composedResource1, *composedResource2},
 			preloadedCRDs:  []*extv1.CustomResourceDefinition{createCRDWithStringField(xrCRD)},
 			expectedErr:    true,
-			expectedErrMsg: "schema validation failed",
+			expectedErrMsg: "could not find CRD/XRD",
 		},
 	}
 
@@ -532,6 +532,55 @@ func TestDefaultSchemaValidator_ValidateResources_AppliesDefaults(t *testing.T) 
 	// Note: We do NOT verify that compositionRevisionRef is stripped from the original resource,
 	// because the stripping only happens on temporary copies used for scope validation.
 	// The compositionRevisionRef remains in the original resource, which is correct behavior.
+}
+
+func TestExtractValidationErrors(t *testing.T) {
+	tests := map[string]struct {
+		input    string
+		expected string
+	}{
+		"SingleValidationError": {
+			input:    "[x] schema validation error example.org/v1, my-xr : spec.region: Required value\nTotal 1 resources: 0 missing schemas, 0 success cases, 1 failure cases",
+			expected: "schema validation error example.org/v1, my-xr : spec.region: Required value",
+		},
+		"SingleMissingSchema": {
+			input:    "[!] could not find CRD/XRD for: other.org/v1, Kind=SomeResource\nTotal 1 resources: 1 missing schemas, 0 success cases, 0 failure cases",
+			expected: "could not find CRD/XRD for: other.org/v1, Kind=SomeResource",
+		},
+		"MultipleErrors": {
+			input:    "[x] schema validation error example.org/v1, my-xr : spec.region: Required value\n[!] could not find CRD/XRD for: other.org/v1\nTotal 2 resources: 1 missing schemas, 0 success cases, 1 failure cases",
+			expected: "schema validation error example.org/v1, my-xr : spec.region: Required value; could not find CRD/XRD for: other.org/v1",
+		},
+		"MixedWithSuccessLines": {
+			input:    "[✓] example.org/v1, good-xr validated successfully\n[x] schema validation error example.org/v1, bad-xr : spec.field: Invalid value\nTotal 2 resources: 0 missing schemas, 1 success cases, 1 failure cases",
+			expected: "schema validation error example.org/v1, bad-xr : spec.field: Invalid value",
+		},
+		"EmptyInput": {
+			input:    "",
+			expected: "schema validation failed",
+		},
+		"NoErrorsOnlySuccess": {
+			input:    "[✓] example.org/v1, my-xr validated successfully\nTotal 1 resources: 0 missing schemas, 1 success cases, 0 failure cases",
+			expected: "schema validation failed",
+		},
+		"WhitespaceHandling": {
+			input:    "  [x] error message with leading spaces  \n",
+			expected: "error message with leading spaces",
+		},
+		"MultipleValidationErrors": {
+			input:    "[x] error one\n[x] error two\n[x] error three",
+			expected: "error one; error two; error three",
+		},
+	}
+
+	for name, tt := range tests {
+		t.Run(name, func(t *testing.T) {
+			result := extractValidationErrors(tt.input)
+			if result != tt.expected {
+				t.Errorf("extractValidationErrors() = %q, want %q", result, tt.expected)
+			}
+		})
+	}
 }
 
 func TestDefaultSchemaValidator_ValidateScopeConstraints(t *testing.T) {

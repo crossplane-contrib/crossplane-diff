@@ -3,6 +3,7 @@ package renderer
 import (
 	"bytes"
 	"encoding/json"
+	"strings"
 	"testing"
 
 	dt "github.com/crossplane-contrib/crossplane-diff/cmd/diff/renderer/types"
@@ -190,11 +191,17 @@ func TestStructuredDiffRenderer_RenderDiffs(t *testing.T) {
 			testName := string(format) + "/" + fixture.name
 			t.Run(testName, func(t *testing.T) {
 				logger := tu.TestLogger(t, false)
-				renderer := NewStructuredDiffRenderer(logger, format)
 
 				var buf bytes.Buffer
 
-				err := renderer.RenderDiffs(&buf, fixture.diffs, fixture.errs)
+				opts := DefaultDiffOptions()
+				opts.Format = format
+				opts.Stdout = &buf
+				opts.Stderr = &bytes.Buffer{} // discard stderr for these tests
+
+				renderer := NewStructuredDiffRenderer(logger, opts)
+
+				err := renderer.RenderDiffs(fixture.diffs, fixture.errs)
 				if err != nil {
 					t.Fatalf("RenderDiffs() failed: %v", err)
 				}
@@ -246,5 +253,66 @@ func TestStructuredDiffRenderer_RenderDiffs(t *testing.T) {
 				}
 			})
 		}
+	}
+}
+
+// TestStructuredDiffRenderer_RenderDiffs_ErrorsToStderr verifies that errors are
+// written to stderr for human visibility in addition to being included in the
+// structured output for machine parsing.
+func TestStructuredDiffRenderer_RenderDiffs_ErrorsToStderr(t *testing.T) {
+	errs := []dt.OutputError{
+		{ResourceID: "example.org/v1/XResource/my-xr", Message: "failed to render XR: missing composition"},
+		{Message: "cluster connection timeout"},
+	}
+
+	for _, format := range []OutputFormat{OutputFormatJSON, OutputFormatYAML} {
+		t.Run(string(format), func(t *testing.T) {
+			logger := tu.TestLogger(t, false)
+
+			var (
+				stdout bytes.Buffer
+				stderr bytes.Buffer
+			)
+
+			opts := DefaultDiffOptions()
+			opts.Format = format
+			opts.Stdout = &stdout
+			opts.Stderr = &stderr
+
+			renderer := NewStructuredDiffRenderer(logger, opts)
+
+			err := renderer.RenderDiffs(map[string]*dt.ResourceDiff{}, errs)
+			if err != nil {
+				t.Fatalf("RenderDiffs() failed: %v", err)
+			}
+
+			// Verify errors are in stderr
+			stderrOut := stderr.String()
+			for _, e := range errs {
+				if !strings.Contains(stderrOut, e.FormatError()) {
+					t.Errorf("Expected stderr to contain %q, got: %q", e.FormatError(), stderrOut)
+				}
+			}
+
+			// Verify errors are ALSO in structured output (stdout)
+			var output StructuredDiffOutput
+
+			switch format {
+			case OutputFormatJSON:
+				if err := json.Unmarshal(stdout.Bytes(), &output); err != nil {
+					t.Fatalf("Failed to parse JSON output: %v\nOutput: %s", err, stdout.String())
+				}
+			case OutputFormatYAML:
+				if err := sigsyaml.Unmarshal(stdout.Bytes(), &output); err != nil {
+					t.Fatalf("Failed to parse YAML output: %v\nOutput: %s", err, stdout.String())
+				}
+			case OutputFormatDiff:
+				t.Fatal("OutputFormatDiff should not be used with StructuredDiffRenderer")
+			}
+
+			if diff := cmp.Diff(errs, output.Errors); diff != "" {
+				t.Errorf("Structured output errors mismatch (-want +got):\n%s", diff)
+			}
+		})
 	}
 }

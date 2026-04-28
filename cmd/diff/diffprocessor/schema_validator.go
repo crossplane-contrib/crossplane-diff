@@ -1,8 +1,11 @@
 package diffprocessor
 
 import (
+	"bytes"
 	"context"
 	"fmt"
+	"io"
+	"strings"
 
 	xp "github.com/crossplane-contrib/crossplane-diff/cmd/diff/client/crossplane"
 	k8 "github.com/crossplane-contrib/crossplane-diff/cmd/diff/client/kubernetes"
@@ -103,17 +106,22 @@ func (v *DefaultSchemaValidator) ValidateResources(ctx context.Context, xr *un.U
 		return errors.Wrap(err, "unable to ensure CRDs")
 	}
 
-	// Create a logger writer to capture output
-	loggerWriter := loggerwriter.NewLoggerWriter(v.logger)
+	// Create a buffer to capture validation output for error messages,
+	// and a MultiWriter to also send output to debug logs
+	var validationOutput bytes.Buffer
+
+	multiWriter := io.MultiWriter(&validationOutput, loggerwriter.NewLoggerWriter(v.logger))
 
 	// Note: SchemaValidation applies defaults IN-PLACE to resources, so we must pass
 	// the original resources (not sanitized copies) to get defaults applied.
 	// We strip Crossplane-managed fields AFTER validation for cleaner error messages.
 	v.logger.Debug("Performing schema validation", "resourceCount", len(resources))
 
-	err = validate.SchemaValidation(ctx, resources, v.schemaClient.GetAllCRDs(), true, true, loggerWriter)
+	err = validate.SchemaValidation(ctx, resources, v.schemaClient.GetAllCRDs(), true, true, multiWriter)
 	if err != nil {
-		return NewSchemaValidationError("", "schema validation failed", err)
+		// Parse and extract only the error lines from validation output
+		details := extractValidationErrors(validationOutput.String())
+		return NewSchemaValidationError("", details, err)
 	}
 
 	// Strip Crossplane-managed fields from resources after validation
@@ -243,6 +251,29 @@ func (v *DefaultSchemaValidator) ValidateScopeConstraints(ctx context.Context, r
 	}
 
 	return nil
+}
+
+// extractValidationErrors parses validation output and returns clean error messages.
+// It extracts lines starting with [x] (validation errors) and [!] (warnings/missing schemas),
+// stripping the prefixes for cleaner display.
+func extractValidationErrors(output string) string {
+	var validationErrs []string
+
+	for line := range strings.SplitSeq(output, "\n") {
+		line = strings.TrimSpace(line)
+		// Use CutPrefix to check for prefix and strip it in one operation
+		if cleaned, found := strings.CutPrefix(line, "[x]"); found {
+			validationErrs = append(validationErrs, strings.TrimSpace(cleaned))
+		} else if cleaned, found := strings.CutPrefix(line, "[!]"); found {
+			validationErrs = append(validationErrs, strings.TrimSpace(cleaned))
+		}
+	}
+
+	if len(validationErrs) == 0 {
+		return "schema validation failed"
+	}
+
+	return strings.Join(validationErrs, "; ")
 }
 
 // stripCrossplaneManagedFields creates a copy of the resource with Crossplane-managed fields removed

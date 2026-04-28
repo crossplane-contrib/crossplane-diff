@@ -20,7 +20,6 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"io"
 	"strings"
 	"testing"
 
@@ -254,19 +253,24 @@ func TestDefaultCompDiffProcessor_DiffComposition(t *testing.T) {
 
 			// Create mock XR processor
 			mockXRProc := &tu.MockDiffProcessor{
-				PerformDiffFn: func(_ context.Context, stdout io.Writer, _ []*un.Unstructured, _ types.CompositionProvider) (bool, error) {
-					_, err := stdout.Write([]byte("Mock XR diff output"))
-					return true, err
+				PerformDiffFn: func(_ context.Context, _ []*un.Unstructured, _ types.CompositionProvider) (bool, error) {
+					return true, nil
 				},
 			}
 
 			// Create processor using constructor to ensure all fields are initialized
 			logger := tu.TestLogger(t, false)
+
+			// Create stdout buffer first so it can be set in config
+			var stdout bytes.Buffer
+
 			config := ProcessorConfig{
 				Namespace: tt.namespace,
 				Colorize:  false,
 				Compact:   false,
 				Logger:    logger,
+				Stdout:    &stdout,         // Set stdout in config so renderers can access it
+				Stderr:    &bytes.Buffer{}, // Discard stderr for tests
 				RenderFunc: func(_ context.Context, _ logging.Logger, in render.Inputs) (render.Outputs, error) {
 					return render.Outputs{
 						CompositeResource: in.CompositeResource,
@@ -274,8 +278,9 @@ func TestDefaultCompDiffProcessor_DiffComposition(t *testing.T) {
 				},
 			}
 			config.SetDefaultFactories()
-			diffRenderer := config.Factories.DiffRenderer(logger, config.GetDiffOptions())
-			compDiffRenderer := config.Factories.CompDiffRenderer(logger, diffRenderer, config.Colorize)
+			diffOpts := config.GetDiffOptions()
+			diffRenderer := config.Factories.DiffRenderer(logger, diffOpts)
+			compDiffRenderer := config.Factories.CompDiffRenderer(logger, diffRenderer, diffOpts)
 
 			processor := &DefaultCompDiffProcessor{
 				compositionClient: xpClients.Composition,
@@ -284,9 +289,7 @@ func TestDefaultCompDiffProcessor_DiffComposition(t *testing.T) {
 				compDiffRenderer:  compDiffRenderer,
 			}
 
-			var stdout bytes.Buffer
-
-			_, err := processor.DiffComposition(ctx, &stdout, tt.compositions, tt.namespace)
+			_, err := processor.DiffComposition(ctx, tt.compositions, tt.namespace)
 
 			if (err != nil) != tt.wantErr {
 				t.Errorf("DiffComposition() error = %v, wantErr %v", err, tt.wantErr)
@@ -696,10 +699,8 @@ func TestDefaultCompDiffProcessor_DiffComposition_StderrErrorOutput(t *testing.T
 		WithStderr(&stderrBuf), // Use WithStderr to inject test buffer
 	)
 
-	var stdout bytes.Buffer
-
 	// Run the diff - should succeed but report XR errors
-	_, err := processor.DiffComposition(ctx, &stdout, []*un.Unstructured{
+	_, err := processor.DiffComposition(ctx, []*un.Unstructured{
 		tu.NewComposition("test-composition").
 			WithCompositeTypeRef("example.org/v1", "XResource").
 			WithPipelineMode().

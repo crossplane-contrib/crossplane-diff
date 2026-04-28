@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"io"
 	"strings"
 	"testing"
 
@@ -172,19 +171,10 @@ func TestDefaultDiffProcessor_PerformDiff(t *testing.T) {
 			},
 			resources:     []*un.Unstructured{resource1},
 			processorOpts: testProcessorOptions(t),
-			verifyOutput: func(t *testing.T, output string) {
-				t.Helper()
-				// Verify that the error message was written to stdout
-				// Format: ERROR: {ResourceID}: {Message}
-				if !strings.Contains(output, "ERROR: XR1/my-xr-1:") {
-					t.Errorf("Expected stdout to contain error message, got: %s", output)
-				}
-				// Also verify it contains the composition not found error
-				if !strings.Contains(output, "composition not found") {
-					t.Errorf("Expected stdout to contain 'composition not found' error detail, got: %s", output)
-				}
-			},
-			want: errors.New("unable to process resource XR1/my-xr-1: cannot get composition: composition not found"),
+			// Note: Error output now goes to stderr (see TestDefaultDiffProcessor_PerformDiff_StderrErrorOutput)
+			// This test verifies the error return value, not stderr output
+			verifyOutput: nil,
+			want:         errors.New("unable to process resource XR1/my-xr-1: cannot get composition: composition not found"),
 		},
 		"MultipleResourceErrors": {
 			setupMocks: func() (k8.Clients, xp.Clients) {
@@ -214,23 +204,9 @@ func TestDefaultDiffProcessor_PerformDiff(t *testing.T) {
 			},
 			resources:     []*un.Unstructured{resource1, resource2},
 			processorOpts: testProcessorOptions(t),
-			verifyOutput: func(t *testing.T, output string) {
-				t.Helper()
-				// Verify that error messages for both resources were written to stdout
-				// Format: ERROR: {ResourceID}: {Message}
-				if !strings.Contains(output, "ERROR: XR1/my-xr-1:") {
-					t.Errorf("Expected stdout to contain error message for my-xr-1, got: %s", output)
-				}
-
-				if !strings.Contains(output, "ERROR: XR1/my-xr-2:") {
-					t.Errorf("Expected stdout to contain error message for my-xr-2, got: %s", output)
-				}
-				// Both should contain the composition not found error
-				expectedCount := strings.Count(output, "composition not found")
-				if expectedCount < 2 {
-					t.Errorf("Expected stdout to contain 'composition not found' at least twice, found %d times in: %s", expectedCount, output)
-				}
-			},
+			// Note: Error output now goes to stderr (see TestDefaultDiffProcessor_PerformDiff_StderrErrorOutput)
+			// This test verifies the error return value, not stderr output
+			verifyOutput: nil,
 			want: errors.New("[unable to process resource XR1/my-xr-1: cannot get composition: composition not found, " +
 				"unable to process resource XR1/my-xr-2: cannot get composition: composition not found]"),
 		},
@@ -481,10 +457,13 @@ func TestDefaultDiffProcessor_PerformDiff(t *testing.T) {
 					}
 				}),
 				// Override the diff renderer factory to produce actual output
-				WithDiffRendererFactory(func(logging.Logger, renderer.DiffOptions) renderer.DiffRenderer {
+				// The factory receives DiffOptions which contains Stdout where output should be written
+				WithDiffRendererFactory(func(_ logging.Logger, opts renderer.DiffOptions) renderer.DiffRenderer {
 					return &tu.MockDiffRenderer{
-						RenderDiffsFn: func(w io.Writer, _ map[string]*dt.ResourceDiff, _ []dt.OutputError) error {
-							// Write a simple summary to the output
+						RenderDiffsFn: func(_ map[string]*dt.ResourceDiff, _ []dt.OutputError) error {
+							// Write a simple summary to the output via opts.Stdout
+							w := opts.Stdout
+
 							_, err := fmt.Fprintln(w, "Changes will be applied to 2 resources:")
 							if err != nil {
 								return err
@@ -615,17 +594,20 @@ func TestDefaultDiffProcessor_PerformDiff(t *testing.T) {
 			// Create components for testing
 			k8sClients, xpClients := tt.setupMocks()
 
-			// Create the diff processor
-			processor := NewDiffProcessor(k8sClients, xpClients, tt.processorOpts...)
-
-			// Create a dummy writer for stdout
+			// Create stdout buffer and add it to processor options so renderers can access it
 			var stdout bytes.Buffer
+
+			opts := append([]ProcessorOption{}, tt.processorOpts...)
+			opts = append(opts, WithStdout(&stdout))
+
+			// Create the diff processor
+			processor := NewDiffProcessor(k8sClients, xpClients, opts...)
 
 			// Create a mock composition provider that uses the same mock composition client
 			compositionProvider := func(ctx context.Context, res *un.Unstructured) (*apiextensionsv1.Composition, error) {
 				return xpClients.Composition.FindMatchingComposition(ctx, res)
 			}
-			_, err := processor.PerformDiff(ctx, &stdout, tt.resources, compositionProvider)
+			_, err := processor.PerformDiff(ctx, tt.resources, compositionProvider)
 
 			// Check output if verification function is provided (do this first, before error checks)
 			if tt.verifyOutput != nil {
@@ -695,16 +677,13 @@ func TestDefaultDiffProcessor_PerformDiff_StderrErrorOutput(t *testing.T) {
 		)...,
 	)
 
-	// Create a dummy writer for stdout
-	var stdout bytes.Buffer
-
 	// Create composition provider using mock client
 	compositionProvider := func(ctx context.Context, res *un.Unstructured) (*apiextensionsv1.Composition, error) {
 		return xpClients.Composition.FindMatchingComposition(ctx, res)
 	}
 
 	// Run the diff
-	_, err := processor.PerformDiff(ctx, &stdout, []*un.Unstructured{resource}, compositionProvider)
+	_, err := processor.PerformDiff(ctx, []*un.Unstructured{resource}, compositionProvider)
 
 	// Should return an error
 	if err == nil {
@@ -2503,8 +2482,8 @@ func TestDefaultDiffProcessor_DiffSingleResource_WithObservedResources(t *testin
 			wantObservedInRender: true,
 			wantObservedCount:    0, // Should pass empty list when fetch fails
 			verifyObservedPassed: true,
-			wantErr:              true,                         // Should return partial error so user knows removal detection failed
-			wantErrContain:       "cannot get resource tree",   // The resource tree error is now surfaced
+			wantErr:              true,                       // Should return partial error so user knows removal detection failed
+			wantErrContain:       "cannot get resource tree", // The resource tree error is now surfaced
 		},
 	}
 

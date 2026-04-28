@@ -1,6 +1,9 @@
 package diffprocessor
 
 import (
+	"bytes"
+	"io"
+	"os"
 	"testing"
 
 	xp "github.com/crossplane-contrib/crossplane-diff/cmd/diff/client/crossplane"
@@ -100,6 +103,66 @@ func TestDiffOptions(t *testing.T) {
 	}
 }
 
+// TestGetDiffOptions_PropagatesStdoutStderrFormat verifies that when a ProcessorConfig
+// has Stdout, Stderr, and OutputFormat set, those values flow through to the returned
+// DiffOptions. When Stdout/Stderr are nil, the defaults (os.Stdout/os.Stderr) must be
+// preserved.
+func TestGetDiffOptions_PropagatesStdoutStderrFormat(t *testing.T) {
+	t.Run("CustomWritersAndFormatPropagate", func(t *testing.T) {
+		var (
+			stdout bytes.Buffer
+			stderr bytes.Buffer
+		)
+
+		config := ProcessorConfig{
+			Colorize:     true,
+			Stdout:       &stdout,
+			Stderr:       &stderr,
+			OutputFormat: renderer.OutputFormatJSON,
+		}
+
+		got := config.GetDiffOptions()
+
+		if got.Stdout != io.Writer(&stdout) {
+			t.Errorf("Expected Stdout to be the injected buffer, got: %v", got.Stdout)
+		}
+
+		if got.Stderr != io.Writer(&stderr) {
+			t.Errorf("Expected Stderr to be the injected buffer, got: %v", got.Stderr)
+		}
+
+		if got.Format != renderer.OutputFormatJSON {
+			t.Errorf("Expected Format to be %q, got %q", renderer.OutputFormatJSON, got.Format)
+		}
+	})
+
+	t.Run("ZeroValuesKeepDefaults", func(t *testing.T) {
+		config := ProcessorConfig{
+			Colorize: true,
+			// Stdout, Stderr, and OutputFormat intentionally left at zero value
+		}
+
+		got := config.GetDiffOptions()
+
+		// When the config's Stdout/Stderr are nil, DefaultDiffOptions() defaults
+		// (os.Stdout/os.Stderr) should be preserved.
+		if got.Stdout != io.Writer(os.Stdout) {
+			t.Errorf("Expected default os.Stdout when config.Stdout is nil, got: %v", got.Stdout)
+		}
+
+		if got.Stderr != io.Writer(os.Stderr) {
+			t.Errorf("Expected default os.Stderr when config.Stderr is nil, got: %v", got.Stderr)
+		}
+
+		// When the config's OutputFormat is the zero value (""), DefaultDiffOptions()
+		// default (OutputFormatDiff) should be preserved rather than overwritten with "".
+		if got.Format != renderer.OutputFormatDiff {
+			t.Errorf("Expected default Format %q when config.OutputFormat is empty, got %q",
+				renderer.OutputFormatDiff, got.Format)
+		}
+	})
+}
+
 func TestWithOptions(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -161,5 +224,27 @@ func TestWithOptions(t *testing.T) {
 				t.Errorf("Compact mismatch (-want +got):\n%s", diff)
 			}
 		})
+	}
+}
+
+// TestWithStdoutStderr verifies that WithStdout and WithStderr set the
+// corresponding writers on the ProcessorConfig.
+func TestWithStdoutStderr(t *testing.T) {
+	var (
+		stdout bytes.Buffer
+		stderr bytes.Buffer
+	)
+
+	config := ProcessorConfig{}
+
+	WithStdout(&stdout)(&config)
+	WithStderr(&stderr)(&config)
+
+	if config.Stdout != io.Writer(&stdout) {
+		t.Errorf("Expected config.Stdout to be the injected buffer, got: %v", config.Stdout)
+	}
+
+	if config.Stderr != io.Writer(&stderr) {
+		t.Errorf("Expected config.Stderr to be the injected buffer, got: %v", config.Stderr)
 	}
 }
