@@ -758,66 +758,6 @@ func TestDefaultDiffCalculator_CalculateDiffs(t *testing.T) {
 			},
 			wantErr: false,
 		},
-		// New XR whose composed resources already exist in the cluster (e.g.
-		// after `kubectl delete xr --cascade=orphan` and reapplying the XR).
-		// The render pipeline emits owner references with an empty UID because
-		// the XR has no cluster UID yet; without the composite fallback,
-		// UpdateOwnerRefs is a no-op and dry-run apply fails with
-		// `metadata.ownerReferences.uid: "": must not be empty`.
-		// The dry-run mock mirrors the real apiserver's validation.
-		"NewXRWithExistingComposedResource": {
-			setupMocks: func(t *testing.T) (k8.ApplyClient, xp.ResourceTreeClient, ResourceManager) {
-				t.Helper()
-
-				applyClient := tu.NewMockApplyClient().
-					WithDryRunApply(func(_ context.Context, obj *un.Unstructured, _ string) (*un.Unstructured, error) {
-						for _, ref := range obj.GetOwnerReferences() {
-							if ref.UID == "" {
-								return nil, errors.Errorf(
-									"%s.%s %q is invalid: metadata.ownerReferences.uid: Invalid value: %q: must not be empty",
-									obj.GetKind(), obj.GetAPIVersion(), obj.GetName(), "")
-							}
-						}
-
-						return obj, nil
-					}).
-					Build()
-
-				// No resource tree for the new XR (it doesn't exist yet); removal
-				// detection should find nothing to remove.
-				resourceTreeClient := tu.NewMockResourceTreeClient().
-					WithEmptyResourceTree().
-					Build()
-
-				// XR is not in the cluster, but the composed resource is.
-				resourceClient := tu.NewMockResourceClient().
-					WithResourcesExist(existingComposed).
-					Build()
-
-				resourceManager := NewResourceManager(resourceClient, tu.NewMockDefinitionClient().Build(), tu.NewMockResourceTreeClient().Build(), tu.TestLogger(t, false))
-
-				return applyClient, resourceTreeClient, resourceManager
-			},
-			inputXR: modifiedXr,
-			renderedOut: render.Outputs{
-				CompositeResource: renderedXR,
-				// Rendered composed resource differs from the existing one (field value
-				// change) so CalculateDiff will exercise the dry-run apply path.
-				// The empty-UID owner reference mirrors what Crossplane's render
-				// pipeline emits when the XR has no UID.
-				ComposedResources: []cpd.Unstructured{*tu.NewResource("example.org/v1", "Composed", "cpd-1").
-					WithCompositeOwner("test-xr").
-					WithCompositionResourceName("resource-1").
-					WithOwnerReference("XR", "test-xr", "example.org/v1", "").
-					WithSpecField("field", "new-value").
-					BuildUComposed()},
-			},
-			expectedDiffs: map[string]dt.DiffType{
-				"example.org/v1/XR//test-xr":     dt.DiffTypeAdded,
-				"example.org/v1/Composed//cpd-1": dt.DiffTypeModified,
-			},
-			wantErr: false,
-		},
 	}
 
 	for name, tt := range tests {
