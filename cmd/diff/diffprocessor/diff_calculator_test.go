@@ -1423,3 +1423,29 @@ func TestDefaultDiffCalculator_preserveExistingResourceIdentity(t *testing.T) {
 		})
 	}
 }
+
+func TestCalculateNonRemovalDiffs_NilCompositeResource(t *testing.T) {
+	calculator := &DefaultDiffCalculator{
+		logger: tu.TestLogger(t, false),
+	}
+
+	xr := cmp.New()
+	xr.SetAPIVersion("example.org/v1")
+	xr.SetKind("XMyResource")
+	xr.SetName("test-xr")
+
+	_, _, err := calculator.CalculateNonRemovalDiffs(
+		t.Context(),
+		xr,
+		nil,
+		render.Outputs{CompositeResource: nil},
+	)
+	if err == nil {
+		t.Fatal("expected error when CompositeResource is nil, got nil")
+	}
+
+	want := "render produced no composite resource (possible fatal pipeline error)"
+	if err.Error() != want {
+		t.Errorf("error message = %q, want %q", err.Error(), want)
+	}
+}

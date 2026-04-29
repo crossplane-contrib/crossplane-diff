@@ -212,6 +212,10 @@ func (c *DefaultDiffCalculator) CalculateNonRemovalDiffs(ctx context.Context, xr
 	renderedResources := make(map[string]bool)
 
 	// Determine if this is a nested XR or root XR, and select the appropriate XR to diff
+	if desired.CompositeResource == nil {
+		return nil, nil, errors.New("render produced no composite resource (possible fatal pipeline error)")
+	}
+
 	renderedXR := desired.CompositeResource.GetUnstructured()
 
 	var (

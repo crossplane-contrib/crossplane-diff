@@ -1120,7 +1120,7 @@ func (p *DefaultDiffProcessor) RenderToStableState(
 		}
 
 		// Check for fatal render errors (no requirements to continue with)
-		if renderErr != nil && newReqCount == 0 && len(output.Requirements) == 0 {
+		if renderErr != nil && newReqCount == 0 {
 			return render.Outputs{}, errors.Wrap(renderErr, "cannot render resources")
 		}
 

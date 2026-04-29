@@ -12,7 +12,6 @@ import (
 	un "k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/util/uuid"
-	"k8s.io/utils/ptr"
 
 	"github.com/crossplane/crossplane-runtime/v2/pkg/errors"
 	"github.com/crossplane/crossplane-runtime/v2/pkg/logging"
@@ -419,7 +418,7 @@ func (m *DefaultResourceManager) updateOwnerRefsForClaim(claim *un.Unstructured,
 		// Ensure Claims are never controller owners
 		if ref.Kind == claim.GetKind() && ref.Name == claim.GetName() {
 			if ref.Controller != nil && *ref.Controller {
-				ref.Controller = ptr.To(false)
+				ref.Controller = new(false)
 				m.logger.Debug("Set Controller to false for claim owner reference",
 					"refKind", ref.Kind,
 					"refName", ref.Name)

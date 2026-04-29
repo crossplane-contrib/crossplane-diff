@@ -25,9 +25,11 @@ import (
 	"github.com/alecthomas/kong"
 	dp "github.com/crossplane-contrib/crossplane-diff/cmd/diff/diffprocessor"
 	"github.com/crossplane-contrib/crossplane-diff/cmd/diff/versioncmd"
+	"github.com/go-logr/logr"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
+	"sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 
 	"github.com/crossplane/crossplane-runtime/v2/pkg/logging"
@@ -111,7 +113,9 @@ func (c *CommonCmdFields) GetKubeContext() KubeContext {
 }
 
 func (v verboseFlag) BeforeApply(ctx *kong.Context) error { //nolint:unparam // BeforeApply requires this signature.
-	logger := logging.NewLogrLogger(zap.New(zap.UseDevMode(true)))
+	zapLogger := zap.New(zap.UseDevMode(true))
+	log.SetLogger(zapLogger)
+	logger := logging.NewLogrLogger(zapLogger)
 	ctx.BindTo(logger, (*logging.Logger)(nil))
 
 	return nil
@@ -142,6 +146,8 @@ type cli struct {
 }
 
 func main() {
+	log.SetLogger(logr.Discard())
+
 	logger := logging.NewNopLogger()
 	exitCode := &ExitCode{Code: dp.ExitCodeSuccess} // Default to success
 
