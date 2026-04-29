@@ -1204,6 +1204,66 @@ func TestDefaultDiffProcessor_RenderToStableState(t *testing.T) {
 			wantRenderIterations: 2,     // Renders once with error but requirements, then once more successfully
 			wantErr:              false, // Should not error as the second render succeeds
 		},
+		"RenderErrorWithCachedRequirements": {
+			// Regression test: render fails with a fatal error and returns requirements,
+			// but all requirements are already cached (newReqCount==0). The error must be
+			// returned instead of silently dropped. Previously the condition also required
+			// len(output.Requirements)==0, which let errors fall through to checkStability
+			// and return an output with nil CompositeResource, causing a SIGSEGV.
+			xr:          xr,
+			composition: composition,
+			functions:   functions,
+			resourceID:  "XR/test-xr",
+			setupResourceClient: func() *tu.MockResourceClient {
+				return tu.NewMockResourceClient().
+					WithNamespacedResource(
+						schema.GroupVersionKind{Group: "", Version: "v1", Kind: "ConfigMap"},
+					).
+					WithGetResource(func(_ context.Context, gvk schema.GroupVersionKind, _, name string) (*un.Unstructured, error) {
+						if gvk.Kind == ConfigMap && name == ConfigMapName {
+							return configMap, nil
+						}
+
+						return nil, errors.New("resource not found")
+					}).
+					Build()
+			},
+			setupEnvironmentClient: func() *tu.MockEnvironmentClient {
+				return tu.NewMockEnvironmentClient().
+					WithNoEnvironmentConfigs().
+					Build()
+			},
+			setupRenderFunc: func() RenderFunc {
+				reqs := map[string]v1.Requirements{
+					"step1": {
+						Resources: map[string]*v1.ResourceSelector{
+							"config": {
+								ApiVersion: "v1",
+								Kind:       ConfigMap,
+								Match: &v1.ResourceSelector_MatchName{
+									MatchName: ConfigMapName,
+								},
+							},
+						},
+					},
+				}
+
+				iteration := 0
+
+				return func(_ context.Context, _ logging.Logger, _ render.Inputs) (render.Outputs, error) {
+					iteration++
+
+					// Every iteration returns the same requirements AND the same error.
+					// After iteration 1, the requirement is already cached so newReqCount==0.
+					return render.Outputs{
+						Requirements: reqs,
+					}, errors.New("fatal template error: assignment to entry in nil map")
+				}
+			},
+			wantComposedCount:    0,
+			wantRenderIterations: 2,    // First render resolves the requirement, second sees no new requirements
+			wantErr:              true, // Must return error, not silently swallow it
+		},
 		"RequirementsProcessingError": {
 			xr:          xr,
 			composition: composition,

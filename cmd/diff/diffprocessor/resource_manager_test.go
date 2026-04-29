@@ -12,7 +12,6 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	un "k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
-	"k8s.io/utils/ptr"
 
 	"github.com/crossplane/crossplane-runtime/v2/pkg/errors"
 	cmp "github.com/crossplane/crossplane-runtime/v2/pkg/resource/unstructured/composite"
@@ -637,16 +636,16 @@ func TestDefaultResourceManager_UpdateOwnerRefs(t *testing.T) {
 						Kind:               "XTestResource",
 						Name:               "test-claim-82crv",
 						UID:                "",
-						Controller:         ptr.To(true),
-						BlockOwnerDeletion: ptr.To(true),
+						Controller:         new(true),
+						BlockOwnerDeletion: new(true),
 					},
 					{
 						APIVersion:         "example.org/v1",
 						Kind:               testClaimKind,
 						Name:               testClaimName,
 						UID:                "",
-						Controller:         ptr.To(true),
-						BlockOwnerDeletion: ptr.To(true),
+						Controller:         new(true),
+						BlockOwnerDeletion: new(true),
 					},
 				})
 
