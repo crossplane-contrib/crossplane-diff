@@ -560,6 +560,76 @@ Summary: 2 modified`,
 			expectedError:    false,
 			expectedExitCode: dp.ExitCodeDiffDetected,
 		},
+		"MultiStepFatalAfterExtraResources": {
+			// Reproduces the PR #295 bug #1 scenario: a multi-step pipeline where
+			// step 1 successfully emits ExtraResources requirements and composed
+			// resources, and a LATER step fatals. Per crossplane/cmd/crank/render/
+			// render.go, a fatal in step N still returns the accumulated
+			// requirements from step <N. So the render output has:
+			//   renderErr != nil AND len(output.Requirements) > 0
+			//
+			// On iteration 2 (after requirements are cached) newReqCount == 0,
+			// and the OLD condition
+			//   renderErr != nil && newReqCount == 0 && len(output.Requirements) == 0
+			// is false — the error falls through to checkStability which declares
+			// the pipeline "stable" on an Outputs with nil CompositeResource,
+			// causing a SIGSEGV in CalculateNonRemovalDiffs.
+			//
+			// Expected behavior (with PR #295's render-loop fix): a clean fatal
+			// error bubbles up instead of a segfault. The diff is NOT produced
+			// because the pipeline legitimately failed.
+			reason:       "Multi-step pipeline with step-1 requirements + later-step fatal should surface the error cleanly, not SIGSEGV",
+			outputFormat: "json",
+			setupFiles: []string{
+				"testdata/diff/resources/xrd.yaml",
+				"testdata/diff/resources/functions.yaml",
+				"testdata/diff/resources/external-resource-configmap.yaml",
+				"testdata/diff/resources/multistep-fatal-after-extra-res-composition.yaml",
+				"testdata/diff/resources/existing-xr-with-external-dep.yaml",
+				"testdata/diff/resources/existing-downstream-with-external-dep.yaml",
+			},
+			inputFiles:            []string{"testdata/diff/modified-xr-with-external-dep.yaml"},
+			expectedError:         true,
+			expectedErrorContains: `"always-fatal" returned a fatal result`,
+			expectedExitCode:      dp.ExitCodeToolError,
+		},
+		"UnguardedTemplatedExtraResources": {
+			// Regression guard: a user template that accesses .extraResources
+			// directly (e.g. `index .extraResources "configmaps"`) without a
+			// `{{- with .extraResources }}` guard fails fatally on the first
+			// function invocation. function-go-templating's template data has no
+			// "extraResources" entry on that first call — crossplane's
+			// FetchingFunctionRunner only populates req.ExtraResources AFTER a
+			// function returns a non-fatal rsp.Requirements, and the Fatal from
+			// this template short-circuits before that ever happens.
+			//
+			// Verified empirically (2026-04-29) against a kind cluster with
+			// Crossplane + function-go-templating v0.11.0: a live controller
+			// produces the identical error, and the XR stays Synced=False with
+			// ReconcileError. So crossplane-diff must surface the same fatal
+			// error — not mask it with a diff — to match production behavior.
+			//
+			// This test also guards against a hypothetical "fixed" prefetch that
+			// pre-populated .extraResources for the template: that would make
+			// crossplane-diff report a successful diff for a composition that
+			// actually fails in-cluster, which is a false positive. If this test
+			// ever starts passing with an unexpected exit code or producing a
+			// diff, something has diverged from prod behavior.
+			reason:       "Unguarded .extraResources access must surface a fatal error matching what a live Crossplane controller produces (verified empirically against kind cluster on 2026-04-29)",
+			outputFormat: "json",
+			setupFiles: []string{
+				"testdata/diff/resources/xrd.yaml",
+				"testdata/diff/resources/functions.yaml",
+				"testdata/diff/resources/external-resource-configmap.yaml",
+				"testdata/diff/resources/unguarded-external-res-gotpl-composition.yaml",
+				"testdata/diff/resources/existing-xr-with-external-dep.yaml",
+				"testdata/diff/resources/existing-downstream-with-external-dep.yaml",
+			},
+			inputFiles:            []string{"testdata/diff/modified-xr-with-external-dep.yaml"},
+			expectedError:         true,
+			expectedErrorContains: `<index .extraResources "configmaps">: error calling index: index of untyped nil`,
+			expectedExitCode:      dp.ExitCodeToolError,
+		},
 		"CrossNamespaceResourceDependencies": {
 			reason:       "Validates cross-namespace resource dependencies via fn-external-resources",
 			outputFormat: "json",

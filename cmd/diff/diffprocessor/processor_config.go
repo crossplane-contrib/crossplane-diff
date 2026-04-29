@@ -251,6 +251,7 @@ func (c *ProcessorConfig) GetDiffOptions() renderer.DiffOptions {
 	opts := renderer.DefaultDiffOptions()
 	opts.UseColors = c.Colorize
 	opts.Compact = c.Compact
+
 	opts.IgnorePaths = c.IgnorePaths
 	if c.OutputFormat != "" {
 		opts.Format = c.OutputFormat

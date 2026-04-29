@@ -1076,15 +1076,6 @@ func (p *DefaultDiffProcessor) RenderToStableState(
 	// Track required resources with deduplication
 	requiredResources := make(map[string]un.Unstructured)
 
-	// Pre-fetch resources declared as ExtraResources in function-go-templating
-	// pipeline steps. The render library's FilteringFetcher only matches from
-	// in-memory resources, so resources must be present before the first render
-	// call. Without this, functions that use ExtraResources fail fatally because
-	// the requirements never reach the outer render loop.
-	for _, res := range p.requirementsProvider.prefetchExtraResources(ctx, comp, xr.GetNamespace()) {
-		addUniqueResource(requiredResources, res)
-	}
-
 	// Track observed resources (modified when synthesizeReady=true)
 	observed := observedResources
 
