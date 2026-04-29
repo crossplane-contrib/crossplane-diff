@@ -23,19 +23,40 @@ import (
 	"time"
 
 	"github.com/alecthomas/kong"
+	"github.com/crossplane-contrib/crossplane-diff/cmd/diff/kubecfg"
 	"github.com/crossplane-contrib/crossplane-diff/internal/versioninfo"
 	"github.com/pkg/errors"
-
-	xpversion "github.com/crossplane/crossplane/v2/cmd/crank/version"
+	"k8s.io/client-go/rest"
 )
 
 const (
 	errGetCrossplaneVersion = "unable to get crossplane version"
 )
 
+// fetchFunc fetches the Crossplane server version for a given REST config.
+// Exposed as a type so tests can substitute a stub on the Cmd struct.
+type fetchFunc func(ctx context.Context, cfg *rest.Config) (string, error)
+
 // Cmd represents the version command.
 type Cmd struct {
-	Client bool `env:"" help:"If true, shows client version only (no server required)."`
+	Client  bool            `env:""                                                          help:"If true, shows client version only (no server required)."`
+	Context kubecfg.Context `help:"Kubernetes context to use (defaults to current context)." name:"context"`
+
+	// fetch is an optional test seam. When nil, FetchCrossplaneVersion is used.
+	// It is intentionally unexported and not a flag so it never appears in --help.
+	fetch fetchFunc `kong:"-"`
+}
+
+// GetKubeContext implements kubecfg.Provider so the shared REST config provider
+// (bound in main via kong.BindToProvider) can resolve a *rest.Config that
+// honors the user's kubeconfig context.
+func (c *Cmd) GetKubeContext() kubecfg.Context { return c.Context }
+
+// BeforeApply binds the Cmd pointer as the kubecfg.Provider so that providers
+// resolved later (in Run) see the parsed --context value.
+func (c *Cmd) BeforeApply(ctx *kong.Context) error {
+	ctx.BindTo(c, (*kubecfg.Provider)(nil))
+	return nil
 }
 
 // Run runs the version command.
@@ -49,8 +70,20 @@ func (c *Cmd) Run(k *kong.Context) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	// Reuse the upstream FetchCrossplaneVersion to get the server version
-	vxp, err := xpversion.FetchCrossplaneVersion(ctx)
+	// Resolve the REST config lazily (after flag parsing) via the shared
+	// kubecfg provider — honors --context and $KUBECONFIG, falls back to
+	// in-cluster only when no kubeconfig is available.
+	cfg, err := kubecfg.Provide(c)
+	if err != nil {
+		return errors.Wrap(err, errGetCrossplaneVersion)
+	}
+
+	fetch := c.fetch
+	if fetch == nil {
+		fetch = FetchCrossplaneVersion
+	}
+
+	vxp, err := fetch(ctx, cfg)
 	if err != nil {
 		return errors.Wrap(err, errGetCrossplaneVersion)
 	}
