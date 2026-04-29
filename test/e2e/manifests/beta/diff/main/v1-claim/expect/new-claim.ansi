@@ -7,6 +7,8 @@
 +     crossplane.io/composition-resource-name: nop-resource
 +   generateName: test-claim-
 +   labels:
++     crossplane.io/claim-name: test-claim
++     crossplane.io/claim-namespace: default
 +     crossplane.io/composite: test-claim
 + spec:
 +   deletionPolicy: Delete

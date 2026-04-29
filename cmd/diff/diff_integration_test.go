@@ -882,6 +882,36 @@ Summary: 2 modified, 2 removed`,
 			expectedError:    false,
 			expectedExitCode: dp.ExitCodeDiffDetected,
 		},
+		// Reproduces the PR #294 scenario: a net-new XR is diffed while the
+		// composed resource it would manage already exists in the cluster
+		// (e.g. after the prior XR was deleted with --cascade=orphan, or while
+		// importing existing resources under Crossplane management). The render
+		// pipeline emits ownerReferences with an empty UID for new XRs;
+		// without the fallback in CalculateNonRemovalDiffs, UpdateOwnerRefs
+		// runs as a no-op and the real apiserver rejects the dry-run apply
+		// with "metadata.ownerReferences.uid: must not be empty".
+		"NewXRWithExistingComposedResource": {
+			reason:       "Shows diff for new XR whose composed resource already exists in the cluster (PR #294)",
+			outputFormat: "json",
+			setupFiles: []string{
+				"testdata/diff/resources/xrd.yaml",
+				"testdata/diff/resources/composition.yaml",
+				"testdata/diff/resources/functions.yaml",
+				// Pre-existing composed resource; no backing XR in the cluster.
+				"testdata/diff/resources/existing-downstream-resource.yaml",
+			},
+			inputFiles: []string{"testdata/diff/new-xr.yaml"},
+			expectedStructuredOutput: tu.ExpectDiff().
+				WithSummary(1, 1, 0).
+				WithAddedResource("XNopResource", "test-resource", "default").
+				WithField("spec.coolField", "new-value").
+				And().
+				WithModifiedResource("XDownstreamResource", "test-resource", "default").
+				WithFieldChange("spec.forProvider.configData", "existing-value", "new-value").
+				And(),
+			expectedError:    false,
+			expectedExitCode: dp.ExitCodeDiffDetected,
+		},
 		"MultipleXRs": {
 			reason:       "Validates diff for multiple XRs",
 			outputFormat: "json",

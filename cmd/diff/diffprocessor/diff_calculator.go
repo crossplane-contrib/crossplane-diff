@@ -270,7 +270,21 @@ func (c *DefaultDiffCalculator) CalculateNonRemovalDiffs(ctx context.Context, xr
 			continue
 		}
 
-		diff, err := c.CalculateDiff(ctx, xrDiff.Current, un)
+		// For new XRs (xrDiff.Current is nil) fall back to the input XR as the
+		// composite parent so UpdateOwnerRefs can assign a placeholder UID to
+		// composed resources' owner references. Without this, dry-run apply on
+		// an existing composed resource fails with
+		// `metadata.ownerReferences.uid: Invalid value: "": must not be empty`,
+		// because the render pipeline emits empty UIDs when the XR has none.
+		//
+		// Skip for generateName-only XRs: they get a synthetic display name like
+		// "foo(generated)" that is invalid as a label selector value.
+		composite := xrDiff.Current
+		if composite == nil && xr.GetName() != "" && xr.GetGenerateName() == "" {
+			composite = xr.GetUnstructured()
+		}
+
+		diff, err := c.CalculateDiff(ctx, composite, un)
 		if err != nil {
 			c.logger.Debug("Error calculating diff for composed resource", "resource", resourceID, "error", err)
 			errs = append(errs, errors.Wrapf(err, "cannot calculate diff for %s", resourceID))

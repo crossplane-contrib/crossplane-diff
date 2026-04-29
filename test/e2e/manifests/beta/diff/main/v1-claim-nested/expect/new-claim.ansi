@@ -7,6 +7,8 @@
 +     crossplane.io/composition-resource-name: nop-resource
 +   generateName: test-parent-claim-
 +   labels:
++     crossplane.io/claim-name: test-parent-claim
++     crossplane.io/claim-namespace: default
 +     crossplane.io/composite: test-parent-claim
 + spec:
 +   deletionPolicy: Delete
@@ -43,6 +45,8 @@
 +     crossplane.io/composition-resource-name: child-xr
 +   generateName: test-parent-claim-
 +   labels:
++     crossplane.io/claim-name: test-parent-claim
++     crossplane.io/claim-namespace: default
 +     crossplane.io/composite: test-parent-claim
 + spec:
 +   childField: new-parent-value
