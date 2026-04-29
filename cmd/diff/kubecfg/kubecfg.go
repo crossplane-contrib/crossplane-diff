@@ -71,6 +71,12 @@ func provide(p Provider, inCluster func() (*rest.Config, error), warn func(msg s
 
 	cfg, err := kubeConfig.ClientConfig()
 	if err != nil {
+		// IsEmptyConfig is true in two distinct scenarios: (a) no kubeconfig
+		// was found on disk, and (b) a kubeconfig was found but has no
+		// current-context set. In scenario (b), falling back to in-cluster
+		// may silently target a different cluster than the user's kubeconfig
+		// would suggest. TODO: distinguish these cases and emit a clearer
+		// error for (b) that points the user at --context.
 		if clientcmd.IsEmptyConfig(err) {
 			icc, iccErr := inCluster()
 			if iccErr == nil {

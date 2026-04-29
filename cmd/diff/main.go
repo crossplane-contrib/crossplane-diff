@@ -39,13 +39,14 @@ var _ = kong.Must(&cli{})
 
 type verboseFlag bool
 
-// KubeContext is an alias for kubecfg.Context, kept in this package so Kong's
-// tag parsing (and any external callers) continue to recognize the flag type
-// without importing the kubecfg package.
+// KubeContext is an alias for kubecfg.Context, used as the flag type on
+// CommonCmdFields.Context so Kong's tag-driven decoding resolves to the same
+// type kubecfg.Provide expects.
 type KubeContext = kubecfg.Context
 
-// ContextProvider is an alias for kubecfg.Provider. It's re-exported here so
-// downstream code that depended on main.ContextProvider keeps compiling.
+// ContextProvider is an alias for kubecfg.Provider, used within this package
+// so CommonCmdFields can implement the provider interface without importing
+// the kubecfg package at every call site.
 type ContextProvider = kubecfg.Provider
 
 // ExitCode tracks the exit code to return after command execution.

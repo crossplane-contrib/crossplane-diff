@@ -39,6 +39,9 @@ const (
 // but accepts a pre-built *rest.Config instead of calling ctrl.GetConfig, so
 // callers can honor the user's kubeconfig context (e.g. --context) even when
 // running inside a Kubernetes pod.
+//
+// TODO: Remove this fork once an upstream variant that accepts *rest.Config is
+// available. Tracked in https://github.com/crossplane-contrib/crossplane-diff/issues/285.
 func FetchCrossplaneVersion(ctx context.Context, cfg *rest.Config) (string, error) {
 	clientset, err := kubernetes.NewForConfig(cfg)
 	if err != nil {
@@ -86,5 +89,5 @@ func fetchCrossplaneVersion(ctx context.Context, clientset kubernetes.Interface)
 		}
 	}
 
-	return "", errors.New("Crossplane version or image tag not found")
+	return "", errors.New("crossplane version or image tag not found")
 }

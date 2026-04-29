@@ -42,9 +42,7 @@ type Cmd struct {
 	Client  bool            `env:""                                                          help:"If true, shows client version only (no server required)."`
 	Context kubecfg.Context `help:"Kubernetes context to use (defaults to current context)." name:"context"`
 
-	// fetch is an optional test seam. When nil, FetchCrossplaneVersion is used.
-	// It is intentionally unexported and not a flag so it never appears in --help.
-	fetch fetchFunc `kong:"-"`
+	fetch fetchFunc `kong:"-"` // test seam; nil means use FetchCrossplaneVersion.
 }
 
 // GetKubeContext implements kubecfg.Provider so the shared REST config provider

@@ -124,8 +124,8 @@ func TestFetchCrossplaneVersion_NoDeployments(t *testing.T) {
 		t.Fatal("expected error, got nil")
 	}
 
-	if !strings.Contains(err.Error(), "not found") {
-		t.Errorf("error = %v, want it to mention 'not found'", err)
+	if !strings.Contains(err.Error(), "crossplane version or image tag not found") {
+		t.Errorf("error = %v, want the specific no-deployments message", err)
 	}
 }
 
