@@ -29,6 +29,7 @@ import (
 	xp "github.com/crossplane-contrib/crossplane-diff/cmd/diff/client/crossplane"
 	k8 "github.com/crossplane-contrib/crossplane-diff/cmd/diff/client/kubernetes"
 	dp "github.com/crossplane-contrib/crossplane-diff/cmd/diff/diffprocessor"
+	"github.com/crossplane-contrib/crossplane-diff/cmd/diff/kubecfg"
 	tu "github.com/crossplane-contrib/crossplane-diff/cmd/diff/testutils"
 	"github.com/crossplane-contrib/crossplane-diff/cmd/diff/types"
 	"github.com/google/go-cmp/cmp"
@@ -1051,7 +1052,7 @@ users:
 			}
 
 			// Call the function with empty context (use default)
-			config, err := provideRestConfig(&testContextProvider{context: ""})
+			config, err := kubecfg.Provide(&testContextProvider{context: ""})
 
 			// Check error expectations
 			if tc.expectError && err == nil {
@@ -1163,8 +1164,8 @@ users:
 			// Set KUBECONFIG environment variable
 			t.Setenv("KUBECONFIG", kubeconfigPath)
 
-			// Call provideRestConfig with the context override
-			config, err := provideRestConfig(&testContextProvider{context: KubeContext(tc.contextOverride)})
+			// Call kubecfg.Provide with the context override
+			config, err := kubecfg.Provide(&testContextProvider{context: KubeContext(tc.contextOverride)})
 
 			// Check error expectations
 			if tc.expectError && err == nil {

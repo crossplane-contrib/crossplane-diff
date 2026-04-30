@@ -24,11 +24,11 @@ import (
 
 	"github.com/alecthomas/kong"
 	dp "github.com/crossplane-contrib/crossplane-diff/cmd/diff/diffprocessor"
+	"github.com/crossplane-contrib/crossplane-diff/cmd/diff/kubecfg"
 	"github.com/crossplane-contrib/crossplane-diff/cmd/diff/versioncmd"
 	"github.com/go-logr/logr"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/client-go/rest"
-	"k8s.io/client-go/tools/clientcmd"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 
@@ -37,19 +37,17 @@ import (
 
 var _ = kong.Must(&cli{})
 
-type (
-	verboseFlag bool
-	// KubeContext represents the Kubernetes context name from the kubeconfig.
-	KubeContext string
-)
+type verboseFlag bool
 
-// ContextProvider is an interface for accessing the Kubernetes context configuration.
-// Commands embed CommonCmdFields which implements this interface. By binding a pointer
-// to the command struct via this interface in BeforeApply, providers can access the
-// context value after flag parsing completes (when providers are actually resolved).
-type ContextProvider interface {
-	GetKubeContext() KubeContext
-}
+// KubeContext is an alias for kubecfg.Context, used as the flag type on
+// CommonCmdFields.Context so Kong's tag-driven decoding resolves to the same
+// type kubecfg.Provide expects.
+type KubeContext = kubecfg.Context
+
+// ContextProvider is an alias for kubecfg.Provider, used within this package
+// so CommonCmdFields can implement the provider interface without importing
+// the kubecfg package at every call site.
+type ContextProvider = kubecfg.Provider
 
 // ExitCode tracks the exit code to return after command execution.
 // Commands set this based on their results (diffs found, validation errors, etc.).
@@ -159,9 +157,9 @@ func main() {
 		kong.BindTo(logger, (*logging.Logger)(nil)),
 		kong.Bind(exitCode), // Bind exit code state
 		// Providers are resolved lazily when dependencies are needed.
-		// provideRestConfig depends on ContextProvider (bound in CommonCmdFields.BeforeApply)
+		// kubecfg.Provide depends on kubecfg.Provider (bound in CommonCmdFields.BeforeApply)
 		// provideAppContext depends on *rest.Config and logging.Logger
-		kong.BindToProvider(provideRestConfig),
+		kong.BindToProvider(kubecfg.Provide),
 		kong.BindToProvider(provideAppContext),
 		kong.ConfigureHelp(kong.HelpOptions{
 			FlagsLast:      true,
@@ -184,43 +182,6 @@ func main() {
 	}
 
 	os.Exit(exitCode.Code)
-}
-
-// provideRestConfig creates a Kubernetes REST config using the context from ContextProvider.
-// This provider is resolved lazily when dependencies need it (in AfterApply or Run),
-// at which point flag parsing is complete and GetKubeContext() returns the correct value.
-func provideRestConfig(cp ContextProvider) (*rest.Config, error) {
-	kubeContext := cp.GetKubeContext()
-
-	// Use the standard client-go loading rules:
-	// 1. If KUBECONFIG env var is set, use that
-	// 2. Otherwise, use ~/.kube/config
-	// 3. Respects current context from the kubeconfig (or uses specified context)
-	loadingRules := clientcmd.NewDefaultClientConfigLoadingRules()
-	configOverrides := &clientcmd.ConfigOverrides{}
-
-	// If a specific context is requested, override the current context
-	if kubeContext != "" {
-		configOverrides.CurrentContext = string(kubeContext)
-	}
-
-	kubeConfig := clientcmd.NewNonInteractiveDeferredLoadingClientConfig(loadingRules, configOverrides)
-
-	config, err := kubeConfig.ClientConfig()
-	if err != nil {
-		return nil, err
-	}
-
-	// Set default QPS and Burst if not already set
-	if config.QPS == 0 {
-		config.QPS = 20
-	}
-
-	if config.Burst == 0 {
-		config.Burst = 30
-	}
-
-	return config, nil
 }
 
 // cachedAppContext stores the singleton AppContext instance.

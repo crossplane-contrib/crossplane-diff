@@ -287,6 +287,33 @@ The tool requires read access to:
 - **Kubernetes resources**: CRDs, referenced resources
 - **Resource hierarchies**: Owner references and relationships
 
+## Kubernetes Configuration
+
+All `crossplane-diff` commands (`xr`, `comp`, `version`) resolve their target
+cluster the same way, following the standard CLI convention:
+
+1. `$KUBECONFIG` env var, if set.
+2. `~/.kube/config`, if present.
+3. Otherwise, fall back to the pod's in-cluster ServiceAccount (with a
+   one-line warning on stderr).
+
+The `--context` flag overrides the kubeconfig's `current-context`.
+
+### Running in a pod
+
+A common pattern is to run `crossplane-diff` inside a pod (for example, a
+GitHub Actions runner) to post PR comments using the pod's existing RBAC.
+Two supported modes:
+
+- **Use the pod's ServiceAccount** — simplest: build an image without
+  `~/.kube/config`, don't set `KUBECONFIG`. The tool falls back to
+  in-cluster automatically.
+- **Target a different cluster from inside the pod** — set up a kubeconfig
+  (e.g. via `kubectl config use-context <arn>`) and `crossplane-diff` will
+  honor it, including `--context` overrides. This matches the behavior of
+  `kubectl` and other Kubernetes CLIs, and is why a `~/.kube/config` that
+  exists in the pod always takes precedence over the pod's ServiceAccount.
+
 ## Output Format
 
 ### Human-Readable Diff (default)
