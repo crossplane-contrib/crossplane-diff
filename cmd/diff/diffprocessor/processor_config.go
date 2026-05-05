@@ -49,8 +49,8 @@ type ProcessorConfig struct {
 	// FunctionCredentials holds Secret credentials to pass to Functions during rendering
 	FunctionCredentials []corev1.Secret
 
-	// FunctionRegistry overrides the registry in all function package refs.
-	FunctionRegistry string
+	// FunctionRegistryOverride overrides the registry in all function package refs.
+	FunctionRegistryOverride string
 
 	// Stdout is the writer for diff output (defaults to os.Stdout)
 	Stdout io.Writer
@@ -172,10 +172,10 @@ func WithFunctionCredentials(creds []corev1.Secret) ProcessorOption {
 	}
 }
 
-// WithFunctionRegistry overrides the registry in all function package refs.
-func WithFunctionRegistry(registry string) ProcessorOption {
+// WithFunctionRegistryOverride overrides the registry in all function package refs.
+func WithFunctionRegistryOverride(registry string) ProcessorOption {
 	return func(config *ProcessorConfig) {
-		config.FunctionRegistry = registry
+		config.FunctionRegistryOverride = registry
 	}
 }
 

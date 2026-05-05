@@ -117,8 +117,8 @@ func NewDiffProcessor(k8cs k8.Clients, xpcs xp.Clients, opts ...ProcessorOption)
 	diffRenderer := config.Factories.DiffRenderer(config.Logger, diffOpts)
 
 	functionProvider := config.Factories.FunctionProvider(xpcs.Function, config.Logger)
-	if config.FunctionRegistry != "" {
-		functionProvider = NewRegistryOverrideFunctionProvider(functionProvider, config.FunctionRegistry, config.Logger)
+	if config.FunctionRegistryOverride != "" {
+		functionProvider = NewRegistryOverrideFunctionProvider(functionProvider, config.FunctionRegistryOverride, config.Logger)
 	}
 
 	processor := &DefaultDiffProcessor{

@@ -90,8 +90,8 @@ func defaultProcessorOptions(fields CommonCmdFields, namespace string) []dp.Proc
 		opts = append(opts, dp.WithFunctionCredentials(fields.FunctionCredentials.Secrets))
 	}
 
-	if fields.FunctionRegistry != "" {
-		opts = append(opts, dp.WithFunctionRegistry(fields.FunctionRegistry))
+	if fields.FunctionRegistryOverride != "" {
+		opts = append(opts, dp.WithFunctionRegistryOverride(fields.FunctionRegistryOverride))
 	}
 
 	return opts
