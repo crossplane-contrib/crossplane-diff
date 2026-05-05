@@ -103,6 +103,7 @@ type CommonCmdFields struct {
 	Timeout             time.Duration       `default:"1m"                                                                                      help:"How long to run before timing out."`
 	IgnorePaths         []string            `help:"Paths to ignore in diffs (e.g., 'metadata.annotations[argocd.argoproj.io/tracking-id]')."   name:"ignore-paths"`
 	FunctionCredentials FunctionCredentials `help:"A YAML file or directory of YAML files specifying Secret credentials to pass to Functions." name:"function-credentials"                                                                         placeholder:"PATH"`
+	FunctionRegistry    string              `help:"Override the registry for all function images (e.g., 'my-company.registry.io')."                   name:"function-registry"`
 }
 
 // GetKubeContext implements ContextProvider.
