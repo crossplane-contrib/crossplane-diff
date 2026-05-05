@@ -147,6 +147,11 @@ Flags:
       --function-credentials=PATH  Path to YAML file or directory containing Secret
                                resources to pass as function credentials. Overrides
                                auto-fetched credentials from cluster.
+      --function-registry-override=STRING
+                               Override the registry for all function images
+                               (e.g., 'my-company.registry.io'). Useful when
+                               pulling functions from a mirror or private
+                               registry.
       --eventual-state         Show eventual state after all reconciliation cycles
                                complete. Useful with function-sequencer which hides
                                later stage resources until earlier stages become Ready.
@@ -186,6 +191,11 @@ Flags:
       --function-credentials=PATH  Path to YAML file or directory containing Secret
                                resources to pass as function credentials. Overrides
                                auto-fetched credentials from cluster.
+      --function-registry-override=STRING
+                               Override the registry for all function images
+                               (e.g., 'my-company.registry.io'). Useful when
+                               pulling functions from a mirror or private
+                               registry.
 ```
 
 **Note**: The `diff` subcommand is deprecated. Use `xr` instead.
