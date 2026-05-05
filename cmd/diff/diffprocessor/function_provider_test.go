@@ -499,6 +499,117 @@ func TestGenerateContainerName_TruncationStability(t *testing.T) {
 	}
 }
 
+func TestReplaceRegistry(t *testing.T) {
+	tests := map[string]struct {
+		pkg         string
+		newRegistry string
+		want        string
+	}{
+		"StandardPackage": {
+			pkg:         "xpkg.crossplane.io/crossplane-contrib/function-go-templating:v0.11.0",
+			newRegistry: "registry.example.com",
+			want:        "registry.example.com/crossplane-contrib/function-go-templating:v0.11.0",
+		},
+		"DifferentRegistry": {
+			pkg:         "ghcr.io/crossplane/function-auto-ready:v1.2.3",
+			newRegistry: "registry.example.com",
+			want:        "registry.example.com/crossplane/function-auto-ready:v1.2.3",
+		},
+		"SHA256Digest": {
+			pkg:         "old.registry.io/org/func@sha256:abc123",
+			newRegistry: "new.registry.io",
+			want:        "new.registry.io/org/func@sha256:abc123",
+		},
+		"NoExplicitRegistry": {
+			// First segment lacks '.', ':' or "localhost", so it is treated as
+			// part of the path (per OCI rules), and newRegistry is prepended.
+			pkg:         "crossplane-contrib/function-auto-ready:v1.0.0",
+			newRegistry: "new.registry.io",
+			want:        "new.registry.io/crossplane-contrib/function-auto-ready:v1.0.0",
+		},
+		"NewRegistryWithTrailingSlash": {
+			pkg:         "xpkg.crossplane.io/foo/bar:v1",
+			newRegistry: "new.registry.io/",
+			want:        "new.registry.io/foo/bar:v1",
+		},
+		"LocalhostWithPort": {
+			pkg:         "localhost:5000/foo/bar:v1",
+			newRegistry: "new.registry.io",
+			want:        "new.registry.io/foo/bar:v1",
+		},
+		"NoSlash": {
+			pkg:         "bare-image:v1",
+			newRegistry: "new.registry.io",
+			want:        "new.registry.io/bare-image:v1",
+		},
+		"DeepPath": {
+			pkg:         "registry.io/a/b/c/func:v1",
+			newRegistry: "other.io",
+			want:        "other.io/a/b/c/func:v1",
+		},
+	}
+
+	for name, tt := range tests {
+		t.Run(name, func(t *testing.T) {
+			got := replaceRegistry(tt.pkg, tt.newRegistry)
+			if got != tt.want {
+				t.Errorf("replaceRegistry(%q, %q) = %q, want %q", tt.pkg, tt.newRegistry, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestRegistryOverrideFunctionProvider(t *testing.T) {
+	functions := []pkgv1.Function{
+		{
+			ObjectMeta: metav1.ObjectMeta{Name: "function-go-templating"},
+			Spec: pkgv1.FunctionSpec{
+				PackageSpec: pkgv1.PackageSpec{
+					Package: "original.registry.io/crossplane-contrib/function-go-templating:v0.11.0",
+				},
+			},
+		},
+		{
+			ObjectMeta: metav1.ObjectMeta{Name: "function-auto-ready"},
+			Spec: pkgv1.FunctionSpec{
+				PackageSpec: pkgv1.PackageSpec{
+					Package: "other.registry.io/crossplane-contrib/function-auto-ready:v1.0.0",
+				},
+			},
+		},
+	}
+
+	fnClient := tu.NewMockFunctionClient().
+		WithSuccessfulFunctionsFetch(functions).
+		Build()
+
+	logger := tu.TestLogger(t, false)
+	inner := NewDefaultFunctionProvider(fnClient, logger)
+
+	provider := NewRegistryOverrideFunctionProvider(inner, "registry.example.com", logger)
+
+	comp := &apiextensionsv1.Composition{
+		ObjectMeta: metav1.ObjectMeta{Name: "test-composition"},
+	}
+
+	fns, err := provider.GetFunctionsForComposition(comp)
+	if err != nil {
+		t.Fatalf("GetFunctionsForComposition() error = %v", err)
+	}
+
+	if len(fns) != 2 {
+		t.Fatalf("GetFunctionsForComposition() returned %d functions, want 2", len(fns))
+	}
+
+	if fns[0].Spec.Package != "registry.example.com/crossplane-contrib/function-go-templating:v0.11.0" {
+		t.Errorf("function[0].Spec.Package = %q, want overridden registry", fns[0].Spec.Package)
+	}
+
+	if fns[1].Spec.Package != "registry.example.com/crossplane-contrib/function-auto-ready:v1.0.0" {
+		t.Errorf("function[1].Spec.Package = %q, want overridden registry", fns[1].Spec.Package)
+	}
+}
+
 func TestGenerateContainerName(t *testing.T) {
 	const testInstanceID = "test1234"
 

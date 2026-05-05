@@ -94,15 +94,16 @@ func (f *FunctionCredentials) Decode(ctx *kong.DecodeContext) error {
 // after flag parsing completes.
 type CommonCmdFields struct {
 	// Configuration options
-	Context             KubeContext         `help:"Kubernetes context to use (defaults to current context)."                                   name:"context"`
-	Output              string              `default:"diff"                                                                                    enum:"diff,json,yaml"                                                                               help:"Output format (diff, json, or yaml)." name:"output" short:"o"`
-	NoColor             bool                `help:"Disable colorized output."                                                                  name:"no-color"`
-	Compact             bool                `help:"Show compact diffs with minimal context."                                                   name:"compact"`
-	MaxNestedDepth      int                 `default:"10"                                                                                      help:"Maximum depth for nested XR recursion."                                                       name:"max-nested-depth"`
-	MaxIterations       int                 `default:"20"                                                                                      help:"Maximum render iterations. Increase for complex pipelines that need more cycles to converge." name:"max-iterations"`
-	Timeout             time.Duration       `default:"1m"                                                                                      help:"How long to run before timing out."`
-	IgnorePaths         []string            `help:"Paths to ignore in diffs (e.g., 'metadata.annotations[argocd.argoproj.io/tracking-id]')."   name:"ignore-paths"`
-	FunctionCredentials FunctionCredentials `help:"A YAML file or directory of YAML files specifying Secret credentials to pass to Functions." name:"function-credentials"                                                                         placeholder:"PATH"`
+	Context                  KubeContext         `help:"Kubernetes context to use (defaults to current context)."                                   name:"context"`
+	Output                   string              `default:"diff"                                                                                    enum:"diff,json,yaml"                                                                               help:"Output format (diff, json, or yaml)." name:"output" short:"o"`
+	NoColor                  bool                `help:"Disable colorized output."                                                                  name:"no-color"`
+	Compact                  bool                `help:"Show compact diffs with minimal context."                                                   name:"compact"`
+	MaxNestedDepth           int                 `default:"10"                                                                                      help:"Maximum depth for nested XR recursion."                                                       name:"max-nested-depth"`
+	MaxIterations            int                 `default:"20"                                                                                      help:"Maximum render iterations. Increase for complex pipelines that need more cycles to converge." name:"max-iterations"`
+	Timeout                  time.Duration       `default:"1m"                                                                                      help:"How long to run before timing out."`
+	IgnorePaths              []string            `help:"Paths to ignore in diffs (e.g., 'metadata.annotations[argocd.argoproj.io/tracking-id]')."   name:"ignore-paths"`
+	FunctionCredentials      FunctionCredentials `help:"A YAML file or directory of YAML files specifying Secret credentials to pass to Functions." name:"function-credentials"                                                                         placeholder:"PATH"`
+	FunctionRegistryOverride string              `help:"Override the registry for all function images (e.g., 'my-company.registry.io')."            name:"function-registry-override"`
 }
 
 // GetKubeContext implements ContextProvider.

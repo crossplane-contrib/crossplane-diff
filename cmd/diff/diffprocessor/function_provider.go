@@ -302,6 +302,78 @@ func generateContainerName(pkg, instanceID string) string {
 	return containerName
 }
 
+// RegistryOverrideFunctionProvider wraps another FunctionProvider and replaces
+// the registry in each function's package reference before returning them.
+type RegistryOverrideFunctionProvider struct {
+	inner    FunctionProvider
+	registry string
+	logger   logging.Logger
+}
+
+// NewRegistryOverrideFunctionProvider wraps inner, replacing the registry
+// portion of every function package ref with the given registry.
+func NewRegistryOverrideFunctionProvider(inner FunctionProvider, registry string, logger logging.Logger) FunctionProvider {
+	return &RegistryOverrideFunctionProvider{
+		inner:    inner,
+		registry: registry,
+		logger:   logger,
+	}
+}
+
+// GetFunctionsForComposition delegates to the wrapped provider and rewrites
+// the registry portion of each returned function's package ref.
+func (p *RegistryOverrideFunctionProvider) GetFunctionsForComposition(comp *apiextensionsv1.Composition) ([]pkgv1.Function, error) {
+	fns, err := p.inner.GetFunctionsForComposition(comp)
+	if err != nil {
+		return nil, err
+	}
+
+	for i := range fns {
+		orig := fns[i].Spec.Package
+
+		replaced := replaceRegistry(orig, p.registry)
+		if replaced != orig {
+			p.logger.Debug("Overriding function registry",
+				"function", fns[i].GetName(),
+				"from", orig,
+				"to", replaced)
+			fns[i].Spec.Package = replaced
+		}
+	}
+
+	return fns, nil
+}
+
+// Cleanup delegates to the wrapped provider.
+func (p *RegistryOverrideFunctionProvider) Cleanup(ctx context.Context) error {
+	return p.inner.Cleanup(ctx)
+}
+
+// replaceRegistry replaces the registry portion of an OCI package reference,
+// preserving the repository path, tag, and/or digest. A trailing slash on
+// newRegistry is trimmed.
+//
+// The first path component is treated as a registry host only when it follows
+// the standard OCI rule: it contains a '.' or ':', or it is exactly
+// "localhost". Otherwise the ref has no explicit registry (e.g.
+// "crossplane-contrib/function-auto-ready:v1.0.0") and newRegistry is prepended
+// to the full ref instead of replacing the first path segment.
+func replaceRegistry(pkg, newRegistry string) string {
+	newRegistry = strings.TrimRight(newRegistry, "/")
+
+	idx := strings.Index(pkg, "/")
+	if idx < 0 {
+		return newRegistry + "/" + pkg
+	}
+
+	first := pkg[:idx]
+	if !strings.ContainsAny(first, ".:") && first != "localhost" {
+		return newRegistry + "/" + pkg
+	}
+
+	return newRegistry + pkg[idx:]
+}
+
 // truncateContainerName shortens a container name to fit within maxContainerNameLength
 // while maintaining uniqueness via a hash suffix derived from the original package name.
 func truncateContainerName(name, pkg, instanceID string) string {
