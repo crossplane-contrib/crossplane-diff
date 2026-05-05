@@ -320,6 +320,8 @@ func NewRegistryOverrideFunctionProvider(inner FunctionProvider, registry string
 	}
 }
 
+// GetFunctionsForComposition delegates to the wrapped provider and rewrites
+// the registry portion of each returned function's package ref.
 func (p *RegistryOverrideFunctionProvider) GetFunctionsForComposition(comp *apiextensionsv1.Composition) ([]pkgv1.Function, error) {
 	fns, err := p.inner.GetFunctionsForComposition(comp)
 	if err != nil {
@@ -342,6 +344,7 @@ func (p *RegistryOverrideFunctionProvider) GetFunctionsForComposition(comp *apie
 	return fns, nil
 }
 
+// Cleanup delegates to the wrapped provider.
 func (p *RegistryOverrideFunctionProvider) Cleanup(ctx context.Context) error {
 	return p.inner.Cleanup(ctx)
 }
