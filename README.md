@@ -116,6 +116,9 @@ crossplane-diff comp updated-composition.yaml --output json
 
 # Output in YAML format
 crossplane-diff comp updated-composition.yaml -o yaml
+
+# Show eventual state with function-sequencer (all stages, not just first)
+crossplane-diff comp updated-composition.yaml --eventual-state
 ```
 
 ### Command Options
@@ -177,9 +180,9 @@ Flags:
       --no-color               Disable colorized output.
       --compact                Show compact diffs with minimal context.
       --max-nested-depth=10    Maximum depth for nested XR recursion.
-      --max-iterations=20      Maximum render iterations for requirements resolution.
-                               Increase for complex pipelines that need more cycles
-                               to converge.
+      --max-iterations=20      Maximum render iterations for requirements resolution
+                               or eventual-state simulation. Increase for complex
+                               pipelines that need more cycles to converge.
       --timeout=1m             How long to run before timing out.
   -n, --namespace=""           Namespace to find Composites (empty = all namespaces).
       --include-manual         Include Composites with Manual update policy (default:
@@ -196,6 +199,9 @@ Flags:
                                (e.g., 'my-company.registry.io'). Useful when
                                pulling functions from a mirror or private
                                registry.
+      --eventual-state         Show eventual state after all reconciliation cycles
+                               complete. Useful with function-sequencer which hides
+                               later stage resources until earlier stages become Ready.
 ```
 
 **Note**: The `diff` subcommand is deprecated. Use `xr` instead.

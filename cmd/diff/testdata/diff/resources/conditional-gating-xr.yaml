@@ -1,0 +1,7 @@
+apiVersion: ns.diff.example.org/v1alpha1
+kind: XNopResource
+metadata:
+  name: conditional-gating-test
+  namespace: default
+spec:
+  coolField: "test-value"
