@@ -45,28 +45,34 @@ spec:
                 configData: {{ .observed.composite.resource.spec.coolField }}
             {{- /* Render stage1 iff observed stage0 has a Ready=True condition.
                  Access pattern: .observed.resources is the protojson of State.resources
-                 (map<string, Resource> keyed by composition-resource-name). */ -}}
+                 (map<string, Resource> keyed by composition-resource-name).
+                 Compute $ready once, then emit the manifest once to avoid
+                 duplicates if multiple Ready=True conditions ever appear. */ -}}
+            {{- $ready := false -}}
             {{- with .observed.resources -}}
               {{- with (index . "stage0-resource") -}}
                 {{- with .resource.status.conditions -}}
                   {{- range . -}}
-                    {{- if and (eq .type "Ready") (eq .status "True") }}
-            ---
-            apiVersion: ns.nop.example.org/v1alpha1
-            kind: XDownstreamResource
-            metadata:
-              name: 1-stage1-resource
-              namespace: {{ $.observed.composite.resource.metadata.namespace }}
-              annotations:
-                gotemplating.fn.crossplane.io/composition-resource-name: stage1-resource
-            spec:
-              forProvider:
-                configData: {{ $.observed.composite.resource.spec.coolField }}
+                    {{- if and (eq .type "Ready") (eq .status "True") -}}
+                      {{- $ready = true -}}
                     {{- end -}}
                   {{- end -}}
                 {{- end -}}
               {{- end -}}
             {{- end -}}
+            {{- if $ready }}
+            ---
+            apiVersion: ns.nop.example.org/v1alpha1
+            kind: XDownstreamResource
+            metadata:
+              name: 1-stage1-resource
+              namespace: {{ .observed.composite.resource.metadata.namespace }}
+              annotations:
+                gotemplating.fn.crossplane.io/composition-resource-name: stage1-resource
+            spec:
+              forProvider:
+                configData: {{ .observed.composite.resource.spec.coolField }}
+            {{- end }}
     - step: mark-ready-from-observed
       functionRef:
         name: function-auto-ready

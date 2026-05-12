@@ -106,6 +106,18 @@ func runIntegrationTest(t *testing.T, testType DiffTestType, tt IntegrationTestC
 
 	t.Parallel() // Enable parallel test execution
 
+	// Validate structured-output config up front so misconfiguration fails loudly
+	// instead of silently routing assertions to the wrong path.
+	if tt.expectedStructuredOutput != nil && tt.expectedStructuredCompOutput != nil {
+		t.Fatalf("test case sets both expectedStructuredOutput and expectedStructuredCompOutput; set only one")
+	}
+	if tt.expectedStructuredOutput != nil && testType != XRDiffTest {
+		t.Fatalf("expectedStructuredOutput is only valid for XRDiffTest (got %q)", testType)
+	}
+	if tt.expectedStructuredCompOutput != nil && testType != CompositionDiffTest {
+		t.Fatalf("expectedStructuredCompOutput is only valid for CompositionDiffTest (got %q)", testType)
+	}
+
 	// Create a fresh scheme for each test to avoid concurrent map access.
 	// Each parallel test needs its own scheme because envtest modifies it during CRD installation.
 	scheme := createTestScheme()
