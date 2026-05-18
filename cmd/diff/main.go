@@ -99,11 +99,12 @@ type CommonCmdFields struct {
 	NoColor                  bool                `help:"Disable colorized output."                                                                  name:"no-color"`
 	Compact                  bool                `help:"Show compact diffs with minimal context."                                                   name:"compact"`
 	MaxNestedDepth           int                 `default:"10"                                                                                      help:"Maximum depth for nested XR recursion."                                                       name:"max-nested-depth"`
-	MaxIterations            int                 `default:"20"                                                                                      help:"Maximum render iterations. Increase for complex pipelines that need more cycles to converge." name:"max-iterations"`
+	MaxIterations            int                 `default:"20"                                                                                      help:"Maximum render iterations for requirements resolution or eventual-state simulation. Increase for complex pipelines that need more cycles to converge." name:"max-iterations"`
 	Timeout                  time.Duration       `default:"1m"                                                                                      help:"How long to run before timing out."`
 	IgnorePaths              []string            `help:"Paths to ignore in diffs (e.g., 'metadata.annotations[argocd.argoproj.io/tracking-id]')."   name:"ignore-paths"`
 	FunctionCredentials      FunctionCredentials `help:"A YAML file or directory of YAML files specifying Secret credentials to pass to Functions." name:"function-credentials"                                                                         placeholder:"PATH"`
 	FunctionRegistryOverride string              `help:"Override the registry for all function images (e.g., 'my-company.registry.io')."            name:"function-registry-override"`
+	EventualState            bool                `default:"false"                                                                                   help:"Show eventual state after all reconciliation cycles complete (useful with function-sequencer)." name:"eventual-state"`
 }
 
 // GetKubeContext implements ContextProvider.

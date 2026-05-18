@@ -55,13 +55,16 @@ type IntegrationTestCase struct {
 	xrdAPIVersion              XrdAPIVersion // For XR tests (optional)
 	ignorePaths                []string      // Paths to ignore in diffs
 	functionCredentials        string        // Path to function credentials file (optional)
-	eventualState              bool          // For XR tests: enable eventual state simulation (optional)
+	eventualState              bool          // Enable eventual state simulation for XR or composition tests (optional)
 	timeout                    time.Duration // Custom timeout for this test (0 = use default)
 	skip                       bool
 	skipReason                 string
-	// JSON output support: set outputFormat to "json" to use structured assertions
-	outputFormat             string           // "json" or "" (default=visual diff)
-	expectedStructuredOutput *tu.ExpectedDiff // for JSON output assertions
+	// JSON output support: set outputFormat to "json" to use structured assertions.
+	// For XR tests, populate expectedStructuredOutput. For CompositionDiffTest tests,
+	// populate expectedStructuredCompOutput. Only one should be set per test case.
+	outputFormat                 string               // "json" or "" (default=visual diff)
+	expectedStructuredOutput     *tu.ExpectedDiff     // for XR JSON output assertions
+	expectedStructuredCompOutput *tu.ExpectedCompDiff // for comp JSON output assertions
 }
 
 type XrdAPIVersion int
@@ -102,6 +105,18 @@ func runIntegrationTest(t *testing.T, testType DiffTestType, tt IntegrationTestC
 	t.Helper()
 
 	t.Parallel() // Enable parallel test execution
+
+	// Validate structured-output config up front so misconfiguration fails loudly
+	// instead of silently routing assertions to the wrong path.
+	if tt.expectedStructuredOutput != nil && tt.expectedStructuredCompOutput != nil {
+		t.Fatalf("test case sets both expectedStructuredOutput and expectedStructuredCompOutput; set only one")
+	}
+	if tt.expectedStructuredOutput != nil && testType != XRDiffTest {
+		t.Fatalf("expectedStructuredOutput is only valid for XRDiffTest (got %q)", testType)
+	}
+	if tt.expectedStructuredCompOutput != nil && testType != CompositionDiffTest {
+		t.Fatalf("expectedStructuredCompOutput is only valid for CompositionDiffTest (got %q)", testType)
+	}
 
 	// Create a fresh scheme for each test to avoid concurrent map access.
 	// Each parallel test needs its own scheme because envtest modifies it during CRD installation.
@@ -227,8 +242,8 @@ func runIntegrationTest(t *testing.T, testType DiffTestType, tt IntegrationTestC
 		args = append(args, fmt.Sprintf("--function-credentials=%s", tt.functionCredentials))
 	}
 
-	// Add eventual-state flag if specified (XR tests only)
-	if tt.eventualState && testType == XRDiffTest {
+	// Add eventual-state flag if specified (supported by both `xr` and `comp`).
+	if tt.eventualState {
 		args = append(args, "--eventual-state")
 	}
 
@@ -305,6 +320,11 @@ func runIntegrationTest(t *testing.T, testType DiffTestType, tt IntegrationTestC
 	// Handle JSON output format with structured assertions
 	if tt.outputFormat == "json" && tt.expectedStructuredOutput != nil {
 		tu.AssertStructuredDiff(t, outputStr, tt.expectedStructuredOutput)
+		return
+	}
+
+	if tt.outputFormat == "json" && tt.expectedStructuredCompOutput != nil {
+		tu.AssertStructuredCompDiff(t, outputStr, tt.expectedStructuredCompOutput)
 		return
 	}
 
@@ -1590,32 +1610,114 @@ Summary: 2 modified, 2 removed`,
 				And(),
 			expectedError: false,
 		},
-		"EventualStateWithSequencer": {
-			reason:  "Shows eventual state after all stages complete when using function-sequencer with --eventual-state",
-			timeout: longTimeout, // Multiple simulation iterations need more time
-			// The sequencer composition has 2 stages: stage0-resource (shown immediately) and stage1-resource (hidden until stage0 is Ready)
-			// Without --eventual-state, only stage0-resource would appear
-			// With --eventual-state, both stage0-resource and stage1-resource should appear
+		// Paired sequencer gating tests — the fixture sequencer-gating-composition.yaml
+		// is deliberately correct (rules match composition-resource-names stage0-/stage1-
+		// AND auto-ready runs BEFORE sequencer so DesiredComposed.Ready is populated
+		// before sequencer's gating check). Together these two cases discriminate
+		// --eventual-state from default behavior: only eventual-state surfaces stage1.
+		"SequencerGatesLaterStageWithoutEventualState": {
+			reason:       "Without --eventual-state, function-sequencer hides stage1 until stage0 is ready",
+			timeout:      longTimeout,
+			outputFormat: "json",
+			// eventualState deliberately false
+			inputFiles: []string{"testdata/diff/resources/sequencer-xr.yaml"},
+			setupFiles: []string{
+				"testdata/diff/resources/xrd.yaml",
+				"testdata/diff/resources/sequencer-gating-composition.yaml",
+				"testdata/diff/resources/sequencer-gating-composition-revision.yaml",
+				"testdata/diff/resources/functions.yaml",
+			},
+			expectedExitCode: dp.ExitCodeDiffDetected,
+			// Expect: XR + stage0 added; stage1 NOT present (gated).
+			expectedStructuredOutput: tu.ExpectDiff().
+				WithSummary(2, 0, 0).
+				WithAddedResource("XNopResource", "sequencer-test", "default").
+				WithField("spec.coolField", "test-value").
+				And().
+				WithAddedResource("XDownstreamResource", "0-stage0-resource", "default").
+				WithField("spec.forProvider.configData", "test-value").
+				And(),
+			expectedError: false,
+		},
+		"SequencerGatedStageAppearsWithEventualState": {
+			reason:        "With --eventual-state, sequencer-gated stage1 surfaces via synthesize-Ready iteration",
+			timeout:       longTimeout, // Multiple simulation iterations need more time
 			outputFormat:  "json",
 			eventualState: true,
 			inputFiles:    []string{"testdata/diff/resources/sequencer-xr.yaml"},
 			setupFiles: []string{
 				"testdata/diff/resources/xrd.yaml",
-				"testdata/diff/resources/sequencer-composition.yaml",
-				"testdata/diff/resources/sequencer-composition-revision.yaml",
+				"testdata/diff/resources/sequencer-gating-composition.yaml",
+				"testdata/diff/resources/sequencer-gating-composition-revision.yaml",
 				"testdata/diff/resources/functions.yaml",
 			},
 			expectedExitCode: dp.ExitCodeDiffDetected,
+			// Expect: XR + stage0 + stage1 all added (stage1 unlocked via eventual-state).
 			expectedStructuredOutput: tu.ExpectDiff().
-				WithSummary(3, 0, 0). // 2 downstream resources + 1 XR
+				WithSummary(3, 0, 0).
+				WithAddedResource("XNopResource", "sequencer-test", "default").
+				WithField("spec.coolField", "test-value").
+				And().
 				WithAddedResource("XDownstreamResource", "0-stage0-resource", "default").
 				WithField("spec.forProvider.configData", "test-value").
 				And().
 				WithAddedResource("XDownstreamResource", "1-stage1-resource", "default").
 				WithField("spec.forProvider.configData", "test-value").
-				And().
-				WithAddedResource("XNopResource", "sequencer-test", "default").
+				And(),
+			expectedError: false,
+		},
+		// Paired composition-driven gating tests — the fixture conditional-gating-composition.yaml
+		// encodes gating in go-templating itself (no function-sequencer): stage1 is only rendered
+		// when observed stage0 has Ready=True. This isolates eventual-state simulation from
+		// function-sequencer and exercises the synthesize-Ready path directly.
+		"ConditionalGatingHidesLaterStageWithoutEventualState": {
+			reason:       "Without --eventual-state, template conditionally gates stage1 because observed stage0 is not Ready",
+			timeout:      longTimeout,
+			outputFormat: "json",
+			// eventualState deliberately false
+			inputFiles: []string{"testdata/diff/resources/conditional-gating-xr.yaml"},
+			setupFiles: []string{
+				"testdata/diff/resources/xrd.yaml",
+				"testdata/diff/resources/conditional-gating-composition.yaml",
+				"testdata/diff/resources/conditional-gating-composition-revision.yaml",
+				"testdata/diff/resources/functions.yaml",
+			},
+			expectedExitCode: dp.ExitCodeDiffDetected,
+			// Expect: XR + stage0 added; stage1 NOT present (gated by the template's Ready check).
+			expectedStructuredOutput: tu.ExpectDiff().
+				WithSummary(2, 0, 0).
+				WithAddedResource("XNopResource", "conditional-gating-test", "default").
 				WithField("spec.coolField", "test-value").
+				And().
+				WithAddedResource("XDownstreamResource", "0-stage0-resource", "default").
+				WithField("spec.forProvider.configData", "test-value").
+				And(),
+			expectedError: false,
+		},
+		"ConditionalGatedStageAppearsWithEventualState": {
+			reason:        "With --eventual-state, synthesize-Ready flips stage0 Ready=True in observed so the template renders stage1",
+			timeout:       longTimeout, // Multiple simulation iterations need more time
+			outputFormat:  "json",
+			eventualState: true,
+			inputFiles:    []string{"testdata/diff/resources/conditional-gating-xr.yaml"},
+			setupFiles: []string{
+				"testdata/diff/resources/xrd.yaml",
+				"testdata/diff/resources/conditional-gating-composition.yaml",
+				"testdata/diff/resources/conditional-gating-composition-revision.yaml",
+				"testdata/diff/resources/functions.yaml",
+			},
+			expectedExitCode: dp.ExitCodeDiffDetected,
+			// Expect: XR + stage0 + stage1 all added.
+			expectedStructuredOutput: tu.ExpectDiff().
+				WithSummary(3, 0, 0).
+				WithAddedResource("XNopResource", "conditional-gating-test", "default").
+				WithField("spec.coolField", "test-value").
+				And().
+				WithAddedResource("XDownstreamResource", "0-stage0-resource", "default").
+				WithField("spec.forProvider.configData", "test-value").
+				And().
+				WithAddedResource("XDownstreamResource", "1-stage1-resource", "default").
+				WithField("spec.forProvider.configData", "test-value").
 				And(),
 			expectedError: false,
 		},
@@ -2973,6 +3075,122 @@ Summary: 2 modified`,
 			expectedError:    false,
 			expectedExitCode: dp.ExitCodeDiffDetected,
 			noColor:          true,
+		},
+		// Paired comp sequencer-gating tests — mirror of the XR pair. Verifies that
+		// --eventual-state on `comp` surfaces downstream resources hidden by
+		// function-sequencer in the impact analysis.
+		"CompSequencerGatesLaterStageWithoutEventualState": {
+			reason:       "`comp` without --eventual-state: sequencer-gated stage1 is absent from the impact analysis",
+			timeout:      longTimeout,
+			outputFormat: "json",
+			// eventualState deliberately false
+			setupFiles: []string{
+				"testdata/diff/resources/xrd.yaml",
+				"testdata/diff/resources/sequencer-gating-composition.yaml",
+				"testdata/diff/resources/sequencer-gating-composition-revision.yaml",
+				"testdata/diff/resources/functions.yaml",
+				// Pre-existing XR that references sequencer-gating-composition by name so
+				// FindCompositesUsingComposition discovers it.
+				"testdata/comp/resources/existing-sequencer-gating-xr.yaml",
+			},
+			inputFiles:       []string{"testdata/comp/updated-sequencer-gating-composition.yaml"},
+			namespace:        "default",
+			expectedExitCode: dp.ExitCodeDiffDetected,
+			// Expect: impact shows stage0 added (its configData changed and it doesn't exist yet);
+			// stage1 is absent from downstream impact because sequencer gates it.
+			expectedStructuredCompOutput: tu.ExpectCompDiff().
+				WithComposition("sequencer-gating-composition").
+				WithCompositionModified().
+				WithXRImpact("XNopResource", "sequencer-gating-test", "default", "changed").
+				WithDownstreamSummary(1, 0, 0).
+				WithDownstreamResource("added", "XDownstreamResource", "0-stage0-resource", "default").
+				WithField("spec.forProvider.configData", "updated-existing-value").
+				AndXR().AndComp().And(),
+			expectedError: false,
+		},
+		"CompSequencerGatedStageAppearsWithEventualState": {
+			reason:        "`comp` with --eventual-state: sequencer-gated stage1 surfaces in the impact analysis",
+			timeout:       longTimeout, // Multiple simulation iterations need more time
+			outputFormat:  "json",
+			eventualState: true,
+			setupFiles: []string{
+				"testdata/diff/resources/xrd.yaml",
+				"testdata/diff/resources/sequencer-gating-composition.yaml",
+				"testdata/diff/resources/sequencer-gating-composition-revision.yaml",
+				"testdata/diff/resources/functions.yaml",
+				"testdata/comp/resources/existing-sequencer-gating-xr.yaml",
+			},
+			inputFiles:       []string{"testdata/comp/updated-sequencer-gating-composition.yaml"},
+			namespace:        "default",
+			expectedExitCode: dp.ExitCodeDiffDetected,
+			// Expect: impact shows BOTH stage0 and stage1 added (eventual-state unlocks stage1).
+			expectedStructuredCompOutput: tu.ExpectCompDiff().
+				WithComposition("sequencer-gating-composition").
+				WithCompositionModified().
+				WithXRImpact("XNopResource", "sequencer-gating-test", "default", "changed").
+				WithDownstreamSummary(2, 0, 0).
+				WithDownstreamResource("added", "XDownstreamResource", "0-stage0-resource", "default").
+				WithField("spec.forProvider.configData", "updated-existing-value").
+				AndXR().
+				WithDownstreamResource("added", "XDownstreamResource", "1-stage1-resource", "default").
+				WithField("spec.forProvider.configData", "updated-existing-value").
+				AndXR().AndComp().And(),
+			expectedError: false,
+		},
+		// Paired comp composition-driven gating tests — gating encoded in go-templating,
+		// no function-sequencer. Mirrors the XR composition-driven pair.
+		"CompConditionalGatingHidesLaterStageWithoutEventualState": {
+			reason:       "`comp` without --eventual-state: template-gated stage1 is absent from the impact analysis",
+			timeout:      longTimeout,
+			outputFormat: "json",
+			// eventualState deliberately false
+			setupFiles: []string{
+				"testdata/diff/resources/xrd.yaml",
+				"testdata/diff/resources/conditional-gating-composition.yaml",
+				"testdata/diff/resources/conditional-gating-composition-revision.yaml",
+				"testdata/diff/resources/functions.yaml",
+				"testdata/comp/resources/existing-conditional-gating-xr.yaml",
+			},
+			inputFiles:       []string{"testdata/comp/updated-conditional-gating-composition.yaml"},
+			namespace:        "default",
+			expectedExitCode: dp.ExitCodeDiffDetected,
+			expectedStructuredCompOutput: tu.ExpectCompDiff().
+				WithComposition("conditional-gating-composition").
+				WithCompositionModified().
+				WithXRImpact("XNopResource", "conditional-gating-test", "default", "changed").
+				WithDownstreamSummary(1, 0, 0).
+				WithDownstreamResource("added", "XDownstreamResource", "0-stage0-resource", "default").
+				WithField("spec.forProvider.configData", "updated-existing-value").
+				AndXR().AndComp().And(),
+			expectedError: false,
+		},
+		"CompConditionalGatedStageAppearsWithEventualState": {
+			reason:        "`comp` with --eventual-state: template-gated stage1 surfaces in the impact analysis",
+			timeout:       longTimeout, // Multiple simulation iterations need more time
+			outputFormat:  "json",
+			eventualState: true,
+			setupFiles: []string{
+				"testdata/diff/resources/xrd.yaml",
+				"testdata/diff/resources/conditional-gating-composition.yaml",
+				"testdata/diff/resources/conditional-gating-composition-revision.yaml",
+				"testdata/diff/resources/functions.yaml",
+				"testdata/comp/resources/existing-conditional-gating-xr.yaml",
+			},
+			inputFiles:       []string{"testdata/comp/updated-conditional-gating-composition.yaml"},
+			namespace:        "default",
+			expectedExitCode: dp.ExitCodeDiffDetected,
+			expectedStructuredCompOutput: tu.ExpectCompDiff().
+				WithComposition("conditional-gating-composition").
+				WithCompositionModified().
+				WithXRImpact("XNopResource", "conditional-gating-test", "default", "changed").
+				WithDownstreamSummary(2, 0, 0).
+				WithDownstreamResource("added", "XDownstreamResource", "0-stage0-resource", "default").
+				WithField("spec.forProvider.configData", "updated-existing-value").
+				AndXR().
+				WithDownstreamResource("added", "XDownstreamResource", "1-stage1-resource", "default").
+				WithField("spec.forProvider.configData", "updated-existing-value").
+				AndXR().AndComp().And(),
+			expectedError: false,
 		},
 	}
 

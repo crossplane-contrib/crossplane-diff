@@ -66,6 +66,9 @@ Examples:
 
   # Include XRs with Manual update policy (pinned revisions)
   crossplane-diff comp updated-composition.yaml --include-manual
+
+  # Show eventual state with function-sequencer (all stages, not just first).
+  crossplane-diff comp updated-composition.yaml --eventual-state
 `
 }
 

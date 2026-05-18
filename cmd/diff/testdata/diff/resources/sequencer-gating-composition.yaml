@@ -1,0 +1,68 @@
+# Composition used by tests that need function-sequencer to actually gate later stages.
+#
+# IMPORTANT notes:
+#
+# 1. function-sequencer matches on the resource's composition-resource-name
+#    (the SDK's resource.Name), NOT on metadata.name. The rules use regexes that
+#    match the composition-resource-names emitted by go-templating
+#    (stage0-resource / stage1-resource).
+#
+# 2. function-sequencer's gating checks DesiredComposed.Ready == True for earlier
+#    stages. DesiredComposed.Ready is set by function-auto-ready based on the
+#    observed state. Therefore auto-ready MUST run BEFORE sequencer for eventual-
+#    state to propagate (synthesize observed Ready -> auto-ready sets desired
+#    Ready -> sequencer unlocks the next stage).
+apiVersion: apiextensions.crossplane.io/v1
+kind: Composition
+metadata:
+  name: sequencer-gating-composition
+spec:
+  compositeTypeRef:
+    apiVersion: ns.diff.example.org/v1alpha1
+    kind: XNopResource
+  mode: Pipeline
+  pipeline:
+    - step: generate-all-resources
+      functionRef:
+        name: function-go-templating
+      input:
+        apiVersion: template.fn.crossplane.io/v1beta1
+        kind: GoTemplate
+        source: Inline
+        inline:
+          template: |
+            apiVersion: ns.nop.example.org/v1alpha1
+            kind: XDownstreamResource
+            metadata:
+              name: 0-stage0-resource
+              namespace: {{ .observed.composite.resource.metadata.namespace }}
+              annotations:
+                gotemplating.fn.crossplane.io/composition-resource-name: stage0-resource
+            spec:
+              forProvider:
+                configData: {{ .observed.composite.resource.spec.coolField }}
+            ---
+            apiVersion: ns.nop.example.org/v1alpha1
+            kind: XDownstreamResource
+            metadata:
+              name: 1-stage1-resource
+              namespace: {{ .observed.composite.resource.metadata.namespace }}
+              annotations:
+                gotemplating.fn.crossplane.io/composition-resource-name: stage1-resource
+            spec:
+              forProvider:
+                configData: {{ .observed.composite.resource.spec.coolField }}
+    # auto-ready FIRST so sequencer sees desired.stage0.Ready reflecting observed.
+    - step: mark-ready-from-observed
+      functionRef:
+        name: function-auto-ready
+    - step: sequence-resources
+      functionRef:
+        name: function-sequencer
+      input:
+        apiVersion: sequencer.fn.crossplane.io/v1beta1
+        kind: Input
+        rules:
+          - sequence:
+              - ^stage0-  # Stage 0 (composition-resource-name starts with stage0-)
+              - ^stage1-  # Stage 1 (gated until stage0- desired.Ready==True)

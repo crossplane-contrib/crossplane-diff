@@ -1,0 +1,78 @@
+# Composition-driven gating (no function-sequencer). stage1 is only rendered by
+# go-templating when observed stage0 has Ready=True. This isolates eventual-state
+# simulation from sequencer behavior: the gating is encoded in the template itself.
+#
+# Template data model: observed composed resources are at .observed.resources
+# (map keyed by composition-resource-name), matching the RunFunctionRequest proto
+# field State.resources. Each entry has .resource (the composed resource object).
+#
+# Flow under eventual-state:
+#   iter 1: observed.resources is empty -> stage1 guard skipped -> renders stage0 only
+#   synthesizeReady flips rendered stage0 Ready=True and merges into observed
+#   iter 2: observed.resources[stage0-resource].resource.status.conditions has
+#           Ready=True -> renders stage0+stage1
+#   iter 3: renders stage0+stage1 again; newComposed=[] -> stable
+#
+# Flow without eventual-state: iter 1 only. Renders stage0. Stable immediately.
+apiVersion: apiextensions.crossplane.io/v1
+kind: Composition
+metadata:
+  name: conditional-gating-composition
+spec:
+  compositeTypeRef:
+    apiVersion: ns.diff.example.org/v1alpha1
+    kind: XNopResource
+  mode: Pipeline
+  pipeline:
+    - step: generate-resources
+      functionRef:
+        name: function-go-templating
+      input:
+        apiVersion: template.fn.crossplane.io/v1beta1
+        kind: GoTemplate
+        source: Inline
+        inline:
+          template: |
+            apiVersion: ns.nop.example.org/v1alpha1
+            kind: XDownstreamResource
+            metadata:
+              name: 0-stage0-resource
+              namespace: {{ .observed.composite.resource.metadata.namespace }}
+              annotations:
+                gotemplating.fn.crossplane.io/composition-resource-name: stage0-resource
+            spec:
+              forProvider:
+                configData: {{ .observed.composite.resource.spec.coolField }}
+            {{- /* Render stage1 iff observed stage0 has a Ready=True condition.
+                 Access pattern: .observed.resources is the protojson of State.resources
+                 (map<string, Resource> keyed by composition-resource-name).
+                 Compute $ready once, then emit the manifest once to avoid
+                 duplicates if multiple Ready=True conditions ever appear. */ -}}
+            {{- $ready := false -}}
+            {{- with .observed.resources -}}
+              {{- with (index . "stage0-resource") -}}
+                {{- with .resource.status.conditions -}}
+                  {{- range . -}}
+                    {{- if and (eq .type "Ready") (eq .status "True") -}}
+                      {{- $ready = true -}}
+                    {{- end -}}
+                  {{- end -}}
+                {{- end -}}
+              {{- end -}}
+            {{- end -}}
+            {{- if $ready }}
+            ---
+            apiVersion: ns.nop.example.org/v1alpha1
+            kind: XDownstreamResource
+            metadata:
+              name: 1-stage1-resource
+              namespace: {{ .observed.composite.resource.metadata.namespace }}
+              annotations:
+                gotemplating.fn.crossplane.io/composition-resource-name: stage1-resource
+            spec:
+              forProvider:
+                configData: {{ .observed.composite.resource.spec.coolField }}
+            {{- end }}
+    - step: mark-ready-from-observed
+      functionRef:
+        name: function-auto-ready

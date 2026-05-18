@@ -34,10 +34,6 @@ type XRCmd struct {
 	// Embed common fields
 	CommonCmdFields
 
-	// EventualState enables iterative simulation to show eventual state after all reconciliation
-	// cycles complete. Useful with function-sequencer which hides later stage resources.
-	EventualState bool `default:"false" help:"Show eventual state after all reconciliation cycles complete (useful with function-sequencer)." name:"eventual-state"`
-
 	Files []string `arg:"" help:"YAML files containing Crossplane resources to diff." optional:""`
 }
 
@@ -95,7 +91,6 @@ func makeDefaultXRProc(c *XRCmd, kongCtx *kong.Context, appCtx *AppContext, log 
 	opts = append(opts,
 		dp.WithLogger(log),
 		dp.WithRenderMutex(&globalRenderMutex),
-		dp.WithEventualState(c.EventualState),
 		dp.WithStdout(kongCtx.Stdout),
 		dp.WithStderr(kongCtx.Stderr),
 	)
