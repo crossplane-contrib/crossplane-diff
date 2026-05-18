@@ -67,6 +67,7 @@ func defaultProcessorOptions(fields CommonCmdFields, namespace string) []dp.Proc
 		dp.WithCompact(fields.Compact),
 		dp.WithMaxNestedDepth(fields.MaxNestedDepth),
 		dp.WithMaxRenderIterations(fields.MaxIterations),
+		dp.WithEventualState(fields.EventualState),
 		dp.WithIgnorePaths(allIgnorePaths),
 	}
 

@@ -36,10 +36,6 @@ type CompCmd struct {
 	// Embed common fields
 	CommonCmdFields
 
-	// EventualState enables iterative simulation to show eventual state after all reconciliation
-	// cycles complete. Useful with function-sequencer which hides later stage resources.
-	EventualState bool `default:"false" help:"Show eventual state after all reconciliation cycles complete (useful with function-sequencer)." name:"eventual-state"`
-
 	Files []string `arg:"" help:"YAML files containing updated Composition(s)." optional:""`
 
 	// Configuration options
@@ -106,7 +102,6 @@ func makeDefaultCompProc(c *CompCmd, kongCtx *kong.Context, appCtx *AppContext, 
 		dp.WithLogger(log),
 		dp.WithRenderMutex(&globalRenderMutex),
 		dp.WithIncludeManual(c.IncludeManual),
-		dp.WithEventualState(c.EventualState),
 		dp.WithStdout(kongCtx.Stdout),
 		dp.WithStderr(kongCtx.Stderr),
 	)
