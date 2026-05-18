@@ -55,7 +55,7 @@ type IntegrationTestCase struct {
 	xrdAPIVersion              XrdAPIVersion // For XR tests (optional)
 	ignorePaths                []string      // Paths to ignore in diffs
 	functionCredentials        string        // Path to function credentials file (optional)
-	eventualState              bool          // For XR tests: enable eventual state simulation (optional)
+	eventualState              bool          // Enable eventual state simulation for XR or composition tests (optional)
 	timeout                    time.Duration // Custom timeout for this test (0 = use default)
 	skip                       bool
 	skipReason                 string
