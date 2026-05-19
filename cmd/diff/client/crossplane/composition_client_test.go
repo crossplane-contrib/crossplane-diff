@@ -6,7 +6,9 @@ import (
 	"testing"
 
 	tu "github.com/crossplane-contrib/crossplane-diff/cmd/diff/testutils"
+	dtypes "github.com/crossplane-contrib/crossplane-diff/cmd/diff/types"
 	"github.com/google/go-cmp/cmp"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	un "k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -1800,6 +1802,189 @@ func TestDefaultCompositionClient_getClaimTypeFromXRD(t *testing.T) {
 
 			if diff := cmp.Diff(tt.want.gvk, got); diff != "" {
 				t.Errorf("\n%s\ngetClaimTypeFromXRD(): -want GVK, +got GVK:\n%s", tt.reason, diff)
+			}
+		})
+	}
+}
+
+func TestDefaultCompositionClient_GetCompositesByName(t *testing.T) {
+	ctx := t.Context()
+
+	// Composition targeting (example.org/v1, XBucket).
+	comp := tu.NewComposition("test-comp").
+		WithCompositeTypeRef("example.org/v1", "XBucket").
+		Build()
+
+	// XRD with claim "Bucket" (so claim GVK is example.org/v1, Bucket).
+	xrd := tu.NewXRD("xbuckets.example.org", "example.org", "XBucket").
+		WithPlural("xbuckets").
+		WithClaimNames("Bucket", "buckets").
+		WithVersion("v1", true, true).
+		BuildAsUnstructured()
+
+	// XRD with no claim type (just XR).
+	xrdNoClaim := tu.NewXRD("xbuckets.example.org", "example.org", "XBucket").
+		WithPlural("xbuckets").
+		WithVersion("v1", true, true).
+		BuildAsUnstructured()
+
+	// Cluster-scoped XR named "xr-cluster", refs comp via v1 path.
+	xrCluster := tu.NewResource("example.org/v1", "XBucket", "xr-cluster").
+		WithSpecField("compositionRef", map[string]any{"name": "test-comp"}).
+		Build()
+
+	// Namespaced claim "claim-ns/claim-1", refs comp via v1 path.
+	claim := tu.NewResource("example.org/v1", "Bucket", "claim-1").
+		InNamespace("claim-ns").
+		WithSpecField("compositionRef", map[string]any{"name": "test-comp"}).
+		Build()
+
+	// XR that uses a DIFFERENT composition.
+	xrWrongComp := tu.NewResource("example.org/v1", "XBucket", "xr-wrong").
+		WithSpecField("compositionRef", map[string]any{"name": "some-other-comp"}).
+		Build()
+
+	xrGVK := schema.GroupVersionKind{Group: "example.org", Version: "v1", Kind: "XBucket"}
+	claimGVK := schema.GroupVersionKind{Group: "example.org", Version: "v1", Kind: "Bucket"}
+
+	tests := map[string]struct {
+		reason       string
+		mockResource *tu.MockResourceClient
+		mockDef      *tu.MockDefinitionClient
+		comp         *apiextensionsv1.Composition
+		refs         []dtypes.ResourceRef
+		wantMatched  []string // names of matched composites
+		wantUnmatched []dtypes.ResourceRef
+		wantErr      bool
+	}{
+		"XRGVKHit_ClusterScoped": {
+			reason: "Cluster-scoped XR with matching composition is matched via XR-GVK lookup",
+			mockResource: tu.NewMockResourceClient().
+				WithGetResource(func(_ context.Context, gvk schema.GroupVersionKind, _, name string) (*un.Unstructured, error) {
+					if gvk == xrGVK && name == "xr-cluster" {
+						return xrCluster, nil
+					}
+					return nil, apierrors.NewNotFound(schema.GroupResource{Group: gvk.Group, Resource: "xbuckets"}, name)
+				}).
+				Build(),
+			mockDef: tu.NewMockDefinitionClient().WithXRDForXR(xrd).Build(),
+			comp:    comp,
+			refs:    []dtypes.ResourceRef{{Name: "xr-cluster"}},
+			wantMatched: []string{"xr-cluster"},
+		},
+		"ClaimGVKHit_NamespacedClaim": {
+			reason: "Claim found via claim-GVK fallback when XR-GVK 404s",
+			mockResource: tu.NewMockResourceClient().
+				WithGetResource(func(_ context.Context, gvk schema.GroupVersionKind, ns, name string) (*un.Unstructured, error) {
+					if gvk == claimGVK && ns == "claim-ns" && name == "claim-1" {
+						return claim, nil
+					}
+					return nil, apierrors.NewNotFound(schema.GroupResource{Group: gvk.Group, Resource: "x"}, name)
+				}).
+				Build(),
+			mockDef: tu.NewMockDefinitionClient().WithXRDForXR(xrd).Build(),
+			comp:    comp,
+			refs:    []dtypes.ResourceRef{{Namespace: "claim-ns", Name: "claim-1"}},
+			wantMatched: []string{"claim-1"},
+		},
+		"BothLookupsNotFound_Unmatched": {
+			reason: "Returned in unmatched when neither XR-GVK nor claim-GVK lookup succeeds",
+			mockResource: tu.NewMockResourceClient().WithResourceNotFound().Build(),
+			mockDef:      tu.NewMockDefinitionClient().WithXRDForXR(xrd).Build(),
+			comp:         comp,
+			refs:         []dtypes.ResourceRef{{Namespace: "claim-ns", Name: "ghost"}},
+			wantUnmatched: []dtypes.ResourceRef{{Namespace: "claim-ns", Name: "ghost"}},
+		},
+		"FoundButUsesDifferentComposition_Unmatched": {
+			reason: "Resource exists but its compositionRef points to a different composition",
+			mockResource: tu.NewMockResourceClient().
+				WithGetResource(func(_ context.Context, gvk schema.GroupVersionKind, _, name string) (*un.Unstructured, error) {
+					if gvk == xrGVK && name == "xr-wrong" {
+						return xrWrongComp, nil
+					}
+					return nil, apierrors.NewNotFound(schema.GroupResource{Group: gvk.Group, Resource: "x"}, name)
+				}).
+				Build(),
+			mockDef:       tu.NewMockDefinitionClient().WithXRDForXR(xrd).Build(),
+			comp:          comp,
+			refs:          []dtypes.ResourceRef{{Name: "xr-wrong"}},
+			wantUnmatched: []dtypes.ResourceRef{{Name: "xr-wrong"}},
+		},
+		"TransportErrorPropagated": {
+			reason: "Non-NotFound errors from GetResource propagate up",
+			mockResource: tu.NewMockResourceClient().
+				WithGetResource(func(context.Context, schema.GroupVersionKind, string, string) (*un.Unstructured, error) {
+					return nil, errors.New("connection refused")
+				}).
+				Build(),
+			mockDef: tu.NewMockDefinitionClient().WithXRDForXR(xrd).Build(),
+			comp:    comp,
+			refs:    []dtypes.ResourceRef{{Name: "x"}},
+			wantErr: true,
+		},
+		"NoClaimType_OnlyXRLookupAttempted": {
+			reason: "When XRD has no claimNames, claim-GVK lookup is skipped without crashing",
+			mockResource: tu.NewMockResourceClient().
+				WithGetResource(func(_ context.Context, gvk schema.GroupVersionKind, _, name string) (*un.Unstructured, error) {
+					if gvk == xrGVK && name == "xr-cluster" {
+						return xrCluster, nil
+					}
+					return nil, apierrors.NewNotFound(schema.GroupResource{Group: gvk.Group, Resource: "x"}, name)
+				}).
+				Build(),
+			mockDef: tu.NewMockDefinitionClient().WithXRDForXR(xrdNoClaim).Build(),
+			comp:    comp,
+			refs:    []dtypes.ResourceRef{{Name: "xr-cluster"}, {Namespace: "x", Name: "ghost"}},
+			wantMatched:   []string{"xr-cluster"},
+			wantUnmatched: []dtypes.ResourceRef{{Namespace: "x", Name: "ghost"}},
+		},
+		"XRDNotFound_OnlyXRLookupAttempted": {
+			reason: "When XRD itself is missing, claim-GVK lookup is skipped",
+			mockResource: tu.NewMockResourceClient().
+				WithGetResource(func(_ context.Context, gvk schema.GroupVersionKind, _, name string) (*un.Unstructured, error) {
+					if gvk == xrGVK && name == "xr-cluster" {
+						return xrCluster, nil
+					}
+					return nil, apierrors.NewNotFound(schema.GroupResource{Group: gvk.Group, Resource: "x"}, name)
+				}).
+				Build(),
+			mockDef: tu.NewMockDefinitionClient().WithXRDForXRNotFound().Build(),
+			comp:    comp,
+			refs:    []dtypes.ResourceRef{{Name: "xr-cluster"}},
+			wantMatched: []string{"xr-cluster"},
+		},
+	}
+
+	for name, tt := range tests {
+		t.Run(name, func(t *testing.T) {
+			c := &DefaultCompositionClient{
+				resourceClient:   tt.mockResource,
+				definitionClient: tt.mockDef,
+				revisionClient:   NewCompositionRevisionClient(tt.mockResource, tu.TestLogger(t, false)),
+				logger:           tu.TestLogger(t, false),
+			}
+
+			matched, unmatched, err := c.GetCompositesByName(ctx, tt.comp, tt.refs)
+
+			if tt.wantErr {
+				if err == nil {
+					t.Fatalf("\n%s: expected error, got matched=%v unmatched=%v", tt.reason, matched, unmatched)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("\n%s: unexpected error: %v", tt.reason, err)
+			}
+
+			var gotMatchedNames []string
+			for _, m := range matched {
+				gotMatchedNames = append(gotMatchedNames, m.GetName())
+			}
+			if diff := cmp.Diff(tt.wantMatched, gotMatchedNames); diff != "" {
+				t.Errorf("\n%s: matched mismatch:\n%s", tt.reason, diff)
+			}
+			if diff := cmp.Diff(tt.wantUnmatched, unmatched); diff != "" {
+				t.Errorf("\n%s: unmatched mismatch:\n%s", tt.reason, diff)
 			}
 		})
 	}

@@ -289,7 +289,7 @@ func TestDefaultCompDiffProcessor_DiffComposition(t *testing.T) {
 				compDiffRenderer:  compDiffRenderer,
 			}
 
-			_, err := processor.DiffComposition(ctx, tt.compositions, tt.namespace)
+			_, err := processor.DiffComposition(ctx, tt.compositions, tt.namespace, nil)
 
 			if (err != nil) != tt.wantErr {
 				t.Errorf("DiffComposition() error = %v, wantErr %v", err, tt.wantErr)
@@ -424,10 +424,10 @@ func TestDefaultCompDiffProcessor_filterXRsByUpdatePolicy(t *testing.T) {
 				},
 			}
 
-			got := processor.filterXRsByUpdatePolicy(tt.xrs)
+			got, _ := processor.partitionXRsByUpdatePolicy(tt.xrs)
 
 			if len(got) != len(tt.want) {
-				t.Errorf("filterXRsByUpdatePolicy() returned %d XRs, want %d", len(got), len(tt.want))
+				t.Errorf("partitionXRsByUpdatePolicy() returned %d kept XRs, want %d", len(got), len(tt.want))
 			}
 
 			// Compare XR names to verify correct filtering
@@ -705,7 +705,7 @@ func TestDefaultCompDiffProcessor_DiffComposition_StderrErrorOutput(t *testing.T
 			WithCompositeTypeRef("example.org/v1", "XResource").
 			WithPipelineMode().
 			BuildAsUnstructured(),
-	}, "default")
+	}, "default", nil)
 
 	// Should return error because one XR failed
 	if err == nil {
@@ -725,4 +725,214 @@ func TestDefaultCompDiffProcessor_DiffComposition_StderrErrorOutput(t *testing.T
 	if !strings.Contains(stderrOutput, "render pipeline failed") {
 		t.Errorf("Expected stderr to contain error message 'render pipeline failed', got: %q", stderrOutput)
 	}
+}
+
+
+// newCompProcessorForTest builds a DefaultCompDiffProcessor wrapping the given composition client
+// for use by the --resource preflight tests below.
+func newCompProcessorForTest(t *testing.T, compClient xp.CompositionClient, includeManual bool) (*DefaultCompDiffProcessor, *bytes.Buffer) {
+	t.Helper()
+
+	logger := tu.TestLogger(t, false)
+
+	stdout := &bytes.Buffer{}
+	stderr := &bytes.Buffer{}
+
+	config := ProcessorConfig{
+		IncludeManual: includeManual,
+		Logger:        logger,
+		Stdout:        stdout,
+		Stderr:        stderr,
+		RenderFunc: func(_ context.Context, _ logging.Logger, in RenderInputs) (render.CompositionOutputs, error) {
+			return render.CompositionOutputs{CompositeResource: in.CompositeResource}, nil
+		},
+	}
+	config.SetDefaultFactories()
+
+	diffOpts := config.GetDiffOptions()
+	diffRenderer := config.Factories.DiffRenderer(logger, diffOpts)
+	compRenderer := config.Factories.CompDiffRenderer(logger, diffRenderer, diffOpts)
+
+	mockXR := &tu.MockDiffProcessor{
+		DiffSingleResourceFn: func(context.Context, *un.Unstructured, types.CompositionProvider) (map[string]*dt.ResourceDiff, error) {
+			return map[string]*dt.ResourceDiff{}, nil
+		},
+	}
+
+	return &DefaultCompDiffProcessor{
+		compositionClient: compClient,
+		config:            config,
+		xrProc:            mockXR,
+		compDiffRenderer:  compRenderer,
+	}, stdout
+}
+
+// TestDefaultCompDiffProcessor_DiffComposition_ResourceMode covers the --resource code path:
+// preflight, fail-fast on globally-unmatched refs, and surfacing of policy-filtered composites.
+func TestDefaultCompDiffProcessor_DiffComposition_ResourceMode(t *testing.T) {
+	ctx := t.Context()
+
+	comp := tu.NewComposition("test-comp").
+		WithCompositeTypeRef("example.org/v1", "XR").
+		WithPipelineMode().
+		BuildAsUnstructured()
+
+	xr1 := tu.NewResource("example.org/v1", "XR", "xr-1").
+		InNamespace("ns").
+		WithSpecField("compositionRef", map[string]any{"name": "test-comp"}).
+		Build()
+
+	xr2 := tu.NewResource("example.org/v1", "XR", "xr-2").
+		InNamespace("ns").
+		WithSpecField("compositionRef", map[string]any{"name": "test-comp"}).
+		Build()
+
+	// Manual-policy XR (v2 path).
+	manualXR := tu.NewResource("example.org/v1", "XR", "manual-xr").
+		InNamespace("ns").
+		WithSpecField("compositionRef", map[string]any{"name": "test-comp"}).
+		WithSpecField("crossplane", map[string]any{"compositionUpdatePolicy": "Manual"}).
+		Build()
+
+	t.Run("EmptyResources_FallsBackToFindCompositesUsingComposition", func(t *testing.T) {
+		findCalls := 0
+		getByNameCalls := 0
+
+		client := tu.NewMockCompositionClient().
+			WithSuccessfulCompositionFetch(&apiextensionsv1.Composition{}).
+			WithFindCompositesUsingComposition(func(context.Context, string, string) ([]*un.Unstructured, error) {
+				findCalls++
+				return []*un.Unstructured{xr1}, nil
+			}).
+			WithGetCompositesByName(func(context.Context, *apiextensionsv1.Composition, []types.ResourceRef) ([]*un.Unstructured, []types.ResourceRef, error) {
+				getByNameCalls++
+				return nil, nil, nil
+			}).
+			Build()
+
+		proc, _ := newCompProcessorForTest(t, client, false)
+		_, err := proc.DiffComposition(ctx, []*un.Unstructured{comp}, "ns", nil)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if findCalls != 1 {
+			t.Errorf("FindCompositesUsingComposition: expected 1 call, got %d", findCalls)
+		}
+		if getByNameCalls != 0 {
+			t.Errorf("GetCompositesByName: expected 0 calls, got %d", getByNameCalls)
+		}
+	})
+
+	t.Run("ResourceMode_AllMatch_UsesGetCompositesByName", func(t *testing.T) {
+		findCalls := 0
+		getByNameCalls := 0
+
+		client := tu.NewMockCompositionClient().
+			WithSuccessfulCompositionFetch(&apiextensionsv1.Composition{}).
+			WithFindCompositesUsingComposition(func(context.Context, string, string) ([]*un.Unstructured, error) {
+				findCalls++
+				return nil, nil
+			}).
+			WithGetCompositesByName(func(_ context.Context, _ *apiextensionsv1.Composition, refs []types.ResourceRef) ([]*un.Unstructured, []types.ResourceRef, error) {
+				getByNameCalls++
+				// Both refs match.
+				_ = refs
+				return []*un.Unstructured{xr1, xr2}, nil, nil
+			}).
+			Build()
+
+		proc, _ := newCompProcessorForTest(t, client, false)
+		_, err := proc.DiffComposition(ctx, []*un.Unstructured{comp}, "",
+			[]types.ResourceRef{{Namespace: "ns", Name: "xr-1"}, {Namespace: "ns", Name: "xr-2"}})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if findCalls != 0 {
+			t.Errorf("FindCompositesUsingComposition: expected 0 calls, got %d", findCalls)
+		}
+		if getByNameCalls != 1 {
+			t.Errorf("GetCompositesByName: expected 1 call, got %d", getByNameCalls)
+		}
+	})
+
+	t.Run("ResourceMode_GloballyUnmatched_FailsFastNoRender", func(t *testing.T) {
+		client := tu.NewMockCompositionClient().
+			WithSuccessfulCompositionFetch(&apiextensionsv1.Composition{}).
+			WithGetCompositesByName(func(_ context.Context, _ *apiextensionsv1.Composition, refs []types.ResourceRef) ([]*un.Unstructured, []types.ResourceRef, error) {
+				// No matches; everything unmatched.
+				return nil, refs, nil
+			}).
+			Build()
+
+		proc, stdout := newCompProcessorForTest(t, client, false)
+		_, err := proc.DiffComposition(ctx, []*un.Unstructured{comp}, "",
+			[]types.ResourceRef{{Namespace: "ns", Name: "ghost"}})
+		if err == nil {
+			t.Fatal("expected error from globally-unmatched preflight, got nil")
+		}
+		if !strings.Contains(err.Error(), "ns/ghost") {
+			t.Errorf("error message should name the unmatched ref, got: %v", err)
+		}
+		if stdout.Len() != 0 {
+			t.Errorf("expected no output before fail-fast, got: %q", stdout.String())
+		}
+	})
+
+	t.Run("ResourceMode_ManualPolicyMatchSurfacedAsFiltered", func(t *testing.T) {
+		client := tu.NewMockCompositionClient().
+			WithSuccessfulCompositionFetch(&apiextensionsv1.Composition{}).
+			WithGetCompositesByName(func(context.Context, *apiextensionsv1.Composition, []types.ResourceRef) ([]*un.Unstructured, []types.ResourceRef, error) {
+				return []*un.Unstructured{manualXR}, nil, nil
+			}).
+			Build()
+
+		proc, _ := newCompProcessorForTest(t, client, false /* IncludeManual */)
+		_, err := proc.DiffComposition(ctx, []*un.Unstructured{comp}, "",
+			[]types.ResourceRef{{Namespace: "ns", Name: "manual-xr"}})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+
+		// Drive the same call again, but this time inspect the result via processSingleComposition
+		// directly — easier than parsing renderer output.
+		got, err := proc.processSingleComposition(ctx, comp, "", []*un.Unstructured{manualXR}, true)
+		if err != nil {
+			t.Fatalf("processSingleComposition: %v", err)
+		}
+		if len(got.ImpactAnalysis) != 1 {
+			t.Fatalf("expected 1 impact entry, got %d", len(got.ImpactAnalysis))
+		}
+		if got.ImpactAnalysis[0].Status != "filtered_by_policy" {
+			t.Errorf("expected filtered_by_policy status, got %q", got.ImpactAnalysis[0].Status)
+		}
+		if got.AffectedResources.FilteredByPolicy != 1 {
+			t.Errorf("expected FilteredByPolicy=1, got %d", got.AffectedResources.FilteredByPolicy)
+		}
+		if got.AffectedResources.Total != 1 {
+			t.Errorf("expected Total=1, got %d", got.AffectedResources.Total)
+		}
+	})
+
+	t.Run("DefaultDiscoveryMode_ManualPolicyNotInImpactAnalysis", func(t *testing.T) {
+		client := tu.NewMockCompositionClient().
+			WithSuccessfulCompositionFetch(&apiextensionsv1.Composition{}).
+			WithFindCompositesUsingComposition(func(context.Context, string, string) ([]*un.Unstructured, error) {
+				return []*un.Unstructured{manualXR}, nil
+			}).
+			Build()
+
+		proc, _ := newCompProcessorForTest(t, client, false /* IncludeManual */)
+
+		// Default-discovery: pass empty resources; processSingleComposition called with resourceMode=false.
+		got, err := proc.processSingleComposition(ctx, comp, "", nil, false)
+		if err != nil {
+			t.Fatalf("processSingleComposition: %v", err)
+		}
+		if len(got.ImpactAnalysis) != 0 {
+			t.Errorf("default-discovery mode: expected NO impact entries for filtered-by-policy XRs, got %d (%+v)", len(got.ImpactAnalysis), got.ImpactAnalysis)
+		}
+		if got.AffectedResources.FilteredByPolicy != 1 {
+			t.Errorf("expected FilteredByPolicy count=1, got %d", got.AffectedResources.FilteredByPolicy)
+		}
+	})
 }

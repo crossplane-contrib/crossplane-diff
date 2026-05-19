@@ -103,6 +103,14 @@ crossplane-diff comp updated-composition.yaml --context production
 # Show impact only on XRs in a specific namespace
 crossplane-diff comp updated-composition.yaml -n production
 
+# Limit impact analysis to specific composites — useful for fast PR-time validation
+# against a representative subset of XRs/Claims, or for debugging against a single composite.
+# Format is [namespace/]name; bare name means cluster-scoped (v1 XRs and v2 cluster-scoped XRs).
+crossplane-diff comp updated-composition.yaml --resource=default/my-claim
+crossplane-diff comp updated-composition.yaml --resource=default/xr-1,default/xr-2
+# Note: --resource cannot be combined with --namespace. Composites with Manual update policy
+# are surfaced with status "filtered_by_policy" unless --include-manual is also passed.
+
 # Include XRs with Manual update policy (pinned revisions)
 crossplane-diff comp updated-composition.yaml --include-manual
 
@@ -202,6 +210,13 @@ Flags:
       --eventual-state         Show eventual state after all reconciliation cycles
                                complete. Useful with function-sequencer which hides
                                later stage resources until earlier stages become Ready.
+      --resource=STRING,...    Limit impact analysis to specific composites in
+                               [namespace/]name format. Repeatable or comma-separated.
+                               Bare name means cluster-scoped. Mutually exclusive with
+                               --namespace. Composites matched by --resource but excluded
+                               by the update-policy filter are reported in the impact
+                               analysis with status "filtered_by_policy" (use
+                               --include-manual to evaluate them instead).
 ```
 
 **Note**: The `diff` subcommand is deprecated. Use `xr` instead.

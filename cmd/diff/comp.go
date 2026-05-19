@@ -18,10 +18,12 @@ package main
 
 import (
 	"context"
+	"strings"
 	"time"
 
 	"github.com/alecthomas/kong"
 	dp "github.com/crossplane-contrib/crossplane-diff/cmd/diff/diffprocessor"
+	"github.com/crossplane-contrib/crossplane-diff/cmd/diff/types"
 	ld "github.com/crossplane/cli/v2/cmd/crossplane/common/load"
 
 	"github.com/crossplane/crossplane-runtime/v2/pkg/errors"
@@ -38,8 +40,17 @@ type CompCmd struct {
 	Files []string `arg:"" help:"YAML files containing updated Composition(s)." optional:""`
 
 	// Configuration options
-	Namespace     string `default:""      help:"Namespace to find XRs (empty = all namespaces)."                            name:"namespace"      short:"n"`
-	IncludeManual bool   `default:"false" help:"Include XRs with Manual update policy (default: only Automatic policy XRs)" name:"include-manual"`
+	Namespace     string   `default:""      help:"Namespace to find XRs (empty = all namespaces)."                                                                          name:"namespace"      short:"n"`
+	IncludeManual bool     `default:"false" help:"Include XRs with Manual update policy (default: only Automatic policy XRs)"                                               name:"include-manual"`
+	Resources     []string `help:"Limit impact analysis to specific composites in [namespace/]name format. Repeatable or comma-separated. Mutually exclusive with --namespace." name:"resource"`
+}
+
+// validateFlags returns an error if mutually exclusive flags are set together.
+func (c *CompCmd) validateFlags() error {
+	if c.Namespace != "" && len(c.Resources) > 0 {
+		return errors.New("--namespace and --resource are mutually exclusive; use --resource=[namespace/]name to scope by name")
+	}
+	return nil
 }
 
 // Help returns help instructions for the composition diff command.
@@ -68,6 +79,15 @@ Examples:
 
   # Show eventual state with function-sequencer (all stages, not just first).
   crossplane-diff comp updated-composition.yaml --eventual-state
+
+  # Limit impact analysis to specific composites (by [namespace/]name)
+  crossplane-diff comp updated-composition.yaml --resource=default/my-claim
+  crossplane-diff comp updated-composition.yaml --resource=default/xr-1,default/xr-2
+
+Notes:
+  --resource cannot be combined with --namespace.
+  Composites with Manual update policy are surfaced as "filtered_by_policy"
+  unless --include-manual is also passed.
 `
 }
 
@@ -75,6 +95,10 @@ Examples:
 // AppContext is received via dependency injection - Kong resolves it through the provider chain:
 // ContextProvider (bound in CommonCmdFields.BeforeApply) -> provideRestConfig -> provideAppContext.
 func (c *CompCmd) AfterApply(ctx *kong.Context, log logging.Logger, appCtx *AppContext) error {
+	if err := c.validateFlags(); err != nil {
+		return err
+	}
+
 	proc := makeDefaultCompProc(c, ctx, appCtx, log)
 
 	loader, err := ld.NewCompositeLoader(c.Files)
@@ -109,6 +133,34 @@ func makeDefaultCompProc(c *CompCmd, kongCtx *kong.Context, appCtx *AppContext, 
 
 	// Inject it into composition processor
 	return dp.NewCompDiffProcessor(xrProc, appCtx.XpClients.Composition, opts...)
+}
+
+// parseResourceRef parses a "[namespace/]name" string into a ResourceRef.
+// Bare "name" (no slash) means cluster-scoped (v1 XRs, v2 cluster-scoped XRs).
+// "ns/name" means namespaced (Claims, v2 namespaced XRs).
+// "/name" (empty namespace before slash) is rejected because the user's intent is clearly namespaced.
+func parseResourceRef(value string) (types.ResourceRef, error) {
+	trimmed := strings.TrimSpace(value)
+	if trimmed == "" {
+		return types.ResourceRef{}, errors.Errorf("invalid --resource value %q: cannot be empty", value)
+	}
+
+	parts := strings.Split(trimmed, "/")
+	switch len(parts) {
+	case 1:
+		return types.ResourceRef{Name: parts[0]}, nil
+	case 2:
+		ns, name := parts[0], parts[1]
+		if ns == "" {
+			return types.ResourceRef{}, errors.Errorf("invalid --resource value %q: namespace must not be empty (use bare name for cluster-scoped composites)", value)
+		}
+		if name == "" {
+			return types.ResourceRef{}, errors.Errorf("invalid --resource value %q: name must not be empty", value)
+		}
+		return types.ResourceRef{Namespace: ns, Name: name}, nil
+	default:
+		return types.ResourceRef{}, errors.Errorf("invalid --resource value %q: expected [namespace/]name format, got %d slash-separated parts", value, len(parts)-1)
+	}
 }
 
 // Run executes the composition diff command.
@@ -147,7 +199,19 @@ func (c *CompCmd) Run(_ *kong.Context, log logging.Logger, appCtx *AppContext, p
 		return errors.Wrap(err, "cannot load compositions")
 	}
 
-	hasDiffs, err := proc.DiffComposition(ctx, compositions, c.Namespace)
+	parsedRefs := make([]types.ResourceRef, 0, len(c.Resources))
+
+	for _, raw := range c.Resources {
+		ref, err := parseResourceRef(raw)
+		if err != nil {
+			exitCode.Code = dp.ExitCodeToolError
+			return err
+		}
+
+		parsedRefs = append(parsedRefs, ref)
+	}
+
+	hasDiffs, err := proc.DiffComposition(ctx, compositions, c.Namespace, parsedRefs)
 
 	// Determine exit code based on result
 	exitCode.Code = dp.DetermineExitCode(err, hasDiffs)

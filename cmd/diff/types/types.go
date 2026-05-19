@@ -27,3 +27,18 @@ import (
 
 // CompositionProvider is a function that provides a composition for a given resource.
 type CompositionProvider func(ctx context.Context, res *un.Unstructured) (*apiextensionsv1.Composition, error)
+
+// ResourceRef identifies a single composite (XR or Claim) by namespace and name.
+// Namespace is empty for cluster-scoped composites (v1 XRs and v2 cluster-scoped XRs).
+type ResourceRef struct {
+	Namespace string
+	Name      string
+}
+
+// String returns a human-readable representation: "namespace/name" or "name" for cluster-scoped.
+func (r ResourceRef) String() string {
+	if r.Namespace == "" {
+		return r.Name
+	}
+	return r.Namespace + "/" + r.Name
+}

@@ -36,6 +36,10 @@ const (
 	XRStatusUnchanged XRStatus = "unchanged"
 	// XRStatusError indicates an error occurred while processing the XR.
 	XRStatusError XRStatus = "error"
+	// XRStatusFilteredByPolicy indicates the XR matched a user --resource selector but was excluded
+	// from evaluation by the update-policy filter (e.g., Manual policy without --include-manual).
+	// The XR is surfaced in impact analysis with no downstream changes so users see the skip explicitly.
+	XRStatusFilteredByPolicy XRStatus = "filtered_by_policy"
 )
 
 // OutputError is an alias for dt.OutputError for convenience.

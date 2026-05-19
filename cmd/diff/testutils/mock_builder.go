@@ -747,6 +747,12 @@ func (b *MockCompositionClientBuilder) WithFindResourcesError(errMsg string) *Mo
 	})
 }
 
+// WithGetCompositesByName sets the GetCompositesByName behavior.
+func (b *MockCompositionClientBuilder) WithGetCompositesByName(fn func(context.Context, *xpextv1.Composition, []dtypes.ResourceRef) ([]*un.Unstructured, []dtypes.ResourceRef, error)) *MockCompositionClientBuilder {
+	b.mock.GetCompositesByNameFn = fn
+	return b
+}
+
 // WithComposition is an alias for WithSuccessfulCompositionMatch for convenience.
 func (b *MockCompositionClientBuilder) WithComposition(comp *xpextv1.Composition) *MockCompositionClientBuilder {
 	return b.WithSuccessfulCompositionMatch(comp)
