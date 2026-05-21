@@ -40,5 +40,6 @@ func (r ResourceRef) String() string {
 	if r.Namespace == "" {
 		return r.Name
 	}
+
 	return r.Namespace + "/" + r.Name
 }

@@ -71,15 +71,18 @@ func TestParseResourceRef(t *testing.T) {
 				if err == nil {
 					t.Fatalf("expected error for input %q, got %+v", tt.input, got)
 				}
+
 				if !strings.Contains(err.Error(), tt.input) && tt.input != "" {
 					t.Errorf("error message %q should reference offending input %q", err.Error(), tt.input)
 				}
+
 				return
 			}
 
 			if err != nil {
 				t.Fatalf("unexpected error for input %q: %v", tt.input, err)
 			}
+
 			if got != tt.want {
 				t.Errorf("parseResourceRef(%q) = %+v, want %+v", tt.input, got, tt.want)
 			}
@@ -116,13 +119,16 @@ func TestCompCmd_ValidateFlags(t *testing.T) {
 				if err == nil {
 					t.Fatal("expected error, got nil")
 				}
+
 				for _, sub := range tt.errMustContain {
 					if !strings.Contains(err.Error(), sub) {
 						t.Errorf("error %q must contain %q", err.Error(), sub)
 					}
 				}
+
 				return
 			}
+
 			if err != nil {
 				t.Fatalf("unexpected error: %v", err)
 			}

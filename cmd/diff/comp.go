@@ -40,8 +40,8 @@ type CompCmd struct {
 	Files []string `arg:"" help:"YAML files containing updated Composition(s)." optional:""`
 
 	// Configuration options
-	Namespace     string   `default:""      help:"Namespace to find XRs (empty = all namespaces)."                                                                          name:"namespace"      short:"n"`
-	IncludeManual bool     `default:"false" help:"Include XRs with Manual update policy (default: only Automatic policy XRs)"                                               name:"include-manual"`
+	Namespace     string   `default:""                                                                                                                                          help:"Namespace to find XRs (empty = all namespaces)."                            name:"namespace"      short:"n"`
+	IncludeManual bool     `default:"false"                                                                                                                                     help:"Include XRs with Manual update policy (default: only Automatic policy XRs)" name:"include-manual"`
 	Resources     []string `help:"Limit impact analysis to specific composites in [namespace/]name format. Repeatable or comma-separated. Mutually exclusive with --namespace." name:"resource"`
 }
 
@@ -50,6 +50,7 @@ func (c *CompCmd) validateFlags() error {
 	if c.Namespace != "" && len(c.Resources) > 0 {
 		return errors.New("--namespace and --resource are mutually exclusive; use --resource=[namespace/]name to scope by name")
 	}
+
 	return nil
 }
 
@@ -154,9 +155,11 @@ func parseResourceRef(value string) (types.ResourceRef, error) {
 		if ns == "" {
 			return types.ResourceRef{}, errors.Errorf("invalid --resource value %q: namespace must not be empty (use bare name for cluster-scoped composites)", value)
 		}
+
 		if name == "" {
 			return types.ResourceRef{}, errors.Errorf("invalid --resource value %q: name must not be empty", value)
 		}
+
 		return types.ResourceRef{Namespace: ns, Name: name}, nil
 	default:
 		return types.ResourceRef{}, errors.Errorf("invalid --resource value %q: expected [namespace/]name format, got %d slash-separated parts", value, len(parts)-1)

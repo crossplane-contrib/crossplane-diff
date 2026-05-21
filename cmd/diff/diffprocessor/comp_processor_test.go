@@ -727,7 +727,6 @@ func TestDefaultCompDiffProcessor_DiffComposition_StderrErrorOutput(t *testing.T
 	}
 }
 
-
 // newCompProcessorForTest builds a DefaultCompDiffProcessor wrapping the given composition client
 // for use by the --resource preflight tests below.
 func newCompProcessorForTest(t *testing.T, compClient xp.CompositionClient, includeManual bool) (*DefaultCompDiffProcessor, *bytes.Buffer) {
@@ -811,13 +810,16 @@ func TestDefaultCompDiffProcessor_DiffComposition_ResourceMode(t *testing.T) {
 			Build()
 
 		proc, _ := newCompProcessorForTest(t, client, false)
+
 		_, err := proc.DiffComposition(ctx, []*un.Unstructured{comp}, "ns", nil)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
+
 		if findCalls != 1 {
 			t.Errorf("FindCompositesUsingComposition: expected 1 call, got %d", findCalls)
 		}
+
 		if getByNameCalls != 0 {
 			t.Errorf("GetCompositesByName: expected 0 calls, got %d", getByNameCalls)
 		}
@@ -837,19 +839,23 @@ func TestDefaultCompDiffProcessor_DiffComposition_ResourceMode(t *testing.T) {
 				getByNameCalls++
 				// Both refs match.
 				_ = refs
+
 				return []*un.Unstructured{xr1, xr2}, nil, nil
 			}).
 			Build()
 
 		proc, _ := newCompProcessorForTest(t, client, false)
+
 		_, err := proc.DiffComposition(ctx, []*un.Unstructured{comp}, "",
 			[]types.ResourceRef{{Namespace: "ns", Name: "xr-1"}, {Namespace: "ns", Name: "xr-2"}})
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
+
 		if findCalls != 0 {
 			t.Errorf("FindCompositesUsingComposition: expected 0 calls, got %d", findCalls)
 		}
+
 		if getByNameCalls != 1 {
 			t.Errorf("GetCompositesByName: expected 1 call, got %d", getByNameCalls)
 		}
@@ -865,14 +871,17 @@ func TestDefaultCompDiffProcessor_DiffComposition_ResourceMode(t *testing.T) {
 			Build()
 
 		proc, stdout := newCompProcessorForTest(t, client, false)
+
 		_, err := proc.DiffComposition(ctx, []*un.Unstructured{comp}, "",
 			[]types.ResourceRef{{Namespace: "ns", Name: "ghost"}})
 		if err == nil {
 			t.Fatal("expected error from globally-unmatched preflight, got nil")
 		}
+
 		if !strings.Contains(err.Error(), "ns/ghost") {
 			t.Errorf("error message should name the unmatched ref, got: %v", err)
 		}
+
 		if stdout.Len() != 0 {
 			t.Errorf("expected no output before fail-fast, got: %q", stdout.String())
 		}
@@ -887,6 +896,7 @@ func TestDefaultCompDiffProcessor_DiffComposition_ResourceMode(t *testing.T) {
 			Build()
 
 		proc, _ := newCompProcessorForTest(t, client, false /* IncludeManual */)
+
 		_, err := proc.DiffComposition(ctx, []*un.Unstructured{comp}, "",
 			[]types.ResourceRef{{Namespace: "ns", Name: "manual-xr"}})
 		if err != nil {
@@ -899,15 +909,19 @@ func TestDefaultCompDiffProcessor_DiffComposition_ResourceMode(t *testing.T) {
 		if err != nil {
 			t.Fatalf("processSingleComposition: %v", err)
 		}
+
 		if len(got.ImpactAnalysis) != 1 {
 			t.Fatalf("expected 1 impact entry, got %d", len(got.ImpactAnalysis))
 		}
+
 		if got.ImpactAnalysis[0].Status != "filtered_by_policy" {
 			t.Errorf("expected filtered_by_policy status, got %q", got.ImpactAnalysis[0].Status)
 		}
+
 		if got.AffectedResources.FilteredByPolicy != 1 {
 			t.Errorf("expected FilteredByPolicy=1, got %d", got.AffectedResources.FilteredByPolicy)
 		}
+
 		if got.AffectedResources.Total != 1 {
 			t.Errorf("expected Total=1, got %d", got.AffectedResources.Total)
 		}
@@ -928,9 +942,11 @@ func TestDefaultCompDiffProcessor_DiffComposition_ResourceMode(t *testing.T) {
 		if err != nil {
 			t.Fatalf("processSingleComposition: %v", err)
 		}
+
 		if len(got.ImpactAnalysis) != 0 {
 			t.Errorf("default-discovery mode: expected NO impact entries for filtered-by-policy XRs, got %d (%+v)", len(got.ImpactAnalysis), got.ImpactAnalysis)
 		}
+
 		if got.AffectedResources.FilteredByPolicy != 1 {
 			t.Errorf("expected FilteredByPolicy count=1, got %d", got.AffectedResources.FilteredByPolicy)
 		}

@@ -272,9 +272,11 @@ func runIntegrationTest(t *testing.T, testType DiffTestType, tt IntegrationTestC
 		for _, r := range tt.resources {
 			args = append(args, fmt.Sprintf("--resource=%s", r))
 		}
+
 		if tt.resourcesCSV != "" {
 			args = append(args, fmt.Sprintf("--resource=%s", tt.resourcesCSV))
 		}
+
 		if tt.includeManual {
 			args = append(args, "--include-manual")
 		}

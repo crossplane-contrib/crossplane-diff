@@ -603,6 +603,7 @@ func TestXRStatusFilteredByPolicy_TextRenderer(t *testing.T) {
 	if !strings.Contains(got, "manual-xr") {
 		t.Errorf("expected XR name in output, got %q", got)
 	}
+
 	if !strings.Contains(strings.ToLower(got), "manual") && !strings.Contains(strings.ToLower(got), "filtered") {
 		t.Errorf("expected 'manual' or 'filtered' marker in output, got %q", got)
 	}

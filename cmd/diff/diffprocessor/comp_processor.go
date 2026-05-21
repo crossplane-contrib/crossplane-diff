@@ -20,6 +20,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"strings"
 
 	xp "github.com/crossplane-contrib/crossplane-diff/cmd/diff/client/crossplane"
 	"github.com/crossplane-contrib/crossplane-diff/cmd/diff/renderer"
@@ -328,19 +329,7 @@ func (p *DefaultCompDiffProcessor) preflightResourceRefs(ctx context.Context, co
 
 // joinRefs renders a list of human-readable refs joined by commas.
 func joinRefs(refs []string) string {
-	switch len(refs) {
-	case 0:
-		return ""
-	case 1:
-		return refs[0]
-	default:
-		out := refs[0]
-		for _, r := range refs[1:] {
-			out += ", " + r
-		}
-
-		return out
-	}
+	return strings.Join(refs, ", ")
 }
 
 // processSingleComposition processes a single composition and builds the result.

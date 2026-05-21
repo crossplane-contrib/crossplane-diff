@@ -20,6 +20,8 @@ import (
 )
 
 // CompositionClient handles operations related to Compositions.
+//
+//nolint:interfacebloat // Composition operations are cohesive; splitting would fragment the API.
 type CompositionClient interface {
 	core.Initializable
 
