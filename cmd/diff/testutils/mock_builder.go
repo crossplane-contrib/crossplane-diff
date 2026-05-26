@@ -723,34 +723,38 @@ func (b *MockCompositionClientBuilder) WithSuccessfulCompositionFetches(comps []
 	})
 }
 
-// WithFindCompositesUsingComposition sets the FindCompositesUsingComposition behavior.
-func (b *MockCompositionClientBuilder) WithFindCompositesUsingComposition(fn func(context.Context, string, string) ([]*un.Unstructured, error)) *MockCompositionClientBuilder {
-	b.mock.FindCompositesUsingCompositionFn = fn
+// WithFindComposites sets the FindComposites behavior.
+func (b *MockCompositionClientBuilder) WithFindComposites(fn func(context.Context, *xpextv1.Composition, dtypes.FindCompositesOptions) ([]*un.Unstructured, error)) *MockCompositionClientBuilder {
+	b.mock.FindCompositesFn = fn
 	return b
 }
 
-// WithResourcesForComposition sets FindCompositesUsingComposition to return specific resources for a given composition name and namespace.
+// WithResourcesForComposition sets FindComposites (default-discovery mode) to return specific resources
+// for a given composition name and namespace. Refs-mode calls fall through to the "not implemented" default.
 func (b *MockCompositionClientBuilder) WithResourcesForComposition(compositionName, namespace string, resources []*un.Unstructured) *MockCompositionClientBuilder {
-	return b.WithFindCompositesUsingComposition(func(_ context.Context, compName, ns string) ([]*un.Unstructured, error) {
-		if compName == compositionName && ns == namespace {
+	return b.WithFindComposites(func(_ context.Context, comp *xpextv1.Composition, opts dtypes.FindCompositesOptions) ([]*un.Unstructured, error) {
+		if len(opts.Refs) > 0 {
+			return nil, errors.New("WithResourcesForComposition only handles default-discovery (empty Refs)")
+		}
+
+		if comp.GetName() == compositionName && opts.Namespace == namespace {
 			return resources, nil
 		}
 
-		return nil, errors.Errorf("no resources found for composition %s in namespace %s", compName, ns)
+		return nil, errors.Errorf("no resources found for composition %s in namespace %s", comp.GetName(), opts.Namespace)
 	})
 }
 
-// WithFindResourcesError sets FindCompositesUsingComposition to return an error.
+// WithFindResourcesError sets FindComposites (default-discovery mode) to return an error. Refs-mode calls
+// fall through to the "not implemented" default.
 func (b *MockCompositionClientBuilder) WithFindResourcesError(errMsg string) *MockCompositionClientBuilder {
-	return b.WithFindCompositesUsingComposition(func(context.Context, string, string) ([]*un.Unstructured, error) {
+	return b.WithFindComposites(func(_ context.Context, _ *xpextv1.Composition, opts dtypes.FindCompositesOptions) ([]*un.Unstructured, error) {
+		if len(opts.Refs) > 0 {
+			return nil, errors.New("WithFindResourcesError only handles default-discovery (empty Refs)")
+		}
+
 		return nil, errors.New(errMsg)
 	})
-}
-
-// WithGetCompositesByName sets the GetCompositesByName behavior.
-func (b *MockCompositionClientBuilder) WithGetCompositesByName(fn func(context.Context, *xpextv1.Composition, []dtypes.ResourceRef) ([]*un.Unstructured, []dtypes.ResourceRef, error)) *MockCompositionClientBuilder {
-	b.mock.GetCompositesByNameFn = fn
-	return b
 }
 
 // WithComposition is an alias for WithSuccessfulCompositionMatch for convenience.

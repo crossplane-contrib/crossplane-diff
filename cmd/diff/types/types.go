@@ -21,6 +21,7 @@ import (
 	"context"
 
 	un "k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	k8stypes "k8s.io/apimachinery/pkg/types"
 
 	apiextensionsv1 "github.com/crossplane/crossplane/apis/v2/apiextensions/v1"
 )
@@ -28,18 +29,16 @@ import (
 // CompositionProvider is a function that provides a composition for a given resource.
 type CompositionProvider func(ctx context.Context, res *un.Unstructured) (*apiextensionsv1.Composition, error)
 
-// ResourceRef identifies a single composite (XR or Claim) by namespace and name.
-// Namespace is empty for cluster-scoped composites (v1 XRs and v2 cluster-scoped XRs).
-type ResourceRef struct {
+// FindCompositesOptions narrows what CompositionClient.FindComposites returns.
+// Lives here (not in the crossplane client package) so test mocks in cmd/diff/testutils
+// can implement the interface without creating an import cycle with cmd/diff/client/crossplane.
+type FindCompositesOptions struct {
+	// Namespace scopes default discovery to a single namespace. Empty = all namespaces.
+	// Ignored when Refs is non-empty (refs carry their own namespace).
 	Namespace string
-	Name      string
-}
-
-// String returns a human-readable representation: "namespace/name" or "name" for cluster-scoped.
-func (r ResourceRef) String() string {
-	if r.Namespace == "" {
-		return r.Name
-	}
-
-	return r.Namespace + "/" + r.Name
+	// Refs limits the result to specific user-named composites. When non-empty, a ref is included
+	// in the result only if (a) the named resource exists at the ref's [namespace/]name and (b) it
+	// references the supplied composition. Refs that don't satisfy both are silently omitted; the
+	// caller derives "unmatched" from the diff between input refs and returned objects.
+	Refs []k8stypes.NamespacedName
 }

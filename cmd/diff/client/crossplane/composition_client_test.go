@@ -13,6 +13,7 @@ import (
 	un "k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	k8stypes "k8s.io/apimachinery/pkg/types"
 
 	"github.com/crossplane/crossplane-runtime/v2/pkg/errors"
 
@@ -1807,7 +1808,7 @@ func TestDefaultCompositionClient_getClaimTypeFromXRD(t *testing.T) {
 	}
 }
 
-func TestDefaultCompositionClient_GetCompositesByName(t *testing.T) {
+func TestDefaultCompositionClient_FindComposites_WithRefs(t *testing.T) {
 	ctx := t.Context()
 
 	// Composition targeting (example.org/v1, XBucket).
@@ -1848,14 +1849,13 @@ func TestDefaultCompositionClient_GetCompositesByName(t *testing.T) {
 	claimGVK := schema.GroupVersionKind{Group: "example.org", Version: "v1", Kind: "Bucket"}
 
 	tests := map[string]struct {
-		reason        string
-		mockResource  *tu.MockResourceClient
-		mockDef       *tu.MockDefinitionClient
-		comp          *apiextensionsv1.Composition
-		refs          []dtypes.ResourceRef
-		wantMatched   []string // names of matched composites
-		wantUnmatched []dtypes.ResourceRef
-		wantErr       bool
+		reason       string
+		mockResource *tu.MockResourceClient
+		mockDef      *tu.MockDefinitionClient
+		comp         *apiextensionsv1.Composition
+		refs         []k8stypes.NamespacedName
+		wantMatched  []string // names of matched composites
+		wantErr      bool
 	}{
 		"XRGVKHit_ClusterScoped": {
 			reason: "Cluster-scoped XR with matching composition is matched via XR-GVK lookup",
@@ -1870,7 +1870,7 @@ func TestDefaultCompositionClient_GetCompositesByName(t *testing.T) {
 				Build(),
 			mockDef:     tu.NewMockDefinitionClient().WithXRDForXR(xrd).Build(),
 			comp:        comp,
-			refs:        []dtypes.ResourceRef{{Name: "xr-cluster"}},
+			refs:        []k8stypes.NamespacedName{{Name: "xr-cluster"}},
 			wantMatched: []string{"xr-cluster"},
 		},
 		"ClaimGVKHit_NamespacedClaim": {
@@ -1886,16 +1886,15 @@ func TestDefaultCompositionClient_GetCompositesByName(t *testing.T) {
 				Build(),
 			mockDef:     tu.NewMockDefinitionClient().WithXRDForXR(xrd).Build(),
 			comp:        comp,
-			refs:        []dtypes.ResourceRef{{Namespace: "claim-ns", Name: "claim-1"}},
+			refs:        []k8stypes.NamespacedName{{Namespace: "claim-ns", Name: "claim-1"}},
 			wantMatched: []string{"claim-1"},
 		},
 		"BothLookupsNotFound_Unmatched": {
-			reason:        "Returned in unmatched when neither XR-GVK nor claim-GVK lookup succeeds",
-			mockResource:  tu.NewMockResourceClient().WithResourceNotFound().Build(),
-			mockDef:       tu.NewMockDefinitionClient().WithXRDForXR(xrd).Build(),
-			comp:          comp,
-			refs:          []dtypes.ResourceRef{{Namespace: "claim-ns", Name: "ghost"}},
-			wantUnmatched: []dtypes.ResourceRef{{Namespace: "claim-ns", Name: "ghost"}},
+			reason:       "Returned in unmatched when neither XR-GVK nor claim-GVK lookup succeeds",
+			mockResource: tu.NewMockResourceClient().WithResourceNotFound().Build(),
+			mockDef:      tu.NewMockDefinitionClient().WithXRDForXR(xrd).Build(),
+			comp:         comp,
+			refs:         []k8stypes.NamespacedName{{Namespace: "claim-ns", Name: "ghost"}},
 		},
 		"FoundButUsesDifferentComposition_Unmatched": {
 			reason: "Resource exists but its compositionRef points to a different composition",
@@ -1908,10 +1907,9 @@ func TestDefaultCompositionClient_GetCompositesByName(t *testing.T) {
 					return nil, apierrors.NewNotFound(schema.GroupResource{Group: gvk.Group, Resource: "x"}, name)
 				}).
 				Build(),
-			mockDef:       tu.NewMockDefinitionClient().WithXRDForXR(xrd).Build(),
-			comp:          comp,
-			refs:          []dtypes.ResourceRef{{Name: "xr-wrong"}},
-			wantUnmatched: []dtypes.ResourceRef{{Name: "xr-wrong"}},
+			mockDef: tu.NewMockDefinitionClient().WithXRDForXR(xrd).Build(),
+			comp:    comp,
+			refs:    []k8stypes.NamespacedName{{Name: "xr-wrong"}},
 		},
 		"TransportErrorPropagated": {
 			reason: "Non-NotFound errors from GetResource propagate up",
@@ -1922,7 +1920,7 @@ func TestDefaultCompositionClient_GetCompositesByName(t *testing.T) {
 				Build(),
 			mockDef: tu.NewMockDefinitionClient().WithXRDForXR(xrd).Build(),
 			comp:    comp,
-			refs:    []dtypes.ResourceRef{{Name: "x"}},
+			refs:    []k8stypes.NamespacedName{{Name: "x"}},
 			wantErr: true,
 		},
 		"NoClaimType_OnlyXRLookupAttempted": {
@@ -1936,11 +1934,10 @@ func TestDefaultCompositionClient_GetCompositesByName(t *testing.T) {
 					return nil, apierrors.NewNotFound(schema.GroupResource{Group: gvk.Group, Resource: "x"}, name)
 				}).
 				Build(),
-			mockDef:       tu.NewMockDefinitionClient().WithXRDForXR(xrdNoClaim).Build(),
-			comp:          comp,
-			refs:          []dtypes.ResourceRef{{Name: "xr-cluster"}, {Namespace: "x", Name: "ghost"}},
-			wantMatched:   []string{"xr-cluster"},
-			wantUnmatched: []dtypes.ResourceRef{{Namespace: "x", Name: "ghost"}},
+			mockDef:     tu.NewMockDefinitionClient().WithXRDForXR(xrdNoClaim).Build(),
+			comp:        comp,
+			refs:        []k8stypes.NamespacedName{{Name: "xr-cluster"}, {Namespace: "x", Name: "ghost"}},
+			wantMatched: []string{"xr-cluster"},
 		},
 		"XRDNotFound_OnlyXRLookupAttempted": {
 			reason: "When XRD itself is missing, claim-GVK lookup is skipped",
@@ -1955,7 +1952,7 @@ func TestDefaultCompositionClient_GetCompositesByName(t *testing.T) {
 				Build(),
 			mockDef:     tu.NewMockDefinitionClient().WithXRDForXRNotFound().Build(),
 			comp:        comp,
-			refs:        []dtypes.ResourceRef{{Name: "xr-cluster"}},
+			refs:        []k8stypes.NamespacedName{{Name: "xr-cluster"}},
 			wantMatched: []string{"xr-cluster"},
 		},
 	}
@@ -1969,11 +1966,11 @@ func TestDefaultCompositionClient_GetCompositesByName(t *testing.T) {
 				logger:           tu.TestLogger(t, false),
 			}
 
-			matched, unmatched, err := c.GetCompositesByName(ctx, tt.comp, tt.refs)
+			matched, err := c.FindComposites(ctx, tt.comp, dtypes.FindCompositesOptions{Refs: tt.refs})
 
 			if tt.wantErr {
 				if err == nil {
-					t.Fatalf("\n%s: expected error, got matched=%v unmatched=%v", tt.reason, matched, unmatched)
+					t.Fatalf("\n%s: expected error, got matched=%v", tt.reason, matched)
 				}
 
 				return
@@ -1991,9 +1988,279 @@ func TestDefaultCompositionClient_GetCompositesByName(t *testing.T) {
 			if diff := cmp.Diff(tt.wantMatched, gotMatchedNames); diff != "" {
 				t.Errorf("\n%s: matched mismatch:\n%s", tt.reason, diff)
 			}
+		})
+	}
+}
 
-			if diff := cmp.Diff(tt.wantUnmatched, unmatched); diff != "" {
-				t.Errorf("\n%s: unmatched mismatch:\n%s", tt.reason, diff)
+func TestDefaultCompositionClient_FindComposites_DefaultDiscovery(t *testing.T) {
+	ctx := t.Context()
+
+	comp := tu.NewComposition("test-comp").
+		WithCompositeTypeRef("example.org/v1", "XBucket").
+		Build()
+
+	xrd := tu.NewXRD("xbuckets.example.org", "example.org", "XBucket").
+		WithPlural("xbuckets").
+		WithClaimNames("Bucket", "buckets").
+		WithVersion("v1", true, true).
+		BuildAsUnstructured()
+
+	xrCluster := tu.NewResource("example.org/v1", "XBucket", "xr-cluster").
+		WithSpecField("compositionRef", map[string]any{"name": "test-comp"}).
+		Build()
+
+	xrGVK := schema.GroupVersionKind{Group: "example.org", Version: "v1", Kind: "XBucket"}
+
+	c := &DefaultCompositionClient{
+		resourceClient: tu.NewMockResourceClient().
+			WithListResources(func(_ context.Context, gvk schema.GroupVersionKind, _ string) ([]*un.Unstructured, error) {
+				if gvk == xrGVK {
+					return []*un.Unstructured{xrCluster}, nil
+				}
+				// Claim listing returns empty (XRD has Bucket claim type but none exist).
+				return []*un.Unstructured{}, nil
+			}).
+			Build(),
+		definitionClient: tu.NewMockDefinitionClient().WithXRDForXR(xrd).Build(),
+		compositions:     map[string]*apiextensionsv1.Composition{"test-comp": comp},
+		logger:           tu.TestLogger(t, false),
+	}
+
+	got, err := c.FindComposites(ctx, comp, dtypes.FindCompositesOptions{})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if len(got) != 1 || got[0].GetName() != "xr-cluster" {
+		t.Errorf("DefaultDiscovery: expected [xr-cluster], got %v", got)
+	}
+}
+
+func TestDefaultCompositionClient_resolveCompositeTypes(t *testing.T) {
+	ctx := t.Context()
+
+	xrdWithClaim := tu.NewXRD("xbuckets.example.org", "example.org", "XBucket").
+		WithPlural("xbuckets").
+		WithClaimNames("Bucket", "buckets").
+		WithVersion("v1", true, true).
+		BuildAsUnstructured()
+
+	xrdNoClaim := tu.NewXRD("xbuckets.example.org", "example.org", "XBucket").
+		WithPlural("xbuckets").
+		WithVersion("v1", true, true).
+		BuildAsUnstructured()
+
+	wantXRGVK := schema.GroupVersionKind{Group: "example.org", Version: "v1", Kind: "XBucket"}
+	wantClaimGVK := schema.GroupVersionKind{Group: "example.org", Version: "v1", Kind: "Bucket"}
+
+	tests := map[string]struct {
+		reason       string
+		comp         *apiextensionsv1.Composition
+		mockDef      *tu.MockDefinitionClient
+		wantXR       schema.GroupVersionKind
+		wantClaim    schema.GroupVersionKind
+		wantErr      bool
+		wantErrMatch string
+	}{
+		"ValidComp_XRDWithClaim": {
+			reason:    "Composition with valid compositeTypeRef and XRD with claim names → both GVKs populated",
+			comp:      tu.NewComposition("c").WithCompositeTypeRef("example.org/v1", "XBucket").Build(),
+			mockDef:   tu.NewMockDefinitionClient().WithXRDForXR(xrdWithClaim).Build(),
+			wantXR:    wantXRGVK,
+			wantClaim: wantClaimGVK,
+		},
+		"ValidComp_XRDNoClaim": {
+			reason:    "Composition with valid compositeTypeRef and XRD without claim names → XR GVK populated, claim GVK empty",
+			comp:      tu.NewComposition("c").WithCompositeTypeRef("example.org/v1", "XBucket").Build(),
+			mockDef:   tu.NewMockDefinitionClient().WithXRDForXR(xrdNoClaim).Build(),
+			wantXR:    wantXRGVK,
+			wantClaim: schema.GroupVersionKind{},
+		},
+		"ValidComp_XRDLookupFails": {
+			reason:    "Composition with valid compositeTypeRef but XRD lookup fails → XR GVK populated, claim GVK empty, no error",
+			comp:      tu.NewComposition("c").WithCompositeTypeRef("example.org/v1", "XBucket").Build(),
+			mockDef:   tu.NewMockDefinitionClient().WithXRDForXRNotFound().Build(),
+			wantXR:    wantXRGVK,
+			wantClaim: schema.GroupVersionKind{},
+		},
+		"MalformedAPIVersion": {
+			reason:       "Composition with malformed compositeTypeRef.apiVersion → returns error",
+			comp:         tu.NewComposition("c").WithCompositeTypeRef("not/a/valid/apiversion", "XBucket").Build(),
+			mockDef:      tu.NewMockDefinitionClient().Build(),
+			wantErr:      true,
+			wantErrMatch: "cannot parse compositeTypeRef apiVersion",
+		},
+	}
+
+	for name, tt := range tests {
+		t.Run(name, func(t *testing.T) {
+			c := &DefaultCompositionClient{
+				definitionClient: tt.mockDef,
+				logger:           tu.TestLogger(t, false),
+			}
+
+			got, err := c.resolveCompositeTypes(ctx, tt.comp)
+
+			if tt.wantErr {
+				if err == nil {
+					t.Fatalf("\n%s: expected error, got %+v", tt.reason, got)
+				}
+
+				if tt.wantErrMatch != "" && !strings.Contains(err.Error(), tt.wantErrMatch) {
+					t.Errorf("\n%s: error %q must contain %q", tt.reason, err.Error(), tt.wantErrMatch)
+				}
+
+				return
+			}
+
+			if err != nil {
+				t.Fatalf("\n%s: unexpected error: %v", tt.reason, err)
+			}
+
+			if got.xrGVK != tt.wantXR {
+				t.Errorf("\n%s: xrGVK = %v, want %v", tt.reason, got.xrGVK, tt.wantXR)
+			}
+
+			if got.claimGVK != tt.wantClaim {
+				t.Errorf("\n%s: claimGVK = %v, want %v", tt.reason, got.claimGVK, tt.wantClaim)
+			}
+		})
+	}
+}
+
+func TestDefaultCompositionClient_lookupRef(t *testing.T) {
+	ctx := t.Context()
+
+	xrGVK := schema.GroupVersionKind{Group: "example.org", Version: "v1", Kind: "XBucket"}
+	claimGVK := schema.GroupVersionKind{Group: "example.org", Version: "v1", Kind: "Bucket"}
+
+	xrMatched := tu.NewResource("example.org/v1", "XBucket", "xr").
+		WithSpecField("compositionRef", map[string]any{"name": "test-comp"}).
+		Build()
+
+	xrWrongComp := tu.NewResource("example.org/v1", "XBucket", "xr-wrong").
+		WithSpecField("compositionRef", map[string]any{"name": "other-comp"}).
+		Build()
+
+	claimMatched := tu.NewResource("example.org/v1", "Bucket", "claim").
+		InNamespace("ns").
+		WithSpecField("compositionRef", map[string]any{"name": "test-comp"}).
+		Build()
+
+	tests := map[string]struct {
+		reason       string
+		ref          k8stypes.NamespacedName
+		types        compositeTypes
+		mockResource *tu.MockResourceClient
+		wantName     string // empty = expect nil result
+		wantErr      bool
+	}{
+		"XRMatch": {
+			reason: "Ref hits XR GVK and references target composition → returns object",
+			ref:    k8stypes.NamespacedName{Name: "xr"},
+			types:  compositeTypes{xrGVK: xrGVK, claimGVK: claimGVK},
+			mockResource: tu.NewMockResourceClient().
+				WithGetResource(func(_ context.Context, gvk schema.GroupVersionKind, _, name string) (*un.Unstructured, error) {
+					if gvk == xrGVK && name == "xr" {
+						return xrMatched, nil
+					}
+
+					return nil, apierrors.NewNotFound(schema.GroupResource{Group: gvk.Group}, name)
+				}).
+				Build(),
+			wantName: "xr",
+		},
+		"XRWrongComposition_ReturnsNil": {
+			reason: "Ref hits XR GVK but references different composition → returns nil (preserves Step-3 behavior; F1 follow-up will switch this to claim fallback)",
+			ref:    k8stypes.NamespacedName{Name: "xr-wrong"},
+			types:  compositeTypes{xrGVK: xrGVK, claimGVK: claimGVK},
+			mockResource: tu.NewMockResourceClient().
+				WithGetResource(func(_ context.Context, gvk schema.GroupVersionKind, _, name string) (*un.Unstructured, error) {
+					if gvk == xrGVK && name == "xr-wrong" {
+						return xrWrongComp, nil
+					}
+
+					return nil, apierrors.NewNotFound(schema.GroupResource{Group: gvk.Group}, name)
+				}).
+				Build(),
+			wantName: "",
+		},
+		"XR404_ClaimMatch": {
+			reason: "Ref XR-404, matches via claim GVK and references target composition → returns object",
+			ref:    k8stypes.NamespacedName{Namespace: "ns", Name: "claim"},
+			types:  compositeTypes{xrGVK: xrGVK, claimGVK: claimGVK},
+			mockResource: tu.NewMockResourceClient().
+				WithGetResource(func(_ context.Context, gvk schema.GroupVersionKind, ns, name string) (*un.Unstructured, error) {
+					if gvk == claimGVK && ns == "ns" && name == "claim" {
+						return claimMatched, nil
+					}
+
+					return nil, apierrors.NewNotFound(schema.GroupResource{Group: gvk.Group}, name)
+				}).
+				Build(),
+			wantName: "claim",
+		},
+		"XR404_ClaimGVKEmpty": {
+			reason:       "Ref XR-404, claim GVK is empty (XRD missing) → returns nil, no error",
+			ref:          k8stypes.NamespacedName{Name: "ghost"},
+			types:        compositeTypes{xrGVK: xrGVK},
+			mockResource: tu.NewMockResourceClient().WithResourceNotFound().Build(),
+			wantName:     "",
+		},
+		"XR404_Claim404": {
+			reason:       "Ref XR-404 and claim 404 → returns nil, no error",
+			ref:          k8stypes.NamespacedName{Namespace: "ns", Name: "ghost"},
+			types:        compositeTypes{xrGVK: xrGVK, claimGVK: claimGVK},
+			mockResource: tu.NewMockResourceClient().WithResourceNotFound().Build(),
+			wantName:     "",
+		},
+		"XRTransportError_Propagates": {
+			reason: "Non-NotFound errors from GetResource on XR-GVK propagate up",
+			ref:    k8stypes.NamespacedName{Name: "x"},
+			types:  compositeTypes{xrGVK: xrGVK, claimGVK: claimGVK},
+			mockResource: tu.NewMockResourceClient().
+				WithGetResource(func(context.Context, schema.GroupVersionKind, string, string) (*un.Unstructured, error) {
+					return nil, errors.New("connection refused")
+				}).
+				Build(),
+			wantErr: true,
+		},
+	}
+
+	for name, tt := range tests {
+		t.Run(name, func(t *testing.T) {
+			c := &DefaultCompositionClient{
+				resourceClient: tt.mockResource,
+				logger:         tu.TestLogger(t, false),
+			}
+
+			got, err := c.lookupRef(ctx, tt.ref, tt.types, "test-comp")
+
+			if tt.wantErr {
+				if err == nil {
+					t.Fatalf("\n%s: expected error, got %+v", tt.reason, got)
+				}
+
+				return
+			}
+
+			if err != nil {
+				t.Fatalf("\n%s: unexpected error: %v", tt.reason, err)
+			}
+
+			switch tt.wantName {
+			case "":
+				if got != nil {
+					t.Errorf("\n%s: expected nil, got %s", tt.reason, got.GetName())
+				}
+			default:
+				if got == nil {
+					t.Fatalf("\n%s: expected %s, got nil", tt.reason, tt.wantName)
+				}
+
+				if got.GetName() != tt.wantName {
+					t.Errorf("\n%s: name = %q, want %q", tt.reason, got.GetName(), tt.wantName)
+				}
 			}
 		})
 	}

@@ -30,6 +30,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	un "k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
+	k8stypes "k8s.io/apimachinery/pkg/types"
 
 	"github.com/crossplane/crossplane-runtime/v2/pkg/errors"
 	"github.com/crossplane/crossplane-runtime/v2/pkg/logging"
@@ -73,7 +74,7 @@ type CompDiffProcessor interface {
 	// each ref is resolved against every supplied composition's (XR GVK, claim GVK) pair via a
 	// preflight pass. If any ref is relevant to no supplied composition, the call fails before
 	// rendering any diffs (CLI input error). When `resources` is empty, behavior is unchanged.
-	DiffComposition(ctx context.Context, compositions []*un.Unstructured, namespace string, resources []dtypes.ResourceRef) (bool, error)
+	DiffComposition(ctx context.Context, compositions []*un.Unstructured, namespace string, resources []k8stypes.NamespacedName) (bool, error)
 	Initialize(ctx context.Context) error
 	// Cleanup releases any resources held by the processor (e.g., Docker containers).
 	Cleanup(ctx context.Context) error
@@ -158,7 +159,7 @@ func (p *DefaultCompDiffProcessor) Cleanup(ctx context.Context) error {
 
 // DiffComposition processes composition changes and shows impact on existing XRs.
 // Returns (hasDiffs, error) where hasDiffs indicates if any differences were detected.
-func (p *DefaultCompDiffProcessor) DiffComposition(ctx context.Context, compositions []*un.Unstructured, namespace string, resources []dtypes.ResourceRef) (bool, error) {
+func (p *DefaultCompDiffProcessor) DiffComposition(ctx context.Context, compositions []*un.Unstructured, namespace string, resources []k8stypes.NamespacedName) (bool, error) {
 	p.config.Logger.Debug("Processing composition diff",
 		"compositionCount", len(compositions),
 		"namespace", namespace,
@@ -196,15 +197,42 @@ func (p *DefaultCompDiffProcessor) DiffComposition(ctx context.Context, composit
 		compositionID := comp.GetName() // Use actual name from unstructured
 		p.config.Logger.Debug("Processing composition", "name", compositionID)
 
-		// In --resource mode, hand the per-composition matched set into processSingleComposition;
-		// nil signals default-discovery mode.
-		var preMatched []*un.Unstructured
-		if len(resources) > 0 {
-			preMatched = preflightMatches[compositionID]
+		// Resolve the affected XR set up-front. In --resource mode the preflight already produced it;
+		// in default-discovery mode we query the cluster (best-effort: net-new compositions yield empty).
+		// surfaceFiltered controls whether Manual-policy XRs go into ImpactAnalysis as XRStatusFilteredByPolicy
+		// entries (true in --resource mode so users see what was matched-but-skipped) vs. only being counted
+		// in the summary (default-discovery mode).
+		var (
+			affectedXRs     []*un.Unstructured
+			surfaceFiltered bool
+		)
+
+		switch {
+		case len(resources) > 0:
+			affectedXRs = preflightMatches[compositionID]
+			surfaceFiltered = true
+		default:
+			typedComp := &apiextensionsv1.Composition{}
+			if err := runtime.DefaultUnstructuredConverter.FromUnstructured(comp.Object, typedComp); err != nil {
+				return false, errors.Wrapf(err, "cannot convert composition %s to typed for default discovery", compositionID)
+			}
+
+			discovered, findErr := p.compositionClient.FindComposites(ctx, typedComp, dtypes.FindCompositesOptions{Namespace: namespace})
+
+			switch {
+			case findErr != nil:
+				// Net-new composition (won't exist in cluster) → graceful empty result, same as before.
+				p.config.Logger.Debug("Cannot find composites using composition (likely net-new composition)",
+					"composition", compositionID, "error", findErr)
+
+				affectedXRs = nil
+			default:
+				affectedXRs = discovered
+			}
 		}
 
 		// Process this single composition and build the result
-		compResult, err := p.processSingleComposition(ctx, comp, namespace, preMatched, len(resources) > 0)
+		compResult, err := p.processSingleComposition(ctx, comp, affectedXRs, surfaceFiltered)
 		if err != nil {
 			p.config.Logger.Debug("Failed to process composition", "composition", compositionID, "error", err)
 
@@ -271,7 +299,7 @@ func (p *DefaultCompDiffProcessor) DiffComposition(ctx context.Context, composit
 // If any ref is relevant to no supplied composition, it returns an error naming the unmatched
 // refs (CLI input error). When `refs` is empty, returns (nil, nil) and the caller falls back to
 // default-discovery mode.
-func (p *DefaultCompDiffProcessor) preflightResourceRefs(ctx context.Context, compositions []*un.Unstructured, refs []dtypes.ResourceRef) (map[string][]*un.Unstructured, error) {
+func (p *DefaultCompDiffProcessor) preflightResourceRefs(ctx context.Context, compositions []*un.Unstructured, refs []k8stypes.NamespacedName) (map[string][]*un.Unstructured, error) {
 	if len(refs) == 0 {
 		return nil, nil
 	}
@@ -289,7 +317,7 @@ func (p *DefaultCompDiffProcessor) preflightResourceRefs(ctx context.Context, co
 			return nil, errors.Wrapf(err, "cannot convert composition %s to typed for preflight", comp.GetName())
 		}
 
-		matched, _, err := p.compositionClient.GetCompositesByName(ctx, typedComp, refs)
+		matched, err := p.compositionClient.FindComposites(ctx, typedComp, dtypes.FindCompositesOptions{Refs: refs})
 		if err != nil {
 			return nil, errors.Wrapf(err, "preflight: cannot resolve --resource refs for composition %s", comp.GetName())
 		}
@@ -307,7 +335,7 @@ func (p *DefaultCompDiffProcessor) preflightResourceRefs(ctx context.Context, co
 		}
 	}
 
-	var globallyUnmatched []dtypes.ResourceRef
+	var globallyUnmatched []k8stypes.NamespacedName
 
 	for _, ref := range refs {
 		if !matchedAtLeastOnce[ref.String()] {
@@ -318,7 +346,7 @@ func (p *DefaultCompDiffProcessor) preflightResourceRefs(ctx context.Context, co
 	if len(globallyUnmatched) > 0 {
 		names := make([]string, 0, len(globallyUnmatched))
 		for _, r := range globallyUnmatched {
-			names = append(names, r.String())
+			names = append(names, formatRef(r))
 		}
 
 		return nil, errors.Errorf("--resource ref(s) not relevant to any supplied composition: %s (resource not found, or it doesn't reference one of the supplied compositions)", joinRefs(names))
@@ -332,11 +360,24 @@ func joinRefs(refs []string) string {
 	return strings.Join(refs, ", ")
 }
 
+// formatRef renders a NamespacedName the way the user typed it on the command line:
+// bare "name" for cluster-scoped, "namespace/name" for namespaced. NamespacedName.String()
+// always renders "namespace/name" (so "/foo" for cluster-scoped), which is wrong for
+// human-facing output where users expect their original spelling.
+func formatRef(n k8stypes.NamespacedName) string {
+	switch n.Namespace {
+	case "":
+		return n.Name
+	default:
+		return n.Namespace + "/" + n.Name
+	}
+}
+
 // processSingleComposition processes a single composition and builds the result.
 // Returns (*CompositionDiff, error). When `resourceMode` is true, the function uses the
 // caller-supplied `preMatched` set instead of calling FindCompositesUsingComposition, and
 // surfaces update-policy-filtered composites in ImpactAnalysis with XRStatusFilteredByPolicy.
-func (p *DefaultCompDiffProcessor) processSingleComposition(ctx context.Context, newComp *un.Unstructured, namespace string, preMatched []*un.Unstructured, resourceMode bool) (*renderer.CompositionDiff, error) {
+func (p *DefaultCompDiffProcessor) processSingleComposition(ctx context.Context, newComp *un.Unstructured, affectedXRs []*un.Unstructured, surfaceFiltered bool) (*renderer.CompositionDiff, error) {
 	result := &renderer.CompositionDiff{
 		Name:           newComp.GetName(),
 		ImpactAnalysis: []renderer.XRImpact{},
@@ -357,27 +398,7 @@ func (p *DefaultCompDiffProcessor) processSingleComposition(ctx context.Context,
 
 	result.CompositionDiff = compDiff
 
-	// Resolve the affected composite set. In --resource mode, the preflight pass already produced it.
-	// In default-discovery mode, query the cluster.
-	var affectedXRs []*un.Unstructured
-
-	if resourceMode {
-		affectedXRs = preMatched
-	} else {
-		discovered, err := p.compositionClient.FindCompositesUsingComposition(ctx, newComp.GetName(), namespace)
-		if err != nil {
-			// For net-new compositions, the composition won't exist in the cluster
-			// so FindCompositesUsingComposition will fail. This is expected behavior.
-			p.config.Logger.Debug("Cannot find composites using composition (likely net-new composition)",
-				"composition", newComp.GetName(), "error", err)
-			// Return result with empty impact analysis for net-new compositions
-			return result, nil
-		}
-
-		affectedXRs = discovered
-	}
-
-	p.config.Logger.Debug("Found affected XRs", "composition", newComp.GetName(), "count", len(affectedXRs), "resourceMode", resourceMode)
+	p.config.Logger.Debug("Processing affected XRs", "composition", newComp.GetName(), "count", len(affectedXRs), "surfaceFiltered", surfaceFiltered)
 
 	// Filter XRs based on IncludeManual flag
 	keptXRs, droppedXRs := p.partitionXRsByUpdatePolicy(affectedXRs)
@@ -390,10 +411,10 @@ func (p *DefaultCompDiffProcessor) processSingleComposition(ctx context.Context,
 		"droppedCount", filteredByPolicy,
 		"includeManual", p.config.IncludeManual)
 
-	// In --resource mode, surface filtered composites in the impact analysis as
-	// XRStatusFilteredByPolicy so users see what was matched-but-skipped. In default-discovery
-	// mode, preserve the existing summary-only behavior.
-	if resourceMode {
+	// In --resource mode (surfaceFiltered=true), surface filtered composites in the impact
+	// analysis as XRStatusFilteredByPolicy so users see what was matched-but-skipped. In
+	// default-discovery mode, preserve the existing summary-only behavior.
+	if surfaceFiltered {
 		for _, xr := range droppedXRs {
 			result.ImpactAnalysis = append(result.ImpactAnalysis, renderer.XRImpact{
 				ObjectReference: corev1.ObjectReference{

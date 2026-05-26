@@ -20,26 +20,26 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/crossplane-contrib/crossplane-diff/cmd/diff/types"
+	k8stypes "k8s.io/apimachinery/pkg/types"
 )
 
 func TestParseResourceRef(t *testing.T) {
 	tests := map[string]struct {
 		input   string
-		want    types.ResourceRef
+		want    k8stypes.NamespacedName
 		wantErr bool
 	}{
 		"BareName_ClusterScoped": {
 			input: "my-xr",
-			want:  types.ResourceRef{Namespace: "", Name: "my-xr"},
+			want:  k8stypes.NamespacedName{Namespace: "", Name: "my-xr"},
 		},
 		"NamespaceAndName": {
 			input: "default/my-claim",
-			want:  types.ResourceRef{Namespace: "default", Name: "my-claim"},
+			want:  k8stypes.NamespacedName{Namespace: "default", Name: "my-claim"},
 		},
 		"WhitespaceTrimmed": {
 			input: "  default/my-claim  ",
-			want:  types.ResourceRef{Namespace: "default", Name: "my-claim"},
+			want:  k8stypes.NamespacedName{Namespace: "default", Name: "my-claim"},
 		},
 		"Empty": {
 			input:   "",

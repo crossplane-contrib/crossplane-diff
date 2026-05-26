@@ -23,11 +23,12 @@ import (
 
 	"github.com/alecthomas/kong"
 	dp "github.com/crossplane-contrib/crossplane-diff/cmd/diff/diffprocessor"
-	"github.com/crossplane-contrib/crossplane-diff/cmd/diff/types"
-	ld "github.com/crossplane/cli/v2/cmd/crossplane/common/load"
+	k8stypes "k8s.io/apimachinery/pkg/types"
 
 	"github.com/crossplane/crossplane-runtime/v2/pkg/errors"
 	"github.com/crossplane/crossplane-runtime/v2/pkg/logging"
+
+	ld "github.com/crossplane/cli/v2/cmd/crossplane/common/load"
 )
 
 // CompDiffProcessor is imported from the diffprocessor package
@@ -136,33 +137,33 @@ func makeDefaultCompProc(c *CompCmd, kongCtx *kong.Context, appCtx *AppContext, 
 	return dp.NewCompDiffProcessor(xrProc, appCtx.XpClients.Composition, opts...)
 }
 
-// parseResourceRef parses a "[namespace/]name" string into a ResourceRef.
+// parseResourceRef parses a "[namespace/]name" string into a NamespacedName.
 // Bare "name" (no slash) means cluster-scoped (v1 XRs, v2 cluster-scoped XRs).
 // "ns/name" means namespaced (Claims, v2 namespaced XRs).
 // "/name" (empty namespace before slash) is rejected because the user's intent is clearly namespaced.
-func parseResourceRef(value string) (types.ResourceRef, error) {
+func parseResourceRef(value string) (k8stypes.NamespacedName, error) {
 	trimmed := strings.TrimSpace(value)
 	if trimmed == "" {
-		return types.ResourceRef{}, errors.Errorf("invalid --resource value %q: cannot be empty", value)
+		return k8stypes.NamespacedName{}, errors.Errorf("invalid --resource value %q: cannot be empty", value)
 	}
 
 	parts := strings.Split(trimmed, "/")
 	switch len(parts) {
 	case 1:
-		return types.ResourceRef{Name: parts[0]}, nil
+		return k8stypes.NamespacedName{Name: parts[0]}, nil
 	case 2:
 		ns, name := parts[0], parts[1]
 		if ns == "" {
-			return types.ResourceRef{}, errors.Errorf("invalid --resource value %q: namespace must not be empty (use bare name for cluster-scoped composites)", value)
+			return k8stypes.NamespacedName{}, errors.Errorf("invalid --resource value %q: namespace must not be empty (use bare name for cluster-scoped composites)", value)
 		}
 
 		if name == "" {
-			return types.ResourceRef{}, errors.Errorf("invalid --resource value %q: name must not be empty", value)
+			return k8stypes.NamespacedName{}, errors.Errorf("invalid --resource value %q: name must not be empty", value)
 		}
 
-		return types.ResourceRef{Namespace: ns, Name: name}, nil
+		return k8stypes.NamespacedName{Namespace: ns, Name: name}, nil
 	default:
-		return types.ResourceRef{}, errors.Errorf("invalid --resource value %q: expected [namespace/]name format, got %d slash-separated parts", value, len(parts)-1)
+		return k8stypes.NamespacedName{}, errors.Errorf("invalid --resource value %q: expected [namespace/]name format, got %d slash-separated parts", value, len(parts)-1)
 	}
 }
 
@@ -202,7 +203,7 @@ func (c *CompCmd) Run(_ *kong.Context, log logging.Logger, appCtx *AppContext, p
 		return errors.Wrap(err, "cannot load compositions")
 	}
 
-	parsedRefs := make([]types.ResourceRef, 0, len(c.Resources))
+	parsedRefs := make([]k8stypes.NamespacedName, 0, len(c.Resources))
 
 	for _, raw := range c.Resources {
 		ref, err := parseResourceRef(raw)
