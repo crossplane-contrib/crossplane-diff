@@ -19,7 +19,6 @@ package diffprocessor
 import (
 	"bytes"
 	"context"
-	"os"
 	"os/exec"
 	"sync"
 
@@ -83,27 +82,25 @@ type EngineRenderFn struct {
 	stopRuntimes  func(log logging.Logger, fa *render.FunctionAddresses)
 }
 
-// NewEngineRenderFn constructs an engineRenderFn backed by the default Docker
-// render engine (via render.NewEngineFromFlags with zero-value EngineFlags).
-func NewEngineRenderFn(log logging.Logger) *EngineRenderFn {
-	// If CROSSPLANE_RENDER_BINARY points at a local `crossplane` binary, use
-	// our stderr-capturing engine instead of the upstream localRenderEngine.
-	// The upstream implementation forwards stderr directly to os.Stderr, which
-	// means fatal-result messages are visible on the terminal but are NOT
-	// included in the returned Go error — making programmatic inspection (e.g.
-	// in integration tests) impossible. Our engine captures stderr and includes
-	// it in the error string so callers can surface it to users and tests can
-	// assert on it.
+// NewEngineRenderFn constructs an EngineRenderFn.
+//
+// When binaryPath is empty (the production path) it uses the upstream docker
+// render engine: empty EngineFlags → xpkg.crossplane.io/crossplane/crossplane:stable,
+// which advances on each crossplane release.
+//
+// When binaryPath is non-empty (a test-only fast path) it uses our
+// stderrCapturingLocalEngine, which exec's the supplied `crossplane` binary
+// for `crossplane internal render`. The wrapper exists only because the
+// upstream localRenderEngine pipes stderr to os.Stderr and ignores exit code 3
+// (the partial-output-on-fatal contract from crossplane/crossplane#7455). Once
+// upstream merges equivalent behavior into both engines, this branch and the
+// wrapper can be deleted and tests should drop straight to the upstream
+// localRenderEngine via render.NewEngineFromFlags(&render.EngineFlags{Local: ...}).
+func NewEngineRenderFn(log logging.Logger, binaryPath string) *EngineRenderFn {
 	var engine render.Engine
-	if bin := os.Getenv("CROSSPLANE_RENDER_BINARY"); bin != "" {
-		engine = &stderrCapturingLocalEngine{binaryPath: bin}
+	if binaryPath != "" {
+		engine = &stderrCapturingLocalEngine{binaryPath: binaryPath}
 	} else {
-		// Empty EngineFlags → upstream cli falls back to
-		// xpkg.crossplane.io/crossplane/crossplane:stable, which gets advanced on
-		// each crossplane release. (We previously hardcoded "main" here to dodge
-		// an empty-tag issue in the older crank API; that path is no longer
-		// needed and ":main" on xpkg has been stale since upstream's nix
-		// migration anyway.) User-facing override flags are tracked separately.
 		engine = render.NewEngineFromFlags(&render.EngineFlags{}, log)
 	}
 

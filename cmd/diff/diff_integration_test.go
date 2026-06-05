@@ -118,6 +118,11 @@ func runIntegrationTest(t *testing.T, testType DiffTestType, tt IntegrationTestC
 		t.Fatalf("expectedStructuredCompOutput is only valid for CompositionDiffTest (got %q)", testType)
 	}
 
+	// Resolve the local crossplane binary path once per test. Threaded into
+	// the kong arg slice below as --crossplane-render-binary=<path> so each
+	// parallel subtest has its own copy with no shared process state.
+	crossplaneBin := requireCrossplaneBinary(t)
+
 	// Create a fresh scheme for each test to avoid concurrent map access.
 	// Each parallel test needs its own scheme because envtest modifies it during CRD installation.
 	scheme := createTestScheme()
@@ -213,6 +218,7 @@ func runIntegrationTest(t *testing.T, testType DiffTestType, tt IntegrationTestC
 	// Create command line args that match your pre-populated struct
 	args := []string{
 		fmt.Sprintf("--timeout=%s", testTimeout.String()),
+		fmt.Sprintf("--crossplane-render-binary=%s", crossplaneBin),
 	}
 
 	// Add namespace if specified (for composition tests only)
@@ -350,10 +356,6 @@ func TestDiffIntegration(t *testing.T) {
 
 	// Set up logger for controller-runtime (global setup, once per test function)
 	tu.SetupKubeTestLogger(t)
-
-	// Point the render engine at the locally-built crossplane binary (contains
-	// `crossplane internal render`); skips if not built.
-	requireCrossplaneBinary(t)
 
 	tests := map[string]IntegrationTestCase{
 		"NewResourceDiff": {
@@ -1775,10 +1777,6 @@ func TestCompDiffIntegration(t *testing.T) {
 
 	// Set up logger for controller-runtime (global setup, once per test function)
 	tu.SetupKubeTestLogger(t)
-
-	// Point the render engine at the locally-built crossplane binary (contains
-	// `crossplane internal render`); skips if not built.
-	requireCrossplaneBinary(t)
 
 	tests := map[string]IntegrationTestCase{
 		"CompositionChangeImpactsXRs": {

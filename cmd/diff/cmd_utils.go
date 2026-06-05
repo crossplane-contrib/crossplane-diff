@@ -86,6 +86,10 @@ func defaultProcessorOptions(fields CommonCmdFields, namespace string) []dp.Proc
 		opts = append(opts, dp.WithFunctionRegistryOverride(fields.FunctionRegistryOverride))
 	}
 
+	if fields.CrossplaneRenderBinary != "" {
+		opts = append(opts, dp.WithCrossplaneRenderBinary(fields.CrossplaneRenderBinary))
+	}
+
 	return opts
 }
 

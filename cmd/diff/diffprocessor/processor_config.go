@@ -64,6 +64,15 @@ type ProcessorConfig struct {
 	// processors construct a default engine-backed RenderFn on initialization.
 	RenderFunc RenderFn
 
+	// CrossplaneRenderBinary, when non-empty, causes the default
+	// engine-backed RenderFn to invoke a local `crossplane` binary at the
+	// supplied path instead of the upstream docker engine. This is a test
+	// affordance that gives integration tests a fast in-process render path;
+	// production users should leave it empty so the docker engine pulls
+	// xpkg.crossplane.io/crossplane/crossplane:stable. Ignored when
+	// RenderFunc is set explicitly.
+	CrossplaneRenderBinary string
+
 	// Factories provide factory functions for creating components
 	Factories ComponentFactories
 }
@@ -201,6 +210,16 @@ func WithLogger(logger logging.Logger) ProcessorOption {
 func WithRenderFunc(renderFn RenderFn) ProcessorOption {
 	return func(config *ProcessorConfig) {
 		config.RenderFunc = renderFn
+	}
+}
+
+// WithCrossplaneRenderBinary points the default engine-backed RenderFn at a
+// local `crossplane` binary instead of the upstream docker engine. See
+// ProcessorConfig.CrossplaneRenderBinary for the semantics — production
+// callers should not use this; it exists for fast integration-test iteration.
+func WithCrossplaneRenderBinary(path string) ProcessorOption {
+	return func(config *ProcessorConfig) {
+		config.CrossplaneRenderBinary = path
 	}
 }
 

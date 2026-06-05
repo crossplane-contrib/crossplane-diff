@@ -105,6 +105,11 @@ type CommonCmdFields struct {
 	FunctionCredentials      FunctionCredentials `help:"A YAML file or directory of YAML files specifying Secret credentials to pass to Functions." name:"function-credentials"                                                                         placeholder:"PATH"`
 	FunctionRegistryOverride string              `help:"Override the registry for all function images (e.g., 'my-company.registry.io')."            name:"function-registry-override"`
 	EventualState            bool                `default:"false"                                                                                   help:"Show eventual state after all reconciliation cycles complete (useful with function-sequencer)." name:"eventual-state"`
+
+	// CrossplaneRenderBinary is a hidden test-only override that points the
+	// render engine at a local `crossplane` binary. Production users leave
+	// this unset and the docker engine handles rendering.
+	CrossplaneRenderBinary string `help:"(test only) Path to a local crossplane binary used by the render engine instead of the docker image." hidden:"" name:"crossplane-render-binary"`
 }
 
 // GetKubeContext implements ContextProvider.

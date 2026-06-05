@@ -102,7 +102,7 @@ func NewDiffProcessor(k8cs k8.Clients, xpcs xp.Clients, opts ...ProcessorOption)
 	// function runtimes owned by the engine.
 	var defaultEngineFn *EngineRenderFn
 	if config.RenderFunc == nil {
-		defaultEngineFn = NewEngineRenderFn(config.Logger)
+		defaultEngineFn = NewEngineRenderFn(config.Logger, config.CrossplaneRenderBinary)
 		config.RenderFunc = defaultEngineFn.Render
 	}
 

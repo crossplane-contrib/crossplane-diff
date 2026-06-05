@@ -649,12 +649,15 @@ func addResourceRefAndUpdate(ctx context.Context, c client.Client,
 }
 
 // requireCrossplaneBinary locates the locally-built crossplane binary at
-// _output/bin/crossplane (relative to cmd/diff/) and points the render engine
-// at it via CROSSPLANE_RENDER_BINARY. The binary must contain the
-// `crossplane internal render` subcommand introduced by upstream PR #7339.
-// Tests are skipped if the binary is missing so that `go test ./...` still
-// runs cleanly on fresh checkouts.
-func requireCrossplaneBinary(t *testing.T) {
+// _output/bin/crossplane (relative to cmd/diff/) and returns its absolute
+// path. The binary must contain the `crossplane internal render` subcommand
+// introduced by upstream PR #7339. Tests are skipped if the binary is missing
+// so that `go test ./...` still runs cleanly on fresh checkouts.
+//
+// Callers thread the returned path into the diff command via
+// --crossplane-render-binary=<path> rather than via a process-global env var,
+// so concurrent t.Parallel() tests don't race on shared state.
+func requireCrossplaneBinary(t *testing.T) string {
 	t.Helper()
 
 	absPath, err := filepath.Abs("../../_output/bin/crossplane")
@@ -666,22 +669,5 @@ func requireCrossplaneBinary(t *testing.T) {
 		t.Skipf("local crossplane binary not built (expected at %s); run: go build -o _output/bin/crossplane ./vendor/github.com/crossplane/crossplane/v2/cmd/crossplane", absPath)
 	}
 
-	// Can't use t.Setenv because the integration tests call t.Parallel().
-	// Capture the old value and restore it via t.Cleanup; subsequent concurrent
-	// tests with the same helper write the same value, so there's no race on
-	// what's read by NewEngineRenderFn.
-	const key = "CROSSPLANE_RENDER_BINARY"
-
-	old, had := os.LookupEnv(key)
-	if err := os.Setenv(key, absPath); err != nil { //nolint:usetesting // t.Setenv is incompatible with t.Parallel used by caller tests
-		t.Fatalf("cannot set %s: %v", key, err)
-	}
-
-	t.Cleanup(func() {
-		if had {
-			_ = os.Setenv(key, old) //nolint:usetesting // see above
-		} else {
-			_ = os.Unsetenv(key)
-		}
-	})
+	return absPath
 }
