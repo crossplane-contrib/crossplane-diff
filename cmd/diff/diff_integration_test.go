@@ -22,9 +22,9 @@ import (
 
 	"github.com/crossplane/crossplane-runtime/v2/pkg/logging"
 
-	xpextv1 "github.com/crossplane/crossplane/v2/apis/apiextensions/v1"
-	xpextv2 "github.com/crossplane/crossplane/v2/apis/apiextensions/v2"
-	pkgv1 "github.com/crossplane/crossplane/v2/apis/pkg/v1"
+	xpextv1 "github.com/crossplane/crossplane/apis/v2/apiextensions/v1"
+	xpextv2 "github.com/crossplane/crossplane/apis/v2/apiextensions/v2"
+	pkgv1 "github.com/crossplane/crossplane/apis/v2/pkg/v1"
 )
 
 const (
@@ -350,6 +350,10 @@ func TestDiffIntegration(t *testing.T) {
 
 	// Set up logger for controller-runtime (global setup, once per test function)
 	tu.SetupKubeTestLogger(t)
+
+	// Point the render engine at the locally-built crossplane binary (contains
+	// `crossplane internal render`); skips if not built.
+	requireCrossplaneBinary(t)
 
 	tests := map[string]IntegrationTestCase{
 		"NewResourceDiff": {
@@ -962,11 +966,11 @@ Summary: 2 modified, 2 removed`,
 			expectedStructuredOutput: tu.ExpectDiff().
 				WithSummary(2, 0, 0).
 				WithAddedResource("XDownstreamResource", "", "default").
-				WithNamePattern(`generated-xr-\(generated\)`).
+				WithNamePattern(`generated-xr-placeholder`).
 				WithField("spec.forProvider.configData", "new-value").
 				And().
 				WithAddedResource("XNopResource", "", "default").
-				WithNamePattern(`generated-xr-\(generated\)`).
+				WithNamePattern(`generated-xr-placeholder`).
 				WithField("spec.coolField", "new-value").
 				And(),
 			expectedError:    false,
@@ -1727,7 +1731,7 @@ Summary: 2 modified, 2 removed`,
 			// This test verifies that the eventual state simulation correctly resolves requirements
 			// (like environment configs) during its iterative rendering, not just in the final render.
 			// The composition uses:
-			// 1. function-environment-configs to fetch env config (requires ProvideRequirements)
+			// 1. function-environment-configs to fetch env config (requires requirements iteration)
 			// 2. function-go-templating to generate resources using env config data
 			// 3. function-sequencer to stage resources
 			// 4. function-auto-ready
@@ -1771,6 +1775,10 @@ func TestCompDiffIntegration(t *testing.T) {
 
 	// Set up logger for controller-runtime (global setup, once per test function)
 	tu.SetupKubeTestLogger(t)
+
+	// Point the render engine at the locally-built crossplane binary (contains
+	// `crossplane internal render`); skips if not built.
+	requireCrossplaneBinary(t)
 
 	tests := map[string]IntegrationTestCase{
 		"CompositionChangeImpactsXRs": {
@@ -2997,7 +3005,17 @@ Summary: 1 modified`,
 			noColor:          true,
 		},
 		"CrossNamespaceResourceCollision": {
-			reason:  "Validates that resources with the same name in different namespaces are correctly distinguished",
+			reason: "Validates that resources with the same name in different namespaces are correctly distinguished",
+			skip:   true,
+			skipReason: "Blocked on https://github.com/crossplane-contrib/function-extra-resources/issues/106. " +
+				"function-extra-resources (v0.2.0/v0.3.0) emits ResourceSelector{Namespace=\"\"} for " +
+				"by-name references that omit `ref.namespace` — it only forwards user-yaml verbatim, " +
+				"never inferring from the XR's namespace. Crossplane v2.3+'s render binary then does " +
+				"InMemoryClient.Get(name, namespace=\"\"), a strict (GVK, ns, name) match that doesn't " +
+				"find our resolved ConfigMap (stored at namespace=ns-{a,b}). By-label selectors aren't " +
+				"affected — List(InNamespace(\"\")) lists across all namespaces — which is why our " +
+				"other extra-resources tests still pass. Re-enable once a function release defaults " +
+				"selector.Namespace to the XR's namespace.",
 			timeout: longTimeout, // Test involves multiple namespaces and can be slow with Docker contention
 			// This test catches a bug where the cache key didn't include namespace, causing
 			// ConfigMaps with the same name in different namespaces to collide.

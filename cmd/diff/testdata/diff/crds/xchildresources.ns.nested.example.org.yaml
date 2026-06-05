@@ -23,6 +23,35 @@ spec:
               properties:
                 childField:
                   type: string
+                # spec.crossplane subtree is populated by the v2 composite
+                # reconciler.
+                crossplane:
+                  type: object
+                  properties:
+                    compositionRef:
+                      type: object
+                      properties:
+                        name: { type: string }
+                    compositionRevisionRef:
+                      type: object
+                      properties:
+                        name: { type: string }
+                    compositionSelector:
+                      type: object
+                      properties:
+                        matchLabels:
+                          type: object
+                          additionalProperties: { type: string }
+                    compositionUpdatePolicy: { type: string }
+                    resourceRefs:
+                      type: array
+                      items:
+                        type: object
+                        properties:
+                          apiVersion: { type: string }
+                          kind: { type: string }
+                          name: { type: string }
+                          namespace: { type: string }
             status:
               type: object
               properties:
@@ -34,6 +63,9 @@ spec:
                       lastTransitionTime:
                         type: string
                         format: date-time
+                      observedGeneration:
+                        type: integer
+                        format: int64
                       message:
                         type: string
                       reason:

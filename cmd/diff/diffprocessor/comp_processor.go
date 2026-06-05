@@ -32,8 +32,7 @@ import (
 	"github.com/crossplane/crossplane-runtime/v2/pkg/errors"
 	"github.com/crossplane/crossplane-runtime/v2/pkg/logging"
 
-	apiextensionsv1 "github.com/crossplane/crossplane/v2/apis/apiextensions/v1"
-	"github.com/crossplane/crossplane/v2/cmd/crank/render"
+	apiextensionsv1 "github.com/crossplane/crossplane/apis/v2/apiextensions/v1"
 )
 
 // XRDiffResult captures the result of processing a single XR against a composition.
@@ -86,18 +85,32 @@ type DefaultCompDiffProcessor struct {
 func NewCompDiffProcessor(xrProc DiffProcessor, compositionClient xp.CompositionClient, opts ...ProcessorOption) CompDiffProcessor {
 	// Create default configuration
 	config := ProcessorConfig{
-		Namespace:  "",
-		Colorize:   true,
-		Compact:    false,
-		Stderr:     os.Stderr,
-		Logger:     logging.NewNopLogger(),
-		RenderFunc: render.Render,
+		Namespace: "",
+		Colorize:  true,
+		Compact:   false,
+		Stderr:    os.Stderr,
+		Logger:    logging.NewNopLogger(),
 	}
 
 	// Apply all provided options
 	for _, option := range opts {
 		option(&config)
 	}
+
+	// NOTE: We intentionally do NOT default config.RenderFunc here.
+	//
+	// WithRenderFunc is operation-scoped: the same opts slice flows into
+	// NewDiffProcessor for our embedded xrProc, so a caller-supplied renderer is
+	// already honored at the layer that actually drives rendering. Comp's copy of
+	// config.RenderFunc just rides along unused, which is fine.
+	//
+	// What we must NOT do is *default* one here. NewEngineRenderFn allocates a
+	// Docker bridge network and reserves function-runtime addresses on first use,
+	// and DefaultCompDiffProcessor.Cleanup delegates to xrProc.Cleanup — it has no
+	// hook for tearing down a comp-side engineRenderFn. Defaulting one would leak
+	// the network for the lifetime of the process. The xr processor handles its
+	// own default + cleanup in NewDiffProcessor, so comp piggybacking on
+	// xrProc.Render is the correct (and only) path.
 
 	// Set default factories if not provided
 	config.SetDefaultFactories()

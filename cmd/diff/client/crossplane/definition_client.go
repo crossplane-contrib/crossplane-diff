@@ -11,6 +11,7 @@ import (
 
 	"github.com/crossplane/crossplane-runtime/v2/pkg/errors"
 	"github.com/crossplane/crossplane-runtime/v2/pkg/logging"
+	ucomposite "github.com/crossplane/crossplane-runtime/v2/pkg/resource/unstructured/composite"
 )
 
 // CompositeResourceDefinitionKind is the kind for Composite Resource Definitions.
@@ -31,6 +32,12 @@ type DefinitionClient interface {
 
 	// IsClaimResource checks if the given resource is a claim type
 	IsClaimResource(ctx context.Context, resource *un.Unstructured) bool
+
+	// GetCompositeSchema returns the composite.Schema (Legacy or Modern) that
+	// applies to the given XR or claim GVK, derived from the XRD's apiVersion.
+	// v1 XRDs are SchemaLegacy (canonical fields under spec.*); v2 XRDs are
+	// SchemaModern (canonical fields under spec.crossplane.*).
+	GetCompositeSchema(ctx context.Context, gvk schema.GroupVersionKind) (ucomposite.Schema, error)
 }
 
 // DefaultDefinitionClient implements DefinitionClient.
@@ -236,4 +243,36 @@ func (c *DefaultDefinitionClient) IsClaimResource(ctx context.Context, resource 
 	c.logger.Debug("Resource is a claim type", "gvk", gvk.String())
 
 	return true
+}
+
+
+// GetCompositeSchema returns the composite.Schema (Legacy or Modern) for the
+// given XR or claim GVK by looking up the XRD and reading its apiVersion. v1
+// XRDs publish CRDs whose canonical fields live directly under spec.*
+// (SchemaLegacy); v2 XRDs nest those fields under spec.crossplane.*
+// (SchemaModern). Tries the XR path first; falls back to the claim path so the
+// helper works for both.
+func (c *DefaultDefinitionClient) GetCompositeSchema(ctx context.Context, gvk schema.GroupVersionKind) (ucomposite.Schema, error) {
+	xrd, err := c.GetXRDForXR(ctx, gvk)
+	if err != nil {
+		// Not an XR GVK; try the claim path.
+		var claimErr error
+		xrd, claimErr = c.GetXRDForClaim(ctx, gvk)
+		if claimErr != nil {
+			return ucomposite.SchemaModern, errors.Wrapf(err, "no XRD found for %s (also tried claim: %v)", gvk.String(), claimErr)
+		}
+	}
+
+	// Use spec.scope, not apiVersion. The apiserver round-trips XRDs through
+	// conversion (a v1 XRD POSTed by the user can come back from a v2 list as
+	// kind v2), so apiVersion is unreliable. spec.scope is preserved across
+	// the conversion: v1 XRDs default to "LegacyCluster" and stay there; v2
+	// XRDs declare "Cluster" or "Namespaced" explicitly. This mirrors the
+	// rule the render binary uses (see selectSchema in crossplane's
+	// internal/render/composite/render.go).
+	scope, _, _ := un.NestedString(xrd.Object, "spec", "scope")
+	if scope == "" || scope == "LegacyCluster" {
+		return ucomposite.SchemaLegacy, nil
+	}
+	return ucomposite.SchemaModern, nil
 }

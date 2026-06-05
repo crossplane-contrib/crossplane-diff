@@ -22,7 +22,7 @@ import (
 
 	un "k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 
-	apiextensionsv1 "github.com/crossplane/crossplane/v2/apis/apiextensions/v1"
+	apiextensionsv1 "github.com/crossplane/crossplane/apis/v2/apiextensions/v1"
 )
 
 // CompositionProvider is a function that provides a composition for a given resource.

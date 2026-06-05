@@ -27,9 +27,8 @@ import (
 	"sigs.k8s.io/e2e-framework/pkg/envconf"
 	"sigs.k8s.io/e2e-framework/pkg/features"
 
-	xpv1 "github.com/crossplane/crossplane-runtime/v2/apis/common/v1"
-
-	apiextensionsv1 "github.com/crossplane/crossplane/v2/apis/apiextensions/v1"
+	apiextensionsv1 "github.com/crossplane/crossplane/apis/v2/apiextensions/v1"
+	xpv2 "github.com/crossplane/crossplane/apis/v2/core/v2"
 	"github.com/crossplane/crossplane/v2/test/e2e"
 	"github.com/crossplane/crossplane/v2/test/e2e/config"
 	"github.com/crossplane/crossplane/v2/test/e2e/funcs"
@@ -57,7 +56,7 @@ func TestDiffExistingComposition(t *testing.T) {
 			WithSetup("CreateExistingXR", funcs.AllOf(
 				funcs.ApplyResources(e2e.FieldManager, manifests, "existing-xr.yaml"),
 				funcs.ResourcesCreatedWithin(30*time.Second, manifests, "existing-xr.yaml"),
-				funcs.ResourcesHaveConditionWithin(2*time.Minute, manifests, "existing-xr.yaml", xpv1.Available()),
+				funcs.ResourcesHaveConditionWithin(2*time.Minute, manifests, "existing-xr.yaml", xpv2.Available()),
 			)).
 			Assess("CanDiffComposition", func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
 				t.Helper()
@@ -126,7 +125,7 @@ func TestCompDiffLargeFanout(t *testing.T) {
 			WithSetup("CreateExistingXRs", funcs.AllOf(
 				funcs.ApplyResources(e2e.FieldManager, manifests, "existing-xrs.yaml"),
 				funcs.ResourcesCreatedWithin(30*time.Second, manifests, "existing-xrs.yaml"),
-				funcs.ResourcesHaveConditionWithin(3*time.Minute, manifests, "existing-xrs.yaml", xpv1.Available()),
+				funcs.ResourcesHaveConditionWithin(3*time.Minute, manifests, "existing-xrs.yaml", xpv2.Available()),
 			)).
 			Assess("CanDiffCompositionWithLargeFanout", func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
 				t.Helper()
@@ -201,7 +200,7 @@ func TestDiffCompositionWithGetComposedResource(t *testing.T) {
 			WithSetup("CreateExistingXR", funcs.AllOf(
 				funcs.ApplyResources(e2e.FieldManager, manifests, "existing-xr.yaml"),
 				funcs.ResourcesCreatedWithin(30*time.Second, manifests, "existing-xr.yaml"),
-				funcs.ResourcesHaveConditionWithin(2*time.Minute, manifests, "existing-xr.yaml", xpv1.Available()),
+				funcs.ResourcesHaveConditionWithin(2*time.Minute, manifests, "existing-xr.yaml", xpv2.Available()),
 			)).
 			Assess("CanDiffCompositionWithGetComposedResource", func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
 				t.Helper()
@@ -263,7 +262,7 @@ func TestDiffCompositionWithClaims(t *testing.T) {
 				funcs.ApplyResources(e2e.FieldManager, manifests, "existing-claim.yaml"),
 				funcs.ResourcesCreatedWithin(30*time.Second, manifests, "existing-claim.yaml"),
 				// Claims get their status from the backing XR, so wait for the claim to be available
-				funcs.ResourcesHaveConditionWithin(2*time.Minute, manifests, "existing-claim.yaml", xpv1.Available()),
+				funcs.ResourcesHaveConditionWithin(2*time.Minute, manifests, "existing-claim.yaml", xpv2.Available()),
 			)).
 			Assess("CanDiffCompositionWithClaim", func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
 				t.Helper()

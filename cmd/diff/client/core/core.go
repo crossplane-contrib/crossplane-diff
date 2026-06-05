@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"reflect"
 
+	"github.com/crossplane/cli/v2/cmd/crossplane/common/resource/xrm"
 	"k8s.io/client-go/discovery"
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes/scheme"
@@ -15,8 +16,7 @@ import (
 	"github.com/crossplane/crossplane-runtime/v2/pkg/errors"
 	"github.com/crossplane/crossplane-runtime/v2/pkg/logging"
 
-	"github.com/crossplane/crossplane/v2/apis/pkg"
-	"github.com/crossplane/crossplane/v2/cmd/crank/common/resource/xrm"
+	"github.com/crossplane/crossplane/apis/v2/pkg"
 )
 
 //nolint:gochecknoinits // Registering types with the global client-go scheme in init avoids race conditions.

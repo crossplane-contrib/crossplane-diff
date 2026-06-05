@@ -22,11 +22,10 @@ import (
 
 	"github.com/alecthomas/kong"
 	dp "github.com/crossplane-contrib/crossplane-diff/cmd/diff/diffprocessor"
+	ld "github.com/crossplane/cli/v2/cmd/crossplane/common/load"
 
 	"github.com/crossplane/crossplane-runtime/v2/pkg/errors"
 	"github.com/crossplane/crossplane-runtime/v2/pkg/logging"
-
-	ld "github.com/crossplane/crossplane/v2/cmd/crank/common/load"
 )
 
 // XRCmd represents the XR diff command.
@@ -90,7 +89,6 @@ func makeDefaultXRProc(c *XRCmd, kongCtx *kong.Context, appCtx *AppContext, log 
 	opts := defaultProcessorOptions(c.CommonCmdFields, namespace)
 	opts = append(opts,
 		dp.WithLogger(log),
-		dp.WithRenderMutex(&globalRenderMutex),
 		dp.WithStdout(kongCtx.Stdout),
 		dp.WithStderr(kongCtx.Stderr),
 	)

@@ -63,6 +63,9 @@ spec:
                   items:
                     type: object
                     properties:
+                      observedGeneration:
+                        type: integer
+                        format: int64
                       lastTransitionTime:
                         type: string
                       message:

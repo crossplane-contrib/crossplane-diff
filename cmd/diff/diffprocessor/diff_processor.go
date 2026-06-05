@@ -16,8 +16,8 @@ import (
 	k8 "github.com/crossplane-contrib/crossplane-diff/cmd/diff/client/kubernetes"
 	"github.com/crossplane-contrib/crossplane-diff/cmd/diff/renderer"
 	dt "github.com/crossplane-contrib/crossplane-diff/cmd/diff/renderer/types"
-	"github.com/crossplane-contrib/crossplane-diff/cmd/diff/serial"
 	"github.com/crossplane-contrib/crossplane-diff/cmd/diff/types"
+	"github.com/crossplane/cli/v2/cmd/crossplane/render"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	un "k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -29,9 +29,8 @@ import (
 	cpd "github.com/crossplane/crossplane-runtime/v2/pkg/resource/unstructured/composed"
 	cmp "github.com/crossplane/crossplane-runtime/v2/pkg/resource/unstructured/composite"
 
-	apiextensionsv1 "github.com/crossplane/crossplane/v2/apis/apiextensions/v1"
-	pkgv1 "github.com/crossplane/crossplane/v2/apis/pkg/v1"
-	"github.com/crossplane/crossplane/v2/cmd/crank/render"
+	apiextensionsv1 "github.com/crossplane/crossplane/apis/v2/apiextensions/v1"
+	pkgv1 "github.com/crossplane/crossplane/apis/v2/pkg/v1"
 )
 
 const (
@@ -45,9 +44,6 @@ const (
 	fieldCompositionRevisionRef     = "compositionRevisionRef"
 	fieldCompositionUpdatePolicy    = "compositionUpdatePolicy"
 )
-
-// RenderFunc defines the signature of a function that can render resources.
-type RenderFunc func(ctx context.Context, log logging.Logger, in render.Inputs) (render.Outputs, error)
 
 // DiffProcessor interface for processing resources.
 type DiffProcessor interface {
@@ -79,6 +75,10 @@ type DefaultDiffProcessor struct {
 	diffCalculator       DiffCalculator
 	diffRenderer         renderer.DiffRenderer
 	requirementsProvider *RequirementsProvider
+	// engineFn is set when using the default engine-backed RenderFunc so its
+	// Docker network and function runtimes can be released in Cleanup. nil when
+	// the caller injected a RenderFunc via WithRenderFunc.
+	engineFn *EngineRenderFn
 }
 
 // NewDiffProcessor creates a new DefaultDiffProcessor with the provided options.
@@ -87,9 +87,8 @@ func NewDiffProcessor(k8cs k8.Clients, xpcs xp.Clients, opts ...ProcessorOption)
 	// Note: Behavior defaults (Namespace, Colorize, Compact, MaxNestedDepth) are intentionally
 	// not set here. They should be provided via ProcessorOptions from the CLI layer.
 	config := ProcessorConfig{
-		Stderr:     os.Stderr,
-		Logger:     logging.NewNopLogger(),
-		RenderFunc: render.Render,
+		Stderr: os.Stderr,
+		Logger: logging.NewNopLogger(),
 	}
 
 	// Apply all provided options
@@ -97,14 +96,18 @@ func NewDiffProcessor(k8cs k8.Clients, xpcs xp.Clients, opts ...ProcessorOption)
 		option(&config)
 	}
 
+	// Default the render function to an engine-backed implementation if the
+	// caller didn't override it. Serialization is handled inside engineRenderFn.
+	// We retain the pointer so Cleanup can release the Docker network and
+	// function runtimes owned by the engine.
+	var defaultEngineFn *EngineRenderFn
+	if config.RenderFunc == nil {
+		defaultEngineFn = NewEngineRenderFn(config.Logger)
+		config.RenderFunc = defaultEngineFn.Render
+	}
+
 	// Set default factory functions if not provided
 	config.SetDefaultFactories()
-
-	// Wrap the RenderFunc with serialization if a mutex was provided
-	// This transparently handles serialization without requiring callers to worry about it
-	if config.RenderMutex != nil {
-		config.RenderFunc = serial.RenderFunc(config.RenderFunc, config.RenderMutex)
-	}
 
 	// Create the diff options based on configuration
 	diffOpts := config.GetDiffOptions()
@@ -133,6 +136,7 @@ func NewDiffProcessor(k8cs k8.Clients, xpcs xp.Clients, opts ...ProcessorOption)
 		diffCalculator:       diffCalculator,
 		diffRenderer:         diffRenderer,
 		requirementsProvider: requirementsProvider,
+		engineFn:             defaultEngineFn,
 	}
 
 	return processor
@@ -162,7 +166,18 @@ func (p *DefaultDiffProcessor) Initialize(ctx context.Context) error {
 // Cleanup releases any resources held by the processor.
 // This includes stopping and removing any Docker containers created for function execution.
 func (p *DefaultDiffProcessor) Cleanup(ctx context.Context) error {
-	return p.functionProvider.Cleanup(ctx)
+	var errs []error
+	if err := p.functionProvider.Cleanup(ctx); err != nil {
+		errs = append(errs, err)
+	}
+
+	if p.engineFn != nil {
+		if err := p.engineFn.Cleanup(ctx); err != nil {
+			errs = append(errs, err)
+		}
+	}
+
+	return errors.Join(errs...)
 }
 
 // initializeSchemaValidator initializes the schema validator with CRDs.
@@ -530,16 +545,21 @@ func (p *DefaultDiffProcessor) resolveBackingXRForClaim(ctx context.Context, exi
 		return p.synthesizeDummyBackingXRForNewClaim(ctx, xr)
 	}
 
-	// Check if this is a Claim by looking for resourceRef field
+	// Check if this is a Claim by looking for resourceRef field.
+	// If the existing cluster copy has no resourceRef (e.g. claim not yet reconciled by
+	// Crossplane, or test fixture hand-crafted without one), synthesize a dummy backing
+	// XR from the XRD. The old render.Render() tolerated running against the claim GVK
+	// directly; crossplane internal render runs the full composite reconciler which
+	// enforces a compositeTypeRef GVK match, so we must provide a correctly-typed XR.
 	resourceRefRaw, hasResourceRef, _ := un.NestedFieldCopy(existingXRFromCluster.Object, "spec", "resourceRef")
 	if !hasResourceRef || resourceRefRaw == nil {
-		return result, nil
+		return p.synthesizeDummyBackingXRForNewClaim(ctx, xr)
 	}
 
 	// Extract backing XR details from resourceRef
 	resourceRefMap, ok := resourceRefRaw.(map[string]any)
 	if !ok {
-		return result, nil
+		return p.synthesizeDummyBackingXRForNewClaim(ctx, xr)
 	}
 
 	name, nameFound, _ := un.NestedString(resourceRefMap, "name")
@@ -547,7 +567,7 @@ func (p *DefaultDiffProcessor) resolveBackingXRForClaim(ctx context.Context, exi
 	kind, kindFound, _ := un.NestedString(resourceRefMap, "kind")
 
 	if !nameFound || !apiVersionFound || !kindFound {
-		return result, nil
+		return p.synthesizeDummyBackingXRForNewClaim(ctx, xr)
 	}
 
 	result.name = name
@@ -792,7 +812,7 @@ func (p *DefaultDiffProcessor) synthesizeDummyBackingXRForNewClaim(ctx context.C
 // prepareXRForDiff prepares the XR unstructured object for diff calculation.
 // When rendered from backing XR (for correct composed resource labels), we use
 // the original Claim for the top-level diff. Otherwise, we merge the rendered XR with input.
-func (p *DefaultDiffProcessor) prepareXRForDiff(xr *cmp.Unstructured, desired render.Outputs, backingXRResolution backingXRInfo, resourceID string) (*un.Unstructured, error) {
+func (p *DefaultDiffProcessor) prepareXRForDiff(xr *cmp.Unstructured, desired render.CompositionOutputs, backingXRResolution backingXRInfo, resourceID string) (*un.Unstructured, error) {
 	if backingXRResolution.xrForRendering != nil {
 		// We rendered from backing XR for correct composed resource labels, but we want
 		// to diff against the original Claim that the user provided - not the backing XR.
@@ -1005,8 +1025,9 @@ func (p *DefaultDiffProcessor) SanitizeXR(res *un.Unstructured, resourceID strin
 
 	// Handle XRs with generateName but no name
 	if xr.GetName() == "" && xr.GetGenerateName() != "" {
-		// Create a display name for the diff
-		displayName := xr.GetGenerateName() + "(generated)"
+		// Create a valid RFC 1123 placeholder name for rendering.
+		// The display layer (diff_formatter.go) independently shows "(generated)" in output.
+		displayName := xr.GetGenerateName() + "placeholder"
 		p.config.Logger.Debug("Setting display name for XR with generateName",
 			"generateName", xr.GetGenerateName(),
 			"displayName", displayName)
@@ -1064,7 +1085,51 @@ func (p *DefaultDiffProcessor) RenderToStableState(
 	resourceID string,
 	observedResources []cpd.Unstructured,
 	synthesizeReady bool,
-) (render.Outputs, error) {
+) (render.CompositionOutputs, error) {
+	// Determine the canonical composite Schema (Legacy vs Modern) once per render
+	// loop, based on the XRD that defines this XR's GVK. Setting it on the input
+	// wrapper makes the renderer write canonical fields at the right path
+	// (spec.* for legacy XRs, spec.crossplane.* for modern), which is critical
+	// for dry-run apply against the cluster's CRD downstream.
+	//
+	// If the XRD lookup fails (or no defClient is available), default to
+	// SchemaModern. This preserves the prior behavior and matches the
+	// composite.Unstructured zero-value default.
+	xrSchema := cmp.SchemaModern
+	// xrdForRender is the XRD we forward to the render binary so it can
+	// pick the right composite.Schema (Legacy vs Modern) for the input
+	// XR's GVK. nil when defClient lookup fails; the binary then falls
+	// back to its default SchemaModern.
+	var xrdForRender *un.Unstructured
+	if p.defClient != nil {
+		s, err := p.defClient.GetCompositeSchema(ctx, xr.GroupVersionKind())
+		if err == nil {
+			xrSchema = s
+		} else {
+			p.config.Logger.Debug("Cannot determine composite schema; defaulting to SchemaModern",
+				"resource", resourceID, "gvk", xr.GroupVersionKind().String(), "error", err)
+		}
+
+		// Look up the XRD itself to forward to the binary. We try the XR
+		// path first (covers root XRs and nested XRs); fall back to the
+		// claim path (for claim-rooted diffs the GVK is the claim's, and
+		// the XR path won't match). The render binary's selectSchema
+		// honors Spec.Scope == "LegacyCluster" on either v1- or v2-form
+		// XRDs, so we don't have to care which form the apiserver returns.
+		xrd, err := p.defClient.GetXRDForXR(ctx, xr.GroupVersionKind())
+		if err != nil {
+			xrd, err = p.defClient.GetXRDForClaim(ctx, xr.GroupVersionKind())
+		}
+		if err == nil && xrd != nil {
+			xrdForRender = xrd
+		} else {
+			p.config.Logger.Debug("Cannot fetch XRD for render input; binary will default to SchemaModern",
+				"resource", resourceID, "gvk", xr.GroupVersionKind().String(), "error", err)
+		}
+	}
+
+	xr.Schema = xrSchema
+
 	// Fetch function credentials from composition pipeline and merge with CLI-provided credentials
 	autoFetchedCredentials := p.fetchCompositionCredentials(ctx, comp)
 
@@ -1085,7 +1150,7 @@ func (p *DefaultDiffProcessor) RenderToStableState(
 
 	maxIterations := p.config.MaxRenderIterations
 
-	var lastOutput render.Outputs
+	var lastOutput render.CompositionOutputs
 
 	for iteration := 1; iteration <= maxIterations; iteration++ {
 		p.config.Logger.Debug("Render iteration",
@@ -1096,24 +1161,42 @@ func (p *DefaultDiffProcessor) RenderToStableState(
 			"synthesizeReady", synthesizeReady)
 
 		// Perform render
-		output, renderErr := p.config.RenderFunc(ctx, p.config.Logger, render.Inputs{
+		output, renderErr := p.config.RenderFunc(ctx, p.config.Logger, RenderInputs{
 			CompositeResource:   xr,
 			Composition:         comp,
 			Functions:           fns,
 			FunctionCredentials: functionCredentials,
 			RequiredResources:   slices.Collect(maps.Values(requiredResources)),
 			ObservedResources:   observed,
+			XRD:                 xrdForRender,
 		})
+
+		// Preserve the input wrapper's schema on the readback wrapper so
+		// in-process accessors (resource refs, composition refs, etc.) read
+		// from the right field paths.
+		//
+		// NOTE: this only affects in-process Go code. The render binary's
+		// `crossplane internal render` defaults its internal wrapper to
+		// SchemaModern (see internal/render/composite/render.go:65 in upstream
+		// crossplane v2.3.1), so the rendered output we get back always uses
+		// v2 field paths even for Legacy (v1 XRD) XRs. Translating the data
+		// here would let downstream code "see" the right shape, but it would
+		// hide the underlying upstream bug — render should faithfully mimic
+		// the reconciler, which is initialized with WithSchema. Tracked
+		// separately; for now legacy XRs in the binary path are best-effort.
+		if output.CompositeResource != nil {
+			output.CompositeResource.Schema = xrSchema
+		}
 
 		lastOutput = output
 
 		// Handle requirements (even if render had errors)
 		newReqCount := 0
 
-		if len(output.Requirements) > 0 {
-			additionalResources, err := p.requirementsProvider.ProvideRequirements(ctx, output.Requirements, xr.GetNamespace())
+		if len(output.RequiredResources) > 0 {
+			additionalResources, err := p.requirementsProvider.ResolveSelectors(ctx, output.RequiredResources, xr.GetNamespace())
 			if err != nil {
-				return render.Outputs{}, errors.Wrap(err, "failed to process requirements")
+				return render.CompositionOutputs{}, errors.Wrap(err, "failed to process requirements")
 			}
 
 			for _, res := range additionalResources {
@@ -1123,9 +1206,17 @@ func (p *DefaultDiffProcessor) RenderToStableState(
 			}
 		}
 
-		// Check for fatal render errors (no requirements to continue with)
+		// Render error AND no new requirements means we have nothing left to try.
+		// Surface the error.
+		//
+		// With the v2.4+ partial-output-on-fatal contract (crossplane/crossplane#7455,
+		// backported in #7466), the binary populates output.RequiredResources even when
+		// a pipeline step FATALs. We resolve those above; if resolution turned up
+		// anything we hadn't already cached, newReqCount > 0 and we iterate. If every
+		// selector resolved to a resource we'd already supplied (or to nothing), the
+		// next iteration would be identical to this one — no point retrying.
 		if renderErr != nil && newReqCount == 0 {
-			return render.Outputs{}, errors.Wrap(renderErr, "cannot render resources")
+			return render.CompositionOutputs{}, errors.Wrap(renderErr, "cannot render resources")
 		}
 
 		// If render failed but we got new requirements, continue to next iteration
@@ -1141,7 +1232,7 @@ func (p *DefaultDiffProcessor) RenderToStableState(
 		// Check for stability
 		result := p.checkStability(output, observed, newReqCount, synthesizeReady, resourceID, iteration, len(requiredResources))
 		if result.err != nil {
-			return render.Outputs{}, result.err
+			return render.CompositionOutputs{}, result.err
 		}
 
 		if result.stable {
@@ -1151,7 +1242,7 @@ func (p *DefaultDiffProcessor) RenderToStableState(
 		observed = result.nextObserved
 	}
 
-	return render.Outputs{}, errors.Errorf("did not stabilize after %d iterations; try increasing --max-iterations if your pipeline requires more cycles", maxIterations)
+	return render.CompositionOutputs{}, errors.Errorf("did not stabilize after %d iterations; try increasing --max-iterations if your pipeline requires more cycles", maxIterations)
 }
 
 // stabilityResult holds the result of a stability check iteration.
@@ -1165,7 +1256,7 @@ type stabilityResult struct {
 // For synthesizeReady mode, it checks for new composed resources and synthesizes Ready status.
 // For normal mode, it checks if requirements have been resolved.
 func (p *DefaultDiffProcessor) checkStability(
-	output render.Outputs,
+	output render.CompositionOutputs,
 	observed []cpd.Unstructured,
 	newReqCount int,
 	synthesizeReady bool,
@@ -1182,7 +1273,7 @@ func (p *DefaultDiffProcessor) checkStability(
 
 // checkStabilityWithReadySynthesis checks stability in eventual-state mode.
 func (p *DefaultDiffProcessor) checkStabilityWithReadySynthesis(
-	output render.Outputs,
+	output render.CompositionOutputs,
 	observed []cpd.Unstructured,
 	newReqCount int,
 	resourceID string,
@@ -1352,7 +1443,7 @@ func mergeObservedResources(existing, newResources []cpd.Unstructured) []cpd.Uns
 // Issue: Lines 455-457 blindly set cd.SetNamespace(xr.GetNamespace()) without checking resource scope
 //
 // Proposed Solution:
-// 1. Extend render.Inputs to accept XRDs (similar to how RequiredResources is passed)
+// 1. Extend RenderInputs to accept XRDs (similar to how RequiredResources is passed)
 // 2. Pass XRDs through to SetComposedResourceMetadata (modify function signature)
 // 3. Look up the composed resource's GVK in the XRDs to determine if it's cluster-scoped
 // 4. Only call cd.SetNamespace(xr.GetNamespace()) if the resource is namespaced

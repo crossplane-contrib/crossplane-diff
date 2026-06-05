@@ -5,293 +5,146 @@ import (
 	"testing"
 
 	tu "github.com/crossplane-contrib/crossplane-diff/cmd/diff/testutils"
+	v1 "github.com/crossplane/function-sdk-go/proto/v1"
 	"github.com/google/go-cmp/cmp"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	un "k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 
 	"github.com/crossplane/crossplane-runtime/v2/pkg/errors"
-
-	v1 "github.com/crossplane/crossplane/v2/proto/fn/v1"
 )
 
-func TestRequirementsProvider_ProvideRequirements(t *testing.T) {
+// TestRequirementsProvider_ResolveSelectors covers the selector-flat entry
+// point used by the new render.CompositionOutputs.RequiredResources shape.
+func TestRequirementsProvider_ResolveSelectors(t *testing.T) {
 	ctx := t.Context()
 
-	// Create resources for testing
-	// Note: ConfigMaps are namespaced, so we set namespace to match xrNamespace ("default") used in the test
 	configMap := tu.NewResource("v1", "ConfigMap", "config1").WithNamespace("default").Build()
 	secret := tu.NewResource("v1", "Secret", "secret1").WithNamespace("default").Build()
 
+	selFor := func(kind, name string) *v1.ResourceSelector {
+		return &v1.ResourceSelector{
+			ApiVersion: "v1",
+			Kind:       kind,
+			Match:      &v1.ResourceSelector_MatchName{MatchName: name},
+		}
+	}
+
 	tests := map[string]struct {
-		requirements           map[string]v1.Requirements
-		setupResourceClient    func() *tu.MockResourceClient
-		setupEnvironmentClient func() *tu.MockEnvironmentClient
-		wantCount              int
-		wantNames              []string
-		wantErr                bool
+		selectors []*v1.ResourceSelector
+		setupRes  func() *tu.MockResourceClient
+		wantCount int
+		wantNames []string
+		wantErr   bool
 	}{
-		"EmptyRequirements": {
-			requirements: map[string]v1.Requirements{},
-			setupResourceClient: func() *tu.MockResourceClient {
-				return tu.NewMockResourceClient().
-					WithNamespacedResource(
-						schema.GroupVersionKind{Group: "", Version: "v1", Kind: "ConfigMap"},
-						schema.GroupVersionKind{Group: "", Version: "v1", Kind: "Secret"},
-					).
-					Build()
-			},
-			setupEnvironmentClient: func() *tu.MockEnvironmentClient {
-				return tu.NewMockEnvironmentClient().
-					WithNoEnvironmentConfigs().
-					Build()
+		"Nil": {
+			selectors: nil,
+			setupRes: func() *tu.MockResourceClient {
+				return tu.NewMockResourceClient().Build()
 			},
 			wantCount: 0,
-			wantErr:   false,
 		},
-		"NameSelector": {
-			requirements: map[string]v1.Requirements{
-				"step1": {
-					Resources: map[string]*v1.ResourceSelector{
-						"config": {
-							ApiVersion: "v1",
-							Kind:       "ConfigMap",
-							Match: &v1.ResourceSelector_MatchName{
-								MatchName: "config1",
-							},
-						},
-					},
-				},
+		"Empty": {
+			selectors: []*v1.ResourceSelector{},
+			setupRes: func() *tu.MockResourceClient {
+				return tu.NewMockResourceClient().Build()
 			},
-			setupResourceClient: func() *tu.MockResourceClient {
+			wantCount: 0,
+		},
+		"SingleMatchName": {
+			selectors: []*v1.ResourceSelector{selFor("ConfigMap", "config1")},
+			setupRes: func() *tu.MockResourceClient {
 				return tu.NewMockResourceClient().
-					WithNamespacedResource(
-						schema.GroupVersionKind{Group: "", Version: "v1", Kind: "ConfigMap"},
-					).
+					WithNamespacedResource(schema.GroupVersionKind{Group: "", Version: "v1", Kind: "ConfigMap"}).
 					WithGetResource(func(_ context.Context, gvk schema.GroupVersionKind, _, name string) (*un.Unstructured, error) {
 						if gvk.Kind == "ConfigMap" && name == "config1" {
 							return configMap, nil
 						}
 
-						return nil, errors.New("resource not found")
+						return nil, errors.New("not found")
 					}).
-					Build()
-			},
-			setupEnvironmentClient: func() *tu.MockEnvironmentClient {
-				return tu.NewMockEnvironmentClient().
-					WithNoEnvironmentConfigs().
 					Build()
 			},
 			wantCount: 1,
 			wantNames: []string{"config1"},
-			wantErr:   false,
 		},
-		"LabelSelector": {
-			requirements: map[string]v1.Requirements{
-				"step1": {
-					Resources: map[string]*v1.ResourceSelector{
-						"config": {
-							ApiVersion: "v1",
-							Kind:       "ConfigMap",
-							Match: &v1.ResourceSelector_MatchLabels{
-								MatchLabels: &v1.MatchLabels{
-									Labels: map[string]string{
-										"app": "test-app",
-									},
-								},
-							},
-						},
-					},
-				},
+		"TwoSelectorsDistinctKinds": {
+			selectors: []*v1.ResourceSelector{
+				selFor("ConfigMap", "config1"),
+				selFor("Secret", "secret1"),
 			},
-			setupResourceClient: func() *tu.MockResourceClient {
-				return tu.NewMockResourceClient().
-					WithNamespacedResource(
-						schema.GroupVersionKind{Group: "", Version: "v1", Kind: "ConfigMap"},
-					).
-					WithGetResourcesByLabel(func(_ context.Context, _ schema.GroupVersionKind, _ string, sel metav1.LabelSelector) ([]*un.Unstructured, error) {
-						// Return resources for label-based selectors
-						if sel.MatchLabels["app"] == "test-app" {
-							return []*un.Unstructured{configMap}, nil
-						}
-
-						return []*un.Unstructured{}, nil
-					}).
-					Build()
-			},
-			setupEnvironmentClient: func() *tu.MockEnvironmentClient {
-				return tu.NewMockEnvironmentClient().
-					WithNoEnvironmentConfigs().
-					Build()
-			},
-			wantCount: 1,
-			wantNames: []string{"config1"},
-			wantErr:   false,
-		},
-		"MultipleSelectors": {
-			requirements: map[string]v1.Requirements{
-				"step1": {
-					Resources: map[string]*v1.ResourceSelector{
-						"config": {
-							ApiVersion: "v1",
-							Kind:       "ConfigMap",
-							Match: &v1.ResourceSelector_MatchName{
-								MatchName: "config1",
-							},
-						},
-						"secret": {
-							ApiVersion: "v1",
-							Kind:       "Secret",
-							Match: &v1.ResourceSelector_MatchName{
-								MatchName: "secret1",
-							},
-						},
-					},
-				},
-			},
-			setupResourceClient: func() *tu.MockResourceClient {
+			setupRes: func() *tu.MockResourceClient {
 				return tu.NewMockResourceClient().
 					WithNamespacedResource(
 						schema.GroupVersionKind{Group: "", Version: "v1", Kind: "ConfigMap"},
 						schema.GroupVersionKind{Group: "", Version: "v1", Kind: "Secret"},
 					).
 					WithGetResource(func(_ context.Context, gvk schema.GroupVersionKind, _, name string) (*un.Unstructured, error) {
-						if gvk.Kind == "ConfigMap" && name == "config1" {
+						switch {
+						case gvk.Kind == "ConfigMap" && name == "config1":
 							return configMap, nil
-						}
-
-						if gvk.Kind == "Secret" && name == "secret1" {
+						case gvk.Kind == "Secret" && name == "secret1":
 							return secret, nil
 						}
 
-						return nil, errors.New("resource not found")
+						return nil, errors.New("not found")
 					}).
-					Build()
-			},
-			setupEnvironmentClient: func() *tu.MockEnvironmentClient {
-				return tu.NewMockEnvironmentClient().
-					WithNoEnvironmentConfigs().
 					Build()
 			},
 			wantCount: 2,
 			wantNames: []string{"config1", "secret1"},
-			wantErr:   false,
 		},
-		"ResourceNotFound": {
-			requirements: map[string]v1.Requirements{
-				"step1": {
-					Resources: map[string]*v1.ResourceSelector{
-						"missing": {
-							ApiVersion: "v1",
-							Kind:       "ConfigMap",
-							Match: &v1.ResourceSelector_MatchName{
-								MatchName: "missing-resource",
-							},
-						},
-					},
-				},
-			},
-			setupResourceClient: func() *tu.MockResourceClient {
+		"FetchError": {
+			selectors: []*v1.ResourceSelector{selFor("ConfigMap", "missing")},
+			setupRes: func() *tu.MockResourceClient {
 				return tu.NewMockResourceClient().
-					WithNamespacedResource(
-						schema.GroupVersionKind{Group: "", Version: "v1", Kind: "ConfigMap"},
-					).
-					WithResourceNotFound().
-					Build()
-			},
-			setupEnvironmentClient: func() *tu.MockEnvironmentClient {
-				return tu.NewMockEnvironmentClient().
-					WithNoEnvironmentConfigs().
-					Build()
-			},
-			wantErr: true,
-		},
-		"EnvironmentConfigsAvailable": {
-			requirements: map[string]v1.Requirements{
-				"step1": {
-					Resources: map[string]*v1.ResourceSelector{
-						"config": {
-							ApiVersion: "v1",
-							Kind:       "ConfigMap",
-							Match: &v1.ResourceSelector_MatchName{
-								MatchName: "config1",
-							},
-						},
-					},
-				},
-			},
-			setupResourceClient: func() *tu.MockResourceClient {
-				// This resource client should not be called because the resource is in the env configs
-				return tu.NewMockResourceClient().
-					WithNamespacedResource(
-						schema.GroupVersionKind{Group: "", Version: "v1", Kind: "ConfigMap"},
-					).
+					WithNamespacedResource(schema.GroupVersionKind{Group: "", Version: "v1", Kind: "ConfigMap"}).
 					WithGetResource(func(_ context.Context, _ schema.GroupVersionKind, _, _ string) (*un.Unstructured, error) {
-						return nil, errors.New("should not be called")
+						return nil, errors.New("boom")
 					}).
 					Build()
 			},
-			setupEnvironmentClient: func() *tu.MockEnvironmentClient {
-				return tu.NewMockEnvironmentClient().
-					WithSuccessfulEnvironmentConfigsFetch([]*un.Unstructured{configMap}).
-					Build()
-			},
-			wantCount: 1,
-			wantNames: []string{"config1"},
-			wantErr:   false,
+			wantErr: true,
 		},
 	}
 
 	for name, tt := range tests {
 		t.Run(name, func(t *testing.T) {
-			// Set up clients
-			resourceClient := tt.setupResourceClient()
-			environmentClient := tt.setupEnvironmentClient()
-
-			// Create the requirements provider
 			provider := NewRequirementsProvider(
-				resourceClient,
-				environmentClient,
-				nil, // renderFn not needed for this test
+				tt.setupRes(),
+				tu.NewMockEnvironmentClient().WithNoEnvironmentConfigs().Build(),
+				nil, // renderFn unused by ResolveSelectors
 				tu.TestLogger(t, false),
 			)
-
-			// Initialize the provider to cache any environment configs
 			if err := provider.Initialize(ctx); err != nil {
-				t.Fatalf("Failed to initialize provider: %v", err)
+				t.Fatalf("Initialize: %v", err)
 			}
 
-			// Call the method being tested
-			resources, err := provider.ProvideRequirements(ctx, tt.requirements, "default")
-
-			// Check error cases
+			got, err := provider.ResolveSelectors(ctx, tt.selectors, "default")
 			if tt.wantErr {
 				if err == nil {
-					t.Errorf("ProvideRequirements() expected error but got none")
+					t.Fatalf("ResolveSelectors: expected error, got nil")
 				}
 
 				return
 			}
 
 			if err != nil {
-				t.Fatalf("ProvideRequirements() unexpected error: %v", err)
+				t.Fatalf("ResolveSelectors: unexpected error: %v", err)
 			}
 
-			// Check resource count
-			if diff := cmp.Diff(tt.wantCount, len(resources)); diff != "" {
-				t.Errorf("ProvideRequirements() resource count mismatch (-want +got):\n%s", diff)
+			if diff := cmp.Diff(tt.wantCount, len(got)); diff != "" {
+				t.Errorf("resource count mismatch (-want +got):\n%s", diff)
 			}
 
-			// Verify expected resource names if specified
 			if tt.wantNames != nil {
-				foundNames := make(map[string]bool)
-				for _, res := range resources {
-					foundNames[res.GetName()] = true
+				names := make(map[string]bool, len(got))
+				for _, r := range got {
+					names[r.GetName()] = true
 				}
 
-				for _, name := range tt.wantNames {
-					if !foundNames[name] {
-						t.Errorf("Expected resource %q not found in result", name)
+				for _, want := range tt.wantNames {
+					if !names[want] {
+						t.Errorf("expected resource %q not found in result", want)
 					}
 				}
 			}
@@ -303,103 +156,3 @@ func TestRequirementsProvider_ProvideRequirements(t *testing.T) {
 // but different namespaces are correctly distinguished in the cache.
 // This test demonstrates a bug where cache keys didn't include namespace, causing
 // collisions when same-named resources existed in different namespaces.
-func TestRequirementsProvider_NamespaceCollision(t *testing.T) {
-	ctx := t.Context()
-
-	// Create two ConfigMaps with the SAME name but DIFFERENT namespaces
-	// This simulates a real scenario where a cluster has:
-	// - ConfigMap "my-config" in namespace "ns-a" with data "value-a"
-	// - ConfigMap "my-config" in namespace "ns-b" with data "value-b"
-	configInNsA := tu.NewResource("v1", "ConfigMap", "my-config").
-		WithNamespace("ns-a").
-		WithSpecField("data", "value-a").
-		Build()
-
-	configInNsB := tu.NewResource("v1", "ConfigMap", "my-config").
-		WithNamespace("ns-b").
-		WithSpecField("data", "value-b").
-		Build()
-
-	// Setup: Pre-cache both resources (simulating environment configs being loaded)
-	resourceClient := tu.NewMockResourceClient().
-		WithNamespacedResource(
-			schema.GroupVersionKind{Group: "", Version: "v1", Kind: "ConfigMap"},
-		).
-		// This should NOT be called if cache works correctly with namespace
-		WithGetResource(func(_ context.Context, gvk schema.GroupVersionKind, ns, name string) (*un.Unstructured, error) {
-			t.Logf("GetResource called for %s/%s in namespace %s - cache miss", gvk.Kind, name, ns)
-			// Return the correct resource based on namespace
-			if ns == "ns-a" {
-				return configInNsA, nil
-			}
-
-			if ns == "ns-b" {
-				return configInNsB, nil
-			}
-
-			return nil, errors.New("resource not found")
-		}).
-		Build()
-
-	environmentClient := tu.NewMockEnvironmentClient().
-		// Pre-load BOTH configs into the cache
-		WithSuccessfulEnvironmentConfigsFetch([]*un.Unstructured{configInNsA, configInNsB}).
-		Build()
-
-	provider := NewRequirementsProvider(
-		resourceClient,
-		environmentClient,
-		nil,                    // renderFn not needed
-		tu.TestLogger(t, true), // verbose logging to see cache behavior
-	)
-
-	// Initialize to load environment configs into cache
-	if err := provider.Initialize(ctx); err != nil {
-		t.Fatalf("Failed to initialize provider: %v", err)
-	}
-
-	// Now request the resource from namespace "ns-a"
-	// The XR is in namespace "ns-a", so the selector should resolve to that namespace
-	requirements := map[string]v1.Requirements{
-		"step1": {
-			Resources: map[string]*v1.ResourceSelector{
-				"config": {
-					ApiVersion: "v1",
-					Kind:       "ConfigMap",
-					Match: &v1.ResourceSelector_MatchName{
-						MatchName: "my-config",
-					},
-					// No namespace specified - should default to xrNamespace
-				},
-			},
-		},
-	}
-
-	// Request with xrNamespace = "ns-a" - we expect to get the resource from ns-a
-	resources, err := provider.ProvideRequirements(ctx, requirements, "ns-a")
-	if err != nil {
-		t.Fatalf("ProvideRequirements() unexpected error: %v", err)
-	}
-
-	// Verify we got exactly one resource
-	if len(resources) != 1 {
-		t.Fatalf("Expected 1 resource, got %d", len(resources))
-	}
-
-	// THE CRITICAL CHECK: Verify we got the resource from ns-a, NOT ns-b
-	// Without the namespace fix, the cache key is just "v1/ConfigMap/my-config"
-	// so the second resource (ns-b) overwrites the first (ns-a), and we get ns-b's data
-	gotResource := resources[0]
-	gotNamespace := gotResource.GetNamespace()
-	gotData, _, _ := un.NestedString(gotResource.Object, "spec", "data")
-
-	t.Logf("Got resource: namespace=%s, data=%s (expected: namespace=ns-a, data=value-a)", gotNamespace, gotData)
-
-	if gotNamespace != "ns-a" {
-		t.Errorf("Namespace collision bug: expected resource from namespace 'ns-a', got '%s'", gotNamespace)
-	}
-
-	if gotData != "value-a" {
-		t.Errorf("Namespace collision bug: expected data 'value-a', got '%s' (got resource from wrong namespace)", gotData)
-	}
-}

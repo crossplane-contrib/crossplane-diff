@@ -66,6 +66,9 @@ spec:
                       - status
                       - type
                     properties:
+                      observedGeneration:
+                        type: integer
+                        format: int64
                       lastTransitionTime:
                         type: string
                         format: date-time

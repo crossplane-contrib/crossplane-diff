@@ -19,8 +19,8 @@ import (
 	"github.com/crossplane/crossplane-runtime/v2/pkg/errors"
 	"github.com/crossplane/crossplane-runtime/v2/pkg/logging"
 
-	xpextv1 "github.com/crossplane/crossplane/v2/apis/apiextensions/v1"
-	xpextv2 "github.com/crossplane/crossplane/v2/apis/apiextensions/v2"
+	xpextv1 "github.com/crossplane/crossplane/apis/v2/apiextensions/v1"
+	xpextv2 "github.com/crossplane/crossplane/apis/v2/apiextensions/v2"
 )
 
 // SchemaClient handles operations related to Kubernetes schemas and CRDs.

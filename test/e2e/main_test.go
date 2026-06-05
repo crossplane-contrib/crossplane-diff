@@ -43,7 +43,7 @@ import (
 	"sigs.k8s.io/e2e-framework/support/kind"
 	"sigs.k8s.io/e2e-framework/third_party/helm"
 
-	pkgv1 "github.com/crossplane/crossplane/v2/apis/pkg/v1"
+	pkgv1 "github.com/crossplane/crossplane/apis/v2/pkg/v1"
 	"github.com/crossplane/crossplane/v2/test/e2e/config"
 	"github.com/crossplane/crossplane/v2/test/e2e/funcs"
 )

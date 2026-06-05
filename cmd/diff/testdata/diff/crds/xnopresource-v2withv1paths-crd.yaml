@@ -68,6 +68,15 @@ spec:
                           type: object
                           additionalProperties:
                             type: string
+                    resourceRefs:
+                      type: array
+                      items:
+                        type: object
+                        properties:
+                          apiVersion: { type: string }
+                          kind: { type: string }
+                          name: { type: string }
+                          namespace: { type: string }
             status:
               type: object
               properties:
@@ -76,6 +85,9 @@ spec:
                   items:
                     type: object
                     properties:
+                      observedGeneration:
+                        type: integer
+                        format: int64
                       type:
                         type: string
                       status:

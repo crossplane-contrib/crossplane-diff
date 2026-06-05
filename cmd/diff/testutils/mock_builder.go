@@ -9,6 +9,7 @@ import (
 
 	"github.com/crossplane-contrib/crossplane-diff/cmd/diff/renderer/types"
 	dtypes "github.com/crossplane-contrib/crossplane-diff/cmd/diff/types"
+	"github.com/crossplane/cli/v2/cmd/crossplane/common/resource"
 	extv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -17,14 +18,13 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	k8stypes "k8s.io/apimachinery/pkg/types"
 
-	xpv1 "github.com/crossplane/crossplane-runtime/v2/apis/common/v1"
 	"github.com/crossplane/crossplane-runtime/v2/pkg/errors"
 	cpd "github.com/crossplane/crossplane-runtime/v2/pkg/resource/unstructured/composed"
 	cmp "github.com/crossplane/crossplane-runtime/v2/pkg/resource/unstructured/composite"
 
-	xpextv1 "github.com/crossplane/crossplane/v2/apis/apiextensions/v1"
-	pkgv1 "github.com/crossplane/crossplane/v2/apis/pkg/v1"
-	"github.com/crossplane/crossplane/v2/cmd/crank/common/resource"
+	xpextv1 "github.com/crossplane/crossplane/apis/v2/apiextensions/v1"
+	xpv2 "github.com/crossplane/crossplane/apis/v2/core/v2"
+	pkgv1 "github.com/crossplane/crossplane/apis/v2/pkg/v1"
 )
 
 // MockBuilder provides a fluent API for building mock objects used in testing.
@@ -1833,7 +1833,7 @@ func WithCredentials(name, namespace, secretName string) PipelineStepOption {
 		step.Credentials = append(step.Credentials, xpextv1.FunctionCredentials{
 			Name:   name,
 			Source: xpextv1.FunctionCredentialsSourceSecret,
-			SecretRef: &xpv1.SecretReference{
+			SecretRef: &xpv2.SecretReference{
 				Namespace: namespace,
 				Name:      secretName,
 			},

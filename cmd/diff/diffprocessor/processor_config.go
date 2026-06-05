@@ -2,7 +2,6 @@ package diffprocessor
 
 import (
 	"io"
-	"sync"
 
 	xp "github.com/crossplane-contrib/crossplane-diff/cmd/diff/client/crossplane"
 	k8 "github.com/crossplane-contrib/crossplane-diff/cmd/diff/client/kubernetes"
@@ -61,11 +60,9 @@ type ProcessorConfig struct {
 	// Logger is the logger to use
 	Logger logging.Logger
 
-	// RenderFunc is the function to use for rendering resources
-	RenderFunc RenderFunc
-
-	// RenderMutex is the mutex used to serialize render operations (for internal use)
-	RenderMutex *sync.Mutex
+	// RenderFunc is the function to use for rendering resources. If left nil,
+	// processors construct a default engine-backed RenderFn on initialization.
+	RenderFunc RenderFn
 
 	// Factories provide factory functions for creating components
 	Factories ComponentFactories
@@ -89,7 +86,7 @@ type ComponentFactories struct {
 	CompDiffRenderer func(logger logging.Logger, diffRenderer renderer.DiffRenderer, opts renderer.DiffOptions) renderer.CompDiffRenderer
 
 	// RequirementsProvider creates an ExtraResourceProvider
-	RequirementsProvider func(res k8.ResourceClient, def xp.EnvironmentClient, renderFunc RenderFunc, logger logging.Logger) *RequirementsProvider
+	RequirementsProvider func(res k8.ResourceClient, def xp.EnvironmentClient, renderFunc RenderFn, logger logging.Logger) *RequirementsProvider
 
 	// FunctionProvider creates a FunctionProvider
 	FunctionProvider func(fnClient xp.FunctionClient, logger logging.Logger) FunctionProvider
@@ -201,16 +198,9 @@ func WithLogger(logger logging.Logger) ProcessorOption {
 }
 
 // WithRenderFunc sets the render function for the processor.
-func WithRenderFunc(renderFn RenderFunc) ProcessorOption {
+func WithRenderFunc(renderFn RenderFn) ProcessorOption {
 	return func(config *ProcessorConfig) {
 		config.RenderFunc = renderFn
-	}
-}
-
-// WithRenderMutex sets the mutex for serializing render operations.
-func WithRenderMutex(mu *sync.Mutex) ProcessorOption {
-	return func(config *ProcessorConfig) {
-		config.RenderMutex = mu
 	}
 }
 
@@ -243,7 +233,7 @@ func WithDiffRendererFactory(factory func(logging.Logger, renderer.DiffOptions) 
 }
 
 // WithRequirementsProviderFactory sets the RequirementsProvider factory function.
-func WithRequirementsProviderFactory(factory func(k8.ResourceClient, xp.EnvironmentClient, RenderFunc, logging.Logger) *RequirementsProvider) ProcessorOption {
+func WithRequirementsProviderFactory(factory func(k8.ResourceClient, xp.EnvironmentClient, RenderFn, logging.Logger) *RequirementsProvider) ProcessorOption {
 	return func(config *ProcessorConfig) {
 		config.Factories.RequirementsProvider = factory
 	}

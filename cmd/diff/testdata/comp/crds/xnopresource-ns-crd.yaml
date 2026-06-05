@@ -76,6 +76,9 @@ spec:
                   items:
                     type: object
                     properties:
+                      observedGeneration:
+                        type: integer
+                        format: int64
                       type:
                         type: string
                       status:
