@@ -154,5 +154,85 @@ func TestRequirementsProvider_ResolveSelectors(t *testing.T) {
 
 // TestRequirementsProvider_NamespaceCollision tests that resources with the same name
 // but different namespaces are correctly distinguished in the cache.
-// This test demonstrates a bug where cache keys didn't include namespace, causing
-// collisions when same-named resources existed in different namespaces.
+//
+// Pairs with the (currently skipped) E2E TestCompDiffIntegration/CrossNamespaceResourceCollision,
+// which is blocked on function-extra-resources#106 (the function emits Selector{Namespace:""}
+// for Reference-typed extras that omit ref.namespace). This unit test exercises the same
+// defaulting + cache-keying behavior at our layer without depending on the function, so
+// regressions in resolveNamespace / namespace-aware cache keys are caught immediately.
+func TestRequirementsProvider_NamespaceCollision(t *testing.T) {
+	ctx := t.Context()
+
+	// Two ConfigMaps with the SAME name in DIFFERENT namespaces.
+	configInNsA := tu.NewResource("v1", "ConfigMap", "my-config").
+		WithNamespace("ns-a").
+		WithSpecField("data", "value-a").
+		Build()
+
+	configInNsB := tu.NewResource("v1", "ConfigMap", "my-config").
+		WithNamespace("ns-b").
+		WithSpecField("data", "value-b").
+		Build()
+
+	resourceClient := tu.NewMockResourceClient().
+		WithNamespacedResource(
+			schema.GroupVersionKind{Group: "", Version: "v1", Kind: "ConfigMap"},
+		).
+		WithGetResource(func(_ context.Context, gvk schema.GroupVersionKind, ns, name string) (*un.Unstructured, error) {
+			t.Logf("GetResource called for %s/%s in namespace %s - cache miss", gvk.Kind, name, ns)
+			if ns == "ns-a" {
+				return configInNsA, nil
+			}
+			if ns == "ns-b" {
+				return configInNsB, nil
+			}
+			return nil, errors.New("resource not found")
+		}).
+		Build()
+
+	environmentClient := tu.NewMockEnvironmentClient().
+		WithSuccessfulEnvironmentConfigsFetch([]*un.Unstructured{configInNsA, configInNsB}).
+		Build()
+
+	provider := NewRequirementsProvider(
+		resourceClient,
+		environmentClient,
+		nil,
+		tu.TestLogger(t, true),
+	)
+
+	if err := provider.Initialize(ctx); err != nil {
+		t.Fatalf("Failed to initialize provider: %v", err)
+	}
+
+	// Empty Namespace on the selector — should default to xrNamespace ("ns-a").
+	selectors := []*v1.ResourceSelector{
+		{
+			ApiVersion: "v1",
+			Kind:       "ConfigMap",
+			Match:      &v1.ResourceSelector_MatchName{MatchName: "my-config"},
+		},
+	}
+
+	resources, err := provider.ResolveSelectors(ctx, selectors, "ns-a")
+	if err != nil {
+		t.Fatalf("ResolveSelectors() unexpected error: %v", err)
+	}
+
+	if len(resources) != 1 {
+		t.Fatalf("Expected 1 resource, got %d", len(resources))
+	}
+
+	gotResource := resources[0]
+	gotNamespace := gotResource.GetNamespace()
+	gotData, _, _ := un.NestedString(gotResource.Object, "spec", "data")
+
+	t.Logf("Got resource: namespace=%s, data=%s (expected: namespace=ns-a, data=value-a)", gotNamespace, gotData)
+
+	if gotNamespace != "ns-a" {
+		t.Errorf("Namespace collision bug: expected resource from namespace 'ns-a', got %q", gotNamespace)
+	}
+	if gotData != "value-a" {
+		t.Errorf("Namespace collision bug: expected data 'value-a', got %q (got resource from wrong namespace)", gotData)
+	}
+}
