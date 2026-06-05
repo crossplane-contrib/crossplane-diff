@@ -34,9 +34,13 @@ type DefinitionClient interface {
 	IsClaimResource(ctx context.Context, resource *un.Unstructured) bool
 
 	// GetCompositeSchema returns the composite.Schema (Legacy or Modern) that
-	// applies to the given XR or claim GVK, derived from the XRD's apiVersion.
-	// v1 XRDs are SchemaLegacy (canonical fields under spec.*); v2 XRDs are
-	// SchemaModern (canonical fields under spec.crossplane.*).
+	// applies to the given XR or claim GVK. The scope is read from the XRD's
+	// spec.scope field (NOT the XRD's own apiVersion, which the apiserver may
+	// rewrite during v1↔v2 conversion). spec.scope == "LegacyCluster" maps to
+	// SchemaLegacy (canonical fields under spec.*); "Cluster"/"Namespaced" map
+	// to SchemaModern (canonical fields under spec.crossplane.*). Mirrors the
+	// rule the render binary uses (selectSchema in crossplane's
+	// internal/render/composite/render.go).
 	GetCompositeSchema(ctx context.Context, gvk schema.GroupVersionKind) (ucomposite.Schema, error)
 }
 
@@ -247,11 +251,11 @@ func (c *DefaultDefinitionClient) IsClaimResource(ctx context.Context, resource 
 
 
 // GetCompositeSchema returns the composite.Schema (Legacy or Modern) for the
-// given XR or claim GVK by looking up the XRD and reading its apiVersion. v1
-// XRDs publish CRDs whose canonical fields live directly under spec.*
-// (SchemaLegacy); v2 XRDs nest those fields under spec.crossplane.*
-// (SchemaModern). Tries the XR path first; falls back to the claim path so the
-// helper works for both.
+// given XR or claim GVK by looking up the XRD and reading its spec.scope.
+// LegacyCluster → SchemaLegacy (canonical fields under spec.*); Cluster or
+// Namespaced → SchemaModern (canonical fields under spec.crossplane.*). Tries
+// the XR path first; falls back to the claim path so the helper works for both.
+// See the interface doc for why scope, not apiVersion, drives the decision.
 func (c *DefaultDefinitionClient) GetCompositeSchema(ctx context.Context, gvk schema.GroupVersionKind) (ucomposite.Schema, error) {
 	xrd, err := c.GetXRDForXR(ctx, gvk)
 	if err != nil {

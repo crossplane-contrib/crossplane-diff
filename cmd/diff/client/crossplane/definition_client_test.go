@@ -768,7 +768,6 @@ func TestDefaultDefinitionClient_GetCompositeSchema(t *testing.T) {
 		}).
 		Build()
 
-	// v2 XRD.
 	// v2 XRD: declares a non-legacy scope so the scope-based detector
 	// returns SchemaModern. (A v2 XRD without scope, or with
 	// scope=LegacyCluster, would correctly resolve as SchemaLegacy — see
@@ -804,8 +803,10 @@ func TestDefaultDefinitionClient_GetCompositeSchema(t *testing.T) {
 		}).
 		Build()
 
-	// v1 XRD that also publishes a claim of kind ModernClaim.
-	// Used to verify the helper resolves via the claim path when given a claim GVK.
+	// v1 XRD that also publishes a claim. Used to verify the helper resolves
+	// via the claim path when given a claim GVK (the XR/claim distinction is
+	// a Crossplane CompositeResourceDefinition feature, not a Go type — the
+	// claim kind here is just the user-supplied "ClaimedResource" below).
 	xrdV1WithClaim := tu.NewResource("apiextensions.crossplane.io/v1", CompositeResourceDefinitionKind, "xrd-v1-with-claim").
 		WithSpecField("group", "example.org").
 		WithSpecField("names", map[string]any{

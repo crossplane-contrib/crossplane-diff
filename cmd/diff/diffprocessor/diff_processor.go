@@ -1025,8 +1025,12 @@ func (p *DefaultDiffProcessor) SanitizeXR(res *un.Unstructured, resourceID strin
 
 	// Handle XRs with generateName but no name
 	if xr.GetName() == "" && xr.GetGenerateName() != "" {
-		// Create a valid RFC 1123 placeholder name for rendering.
-		// The display layer (diff_formatter.go) independently shows "(generated)" in output.
+		// Synthesize an RFC 1123-valid name so the render binary's apiserver-style
+		// validation accepts the XR. The trailing "placeholder" is purely a
+		// rendering-pipeline concern and is NOT what the user sees: diff_formatter.go
+		// detects GetGenerateName() != "" on the desired object and renders
+		// "<generateName>(generated)" regardless of the placeholder we chose here.
+		// (Any RFC 1123-valid suffix would do; "placeholder" is just a stable string.)
 		displayName := xr.GetGenerateName() + "placeholder"
 		p.config.Logger.Debug("Setting display name for XR with generateName",
 			"generateName", xr.GetGenerateName(),
@@ -1103,11 +1107,12 @@ func (p *DefaultDiffProcessor) RenderToStableState(
 	var xrdForRender *un.Unstructured
 	if p.defClient != nil {
 		s, err := p.defClient.GetCompositeSchema(ctx, xr.GroupVersionKind())
-		if err == nil {
-			xrSchema = s
-		} else {
+		switch {
+		case err != nil:
 			p.config.Logger.Debug("Cannot determine composite schema; defaulting to SchemaModern",
 				"resource", resourceID, "gvk", xr.GroupVersionKind().String(), "error", err)
+		default:
+			xrSchema = s
 		}
 
 		// Look up the XRD itself to forward to the binary. We try the XR
@@ -1175,15 +1180,14 @@ func (p *DefaultDiffProcessor) RenderToStableState(
 		// in-process accessors (resource refs, composition refs, etc.) read
 		// from the right field paths.
 		//
-		// NOTE: this only affects in-process Go code. The render binary's
-		// `crossplane internal render` defaults its internal wrapper to
-		// SchemaModern (see internal/render/composite/render.go:65 in upstream
-		// crossplane v2.3.1), so the rendered output we get back always uses
-		// v2 field paths even for Legacy (v1 XRD) XRs. Translating the data
-		// here would let downstream code "see" the right shape, but it would
-		// hide the underlying upstream bug — render should faithfully mimic
-		// the reconciler, which is initialized with WithSchema. Tracked
-		// separately; for now legacy XRs in the binary path are best-effort.
+		// NOTE: this only affects in-process Go code. crossplane/crossplane#7452
+		// (merged 2026-06 into main) makes `crossplane internal render` honour
+		// the supplied XRD when picking its internal wrapper schema; once we
+		// bump past a release that ships that fix, the rendered output for
+		// Legacy XRs should already use v1 field paths and this re-stamping
+		// becomes belt-and-braces. Until then (we're pinned to v2.3.1 which
+		// predates the merge), the binary defaults to SchemaModern and the
+		// re-stamp is what keeps downstream Go code reading the right paths.
 		if output.CompositeResource != nil {
 			output.CompositeResource.Schema = xrSchema
 		}

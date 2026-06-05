@@ -43,7 +43,9 @@ type RequirementsProvider struct {
 	renderFn  RenderFn
 	logger    logging.Logger
 
-	// Resource cache by resource key (apiVersion+kind+name)
+	// Resource cache by resource key (apiVersion+kind+namespace+name — see
+	// dt.MakeDiffKey). Namespace is required so same-named resources in
+	// different namespaces don't collide.
 	resourceCache map[string]*un.Unstructured
 	cacheMutex    sync.RWMutex
 }
@@ -127,9 +129,7 @@ func (p *RequirementsProvider) ResolveSelectors(ctx context.Context, selectors [
 	)
 
 	for i, selector := range selectors {
-		resourceKey := strconv.Itoa(i)
-
-		res, fetched, err := p.processSelector(ctx, "", resourceKey, selector, xrNamespace)
+		res, fetched, err := p.processSelector(ctx, strconv.Itoa(i), selector, xrNamespace)
 		if err != nil {
 			return nil, err
 		}
@@ -151,22 +151,12 @@ func (p *RequirementsProvider) ResolveSelectors(ctx context.Context, selectors [
 	return allResources, nil
 }
 
-// ResolveEnvConfigByName fetches the EnvironmentConfig with the given name using
-// the envClient, which dynamically discovers the correct GVK from the cluster.
-// This avoids apiVersion hardcoding when constructing ResourceSelectors for env
-// config FATAL-error recovery.
-
-// processAllSteps processes requirements for all steps without copying protobuf structs.
-
-// processStepSelectors processes selectors from Resources and ExtraResources maps.
-
-// processSelector processes a single resource selector.
-func (p *RequirementsProvider) processSelector(ctx context.Context, stepName, resourceKey string, selector *v1.ResourceSelector, xrNamespace string) ([]*un.Unstructured, []*un.Unstructured, error) {
+// processSelector processes a single resource selector. resourceKey is a
+// short identifier (typically the selector's index in the parent slice) used
+// only for debug logging.
+func (p *RequirementsProvider) processSelector(ctx context.Context, resourceKey string, selector *v1.ResourceSelector, xrNamespace string) ([]*un.Unstructured, []*un.Unstructured, error) {
 	if selector == nil {
-		p.logger.Debug("Nil selector in requirements",
-			"step", stepName,
-			"resourceKey", resourceKey)
-
+		p.logger.Debug("Nil selector in requirements", "resourceKey", resourceKey)
 		return nil, nil, nil
 	}
 
@@ -178,7 +168,7 @@ func (p *RequirementsProvider) processSelector(ctx context.Context, stepName, re
 
 	switch {
 	case selector.GetMatchName() != "":
-		resources, fromCache, err := p.processNameSelector(ctx, selector, gvk, xrNamespace, stepName)
+		resources, fromCache, err := p.processNameSelector(ctx, selector, gvk, xrNamespace)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -192,7 +182,7 @@ func (p *RequirementsProvider) processSelector(ctx context.Context, stepName, re
 		return resources, newlyFetched, nil
 
 	case selector.GetMatchLabels() != nil:
-		resources, err := p.processLabelSelector(ctx, selector, gvk, xrNamespace, stepName)
+		resources, err := p.processLabelSelector(ctx, selector, gvk, xrNamespace)
 		if err != nil {
 			return nil, nil, errors.Wrap(err, "cannot get resources by label")
 		}
@@ -201,10 +191,7 @@ func (p *RequirementsProvider) processSelector(ctx context.Context, stepName, re
 		return resources, resources, nil
 
 	default:
-		p.logger.Debug("Unsupported selector type",
-			"step", stepName,
-			"resourceKey", resourceKey)
-
+		p.logger.Debug("Unsupported selector type", "resourceKey", resourceKey)
 		return nil, nil, nil
 	}
 }
@@ -222,10 +209,10 @@ func parseVersionFromAPIVersion(apiVersion string) string {
 }
 
 // resolveNamespace determines the appropriate namespace for a resource based on its scope and selector.
-func (p *RequirementsProvider) resolveNamespace(ctx context.Context, gvk schema.GroupVersionKind, selector *v1.ResourceSelector, xrNamespace, stepName string) (string, error) {
+func (p *RequirementsProvider) resolveNamespace(ctx context.Context, gvk schema.GroupVersionKind, selector *v1.ResourceSelector, xrNamespace string) (string, error) {
 	isNamespaced, err := p.client.IsNamespacedResource(ctx, gvk)
 	if err != nil {
-		return "", errors.Wrapf(err, "cannot determine namespace scope for resource %s when processing requirements for step %s", gvk.String(), stepName)
+		return "", errors.Wrapf(err, "cannot determine namespace scope for resource %s", gvk.String())
 	}
 
 	if !isNamespaced {
@@ -241,13 +228,13 @@ func (p *RequirementsProvider) resolveNamespace(ctx context.Context, gvk schema.
 
 // processNameSelector handles resource selection by name.
 // Returns (resources, fromCache, error) where fromCache indicates if the resource was found in cache.
-func (p *RequirementsProvider) processNameSelector(ctx context.Context, selector *v1.ResourceSelector, gvk schema.GroupVersionKind, xrNamespace, stepName string) ([]*un.Unstructured, bool, error) {
+func (p *RequirementsProvider) processNameSelector(ctx context.Context, selector *v1.ResourceSelector, gvk schema.GroupVersionKind, xrNamespace string) ([]*un.Unstructured, bool, error) {
 	name := selector.GetMatchName()
 
 	// Resolve namespace FIRST so we can check cache correctly.
 	// This prevents returning wrong resources when same-named resources exist
 	// in different namespaces (e.g., ConfigMap/my-config in both ns-a and ns-b).
-	ns, err := p.resolveNamespace(ctx, gvk, selector, xrNamespace, stepName)
+	ns, err := p.resolveNamespace(ctx, gvk, selector, xrNamespace)
 	if err != nil {
 		return nil, false, err
 	}
@@ -277,13 +264,13 @@ func (p *RequirementsProvider) processNameSelector(ctx context.Context, selector
 }
 
 // processLabelSelector handles resource selection by labels.
-func (p *RequirementsProvider) processLabelSelector(ctx context.Context, selector *v1.ResourceSelector, gvk schema.GroupVersionKind, xrNamespace, stepName string) ([]*un.Unstructured, error) {
+func (p *RequirementsProvider) processLabelSelector(ctx context.Context, selector *v1.ResourceSelector, gvk schema.GroupVersionKind, xrNamespace string) ([]*un.Unstructured, error) {
 	labelSelector := metav1.LabelSelector{
 		MatchLabels: selector.GetMatchLabels().GetLabels(),
 	}
 
 	// Resolve namespace
-	ns, err := p.resolveNamespace(ctx, gvk, selector, xrNamespace, stepName)
+	ns, err := p.resolveNamespace(ctx, gvk, selector, xrNamespace)
 	if err != nil {
 		return nil, err
 	}

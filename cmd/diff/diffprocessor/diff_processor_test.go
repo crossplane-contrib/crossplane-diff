@@ -3496,10 +3496,11 @@ func TestFetchCompositionCredentials(t *testing.T) {
 // TestDefaultDiffProcessor_RenderToStableState_SchemaPlumbing asserts that the
 // composite.Schema returned by DefinitionClient.GetCompositeSchema is applied
 // to both the input *cmp.Unstructured passed to the render function and the
-// readback wrapper. This is informational for in-process Go code (accessors
-// dispatch on Schema). The render binary itself does not honor the wrapper's
-// Schema today (see upstream's internal/render/composite/render.go which uses
-// `ucomposite.New()` without WithSchema, defaulting to SchemaModern).
+// readback wrapper. The render binary now honours the supplied XRD when
+// picking its internal wrapper schema (crossplane/crossplane#7452, merged
+// to main; ships in the next release after v2.3.1). Until we pin past that
+// release the re-stamp here is what makes in-process accessors read v1
+// field paths for Legacy XRs.
 func TestDefaultDiffProcessor_RenderToStableState_SchemaPlumbing(t *testing.T) {
 	ctx := t.Context()
 

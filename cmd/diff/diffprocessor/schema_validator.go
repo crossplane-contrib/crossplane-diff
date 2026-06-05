@@ -86,10 +86,13 @@ func (v *DefaultSchemaValidator) ValidateResources(ctx context.Context, xr *un.U
 
 	// Collect all resources that need to be validated. The XR is passed as a
 	// sanitized deep-copy (spec.crossplane stripped) because the real
-	// composite reconciler now populates that subtree with Crossplane-managed
-	// runtime state (compositionRef, resourceRefs, ...) that many XRD/CRD
-	// schemas don't declare. Stripping on a copy keeps the original XR —
-	// used downstream for diffing against cluster state — intact.
+	// composite reconciler populates that subtree with Crossplane-managed
+	// runtime state (compositionRef, resourceRefs, ...). Real cluster-derived
+	// CRDs declare spec.crossplane (Crossplane's CRD generator emits it),
+	// but our integration-test CRD fixtures are hand-rolled and don't always
+	// have it — strict unknown-field validation against those fixtures would
+	// reject the field. Stripping on a copy keeps the original XR (used
+	// downstream for diffing against cluster state) intact.
 	// Managed resources pass through unchanged so defaults-in-place still
 	// applies to their spec fields.
 	resources := make([]*un.Unstructured, 0, len(composed)+1)
@@ -286,10 +289,13 @@ func (v *DefaultSchemaValidator) stripCrossplaneManagedFields(resource *un.Unstr
 	sanitized := resource.DeepCopy()
 
 	// spec.crossplane is populated by the Crossplane composite reconciler
-	// (compositionRef, compositionRevisionRef, resourceRefs, ...). It's
-	// Crossplane-managed runtime state, not part of the user's XRD schema.
-	// Many XRDs/CRDs don't declare it at all, so strict unknown-field
-	// validation would reject it. Strip it on the copy before validating.
+	// (compositionRef, compositionRevisionRef, resourceRefs, ...). Real
+	// cluster CRDs derived from XRDs declare it because Crossplane's CRD
+	// generator emits the subtree, but our hand-rolled integration-test CRD
+	// fixtures don't always include it. Strict unknown-field validation
+	// against those fixtures would reject the field, so we strip it on the
+	// copy. (E2Es run against real Crossplane in kind and don't go through
+	// this path.)
 	un.RemoveNestedField(sanitized.Object, "spec", "crossplane")
 
 	return sanitized

@@ -7,6 +7,7 @@ import (
 
 	xp "github.com/crossplane-contrib/crossplane-diff/cmd/diff/client/crossplane"
 	k8 "github.com/crossplane-contrib/crossplane-diff/cmd/diff/client/kubernetes"
+	dt "github.com/crossplane-contrib/crossplane-diff/cmd/diff/renderer/types"
 	"github.com/crossplane/cli/v2/cmd/crossplane/common/resource"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -493,7 +494,11 @@ func (m *DefaultResourceManager) updateOwnerRefsForXR(xr *un.Unstructured, child
 
 	seen := make(map[string]bool, len(updatedRefs))
 	for _, ref := range updatedRefs {
-		key := ref.APIVersion + "|" + ref.Kind + "|" + ref.Name
+		// OwnerReferences are namespace-scoped to the owning object's namespace,
+		// so MakeDiffKey's apiVersion/kind/namespace/name shape is overkill here
+		// — but reusing it keeps key construction consistent with the rest of
+		// the diff layer. Empty namespace is fine: dedup is per (kind, name).
+		key := dt.MakeDiffKey(ref.APIVersion, ref.Kind, "", ref.Name)
 		if seen[key] {
 			m.logger.Debug("Dropping duplicate owner reference",
 				"refKind", ref.Kind,

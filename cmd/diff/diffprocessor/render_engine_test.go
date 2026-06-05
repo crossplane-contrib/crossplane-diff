@@ -51,6 +51,17 @@ func newTestRenderFn(mock *render.MockEngine, startCalls, stopCalls *int32) *Eng
 	}
 }
 
+// The three tests below (HappyPath, CleanupIdempotent, Serialization) each
+// exercise a distinct lifecycle property of EngineRenderFn — they're not
+// data-variant cases of a single operation. HappyPath asserts setup-once /
+// reuse semantics across two sequential renders. CleanupIdempotent asserts
+// teardown counts after 0/1/2 cleanup calls. Serialization spawns concurrent
+// goroutines and asserts the internal mutex never lets two renders enter the
+// engine at the same time. Forcing these into a table would require per-row
+// setup hooks, per-row assertion sets, and per-row concurrency primitives —
+// the rows would share almost nothing. Procedural tests read more clearly
+// here.
+
 // minimalRenderInputs returns RenderInputs with just enough populated that
 // BuildCompositeRequest will not error during marshaling.
 func minimalRenderInputs() RenderInputs {
@@ -70,7 +81,7 @@ func minimalRenderInputs() RenderInputs {
 }
 
 func TestEngineRenderFn_HappyPath(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 
 	var renderCalls atomic.Int32
 
@@ -129,7 +140,7 @@ func TestEngineRenderFn_HappyPath(t *testing.T) {
 }
 
 func TestEngineRenderFn_CleanupIdempotent(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 
 	var setupCalls, setupCleanupCalls int32
 
@@ -194,7 +205,7 @@ func TestEngineRenderFn_CleanupIdempotent(t *testing.T) {
 }
 
 func TestEngineRenderFn_Serialization(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 
 	// inFlight tracks concurrent entries to the engine's Render; must never exceed 1.
 	var (
