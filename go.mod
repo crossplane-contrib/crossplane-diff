@@ -7,8 +7,8 @@ require (
 	github.com/Masterminds/semver v1.5.0
 	github.com/alecthomas/kong v1.15.0
 	github.com/crossplane/cli/v2 v2.3.2
-	github.com/crossplane/crossplane-runtime/v2 v2.3.2
-	github.com/crossplane/crossplane/apis/v2 v2.3.2
+	github.com/crossplane/crossplane-runtime/v2 v2.4.0-rc.0
+	github.com/crossplane/crossplane/apis/v2 v2.4.0-rc.0
 	github.com/crossplane/crossplane/v2 v2.3.2
 	github.com/crossplane/function-sdk-go v0.6.1-0.20260506001521-78a3dd862da1
 	github.com/docker/docker v28.5.2+incompatible
@@ -157,3 +157,5 @@ require (
 	k8s.io/kube-openapi v0.0.0-20260127142750-a19766b6e2d4
 	sigs.k8s.io/json v0.0.0-20250730193827-2d320260d730 // indirect
 )
+
+replace github.com/crossplane/cli/v2 => github.com/jcogilvie/cli/v2 v2.0.0-20260609004319-f9700864e827

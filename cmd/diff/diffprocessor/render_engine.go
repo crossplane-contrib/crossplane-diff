@@ -17,14 +17,10 @@ limitations under the License.
 package diffprocessor
 
 import (
-	"bytes"
 	"context"
-	"os/exec"
 	"sync"
 
 	"github.com/crossplane/cli/v2/cmd/crossplane/render"
-	renderv1alpha1 "github.com/crossplane/cli/v2/proto/render/v1alpha1"
-	"google.golang.org/protobuf/proto"
 	corev1 "k8s.io/api/core/v1"
 	kunstructured "k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/kube-openapi/pkg/spec3"
@@ -84,98 +80,21 @@ type EngineRenderFn struct {
 
 // NewEngineRenderFn constructs an EngineRenderFn.
 //
-// When binaryPath is empty (the production path) it uses the upstream docker
-// render engine: empty EngineFlags → xpkg.crossplane.io/crossplane/crossplane:stable,
-// which advances on each crossplane release.
-//
-// When binaryPath is non-empty (a test-only fast path) it uses our
-// stderrCapturingLocalEngine, which exec's the supplied `crossplane` binary
-// for `crossplane internal render`. The wrapper exists only because the
-// upstream localRenderEngine pipes stderr to os.Stderr and ignores exit code 3
-// (the partial-output-on-fatal contract from crossplane/crossplane#7455). Once
-// upstream merges equivalent behavior into both engines, this branch and the
-// wrapper can be deleted and tests should drop straight to the upstream
-// localRenderEngine via render.NewEngineFromFlags(&render.EngineFlags{Local: ...}).
+// binaryPath threads through to render.EngineFlags.CrossplaneBinary, so when
+// non-empty the upstream localRenderEngine drives rendering against a local
+// `crossplane` binary; when empty the upstream dockerRenderEngine pulls
+// xpkg.crossplane.io/crossplane/crossplane:stable. Both engines now capture
+// stderr into the returned error and honour exit code 3 (partial-output-on-
+// fatal — crossplane/crossplane#7455) per crossplane/cli#91, so we no longer
+// wrap them. Our EngineRenderFn.Render still expects (rsp != nil, err != nil)
+// on pipeline fatal and surfaces both — see the comment there.
 func NewEngineRenderFn(log logging.Logger, binaryPath string) *EngineRenderFn {
-	var engine render.Engine
-	if binaryPath != "" {
-		engine = &stderrCapturingLocalEngine{binaryPath: binaryPath}
-	} else {
-		engine = render.NewEngineFromFlags(&render.EngineFlags{}, log)
-	}
-
 	return &EngineRenderFn{
-		engine:        engine,
+		engine:        render.NewEngineFromFlags(&render.EngineFlags{CrossplaneBinary: binaryPath}, log),
 		log:           log,
 		startRuntimes: render.StartFunctionRuntimes,
 		stopRuntimes:  render.StopFunctionRuntimes,
 	}
-}
-
-// stderrCapturingLocalEngine is a render.Engine that runs a local crossplane
-// binary for rendering, identical to the upstream localRenderEngine, except
-// that it captures stderr into a buffer and includes it in the returned error.
-// The upstream implementation forwards stderr directly to os.Stderr, so any
-// fatal-result messages from function containers are visible on the terminal
-// but NOT included in the Go error — making it impossible for callers (and
-// tests) to inspect them programmatically.
-type stderrCapturingLocalEngine struct {
-	binaryPath string
-}
-
-func (e *stderrCapturingLocalEngine) CheckContextSupport() error { return nil }
-
-// Setup is a no-op: function containers publish ports to localhost, so there
-// is nothing extra to configure for the local engine.
-func (e *stderrCapturingLocalEngine) Setup(_ context.Context, _ []pkgv1.Function) (func(), error) {
-	return func() {}, nil
-}
-
-// Render marshals req, runs it through the local binary, and returns the
-// parsed response. If the binary exits non-zero, the captured stderr output
-// is included verbatim in the returned error so callers can surface it.
-func (e *stderrCapturingLocalEngine) Render(ctx context.Context, req *renderv1alpha1.RenderRequest) (*renderv1alpha1.RenderResponse, error) {
-	data, err := proto.Marshal(req)
-	if err != nil {
-		return nil, errors.Wrap(err, "cannot marshal render request")
-	}
-
-	var stderrBuf bytes.Buffer
-
-	cmd := exec.CommandContext(ctx, e.binaryPath, "internal", "render") //nolint:gosec // The binary path is user-supplied via env var.
-	cmd.Stdin = bytes.NewReader(data)
-	cmd.Stderr = &stderrBuf
-
-	out, err := cmd.Output()
-
-	// As of crossplane v2.4 (PR #7446), `crossplane internal render` exits
-	// with code 3 and a populated stdout when a pipeline step returns a
-	// SEVERITY_FATAL result, so callers can recover the partial
-	// CompositeOutput (especially RequiredResources) and iterate. Other
-	// non-zero exits indicate hard failures with no usable stdout.
-	const exitCodePipelineFatal = 3
-
-	var exitErr *exec.ExitError
-	switch {
-	case err == nil:
-		// Success path; fall through to unmarshal.
-	case errors.As(err, &exitErr) && exitErr.ExitCode() == exitCodePipelineFatal && len(out) > 0:
-		// Partial output on pipeline-fatal. Unmarshal and surface both.
-		rsp := &renderv1alpha1.RenderResponse{}
-		if uerr := proto.Unmarshal(out, rsp); uerr != nil {
-			return nil, errors.Errorf("cannot unmarshal partial render response after pipeline fatal: %s: %s", uerr.Error(), stderrBuf.String())
-		}
-		return rsp, errors.Errorf("crossplane internal render: pipeline returned fatal: %s", stderrBuf.String())
-	default:
-		return nil, errors.Errorf("cannot run crossplane internal render: %s: %s", err.Error(), stderrBuf.String())
-	}
-
-	rsp := &renderv1alpha1.RenderResponse{}
-	if err := proto.Unmarshal(out, rsp); err != nil {
-		return nil, errors.Wrap(err, "cannot unmarshal render response")
-	}
-
-	return rsp, nil
 }
 
 // Render performs one render. It is safe for concurrent use — calls are
