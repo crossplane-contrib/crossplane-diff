@@ -294,7 +294,7 @@ flags.
 
 ## Required Permissions
 
-The tool reads from the cluster to gather definitions and current state, and performs a server-side apply with `dryRun=All` against existing resources to compute the post-apply form (defaulting, mutating webhooks, validation). Although nothing is ever persisted, the apiserver still authorizes SSA dry-run with the `patch` verb, so read-only access is **not** sufficient.
+The tool reads from the cluster to gather definitions and current state, and performs a server-side apply with `dryRun=All` against existing resources to compute the post-apply form — picking up CRD defaulting and mutating-webhook output, and surfacing any validating-webhook rejection as a diff-time error. Although nothing is ever persisted, the apiserver still authorizes SSA dry-run with the `patch` verb, so read-only access is **not** sufficient.
 
 ### Read-only (`get`, `list`, `watch`)
 
@@ -334,7 +334,8 @@ rules:
 - apiGroups: [pkg.crossplane.io]
   resources: [functions]
   verbs: [get, list, watch]
-# Diffable resources — read + patch (one rule per provider/XR API group you use)
+# Diffable resources — read + patch. List the provider/XR API groups you use;
+# you can combine them in one rule (as below) or split them into separate rules.
 - apiGroups:
   - example.org                       # your XR groups
   - s3.aws.upbound.io                 # provider groups
