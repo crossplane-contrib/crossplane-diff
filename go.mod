@@ -6,7 +6,7 @@ require (
 	dario.cat/mergo v1.0.2
 	github.com/Masterminds/semver v1.5.0
 	github.com/alecthomas/kong v1.15.0
-	github.com/crossplane/crossplane-runtime/v2 v2.2.1
+	github.com/crossplane/crossplane-runtime/v2 v2.3.2
 	github.com/crossplane/crossplane/v2 v2.2.1
 	github.com/docker/docker v28.5.2+incompatible
 	github.com/google/go-cmp v0.7.0
