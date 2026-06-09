@@ -167,8 +167,8 @@ github.com/hexops/gotextdiff v1.0.3 h1:gitA9+qJrrTCsiCl7+kh75nPqQt1cx4ZkudSTLoUq
 github.com/hexops/gotextdiff v1.0.3/go.mod h1:pSWU5MAI3yDq+fZBTazCSJysOMbxWL1BSow5/V2vxeg=
 github.com/inconshreveable/mousetrap v1.1.0 h1:wN+x4NVGpMsO7ErUn/mUI3vEoE6Jt13X2s0bqwp9tc8=
 github.com/inconshreveable/mousetrap v1.1.0/go.mod h1:vpF70FUmC8bwa3OWnCshd2FqLfsEA9PFc4w1p2J65bw=
-github.com/jcogilvie/cli/v2 v2.0.0-20260609004319-f9700864e827 h1:B9rxXXp6hiHM0xEgMDmzx711qJqqNkQKgjnTEE/YDpw=
-github.com/jcogilvie/cli/v2 v2.0.0-20260609004319-f9700864e827/go.mod h1:TVfHZdpkSlrfkE6V8VLlTOS/DT4Qsxc+ybMcUnZz3ko=
+github.com/jcogilvie/cli/v2 v2.0.0-20260609180652-ac63a4fa4654 h1:E8Jt8AZ8/6ldNnYp8ZoYg8fJRi3UkIyXhxkjZKcDhHQ=
+github.com/jcogilvie/cli/v2 v2.0.0-20260609180652-ac63a4fa4654/go.mod h1:TVfHZdpkSlrfkE6V8VLlTOS/DT4Qsxc+ybMcUnZz3ko=
 github.com/json-iterator/go v1.1.12 h1:PV8peI4a0ysnczrg+LtxykD8LfKY9ML6u2jnxaEnrnM=
 github.com/json-iterator/go v1.1.12/go.mod h1:e30LSqwooZae/UwlEbR2852Gd8hjQvJoHmT4TnhNGBo=
 github.com/klauspost/compress v1.18.6 h1:2jupLlAwFm95+YDR+NwD2MEfFO9d4z4Prjl1XXDjuao=

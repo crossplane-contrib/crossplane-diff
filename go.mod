@@ -158,4 +158,4 @@ require (
 	sigs.k8s.io/json v0.0.0-20250730193827-2d320260d730 // indirect
 )
 
-replace github.com/crossplane/cli/v2 => github.com/jcogilvie/cli/v2 v2.0.0-20260609004319-f9700864e827
+replace github.com/crossplane/cli/v2 => github.com/jcogilvie/cli/v2 v2.0.0-20260609180652-ac63a4fa4654
