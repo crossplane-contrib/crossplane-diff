@@ -294,14 +294,58 @@ flags.
 
 ## Required Permissions
 
-The tool requires read access to:
+The tool reads from the cluster to gather definitions and current state, and performs a server-side apply with `dryRun=All` against existing resources to compute the post-apply form (defaulting, mutating webhooks, validation). Although nothing is ever persisted, the apiserver still authorizes SSA dry-run with the `patch` verb, so read-only access is **not** sufficient.
 
-- **Crossplane definitions**: XRDs, Compositions, Functions
-- **Crossplane runtime resources**: XRs, Claims, Managed Resources
-- **Crossplane configuration**: EnvironmentConfigs
-- **Function credentials**: Secrets referenced in composition pipelines (for auto-fetch)
-- **Kubernetes resources**: CRDs, referenced resources
-- **Resource hierarchies**: Owner references and relationships
+### Read-only (`get`, `list`, `watch`)
+
+For the definition and configuration plane, which is only fetched:
+
+- `apiextensions.k8s.io`: `customresourcedefinitions`
+- `apiextensions.crossplane.io`: `compositeresourcedefinitions`, `compositions`, `compositionrevisions`, `environmentconfigs`
+- `pkg.crossplane.io`: `functions`
+
+### Read + `patch`
+
+On every API group containing resources you want to diff — XRs, Claims, and any managed resource GVKs the compositions render. The `patch` verb is what authorizes the SSA dry-run.
+
+### Optional: `get` on `secrets`
+
+Only required if you use the [auto-fetch credentials](#automatic-credential-fetching) feature. Skip this if you always supply credentials via `--function-credentials` or your compositions don't use credentialed functions.
+
+### `create` is **not** required
+
+The dry-run SSA only runs against resources that already exist in the cluster; for additions, the tool emits the rendered output directly without round-tripping through the apiserver. This keeps the RBAC surface smaller at the cost of slightly less faithful addition diffs (no apiserver defaulting or webhook mutation). See [#334](https://github.com/crossplane-contrib/crossplane-diff/issues/334) for the tracking issue on optionally enabling this.
+
+### Example `ClusterRole`
+
+```yaml
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: crossplane-diff-runner
+rules:
+# Definition plane — read-only
+- apiGroups: [apiextensions.k8s.io]
+  resources: [customresourcedefinitions]
+  verbs: [get, list, watch]
+- apiGroups: [apiextensions.crossplane.io]
+  resources: [compositeresourcedefinitions, compositions, compositionrevisions, environmentconfigs]
+  verbs: [get, list, watch]
+- apiGroups: [pkg.crossplane.io]
+  resources: [functions]
+  verbs: [get, list, watch]
+# Diffable resources — read + patch (one rule per provider/XR API group you use)
+- apiGroups:
+  - example.org                       # your XR groups
+  - s3.aws.upbound.io                 # provider groups
+  - s3.aws.m.upbound.io               # namespaced variants (Crossplane v2)
+  resources: ['*']
+  verbs: [get, list, watch, patch]
+# Optional: function credential auto-fetch
+- apiGroups: ['']
+  resources: [secrets]
+  verbs: [get]
+```
 
 ## Kubernetes Configuration
 
