@@ -92,7 +92,7 @@ func LooksLikeGeneratedName(name, generateName string) bool {
 			gen += "-"
 		}
 
-		if suffix, ok := strings.CutPrefix(name, gen); ok && isHex(suffix, generatedSuffixLen) {
+		if suffix, ok := strings.CutPrefix(name, gen); ok && isLowerHex(suffix, generatedSuffixLen) {
 			return true
 		}
 	}
@@ -110,7 +110,7 @@ func GeneratedDisplayName(name, generateName string) string {
 			gen += "-"
 		}
 
-		if suffix, ok := strings.CutPrefix(name, gen); ok && isHex(suffix, generatedSuffixLen) {
+		if suffix, ok := strings.CutPrefix(name, gen); ok && isLowerHex(suffix, generatedSuffixLen) {
 			return generateName + "(generated)"
 		}
 	}
@@ -122,18 +122,18 @@ func GeneratedDisplayName(name, generateName string) string {
 	return strings.TrimSuffix(before, "-") + "-(generated)"
 }
 
-func isHex(s string, length int) bool {
-	if len(s) != length {
+// isLowerHex reports whether s is exactly length characters of lowercase
+// hex — matching what hex.EncodeToString produces. encoding/hex.DecodeString
+// alone accepts uppercase too, so we lowercase-check first; otherwise a
+// stdlib decode handles the rest.
+func isLowerHex(s string, length int) bool {
+	if len(s) != length || s != strings.ToLower(s) {
 		return false
 	}
 
-	for _, r := range s {
-		if (r < '0' || r > '9') && (r < 'a' || r > 'f') {
-			return false
-		}
-	}
+	_, err := hex.DecodeString(s)
 
-	return true
+	return err == nil
 }
 
 const (
