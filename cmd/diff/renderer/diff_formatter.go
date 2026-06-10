@@ -428,8 +428,14 @@ func GenerateDiffWithOptions(_ context.Context, current, desired *un.Unstructure
 // modification messages for diagnostic logging. The composite label is left
 // intact — downstream resources should still refer to their parent by the
 // synthesized display name that appears at the diff header.
-func stripSyntheticName(metadata map[string]any, name, generateName string, nameFound, genNameFound bool) []string {
-	if !nameFound || !genNameFound {
+//
+// Note we don't require generateName to be present: the embedded-suffix
+// case (XR-synthesis suffix interpolated into a downstream resource's
+// metadata.name via a composition template) typically has no generateName
+// field on the rendered resource, and LooksLikeGeneratedName handles that
+// path via Contains-on-suffix.
+func stripSyntheticName(metadata map[string]any, name string, nameFound bool, generateName string) []string {
+	if !nameFound {
 		return nil
 	}
 
@@ -598,9 +604,9 @@ func cleanupForDiff(obj *un.Unstructured, logger logging.Logger, ignorePaths []s
 		// If the name looks like a generated display name (ends with "(generated)")
 		// and generateName is also present, remove the name to avoid confusion
 		name, nameFound, _ := un.NestedString(metadata, "name")
-		generateName, genNameFound, _ := un.NestedString(metadata, "generateName")
+		generateName, _, _ := un.NestedString(metadata, "generateName")
 
-		modifications = append(modifications, stripSyntheticName(metadata, name, generateName, nameFound, genNameFound)...)
+		modifications = append(modifications, stripSyntheticName(metadata, name, nameFound, generateName)...)
 
 		// Remove fields that change automatically or are server-side
 		fieldsToRemove := []string{
