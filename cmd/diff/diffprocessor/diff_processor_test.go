@@ -3527,6 +3527,7 @@ func TestDefaultDiffProcessor_RenderToStableState_SchemaPlumbing(t *testing.T) {
 	for name, tt := range tests {
 		t.Run(name, func(t *testing.T) {
 			var capturedSchema cmp.Schema
+
 			renderFn := func(_ context.Context, _ logging.Logger, in RenderInputs) (render.CompositionOutputs, error) {
 				capturedSchema = in.CompositeResource.Schema
 				return render.CompositionOutputs{CompositeResource: in.CompositeResource}, nil
@@ -3556,6 +3557,7 @@ func TestDefaultDiffProcessor_RenderToStableState_SchemaPlumbing(t *testing.T) {
 			if out.CompositeResource == nil {
 				t.Fatal("output CompositeResource is nil")
 			}
+
 			if out.CompositeResource.Schema != tt.wantSchema {
 				t.Errorf("output.CompositeResource.Schema = %v, want %v",
 					out.CompositeResource.Schema, tt.wantSchema)

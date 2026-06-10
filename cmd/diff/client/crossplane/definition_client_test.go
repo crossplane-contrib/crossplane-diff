@@ -938,9 +938,11 @@ func TestDefaultDefinitionClient_GetCompositeSchema(t *testing.T) {
 					t.Errorf("\n%s\nGetCompositeSchema(): expected error but got none", tt.reason)
 					return
 				}
+
 				if tt.errSubstring != "" && !strings.Contains(err.Error(), tt.errSubstring) {
 					t.Errorf("\n%s\nGetCompositeSchema(): expected error containing %q, got %q", tt.reason, tt.errSubstring, err.Error())
 				}
+
 				return
 			}
 

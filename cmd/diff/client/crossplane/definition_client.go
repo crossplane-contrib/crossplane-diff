@@ -18,6 +18,10 @@ import (
 const CompositeResourceDefinitionKind = "CompositeResourceDefinition"
 
 // DefinitionClient handles Crossplane definitions (XRDs).
+//
+// splitting just to satisfy the linter would create surface without value.
+//
+//nolint:interfacebloat // The 6 methods are cohesively about XRD lookup;
 type DefinitionClient interface {
 	core.Initializable
 
@@ -249,7 +253,6 @@ func (c *DefaultDefinitionClient) IsClaimResource(ctx context.Context, resource 
 	return true
 }
 
-
 // GetCompositeSchema returns the composite.Schema (Legacy or Modern) for the
 // given XR or claim GVK by looking up the XRD and reading its spec.scope.
 // LegacyCluster → SchemaLegacy (canonical fields under spec.*); Cluster or
@@ -261,6 +264,7 @@ func (c *DefaultDefinitionClient) GetCompositeSchema(ctx context.Context, gvk sc
 	if err != nil {
 		// Not an XR GVK; try the claim path.
 		var claimErr error
+
 		xrd, claimErr = c.GetXRDForClaim(ctx, gvk)
 		if claimErr != nil {
 			return ucomposite.SchemaModern, errors.Wrapf(err, "no XRD found for %s (also tried claim: %v)", gvk.String(), claimErr)
@@ -278,5 +282,6 @@ func (c *DefaultDefinitionClient) GetCompositeSchema(ctx context.Context, gvk sc
 	if scope == "" || scope == "LegacyCluster" {
 		return ucomposite.SchemaLegacy, nil
 	}
+
 	return ucomposite.SchemaModern, nil
 }

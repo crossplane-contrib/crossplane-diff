@@ -180,12 +180,15 @@ func TestRequirementsProvider_NamespaceCollision(t *testing.T) {
 		).
 		WithGetResource(func(_ context.Context, gvk schema.GroupVersionKind, ns, name string) (*un.Unstructured, error) {
 			t.Logf("GetResource called for %s/%s in namespace %s - cache miss", gvk.Kind, name, ns)
+
 			if ns == "ns-a" {
 				return configInNsA, nil
 			}
+
 			if ns == "ns-b" {
 				return configInNsB, nil
 			}
+
 			return nil, errors.New("resource not found")
 		}).
 		Build()
@@ -232,6 +235,7 @@ func TestRequirementsProvider_NamespaceCollision(t *testing.T) {
 	if gotNamespace != "ns-a" {
 		t.Errorf("Namespace collision bug: expected resource from namespace 'ns-a', got %q", gotNamespace)
 	}
+
 	if gotData != "value-a" {
 		t.Errorf("Namespace collision bug: expected data 'value-a', got %q (got resource from wrong namespace)", gotData)
 	}

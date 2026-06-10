@@ -23,6 +23,20 @@ type ResourceDiff struct {
 // DiffType represents the type of diff (added, removed, modified).
 type DiffType string
 
+// GenerateNamePlaceholder is the synthetic suffix the diff processor appends
+// to an XR's generateName when synthesizing a metadata.name for the render
+// pipeline. The render binary's apiserver-style validation rejects names
+// containing characters outside the DNS-1123 subdomain set (so "(generated)"
+// can't be used directly), so we use this RFC-1123-valid sentinel instead.
+//
+// The diff formatter detects this sentinel in rendered/composed-resource
+// names (and their generateName fields) and substitutes the user-facing
+// "(generated)" display.
+//
+// The value is deliberately distinctive ("xrgenplace" + a fixed 0-pad) so
+// that random user resource names are extremely unlikely to collide with it.
+const GenerateNamePlaceholder = "xrgenplace0000"
+
 const (
 	// DiffTypeAdded an added section.
 	DiffTypeAdded DiffType = "+"

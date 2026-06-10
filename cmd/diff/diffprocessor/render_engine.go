@@ -18,6 +18,7 @@ package diffprocessor
 
 import (
 	"context"
+	"maps"
 	"sync"
 
 	"github.com/crossplane/cli/v2/cmd/crossplane/render"
@@ -137,6 +138,7 @@ func (e *EngineRenderFn) Render(ctx context.Context, log logging.Logger, in Rend
 	if e.addrs == nil {
 		e.addrs = make(map[string]string)
 	}
+
 	if e.startedNames == nil {
 		e.startedNames = make(map[string]struct{})
 	}
@@ -149,6 +151,7 @@ func (e *EngineRenderFn) Render(ctx context.Context, log logging.Logger, in Rend
 		if _, ok := e.startedNames[in.Functions[i].GetName()]; ok {
 			continue
 		}
+
 		newFns = append(newFns, in.Functions[i])
 	}
 
@@ -191,9 +194,8 @@ func (e *EngineRenderFn) Render(ctx context.Context, log logging.Logger, in Rend
 		for i := range newFns {
 			e.startedNames[newFns[i].GetName()] = struct{}{}
 		}
-		for k, v := range fa.Addresses() {
-			e.addrs[k] = v
-		}
+
+		maps.Copy(e.addrs, fa.Addresses())
 	}
 
 	// Build request with addresses for in.Functions only — the binary needs
@@ -227,7 +229,15 @@ func (e *EngineRenderFn) Render(ctx context.Context, log logging.Logger, in Rend
 	// this case as "we have partial output; preserve it AND the error so
 	// the caller (RenderToStableState) can iterate on RequiredResources
 	// even when the pipeline fataled."
-	if renderErr != nil && rsp == nil {
+	//
+	// Anything else with rsp == nil (including a hypothetical (nil, nil) from
+	// a misbehaving Engine implementation) is a hard failure — we can't parse
+	// what we don't have.
+	if rsp == nil {
+		if renderErr == nil {
+			return render.CompositionOutputs{}, errors.New("render engine returned nil response with no error")
+		}
+
 		return render.CompositionOutputs{}, errors.Wrap(renderErr, "cannot render")
 	}
 
@@ -239,6 +249,7 @@ func (e *EngineRenderFn) Render(ctx context.Context, log logging.Logger, in Rend
 	if renderErr != nil {
 		return out, errors.Wrap(renderErr, "render returned partial output after pipeline fatal")
 	}
+
 	return out, nil
 }
 
@@ -283,6 +294,7 @@ func (e *EngineRenderFn) Cleanup(_ context.Context) error {
 	for _, fa := range e.fnAddrsList {
 		e.stopRuntimes(e.log, fa)
 	}
+
 	e.fnAddrsList = nil
 	e.addrs = nil
 	e.startedNames = nil

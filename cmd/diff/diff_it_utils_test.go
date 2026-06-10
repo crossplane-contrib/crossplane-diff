@@ -648,17 +648,31 @@ func addResourceRefAndUpdate(ctx context.Context, c client.Client,
 	return nil
 }
 
-// requireCrossplaneBinary locates the locally-built crossplane binary at
-// _output/bin/crossplane (relative to cmd/diff/) and returns its absolute
-// path. The binary must contain the `crossplane internal render` subcommand
-// introduced by upstream PR #7339. Tests are skipped if the binary is missing
-// so that `go test ./...` still runs cleanly on fresh checkouts.
+// localCrossplaneBinary returns the absolute path to a locally-built
+// `crossplane` binary at _output/bin/crossplane (relative to cmd/diff/) when
+// it exists, or "" when it doesn't. The binary, when present, contains the
+// `crossplane internal render` subcommand introduced by upstream PR #7339
+// and is exec'd directly for fast in-process rendering. When absent, callers
+// pass the empty string through to the diff command, which falls through to
+// the docker render engine (slower but works wherever Docker does — including
+// CI's WITH DOCKER block in the go-test target).
+//
+// Local developers wanting the fast path can build the binary with:
+//
+//	go build -o _output/bin/crossplane github.com/crossplane/crossplane/v2/cmd/crossplane
+//
+// (run from the repo root). The path is overridable via the
+// CROSSPLANE_DIFF_RENDER_BINARY env var when a different layout is needed.
 //
 // Callers thread the returned path into the diff command via
 // --crossplane-render-binary=<path> rather than via a process-global env var,
 // so concurrent t.Parallel() tests don't race on shared state.
-func requireCrossplaneBinary(t *testing.T) string {
+func localCrossplaneBinary(t *testing.T) string {
 	t.Helper()
+
+	if override := os.Getenv("CROSSPLANE_DIFF_RENDER_BINARY"); override != "" {
+		return override
+	}
 
 	absPath, err := filepath.Abs("../../_output/bin/crossplane")
 	if err != nil {
@@ -666,7 +680,8 @@ func requireCrossplaneBinary(t *testing.T) string {
 	}
 
 	if _, err := os.Stat(absPath); err != nil {
-		t.Skipf("local crossplane binary not built (expected at %s); run: go build -o _output/bin/crossplane ./vendor/github.com/crossplane/crossplane/v2/cmd/crossplane", absPath)
+		t.Logf("local crossplane binary not present at %s; falling back to docker render engine. Build it for faster iteration: go build -o _output/bin/crossplane github.com/crossplane/crossplane/v2/cmd/crossplane", absPath)
+		return ""
 	}
 
 	return absPath

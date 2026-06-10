@@ -24,14 +24,13 @@ import (
 
 	"github.com/crossplane/cli/v2/cmd/crossplane/render"
 	renderv1alpha1 "github.com/crossplane/cli/v2/proto/render/v1alpha1"
-	"google.golang.org/protobuf/types/known/structpb"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	"github.com/crossplane/crossplane-runtime/v2/pkg/logging"
 	ucomposite "github.com/crossplane/crossplane-runtime/v2/pkg/resource/unstructured/composite"
 
 	apiextensionsv1 "github.com/crossplane/crossplane/apis/v2/apiextensions/v1"
 	pkgv1 "github.com/crossplane/crossplane/apis/v2/pkg/v1"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
 // newTestRenderFn builds an engineRenderFn wired with the supplied mock engine
@@ -287,10 +286,6 @@ func TestEngineRenderFn_Serialization(t *testing.T) {
 	}
 }
 
-// ensure structpb is referenced so the import survives even if future tests
-// drop their uses. Kept deliberately trivial.
-var _ = structpb.NewNullValue
-
 // TestEngineRenderFn_MultiCompositionFunctionSet asserts that EngineRenderFn
 // correctly handles renders whose RenderInputs.Functions slice differs across
 // calls — the case where one `xr` invocation processes XRs that resolve to
@@ -325,8 +320,10 @@ func TestEngineRenderFn_MultiCompositionFunctionSet(t *testing.T) {
 				if fns[i].Annotations == nil {
 					fns[i].Annotations = map[string]string{}
 				}
+
 				fns[i].Annotations[render.AnnotationKeyRuntimeDockerNetwork] = networkName
 			}
+
 			return func() {}, nil
 		},
 		MockRender: func(_ context.Context, req *renderv1alpha1.RenderRequest) (*renderv1alpha1.RenderResponse, error) {
@@ -348,6 +345,7 @@ func TestEngineRenderFn_MultiCompositionFunctionSet(t *testing.T) {
 		names    []string
 		networks []string
 	}
+
 	var (
 		startCallsLog []startCall
 		startCallsMu  sync.Mutex
@@ -359,12 +357,15 @@ func TestEngineRenderFn_MultiCompositionFunctionSet(t *testing.T) {
 		startRuntimes: func(_ context.Context, _ logging.Logger, fns []pkgv1.Function) (*render.FunctionAddresses, error) {
 			startCallsMu.Lock()
 			defer startCallsMu.Unlock()
+
 			call := startCall{}
 			for _, fn := range fns {
 				call.names = append(call.names, fn.GetName())
 				call.networks = append(call.networks, fn.GetAnnotations()[render.AnnotationKeyRuntimeDockerNetwork])
 			}
+
 			startCallsLog = append(startCallsLog, call)
+
 			return &render.FunctionAddresses{}, nil
 		},
 		stopRuntimes: func(_ logging.Logger, _ *render.FunctionAddresses) {},
@@ -378,6 +379,7 @@ func TestEngineRenderFn_MultiCompositionFunctionSet(t *testing.T) {
 
 	// First render — composition A's functions [F1, F2].
 	in1 := minimalRenderInputs()
+
 	in1.Functions = []pkgv1.Function{mkFn("F1"), mkFn("F2")}
 	if _, err := e.Render(ctx, logging.NewNopLogger(), in1); err != nil {
 		t.Fatalf("first Render: %v", err)
@@ -386,6 +388,7 @@ func TestEngineRenderFn_MultiCompositionFunctionSet(t *testing.T) {
 	// Second render — composition B's functions [F1, F3]. F3 is new, F1 is
 	// shared with composition A and must NOT be re-started.
 	in2 := minimalRenderInputs()
+
 	in2.Functions = []pkgv1.Function{mkFn("F1"), mkFn("F3")}
 	if _, err := e.Render(ctx, logging.NewNopLogger(), in2); err != nil {
 		t.Fatalf("second Render: %v", err)
@@ -393,6 +396,7 @@ func TestEngineRenderFn_MultiCompositionFunctionSet(t *testing.T) {
 
 	// Third render — composition A again. All functions already running.
 	in3 := minimalRenderInputs()
+
 	in3.Functions = []pkgv1.Function{mkFn("F1"), mkFn("F2")}
 	if _, err := e.Render(ctx, logging.NewNopLogger(), in3); err != nil {
 		t.Fatalf("third Render: %v", err)
@@ -414,6 +418,7 @@ func TestEngineRenderFn_MultiCompositionFunctionSet(t *testing.T) {
 	if got := len(startCallsLog); got != len(want) {
 		t.Fatalf("startRuntimes calls = %d, want %d (calls=%v)", got, len(want), startCallsLog)
 	}
+
 	for i, w := range want {
 		if got := startCallsLog[i]; !equalStartCall(got, w) {
 			t.Errorf("startRuntimes call #%d = %v, want %v", i+1, got, w)
@@ -430,8 +435,10 @@ func TestEngineRenderFn_MultiCompositionFunctionSet(t *testing.T) {
 func TestEngineRenderFn_PreservesExistingNetworkAnnotation(t *testing.T) {
 	ctx := t.Context()
 
-	const engineNetwork = "engine-network"
-	const userNetwork = "user-supplied-network"
+	const (
+		engineNetwork = "engine-network"
+		userNetwork   = "user-supplied-network"
+	)
 
 	mock := &render.MockEngine{
 		MockSetup: func(_ context.Context, fns []pkgv1.Function) (func(), error) {
@@ -439,10 +446,12 @@ func TestEngineRenderFn_PreservesExistingNetworkAnnotation(t *testing.T) {
 				if fns[i].Annotations == nil {
 					fns[i].Annotations = map[string]string{}
 				}
+
 				if fns[i].Annotations[render.AnnotationKeyRuntimeDockerNetwork] == "" {
 					fns[i].Annotations[render.AnnotationKeyRuntimeDockerNetwork] = engineNetwork
 				}
 			}
+
 			return func() {}, nil
 		},
 		MockRender: func(_ context.Context, req *renderv1alpha1.RenderRequest) (*renderv1alpha1.RenderResponse, error) {
@@ -467,9 +476,11 @@ func TestEngineRenderFn_PreservesExistingNetworkAnnotation(t *testing.T) {
 		startRuntimes: func(_ context.Context, _ logging.Logger, fns []pkgv1.Function) (*render.FunctionAddresses, error) {
 			seenMu.Lock()
 			defer seenMu.Unlock()
+
 			for i := range fns {
 				seen = append(seen, fns[i].GetName()+"="+fns[i].GetAnnotations()[render.AnnotationKeyRuntimeDockerNetwork])
 			}
+
 			return &render.FunctionAddresses{}, nil
 		},
 		stopRuntimes: func(_ logging.Logger, _ *render.FunctionAddresses) {},
@@ -477,6 +488,7 @@ func TestEngineRenderFn_PreservesExistingNetworkAnnotation(t *testing.T) {
 
 	// First render — composition A's [F1]. Setup stamps engineNetwork on F1.
 	in1 := minimalRenderInputs()
+
 	in1.Functions = []pkgv1.Function{
 		{ObjectMeta: metav1.ObjectMeta{Name: "F1"}},
 	}
@@ -487,6 +499,7 @@ func TestEngineRenderFn_PreservesExistingNetworkAnnotation(t *testing.T) {
 	// Second render — composition B introduces F2 with a pre-set user network.
 	// EngineRenderFn's annotate-on-subsequent-render path must NOT overwrite it.
 	in2 := minimalRenderInputs()
+
 	in2.Functions = []pkgv1.Function{
 		{ObjectMeta: metav1.ObjectMeta{Name: "F2", Annotations: map[string]string{
 			render.AnnotationKeyRuntimeDockerNetwork: userNetwork,
@@ -507,6 +520,7 @@ func TestEngineRenderFn_PreservesExistingNetworkAnnotation(t *testing.T) {
 	if len(seen) != len(want) {
 		t.Fatalf("startRuntimes saw %d invocations of fn=net pairs, want %d (%v)", len(seen), len(want), seen)
 	}
+
 	for i := range want {
 		if seen[i] != want[i] {
 			t.Errorf("startRuntimes seen[%d] = %q, want %q", i, seen[i], want[i])
@@ -526,8 +540,10 @@ func TestEngineRenderFn_CleanupStopsAllFunctionAddresses(t *testing.T) {
 				if fns[i].Annotations == nil {
 					fns[i].Annotations = map[string]string{}
 				}
+
 				fns[i].Annotations[render.AnnotationKeyRuntimeDockerNetwork] = "test-network"
 			}
+
 			return func() {}, nil
 		},
 		MockRender: func(_ context.Context, req *renderv1alpha1.RenderRequest) (*renderv1alpha1.RenderResponse, error) {
@@ -557,12 +573,14 @@ func TestEngineRenderFn_CleanupStopsAllFunctionAddresses(t *testing.T) {
 	// Two renders that each introduce a brand-new function → two
 	// FunctionAddresses entries in fnAddrsList.
 	in1 := minimalRenderInputs()
+
 	in1.Functions = []pkgv1.Function{{ObjectMeta: metav1.ObjectMeta{Name: "F1"}}}
 	if _, err := e.Render(ctx, logging.NewNopLogger(), in1); err != nil {
 		t.Fatalf("first Render: %v", err)
 	}
 
 	in2 := minimalRenderInputs()
+
 	in2.Functions = []pkgv1.Function{{ObjectMeta: metav1.ObjectMeta{Name: "F2"}}}
 	if _, err := e.Render(ctx, logging.NewNopLogger(), in2); err != nil {
 		t.Fatalf("second Render: %v", err)
@@ -582,19 +600,23 @@ func TestEngineRenderFn_CleanupStopsAllFunctionAddresses(t *testing.T) {
 func equalStartCall(a, b struct {
 	names    []string
 	networks []string
-}) bool {
+},
+) bool {
 	if len(a.names) != len(b.names) {
 		return false
 	}
+
 	bn := map[string]string{}
 	for i, n := range b.names {
 		bn[n] = b.networks[i]
 	}
+
 	for i, n := range a.names {
 		want, ok := bn[n]
 		if !ok || want != a.networks[i] {
 			return false
 		}
 	}
+
 	return true
 }

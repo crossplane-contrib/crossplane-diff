@@ -395,12 +395,15 @@ func GenerateDiffWithOptions(_ context.Context, current, desired *un.Unstructure
 		if current != nil && current.GetName() != "" {
 			name = current.GetName()
 		} else {
-			// If desired has a name, use it
-			if desired.GetName() != "" {
-				name = desired.GetName()
-			} else if desired.GetGenerateName() != "" {
-				// Special handling for resources with generateName
-				// Format as "prefix-(generated)" to match expected naming pattern
+			// If desired has a name, use it — but if it's a synthesized
+			// placeholder name (XR with generateName + the
+			// GenerateNamePlaceholder sentinel), or a composed resource
+			// whose name was derived from one, substitute the user-facing
+			// "(generated)" display.
+			switch {
+			case desired.GetName() != "":
+				name = displayNameFromPlaceholder(desired.GetName())
+			case desired.GetGenerateName() != "":
 				name = desired.GetGenerateName() + "(generated)"
 			}
 		}
@@ -415,6 +418,70 @@ func GenerateDiffWithOptions(_ context.Context, current, desired *un.Unstructure
 		Current:      current,
 		Desired:      desired,
 	}, nil
+}
+
+// displayNameFromPlaceholder returns the user-facing display name for a
+// resource. If name embeds the GenerateNamePlaceholder sentinel — meaning
+// it's either the XR we synthesized (matches "<gen>SENTINEL") or a composed
+// resource whose name crossplane derived from it (matches
+// "<gen>SENTINEL[-suffix]") — the sentinel and anything after it are
+// replaced with "(generated)" so the diff shows what the user supplied.
+// Otherwise returns name unchanged.
+func displayNameFromPlaceholder(name string) string {
+	before, _, found := strings.Cut(name, t.GenerateNamePlaceholder)
+	if !found {
+		return name
+	}
+
+	return before + "(generated)"
+}
+
+// stripSyntheticName removes the synthesized name (and normalizes the
+// synthesized generateName) we attach to XRs whose only name input was
+// generateName, so the diff body matches what the user supplied. Handles two
+// shapes: the legacy "(generated)" suffix and the current
+// GenerateNamePlaceholder sentinel. Returns a list of modification messages
+// for diagnostic logging.
+func stripSyntheticName(metadata map[string]any, name, generateName string, nameFound, genNameFound bool) []string {
+	if !nameFound || !genNameFound {
+		return nil
+	}
+
+	hasLegacySuffix := strings.HasSuffix(name, "(generated)")
+
+	hasSentinel := strings.Contains(name, t.GenerateNamePlaceholder)
+	if !hasLegacySuffix && !hasSentinel {
+		return nil
+	}
+
+	// The synthesized name only existed to satisfy render's name validation.
+	// Drop it from the diff body so we show the user's input shape.
+	delete(metadata, "name")
+
+	mods := []string{fmt.Sprintf("removed display name %q", name)}
+
+	originalGenName, ok := normalizedGenerateName(generateName)
+	if ok {
+		metadata["generateName"] = originalGenName
+		mods = append(mods, fmt.Sprintf("normalized generateName from %q to %q", generateName, originalGenName))
+	}
+
+	// Don't touch the composite label — downstream resources should still
+	// refer to their parent by the synthesized display name that appears
+	// at the diff header.
+
+	return mods
+}
+
+// normalizedGenerateName returns the user's original generateName by
+// stripping our synthetic suffix (sentinel or legacy "(generated)-"). The
+// second return is false when the input doesn't carry a recognized suffix.
+func normalizedGenerateName(generateName string) (string, bool) {
+	if before, _, ok := strings.Cut(generateName, t.GenerateNamePlaceholder); ok {
+		return before, true
+	}
+
+	return strings.CutSuffix(generateName, "(generated)-")
 }
 
 func equalDiff(current *un.Unstructured, desired *un.Unstructured) *t.ResourceDiff {
@@ -575,26 +642,7 @@ func cleanupForDiff(obj *un.Unstructured, logger logging.Logger, ignorePaths []s
 		name, nameFound, _ := un.NestedString(metadata, "name")
 		generateName, genNameFound, _ := un.NestedString(metadata, "generateName")
 
-		if nameFound && genNameFound && strings.HasSuffix(name, "(generated)") {
-			// This is a display name we added for diffing purposes - remove it
-			// since we only added it for diffing but don't want it to show in the actual diff
-			delete(metadata, "name")
-
-			modifications = append(modifications, fmt.Sprintf("removed display name %q", name))
-
-			// Also normalize generateName by removing any "(generated)" suffix
-			if before, ok := strings.CutSuffix(generateName, "(generated)-"); ok {
-				// For downstream resources that have generateName mangled with the parent's display name
-				// Strip the "(generated)" part to match the original input
-				originalGenName := before
-				metadata["generateName"] = originalGenName
-				modifications = append(modifications, fmt.Sprintf("normalized generateName from %q to %q", generateName, originalGenName))
-			}
-
-			// Don't change the composite label - it should keep the (generated) suffix
-			// This is because downstream resources should refer to their parent
-			// with the same display name that appears in the diff
-		}
+		modifications = append(modifications, stripSyntheticName(metadata, name, generateName, nameFound, genNameFound)...)
 
 		// Remove fields that change automatically or are server-side
 		fieldsToRemove := []string{

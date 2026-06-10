@@ -118,12 +118,19 @@ func (v *DefaultSchemaValidator) ValidateResources(ctx context.Context, xr *un.U
 
 	multiWriter := io.MultiWriter(&validationOutput, loggerwriter.NewLoggerWriter(v.logger))
 
-	// SchemaValidation applies defaults IN-PLACE to the resources it sees.
-	// The managed-resource pointers above are the ones the caller owns, so
-	// defaults for those land in the caller's slice (preserving pre-existing
-	// behavior). The XR here is a stripped copy, but the real composite
-	// reconciler in the render pipeline already applied XRD schema defaults
-	// before we got here, so there's nothing else to fold back.
+	// SchemaValidation applies defaults IN-PLACE to the resources it sees,
+	// mutating the underlying Object map. For each managed resource we wrap
+	// `&un.Unstructured{Object: composed[i].UnstructuredContent()}` — the
+	// embedded unstructured.Unstructured returns its Object map by reference,
+	// so defaults applied here propagate back to the caller's
+	// `composed[i]` via the shared map. That preserves pre-existing
+	// defaulting behaviour for downstream diff calculation.
+	//
+	// The XR here is a deep-copied stripped variant (see
+	// stripCrossplaneManagedFields above), so any defaults applied to it
+	// stay on the copy — the real composite reconciler in the render
+	// pipeline already applied XRD schema defaults before we got here, so
+	// there's nothing on the XR side that needs to fold back to the caller.
 	v.logger.Debug("Performing schema validation", "resourceCount", len(resources))
 
 	err = validate.SchemaValidation(ctx, resources, v.schemaClient.GetAllCRDs(), true, true, multiWriter)

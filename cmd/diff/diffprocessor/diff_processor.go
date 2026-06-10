@@ -1026,12 +1026,12 @@ func (p *DefaultDiffProcessor) SanitizeXR(res *un.Unstructured, resourceID strin
 	// Handle XRs with generateName but no name
 	if xr.GetName() == "" && xr.GetGenerateName() != "" {
 		// Synthesize an RFC 1123-valid name so the render binary's apiserver-style
-		// validation accepts the XR. The trailing "placeholder" is purely a
-		// rendering-pipeline concern and is NOT what the user sees: diff_formatter.go
-		// detects GetGenerateName() != "" on the desired object and renders
-		// "<generateName>(generated)" regardless of the placeholder we chose here.
-		// (Any RFC 1123-valid suffix would do; "placeholder" is just a stable string.)
-		displayName := xr.GetGenerateName() + "placeholder"
+		// validation accepts the XR. The trailing GenerateNamePlaceholder is purely
+		// a rendering-pipeline concern and is NOT what the user sees:
+		// diff_formatter.go detects the sentinel in rendered/composed-resource names
+		// and substitutes "<generateName>(generated)" for display. Both call sites
+		// share the same constant from cmd/diff/renderer/types so they stay in sync.
+		displayName := xr.GetGenerateName() + dt.GenerateNamePlaceholder
 		p.config.Logger.Debug("Setting display name for XR with generateName",
 			"generateName", xr.GetGenerateName(),
 			"displayName", displayName)
@@ -1090,62 +1090,10 @@ func (p *DefaultDiffProcessor) RenderToStableState(
 	observedResources []cpd.Unstructured,
 	synthesizeReady bool,
 ) (render.CompositionOutputs, error) {
-	// Determine the canonical composite Schema (Legacy vs Modern) once per render
-	// loop, based on the XRD that defines this XR's GVK. Setting it on the input
-	// wrapper makes the renderer write canonical fields at the right path
-	// (spec.* for legacy XRs, spec.crossplane.* for modern), which is critical
-	// for dry-run apply against the cluster's CRD downstream.
-	//
-	// If the XRD lookup fails (or no defClient is available), default to
-	// SchemaModern. This preserves the prior behavior and matches the
-	// composite.Unstructured zero-value default.
-	xrSchema := cmp.SchemaModern
-	// xrdForRender is the XRD we forward to the render binary so it can
-	// pick the right composite.Schema (Legacy vs Modern) for the input
-	// XR's GVK. nil when defClient lookup fails; the binary then falls
-	// back to its default SchemaModern.
-	var xrdForRender *un.Unstructured
-	if p.defClient != nil {
-		s, err := p.defClient.GetCompositeSchema(ctx, xr.GroupVersionKind())
-		switch {
-		case err != nil:
-			p.config.Logger.Debug("Cannot determine composite schema; defaulting to SchemaModern",
-				"resource", resourceID, "gvk", xr.GroupVersionKind().String(), "error", err)
-		default:
-			xrSchema = s
-		}
-
-		// Look up the XRD itself to forward to the binary. We try the XR
-		// path first (covers root XRs and nested XRs); fall back to the
-		// claim path (for claim-rooted diffs the GVK is the claim's, and
-		// the XR path won't match). The render binary's selectSchema
-		// honors Spec.Scope == "LegacyCluster" on either v1- or v2-form
-		// XRDs, so we don't have to care which form the apiserver returns.
-		xrd, err := p.defClient.GetXRDForXR(ctx, xr.GroupVersionKind())
-		if err != nil {
-			xrd, err = p.defClient.GetXRDForClaim(ctx, xr.GroupVersionKind())
-		}
-		if err == nil && xrd != nil {
-			xrdForRender = xrd
-		} else {
-			p.config.Logger.Debug("Cannot fetch XRD for render input; binary will default to SchemaModern",
-				"resource", resourceID, "gvk", xr.GroupVersionKind().String(), "error", err)
-		}
-	}
-
+	xrSchema, xrdForRender := p.resolveSchemaAndXRDForRender(ctx, xr, resourceID)
 	xr.Schema = xrSchema
 
-	// Fetch function credentials from composition pipeline and merge with CLI-provided credentials
-	autoFetchedCredentials := p.fetchCompositionCredentials(ctx, comp)
-
-	functionCredentials := mergeCredentials(p.config.FunctionCredentials, autoFetchedCredentials)
-	if len(functionCredentials) > 0 {
-		p.config.Logger.Debug("Using function credentials for rendering",
-			"resource", resourceID,
-			"credentialCount", len(functionCredentials),
-			"cliProvided", len(p.config.FunctionCredentials),
-			"autoFetched", len(autoFetchedCredentials))
-	}
+	functionCredentials := p.resolveFunctionCredentials(ctx, comp, resourceID)
 
 	// Track required resources with deduplication
 	requiredResources := make(map[string]un.Unstructured)
@@ -1181,13 +1129,12 @@ func (p *DefaultDiffProcessor) RenderToStableState(
 		// from the right field paths.
 		//
 		// NOTE: this only affects in-process Go code. crossplane/crossplane#7452
-		// (merged 2026-06 into main) makes `crossplane internal render` honour
-		// the supplied XRD when picking its internal wrapper schema; once we
-		// bump past a release that ships that fix, the rendered output for
-		// Legacy XRs should already use v1 field paths and this re-stamping
-		// becomes belt-and-braces. Until then (we're pinned to v2.3.1 which
-		// predates the merge), the binary defaults to SchemaModern and the
-		// re-stamp is what keeps downstream Go code reading the right paths.
+		// (shipped in v2.3.2, the version we pin) makes `crossplane internal
+		// render` honour the supplied XRD when picking its internal wrapper
+		// schema, so the rendered output for Legacy XRs should already use v1
+		// field paths. Re-stamping here is now belt-and-braces — kept so any
+		// future divergence (binary fallback, missing XRD, alternative
+		// engines) still leaves in-process accessors reading the right paths.
 		if output.CompositeResource != nil {
 			output.CompositeResource.Schema = xrSchema
 		}
@@ -1247,6 +1194,67 @@ func (p *DefaultDiffProcessor) RenderToStableState(
 	}
 
 	return render.CompositionOutputs{}, errors.Errorf("did not stabilize after %d iterations; try increasing --max-iterations if your pipeline requires more cycles", maxIterations)
+}
+
+// resolveSchemaAndXRDForRender determines the canonical composite Schema
+// (Legacy vs Modern) and the XRD object the render binary should consider
+// when picking its internal wrapper schema.
+//
+// Setting the schema on the input wrapper makes the renderer write canonical
+// fields at the right path (spec.* for legacy XRs, spec.crossplane.* for
+// modern), which is critical for dry-run apply against the cluster's CRD
+// downstream. Forwarding the XRD lets the binary's selectSchema honor
+// Spec.Scope == "LegacyCluster" on either v1- or v2-form XRDs.
+//
+// If defClient lookups fail (or no defClient is available), schema falls back
+// to SchemaModern (matching the composite.Unstructured zero-value default and
+// the binary's own fallback) and the XRD is left nil.
+func (p *DefaultDiffProcessor) resolveSchemaAndXRDForRender(ctx context.Context, xr *cmp.Unstructured, resourceID string) (cmp.Schema, *un.Unstructured) {
+	if p.defClient == nil {
+		return cmp.SchemaModern, nil
+	}
+
+	xrSchema := cmp.SchemaModern
+	if s, err := p.defClient.GetCompositeSchema(ctx, xr.GroupVersionKind()); err == nil {
+		xrSchema = s
+	} else {
+		p.config.Logger.Debug("Cannot determine composite schema; defaulting to SchemaModern",
+			"resource", resourceID, "gvk", xr.GroupVersionKind().String(), "error", err)
+	}
+
+	// Try the XR path first (covers root XRs and nested XRs); fall back to
+	// the claim path (claim-rooted diffs use the claim's GVK, which the XR
+	// path won't match).
+	xrd, err := p.defClient.GetXRDForXR(ctx, xr.GroupVersionKind())
+	if err != nil {
+		xrd, err = p.defClient.GetXRDForClaim(ctx, xr.GroupVersionKind())
+	}
+
+	if err != nil || xrd == nil {
+		p.config.Logger.Debug("Cannot fetch XRD for render input; binary will default to SchemaModern",
+			"resource", resourceID, "gvk", xr.GroupVersionKind().String(), "error", err)
+
+		return xrSchema, nil
+	}
+
+	return xrSchema, xrd
+}
+
+// resolveFunctionCredentials merges CLI-provided function credentials with
+// any credentials auto-fetched from the composition pipeline.
+func (p *DefaultDiffProcessor) resolveFunctionCredentials(ctx context.Context, comp *apiextensionsv1.Composition, resourceID string) []corev1.Secret {
+	autoFetched := p.fetchCompositionCredentials(ctx, comp)
+	merged := mergeCredentials(p.config.FunctionCredentials, autoFetched)
+
+	if len(merged) > 0 {
+		p.config.Logger.Debug("Using function credentials for rendering",
+			"resource", resourceID,
+			"credentialCount", len(merged),
+			"cliProvided", len(p.config.FunctionCredentials),
+			"autoFetched", len(autoFetched))
+	}
+
+	return merged
 }
 
 // stabilityResult holds the result of a stability check iteration.

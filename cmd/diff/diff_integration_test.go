@@ -111,17 +111,22 @@ func runIntegrationTest(t *testing.T, testType DiffTestType, tt IntegrationTestC
 	if tt.expectedStructuredOutput != nil && tt.expectedStructuredCompOutput != nil {
 		t.Fatalf("test case sets both expectedStructuredOutput and expectedStructuredCompOutput; set only one")
 	}
+
 	if tt.expectedStructuredOutput != nil && testType != XRDiffTest {
 		t.Fatalf("expectedStructuredOutput is only valid for XRDiffTest (got %q)", testType)
 	}
+
 	if tt.expectedStructuredCompOutput != nil && testType != CompositionDiffTest {
 		t.Fatalf("expectedStructuredCompOutput is only valid for CompositionDiffTest (got %q)", testType)
 	}
 
-	// Resolve the local crossplane binary path once per test. Threaded into
-	// the kong arg slice below as --crossplane-render-binary=<path> so each
-	// parallel subtest has its own copy with no shared process state.
-	crossplaneBin := requireCrossplaneBinary(t)
+	// Resolve a local crossplane binary if one is present. When non-empty,
+	// it's threaded into the kong arg slice below as
+	// --crossplane-render-binary=<path> so each parallel subtest has its own
+	// copy with no shared process state. When empty, the diff command falls
+	// through to the docker render engine — slower but works wherever Docker
+	// does (including the Earthfile's go-test target's WITH DOCKER block).
+	crossplaneBin := localCrossplaneBinary(t)
 
 	// Create a fresh scheme for each test to avoid concurrent map access.
 	// Each parallel test needs its own scheme because envtest modifies it during CRD installation.
@@ -218,7 +223,13 @@ func runIntegrationTest(t *testing.T, testType DiffTestType, tt IntegrationTestC
 	// Create command line args that match your pre-populated struct
 	args := []string{
 		fmt.Sprintf("--timeout=%s", testTimeout.String()),
-		fmt.Sprintf("--crossplane-render-binary=%s", crossplaneBin),
+	}
+
+	// Only thread --crossplane-render-binary when a local binary exists; an
+	// empty value would still parse but waste cycles, and a missing flag
+	// lets the diff command pick the docker render engine cleanly.
+	if crossplaneBin != "" {
+		args = append(args, fmt.Sprintf("--crossplane-render-binary=%s", crossplaneBin))
 	}
 
 	// Add namespace if specified (for composition tests only)
@@ -968,11 +979,11 @@ Summary: 2 modified, 2 removed`,
 			expectedStructuredOutput: tu.ExpectDiff().
 				WithSummary(2, 0, 0).
 				WithAddedResource("XDownstreamResource", "", "default").
-				WithNamePattern(`generated-xr-placeholder`).
+				WithNamePattern(`generated-xr-\(generated\)`).
 				WithField("spec.forProvider.configData", "new-value").
 				And().
 				WithAddedResource("XNopResource", "", "default").
-				WithNamePattern(`generated-xr-placeholder`).
+				WithNamePattern(`generated-xr-\(generated\)`).
 				WithField("spec.coolField", "new-value").
 				And(),
 			expectedError:    false,
