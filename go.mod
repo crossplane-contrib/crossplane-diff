@@ -15,7 +15,6 @@ require (
 	github.com/google/go-containerregistry v0.21.5
 	github.com/pkg/errors v0.9.1
 	github.com/sergi/go-diff v1.4.0
-	google.golang.org/protobuf v1.36.11
 	k8s.io/api v0.35.3
 	k8s.io/apiextensions-apiserver v0.35.1
 	k8s.io/apimachinery v0.35.3
@@ -24,6 +23,8 @@ require (
 	sigs.k8s.io/e2e-framework v0.6.0
 	sigs.k8s.io/yaml v1.6.0
 )
+
+require google.golang.org/protobuf v1.36.11 // indirect
 
 require (
 	cel.dev/expr v0.25.1 // indirect
