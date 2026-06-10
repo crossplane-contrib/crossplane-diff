@@ -7,6 +7,7 @@ import (
 	tu "github.com/crossplane-contrib/crossplane-diff/cmd/diff/testutils"
 	v1 "github.com/crossplane/function-sdk-go/proto/v1"
 	"github.com/google/go-cmp/cmp"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	un "k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 
@@ -99,6 +100,59 @@ func TestRequirementsProvider_ResolveSelectors(t *testing.T) {
 				return tu.NewMockResourceClient().
 					WithNamespacedResource(schema.GroupVersionKind{Group: "", Version: "v1", Kind: "ConfigMap"}).
 					WithGetResource(func(_ context.Context, _ schema.GroupVersionKind, _, _ string) (*un.Unstructured, error) {
+						return nil, errors.New("boom")
+					}).
+					Build()
+			},
+			wantErr: true,
+		},
+		"MatchLabels": {
+			// processSelector → processLabelSelector → GetResourcesByLabel.
+			// Two ConfigMaps both labelled tier=cache; selector requests
+			// tier=cache and we expect both back. Different code path from
+			// MatchName (no GetResource, no namespace-aware cache).
+			selectors: []*v1.ResourceSelector{
+				{
+					ApiVersion: "v1",
+					Kind:       "ConfigMap",
+					Match: &v1.ResourceSelector_MatchLabels{
+						MatchLabels: &v1.MatchLabels{Labels: map[string]string{"tier": "cache"}},
+					},
+				},
+			},
+			setupRes: func() *tu.MockResourceClient {
+				cacheA := tu.NewResource("v1", "ConfigMap", "cache-a").WithNamespace("default").Build()
+				cacheB := tu.NewResource("v1", "ConfigMap", "cache-b").WithNamespace("default").Build()
+
+				return tu.NewMockResourceClient().
+					WithNamespacedResource(schema.GroupVersionKind{Group: "", Version: "v1", Kind: "ConfigMap"}).
+					WithGetResourcesByLabel(func(_ context.Context, gvk schema.GroupVersionKind, _ string, sel metav1.LabelSelector) ([]*un.Unstructured, error) {
+						if gvk.Kind == "ConfigMap" && sel.MatchLabels["tier"] == "cache" {
+							return []*un.Unstructured{cacheA, cacheB}, nil
+						}
+
+						return nil, nil
+					}).
+					Build()
+			},
+			wantCount: 2,
+			wantNames: []string{"cache-a", "cache-b"},
+		},
+		"MatchLabelsFetchError": {
+			// Error path for the label-selector branch, parallel to FetchError.
+			selectors: []*v1.ResourceSelector{
+				{
+					ApiVersion: "v1",
+					Kind:       "ConfigMap",
+					Match: &v1.ResourceSelector_MatchLabels{
+						MatchLabels: &v1.MatchLabels{Labels: map[string]string{"tier": "cache"}},
+					},
+				},
+			},
+			setupRes: func() *tu.MockResourceClient {
+				return tu.NewMockResourceClient().
+					WithNamespacedResource(schema.GroupVersionKind{Group: "", Version: "v1", Kind: "ConfigMap"}).
+					WithGetResourcesByLabel(func(context.Context, schema.GroupVersionKind, string, metav1.LabelSelector) ([]*un.Unstructured, error) {
 						return nil, errors.New("boom")
 					}).
 					Build()
