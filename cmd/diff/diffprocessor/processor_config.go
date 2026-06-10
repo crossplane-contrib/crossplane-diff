@@ -95,7 +95,7 @@ type ComponentFactories struct {
 	CompDiffRenderer func(logger logging.Logger, diffRenderer renderer.DiffRenderer, opts renderer.DiffOptions) renderer.CompDiffRenderer
 
 	// RequirementsProvider creates an ExtraResourceProvider
-	RequirementsProvider func(res k8.ResourceClient, def xp.EnvironmentClient, renderFunc RenderFn, logger logging.Logger) *RequirementsProvider
+	RequirementsProvider func(res k8.ResourceClient, def xp.EnvironmentClient, logger logging.Logger) *RequirementsProvider
 
 	// FunctionProvider creates a FunctionProvider
 	FunctionProvider func(fnClient xp.FunctionClient, logger logging.Logger) FunctionProvider
@@ -252,7 +252,7 @@ func WithDiffRendererFactory(factory func(logging.Logger, renderer.DiffOptions) 
 }
 
 // WithRequirementsProviderFactory sets the RequirementsProvider factory function.
-func WithRequirementsProviderFactory(factory func(k8.ResourceClient, xp.EnvironmentClient, RenderFn, logging.Logger) *RequirementsProvider) ProcessorOption {
+func WithRequirementsProviderFactory(factory func(k8.ResourceClient, xp.EnvironmentClient, logging.Logger) *RequirementsProvider) ProcessorOption {
 	return func(config *ProcessorConfig) {
 		config.Factories.RequirementsProvider = factory
 	}

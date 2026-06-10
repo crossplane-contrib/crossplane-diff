@@ -40,7 +40,6 @@ func addUniqueResource(m map[string]un.Unstructured, res *un.Unstructured) bool 
 type RequirementsProvider struct {
 	client    k8.ResourceClient
 	envClient xp.EnvironmentClient
-	renderFn  RenderFn
 	logger    logging.Logger
 
 	// Resource cache by resource key (apiVersion+kind+namespace+name — see
@@ -51,11 +50,10 @@ type RequirementsProvider struct {
 }
 
 // NewRequirementsProvider creates a new provider with caching.
-func NewRequirementsProvider(res k8.ResourceClient, env xp.EnvironmentClient, renderFn RenderFn, logger logging.Logger) *RequirementsProvider {
+func NewRequirementsProvider(res k8.ResourceClient, env xp.EnvironmentClient, logger logging.Logger) *RequirementsProvider {
 	return &RequirementsProvider{
 		client:        res,
 		envClient:     env,
-		renderFn:      renderFn,
 		logger:        logger,
 		resourceCache: make(map[string]*un.Unstructured),
 	}

@@ -115,7 +115,7 @@ func NewDiffProcessor(k8cs k8.Clients, xpcs xp.Clients, opts ...ProcessorOption)
 	// Create components using factories
 	resourceManager := config.Factories.ResourceManager(k8cs.Resource, xpcs.Definition, xpcs.ResourceTree, config.Logger)
 	schemaValidator := config.Factories.SchemaValidator(k8cs.Schema, xpcs.Definition, config.Logger)
-	requirementsProvider := config.Factories.RequirementsProvider(k8cs.Resource, xpcs.Environment, config.RenderFunc, config.Logger)
+	requirementsProvider := config.Factories.RequirementsProvider(k8cs.Resource, xpcs.Environment, config.Logger)
 	diffCalculator := config.Factories.DiffCalculator(k8cs.Apply, xpcs.ResourceTree, resourceManager, config.Logger, diffOpts)
 	diffRenderer := config.Factories.DiffRenderer(config.Logger, diffOpts)
 
@@ -1214,30 +1214,23 @@ func (p *DefaultDiffProcessor) resolveSchemaAndXRDForRender(ctx context.Context,
 		return cmp.SchemaModern, nil
 	}
 
-	xrSchema := cmp.SchemaModern
-	if s, err := p.defClient.GetCompositeSchema(ctx, xr.GroupVersionKind()); err == nil {
-		xrSchema = s
-	} else {
-		p.config.Logger.Debug("Cannot determine composite schema; defaulting to SchemaModern",
-			"resource", resourceID, "gvk", xr.GroupVersionKind().String(), "error", err)
-	}
-
-	// Try the XR path first (covers root XRs and nested XRs); fall back to
-	// the claim path (claim-rooted diffs use the claim's GVK, which the XR
-	// path won't match).
+	// One XRD lookup serves both jobs: the spec.scope read for our schema
+	// decision (via xp.SchemaFromXRD) AND the XRD object we forward to the
+	// render binary. Try the XR path first (covers root XRs and nested XRs);
+	// fall back to the claim path (claim-rooted diffs use the claim's GVK).
 	xrd, err := p.defClient.GetXRDForXR(ctx, xr.GroupVersionKind())
 	if err != nil {
 		xrd, err = p.defClient.GetXRDForClaim(ctx, xr.GroupVersionKind())
 	}
 
 	if err != nil || xrd == nil {
-		p.config.Logger.Debug("Cannot fetch XRD for render input; binary will default to SchemaModern",
+		p.config.Logger.Debug("Cannot fetch XRD for render input; defaulting to SchemaModern",
 			"resource", resourceID, "gvk", xr.GroupVersionKind().String(), "error", err)
 
-		return xrSchema, nil
+		return cmp.SchemaModern, nil
 	}
 
-	return xrSchema, xrd
+	return xp.SchemaFromXRD(xrd), xrd
 }
 
 // resolveFunctionCredentials merges CLI-provided function credentials with

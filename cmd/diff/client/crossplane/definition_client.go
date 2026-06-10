@@ -19,9 +19,7 @@ const CompositeResourceDefinitionKind = "CompositeResourceDefinition"
 
 // DefinitionClient handles Crossplane definitions (XRDs).
 //
-// splitting just to satisfy the linter would create surface without value.
-//
-//nolint:interfacebloat // The 6 methods are cohesively about XRD lookup;
+//nolint:interfacebloat // The 6 methods are cohesively about XRD lookup; splitting just to satisfy the linter would create surface without value.
 type DefinitionClient interface {
 	core.Initializable
 
@@ -271,17 +269,26 @@ func (c *DefaultDefinitionClient) GetCompositeSchema(ctx context.Context, gvk sc
 		}
 	}
 
-	// Use spec.scope, not apiVersion. The apiserver round-trips XRDs through
-	// conversion (a v1 XRD POSTed by the user can come back from a v2 list as
-	// kind v2), so apiVersion is unreliable. spec.scope is preserved across
-	// the conversion: v1 XRDs default to "LegacyCluster" and stay there; v2
-	// XRDs declare "Cluster" or "Namespaced" explicitly. This mirrors the
-	// rule the render binary uses (see selectSchema in crossplane's
-	// internal/render/composite/render.go).
+	return SchemaFromXRD(xrd), nil
+}
+
+// SchemaFromXRD picks the composite.Schema (Legacy or Modern) for the given
+// XRD by reading its spec.scope. Use this when you've already fetched the XRD
+// for another reason (e.g. forwarding it to the render binary) and want to
+// avoid the redundant cache lookup GetCompositeSchema would do.
+//
+// The rule mirrors the render binary's own selectSchema (see
+// crossplane/crossplane internal/render/composite/render.go): use spec.scope
+// rather than the XRD's apiVersion. The apiserver round-trips XRDs through
+// v1↔v2 conversion (a v1 XRD POSTed by the user can come back from a v2 list
+// as kind v2), so apiVersion is unreliable. spec.scope is preserved verbatim:
+// v1 XRDs default to "LegacyCluster" and stay there; v2 XRDs declare
+// "Cluster" or "Namespaced" explicitly.
+func SchemaFromXRD(xrd *un.Unstructured) ucomposite.Schema {
 	scope, _, _ := un.NestedString(xrd.Object, "spec", "scope")
 	if scope == "" || scope == "LegacyCluster" {
-		return ucomposite.SchemaLegacy, nil
+		return ucomposite.SchemaLegacy
 	}
 
-	return ucomposite.SchemaModern, nil
+	return ucomposite.SchemaModern
 }

@@ -166,7 +166,6 @@ func TestRequirementsProvider_ResolveSelectors(t *testing.T) {
 			provider := NewRequirementsProvider(
 				tt.setupRes(),
 				tu.NewMockEnvironmentClient().WithNoEnvironmentConfigs().Build(),
-				nil, // renderFn unused by ResolveSelectors
 				tu.TestLogger(t, false),
 			)
 			if err := provider.Initialize(ctx); err != nil {
@@ -254,7 +253,6 @@ func TestRequirementsProvider_NamespaceCollision(t *testing.T) {
 	provider := NewRequirementsProvider(
 		resourceClient,
 		environmentClient,
-		nil,
 		tu.TestLogger(t, true),
 	)
 

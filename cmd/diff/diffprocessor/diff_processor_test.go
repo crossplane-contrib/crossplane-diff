@@ -1382,7 +1382,6 @@ func TestDefaultDiffProcessor_RenderToStableState(t *testing.T) {
 			requirementsProvider := NewRequirementsProvider(
 				resourceClient,
 				environmentClient,
-				countingRenderFunc,
 				logger,
 			)
 
@@ -1391,7 +1390,7 @@ func TestDefaultDiffProcessor_RenderToStableState(t *testing.T) {
 			customOpts := []ProcessorOption{
 				WithLogger(logger),
 				WithRenderFunc(countingRenderFunc),
-				WithRequirementsProviderFactory(func(k8.ResourceClient, xp.EnvironmentClient, RenderFn, logging.Logger) *RequirementsProvider {
+				WithRequirementsProviderFactory(func(k8.ResourceClient, xp.EnvironmentClient, logging.Logger) *RequirementsProvider {
 					return requirementsProvider
 				}),
 			}
@@ -1577,13 +1576,13 @@ func TestDefaultDiffProcessor_RenderToStableState_SynthesizeReady(t *testing.T) 
 			resourceClient := tu.NewMockResourceClient().Build()
 			environmentClient := tu.NewMockEnvironmentClient().WithNoEnvironmentConfigs().Build()
 
-			requirementsProvider := NewRequirementsProvider(resourceClient, environmentClient, countingRenderFunc, logger)
+			requirementsProvider := NewRequirementsProvider(resourceClient, environmentClient, logger)
 
 			baseOpts := testProcessorOptions(t)
 			customOpts := []ProcessorOption{
 				WithLogger(logger),
 				WithRenderFunc(countingRenderFunc),
-				WithRequirementsProviderFactory(func(k8.ResourceClient, xp.EnvironmentClient, RenderFn, logging.Logger) *RequirementsProvider {
+				WithRequirementsProviderFactory(func(k8.ResourceClient, xp.EnvironmentClient, logging.Logger) *RequirementsProvider {
 					return requirementsProvider
 				}),
 			}
@@ -3510,17 +3509,21 @@ func TestDefaultDiffProcessor_RenderToStableState_SchemaPlumbing(t *testing.T) {
 		Spec:       apiextensionsv1.CompositionSpec{Mode: apiextensionsv1.CompositionModePipeline},
 	}
 
+	// resolveSchemaAndXRDForRender derives the schema from the XRD's
+	// spec.scope (LegacyCluster -> SchemaLegacy; anything else ->
+	// SchemaModern), so this test drives the schema decision via the
+	// XRD's scope field rather than mocking GetCompositeSchema.
 	tests := map[string]struct {
-		schemaFromDefClient cmp.Schema
-		wantSchema          cmp.Schema
+		scope      string
+		wantSchema cmp.Schema
 	}{
 		"LegacyXRD_SchemaLegacy": {
-			schemaFromDefClient: cmp.SchemaLegacy,
-			wantSchema:          cmp.SchemaLegacy,
+			scope:      "LegacyCluster",
+			wantSchema: cmp.SchemaLegacy,
 		},
 		"ModernXRD_SchemaModern": {
-			schemaFromDefClient: cmp.SchemaModern,
-			wantSchema:          cmp.SchemaModern,
+			scope:      "Cluster",
+			wantSchema: cmp.SchemaModern,
 		},
 	}
 
@@ -3533,9 +3536,13 @@ func TestDefaultDiffProcessor_RenderToStableState_SchemaPlumbing(t *testing.T) {
 				return render.CompositionOutputs{CompositeResource: in.CompositeResource}, nil
 			}
 
+			xrd := tu.NewResource("apiextensions.crossplane.io/v2", "CompositeResourceDefinition", "xrd-test").
+				WithSpecField("scope", tt.scope).
+				Build()
+
 			defClient := tu.NewMockDefinitionClient().Build()
-			defClient.GetCompositeSchemaFn = func(_ context.Context, _ schema.GroupVersionKind) (cmp.Schema, error) {
-				return tt.schemaFromDefClient, nil
+			defClient.GetXRDForXRFn = func(_ context.Context, _ schema.GroupVersionKind) (*un.Unstructured, error) {
+				return xrd, nil
 			}
 
 			opts := append(testProcessorOptions(t),
