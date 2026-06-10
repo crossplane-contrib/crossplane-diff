@@ -24,6 +24,7 @@ import (
 	"testing"
 
 	xp "github.com/crossplane-contrib/crossplane-diff/cmd/diff/client/crossplane"
+	"github.com/crossplane-contrib/crossplane-diff/cmd/diff/renderer"
 	dt "github.com/crossplane-contrib/crossplane-diff/cmd/diff/renderer/types"
 	tu "github.com/crossplane-contrib/crossplane-diff/cmd/diff/testutils"
 	"github.com/crossplane-contrib/crossplane-diff/cmd/diff/types"
@@ -823,71 +824,65 @@ func TestDefaultCompDiffProcessor_DiffComposition_ResourceMode(t *testing.T) {
 		WithSpecField("crossplane", map[string]any{"compositionUpdatePolicy": "Manual"}).
 		Build()
 
-	t.Run("EmptyResources_FallsBackToDefaultDiscovery", func(t *testing.T) {
-		var defaultCalls, refCalls int
+	// DispatchesToCorrectFindMode: DiffComposition routes to ref-lookup vs default-discovery
+	// based on whether `resources` is non-empty.
+	t.Run("DispatchesToCorrectFindMode", func(t *testing.T) {
+		dispatchTests := map[string]struct {
+			resources        []k8stypes.NamespacedName
+			namespace        string
+			matched          []*un.Unstructured // returned by FindComposites for the chosen path
+			wantDefaultCalls int
+			wantRefCalls     int
+		}{
+			"EmptyResources_DefaultDiscovery": {
+				resources:        nil,
+				namespace:        "ns",
+				matched:          []*un.Unstructured{xr1},
+				wantDefaultCalls: 1,
+				wantRefCalls:     0,
+			},
+			"WithResources_RefLookup": {
+				resources:        []k8stypes.NamespacedName{{Namespace: "ns", Name: "xr-1"}, {Namespace: "ns", Name: "xr-2"}},
+				namespace:        "",
+				matched:          []*un.Unstructured{xr1, xr2},
+				wantDefaultCalls: 0,
+				wantRefCalls:     1,
+			},
+		}
 
-		client := tu.NewMockCompositionClient().
-			WithSuccessfulCompositionFetch(&apiextensionsv1.Composition{}).
-			WithFindComposites(func(_ context.Context, _ *apiextensionsv1.Composition, opts types.FindCompositesOptions) ([]*un.Unstructured, error) {
-				switch {
-				case len(opts.Refs) > 0:
-					refCalls++
-					return nil, nil
-				default:
-					defaultCalls++
-					return []*un.Unstructured{xr1}, nil
+		for name, tt := range dispatchTests {
+			t.Run(name, func(t *testing.T) {
+				var defaultCalls, refCalls int
+
+				client := tu.NewMockCompositionClient().
+					WithSuccessfulCompositionFetch(&apiextensionsv1.Composition{}).
+					WithFindComposites(func(_ context.Context, _ *apiextensionsv1.Composition, opts types.FindCompositesOptions) ([]*un.Unstructured, error) {
+						switch {
+						case len(opts.Refs) > 0:
+							refCalls++
+						default:
+							defaultCalls++
+						}
+
+						return tt.matched, nil
+					}).
+					Build()
+
+				proc, _ := newCompProcessorForTest(t, client, false)
+
+				_, err := proc.DiffComposition(ctx, []*un.Unstructured{comp}, tt.namespace, tt.resources)
+				if err != nil {
+					t.Fatalf("unexpected error: %v", err)
 				}
-			}).
-			Build()
 
-		proc, _ := newCompProcessorForTest(t, client, false)
-
-		_, err := proc.DiffComposition(ctx, []*un.Unstructured{comp}, "ns", nil)
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
-
-		if defaultCalls != 1 {
-			t.Errorf("default-discovery: expected 1 call, got %d", defaultCalls)
-		}
-
-		if refCalls != 0 {
-			t.Errorf("ref-lookup: expected 0 calls, got %d", refCalls)
-		}
-	})
-
-	t.Run("ResourceMode_AllMatch_UsesRefLookup", func(t *testing.T) {
-		var defaultCalls, refCalls int
-
-		client := tu.NewMockCompositionClient().
-			WithSuccessfulCompositionFetch(&apiextensionsv1.Composition{}).
-			WithFindComposites(func(_ context.Context, _ *apiextensionsv1.Composition, opts types.FindCompositesOptions) ([]*un.Unstructured, error) {
-				switch {
-				case len(opts.Refs) > 0:
-					refCalls++
-					// Both refs match.
-					return []*un.Unstructured{xr1, xr2}, nil
-				default:
-					defaultCalls++
-					return nil, nil
+				if defaultCalls != tt.wantDefaultCalls {
+					t.Errorf("default-discovery calls: got %d, want %d", defaultCalls, tt.wantDefaultCalls)
 				}
-			}).
-			Build()
 
-		proc, _ := newCompProcessorForTest(t, client, false)
-
-		_, err := proc.DiffComposition(ctx, []*un.Unstructured{comp}, "",
-			[]k8stypes.NamespacedName{{Namespace: "ns", Name: "xr-1"}, {Namespace: "ns", Name: "xr-2"}})
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
-
-		if defaultCalls != 0 {
-			t.Errorf("default-discovery: expected 0 calls, got %d", defaultCalls)
-		}
-
-		if refCalls != 1 {
-			t.Errorf("ref-lookup: expected 1 call, got %d", refCalls)
+				if refCalls != tt.wantRefCalls {
+					t.Errorf("ref-lookup calls: got %d, want %d", refCalls, tt.wantRefCalls)
+				}
+			})
 		}
 	})
 
@@ -917,66 +912,55 @@ func TestDefaultCompDiffProcessor_DiffComposition_ResourceMode(t *testing.T) {
 		}
 	})
 
-	t.Run("ResourceMode_ManualPolicyMatchSurfacedAsFiltered", func(t *testing.T) {
-		client := tu.NewMockCompositionClient().
-			WithSuccessfulCompositionFetch(&apiextensionsv1.Composition{}).
-			WithFindComposites(func(_ context.Context, _ *apiextensionsv1.Composition, _ types.FindCompositesOptions) ([]*un.Unstructured, error) {
-				return []*un.Unstructured{manualXR}, nil
-			}).
-			Build()
-
-		proc, _ := newCompProcessorForTest(t, client, false /* IncludeManual */)
-
-		_, err := proc.DiffComposition(ctx, []*un.Unstructured{comp}, "",
-			[]k8stypes.NamespacedName{{Namespace: "ns", Name: "manual-xr"}})
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
+	// SurfaceFilteredControlsImpactAnalysis: when surfaceFiltered=true (resource mode),
+	// Manual-policy XRs are surfaced as XRStatusFilteredByPolicy impacts; when false
+	// (default-discovery), they're counted in the summary but absent from ImpactAnalysis.
+	t.Run("SurfaceFilteredControlsImpactAnalysis", func(t *testing.T) {
+		surfaceTests := map[string]struct {
+			surfaceFiltered bool
+			wantImpactCount int
+			wantStatus      renderer.XRStatus // empty when wantImpactCount == 0
+		}{
+			"ResourceMode_SurfacesFilteredXRs": {
+				surfaceFiltered: true,
+				wantImpactCount: 1,
+				wantStatus:      renderer.XRStatusFilteredByPolicy,
+			},
+			"DefaultDiscovery_OmitsFilteredFromImpactAnalysis": {
+				surfaceFiltered: false,
+				wantImpactCount: 0,
+			},
 		}
 
-		// Drive the same call again, but this time inspect the result via processSingleComposition
-		// directly — easier than parsing renderer output.
-		got, err := proc.processSingleComposition(ctx, comp, []*un.Unstructured{manualXR}, true)
-		if err != nil {
-			t.Fatalf("processSingleComposition: %v", err)
-		}
+		for name, tt := range surfaceTests {
+			t.Run(name, func(t *testing.T) {
+				client := tu.NewMockCompositionClient().
+					WithSuccessfulCompositionFetch(&apiextensionsv1.Composition{}).
+					Build()
 
-		if len(got.ImpactAnalysis) != 1 {
-			t.Fatalf("expected 1 impact entry, got %d", len(got.ImpactAnalysis))
-		}
+				proc, _ := newCompProcessorForTest(t, client, false /* IncludeManual */)
 
-		if got.ImpactAnalysis[0].Status != "filtered_by_policy" {
-			t.Errorf("expected filtered_by_policy status, got %q", got.ImpactAnalysis[0].Status)
-		}
+				got, err := proc.processSingleComposition(ctx, comp, []*un.Unstructured{manualXR}, tt.surfaceFiltered)
+				if err != nil {
+					t.Fatalf("processSingleComposition: %v", err)
+				}
 
-		if got.AffectedResources.FilteredByPolicy != 1 {
-			t.Errorf("expected FilteredByPolicy=1, got %d", got.AffectedResources.FilteredByPolicy)
-		}
+				if len(got.ImpactAnalysis) != tt.wantImpactCount {
+					t.Fatalf("ImpactAnalysis: got %d entries, want %d (%+v)", len(got.ImpactAnalysis), tt.wantImpactCount, got.ImpactAnalysis)
+				}
 
-		if got.AffectedResources.Total != 1 {
-			t.Errorf("expected Total=1, got %d", got.AffectedResources.Total)
-		}
-	})
+				if tt.wantImpactCount > 0 && got.ImpactAnalysis[0].Status != tt.wantStatus {
+					t.Errorf("ImpactAnalysis[0].Status: got %q, want %q", got.ImpactAnalysis[0].Status, tt.wantStatus)
+				}
 
-	t.Run("DefaultDiscoveryMode_ManualPolicyNotInImpactAnalysis", func(t *testing.T) {
-		client := tu.NewMockCompositionClient().
-			WithSuccessfulCompositionFetch(&apiextensionsv1.Composition{}).
-			Build()
+				if got.AffectedResources.FilteredByPolicy != 1 {
+					t.Errorf("FilteredByPolicy: got %d, want 1", got.AffectedResources.FilteredByPolicy)
+				}
 
-		proc, _ := newCompProcessorForTest(t, client, false /* IncludeManual */)
-
-		// Default-discovery semantics: surfaceFiltered=false. Filtered-by-policy XRs should NOT be
-		// surfaced as impact entries — only counted in the summary.
-		got, err := proc.processSingleComposition(ctx, comp, []*un.Unstructured{manualXR}, false)
-		if err != nil {
-			t.Fatalf("processSingleComposition: %v", err)
-		}
-
-		if len(got.ImpactAnalysis) != 0 {
-			t.Errorf("default-discovery mode: expected NO impact entries for filtered-by-policy XRs, got %d (%+v)", len(got.ImpactAnalysis), got.ImpactAnalysis)
-		}
-
-		if got.AffectedResources.FilteredByPolicy != 1 {
-			t.Errorf("expected FilteredByPolicy count=1, got %d", got.AffectedResources.FilteredByPolicy)
+				if got.AffectedResources.Total != 1 {
+					t.Errorf("Total: got %d, want 1", got.AffectedResources.Total)
+				}
+			})
 		}
 	})
 }
