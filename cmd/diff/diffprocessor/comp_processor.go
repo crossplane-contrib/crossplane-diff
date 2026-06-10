@@ -374,9 +374,10 @@ func formatRef(n k8stypes.NamespacedName) string {
 }
 
 // processSingleComposition processes a single composition and builds the result.
-// Returns (*CompositionDiff, error). When `resourceMode` is true, the function uses the
-// caller-supplied `preMatched` set instead of calling FindCompositesUsingComposition, and
-// surfaces update-policy-filtered composites in ImpactAnalysis with XRStatusFilteredByPolicy.
+// `affectedXRs` is the pre-resolved set of XRs to evaluate (caller decides via DiffComposition's
+// switch whether this comes from the --resource preflight or default-discovery via FindComposites).
+// When `surfaceFiltered` is true, XRs dropped by update-policy filtering are surfaced in
+// ImpactAnalysis with XRStatusFilteredByPolicy so users see what was matched-but-skipped.
 func (p *DefaultCompDiffProcessor) processSingleComposition(ctx context.Context, newComp *un.Unstructured, affectedXRs []*un.Unstructured, surfaceFiltered bool) (*renderer.CompositionDiff, error) {
 	result := &renderer.CompositionDiff{
 		Name:           newComp.GetName(),
@@ -481,10 +482,10 @@ func (p *DefaultCompDiffProcessor) collectXRDiffs(ctx context.Context, xrs []*un
 		"kind", cliCompTargetKind)
 
 	// Build a set of root-level resource keys (apiVersion/kind/namespace/name) for quick lookup.
-	// Root-level resources are XRs and Claims found by FindCompositesUsingComposition
-	// that use the CLI composition. These should always use the CLI composition.
-	// We include namespace to avoid collisions between resources with the same name
-	// in different namespaces (e.g., two claims with the same name).
+	// Root-level resources are XRs and Claims supplied as `affectedXRs` to processSingleComposition
+	// (resolved by DiffComposition via either preflight or FindComposites default-discovery).
+	// These should always use the CLI composition. Namespace is included in the key to avoid
+	// collisions between resources with the same name in different namespaces.
 	rootResourceKeys := make(map[string]bool)
 
 	for _, xr := range xrs {
@@ -503,7 +504,7 @@ func (p *DefaultCompDiffProcessor) collectXRDiffs(ctx context.Context, xrs []*un
 		resKind := resGVK.Kind
 		resourceID := fmt.Sprintf("%s/%s", res.GetKind(), res.GetName())
 
-		// Check 1: Is this a root-level resource (XR or Claim found by FindCompositesUsingComposition)?
+		// Check 1: Is this a root-level resource (XR or Claim supplied as affectedXRs to this composition)?
 		// Root-level resources always use the CLI composition, even claims whose GVK differs from the XR type.
 		key := dt.MakeDiffKeyFromResource(res)
 		if rootResourceKeys[key] {

@@ -700,11 +700,10 @@ func (c *DefaultCompositionClient) findByTypeReference(ctx context.Context, _ *u
 	return compatibleCompositions[0], nil
 }
 
-// FindCompositesUsingComposition finds all composites (XRs and Claims) that use the specified composition.
 // findByListing implements default-discovery for FindComposites: list every XR (and Claim, if the
 // XRD defines one) of the composition's target GVK, scoped to namespace, and filter by composition.
-// Pre-existing behavior: if the composition itself isn't in the cluster (net-new), the GetComposition
-// lookup fails and the error propagates to the caller, which is expected to handle "net-new" gracefully.
+// If the composition itself isn't in the cluster (net-new), the GetComposition lookup fails and the
+// error propagates to the caller, which is expected to handle "net-new" gracefully.
 func (c *DefaultCompositionClient) findByListing(ctx context.Context, compositionName string, namespace string) ([]*un.Unstructured, error) {
 	c.logger.Debug("Finding composites using composition",
 		"compositionName", compositionName,
@@ -838,16 +837,10 @@ func (c *DefaultCompositionClient) resourceUsesComposition(resource *un.Unstruct
 	return false
 }
 
-// GetCompositesByName fetches the user-named composites for a composition.
-// See the CompositionClient interface for the full contract.
 // findByRefs implements ref-based lookup for FindComposites: each ref is resolved against the
 // composition's XR GVK first, then the claim GVK on 404 if the XRD defines a claim type. Refs that
 // fail both lookups, or that exist but reference a different composition, are silently dropped from
 // the result. NotFound responses are tolerated; other errors propagate.
-//
-// Step 4 will split this into resolveCompositeTypes + lookupRef.
-// findByRefs implements ref-based lookup for FindComposites: each ref is resolved against the
-// composition's XR GVK first, then the claim GVK on 404 if the XRD defines a claim type.
 func (c *DefaultCompositionClient) findByRefs(ctx context.Context, comp *apiextensionsv1.Composition, refs []k8stypes.NamespacedName) ([]*un.Unstructured, error) {
 	if len(refs) == 0 {
 		return nil, nil
