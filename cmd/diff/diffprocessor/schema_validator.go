@@ -84,20 +84,16 @@ func (v *DefaultSchemaValidator) ValidateResources(ctx context.Context, xr *un.U
 		"namespace", xr.GetNamespace(),
 		"composedCount", len(composed))
 
-	// Collect all resources that need to be validated. The XR is passed as a
-	// sanitized deep-copy (spec.crossplane stripped) because the real
-	// composite reconciler populates that subtree with Crossplane-managed
-	// runtime state (compositionRef, resourceRefs, ...). Real cluster-derived
-	// CRDs declare spec.crossplane (Crossplane's CRD generator emits it),
-	// but our integration-test CRD fixtures are hand-rolled and don't always
-	// have it — strict unknown-field validation against those fixtures would
-	// reject the field. Stripping on a copy keeps the original XR (used
-	// downstream for diffing against cluster state) intact.
-	// Managed resources pass through unchanged so defaults-in-place still
-	// applies to their spec fields.
+	// Collect all resources that need to be validated. Real cluster CRDs
+	// derived from XRDs declare spec.crossplane (Crossplane's CRD generator
+	// emits the subtree), so the v2-style XR + the composed resources we
+	// hand to SchemaValidation should pass strict validation against those
+	// CRDs unmodified. Our integration-test CRD fixtures match the
+	// cluster-derived shape — see testdata/{diff,comp}/crds — so no
+	// preprocessing is needed here.
 	resources := make([]*un.Unstructured, 0, len(composed)+1)
 
-	resources = append(resources, v.stripCrossplaneManagedFields(xr))
+	resources = append(resources, xr)
 	for i := range composed {
 		resources = append(resources, &un.Unstructured{Object: composed[i].UnstructuredContent()})
 	}
@@ -126,11 +122,11 @@ func (v *DefaultSchemaValidator) ValidateResources(ctx context.Context, xr *un.U
 	// `composed[i]` via the shared map. That preserves pre-existing
 	// defaulting behaviour for downstream diff calculation.
 	//
-	// The XR here is a deep-copied stripped variant (see
-	// stripCrossplaneManagedFields above), so any defaults applied to it
-	// stay on the copy — the real composite reconciler in the render
-	// pipeline already applied XRD schema defaults before we got here, so
-	// there's nothing on the XR side that needs to fold back to the caller.
+	// The XR is passed by pointer; defaults applied to it land on the
+	// caller's object, which is then used downstream for diffing against
+	// cluster state. The real composite reconciler in the render pipeline
+	// already applied XRD schema defaults before we got here, so this is
+	// belt-and-braces.
 	v.logger.Debug("Performing schema validation", "resourceCount", len(resources))
 
 	err = validate.SchemaValidation(ctx, resources, v.schemaClient.GetAllCRDs(), true, true, multiWriter)
@@ -284,26 +280,4 @@ func extractValidationErrors(output string) string {
 	}
 
 	return strings.Join(validationErrs, "; ")
-}
-
-// stripCrossplaneManagedFields creates a copy of the resource with Crossplane-managed fields removed
-// These fields are set by Crossplane controllers and may not be present in the CRD schema.
-func (v *DefaultSchemaValidator) stripCrossplaneManagedFields(resource *un.Unstructured) *un.Unstructured {
-	// Create a deep copy to avoid modifying the original. The caller still
-	// needs the original (with spec.crossplane.*) for downstream diff
-	// calculation against cluster state — which, once applied, will also
-	// carry those fields.
-	sanitized := resource.DeepCopy()
-
-	// spec.crossplane is populated by the Crossplane composite reconciler
-	// (compositionRef, compositionRevisionRef, resourceRefs, ...). Real
-	// cluster CRDs derived from XRDs declare it because Crossplane's CRD
-	// generator emits the subtree, but our hand-rolled integration-test CRD
-	// fixtures don't always include it. Strict unknown-field validation
-	// against those fixtures would reject the field, so we strip it on the
-	// copy. (E2Es run against real Crossplane in kind and don't go through
-	// this path.)
-	un.RemoveNestedField(sanitized.Object, "spec", "crossplane")
-
-	return sanitized
 }
