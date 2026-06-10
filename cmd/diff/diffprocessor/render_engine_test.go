@@ -291,13 +291,7 @@ func TestEngineRenderFn_Serialization(t *testing.T) {
 // calls — the case where one `xr` invocation processes XRs that resolve to
 // different compositions with overlapping but non-identical function pipelines.
 //
-// Pre-fix behaviour: Setup ran only on the first render, so Setup's network
-// annotation was applied only to the first batch of functions. Subsequent
-// renders that introduced new functions left those new functions un-annotated,
-// causing their containers to land on the default Docker bridge network and
-// be unreachable from the render container.
-//
-// Post-fix behaviour:
+// Required behaviour:
 //   - Setup runs once with the first batch of functions (creates network N).
 //   - The network name is captured from the annotation upstream's Setup
 //     stamps onto the first batch.

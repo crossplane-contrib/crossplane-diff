@@ -1091,6 +1091,10 @@ func (p *DefaultDiffProcessor) RenderToStableState(
 	synthesizeReady bool,
 ) (render.CompositionOutputs, error) {
 	xrSchema, xrdForRender := p.resolveSchemaAndXRDForRender(ctx, xr, resourceID)
+	// Pin the schema on the input wrapper so the renderer writes canonical
+	// fields at the right path (spec.* for Legacy XRs, spec.crossplane.* for
+	// Modern), which is required for dry-run apply against the cluster CRD
+	// downstream.
 	xr.Schema = xrSchema
 
 	functionCredentials := p.resolveFunctionCredentials(ctx, comp, resourceID)
@@ -1123,21 +1127,6 @@ func (p *DefaultDiffProcessor) RenderToStableState(
 			ObservedResources:   observed,
 			XRD:                 xrdForRender,
 		})
-
-		// Preserve the input wrapper's schema on the readback wrapper so
-		// in-process accessors (resource refs, composition refs, etc.) read
-		// from the right field paths.
-		//
-		// NOTE: this only affects in-process Go code. crossplane/crossplane#7452
-		// (shipped in v2.3.2, the version we pin) makes `crossplane internal
-		// render` honour the supplied XRD when picking its internal wrapper
-		// schema, so the rendered output for Legacy XRs should already use v1
-		// field paths. Re-stamping here is now belt-and-braces — kept so any
-		// future divergence (binary fallback, missing XRD, alternative
-		// engines) still leaves in-process accessors reading the right paths.
-		if output.CompositeResource != nil {
-			output.CompositeResource.Schema = xrSchema
-		}
 
 		lastOutput = output
 
@@ -1196,28 +1185,14 @@ func (p *DefaultDiffProcessor) RenderToStableState(
 	return render.CompositionOutputs{}, errors.Errorf("did not stabilize after %d iterations; try increasing --max-iterations if your pipeline requires more cycles", maxIterations)
 }
 
-// resolveSchemaAndXRDForRender determines the canonical composite Schema
-// (Legacy vs Modern) and the XRD object the render binary should consider
-// when picking its internal wrapper schema.
-//
-// Setting the schema on the input wrapper makes the renderer write canonical
-// fields at the right path (spec.* for legacy XRs, spec.crossplane.* for
-// modern), which is critical for dry-run apply against the cluster's CRD
-// downstream. Forwarding the XRD lets the binary's selectSchema honor
-// Spec.Scope == "LegacyCluster" on either v1- or v2-form XRDs.
-//
-// If defClient lookups fail (or no defClient is available), schema falls back
-// to SchemaModern (matching the composite.Unstructured zero-value default and
-// the binary's own fallback) and the XRD is left nil.
+// resolveSchemaAndXRDForRender returns the canonical composite Schema (Legacy
+// vs Modern) and the XRD object the render binary uses when picking its
+// internal wrapper schema. One XRD lookup serves both jobs: the spec.scope
+// read for our schema decision (via xp.SchemaFromXRD) AND the XRD forwarded
+// to the binary. Tries the XR path first; falls back to the claim path so
+// claim-rooted diffs work too. Falls back to SchemaModern with no XRD when
+// no XRD matches.
 func (p *DefaultDiffProcessor) resolveSchemaAndXRDForRender(ctx context.Context, xr *cmp.Unstructured, resourceID string) (cmp.Schema, *un.Unstructured) {
-	if p.defClient == nil {
-		return cmp.SchemaModern, nil
-	}
-
-	// One XRD lookup serves both jobs: the spec.scope read for our schema
-	// decision (via xp.SchemaFromXRD) AND the XRD object we forward to the
-	// render binary. Try the XR path first (covers root XRs and nested XRs);
-	// fall back to the claim path (claim-rooted diffs use the claim's GVK).
 	xrd, err := p.defClient.GetXRDForXR(ctx, xr.GroupVersionKind())
 	if err != nil {
 		xrd, err = p.defClient.GetXRDForClaim(ctx, xr.GroupVersionKind())

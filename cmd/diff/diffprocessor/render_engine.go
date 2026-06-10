@@ -157,7 +157,8 @@ func (e *EngineRenderFn) Render(ctx context.Context, log logging.Logger, in Rend
 		newFns = append(newFns, in.Functions[i])
 	}
 
-	if !e.started {
+	switch {
+	case !e.started:
 		// First call: let upstream Setup create the docker network and
 		// stamp the first batch with the network annotation. We then read
 		// the network name off the annotated functions for use on later
@@ -170,7 +171,7 @@ func (e *EngineRenderFn) Render(ctx context.Context, log logging.Logger, in Rend
 		e.networkCleanup = cleanup
 		e.networkName = firstNetworkAnnotation(newFns)
 		e.started = true
-	} else if e.networkName != "" {
+	case e.networkName != "":
 		// Subsequent call: upstream's Setup is single-shot in cli v2.3.2
 		// (calling it again would create a new network and leak the first
 		// one), so we apply the same annotation to new functions ourselves.

@@ -1395,7 +1395,7 @@ func TestDefaultDiffProcessor_RenderToStableState(t *testing.T) {
 				}),
 			}
 			baseOpts = append(baseOpts, customOpts...)
-			processor := NewDiffProcessor(k8.Clients{}, xp.Clients{}, baseOpts...)
+			processor := NewDiffProcessor(k8.Clients{}, xp.Clients{Definition: tu.NewMockDefinitionClient().Build()}, baseOpts...)
 
 			// Call the method under test
 			output, err := processor.(*DefaultDiffProcessor).RenderToStableState(ctx, tt.xr, tt.composition, tt.functions, tt.resourceID, tt.observedResources, false)
@@ -1587,7 +1587,7 @@ func TestDefaultDiffProcessor_RenderToStableState_SynthesizeReady(t *testing.T) 
 				}),
 			}
 			baseOpts = append(baseOpts, customOpts...)
-			processor := NewDiffProcessor(k8.Clients{}, xp.Clients{}, baseOpts...)
+			processor := NewDiffProcessor(k8.Clients{}, xp.Clients{Definition: tu.NewMockDefinitionClient().Build()}, baseOpts...)
 
 			// Call with synthesizeReady=true
 			output, err := processor.(*DefaultDiffProcessor).RenderToStableState(ctx, xr, composition, functions, "XR/test-xr", nil, true)
@@ -3492,14 +3492,13 @@ func TestFetchCompositionCredentials(t *testing.T) {
 	}
 }
 
-// TestDefaultDiffProcessor_RenderToStableState_SchemaPlumbing asserts that the
-// composite.Schema returned by DefinitionClient.GetCompositeSchema is applied
-// to both the input *cmp.Unstructured passed to the render function and the
-// readback wrapper. The render binary now honours the supplied XRD when
-// picking its internal wrapper schema (crossplane/crossplane#7452, merged
-// to main; ships in the next release after v2.3.1). Until we pin past that
-// release the re-stamp here is what makes in-process accessors read v1
-// field paths for Legacy XRs.
+// TestDefaultDiffProcessor_RenderToStableState_SchemaPlumbing asserts that
+// resolveSchemaAndXRDForRender pins the right composite.Schema on the input
+// *cmp.Unstructured the render function receives. Schema selection follows
+// the XRD's spec.scope: LegacyCluster -> SchemaLegacy (canonical fields at
+// spec.*); anything else -> SchemaModern (canonical fields at
+// spec.crossplane.*). Pinning here is required so the renderer writes
+// canonical fields at the path the cluster CRD declares.
 func TestDefaultDiffProcessor_RenderToStableState_SchemaPlumbing(t *testing.T) {
 	ctx := t.Context()
 
