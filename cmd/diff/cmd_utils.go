@@ -18,26 +18,17 @@ package main
 
 import (
 	"context"
-	"sync"
 	"time"
 
 	dp "github.com/crossplane-contrib/crossplane-diff/cmd/diff/diffprocessor"
 	"github.com/crossplane-contrib/crossplane-diff/cmd/diff/renderer"
+	ld "github.com/crossplane/cli/v2/cmd/crossplane/common/load"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 
 	"github.com/crossplane/crossplane-runtime/v2/pkg/errors"
 	"github.com/crossplane/crossplane-runtime/v2/pkg/logging"
-
-	ld "github.com/crossplane/crossplane/v2/cmd/crank/common/load"
 )
-
-// globalRenderMutex serializes all render operations globally across all diff processors.
-// This prevents concurrent Docker container operations that can overwhelm the Docker daemon
-// when processing multiple XRs with the same functions. See issue #59.
-//
-//nolint:gochecknoglobals // Required for global serialization across processors
-var globalRenderMutex sync.Mutex
 
 // initializeAppContext initializes the application context with timeout and error handling.
 func initializeAppContext(timeout time.Duration, appCtx *AppContext, log logging.Logger) (context.Context, context.CancelFunc, error) {
@@ -93,6 +84,10 @@ func defaultProcessorOptions(fields CommonCmdFields, namespace string) []dp.Proc
 
 	if fields.FunctionRegistryOverride != "" {
 		opts = append(opts, dp.WithFunctionRegistryOverride(fields.FunctionRegistryOverride))
+	}
+
+	if fields.CrossplaneRenderBinary != "" {
+		opts = append(opts, dp.WithCrossplaneRenderBinary(fields.CrossplaneRenderBinary))
 	}
 
 	return opts

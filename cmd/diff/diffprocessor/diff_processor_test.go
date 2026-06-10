@@ -12,6 +12,9 @@ import (
 	"github.com/crossplane-contrib/crossplane-diff/cmd/diff/renderer"
 	dt "github.com/crossplane-contrib/crossplane-diff/cmd/diff/renderer/types"
 	tu "github.com/crossplane-contrib/crossplane-diff/cmd/diff/testutils"
+	"github.com/crossplane/cli/v2/cmd/crossplane/common/resource"
+	"github.com/crossplane/cli/v2/cmd/crossplane/render"
+	v1 "github.com/crossplane/function-sdk-go/proto/v1"
 	gcmp "github.com/google/go-cmp/cmp"
 	"github.com/sergi/go-diff/diffmatchpatch"
 	corev1 "k8s.io/api/core/v1"
@@ -25,11 +28,8 @@ import (
 	cpd "github.com/crossplane/crossplane-runtime/v2/pkg/resource/unstructured/composed"
 	cmp "github.com/crossplane/crossplane-runtime/v2/pkg/resource/unstructured/composite"
 
-	apiextensionsv1 "github.com/crossplane/crossplane/v2/apis/apiextensions/v1"
-	pkgv1 "github.com/crossplane/crossplane/v2/apis/pkg/v1"
-	"github.com/crossplane/crossplane/v2/cmd/crank/common/resource"
-	"github.com/crossplane/crossplane/v2/cmd/crank/render"
-	v1 "github.com/crossplane/crossplane/v2/proto/fn/v1"
+	apiextensionsv1 "github.com/crossplane/crossplane/apis/v2/apiextensions/v1"
+	pkgv1 "github.com/crossplane/crossplane/apis/v2/pkg/v1"
 )
 
 // Test constants to avoid duplication.
@@ -66,6 +66,10 @@ func (m *mockResourceManagerForSpecMerge) FetchObservedResources(_ context.Conte
 
 // testProcessorOptions returns sensible default options for tests.
 // Tests can append additional options or override these as needed.
+//
+// The default WithRenderFunc is a no-op that returns an empty CompositionOutputs.
+// The production default would spin up a Docker engine, which unit tests cannot rely on.
+// Tests that need specific render behavior should override via WithRenderFunc.
 func testProcessorOptions(t *testing.T) []ProcessorOption {
 	t.Helper()
 
@@ -76,6 +80,9 @@ func testProcessorOptions(t *testing.T) []ProcessorOption {
 		WithMaxNestedDepth(10),
 		WithMaxRenderIterations(DefaultMaxRenderIterations),
 		WithLogger(tu.TestLogger(t, false)),
+		WithRenderFunc(func(_ context.Context, _ logging.Logger, in RenderInputs) (render.CompositionOutputs, error) {
+			return render.CompositionOutputs{CompositeResource: in.CompositeResource}, nil
+		}),
 	}
 }
 
@@ -388,11 +395,11 @@ func TestDefaultDiffProcessor_PerformDiff(t *testing.T) {
 			},
 			resources: []*un.Unstructured{resource1},
 			processorOpts: append(testProcessorOptions(t),
-				WithRenderFunc(func(_ context.Context, _ logging.Logger, in render.Inputs) (render.Outputs, error) {
+				WithRenderFunc(func(_ context.Context, _ logging.Logger, in RenderInputs) (render.CompositionOutputs, error) {
 					// Only return composed resources for the main XR, not for nested XRs
 					// to avoid infinite recursion
 					if in.CompositeResource.GetKind() == testKind {
-						return render.Outputs{
+						return render.CompositionOutputs{
 							CompositeResource: in.CompositeResource,
 							ComposedResources: []cpd.Unstructured{
 								{
@@ -404,7 +411,7 @@ func TestDefaultDiffProcessor_PerformDiff(t *testing.T) {
 						}, nil
 					}
 					// For nested XRs, just return the XR itself with no composed resources
-					return render.Outputs{
+					return render.CompositionOutputs{
 						CompositeResource: in.CompositeResource,
 					}, nil
 				}),
@@ -419,7 +426,7 @@ func TestDefaultDiffProcessor_PerformDiff(t *testing.T) {
 				// Override the diff calculator factory to return actual diffs
 				WithDiffCalculatorFactory(func(k8.ApplyClient, xp.ResourceTreeClient, ResourceManager, logging.Logger, renderer.DiffOptions) DiffCalculator {
 					return &tu.MockDiffCalculator{
-						CalculateNonRemovalDiffsFn: func(context.Context, *cmp.Unstructured, *un.Unstructured, render.Outputs) (map[string]*dt.ResourceDiff, map[string]bool, error) {
+						CalculateNonRemovalDiffsFn: func(context.Context, *cmp.Unstructured, *un.Unstructured, render.CompositionOutputs) (map[string]*dt.ResourceDiff, map[string]bool, error) {
 							diffs := make(map[string]*dt.ResourceDiff)
 							rendered := make(map[string]bool)
 
@@ -562,9 +569,9 @@ func TestDefaultDiffProcessor_PerformDiff(t *testing.T) {
 			},
 			resources: []*un.Unstructured{resource1},
 			processorOpts: append(testProcessorOptions(t),
-				WithRenderFunc(func(_ context.Context, _ logging.Logger, in render.Inputs) (render.Outputs, error) {
+				WithRenderFunc(func(_ context.Context, _ logging.Logger, in RenderInputs) (render.CompositionOutputs, error) {
 					// Return valid render outputs
-					return render.Outputs{
+					return render.CompositionOutputs{
 						CompositeResource: in.CompositeResource,
 						ComposedResources: []cpd.Unstructured{
 							{
@@ -895,7 +902,7 @@ func TestDefaultDiffProcessor_RenderToStableState(t *testing.T) {
 		observedResources      []cpd.Unstructured
 		setupResourceClient    func() *tu.MockResourceClient
 		setupEnvironmentClient func() *tu.MockEnvironmentClient
-		setupRenderFunc        func() RenderFunc
+		setupRenderFunc        func() RenderFn
 		wantComposedCount      int
 		wantRenderIterations   int
 		wantErr                bool
@@ -914,13 +921,13 @@ func TestDefaultDiffProcessor_RenderToStableState(t *testing.T) {
 					WithNoEnvironmentConfigs().
 					Build()
 			},
-			setupRenderFunc: func() RenderFunc {
+			setupRenderFunc: func() RenderFn {
 				iteration := 0
 
-				return func(_ context.Context, _ logging.Logger, in render.Inputs) (render.Outputs, error) {
+				return func(_ context.Context, _ logging.Logger, in RenderInputs) (render.CompositionOutputs, error) {
 					iteration++
 					// Return a simple output with no requirements
-					return render.Outputs{
+					return render.CompositionOutputs{
 						CompositeResource: in.CompositeResource,
 						ComposedResources: []cpd.Unstructured{
 							{Unstructured: un.Unstructured{Object: map[string]any{
@@ -931,7 +938,6 @@ func TestDefaultDiffProcessor_RenderToStableState(t *testing.T) {
 								},
 							}}},
 						},
-						Requirements: map[string]v1.Requirements{},
 					}, nil
 				}
 			},
@@ -963,34 +969,28 @@ func TestDefaultDiffProcessor_RenderToStableState(t *testing.T) {
 					WithNoEnvironmentConfigs().
 					Build()
 			},
-			setupRenderFunc: func() RenderFunc {
+			setupRenderFunc: func() RenderFn {
 				iteration := 0
 
-				return func(_ context.Context, _ logging.Logger, in render.Inputs) (render.Outputs, error) {
+				return func(_ context.Context, _ logging.Logger, in RenderInputs) (render.CompositionOutputs, error) {
 					iteration++
 
 					// First render includes requirements, second should have no requirements
-					var reqs map[string]v1.Requirements
+					var reqs []*v1.ResourceSelector
 					if iteration == 1 {
-						reqs = map[string]v1.Requirements{
-							"step1": {
-								Resources: map[string]*v1.ResourceSelector{
-									"config": {
-										ApiVersion: "v1",
-										Kind:       ConfigMap,
-										Match: &v1.ResourceSelector_MatchName{
-											MatchName: ConfigMapName,
-										},
-									},
+						reqs = []*v1.ResourceSelector{
+							{
+								ApiVersion: "v1",
+								Kind:       ConfigMap,
+								Match: &v1.ResourceSelector_MatchName{
+									MatchName: ConfigMapName,
 								},
 							},
 						}
-					} else {
-						reqs = map[string]v1.Requirements{}
 					}
 
 					// Return a simple output
-					return render.Outputs{
+					return render.CompositionOutputs{
 						CompositeResource: in.CompositeResource,
 						ComposedResources: []cpd.Unstructured{
 							{Unstructured: un.Unstructured{Object: map[string]any{
@@ -1001,7 +1001,7 @@ func TestDefaultDiffProcessor_RenderToStableState(t *testing.T) {
 								},
 							}}},
 						},
-						Requirements: reqs,
+						RequiredResources: reqs,
 					}, nil
 				}
 			},
@@ -1038,10 +1038,10 @@ func TestDefaultDiffProcessor_RenderToStableState(t *testing.T) {
 					WithNoEnvironmentConfigs().
 					Build()
 			},
-			setupRenderFunc: func() RenderFunc {
+			setupRenderFunc: func() RenderFn {
 				iteration := 0
 
-				return func(_ context.Context, _ logging.Logger, in render.Inputs) (render.Outputs, error) {
+				return func(_ context.Context, _ logging.Logger, in RenderInputs) (render.CompositionOutputs, error) {
 					iteration++
 
 					// Track existing resources to simulate dependencies
@@ -1059,12 +1059,12 @@ func TestDefaultDiffProcessor_RenderToStableState(t *testing.T) {
 					}
 
 					// Build requirements based on what we already have
-					var reqs map[string]*v1.ResourceSelector
+					var requirements []*v1.ResourceSelector
 
 					if !hasConfig {
 						// First iteration - request ConfigMap
-						reqs = map[string]*v1.ResourceSelector{
-							"config": {
+						requirements = []*v1.ResourceSelector{
+							{
 								ApiVersion: "v1",
 								Kind:       ConfigMap,
 								Match: &v1.ResourceSelector_MatchName{
@@ -1074,8 +1074,8 @@ func TestDefaultDiffProcessor_RenderToStableState(t *testing.T) {
 						}
 					} else if !hasSecret {
 						// Second iteration - request Secret
-						reqs = map[string]*v1.ResourceSelector{
-							"secret": {
+						requirements = []*v1.ResourceSelector{
+							{
 								ApiVersion: "v1",
 								Kind:       "Secret",
 								Match: &v1.ResourceSelector_MatchName{
@@ -1085,15 +1085,8 @@ func TestDefaultDiffProcessor_RenderToStableState(t *testing.T) {
 						}
 					}
 
-					requirements := map[string]v1.Requirements{}
-					if len(reqs) > 0 {
-						requirements["step1"] = v1.Requirements{
-							Resources: reqs,
-						}
-					}
-
 					// Return a simple output
-					return render.Outputs{
+					return render.CompositionOutputs{
 						CompositeResource: in.CompositeResource,
 						ComposedResources: []cpd.Unstructured{
 							{Unstructured: un.Unstructured{Object: map[string]any{
@@ -1104,7 +1097,7 @@ func TestDefaultDiffProcessor_RenderToStableState(t *testing.T) {
 								},
 							}}},
 						},
-						Requirements: requirements,
+						RequiredResources: requirements,
 					}, nil
 				}
 			},
@@ -1125,9 +1118,9 @@ func TestDefaultDiffProcessor_RenderToStableState(t *testing.T) {
 					WithNoEnvironmentConfigs().
 					Build()
 			},
-			setupRenderFunc: func() RenderFunc {
-				return func(context.Context, logging.Logger, render.Inputs) (render.Outputs, error) {
-					return render.Outputs{}, errors.New("render error")
+			setupRenderFunc: func() RenderFn {
+				return func(context.Context, logging.Logger, RenderInputs) (render.CompositionOutputs, error) {
+					return render.CompositionOutputs{}, errors.New("render error")
 				}
 			},
 			wantComposedCount:    0,
@@ -1158,35 +1151,31 @@ func TestDefaultDiffProcessor_RenderToStableState(t *testing.T) {
 					WithNoEnvironmentConfigs().
 					Build()
 			},
-			setupRenderFunc: func() RenderFunc {
+			setupRenderFunc: func() RenderFn {
 				iteration := 0
 
-				return func(_ context.Context, _ logging.Logger, in render.Inputs) (render.Outputs, error) {
+				return func(_ context.Context, _ logging.Logger, in RenderInputs) (render.CompositionOutputs, error) {
 					iteration++
 
 					// First render has requirements but errors
 					if iteration == 1 {
-						reqs := map[string]v1.Requirements{
-							"step1": {
-								Resources: map[string]*v1.ResourceSelector{
-									"config": {
-										ApiVersion: "v1",
-										Kind:       ConfigMap,
-										Match: &v1.ResourceSelector_MatchName{
-											MatchName: ConfigMapName,
-										},
-									},
+						reqs := []*v1.ResourceSelector{
+							{
+								ApiVersion: "v1",
+								Kind:       ConfigMap,
+								Match: &v1.ResourceSelector_MatchName{
+									MatchName: ConfigMapName,
 								},
 							},
 						}
 
-						return render.Outputs{
-							Requirements: reqs,
+						return render.CompositionOutputs{
+							RequiredResources: reqs,
 						}, errors.New("render error with requirements")
 					}
 
 					// Second render succeeds
-					return render.Outputs{
+					return render.CompositionOutputs{
 						CompositeResource: in.CompositeResource,
 						ComposedResources: []cpd.Unstructured{
 							{Unstructured: un.Unstructured{Object: map[string]any{
@@ -1233,30 +1222,26 @@ func TestDefaultDiffProcessor_RenderToStableState(t *testing.T) {
 					WithNoEnvironmentConfigs().
 					Build()
 			},
-			setupRenderFunc: func() RenderFunc {
-				reqs := map[string]v1.Requirements{
-					"step1": {
-						Resources: map[string]*v1.ResourceSelector{
-							"config": {
-								ApiVersion: "v1",
-								Kind:       ConfigMap,
-								Match: &v1.ResourceSelector_MatchName{
-									MatchName: ConfigMapName,
-								},
-							},
+			setupRenderFunc: func() RenderFn {
+				reqs := []*v1.ResourceSelector{
+					{
+						ApiVersion: "v1",
+						Kind:       ConfigMap,
+						Match: &v1.ResourceSelector_MatchName{
+							MatchName: ConfigMapName,
 						},
 					},
 				}
 
 				iteration := 0
 
-				return func(_ context.Context, _ logging.Logger, _ render.Inputs) (render.Outputs, error) {
+				return func(_ context.Context, _ logging.Logger, _ RenderInputs) (render.CompositionOutputs, error) {
 					iteration++
 
 					// Every iteration returns the same requirements AND the same error.
 					// After iteration 1, the requirement is already cached so newReqCount==0.
-					return render.Outputs{
-						Requirements: reqs,
+					return render.CompositionOutputs{
+						RequiredResources: reqs,
 					}, errors.New("fatal template error: assignment to entry in nil map")
 				}
 			},
@@ -1282,25 +1267,21 @@ func TestDefaultDiffProcessor_RenderToStableState(t *testing.T) {
 					WithNoEnvironmentConfigs().
 					Build()
 			},
-			setupRenderFunc: func() RenderFunc {
-				return func(_ context.Context, _ logging.Logger, in render.Inputs) (render.Outputs, error) {
-					reqs := map[string]v1.Requirements{
-						"step1": {
-							Resources: map[string]*v1.ResourceSelector{
-								"config": {
-									ApiVersion: "v1",
-									Kind:       ConfigMap,
-									Match: &v1.ResourceSelector_MatchName{
-										MatchName: "missing-config",
-									},
-								},
+			setupRenderFunc: func() RenderFn {
+				return func(_ context.Context, _ logging.Logger, in RenderInputs) (render.CompositionOutputs, error) {
+					reqs := []*v1.ResourceSelector{
+						{
+							ApiVersion: "v1",
+							Kind:       ConfigMap,
+							Match: &v1.ResourceSelector_MatchName{
+								MatchName: "missing-config",
 							},
 						},
 					}
 
-					return render.Outputs{
+					return render.CompositionOutputs{
 						CompositeResource: in.CompositeResource,
-						Requirements:      reqs,
+						RequiredResources: reqs,
 					}, nil
 				}
 			},
@@ -1343,11 +1324,11 @@ func TestDefaultDiffProcessor_RenderToStableState(t *testing.T) {
 					WithNoEnvironmentConfigs().
 					Build()
 			},
-			setupRenderFunc: func() RenderFunc {
-				return func(_ context.Context, _ logging.Logger, in render.Inputs) (render.Outputs, error) {
+			setupRenderFunc: func() RenderFn {
+				return func(_ context.Context, _ logging.Logger, in RenderInputs) (render.CompositionOutputs, error) {
 					// Verify observed resources were passed through
 					if len(in.ObservedResources) != 2 {
-						return render.Outputs{}, errors.Errorf("expected 2 observed resources, got %d", len(in.ObservedResources))
+						return render.CompositionOutputs{}, errors.Errorf("expected 2 observed resources, got %d", len(in.ObservedResources))
 					}
 
 					// Verify the observed resources have the expected kinds
@@ -1357,10 +1338,10 @@ func TestDefaultDiffProcessor_RenderToStableState(t *testing.T) {
 					}
 
 					if !observedKinds["Bucket"] || !observedKinds["User"] {
-						return render.Outputs{}, errors.New("expected observed resources to include Bucket and User")
+						return render.CompositionOutputs{}, errors.New("expected observed resources to include Bucket and User")
 					}
 
-					return render.Outputs{
+					return render.CompositionOutputs{
 						CompositeResource: in.CompositeResource,
 						ComposedResources: []cpd.Unstructured{
 							{Unstructured: un.Unstructured{Object: map[string]any{
@@ -1392,7 +1373,7 @@ func TestDefaultDiffProcessor_RenderToStableState(t *testing.T) {
 
 			// Create a render iteration counter to verify
 			renderCount := 0
-			countingRenderFunc := func(ctx context.Context, log logging.Logger, in render.Inputs) (render.Outputs, error) {
+			countingRenderFunc := func(ctx context.Context, log logging.Logger, in RenderInputs) (render.CompositionOutputs, error) {
 				renderCount++
 				return renderFunc(ctx, log, in)
 			}
@@ -1401,7 +1382,6 @@ func TestDefaultDiffProcessor_RenderToStableState(t *testing.T) {
 			requirementsProvider := NewRequirementsProvider(
 				resourceClient,
 				environmentClient,
-				countingRenderFunc,
 				logger,
 			)
 
@@ -1410,12 +1390,12 @@ func TestDefaultDiffProcessor_RenderToStableState(t *testing.T) {
 			customOpts := []ProcessorOption{
 				WithLogger(logger),
 				WithRenderFunc(countingRenderFunc),
-				WithRequirementsProviderFactory(func(k8.ResourceClient, xp.EnvironmentClient, RenderFunc, logging.Logger) *RequirementsProvider {
+				WithRequirementsProviderFactory(func(k8.ResourceClient, xp.EnvironmentClient, logging.Logger) *RequirementsProvider {
 					return requirementsProvider
 				}),
 			}
 			baseOpts = append(baseOpts, customOpts...)
-			processor := NewDiffProcessor(k8.Clients{}, xp.Clients{}, baseOpts...)
+			processor := NewDiffProcessor(k8.Clients{}, xp.Clients{Definition: tu.NewMockDefinitionClient().Build()}, baseOpts...)
 
 			// Call the method under test
 			output, err := processor.(*DefaultDiffProcessor).RenderToStableState(ctx, tt.xr, tt.composition, tt.functions, tt.resourceID, tt.observedResources, false)
@@ -1465,17 +1445,17 @@ func TestDefaultDiffProcessor_RenderToStableState_SynthesizeReady(t *testing.T) 
 	functions := []pkgv1.Function{{ObjectMeta: metav1.ObjectMeta{Name: "test-function"}}}
 
 	tests := map[string]struct {
-		setupRenderFunc      func() RenderFunc
+		setupRenderFunc      func() RenderFn
 		wantComposedCount    int
 		wantRenderIterations int
 		wantErr              bool
 		wantErrContains      string
 	}{
 		"AlreadyStable": {
-			setupRenderFunc: func() RenderFunc {
-				return func(_ context.Context, _ logging.Logger, in render.Inputs) (render.Outputs, error) {
+			setupRenderFunc: func() RenderFn {
+				return func(_ context.Context, _ logging.Logger, in RenderInputs) (render.CompositionOutputs, error) {
 					// Return same resource every time - already stable
-					return render.Outputs{
+					return render.CompositionOutputs{
 						CompositeResource: in.CompositeResource,
 						ComposedResources: []cpd.Unstructured{{
 							Unstructured: un.Unstructured{Object: map[string]any{
@@ -1492,10 +1472,10 @@ func TestDefaultDiffProcessor_RenderToStableState_SynthesizeReady(t *testing.T) 
 			wantErr:              false,
 		},
 		"MultiStageProgression": {
-			setupRenderFunc: func() RenderFunc {
+			setupRenderFunc: func() RenderFn {
 				iteration := 0
 
-				return func(_ context.Context, _ logging.Logger, in render.Inputs) (render.Outputs, error) {
+				return func(_ context.Context, _ logging.Logger, in RenderInputs) (render.CompositionOutputs, error) {
 					iteration++
 
 					// Count how many observed resources have Ready=True
@@ -1539,7 +1519,7 @@ func TestDefaultDiffProcessor_RenderToStableState_SynthesizeReady(t *testing.T) 
 						})
 					}
 
-					return render.Outputs{
+					return render.CompositionOutputs{
 						CompositeResource: in.CompositeResource,
 						ComposedResources: resources,
 					}, nil
@@ -1550,15 +1530,15 @@ func TestDefaultDiffProcessor_RenderToStableState_SynthesizeReady(t *testing.T) 
 			wantErr:              false,
 		},
 		"MaxIterationsExceeded": {
-			setupRenderFunc: func() RenderFunc {
+			setupRenderFunc: func() RenderFn {
 				resourceNum := 0
 
-				return func(_ context.Context, _ logging.Logger, in render.Inputs) (render.Outputs, error) {
+				return func(_ context.Context, _ logging.Logger, in RenderInputs) (render.CompositionOutputs, error) {
 					// Always produce a new resource - never stabilizes
 					// Key uses crossplane.io/composition-resource-name annotation
 					resourceNum++
 
-					return render.Outputs{
+					return render.CompositionOutputs{
 						CompositeResource: in.CompositeResource,
 						ComposedResources: []cpd.Unstructured{{
 							Unstructured: un.Unstructured{Object: map[string]any{
@@ -1588,7 +1568,7 @@ func TestDefaultDiffProcessor_RenderToStableState_SynthesizeReady(t *testing.T) 
 			renderFunc := tt.setupRenderFunc()
 
 			renderCount := 0
-			countingRenderFunc := func(ctx context.Context, log logging.Logger, in render.Inputs) (render.Outputs, error) {
+			countingRenderFunc := func(ctx context.Context, log logging.Logger, in RenderInputs) (render.CompositionOutputs, error) {
 				renderCount++
 				return renderFunc(ctx, log, in)
 			}
@@ -1596,18 +1576,18 @@ func TestDefaultDiffProcessor_RenderToStableState_SynthesizeReady(t *testing.T) 
 			resourceClient := tu.NewMockResourceClient().Build()
 			environmentClient := tu.NewMockEnvironmentClient().WithNoEnvironmentConfigs().Build()
 
-			requirementsProvider := NewRequirementsProvider(resourceClient, environmentClient, countingRenderFunc, logger)
+			requirementsProvider := NewRequirementsProvider(resourceClient, environmentClient, logger)
 
 			baseOpts := testProcessorOptions(t)
 			customOpts := []ProcessorOption{
 				WithLogger(logger),
 				WithRenderFunc(countingRenderFunc),
-				WithRequirementsProviderFactory(func(k8.ResourceClient, xp.EnvironmentClient, RenderFunc, logging.Logger) *RequirementsProvider {
+				WithRequirementsProviderFactory(func(k8.ResourceClient, xp.EnvironmentClient, logging.Logger) *RequirementsProvider {
 					return requirementsProvider
 				}),
 			}
 			baseOpts = append(baseOpts, customOpts...)
-			processor := NewDiffProcessor(k8.Clients{}, xp.Clients{}, baseOpts...)
+			processor := NewDiffProcessor(k8.Clients{}, xp.Clients{Definition: tu.NewMockDefinitionClient().Build()}, baseOpts...)
 
 			// Call with synthesizeReady=true
 			output, err := processor.(*DefaultDiffProcessor).RenderToStableState(ctx, xr, composition, functions, "XR/test-xr", nil, true)
@@ -2183,7 +2163,7 @@ func TestDefaultDiffProcessor_ProcessNestedXRs(t *testing.T) {
 				}),
 				WithDiffCalculatorFactory(func(k8.ApplyClient, xp.ResourceTreeClient, ResourceManager, logging.Logger, renderer.DiffOptions) DiffCalculator {
 					return &tu.MockDiffCalculator{
-						CalculateNonRemovalDiffsFn: func(_ context.Context, xr *cmp.Unstructured, _ *un.Unstructured, _ render.Outputs) (map[string]*dt.ResourceDiff, map[string]bool, error) {
+						CalculateNonRemovalDiffsFn: func(_ context.Context, xr *cmp.Unstructured, _ *un.Unstructured, _ render.CompositionOutputs) (map[string]*dt.ResourceDiff, map[string]bool, error) {
 							// Return a simple diff for the XR to make the test pass
 							diffs := make(map[string]*dt.ResourceDiff)
 							rendered := make(map[string]bool)
@@ -2560,11 +2540,11 @@ func TestDefaultDiffProcessor_DiffSingleResource_WithObservedResources(t *testin
 			// Create processor with custom render function that captures observed resources
 			baseOpts := testProcessorOptions(t)
 			customOpts := []ProcessorOption{
-				WithRenderFunc(func(_ context.Context, _ logging.Logger, in render.Inputs) (render.Outputs, error) {
+				WithRenderFunc(func(_ context.Context, _ logging.Logger, in RenderInputs) (render.CompositionOutputs, error) {
 					capturedObserved = in.ObservedResources
 					capturedObservedCount = len(in.ObservedResources)
 
-					return render.Outputs{
+					return render.CompositionOutputs{
 						CompositeResource: in.CompositeResource,
 						ComposedResources: []cpd.Unstructured{},
 					}, nil
@@ -3507,6 +3487,86 @@ func TestFetchCompositionCredentials(t *testing.T) {
 
 			if len(secrets) != tc.wantSecrets {
 				t.Errorf("fetchCompositionCredentials() returned %d secrets, want %d", len(secrets), tc.wantSecrets)
+			}
+		})
+	}
+}
+
+// TestDefaultDiffProcessor_RenderToStableState_SchemaPlumbing asserts that
+// resolveSchemaAndXRDForRender pins the right composite.Schema on the input
+// *cmp.Unstructured the render function receives. Schema selection follows
+// the XRD's spec.scope: LegacyCluster -> SchemaLegacy (canonical fields at
+// spec.*); anything else -> SchemaModern (canonical fields at
+// spec.crossplane.*). Pinning here is required so the renderer writes
+// canonical fields at the path the cluster CRD declares.
+func TestDefaultDiffProcessor_RenderToStableState_SchemaPlumbing(t *testing.T) {
+	ctx := t.Context()
+
+	xr := tu.NewResource("example.org/v1", "XLegacy", "test-xr").BuildUComposite()
+	composition := &apiextensionsv1.Composition{
+		ObjectMeta: metav1.ObjectMeta{Name: "test-composition"},
+		Spec:       apiextensionsv1.CompositionSpec{Mode: apiextensionsv1.CompositionModePipeline},
+	}
+
+	// resolveSchemaAndXRDForRender derives the schema from the XRD's
+	// spec.scope (LegacyCluster -> SchemaLegacy; anything else ->
+	// SchemaModern), so this test drives the schema decision via the
+	// XRD's scope field rather than mocking GetCompositeSchema.
+	tests := map[string]struct {
+		scope      string
+		wantSchema cmp.Schema
+	}{
+		"LegacyXRD_SchemaLegacy": {
+			scope:      "LegacyCluster",
+			wantSchema: cmp.SchemaLegacy,
+		},
+		"ModernXRD_SchemaModern": {
+			scope:      "Cluster",
+			wantSchema: cmp.SchemaModern,
+		},
+	}
+
+	for name, tt := range tests {
+		t.Run(name, func(t *testing.T) {
+			var capturedSchema cmp.Schema
+
+			renderFn := func(_ context.Context, _ logging.Logger, in RenderInputs) (render.CompositionOutputs, error) {
+				capturedSchema = in.CompositeResource.Schema
+				return render.CompositionOutputs{CompositeResource: in.CompositeResource}, nil
+			}
+
+			xrd := tu.NewResource("apiextensions.crossplane.io/v2", "CompositeResourceDefinition", "xrd-test").
+				WithSpecField("scope", tt.scope).
+				Build()
+
+			defClient := tu.NewMockDefinitionClient().Build()
+			defClient.GetXRDForXRFn = func(_ context.Context, _ schema.GroupVersionKind) (*un.Unstructured, error) {
+				return xrd, nil
+			}
+
+			opts := append(testProcessorOptions(t),
+				WithRenderFunc(renderFn),
+			)
+			processor := NewDiffProcessor(k8.Clients{}, xp.Clients{Definition: defClient}, opts...)
+
+			out, err := processor.(*DefaultDiffProcessor).RenderToStableState(
+				ctx, xr, composition, nil, "XR/test-xr", nil, false,
+			)
+			if err != nil {
+				t.Fatalf("RenderToStableState() unexpected error: %v", err)
+			}
+
+			if capturedSchema != tt.wantSchema {
+				t.Errorf("input.CompositeResource.Schema = %v, want %v", capturedSchema, tt.wantSchema)
+			}
+
+			if out.CompositeResource == nil {
+				t.Fatal("output CompositeResource is nil")
+			}
+
+			if out.CompositeResource.Schema != tt.wantSchema {
+				t.Errorf("output.CompositeResource.Schema = %v, want %v",
+					out.CompositeResource.Schema, tt.wantSchema)
 			}
 		})
 	}

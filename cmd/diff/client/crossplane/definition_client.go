@@ -11,12 +11,15 @@ import (
 
 	"github.com/crossplane/crossplane-runtime/v2/pkg/errors"
 	"github.com/crossplane/crossplane-runtime/v2/pkg/logging"
+	ucomposite "github.com/crossplane/crossplane-runtime/v2/pkg/resource/unstructured/composite"
 )
 
 // CompositeResourceDefinitionKind is the kind for Composite Resource Definitions.
 const CompositeResourceDefinitionKind = "CompositeResourceDefinition"
 
 // DefinitionClient handles Crossplane definitions (XRDs).
+//
+//nolint:interfacebloat // The 6 methods are cohesively about XRD lookup; splitting just to satisfy the linter would create surface without value.
 type DefinitionClient interface {
 	core.Initializable
 
@@ -31,6 +34,16 @@ type DefinitionClient interface {
 
 	// IsClaimResource checks if the given resource is a claim type
 	IsClaimResource(ctx context.Context, resource *un.Unstructured) bool
+
+	// GetCompositeSchema returns the composite.Schema (Legacy or Modern) that
+	// applies to the given XR or claim GVK. The scope is read from the XRD's
+	// spec.scope field (NOT the XRD's own apiVersion, which the apiserver may
+	// rewrite during v1↔v2 conversion). spec.scope == "LegacyCluster" maps to
+	// SchemaLegacy (canonical fields under spec.*); "Cluster"/"Namespaced" map
+	// to SchemaModern (canonical fields under spec.crossplane.*). Mirrors the
+	// rule the render binary uses (selectSchema in crossplane's
+	// internal/render/composite/render.go).
+	GetCompositeSchema(ctx context.Context, gvk schema.GroupVersionKind) (ucomposite.Schema, error)
 }
 
 // DefaultDefinitionClient implements DefinitionClient.
@@ -236,4 +249,46 @@ func (c *DefaultDefinitionClient) IsClaimResource(ctx context.Context, resource 
 	c.logger.Debug("Resource is a claim type", "gvk", gvk.String())
 
 	return true
+}
+
+// GetCompositeSchema returns the composite.Schema (Legacy or Modern) for the
+// given XR or claim GVK by looking up the XRD and reading its spec.scope.
+// LegacyCluster → SchemaLegacy (canonical fields under spec.*); Cluster or
+// Namespaced → SchemaModern (canonical fields under spec.crossplane.*). Tries
+// the XR path first; falls back to the claim path so the helper works for both.
+// See the interface doc for why scope, not apiVersion, drives the decision.
+func (c *DefaultDefinitionClient) GetCompositeSchema(ctx context.Context, gvk schema.GroupVersionKind) (ucomposite.Schema, error) {
+	xrd, err := c.GetXRDForXR(ctx, gvk)
+	if err != nil {
+		// Not an XR GVK; try the claim path.
+		var claimErr error
+
+		xrd, claimErr = c.GetXRDForClaim(ctx, gvk)
+		if claimErr != nil {
+			return ucomposite.SchemaModern, errors.Wrapf(err, "no XRD found for %s (also tried claim: %v)", gvk.String(), claimErr)
+		}
+	}
+
+	return SchemaFromXRD(xrd), nil
+}
+
+// SchemaFromXRD picks the composite.Schema (Legacy or Modern) for the given
+// XRD by reading its spec.scope. Use this when you've already fetched the XRD
+// for another reason (e.g. forwarding it to the render binary) and want to
+// avoid the redundant cache lookup GetCompositeSchema would do.
+//
+// The rule mirrors the render binary's own selectSchema (see
+// crossplane/crossplane internal/render/composite/render.go): use spec.scope
+// rather than the XRD's apiVersion. The apiserver round-trips XRDs through
+// v1↔v2 conversion (a v1 XRD POSTed by the user can come back from a v2 list
+// as kind v2), so apiVersion is unreliable. spec.scope is preserved verbatim:
+// v1 XRDs default to "LegacyCluster" and stay there; v2 XRDs declare
+// "Cluster" or "Namespaced" explicitly.
+func SchemaFromXRD(xrd *un.Unstructured) ucomposite.Schema {
+	scope, _, _ := un.NestedString(xrd.Object, "spec", "scope")
+	if scope == "" || scope == "LegacyCluster" {
+		return ucomposite.SchemaLegacy
+	}
+
+	return ucomposite.SchemaModern
 }

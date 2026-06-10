@@ -9,6 +9,8 @@ import (
 
 	xp "github.com/crossplane-contrib/crossplane-diff/cmd/diff/client/crossplane"
 	k8 "github.com/crossplane-contrib/crossplane-diff/cmd/diff/client/kubernetes"
+	"github.com/crossplane/cli/v2/cmd/crossplane/common/loggerwriter"
+	"github.com/crossplane/cli/v2/cmd/crossplane/validate"
 	extv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	un "k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -16,9 +18,6 @@ import (
 	"github.com/crossplane/crossplane-runtime/v2/pkg/errors"
 	"github.com/crossplane/crossplane-runtime/v2/pkg/logging"
 	cpd "github.com/crossplane/crossplane-runtime/v2/pkg/resource/unstructured/composed"
-
-	"github.com/crossplane/crossplane/v2/cmd/crank/beta/validate"
-	"github.com/crossplane/crossplane/v2/cmd/crank/common/loggerwriter"
 )
 
 // SchemaValidator handles validation of resources against CRD schemas.
@@ -85,13 +84,16 @@ func (v *DefaultSchemaValidator) ValidateResources(ctx context.Context, xr *un.U
 		"namespace", xr.GetNamespace(),
 		"composedCount", len(composed))
 
-	// Collect all resources that need to be validated
+	// Collect all resources that need to be validated. Real cluster CRDs
+	// derived from XRDs declare spec.crossplane (Crossplane's CRD generator
+	// emits the subtree), so the v2-style XR + the composed resources we
+	// hand to SchemaValidation should pass strict validation against those
+	// CRDs unmodified. Our integration-test CRD fixtures match the
+	// cluster-derived shape — see testdata/{diff,comp}/crds — so no
+	// preprocessing is needed here.
 	resources := make([]*un.Unstructured, 0, len(composed)+1)
 
-	// Add the XR to the validation list
 	resources = append(resources, xr)
-
-	// Add cpd resources to validation list
 	for i := range composed {
 		resources = append(resources, &un.Unstructured{Object: composed[i].UnstructuredContent()})
 	}
@@ -112,9 +114,19 @@ func (v *DefaultSchemaValidator) ValidateResources(ctx context.Context, xr *un.U
 
 	multiWriter := io.MultiWriter(&validationOutput, loggerwriter.NewLoggerWriter(v.logger))
 
-	// Note: SchemaValidation applies defaults IN-PLACE to resources, so we must pass
-	// the original resources (not sanitized copies) to get defaults applied.
-	// We strip Crossplane-managed fields AFTER validation for cleaner error messages.
+	// SchemaValidation applies defaults IN-PLACE to the resources it sees,
+	// mutating the underlying Object map. For each managed resource we wrap
+	// `&un.Unstructured{Object: composed[i].UnstructuredContent()}` — the
+	// embedded unstructured.Unstructured returns its Object map by reference,
+	// so defaults applied here propagate back to the caller's
+	// `composed[i]` via the shared map. That preserves pre-existing
+	// defaulting behaviour for downstream diff calculation.
+	//
+	// The XR is passed by pointer; defaults applied to it land on the
+	// caller's object, which is then used downstream for diffing against
+	// cluster state. The real composite reconciler in the render pipeline
+	// already applied XRD schema defaults before we got here, so this is
+	// belt-and-braces.
 	v.logger.Debug("Performing schema validation", "resourceCount", len(resources))
 
 	err = validate.SchemaValidation(ctx, resources, v.schemaClient.GetAllCRDs(), true, true, multiWriter)
@@ -122,12 +134,6 @@ func (v *DefaultSchemaValidator) ValidateResources(ctx context.Context, xr *un.U
 		// Parse and extract only the error lines from validation output
 		details := extractValidationErrors(validationOutput.String())
 		return NewSchemaValidationError("", details, err)
-	}
-
-	// Strip Crossplane-managed fields from resources after validation
-	// These fields are set by Crossplane controllers and may not be in all XRD schemas
-	for i := range resources {
-		resources[i] = v.stripCrossplaneManagedFields(resources[i])
 	}
 
 	// Additionally validate resource scope constraints (namespace requirements and cross-namespace refs)
@@ -274,22 +280,4 @@ func extractValidationErrors(output string) string {
 	}
 
 	return strings.Join(validationErrs, "; ")
-}
-
-// stripCrossplaneManagedFields creates a copy of the resource with Crossplane-managed fields removed
-// These fields are set by Crossplane controllers and may not be present in the CRD schema.
-func (v *DefaultSchemaValidator) stripCrossplaneManagedFields(resource *un.Unstructured) *un.Unstructured {
-	// Create a deep copy to avoid modifying the original
-	sanitized := resource.DeepCopy()
-
-	// Remove compositionRevisionRef from spec.crossplane if it exists
-	// This field is set automatically by Crossplane and may not be in all XRD schemas
-	crossplane, found, err := un.NestedMap(sanitized.Object, "spec", "crossplane")
-	if err == nil && found {
-		delete(crossplane, "compositionRevisionRef")
-		// Set the modified crossplane map back
-		_ = un.SetNestedMap(sanitized.Object, crossplane, "spec", "crossplane")
-	}
-
-	return sanitized
 }

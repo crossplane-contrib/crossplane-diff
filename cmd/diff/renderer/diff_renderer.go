@@ -41,12 +41,6 @@ func (r *DefaultDiffRenderer) SetDiffOptions(options DiffOptions) {
 }
 
 func getKindName(d *dt.ResourceDiff) string {
-	// Check if the name indicates a generated name (ends with "(generated)")
-	if strings.HasSuffix(d.ResourceName, "(generated)") {
-		return fmt.Sprintf("%s/%s", d.Gvk.Kind, d.ResourceName)
-	}
-
-	// Regular case with a specific name
 	return fmt.Sprintf("%s/%s", d.Gvk.Kind, d.ResourceName)
 }
 

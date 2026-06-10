@@ -2,20 +2,20 @@ package diffprocessor
 
 import (
 	"context"
+	"strconv"
 	"strings"
 	"sync"
 
 	xp "github.com/crossplane-contrib/crossplane-diff/cmd/diff/client/crossplane"
 	k8 "github.com/crossplane-contrib/crossplane-diff/cmd/diff/client/kubernetes"
 	dt "github.com/crossplane-contrib/crossplane-diff/cmd/diff/renderer/types"
+	v1 "github.com/crossplane/function-sdk-go/proto/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	un "k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 
 	"github.com/crossplane/crossplane-runtime/v2/pkg/errors"
 	"github.com/crossplane/crossplane-runtime/v2/pkg/logging"
-
-	v1 "github.com/crossplane/crossplane/v2/proto/fn/v1"
 )
 
 // addUniqueResource adds a resource to the map if not already present.
@@ -40,20 +40,20 @@ func addUniqueResource(m map[string]un.Unstructured, res *un.Unstructured) bool 
 type RequirementsProvider struct {
 	client    k8.ResourceClient
 	envClient xp.EnvironmentClient
-	renderFn  RenderFunc
 	logger    logging.Logger
 
-	// Resource cache by resource key (apiVersion+kind+name)
+	// Resource cache by resource key (apiVersion+kind+namespace+name — see
+	// dt.MakeDiffKey). Namespace is required so same-named resources in
+	// different namespaces don't collide.
 	resourceCache map[string]*un.Unstructured
 	cacheMutex    sync.RWMutex
 }
 
 // NewRequirementsProvider creates a new provider with caching.
-func NewRequirementsProvider(res k8.ResourceClient, env xp.EnvironmentClient, renderFn RenderFunc, logger logging.Logger) *RequirementsProvider {
+func NewRequirementsProvider(res k8.ResourceClient, env xp.EnvironmentClient, logger logging.Logger) *RequirementsProvider {
 	return &RequirementsProvider{
 		client:        res,
 		envClient:     env,
-		renderFn:      renderFn,
 		logger:        logger,
 		resourceCache: make(map[string]*un.Unstructured),
 	}
@@ -109,24 +109,39 @@ func (p *RequirementsProvider) getCachedResource(apiVersion, kind, namespace, na
 	return p.resourceCache[key]
 }
 
-// ProvideRequirements provides requirements, checking cache first.
-func (p *RequirementsProvider) ProvideRequirements(ctx context.Context, requirements map[string]v1.Requirements, xrNamespace string) ([]*un.Unstructured, error) {
-	if len(requirements) == 0 {
-		p.logger.Debug("No requirements provided, returning empty")
+// ResolveSelectors resolves a flat list of ResourceSelector entries into their
+// backing resources. Checks the cache first; on a miss it defers to the
+// per-selector fetcher and caches the result.
+//
+// Matches the render.CompositionOutputs.RequiredResources shape introduced in
+// upstream crossplane PR #7339.
+func (p *RequirementsProvider) ResolveSelectors(ctx context.Context, selectors []*v1.ResourceSelector, xrNamespace string) ([]*un.Unstructured, error) {
+	if len(selectors) == 0 {
+		p.logger.Debug("No selectors provided, returning empty")
 		return nil, nil
 	}
 
-	allResources, newlyFetchedResources, err := p.processAllSteps(ctx, requirements, xrNamespace)
-	if err != nil {
-		return nil, err
+	var (
+		allResources          []*un.Unstructured
+		newlyFetchedResources []*un.Unstructured
+	)
+
+	for i, selector := range selectors {
+		res, fetched, err := p.processSelector(ctx, strconv.Itoa(i), selector, xrNamespace)
+		if err != nil {
+			return nil, err
+		}
+
+		allResources = append(allResources, res...)
+		newlyFetchedResources = append(newlyFetchedResources, fetched...)
 	}
 
-	// Cache any newly fetched resources
 	if len(newlyFetchedResources) > 0 {
 		p.cacheResources(newlyFetchedResources)
 	}
 
-	p.logger.Debug("Processed all requirements",
+	p.logger.Debug("Resolved selectors",
+		"selectorCount", len(selectors),
 		"resourceCount", len(allResources),
 		"newlyFetchedCount", len(newlyFetchedResources),
 		"cacheSize", len(p.resourceCache))
@@ -134,84 +149,12 @@ func (p *RequirementsProvider) ProvideRequirements(ctx context.Context, requirem
 	return allResources, nil
 }
 
-// processAllSteps processes requirements for all steps without copying protobuf structs.
-func (p *RequirementsProvider) processAllSteps(ctx context.Context, requirements map[string]v1.Requirements, xrNamespace string) ([]*un.Unstructured, []*un.Unstructured, error) {
-	var (
-		allResources          []*un.Unstructured
-		newlyFetchedResources []*un.Unstructured
-	)
-
-	// Process each step's requirements
-
-	for stepName := range requirements {
-		stepResources, stepNewlyFetched, err := p.processStepSelectors(
-			ctx,
-			stepName,
-			requirements[stepName].Resources, //nolint:protogetter // Direct field access required for protobuf struct values
-			// to avoid copying mutexes.  also, we need to keep using ExtraResources since we aren't guaranteed that all
-			// functions in our pipeline have been upgraded to v2.
-			requirements[stepName].ExtraResources, //nolint:staticcheck,protogetter // ExtraResources deprecated but needed for backward compatibility
-			xrNamespace,
-		)
-		if err != nil {
-			return nil, nil, err
-		}
-
-		allResources = append(allResources, stepResources...)
-		newlyFetchedResources = append(newlyFetchedResources, stepNewlyFetched...)
-	}
-
-	return allResources, newlyFetchedResources, nil
-}
-
-// processStepSelectors processes selectors from Resources and ExtraResources maps.
-func (p *RequirementsProvider) processStepSelectors(ctx context.Context, stepName string, resources, extraResources map[string]*v1.ResourceSelector, xrNamespace string) ([]*un.Unstructured, []*un.Unstructured, error) {
-	totalSelectors := len(resources) + len(extraResources)
-
-	p.logger.Debug("Processing step requirements",
-		"step", stepName,
-		"resources", len(resources),
-		"extraResources", len(extraResources),
-		"total", totalSelectors)
-
-	var (
-		stepResources []*un.Unstructured
-		newlyFetched  []*un.Unstructured
-	)
-
-	// Process Resources selectors
-
-	for resourceKey, selector := range resources {
-		res, fetched, err := p.processSelector(ctx, stepName, resourceKey, selector, xrNamespace)
-		if err != nil {
-			return nil, nil, err
-		}
-
-		stepResources = append(stepResources, res...)
-		newlyFetched = append(newlyFetched, fetched...)
-	}
-
-	// Process ExtraResources selectors (deprecated but backward compatible)
-	for resourceKey, selector := range extraResources {
-		res, fetched, err := p.processSelector(ctx, stepName, resourceKey, selector, xrNamespace)
-		if err != nil {
-			return nil, nil, err
-		}
-
-		stepResources = append(stepResources, res...)
-		newlyFetched = append(newlyFetched, fetched...)
-	}
-
-	return stepResources, newlyFetched, nil
-}
-
-// processSelector processes a single resource selector.
-func (p *RequirementsProvider) processSelector(ctx context.Context, stepName, resourceKey string, selector *v1.ResourceSelector, xrNamespace string) ([]*un.Unstructured, []*un.Unstructured, error) {
+// processSelector processes a single resource selector. resourceKey is a
+// short identifier (typically the selector's index in the parent slice) used
+// only for debug logging.
+func (p *RequirementsProvider) processSelector(ctx context.Context, resourceKey string, selector *v1.ResourceSelector, xrNamespace string) ([]*un.Unstructured, []*un.Unstructured, error) {
 	if selector == nil {
-		p.logger.Debug("Nil selector in requirements",
-			"step", stepName,
-			"resourceKey", resourceKey)
-
+		p.logger.Debug("Nil selector in requirements", "resourceKey", resourceKey)
 		return nil, nil, nil
 	}
 
@@ -223,7 +166,7 @@ func (p *RequirementsProvider) processSelector(ctx context.Context, stepName, re
 
 	switch {
 	case selector.GetMatchName() != "":
-		resources, fromCache, err := p.processNameSelector(ctx, selector, gvk, xrNamespace, stepName)
+		resources, fromCache, err := p.processNameSelector(ctx, selector, gvk, xrNamespace)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -237,7 +180,7 @@ func (p *RequirementsProvider) processSelector(ctx context.Context, stepName, re
 		return resources, newlyFetched, nil
 
 	case selector.GetMatchLabels() != nil:
-		resources, err := p.processLabelSelector(ctx, selector, gvk, xrNamespace, stepName)
+		resources, err := p.processLabelSelector(ctx, selector, gvk, xrNamespace)
 		if err != nil {
 			return nil, nil, errors.Wrap(err, "cannot get resources by label")
 		}
@@ -246,10 +189,7 @@ func (p *RequirementsProvider) processSelector(ctx context.Context, stepName, re
 		return resources, resources, nil
 
 	default:
-		p.logger.Debug("Unsupported selector type",
-			"step", stepName,
-			"resourceKey", resourceKey)
-
+		p.logger.Debug("Unsupported selector type", "resourceKey", resourceKey)
 		return nil, nil, nil
 	}
 }
@@ -267,10 +207,10 @@ func parseVersionFromAPIVersion(apiVersion string) string {
 }
 
 // resolveNamespace determines the appropriate namespace for a resource based on its scope and selector.
-func (p *RequirementsProvider) resolveNamespace(ctx context.Context, gvk schema.GroupVersionKind, selector *v1.ResourceSelector, xrNamespace, stepName string) (string, error) {
+func (p *RequirementsProvider) resolveNamespace(ctx context.Context, gvk schema.GroupVersionKind, selector *v1.ResourceSelector, xrNamespace string) (string, error) {
 	isNamespaced, err := p.client.IsNamespacedResource(ctx, gvk)
 	if err != nil {
-		return "", errors.Wrapf(err, "cannot determine namespace scope for resource %s when processing requirements for step %s", gvk.String(), stepName)
+		return "", errors.Wrapf(err, "cannot determine namespace scope for resource %s", gvk.String())
 	}
 
 	if !isNamespaced {
@@ -286,13 +226,13 @@ func (p *RequirementsProvider) resolveNamespace(ctx context.Context, gvk schema.
 
 // processNameSelector handles resource selection by name.
 // Returns (resources, fromCache, error) where fromCache indicates if the resource was found in cache.
-func (p *RequirementsProvider) processNameSelector(ctx context.Context, selector *v1.ResourceSelector, gvk schema.GroupVersionKind, xrNamespace, stepName string) ([]*un.Unstructured, bool, error) {
+func (p *RequirementsProvider) processNameSelector(ctx context.Context, selector *v1.ResourceSelector, gvk schema.GroupVersionKind, xrNamespace string) ([]*un.Unstructured, bool, error) {
 	name := selector.GetMatchName()
 
 	// Resolve namespace FIRST so we can check cache correctly.
 	// This prevents returning wrong resources when same-named resources exist
 	// in different namespaces (e.g., ConfigMap/my-config in both ns-a and ns-b).
-	ns, err := p.resolveNamespace(ctx, gvk, selector, xrNamespace, stepName)
+	ns, err := p.resolveNamespace(ctx, gvk, selector, xrNamespace)
 	if err != nil {
 		return nil, false, err
 	}
@@ -322,13 +262,13 @@ func (p *RequirementsProvider) processNameSelector(ctx context.Context, selector
 }
 
 // processLabelSelector handles resource selection by labels.
-func (p *RequirementsProvider) processLabelSelector(ctx context.Context, selector *v1.ResourceSelector, gvk schema.GroupVersionKind, xrNamespace, stepName string) ([]*un.Unstructured, error) {
+func (p *RequirementsProvider) processLabelSelector(ctx context.Context, selector *v1.ResourceSelector, gvk schema.GroupVersionKind, xrNamespace string) ([]*un.Unstructured, error) {
 	labelSelector := metav1.LabelSelector{
 		MatchLabels: selector.GetMatchLabels().GetLabels(),
 	}
 
 	// Resolve namespace
-	ns, err := p.resolveNamespace(ctx, gvk, selector, xrNamespace, stepName)
+	ns, err := p.resolveNamespace(ctx, gvk, selector, xrNamespace)
 	if err != nil {
 		return nil, err
 	}

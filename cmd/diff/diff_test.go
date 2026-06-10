@@ -32,6 +32,8 @@ import (
 	"github.com/crossplane-contrib/crossplane-diff/cmd/diff/kubecfg"
 	tu "github.com/crossplane-contrib/crossplane-diff/cmd/diff/testutils"
 	"github.com/crossplane-contrib/crossplane-diff/cmd/diff/types"
+	"github.com/crossplane/cli/v2/cmd/crossplane/common/load"
+	itu "github.com/crossplane/cli/v2/cmd/crossplane/common/load/testutils"
 	"github.com/google/go-cmp/cmp"
 	extv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -42,10 +44,8 @@ import (
 
 	"github.com/crossplane/crossplane-runtime/v2/pkg/errors"
 
-	xpextv1 "github.com/crossplane/crossplane/v2/apis/apiextensions/v1"
-	pkgv1 "github.com/crossplane/crossplane/v2/apis/pkg/v1"
-	"github.com/crossplane/crossplane/v2/cmd/crank/common/load"
-	itu "github.com/crossplane/crossplane/v2/cmd/crank/common/load/testutils"
+	xpextv1 "github.com/crossplane/crossplane/apis/v2/apiextensions/v1"
+	pkgv1 "github.com/crossplane/crossplane/apis/v2/pkg/v1"
 )
 
 // testContextProvider implements ContextProvider for testing.
@@ -990,6 +990,12 @@ func TestGetRestConfig(t *testing.T) {
 			// This test only works in isolated environments where ~/.kube/config doesn't exist
 			skip:       !isIsolated,
 			skipReason: "requires isolated environment without ~/.kube/config (run 'earthly +go-test' for full coverage)",
+			// TODO: rework this so it covers the empty-KUBECONFIG branch on developer
+			// machines too — e.g. by overriding the loading rules' Precedence list
+			// (clientcmd.NewDefaultClientConfigLoadingRules with ExplicitPath=""
+			// and an empty Precedence) instead of relying on ~/.kube/config absence.
+			// The Earthly path catches it via the isolated container; locally it
+			// silently skips, which is easy to miss when something regresses.
 		},
 		"ValidKubeconfigPath": {
 			setupFile: func() string {

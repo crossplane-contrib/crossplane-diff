@@ -7,7 +7,9 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"sort"
+	"testing"
 
 	tu "github.com/crossplane-contrib/crossplane-diff/cmd/diff/testutils"
 	gyaml "gopkg.in/yaml.v3"
@@ -21,7 +23,7 @@ import (
 	"github.com/crossplane/crossplane-runtime/v2/pkg/errors"
 	"github.com/crossplane/crossplane-runtime/v2/pkg/logging"
 
-	xpextv1 "github.com/crossplane/crossplane/v2/apis/apiextensions/v1"
+	xpextv1 "github.com/crossplane/crossplane/apis/v2/apiextensions/v1"
 )
 
 // CrossplaneFieldManager is the field manager used for SSA when setting up Crossplane-managed resources.
@@ -644,4 +646,43 @@ func addResourceRefAndUpdate(ctx context.Context, c client.Client,
 	}
 
 	return nil
+}
+
+// localCrossplaneBinary returns the absolute path to a locally-built
+// `crossplane` binary at _output/bin/crossplane (relative to cmd/diff/) when
+// it exists, or "" when it doesn't. The binary, when present, contains the
+// `crossplane internal render` subcommand introduced by upstream PR #7339
+// and is exec'd directly for fast in-process rendering. When absent, callers
+// pass the empty string through to the diff command, which falls through to
+// the docker render engine (slower but works wherever Docker does — including
+// CI's WITH DOCKER block in the go-test target).
+//
+// Local developers wanting the fast path can build the binary with:
+//
+//	go build -o _output/bin/crossplane github.com/crossplane/crossplane/v2/cmd/crossplane
+//
+// (run from the repo root). The path is overridable via the
+// CROSSPLANE_DIFF_RENDER_BINARY env var when a different layout is needed.
+//
+// Callers thread the returned path into the diff command via
+// --crossplane-render-binary=<path> rather than via a process-global env var,
+// so concurrent t.Parallel() tests don't race on shared state.
+func localCrossplaneBinary(t *testing.T) string {
+	t.Helper()
+
+	if override := os.Getenv("CROSSPLANE_DIFF_RENDER_BINARY"); override != "" {
+		return override
+	}
+
+	absPath, err := filepath.Abs("../../_output/bin/crossplane")
+	if err != nil {
+		t.Fatalf("cannot resolve crossplane binary path: %v", err)
+	}
+
+	if _, err := os.Stat(absPath); err != nil {
+		t.Logf("local crossplane binary not present at %s; falling back to docker render engine. Build it for faster iteration: go build -o _output/bin/crossplane github.com/crossplane/crossplane/v2/cmd/crossplane", absPath)
+		return ""
+	}
+
+	return absPath
 }

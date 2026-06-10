@@ -7,6 +7,8 @@ import (
 
 	xp "github.com/crossplane-contrib/crossplane-diff/cmd/diff/client/crossplane"
 	k8 "github.com/crossplane-contrib/crossplane-diff/cmd/diff/client/kubernetes"
+	dt "github.com/crossplane-contrib/crossplane-diff/cmd/diff/renderer/types"
+	"github.com/crossplane/cli/v2/cmd/crossplane/common/resource"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	un "k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -17,8 +19,6 @@ import (
 	"github.com/crossplane/crossplane-runtime/v2/pkg/logging"
 	cpd "github.com/crossplane/crossplane-runtime/v2/pkg/resource/unstructured/composed"
 	cmp "github.com/crossplane/crossplane-runtime/v2/pkg/resource/unstructured/composite"
-
-	"github.com/crossplane/crossplane/v2/cmd/crank/common/resource"
 )
 
 // ResourceManager handles resource-related operations like fetching, updating owner refs,
@@ -455,11 +455,15 @@ func (m *DefaultResourceManager) updateOwnerRefsForXR(xr *un.Unstructured, child
 		originalUID := ref.UID
 
 		// If there is an owner ref on the dependent that matches the parent XR,
-		// use the parent's UID
-		if ref.Name == xr.GetName() &&
+		// overwrite its UID with the cluster UID (when known). The upstream
+		// render engine pre-fills a deterministic SHA1-derived UID, so the
+		// guard must match on name/apiVersion/kind alone and not on UID=="" —
+		// otherwise the synthetic UID survives alongside the real cluster UID
+		// and dry-run apply rejects the dual-controller ownerRefs.
+		if uid != "" &&
+			ref.Name == xr.GetName() &&
 			ref.APIVersion == xr.GetAPIVersion() &&
-			ref.Kind == xr.GetKind() &&
-			ref.UID == "" {
+			ref.Kind == xr.GetKind() {
 			ref.UID = uid
 			m.logger.Debug("Updated matching owner reference with parent UID",
 				"refName", ref.Name,
@@ -478,6 +482,38 @@ func (m *DefaultResourceManager) updateOwnerRefsForXR(xr *un.Unstructured, child
 
 		updatedRefs = append(updatedRefs, ref)
 	}
+
+	// Dedupe owner refs targeting the same parent. The upstream render
+	// engine can emit two controller refs to the same parent XR in nested
+	// scenarios — one with its SHA1-derived UID and one with the cluster
+	// UID. After the UID-overwrite loop above they carry the same UID, but
+	// their presence as two entries still fails the apiserver "single
+	// controller" validation. Collapse matches by (APIVersion, Kind, Name),
+	// keeping the first occurrence.
+	dedupedRefs := make([]metav1.OwnerReference, 0, len(updatedRefs))
+
+	seen := make(map[string]bool, len(updatedRefs))
+	for _, ref := range updatedRefs {
+		// OwnerReferences are namespace-scoped to the owning object's namespace,
+		// so MakeDiffKey's apiVersion/kind/namespace/name shape is overkill here
+		// — but reusing it keeps key construction consistent with the rest of
+		// the diff layer. Empty namespace is fine: dedup is per (kind, name).
+		key := dt.MakeDiffKey(ref.APIVersion, ref.Kind, "", ref.Name)
+		if seen[key] {
+			m.logger.Debug("Dropping duplicate owner reference",
+				"refKind", ref.Kind,
+				"refName", ref.Name,
+				"refUID", ref.UID)
+
+			continue
+		}
+
+		seen[key] = true
+
+		dedupedRefs = append(dedupedRefs, ref)
+	}
+
+	updatedRefs = dedupedRefs
 
 	// Update the object with the modified owner references
 	child.SetOwnerReferences(updatedRefs)
@@ -560,7 +596,7 @@ func (m *DefaultResourceManager) updateCompositeOwnerLabel(ctx context.Context, 
 }
 
 // FetchObservedResources fetches the observed composed resources for the given XR.
-// Returns a flat slice of composed resources suitable for render.Inputs.ObservedResources.
+// Returns a flat slice of composed resources suitable for RenderInputs.ObservedResources.
 func (m *DefaultResourceManager) FetchObservedResources(ctx context.Context, xr *cmp.Unstructured) ([]cpd.Unstructured, error) {
 	m.logger.Debug("Fetching observed resources for XR",
 		"xr_kind", xr.GetKind(),
@@ -587,7 +623,7 @@ func (m *DefaultResourceManager) FetchObservedResources(ctx context.Context, xr 
 }
 
 // extractComposedResourcesFromTree recursively extracts all composed resources from a resource tree.
-// It returns a flat slice of composed resources, suitable for render.Inputs.ObservedResources.
+// It returns a flat slice of composed resources, suitable for RenderInputs.ObservedResources.
 // Only includes resources with the crossplane.io/composition-resource-name annotation.
 func extractComposedResourcesFromTree(tree *resource.Resource) []cpd.Unstructured {
 	var resources []cpd.Unstructured

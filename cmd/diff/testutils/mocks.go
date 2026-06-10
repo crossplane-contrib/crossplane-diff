@@ -6,6 +6,8 @@ import (
 
 	dt "github.com/crossplane-contrib/crossplane-diff/cmd/diff/renderer/types"
 	"github.com/crossplane-contrib/crossplane-diff/cmd/diff/types"
+	"github.com/crossplane/cli/v2/cmd/crossplane/common/resource"
+	"github.com/crossplane/cli/v2/cmd/crossplane/render"
 	corev1 "k8s.io/api/core/v1"
 	extv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -19,10 +21,8 @@ import (
 	cpd "github.com/crossplane/crossplane-runtime/v2/pkg/resource/unstructured/composed"
 	cmp "github.com/crossplane/crossplane-runtime/v2/pkg/resource/unstructured/composite"
 
-	xpextv1 "github.com/crossplane/crossplane/v2/apis/apiextensions/v1"
-	pkgv1 "github.com/crossplane/crossplane/v2/apis/pkg/v1"
-	"github.com/crossplane/crossplane/v2/cmd/crank/common/resource"
-	"github.com/crossplane/crossplane/v2/cmd/crank/render"
+	xpextv1 "github.com/crossplane/crossplane/apis/v2/apiextensions/v1"
+	pkgv1 "github.com/crossplane/crossplane/apis/v2/pkg/v1"
 )
 
 // duplicate these interfaces to avoid cyclical dependency:
@@ -677,11 +677,12 @@ func (m *MockEnvironmentClient) GetEnvironmentConfig(ctx context.Context, name s
 
 // MockDefinitionClient implements the crossplane.DefinitionClient interface.
 type MockDefinitionClient struct {
-	InitializeFn      func(ctx context.Context) error
-	GetXRDsFn         func(ctx context.Context) ([]*un.Unstructured, error)
-	GetXRDForClaimFn  func(ctx context.Context, gvk schema.GroupVersionKind) (*un.Unstructured, error)
-	GetXRDForXRFn     func(ctx context.Context, gvk schema.GroupVersionKind) (*un.Unstructured, error)
-	IsClaimResourceFn func(ctx context.Context, resource *un.Unstructured) bool
+	InitializeFn         func(ctx context.Context) error
+	GetXRDsFn            func(ctx context.Context) ([]*un.Unstructured, error)
+	GetXRDForClaimFn     func(ctx context.Context, gvk schema.GroupVersionKind) (*un.Unstructured, error)
+	GetXRDForXRFn        func(ctx context.Context, gvk schema.GroupVersionKind) (*un.Unstructured, error)
+	IsClaimResourceFn    func(ctx context.Context, resource *un.Unstructured) bool
+	GetCompositeSchemaFn func(ctx context.Context, gvk schema.GroupVersionKind) (cmp.Schema, error)
 }
 
 // Initialize implements crossplane.DefinitionClient.
@@ -729,6 +730,15 @@ func (m *MockDefinitionClient) IsClaimResource(ctx context.Context, resource *un
 	return false
 }
 
+// GetCompositeSchema implements crossplane.DefinitionClient.
+func (m *MockDefinitionClient) GetCompositeSchema(ctx context.Context, gvk schema.GroupVersionKind) (cmp.Schema, error) {
+	if m.GetCompositeSchemaFn != nil {
+		return m.GetCompositeSchemaFn(ctx, gvk)
+	}
+
+	return cmp.SchemaModern, errors.New("GetCompositeSchema not implemented")
+}
+
 // MockResourceTreeClient implements the crossplane.ResourceTreeClient interface.
 type MockResourceTreeClient struct {
 	InitializeFn      func(ctx context.Context) error
@@ -772,8 +782,8 @@ func (m *MockCredentialClient) FetchCompositionCredentials(ctx context.Context, 
 // MockDiffCalculator is a mock implementation of DiffCalculator for testing.
 type MockDiffCalculator struct {
 	CalculateDiffFn                 func(context.Context, *un.Unstructured, *un.Unstructured) (*dt.ResourceDiff, error)
-	CalculateDiffsFn                func(context.Context, *cmp.Unstructured, render.Outputs) (map[string]*dt.ResourceDiff, error)
-	CalculateNonRemovalDiffsFn      func(context.Context, *cmp.Unstructured, *un.Unstructured, render.Outputs) (map[string]*dt.ResourceDiff, map[string]bool, error)
+	CalculateDiffsFn                func(context.Context, *cmp.Unstructured, render.CompositionOutputs) (map[string]*dt.ResourceDiff, error)
+	CalculateNonRemovalDiffsFn      func(context.Context, *cmp.Unstructured, *un.Unstructured, render.CompositionOutputs) (map[string]*dt.ResourceDiff, map[string]bool, error)
 	CalculateRemovedResourceDiffsFn func(context.Context, *un.Unstructured, map[string]bool) (map[string]*dt.ResourceDiff, error)
 }
 
@@ -787,7 +797,7 @@ func (m *MockDiffCalculator) CalculateDiff(ctx context.Context, composite *un.Un
 }
 
 // CalculateDiffs implements DiffCalculator.
-func (m *MockDiffCalculator) CalculateDiffs(ctx context.Context, xr *cmp.Unstructured, desired render.Outputs) (map[string]*dt.ResourceDiff, error) {
+func (m *MockDiffCalculator) CalculateDiffs(ctx context.Context, xr *cmp.Unstructured, desired render.CompositionOutputs) (map[string]*dt.ResourceDiff, error) {
 	if m.CalculateDiffsFn != nil {
 		return m.CalculateDiffsFn(ctx, xr, desired)
 	}
@@ -796,7 +806,7 @@ func (m *MockDiffCalculator) CalculateDiffs(ctx context.Context, xr *cmp.Unstruc
 }
 
 // CalculateNonRemovalDiffs implements DiffCalculator.
-func (m *MockDiffCalculator) CalculateNonRemovalDiffs(ctx context.Context, xr *cmp.Unstructured, parentComposite *un.Unstructured, desired render.Outputs) (map[string]*dt.ResourceDiff, map[string]bool, error) {
+func (m *MockDiffCalculator) CalculateNonRemovalDiffs(ctx context.Context, xr *cmp.Unstructured, parentComposite *un.Unstructured, desired render.CompositionOutputs) (map[string]*dt.ResourceDiff, map[string]bool, error) {
 	if m.CalculateNonRemovalDiffsFn != nil {
 		return m.CalculateNonRemovalDiffsFn(ctx, xr, parentComposite, desired)
 	}

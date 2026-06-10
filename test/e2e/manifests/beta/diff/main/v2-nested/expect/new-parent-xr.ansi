@@ -33,6 +33,8 @@
 +   namespace: default
 + spec:
 +   childField: new-value
++   crossplane:
++     compositionUpdatePolicy: Automatic
 
 ---
 +++ XParentNop/test-parent-new
@@ -42,6 +44,8 @@
 +   name: test-parent-new
 +   namespace: default
 + spec:
++   crossplane:
++     compositionUpdatePolicy: Automatic
 +   parentField: new-value
 
 ---

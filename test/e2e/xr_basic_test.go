@@ -30,9 +30,8 @@ import (
 	"sigs.k8s.io/e2e-framework/pkg/envconf"
 	"sigs.k8s.io/e2e-framework/pkg/features"
 
-	xpv1 "github.com/crossplane/crossplane-runtime/v2/apis/common/v1"
-
-	apiextensionsv1 "github.com/crossplane/crossplane/v2/apis/apiextensions/v1"
+	apiextensionsv1 "github.com/crossplane/crossplane/apis/v2/apiextensions/v1"
+	xpv2 "github.com/crossplane/crossplane/apis/v2/core/v2"
 	"github.com/crossplane/crossplane/v2/test/e2e"
 	"github.com/crossplane/crossplane/v2/test/e2e/config"
 	"github.com/crossplane/crossplane/v2/test/e2e/funcs"
@@ -99,7 +98,7 @@ func TestDiffExistingResourceV2Cluster(t *testing.T) {
 			WithSetup("CreateExistingXR", funcs.AllOf(
 				funcs.ApplyResources(e2e.FieldManager, manifests, "existing-xr.yaml"),
 				funcs.ResourcesCreatedWithin(30*time.Second, manifests, "existing-xr.yaml"),
-				funcs.ResourcesHaveConditionWithin(2*time.Minute, manifests, "existing-xr.yaml", xpv1.Available()),
+				funcs.ResourcesHaveConditionWithin(2*time.Minute, manifests, "existing-xr.yaml", xpv2.Available()),
 			)).
 			Assess("CanDiffExistingResource", func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
 				t.Helper()
@@ -198,7 +197,7 @@ func TestDiffExistingResourceV2Namespaced(t *testing.T) {
 			WithSetup("CreateExistingXR", funcs.AllOf(
 				funcs.ApplyResources(e2e.FieldManager, manifests, "existing-xr.yaml"),
 				funcs.ResourcesCreatedWithin(30*time.Second, manifests, "existing-xr.yaml"),
-				funcs.ResourcesHaveConditionWithin(2*time.Minute, manifests, "existing-xr.yaml", xpv1.Available()),
+				funcs.ResourcesHaveConditionWithin(2*time.Minute, manifests, "existing-xr.yaml", xpv2.Available()),
 			)).
 			Assess("CanDiffExistingResource", func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
 				t.Helper()
@@ -305,7 +304,7 @@ func TestDiffExistingResourceV1(t *testing.T) {
 			WithSetup("CreateXR", funcs.AllOf(
 				funcs.ApplyResources(e2e.FieldManager, manifests, "existing-xr.yaml"),
 				funcs.ResourcesCreatedWithin(30*time.Second, manifests, "existing-xr.yaml"),
-				funcs.ResourcesHaveConditionWithin(2*time.Minute, manifests, "existing-xr.yaml", xpv1.Available()),
+				funcs.ResourcesHaveConditionWithin(2*time.Minute, manifests, "existing-xr.yaml", xpv2.Available()),
 			)).
 			Assess("CanDiffExistingResource", func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
 				t.Helper()
@@ -425,7 +424,7 @@ func TestDiffExistingResourceV2WithV1Paths(t *testing.T) {
 			WithSetup("CreateExistingXR", funcs.AllOf(
 				funcs.ApplyResources(e2e.FieldManager, manifests, "existing-xr.yaml"),
 				funcs.ResourcesCreatedWithin(30*time.Second, manifests, "existing-xr.yaml"),
-				funcs.ResourcesHaveConditionWithin(2*time.Minute, manifests, "existing-xr.yaml", xpv1.Available()),
+				funcs.ResourcesHaveConditionWithin(2*time.Minute, manifests, "existing-xr.yaml", xpv2.Available()),
 			)).
 			Assess("CanDiffExistingResource", func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
 				t.Helper()

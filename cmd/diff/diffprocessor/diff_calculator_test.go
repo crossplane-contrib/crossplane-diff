@@ -10,6 +10,7 @@ import (
 	"github.com/crossplane-contrib/crossplane-diff/cmd/diff/renderer"
 	dt "github.com/crossplane-contrib/crossplane-diff/cmd/diff/renderer/types"
 	tu "github.com/crossplane-contrib/crossplane-diff/cmd/diff/testutils"
+	"github.com/crossplane/cli/v2/cmd/crossplane/render"
 	gcmp "github.com/google/go-cmp/cmp"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -19,8 +20,6 @@ import (
 	"github.com/crossplane/crossplane-runtime/v2/pkg/errors"
 	cpd "github.com/crossplane/crossplane-runtime/v2/pkg/resource/unstructured/composed"
 	cmp "github.com/crossplane/crossplane-runtime/v2/pkg/resource/unstructured/composite"
-
-	"github.com/crossplane/crossplane/v2/cmd/crank/render"
 )
 
 // Ensure MockDiffCalculator implements the DiffCalculator interface.
@@ -535,7 +534,7 @@ func TestDefaultDiffCalculator_CalculateDiffs(t *testing.T) {
 	tests := map[string]struct {
 		setupMocks    func(t *testing.T) (k8.ApplyClient, xp.ResourceTreeClient, ResourceManager)
 		inputXR       *cmp.Unstructured
-		renderedOut   render.Outputs
+		renderedOut   render.CompositionOutputs
 		expectedDiffs map[string]dt.DiffType // Map of expected keys and their diff types
 		wantErr       bool
 	}{
@@ -565,7 +564,7 @@ func TestDefaultDiffCalculator_CalculateDiffs(t *testing.T) {
 				return applyClient, resourceTreeClient, resourceManager
 			},
 			inputXR: modifiedXr,
-			renderedOut: render.Outputs{
+			renderedOut: render.CompositionOutputs{
 				CompositeResource: renderedXR,
 				ComposedResources: []cpd.Unstructured{*composedResource1},
 			},
@@ -601,7 +600,7 @@ func TestDefaultDiffCalculator_CalculateDiffs(t *testing.T) {
 				return applyClient, resourceTreeClient, resourceManager
 			},
 			inputXR: existingXrUComp,
-			renderedOut: render.Outputs{
+			renderedOut: render.CompositionOutputs{
 				CompositeResource: func() *cmp.Unstructured {
 					// Create XR with same values (no changes)
 					sameXR := &cmp.Unstructured{}
@@ -642,7 +641,7 @@ func TestDefaultDiffCalculator_CalculateDiffs(t *testing.T) {
 				return applyClient, resourceTreeClient, resourceManager
 			},
 			inputXR: existingXrUComp,
-			renderedOut: render.Outputs{
+			renderedOut: render.CompositionOutputs{
 				CompositeResource: renderedXR,
 				ComposedResources: []cpd.Unstructured{*composedResource1},
 			},
@@ -685,7 +684,7 @@ func TestDefaultDiffCalculator_CalculateDiffs(t *testing.T) {
 				return applyClient, resourceTreeClient, resourceManager
 			},
 			inputXR: modifiedXr,
-			renderedOut: render.Outputs{
+			renderedOut: render.CompositionOutputs{
 				CompositeResource: renderedXR,
 				ComposedResources: []cpd.Unstructured{*composedResource1},
 			},
@@ -742,7 +741,7 @@ func TestDefaultDiffCalculator_CalculateDiffs(t *testing.T) {
 				return applyClient, resourceTreeClient, resourceManager
 			},
 			inputXR: modifiedXr,
-			renderedOut: render.Outputs{
+			renderedOut: render.CompositionOutputs{
 				CompositeResource: renderedXR,
 				// Include a modified version of composedResource1 with new value
 				ComposedResources: []cpd.Unstructured{*tu.NewResource("example.org/v1", "Composed", "cpd-1").
@@ -1438,7 +1437,7 @@ func TestCalculateNonRemovalDiffs_NilCompositeResource(t *testing.T) {
 		t.Context(),
 		xr,
 		nil,
-		render.Outputs{CompositeResource: nil},
+		render.CompositionOutputs{CompositeResource: nil},
 	)
 	if err == nil {
 		t.Fatal("expected error when CompositeResource is nil, got nil")

@@ -395,12 +395,17 @@ func GenerateDiffWithOptions(_ context.Context, current, desired *un.Unstructure
 		if current != nil && current.GetName() != "" {
 			name = current.GetName()
 		} else {
-			// If desired has a name, use it
-			if desired.GetName() != "" {
+			// If desired's metadata.name was produced by either our XR
+			// synthesis path or the binary's nameGenerator, substitute a
+			// "(generated)" display so the diff doesn't show a value the
+			// user can't predict. Bare generateName (no name yet) gets the
+			// same treatment.
+			switch {
+			case t.LooksLikeGeneratedName(desired.GetName(), desired.GetGenerateName()):
+				name = t.GeneratedDisplayName(desired.GetName(), desired.GetGenerateName())
+			case desired.GetName() != "":
 				name = desired.GetName()
-			} else if desired.GetGenerateName() != "" {
-				// Special handling for resources with generateName
-				// Format as "prefix-(generated)" to match expected naming pattern
+			case desired.GetGenerateName() != "":
 				name = desired.GetGenerateName() + "(generated)"
 			}
 		}
@@ -415,6 +420,32 @@ func GenerateDiffWithOptions(_ context.Context, current, desired *un.Unstructure
 		Current:      current,
 		Desired:      desired,
 	}, nil
+}
+
+// stripSyntheticName drops metadata.name from the diff body when the
+// rendered name was produced by either our XR synthesis path or the binary's
+// nameGenerator (see types.LooksLikeGeneratedName). Returns a list of
+// modification messages for diagnostic logging. The composite label is left
+// intact — downstream resources should still refer to their parent by the
+// synthesized display name that appears at the diff header.
+//
+// Note we don't require generateName to be present: the embedded-suffix
+// case (XR-synthesis suffix interpolated into a downstream resource's
+// metadata.name via a composition template) typically has no generateName
+// field on the rendered resource, and LooksLikeGeneratedName handles that
+// path via Contains-on-suffix.
+func stripSyntheticName(metadata map[string]any, name string, nameFound bool, generateName string) []string {
+	if !nameFound {
+		return nil
+	}
+
+	if !t.LooksLikeGeneratedName(name, generateName) {
+		return nil
+	}
+
+	delete(metadata, "name")
+
+	return []string{fmt.Sprintf("removed display name %q", name)}
 }
 
 func equalDiff(current *un.Unstructured, desired *un.Unstructured) *t.ResourceDiff {
@@ -573,28 +604,9 @@ func cleanupForDiff(obj *un.Unstructured, logger logging.Logger, ignorePaths []s
 		// If the name looks like a generated display name (ends with "(generated)")
 		// and generateName is also present, remove the name to avoid confusion
 		name, nameFound, _ := un.NestedString(metadata, "name")
-		generateName, genNameFound, _ := un.NestedString(metadata, "generateName")
+		generateName, _, _ := un.NestedString(metadata, "generateName")
 
-		if nameFound && genNameFound && strings.HasSuffix(name, "(generated)") {
-			// This is a display name we added for diffing purposes - remove it
-			// since we only added it for diffing but don't want it to show in the actual diff
-			delete(metadata, "name")
-
-			modifications = append(modifications, fmt.Sprintf("removed display name %q", name))
-
-			// Also normalize generateName by removing any "(generated)" suffix
-			if before, ok := strings.CutSuffix(generateName, "(generated)-"); ok {
-				// For downstream resources that have generateName mangled with the parent's display name
-				// Strip the "(generated)" part to match the original input
-				originalGenName := before
-				metadata["generateName"] = originalGenName
-				modifications = append(modifications, fmt.Sprintf("normalized generateName from %q to %q", generateName, originalGenName))
-			}
-
-			// Don't change the composite label - it should keep the (generated) suffix
-			// This is because downstream resources should refer to their parent
-			// with the same display name that appears in the diff
-		}
+		modifications = append(modifications, stripSyntheticName(metadata, name, nameFound, generateName)...)
 
 		// Remove fields that change automatically or are server-side
 		fieldsToRemove := []string{

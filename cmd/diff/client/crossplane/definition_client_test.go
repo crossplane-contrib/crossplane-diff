@@ -11,6 +11,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 
 	"github.com/crossplane/crossplane-runtime/v2/pkg/errors"
+	ucomposite "github.com/crossplane/crossplane-runtime/v2/pkg/resource/unstructured/composite"
 )
 
 var _ DefinitionClient = (*tu.MockDefinitionClient)(nil)
@@ -746,6 +747,212 @@ func TestDefaultDefinitionClient_IsClaimResource(t *testing.T) {
 			// Check the result
 			if result != tt.expected {
 				t.Errorf("\n%s\nIsClaimResource() = %v, want %v", tt.reason, result, tt.expected)
+			}
+		})
+	}
+}
+
+func TestDefaultDefinitionClient_GetCompositeSchema(t *testing.T) {
+	ctx := t.Context()
+
+	// v1 XRD: defines an XR (no claimNames here for simplicity).
+	xrdV1 := tu.NewResource("apiextensions.crossplane.io/v1", CompositeResourceDefinitionKind, "xrd-v1").
+		WithSpecField("group", "example.org").
+		WithSpecField("names", map[string]any{
+			"kind":     "XLegacyResource",
+			"plural":   "xlegacyresources",
+			"singular": "xlegacyresource",
+		}).
+		WithSpecField("versions", []any{
+			map[string]any{"name": "v1alpha1"},
+		}).
+		Build()
+
+	// v2 XRD: declares a non-legacy scope so the scope-based detector
+	// returns SchemaModern. (A v2 XRD without scope, or with
+	// scope=LegacyCluster, would correctly resolve as SchemaLegacy — see
+	// the V2XRD_LegacyScope_LegacySchema case below.)
+	xrdV2 := tu.NewResource("apiextensions.crossplane.io/v2", CompositeResourceDefinitionKind, "xrd-v2").
+		WithSpecField("group", "example.org").
+		WithSpecField("names", map[string]any{
+			"kind":     "XModernResource",
+			"plural":   "xmodernresources",
+			"singular": "xmodernresource",
+		}).
+		WithSpecField("scope", "Cluster").
+		WithSpecField("versions", []any{
+			map[string]any{"name": "v1alpha1"},
+		}).
+		Build()
+
+	// v2 XRD whose scope is "LegacyCluster". This shape can occur in real
+	// clusters when a user-posted v1 XRD round-trips through the apiserver's
+	// conversion to v2 storage form: the converted v2 object preserves
+	// scope="LegacyCluster" verbatim. Our scope-based detector should treat
+	// this as Legacy regardless of the apiVersion stamp.
+	xrdV2LegacyScope := tu.NewResource("apiextensions.crossplane.io/v2", CompositeResourceDefinitionKind, "xrd-v2-legacy-scope").
+		WithSpecField("group", "example.org").
+		WithSpecField("names", map[string]any{
+			"kind":     "XLegacyScopedResource",
+			"plural":   "xlegacyscopedresources",
+			"singular": "xlegacyscopedresource",
+		}).
+		WithSpecField("scope", "LegacyCluster").
+		WithSpecField("versions", []any{
+			map[string]any{"name": "v1alpha1"},
+		}).
+		Build()
+
+	// v1 XRD that also publishes a claim. Used to verify the helper resolves
+	// via the claim path when given a claim GVK (the XR/claim distinction is
+	// a Crossplane CompositeResourceDefinition feature, not a Go type — the
+	// claim kind here is just the user-supplied "ClaimedResource" below).
+	xrdV1WithClaim := tu.NewResource("apiextensions.crossplane.io/v1", CompositeResourceDefinitionKind, "xrd-v1-with-claim").
+		WithSpecField("group", "example.org").
+		WithSpecField("names", map[string]any{
+			"kind":     "XClaimedResource",
+			"plural":   "xclaimedresources",
+			"singular": "xclaimedresource",
+		}).
+		WithSpecField("claimNames", map[string]any{
+			"kind":     "ClaimedResource",
+			"plural":   "claimedresources",
+			"singular": "claimedresource",
+		}).
+		WithSpecField("versions", []any{
+			map[string]any{"name": "v1alpha1"},
+		}).
+		Build()
+
+	type args struct {
+		gvk schema.GroupVersionKind
+	}
+
+	tests := map[string]struct {
+		reason            string
+		mockResource      tu.MockResourceClient
+		cachedXRDs        []*un.Unstructured
+		discoveredXRDGVKs []schema.GroupVersionKind
+		args              args
+		want              ucomposite.Schema
+		wantErr           bool
+		errSubstring      string
+	}{
+		"V1XRD_LegacySchema": {
+			reason: "Should return SchemaLegacy for an XR defined by a v1 XRD",
+			mockResource: *tu.NewMockResourceClient().
+				WithSuccessfulInitialize().
+				Build(),
+			cachedXRDs:        []*un.Unstructured{xrdV1},
+			discoveredXRDGVKs: []schema.GroupVersionKind{XRDv1GVK},
+			args: args{
+				gvk: schema.GroupVersionKind{
+					Group:   "example.org",
+					Version: "v1alpha1",
+					Kind:    "XLegacyResource",
+				},
+			},
+			want: ucomposite.SchemaLegacy,
+		},
+		"V2XRD_ModernSchema": {
+			reason: "Should return SchemaModern for a v2 XRD with non-legacy scope",
+			mockResource: *tu.NewMockResourceClient().
+				WithSuccessfulInitialize().
+				Build(),
+			cachedXRDs:        []*un.Unstructured{xrdV2},
+			discoveredXRDGVKs: []schema.GroupVersionKind{XRDv2GVK},
+			args: args{
+				gvk: schema.GroupVersionKind{
+					Group:   "example.org",
+					Version: "v1alpha1",
+					Kind:    "XModernResource",
+				},
+			},
+			want: ucomposite.SchemaModern,
+		},
+		"V2XRD_LegacyScope_LegacySchema": {
+			reason: "Should return SchemaLegacy when a v2-form XRD's scope is LegacyCluster (e.g. v1 XRD round-tripped through conversion)",
+			mockResource: *tu.NewMockResourceClient().
+				WithSuccessfulInitialize().
+				Build(),
+			cachedXRDs:        []*un.Unstructured{xrdV2LegacyScope},
+			discoveredXRDGVKs: []schema.GroupVersionKind{XRDv2GVK},
+			args: args{
+				gvk: schema.GroupVersionKind{
+					Group:   "example.org",
+					Version: "v1alpha1",
+					Kind:    "XLegacyScopedResource",
+				},
+			},
+			want: ucomposite.SchemaLegacy,
+		},
+		"ClaimGVK_ResolvesViaClaimPath": {
+			reason: "Should return the schema of the XRD that publishes a claim, given the claim GVK",
+			mockResource: *tu.NewMockResourceClient().
+				WithSuccessfulInitialize().
+				Build(),
+			cachedXRDs:        []*un.Unstructured{xrdV1WithClaim},
+			discoveredXRDGVKs: []schema.GroupVersionKind{XRDv1GVK},
+			args: args{
+				gvk: schema.GroupVersionKind{
+					Group:   "example.org",
+					Version: "v1alpha1",
+					Kind:    "ClaimedResource", // claim kind, not XR kind
+				},
+			},
+			want: ucomposite.SchemaLegacy,
+		},
+		"NoXRDFound_Error": {
+			reason: "Should return an error when no XRD defines the GVK",
+			mockResource: *tu.NewMockResourceClient().
+				WithSuccessfulInitialize().
+				Build(),
+			cachedXRDs:        []*un.Unstructured{xrdV2}, // only v2 XRD known
+			discoveredXRDGVKs: []schema.GroupVersionKind{XRDv2GVK},
+			args: args{
+				gvk: schema.GroupVersionKind{
+					Group:   "example.org",
+					Version: "v1alpha1",
+					Kind:    "Unknown",
+				},
+			},
+			wantErr:      true,
+			errSubstring: "no XRD",
+		},
+	}
+
+	for name, tt := range tests {
+		t.Run(name, func(t *testing.T) {
+			c := &DefaultDefinitionClient{
+				resourceClient: &tt.mockResource,
+				logger:         tu.TestLogger(t, false),
+				xrds:           tt.cachedXRDs,
+				xrdsLoaded:     tt.cachedXRDs != nil,
+				gvks:           tt.discoveredXRDGVKs,
+			}
+
+			got, err := c.GetCompositeSchema(ctx, tt.args.gvk)
+
+			if tt.wantErr {
+				if err == nil {
+					t.Errorf("\n%s\nGetCompositeSchema(): expected error but got none", tt.reason)
+					return
+				}
+
+				if tt.errSubstring != "" && !strings.Contains(err.Error(), tt.errSubstring) {
+					t.Errorf("\n%s\nGetCompositeSchema(): expected error containing %q, got %q", tt.reason, tt.errSubstring, err.Error())
+				}
+
+				return
+			}
+
+			if err != nil {
+				t.Errorf("\n%s\nGetCompositeSchema(): unexpected error: %v", tt.reason, err)
+				return
+			}
+
+			if diff := cmp.Diff(tt.want, got); diff != "" {
+				t.Errorf("\n%s\nGetCompositeSchema(): -want, +got:\n%s", tt.reason, diff)
 			}
 		})
 	}

@@ -27,13 +27,13 @@ import (
 	dt "github.com/crossplane-contrib/crossplane-diff/cmd/diff/renderer/types"
 	tu "github.com/crossplane-contrib/crossplane-diff/cmd/diff/testutils"
 	"github.com/crossplane-contrib/crossplane-diff/cmd/diff/types"
+	"github.com/crossplane/cli/v2/cmd/crossplane/render"
 	gcmp "github.com/google/go-cmp/cmp"
 	un "k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 
 	"github.com/crossplane/crossplane-runtime/v2/pkg/logging"
 
-	apiextensionsv1 "github.com/crossplane/crossplane/v2/apis/apiextensions/v1"
-	"github.com/crossplane/crossplane/v2/cmd/crank/render"
+	apiextensionsv1 "github.com/crossplane/crossplane/apis/v2/apiextensions/v1"
 )
 
 func TestDefaultCompDiffProcessor_findResourcesUsingComposition(t *testing.T) {
@@ -271,8 +271,8 @@ func TestDefaultCompDiffProcessor_DiffComposition(t *testing.T) {
 				Logger:    logger,
 				Stdout:    &stdout,         // Set stdout in config so renderers can access it
 				Stderr:    &bytes.Buffer{}, // Discard stderr for tests
-				RenderFunc: func(_ context.Context, _ logging.Logger, in render.Inputs) (render.Outputs, error) {
-					return render.Outputs{
+				RenderFunc: func(_ context.Context, _ logging.Logger, in RenderInputs) (render.CompositionOutputs, error) {
+					return render.CompositionOutputs{
 						CompositeResource: in.CompositeResource,
 					}, nil
 				},

@@ -22,9 +22,9 @@ import (
 
 	"github.com/crossplane/crossplane-runtime/v2/pkg/logging"
 
-	xpextv1 "github.com/crossplane/crossplane/v2/apis/apiextensions/v1"
-	xpextv2 "github.com/crossplane/crossplane/v2/apis/apiextensions/v2"
-	pkgv1 "github.com/crossplane/crossplane/v2/apis/pkg/v1"
+	xpextv1 "github.com/crossplane/crossplane/apis/v2/apiextensions/v1"
+	xpextv2 "github.com/crossplane/crossplane/apis/v2/apiextensions/v2"
+	pkgv1 "github.com/crossplane/crossplane/apis/v2/pkg/v1"
 )
 
 const (
@@ -111,12 +111,22 @@ func runIntegrationTest(t *testing.T, testType DiffTestType, tt IntegrationTestC
 	if tt.expectedStructuredOutput != nil && tt.expectedStructuredCompOutput != nil {
 		t.Fatalf("test case sets both expectedStructuredOutput and expectedStructuredCompOutput; set only one")
 	}
+
 	if tt.expectedStructuredOutput != nil && testType != XRDiffTest {
 		t.Fatalf("expectedStructuredOutput is only valid for XRDiffTest (got %q)", testType)
 	}
+
 	if tt.expectedStructuredCompOutput != nil && testType != CompositionDiffTest {
 		t.Fatalf("expectedStructuredCompOutput is only valid for CompositionDiffTest (got %q)", testType)
 	}
+
+	// Resolve a local crossplane binary if one is present. When non-empty,
+	// it's threaded into the kong arg slice below as
+	// --crossplane-render-binary=<path> so each parallel subtest has its own
+	// copy with no shared process state. When empty, the diff command falls
+	// through to the docker render engine — slower but works wherever Docker
+	// does (including the Earthfile's go-test target's WITH DOCKER block).
+	crossplaneBin := localCrossplaneBinary(t)
 
 	// Create a fresh scheme for each test to avoid concurrent map access.
 	// Each parallel test needs its own scheme because envtest modifies it during CRD installation.
@@ -213,6 +223,13 @@ func runIntegrationTest(t *testing.T, testType DiffTestType, tt IntegrationTestC
 	// Create command line args that match your pre-populated struct
 	args := []string{
 		fmt.Sprintf("--timeout=%s", testTimeout.String()),
+	}
+
+	// Only thread --crossplane-render-binary when a local binary exists; an
+	// empty value would still parse but waste cycles, and a missing flag
+	// lets the diff command pick the docker render engine cleanly.
+	if crossplaneBin != "" {
+		args = append(args, fmt.Sprintf("--crossplane-render-binary=%s", crossplaneBin))
 	}
 
 	// Add namespace if specified (for composition tests only)
@@ -1727,7 +1744,7 @@ Summary: 2 modified, 2 removed`,
 			// This test verifies that the eventual state simulation correctly resolves requirements
 			// (like environment configs) during its iterative rendering, not just in the final render.
 			// The composition uses:
-			// 1. function-environment-configs to fetch env config (requires ProvideRequirements)
+			// 1. function-environment-configs to fetch env config (requires requirements iteration)
 			// 2. function-go-templating to generate resources using env config data
 			// 3. function-sequencer to stage resources
 			// 4. function-auto-ready
@@ -2997,7 +3014,17 @@ Summary: 1 modified`,
 			noColor:          true,
 		},
 		"CrossNamespaceResourceCollision": {
-			reason:  "Validates that resources with the same name in different namespaces are correctly distinguished",
+			reason: "Validates that resources with the same name in different namespaces are correctly distinguished",
+			skip:   true,
+			skipReason: "Blocked on https://github.com/crossplane-contrib/function-extra-resources/issues/106. " +
+				"function-extra-resources (v0.2.0/v0.3.0) emits ResourceSelector{Namespace=\"\"} for " +
+				"by-name references that omit `ref.namespace` — it only forwards user-yaml verbatim, " +
+				"never inferring from the XR's namespace. Crossplane v2.3+'s render binary then does " +
+				"InMemoryClient.Get(name, namespace=\"\"), a strict (GVK, ns, name) match that doesn't " +
+				"find our resolved ConfigMap (stored at namespace=ns-{a,b}). By-label selectors aren't " +
+				"affected — List(InNamespace(\"\")) lists across all namespaces — which is why our " +
+				"other extra-resources tests still pass. Re-enable once a function release defaults " +
+				"selector.Namespace to the XR's namespace.",
 			timeout: longTimeout, // Test involves multiple namespaces and can be slow with Docker contention
 			// This test catches a bug where the cache key didn't include namespace, causing
 			// ConfigMaps with the same name in different namespaces to collide.

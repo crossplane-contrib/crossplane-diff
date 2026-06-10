@@ -9,14 +9,13 @@ import (
 	k8 "github.com/crossplane-contrib/crossplane-diff/cmd/diff/client/kubernetes"
 	"github.com/crossplane-contrib/crossplane-diff/cmd/diff/renderer"
 	dt "github.com/crossplane-contrib/crossplane-diff/cmd/diff/renderer/types"
+	"github.com/crossplane/cli/v2/cmd/crossplane/common/resource"
+	"github.com/crossplane/cli/v2/cmd/crossplane/render"
 	un "k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 
 	"github.com/crossplane/crossplane-runtime/v2/pkg/errors"
 	"github.com/crossplane/crossplane-runtime/v2/pkg/logging"
 	cmp "github.com/crossplane/crossplane-runtime/v2/pkg/resource/unstructured/composite"
-
-	"github.com/crossplane/crossplane/v2/cmd/crank/common/resource"
-	"github.com/crossplane/crossplane/v2/cmd/crank/render"
 )
 
 // DiffCalculator calculates differences between resources.
@@ -26,13 +25,13 @@ type DiffCalculator interface {
 
 	// CalculateDiffs computes all diffs including removals for the rendered resources.
 	// This is the primary method that most code should use.
-	CalculateDiffs(ctx context.Context, xr *cmp.Unstructured, desired render.Outputs) (map[string]*dt.ResourceDiff, error)
+	CalculateDiffs(ctx context.Context, xr *cmp.Unstructured, desired render.CompositionOutputs) (map[string]*dt.ResourceDiff, error)
 
 	// CalculateNonRemovalDiffs computes diffs for modified/added resources and returns
 	// the set of rendered resource keys. This is used by nested XR processing.
 	// parentComposite should be nil for root XRs, and the parent XR for nested XRs.
 	// Returns: (diffs map, rendered resource keys, error)
-	CalculateNonRemovalDiffs(ctx context.Context, xr *cmp.Unstructured, parentComposite *un.Unstructured, desired render.Outputs) (map[string]*dt.ResourceDiff, map[string]bool, error)
+	CalculateNonRemovalDiffs(ctx context.Context, xr *cmp.Unstructured, parentComposite *un.Unstructured, desired render.CompositionOutputs) (map[string]*dt.ResourceDiff, map[string]bool, error)
 
 	// CalculateRemovedResourceDiffs identifies resources that exist in the cluster but are not
 	// in the rendered set. This is called after nested XR processing is complete.
@@ -126,14 +125,29 @@ func (c *DefaultDiffCalculator) CalculateDiff(ctx context.Context, composite *un
 		// are owned by this manager but not present in the apply request).
 		fieldOwner := k8.GetComposedFieldOwner(current)
 
+		// Deep-copy before stripping ownerReferences so the rendered desired (used
+		// for downstream diff comparison) isn't mutated.
+		applyDesired := desired.DeepCopy()
+
+		// Strip ownerReferences too. SSA merges list items by UID and
+		// tracks per-field ownership: if we apply our rendered ownerRef
+		// (with our own field owner) and the cluster resource already has
+		// an ownerRef to the same parent managed by a different field
+		// owner, both survive the merge and the apiserver rejects the
+		// multi-controller state. Leaving ownerRefs out of the apply
+		// preserves whatever the cluster already has; for new resources
+		// (current == nil) we skip DryRunApply entirely so the rendered
+		// ownerRefs still surface in the diff output.
+		un.RemoveNestedField(applyDesired.Object, "metadata", "ownerReferences")
+
 		// Perform a dry-run apply to get the result after we'd apply
 		c.logger.Debug("Performing dry-run apply",
 			"resource", resourceID,
 			"name", desired.GetName(),
 			"fieldOwner", fieldOwner,
-			"desired", desired)
+			"desired", applyDesired)
 
-		wouldBeResult, err = c.applyClient.DryRunApply(ctx, desired, fieldOwner)
+		wouldBeResult, err = c.applyClient.DryRunApply(ctx, applyDesired, fieldOwner)
 		if err != nil {
 			c.logger.Debug("Dry-run apply failed", "resource", resourceID, "error", err)
 			return nil, errors.Wrap(err, "cannot dry-run apply desired object")
@@ -199,7 +213,7 @@ func (c *DefaultDiffCalculator) CalculateDiff(ctx context.Context, composite *un
 //	           No false removal detection!
 //
 // Returns: (diffs map, rendered resource keys, error).
-func (c *DefaultDiffCalculator) CalculateNonRemovalDiffs(ctx context.Context, xr *cmp.Unstructured, parentComposite *un.Unstructured, desired render.Outputs) (map[string]*dt.ResourceDiff, map[string]bool, error) {
+func (c *DefaultDiffCalculator) CalculateNonRemovalDiffs(ctx context.Context, xr *cmp.Unstructured, parentComposite *un.Unstructured, desired render.CompositionOutputs) (map[string]*dt.ResourceDiff, map[string]bool, error) {
 	xrName := xr.GetName()
 	c.logger.Debug("Calculating diffs",
 		"xr", xrName,
@@ -324,7 +338,7 @@ func (c *DefaultDiffCalculator) CalculateNonRemovalDiffs(ctx context.Context, xr
 
 // CalculateDiffs computes all diffs including removals for the rendered resources.
 // This is the primary method that most code should use.
-func (c *DefaultDiffCalculator) CalculateDiffs(ctx context.Context, xr *cmp.Unstructured, desired render.Outputs) (map[string]*dt.ResourceDiff, error) {
+func (c *DefaultDiffCalculator) CalculateDiffs(ctx context.Context, xr *cmp.Unstructured, desired render.CompositionOutputs) (map[string]*dt.ResourceDiff, error) {
 	// First calculate diffs for modified/added resources
 	// parentComposite is nil because CalculateDiffs is only called for root XRs
 	diffs, renderedResources, err := c.CalculateNonRemovalDiffs(ctx, xr, nil, desired)

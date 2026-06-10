@@ -30,9 +30,8 @@ import (
 	"sigs.k8s.io/e2e-framework/pkg/envconf"
 	"sigs.k8s.io/e2e-framework/pkg/features"
 
-	xpv1 "github.com/crossplane/crossplane-runtime/v2/apis/common/v1"
-
-	apiextensionsv1 "github.com/crossplane/crossplane/v2/apis/apiextensions/v1"
+	apiextensionsv1 "github.com/crossplane/crossplane/apis/v2/apiextensions/v1"
+	xpv2 "github.com/crossplane/crossplane/apis/v2/core/v2"
 	"github.com/crossplane/crossplane/v2/test/e2e"
 	"github.com/crossplane/crossplane/v2/test/e2e/config"
 	"github.com/crossplane/crossplane/v2/test/e2e/funcs"
@@ -107,7 +106,7 @@ func TestDiffExistingClaim(t *testing.T) {
 				funcs.ApplyResources(e2e.FieldManager, manifests, "existing-claim.yaml"),
 				funcs.ResourcesCreatedWithin(30*time.Second, manifests, "existing-claim.yaml"),
 				// Claims get their status from the backing XR, so wait for the XR to be available
-				funcs.ResourcesHaveConditionWithin(2*time.Minute, manifests, "existing-claim.yaml", xpv1.Available()),
+				funcs.ResourcesHaveConditionWithin(2*time.Minute, manifests, "existing-claim.yaml", xpv2.Available()),
 			)).
 			Assess("CanDiffExistingClaim", func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
 				t.Helper()
@@ -239,7 +238,7 @@ func TestDiffExistingClaimWithNestedXRs(t *testing.T) {
 			WithSetup("CreateClaim", funcs.AllOf(
 				funcs.ApplyResources(e2e.FieldManager, manifests, "existing-claim.yaml"),
 				funcs.ResourcesCreatedWithin(1*time.Minute, manifests, "existing-claim.yaml"),
-				funcs.ResourcesHaveConditionWithin(2*time.Minute, manifests, "existing-claim.yaml", xpv1.Available()),
+				funcs.ResourcesHaveConditionWithin(2*time.Minute, manifests, "existing-claim.yaml", xpv2.Available()),
 			)).
 			Assess("CanDiffExistingClaimWithNestedXRs", func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
 				t.Helper()
@@ -325,7 +324,7 @@ func TestDiffExistingClaimSpecFieldRemoval(t *testing.T) {
 				funcs.ApplyResources(e2e.FieldManager, manifests, "existing-claim.yaml"),
 				funcs.ResourcesCreatedWithin(30*time.Second, manifests, "existing-claim.yaml"),
 				// Claims get their status from the backing XR, so wait for the XR to be available
-				funcs.ResourcesHaveConditionWithin(2*time.Minute, manifests, "existing-claim.yaml", xpv1.Available()),
+				funcs.ResourcesHaveConditionWithin(2*time.Minute, manifests, "existing-claim.yaml", xpv2.Available()),
 			)).
 			WithSetup("ApplyStrictComposition", funcs.AllOf(
 				// Apply the strict composition that rejects oldField

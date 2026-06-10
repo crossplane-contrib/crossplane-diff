@@ -22,11 +22,10 @@ import (
 
 	"github.com/alecthomas/kong"
 	dp "github.com/crossplane-contrib/crossplane-diff/cmd/diff/diffprocessor"
+	ld "github.com/crossplane/cli/v2/cmd/crossplane/common/load"
 
 	"github.com/crossplane/crossplane-runtime/v2/pkg/errors"
 	"github.com/crossplane/crossplane-runtime/v2/pkg/logging"
-
-	ld "github.com/crossplane/crossplane/v2/cmd/crank/common/load"
 )
 
 // CompDiffProcessor is imported from the diffprocessor package
@@ -100,7 +99,6 @@ func makeDefaultCompProc(c *CompCmd, kongCtx *kong.Context, appCtx *AppContext, 
 	opts := defaultProcessorOptions(c.CommonCmdFields, namespace)
 	opts = append(opts,
 		dp.WithLogger(log),
-		dp.WithRenderMutex(&globalRenderMutex),
 		dp.WithIncludeManual(c.IncludeManual),
 		dp.WithStdout(kongCtx.Stdout),
 		dp.WithStderr(kongCtx.Stderr),
