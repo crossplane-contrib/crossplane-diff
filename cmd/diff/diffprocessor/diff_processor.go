@@ -1025,20 +1025,20 @@ func (p *DefaultDiffProcessor) SanitizeXR(res *un.Unstructured, resourceID strin
 
 	// Handle XRs with generateName but no name
 	if xr.GetName() == "" && xr.GetGenerateName() != "" {
-		// Synthesize an RFC 1123-valid name so the render binary's apiserver-style
-		// validation accepts the XR. The trailing GenerateNamePlaceholder is purely
-		// a rendering-pipeline concern and is NOT what the user sees:
-		// diff_formatter.go detects the sentinel in rendered/composed-resource names
-		// and substitutes "<generateName>(generated)" for display. Both call sites
-		// share the same constant from cmd/diff/renderer/types so they stay in sync.
-		displayName := xr.GetGenerateName() + dt.GenerateNamePlaceholder
-		p.config.Logger.Debug("Setting display name for XR with generateName",
+		// Synthesize a metadata.name in the same shape upstream's nameGenerator
+		// produces — "<generateName-with-dash><12 lowercase hex>" — so the
+		// binary's apiserver-style name validation accepts the XR AND the
+		// rendered XR name is shape-compatible with the composed-resource
+		// names the binary itself emits. The diff formatter then runs one
+		// detector (LooksLikeGeneratedName) over both to substitute
+		// "<generateName>(generated)" for display.
+		synthesizedName := dt.SynthesizeGeneratedName(xr.GetGenerateName())
+		p.config.Logger.Debug("Setting synthesized name for XR with generateName",
 			"generateName", xr.GetGenerateName(),
-			"displayName", displayName)
+			"synthesizedName", synthesizedName)
 
-		// Set this display name on the XR for rendering
 		xrCopy := xr.DeepCopy()
-		xrCopy.SetName(displayName)
+		xrCopy.SetName(synthesizedName)
 		xr = xrCopy
 	}
 

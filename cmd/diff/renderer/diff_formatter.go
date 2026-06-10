@@ -395,16 +395,16 @@ func GenerateDiffWithOptions(_ context.Context, current, desired *un.Unstructure
 		if current != nil && current.GetName() != "" {
 			name = current.GetName()
 		} else {
-			// If desired has a synthesized name — either our XR placeholder
-			// (GenerateNamePlaceholder sentinel) or a name crossplane's
-			// reconciler generated from a generateName template — strip the
-			// generated portion and display "<generateName>(generated)" so
-			// the diff doesn't show a value the user can't predict.
+			// If desired's metadata.name was produced by either our XR
+			// synthesis path or the binary's nameGenerator, substitute a
+			// "(generated)" display so the diff doesn't show a value the
+			// user can't predict. Bare generateName (no name yet) gets the
+			// same treatment.
 			switch {
-			case isGeneratedFromGenerateName(desired):
-				name = desired.GetGenerateName() + "(generated)"
+			case t.LooksLikeGeneratedName(desired.GetName(), desired.GetGenerateName()):
+				name = t.GeneratedDisplayName(desired.GetName(), desired.GetGenerateName())
 			case desired.GetName() != "":
-				name = displayNameFromPlaceholder(desired.GetName())
+				name = desired.GetName()
 			case desired.GetGenerateName() != "":
 				name = desired.GetGenerateName() + "(generated)"
 			}
@@ -422,116 +422,24 @@ func GenerateDiffWithOptions(_ context.Context, current, desired *un.Unstructure
 	}, nil
 }
 
-// --- generateName display machinery ---
-//
-// The render binary requires every input XR to have a metadata.name; bare
-// generateName isn't accepted. When the user supplies only generateName, the
-// diff processor synthesizes one by appending GenerateNamePlaceholder (an
-// RFC-1123-valid sentinel — see types.GenerateNamePlaceholder for why it's
-// not just literal "(generated)"). That synthesized name then propagates two
-// places we need to undo at display time:
-//
-//  1. Onto the rendered XR itself (carries the sentinel verbatim).
-//  2. Onto composed resources whose template uses generateName: crossplane's
-//     reconciler stamps a deterministic <generateName><hex-suffix> name on
-//     them, and when the parent generateName carries our sentinel that
-//     suffix appears under the sentinel too.
-//
-// Two surfaces care about both: the diff *header* (resource ID shown above
-// each diff body) wants "<generateName>(generated)" so the reader sees the
-// user's input shape, and the diff *body* wants the synthesized
-// metadata.name removed entirely (along with the sentinel-suffixed
-// generateName normalized back). The helpers below split that work:
-//
-//   - displayNameFromPlaceholder + isGeneratedFromGenerateName render the
-//     header. Two callers because we have to handle both shapes from (2)
-//     above plus the bare-XR shape from (1).
-//   - stripSyntheticName + normalizedGenerateName clean the body.
-//
-// Net: each helper is a few lines, but every line covers a real shape we
-// produce.
-
-// displayNameFromPlaceholder returns the user-facing display name for a
-// resource. If name embeds the GenerateNamePlaceholder sentinel — meaning
-// it's either the XR we synthesized (matches "<gen>SENTINEL") or a composed
-// resource whose name crossplane derived from it (matches
-// "<gen>SENTINEL[-suffix]") — the sentinel and anything after it are
-// replaced with "(generated)" so the diff shows what the user supplied.
-// Otherwise returns name unchanged.
-func displayNameFromPlaceholder(name string) string {
-	before, _, found := strings.Cut(name, t.GenerateNamePlaceholder)
-	if !found {
-		return name
-	}
-
-	return before + "(generated)"
-}
-
-// isGeneratedFromGenerateName reports whether `desired`'s metadata.name was
-// synthesized by crossplane's reconciler from a generateName template — i.e.
-// generateName is non-empty and name starts with generateName followed by a
-// generated suffix. This catches the render binary's behavior of stamping a
-// deterministic name (e.g. "test-claim-b0348ce08462") onto composed
-// resources whose template only had generateName.
-func isGeneratedFromGenerateName(desired *un.Unstructured) bool {
-	gen := desired.GetGenerateName()
-	if gen == "" {
-		return false
-	}
-
-	name := desired.GetName()
-	if name == "" || name == gen {
-		return false
-	}
-
-	return strings.HasPrefix(name, gen)
-}
-
-// stripSyntheticName removes the synthesized name (and normalizes the
-// synthesized generateName) so the diff body matches what the user supplied.
-// Handles two shapes:
-//   - GenerateNamePlaceholder sentinel on a synthesized XR name.
-//   - A name crossplane's reconciler generated from a generateName template
-//     (name starts with generateName + a generated suffix).
-//
-// Returns a list of modification messages for diagnostic logging.
+// stripSyntheticName drops metadata.name from the diff body when the
+// rendered name was produced by either our XR synthesis path or the binary's
+// nameGenerator (see types.LooksLikeGeneratedName). Returns a list of
+// modification messages for diagnostic logging. The composite label is left
+// intact — downstream resources should still refer to their parent by the
+// synthesized display name that appears at the diff header.
 func stripSyntheticName(metadata map[string]any, name, generateName string, nameFound, genNameFound bool) []string {
 	if !nameFound || !genNameFound {
 		return nil
 	}
 
-	hasSentinel := strings.Contains(name, t.GenerateNamePlaceholder)
-
-	hasGeneratedSuffix := name != generateName && strings.HasPrefix(name, generateName)
-	if !hasSentinel && !hasGeneratedSuffix {
+	if !t.LooksLikeGeneratedName(name, generateName) {
 		return nil
 	}
 
-	// The synthesized name only existed to satisfy render's name validation.
-	// Drop it from the diff body so we show the user's input shape.
 	delete(metadata, "name")
 
-	mods := []string{fmt.Sprintf("removed display name %q", name)}
-
-	originalGenName, ok := normalizedGenerateName(generateName)
-	if ok {
-		metadata["generateName"] = originalGenName
-		mods = append(mods, fmt.Sprintf("normalized generateName from %q to %q", generateName, originalGenName))
-	}
-
-	// Don't touch the composite label — downstream resources should still
-	// refer to their parent by the synthesized display name that appears
-	// at the diff header.
-
-	return mods
-}
-
-// normalizedGenerateName returns the user's original generateName by
-// stripping our synthetic sentinel suffix. The second return is false when
-// the input doesn't carry the sentinel.
-func normalizedGenerateName(generateName string) (string, bool) {
-	before, _, ok := strings.Cut(generateName, t.GenerateNamePlaceholder)
-	return before, ok
+	return []string{fmt.Sprintf("removed display name %q", name)}
 }
 
 func equalDiff(current *un.Unstructured, desired *un.Unstructured) *t.ResourceDiff {

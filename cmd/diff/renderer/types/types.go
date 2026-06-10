@@ -2,7 +2,10 @@
 package types
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
+	"strings"
 
 	"github.com/sergi/go-diff/diffmatchpatch"
 	un "k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -23,19 +26,115 @@ type ResourceDiff struct {
 // DiffType represents the type of diff (added, removed, modified).
 type DiffType string
 
-// GenerateNamePlaceholder is the synthetic suffix the diff processor appends
-// to an XR's generateName when synthesizing a metadata.name for the render
-// pipeline. The render binary's apiserver-style validation rejects names
-// containing characters outside the DNS-1123 subdomain set (so "(generated)"
-// can't be used directly), so we use this RFC-1123-valid sentinel instead.
+// generatedSuffixLen mirrors the hash length crossplane's
+// internal/names.ChildName uses when generating a child name. Names produced
+// by `crossplane internal render` for composed resources are
+// "<parent-with-trailing-dash><12 lowercase hex>"; we synthesize XR names
+// in the same shape (see SynthesizeGeneratedName).
+const generatedSuffixLen = 12
+
+// xrSynthesisSeed is the input we hash to derive the 12-hex suffix appended
+// to an XR's generateName when synthesizing a metadata.name. Picking
+// upstream-shape (12 hex via sha256, see SynthesizeGeneratedName) means the
+// resulting XR name matches the shape of binary-generated composed names AND
+// the suffix value itself is recognisable on its own — which we rely on for
+// downstream detection in LooksLikeGeneratedName.
+const xrSynthesisSeed = "crossplane-diff/synthesized-xr"
+
+// xrSynthesisSuffix returns the deterministic 12-hex suffix we use for XR
+// name synthesis. Two surfaces depend on it:
 //
-// The diff formatter detects this sentinel in rendered/composed-resource
-// names (and their generateName fields) and substitutes the user-facing
-// "(generated)" display.
+//  1. Direct shape match — the synthesized XR name itself is
+//     "<gen-with-dash><suffix>", caught by LooksLikeGeneratedName via the
+//     shape branch.
+//  2. Embedded match — composition templates that interpolate the XR's
+//     metadata.name into a downstream resource's name carry the suffix
+//     verbatim (e.g. "<gen-with-dash><suffix>" or
+//     "<gen-with-dash><suffix>-<binary-suffix>"); those resources may not
+//     have their own generateName set, so we detect via Contains.
+func xrSynthesisSuffix() string {
+	h := sha256.Sum256([]byte(xrSynthesisSeed))
+	return hex.EncodeToString(h[:])[:generatedSuffixLen]
+}
+
+// SynthesizeGeneratedName builds a metadata.name in the same shape upstream's
+// internal/names.ChildName produces: "<parent-with-trailing-dash><12 hex>".
 //
-// The value is deliberately distinctive ("xrgenplace" + a fixed 0-pad) so
-// that random user resource names are extremely unlikely to collide with it.
-const GenerateNamePlaceholder = "xrgenplace0000"
+// We use this when an XR has bare generateName and we need a metadata.name
+// for the binary's validation. Picking upstream-shape lets the same
+// detector (LooksLikeGeneratedName) catch both this name and the binary's
+// own composed-resource names.
+func SynthesizeGeneratedName(parent string) string {
+	if !strings.HasSuffix(parent, "-") {
+		parent += "-"
+	}
+
+	return parent + xrSynthesisSuffix()
+}
+
+// LooksLikeGeneratedName reports whether name was produced by either our
+// XR synthesis path or the binary's nameGenerator. True when:
+//
+//   - name has the deterministic shape upstream's nameGenerator emits —
+//     "<generateName-with-dash><12 lowercase hex>" (catches binary-generated
+//     composed-resource names whose template carries a generateName); or
+//   - name embeds xrSynthesisSuffix anywhere (catches the synthesized XR
+//     itself and any downstream resource whose template interpolated the
+//     XR's metadata.name into its own).
+func LooksLikeGeneratedName(name, generateName string) bool {
+	if name == "" {
+		return false
+	}
+
+	if generateName != "" {
+		gen := generateName
+		if !strings.HasSuffix(gen, "-") {
+			gen += "-"
+		}
+
+		if suffix, ok := strings.CutPrefix(name, gen); ok && isHex(suffix, generatedSuffixLen) {
+			return true
+		}
+	}
+
+	return strings.Contains(name, xrSynthesisSuffix())
+}
+
+// GeneratedDisplayName returns the user-facing label for a name produced by
+// either synthesis path. Caller is responsible for checking
+// LooksLikeGeneratedName first.
+func GeneratedDisplayName(name, generateName string) string {
+	if generateName != "" {
+		gen := generateName
+		if !strings.HasSuffix(gen, "-") {
+			gen += "-"
+		}
+
+		if suffix, ok := strings.CutPrefix(name, gen); ok && isHex(suffix, generatedSuffixLen) {
+			return generateName + "(generated)"
+		}
+	}
+
+	// xrSynthesisSuffix was interpolated into name; cut at the suffix and
+	// drop the leading dash from what remains so the display reads cleanly.
+	before, _, _ := strings.Cut(name, xrSynthesisSuffix())
+
+	return strings.TrimSuffix(before, "-") + "-(generated)"
+}
+
+func isHex(s string, length int) bool {
+	if len(s) != length {
+		return false
+	}
+
+	for _, r := range s {
+		if (r < '0' || r > '9') && (r < 'a' || r > 'f') {
+			return false
+		}
+	}
+
+	return true
+}
 
 const (
 	// DiffTypeAdded an added section.
