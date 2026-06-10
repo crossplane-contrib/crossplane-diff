@@ -71,7 +71,7 @@ func NewDefinitionClient(resourceClient kubernetes.ResourceClient, logger loggin
 func (c *DefaultDefinitionClient) Initialize(ctx context.Context) error {
 	c.logger.Debug("Initializing definition client")
 
-	gvks, err := c.resourceClient.GetGVKsForGroupKind(ctx, "apiextensions.crossplane.io", CompositeResourceDefinitionKind)
+	gvks, err := c.resourceClient.GetGVKsForGroupKind(ctx, CrossplaneAPIExtGroup, CompositeResourceDefinitionKind)
 	if err != nil {
 		return errors.Wrap(err, "cannot get XRD GVKs")
 	}

@@ -64,7 +64,7 @@ func NewCompositionRevisionClient(resourceClient kubernetes.ResourceClient, logg
 func (c *DefaultCompositionRevisionClient) Initialize(ctx context.Context) error {
 	c.logger.Debug("Initializing composition revision client")
 
-	gvks, err := c.resourceClient.GetGVKsForGroupKind(ctx, "apiextensions.crossplane.io", "CompositionRevision")
+	gvks, err := c.resourceClient.GetGVKsForGroupKind(ctx, CrossplaneAPIExtGroup, CompositionRevisionKind)
 	if err != nil {
 		return errors.Wrap(err, "cannot get CompositionRevision GVKs")
 	}
@@ -82,9 +82,9 @@ func (c *DefaultCompositionRevisionClient) listCompositionRevisionsForCompositio
 
 	// Define the composition revision GVK
 	gvk := schema.GroupVersionKind{
-		Group:   "apiextensions.crossplane.io",
+		Group:   CrossplaneAPIExtGroup,
 		Version: "v1",
-		Kind:    "CompositionRevision",
+		Kind:    CompositionRevisionKind,
 	}
 
 	// Use label selector to filter server-side
@@ -128,9 +128,9 @@ func (c *DefaultCompositionRevisionClient) ListCompositionRevisions(ctx context.
 
 	// Define the composition revision GVK
 	gvk := schema.GroupVersionKind{
-		Group:   "apiextensions.crossplane.io",
+		Group:   CrossplaneAPIExtGroup,
 		Version: "v1",
-		Kind:    "CompositionRevision",
+		Kind:    CompositionRevisionKind,
 	}
 
 	// Get all composition revisions using the resource client
@@ -171,9 +171,9 @@ func (c *DefaultCompositionRevisionClient) GetCompositionRevision(ctx context.Co
 
 	// Not in cache, fetch from cluster
 	gvk := schema.GroupVersionKind{
-		Group:   "apiextensions.crossplane.io",
+		Group:   CrossplaneAPIExtGroup,
 		Version: "v1",
-		Kind:    "CompositionRevision",
+		Kind:    CompositionRevisionKind,
 	}
 
 	unRev, err := c.resourceClient.GetResource(ctx, gvk, "" /* CompositionRevisions are cluster scoped */, name)

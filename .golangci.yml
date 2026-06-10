@@ -121,6 +121,15 @@ linters:
       min-len: 3
       # minimal occurrences count to trigger, 3 by default
       min-occurrences: 5
+      # Skip strings that are idiomatic Kubernetes/Crossplane field names or
+      # logger keys. Replacing them with constants makes the surrounding code
+      # harder to read than the literal strings, since these names are part of
+      # well-known wire protocols (the unstructured field path) or structured
+      # logging conventions. The `...` ellipsis is a one-off display separator
+      # that doesn't benefit from being a constant.
+      ignore-string-values:
+        - '^(apiVersion|kind|name|namespace|spec|status|claim|composite|crossplane|default|json|yaml)$'
+        - '^\.\.\.$'
     gocritic:
       # Enable multiple checks by tags, run `GL_DEBUG=gocritic golangci-lint` run to see all tags and checks.
       # Empty list by default. See https://github.com/go-critic/go-critic#usage -> section "Tags".
@@ -179,6 +188,7 @@ linters:
           - containedctx
           - errcheck
           - forcetypeassert
+          - goconst
           - gochecknoglobals
           - gochecknoinits
           - gocognit
@@ -186,6 +196,13 @@ linters:
           - scopelint
           - unparam
         path: _test(ing)?\.go
+
+      # Exclude goconst from test helper files. They repeat string literals as
+      # part of building fluent mock APIs; extracting constants makes them
+      # harder to read than the literal strings.
+      - linters:
+          - goconst
+        path: testutils/
 
       # Ease some gocritic warnings on test files.
       - linters:

@@ -43,6 +43,10 @@ const (
 	fieldWriteConnectionSecretToRef = "writeConnectionSecretToRef"
 	fieldCompositionRevisionRef     = "compositionRevisionRef"
 	fieldCompositionUpdatePolicy    = "compositionUpdatePolicy"
+
+	// Composition update policy values, mirroring Crossplane's CompositionUpdatePolicy.
+	compositionUpdatePolicyManual    = "Manual"
+	compositionUpdatePolicyAutomatic = "Automatic"
 )
 
 // DiffProcessor interface for processing resources.
@@ -729,7 +733,7 @@ func buildMergedSpec(claimSpecMap, xrSpecMap map[string]any, xrForRendering *cmp
 	// (allowing Crossplane to select the latest revision).
 	if _, existsInClaim := claimSpecMap[fieldCompositionRevisionRef]; !existsInClaim {
 		updatePolicy := getCompositionUpdatePolicy(xrForRendering)
-		if updatePolicy == "Manual" {
+		if updatePolicy == compositionUpdatePolicyManual {
 			if val, exists := xrSpecMap[fieldCompositionRevisionRef]; exists {
 				mergedSpec[fieldCompositionRevisionRef] = val
 			}
@@ -1642,5 +1646,5 @@ func getCompositionUpdatePolicy(xr *cmp.Unstructured) string {
 	}
 
 	// Default to Automatic if not found (matching Crossplane default behavior)
-	return "Automatic"
+	return compositionUpdatePolicyAutomatic
 }

@@ -61,7 +61,7 @@ func NewCompositionClient(resourceClient kubernetes.ResourceClient, definitionCl
 func (c *DefaultCompositionClient) Initialize(ctx context.Context) error {
 	c.logger.Debug("Initializing composition client")
 
-	gvks, err := c.resourceClient.GetGVKsForGroupKind(ctx, "apiextensions.crossplane.io", "Composition")
+	gvks, err := c.resourceClient.GetGVKsForGroupKind(ctx, CrossplaneAPIExtGroup, CompositionKind)
 	if err != nil {
 		return errors.Wrap(err, "cannot get Composition GVKs")
 	}
@@ -95,9 +95,9 @@ func (c *DefaultCompositionClient) ListCompositions(ctx context.Context) ([]*api
 
 	// Define the composition GVK
 	gvk := schema.GroupVersionKind{
-		Group:   "apiextensions.crossplane.io",
+		Group:   CrossplaneAPIExtGroup,
 		Version: "v1",
-		Kind:    "Composition",
+		Kind:    CompositionKind,
 	}
 
 	// TODO:  we don't actually use our cached GVKs here -- but there's only one version of Composition
@@ -141,9 +141,9 @@ func (c *DefaultCompositionClient) GetComposition(ctx context.Context, name stri
 
 	// Not in cache, fetch from cluster
 	gvk := schema.GroupVersionKind{
-		Group:   "apiextensions.crossplane.io",
+		Group:   CrossplaneAPIExtGroup,
 		Version: "v1",
-		Kind:    "Composition",
+		Kind:    CompositionKind,
 	}
 
 	unComp, err := c.resourceClient.GetResource(ctx, gvk, "" /* Compositions are cluster scoped */, name)
@@ -490,7 +490,7 @@ func getCrossplaneRefPaths(apiVersion string, path ...string) [][]string {
 	v2Path := append([]string{"spec", "crossplane"}, path...)
 
 	switch apiVersion {
-	case "apiextensions.crossplane.io/v1":
+	case CrossplaneAPIExtGroupV1:
 		// Crossplane v1 keeps these under spec.x
 		return [][]string{v1Path}
 	default:
@@ -814,7 +814,7 @@ func (c *DefaultCompositionClient) FindCompositesUsingComposition(ctx context.Co
 func (c *DefaultCompositionClient) resourceUsesComposition(resource *un.Unstructured, compositionName string) bool {
 	// Try both v1 and v2 paths - we use a non-v1 apiVersion to get both paths from getCrossplaneRefPaths
 	// since getCrossplaneRefPaths returns both paths for non-v1 XRDs
-	for _, path := range getCrossplaneRefPaths("apiextensions.crossplane.io/v2", "compositionRef", "name") {
+	for _, path := range getCrossplaneRefPaths(CrossplaneAPIExtGroupV2, "compositionRef", "name") {
 		if refName, found, _ := un.NestedString(resource.Object, path...); found && refName == compositionName {
 			return true
 		}

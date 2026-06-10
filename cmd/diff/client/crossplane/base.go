@@ -15,6 +15,24 @@ import (
 	"github.com/crossplane/crossplane-runtime/v2/pkg/logging"
 )
 
+// Crossplane API group and kind constants used across the client package.
+const (
+	// CrossplaneAPIExtGroup is the Crossplane API extensions group.
+	CrossplaneAPIExtGroup = "apiextensions.crossplane.io"
+	// CrossplaneAPIExtGroupV1 is the v1 group/version for Crossplane API extensions.
+	CrossplaneAPIExtGroupV1 = "apiextensions.crossplane.io/v1"
+	// CrossplaneAPIExtGroupV2 is the v2 group/version for Crossplane API extensions.
+	CrossplaneAPIExtGroupV2 = "apiextensions.crossplane.io/v2"
+	// CrossplanePkgGroup is the Crossplane packages group.
+	CrossplanePkgGroup = "pkg.crossplane.io"
+	// CompositionKind is the kind for Compositions.
+	CompositionKind = "Composition"
+	// CompositionRevisionKind is the kind for CompositionRevisions.
+	CompositionRevisionKind = "CompositionRevision"
+	// FunctionKind is the kind for Crossplane Functions.
+	FunctionKind = "Function"
+)
+
 // Initialize initializes all the clients in this bundle.
 func (c *Clients) Initialize(ctx context.Context, logger logging.Logger) error {
 	return core.InitializeClients(ctx, logger,

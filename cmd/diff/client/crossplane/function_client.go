@@ -50,7 +50,7 @@ func NewFunctionClient(resourceClient kubernetes.ResourceClient, logger logging.
 func (c *DefaultFunctionClient) Initialize(ctx context.Context) error {
 	c.logger.Debug("Initializing function client")
 
-	gvks, err := c.resourceClient.GetGVKsForGroupKind(ctx, "apiextensions.crossplane.io", "Function")
+	gvks, err := c.resourceClient.GetGVKsForGroupKind(ctx, CrossplanePkgGroup, FunctionKind)
 	if err != nil {
 		return errors.Wrap(err, "cannot get Function GVKs")
 	}
@@ -82,9 +82,9 @@ func (c *DefaultFunctionClient) ListFunctions(ctx context.Context) ([]pkgv1.Func
 
 	// Define the function GVK
 	gvk := schema.GroupVersionKind{
-		Group:   "pkg.crossplane.io",
+		Group:   CrossplanePkgGroup,
 		Version: "v1",
-		Kind:    "Function",
+		Kind:    FunctionKind,
 	}
 
 	// Get all functions using the resource client

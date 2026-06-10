@@ -66,12 +66,15 @@ func defaultProcessorOptions(fields CommonCmdFields, namespace string) []dp.Proc
 	// Import renderer package to use OutputFormat type
 	var outputFormat renderer.OutputFormat
 
-	switch fields.Output {
-	case "json":
+	switch renderer.OutputFormat(fields.Output) {
+	case renderer.OutputFormatJSON:
 		outputFormat = renderer.OutputFormatJSON
-	case "yaml":
+	case renderer.OutputFormatYAML:
 		outputFormat = renderer.OutputFormatYAML
+	case renderer.OutputFormatDiff:
+		outputFormat = renderer.OutputFormatDiff
 	default:
+		// Empty string or unrecognized values fall back to the human-readable diff.
 		outputFormat = renderer.OutputFormatDiff
 	}
 

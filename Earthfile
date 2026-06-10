@@ -296,12 +296,12 @@ go-test:
 
 # go-lint lints Go code.
 go-lint:
-  ARG GOLANGCI_LINT_VERSION=v2.11.4
+  ARG GOLANGCI_LINT_VERSION=v2.12.2
   FROM +go-modules
   # This cache is private because golangci-lint doesn't support concurrent runs.
   CACHE --id go-lint --sharing private /root/.cache/golangci-lint
   CACHE --id go-build --sharing shared /root/.cache/go-build
-  RUN curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/master/install.sh | sh -s -- -b $(go env GOPATH)/bin ${GOLANGCI_LINT_VERSION}
+  RUN curl -sSfL https://golangci-lint.run/install.sh | sh -s -- -b $(go env GOPATH)/bin ${GOLANGCI_LINT_VERSION}
   COPY .golangci.yml .
   COPY --dir cmd/ internal/ test/ .
   RUN golangci-lint run --fix
