@@ -163,7 +163,7 @@ func parseResourceRef(value string) (k8stypes.NamespacedName, error) {
 
 		return k8stypes.NamespacedName{Namespace: ns, Name: name}, nil
 	default:
-		return k8stypes.NamespacedName{}, errors.Errorf("invalid --resource value %q: expected [namespace/]name format, got %d slash-separated parts", value, len(parts)-1)
+		return k8stypes.NamespacedName{}, errors.Errorf("invalid --resource value %q: expected [namespace/]name format, got %d slashes", value, len(parts)-1)
 	}
 }
 

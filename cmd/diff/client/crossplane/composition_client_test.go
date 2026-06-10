@@ -2170,8 +2170,8 @@ func TestDefaultCompositionClient_lookupRef(t *testing.T) {
 				Build(),
 			wantName: "xr",
 		},
-		"XRWrongComposition_ReturnsNil": {
-			reason: "Ref hits XR GVK but references different composition → returns nil (preserves Step-3 behavior; F1 follow-up will switch this to claim fallback)",
+		"XRWrongComposition_ClaimAlso404_ReturnsNil": {
+			reason: "Ref hits XR GVK with wrong composition AND claim 404s → returns nil (XR was wrong-composition; falling through to claim found nothing)",
 			ref:    k8stypes.NamespacedName{Name: "xr-wrong"},
 			types:  compositeTypes{xrGVK: xrGVK, claimGVK: claimGVK},
 			mockResource: tu.NewMockResourceClient().
@@ -2184,6 +2184,32 @@ func TestDefaultCompositionClient_lookupRef(t *testing.T) {
 				}).
 				Build(),
 			wantName: "",
+		},
+		"XRWrongComposition_ClaimMatchesTarget_FallsThroughAndReturnsClaim": {
+			reason: "Same-name XR + Claim collision: XR uses other-comp but Claim uses test-comp → falls through to claim path, returns Claim",
+			ref:    k8stypes.NamespacedName{Namespace: "ns", Name: "collision"},
+			types:  compositeTypes{xrGVK: xrGVK, claimGVK: claimGVK},
+			mockResource: tu.NewMockResourceClient().
+				WithGetResource(func(_ context.Context, gvk schema.GroupVersionKind, ns, name string) (*un.Unstructured, error) {
+					switch {
+					case gvk == xrGVK && ns == "ns" && name == "collision":
+						// XR exists at this name+ns but uses a different composition.
+						return tu.NewResource("example.org/v1", "XBucket", "collision").
+							InNamespace("ns").
+							WithSpecField("compositionRef", map[string]any{"name": "other-comp"}).
+							Build(), nil
+					case gvk == claimGVK && ns == "ns" && name == "collision":
+						// Claim with the same name+ns uses the target composition — should be returned.
+						return tu.NewResource("example.org/v1", "Bucket", "collision").
+							InNamespace("ns").
+							WithSpecField("compositionRef", map[string]any{"name": "test-comp"}).
+							Build(), nil
+					default:
+						return nil, apierrors.NewNotFound(schema.GroupResource{Group: gvk.Group}, name)
+					}
+				}).
+				Build(),
+			wantName: "collision",
 		},
 		"XR404_ClaimMatch": {
 			reason: "Ref XR-404, matches via claim GVK and references target composition → returns object",

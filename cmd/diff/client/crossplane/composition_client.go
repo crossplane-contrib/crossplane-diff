@@ -917,65 +917,64 @@ func (c *DefaultCompositionClient) resolveCompositeTypes(ctx context.Context, co
 	return types, nil
 }
 
-// lookupRef resolves a single ref against (compName, types). Tries the XR GVK first, then the
-// claim GVK on 404 if non-empty. Returns the matched object, or nil if not found anywhere or
-// found but referencing a different composition. Non-NotFound cluster errors propagate.
+// lookupRef resolves a single ref against (compName, types). Tries the XR GVK first; on miss
+// (404 OR found-but-wrong-composition) falls through to the claim GVK if non-empty. Returns the
+// matched object, or nil if neither GVK yielded a resource referencing compName. Non-NotFound
+// cluster errors propagate.
 //
-// NOTE: when XR GVK returns a hit but the resource references a different composition, this
-// returns nil WITHOUT trying the claim GVK. Follow-up F1 (Copilot review on PR #322) tracks
-// switching this to fall through to the claim path so same-name XR+Claim collisions resolve
-// correctly. Step 4 preserves the existing behavior.
+// "Found-but-wrong-composition" falls through (rather than short-circuiting to nil) so a same-name
+// XR + Claim collision in v2 namespaces resolves correctly: e.g. an XR `default/foo` (XBucket)
+// using composition Y and a Claim `default/foo` (Bucket) using composition X both exist; a
+// `--resource=default/foo` lookup against composition X must reach the Claim via the claim-GVK
+// path even though the XR GET succeeds first.
 func (c *DefaultCompositionClient) lookupRef(ctx context.Context, ref k8stypes.NamespacedName, types compositeTypes, compName string) (*un.Unstructured, error) {
-	// Try XR GVK first.
-	obj, err := c.resourceClient.GetResource(ctx, types.xrGVK, ref.Namespace, ref.Name)
-
-	switch {
-	case err == nil:
-		if c.resourceUsesComposition(obj, compName) {
-			c.logger.Debug("matched ref via XR GVK",
-				"ref", ref.String(), "composition", compName)
-
-			return obj, nil
-		}
-
-		c.logger.Debug("ref exists as XR but does not reference this composition",
-			"ref", ref.String(), "composition", compName)
-
-		return nil, nil
-	case !apierrors.IsNotFound(err):
-		return nil, errors.Wrapf(err, "cannot fetch composite %s as %s", ref.String(), types.xrGVK)
+	obj, err := c.tryLookupAtGVK(ctx, types.xrGVK, ref, compName, "XR GVK")
+	if err != nil {
+		return nil, err
 	}
 
-	// XR GVK was 404. Try claim GVK if available.
+	if obj != nil {
+		return obj, nil
+	}
+
 	if types.claimGVK.Empty() {
-		c.logger.Debug("ref not found as XR and no claim GVK to try",
+		c.logger.Debug("ref not matched via XR GVK and no claim GVK to try",
 			"ref", ref.String())
 
 		return nil, nil
 	}
 
-	obj, err = c.resourceClient.GetResource(ctx, types.claimGVK, ref.Namespace, ref.Name)
+	return c.tryLookupAtGVK(ctx, types.claimGVK, ref, compName, "claim GVK")
+}
+
+// tryLookupAtGVK fetches a single resource at (gvk, ref.Namespace, ref.Name) and returns it iff
+// the resource exists AND references compName. Returns (nil, nil) for both 404 and
+// found-but-wrong-composition — callers distinguish "missed at this GVK, try the next" from
+// "matched at this GVK". Non-NotFound errors propagate.
+func (c *DefaultCompositionClient) tryLookupAtGVK(ctx context.Context, gvk schema.GroupVersionKind, ref k8stypes.NamespacedName, compName, kindLabel string) (*un.Unstructured, error) {
+	obj, err := c.resourceClient.GetResource(ctx, gvk, ref.Namespace, ref.Name)
 
 	switch {
-	case err == nil:
-		if c.resourceUsesComposition(obj, compName) {
-			c.logger.Debug("matched ref via claim GVK",
-				"ref", ref.String(), "composition", compName)
-
-			return obj, nil
-		}
-
-		c.logger.Debug("ref exists as claim but does not reference this composition",
-			"ref", ref.String(), "composition", compName)
-
-		return nil, nil
 	case apierrors.IsNotFound(err):
-		c.logger.Debug("ref not found as XR or claim", "ref", ref.String())
+		c.logger.Debug("ref not found at GVK",
+			"ref", ref.String(), "gvk", gvk.String(), "via", kindLabel)
 
 		return nil, nil
-	default:
-		return nil, errors.Wrapf(err, "cannot fetch composite %s as %s", ref.String(), types.claimGVK)
+	case err != nil:
+		return nil, errors.Wrapf(err, "cannot fetch composite %s as %s", ref.String(), gvk)
 	}
+
+	if c.resourceUsesComposition(obj, compName) {
+		c.logger.Debug("matched ref",
+			"ref", ref.String(), "composition", compName, "via", kindLabel)
+
+		return obj, nil
+	}
+
+	c.logger.Debug("ref exists at GVK but does not reference this composition",
+		"ref", ref.String(), "gvk", gvk.String(), "composition", compName, "via", kindLabel)
+
+	return nil, nil
 }
 
 // FindComposites dispatches to ref-based or listing-based discovery based on opts.Refs.

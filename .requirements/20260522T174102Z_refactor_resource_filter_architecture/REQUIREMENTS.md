@@ -157,7 +157,8 @@ Tests that fail at compile time when the type/signature is wrong. These guide th
   - case: composition with malformed `compositeTypeRef.apiVersion` → returns error
 - **TC-R3.2**: `TestLookupRef` (new) — table-driven tests in `composition_client_test.go`:
   - case: ref matches via XR GVK and uses target composition → returns object
-  - case: ref matches via XR GVK but uses different composition → returns nil, no error (preserves current bug for follow-up F1)
+  - case: ref matches via XR GVK but uses different composition AND claim 404s → returns nil, no error (XR was wrong-composition; claim fallback found nothing)
+  - case: same-name XR+Claim collision — XR uses other-comp, Claim uses target-comp → falls through to claim GVK and returns the Claim (F1 fix from Copilot review on PR #322)
   - case: ref XR-404, then matches via claim GVK and uses target composition → returns object
   - case: ref XR-404, claim GVK 404 → returns nil, no error
   - case: ref XR-404 and claim GVK is empty (XRD missing) → returns nil, no error
