@@ -32,6 +32,8 @@
 +   compositionRef:
 +     name: xnopresources.v2withv1paths.diff.example.org
 +   coolField: I'm new with v1-style paths!
++   crossplane:
++     compositionUpdatePolicy: Automatic
 
 ---
 
