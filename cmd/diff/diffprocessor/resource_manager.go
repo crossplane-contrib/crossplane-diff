@@ -157,7 +157,7 @@ func (m *DefaultResourceManager) checkCompositeOwnership(current *un.Unstructure
 	}
 
 	if labels := current.GetLabels(); labels != nil {
-		if owner, exists := labels["crossplane.io/composite"]; exists && owner != composite.GetName() {
+		if owner, exists := labels[LabelComposite]; exists && owner != composite.GetName() {
 			// Log a warning if the resource is owned by a different composite
 			m.logger.Info(
 				// TODO:  should we fail by default here?  maybe require a --force flag to proceed?
@@ -220,7 +220,7 @@ func (m *DefaultResourceManager) lookupByComposite(ctx context.Context, composit
 	// If so, use that for lookup instead of the parent's name. This handles nested XRs
 	// where the composed resources should have the ROOT XR's name in their composite label,
 	// not the intermediate nested XR's name.
-	desiredCompositeLabel := desired.GetLabels()["crossplane.io/composite"]
+	desiredCompositeLabel := desired.GetLabels()[LabelComposite]
 
 	switch {
 	case isCompositeAClaim:
@@ -229,8 +229,8 @@ func (m *DefaultResourceManager) lookupByComposite(ctx context.Context, composit
 		// We'll use the claim labels to find downstream resources
 		labelSelector = metav1.LabelSelector{
 			MatchLabels: map[string]string{
-				"crossplane.io/claim-name":      composite.GetName(),
-				"crossplane.io/claim-namespace": composite.GetNamespace(),
+				LabelClaimName:      composite.GetName(),
+				LabelClaimNamespace: composite.GetNamespace(),
 			},
 		}
 		lookupName = composite.GetName()
@@ -243,7 +243,7 @@ func (m *DefaultResourceManager) lookupByComposite(ctx context.Context, composit
 		// Use the resource's own label value for lookup
 		labelSelector = metav1.LabelSelector{
 			MatchLabels: map[string]string{
-				"crossplane.io/composite": desiredCompositeLabel,
+				LabelComposite: desiredCompositeLabel,
 			},
 		}
 		lookupName = desiredCompositeLabel
@@ -254,7 +254,7 @@ func (m *DefaultResourceManager) lookupByComposite(ctx context.Context, composit
 		// For XRs, use the composite label
 		labelSelector = metav1.LabelSelector{
 			MatchLabels: map[string]string{
-				"crossplane.io/composite": composite.GetName(),
+				LabelComposite: composite.GetName(),
 			},
 		}
 		lookupName = composite.GetName()
@@ -552,15 +552,15 @@ func (m *DefaultResourceManager) updateCompositeOwnerLabel(ctx context.Context, 
 	switch {
 	case isParentAClaim:
 		// For claims, set claim-specific labels (all claims are namespaced)
-		labels["crossplane.io/claim-name"] = parentName
-		labels["crossplane.io/claim-namespace"] = parent.GetNamespace()
+		labels[LabelClaimName] = parentName
+		labels[LabelClaimNamespace] = parent.GetNamespace()
 
 		// For claims, only set the composite label if it doesn't already exist
 		// If it exists, it likely points to a generated XR name which we should preserve
-		existingComposite, hasComposite := labels["crossplane.io/composite"]
+		existingComposite, hasComposite := labels[LabelComposite]
 		if !hasComposite {
 			// No existing composite label, set it to the claim name
-			labels["crossplane.io/composite"] = parentName
+			labels[LabelComposite] = parentName
 			m.logger.Debug("Set composite label for new claim resource",
 				"claimName", parentName,
 				"claimNamespace", parent.GetNamespace(),
@@ -576,10 +576,10 @@ func (m *DefaultResourceManager) updateCompositeOwnerLabel(ctx context.Context, 
 	default:
 		// For XRs, only set the composite label if it doesn't already exist
 		// If it exists, preserve it (e.g., for managed resources that already have correct ownership)
-		existingComposite, hasComposite := labels["crossplane.io/composite"]
+		existingComposite, hasComposite := labels[LabelComposite]
 		if !hasComposite {
 			// No existing composite label, set it to the parent XR name
-			labels["crossplane.io/composite"] = parentName
+			labels[LabelComposite] = parentName
 			m.logger.Debug("Set composite label for new XR resource",
 				"xrName", parentName,
 				"child", child.GetName())

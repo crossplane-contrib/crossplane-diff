@@ -23,6 +23,14 @@ import (
 	xpextv2 "github.com/crossplane/crossplane/apis/v2/apiextensions/v2"
 )
 
+// XRD apiVersion strings recognized by the schema client. These mirror the
+// runtime SchemeGroupVersion values from the imported xpextv1/xpextv2 packages,
+// but as constants they can be used in switch cases.
+const (
+	xrdAPIVersionV1 = "apiextensions.crossplane.io/v1"
+	xrdAPIVersionV2 = "apiextensions.crossplane.io/v2"
+)
+
 // SchemaClient handles operations related to Kubernetes schemas and CRDs.
 type SchemaClient interface {
 	// GetCRD gets the CustomResourceDefinition for a given GVK
@@ -207,9 +215,9 @@ func extractGVKsFromXRD(xrd *un.Unstructured) ([]schema.GroupVersionKind, error)
 	apiVersion := xrd.GetAPIVersion()
 
 	switch apiVersion {
-	case "apiextensions.crossplane.io/v1":
+	case xrdAPIVersionV1:
 		return extractGVKsFromV1XRD(xrd)
-	case "apiextensions.crossplane.io/v2":
+	case xrdAPIVersionV2:
 		return extractGVKsFromV2XRD(xrd)
 	default:
 		return nil, errors.Errorf("unsupported XRD apiVersion %s in XRD %s", apiVersion, xrd.GetName())

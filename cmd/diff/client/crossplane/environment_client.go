@@ -46,7 +46,7 @@ func NewEnvironmentClient(resourceClient kubernetes.ResourceClient, logger loggi
 func (c *DefaultEnvironmentClient) Initialize(ctx context.Context) error {
 	c.logger.Debug("Initializing environment client")
 
-	gvks, err := c.resourceClient.GetGVKsForGroupKind(ctx, "apiextensions.crossplane.io", "EnvironmentConfig")
+	gvks, err := c.resourceClient.GetGVKsForGroupKind(ctx, CrossplaneAPIExtGroup, "EnvironmentConfig")
 	if err != nil {
 		return errors.Wrap(err, "cannot get EnvironmentConfig GVKs")
 	}

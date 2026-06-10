@@ -19,11 +19,6 @@ import (
 
 var _ CompositionClient = (*tu.MockCompositionClient)(nil)
 
-const (
-	CrossplaneAPIExtGroup   = "apiextensions.crossplane.io"
-	CrossplaneAPIExtGroupV1 = "apiextensions.crossplane.io/v1"
-)
-
 func TestDefaultCompositionClient_FindMatchingComposition(t *testing.T) {
 	type fields struct {
 		compositions map[string]*apiextensionsv1.Composition

@@ -507,7 +507,7 @@ func (p *DefaultCompDiffProcessor) filterXRsByUpdatePolicy(xrs []*un.Unstructure
 			"policy", policy)
 
 		// Include XRs that are not explicitly set to Manual (i.e., Automatic or empty/default)
-		if policy != "Manual" {
+		if policy != compositionUpdatePolicyManual {
 			filtered = append(filtered, xr)
 		}
 	}
@@ -532,7 +532,7 @@ func (p *DefaultCompDiffProcessor) getCompositionUpdatePolicy(xr *un.Unstructure
 	}
 
 	// Default to Automatic if not found (matching Crossplane default behavior)
-	return "Automatic"
+	return compositionUpdatePolicyAutomatic
 }
 
 // buildImpactAnalysis builds the impact analysis and summary from XR results.
