@@ -35,6 +35,12 @@ type CompositionClient interface {
 	GetComposition(ctx context.Context, name string) (*apiextensionsv1.Composition, error)
 
 	// FindComposites locates composites (XRs and Claims) that reference a composition.
+	// `comp` is taken as the user-supplied unstructured Composition (typically loaded from a YAML
+	// file); the client converts to a typed *apiextensionsv1.Composition internally only when
+	// needed (i.e. in refs-mode, which reads spec.compositeTypeRef). Default-discovery only needs
+	// comp.GetName() and avoids the conversion entirely so it isn't tripped by version skew or
+	// unknown fields in the input file.
+	//
 	// When opts.Refs is non-empty, it performs ref-based lookup: each ref is resolved against the
 	// composition's XR GVK (then claim GVK on 404 if the XRD defines a claim type). A ref is included
 	// in the result only when (a) the cluster lookup succeeds AND (b) the resource references this
@@ -43,7 +49,7 @@ type CompositionClient interface {
 	// When opts.Refs is empty, it performs default discovery scoped to opts.Namespace, listing all
 	// XRs (and Claims, if the XRD defines them) of the appropriate GVK and filtering by composition.
 	// NotFound responses are tolerated; non-NotFound transport errors propagate.
-	FindComposites(ctx context.Context, comp *apiextensionsv1.Composition, opts dtypes.FindCompositesOptions) ([]*un.Unstructured, error)
+	FindComposites(ctx context.Context, comp *un.Unstructured, opts dtypes.FindCompositesOptions) ([]*un.Unstructured, error)
 }
 
 // DefaultCompositionClient implements CompositionClient.
@@ -842,12 +848,20 @@ func (c *DefaultCompositionClient) resourceUsesComposition(resource *un.Unstruct
 // composition's XR GVK first, then the claim GVK on 404 if the XRD defines a claim type. Refs that
 // fail both lookups, or that exist but reference a different composition, are silently dropped from
 // the result. NotFound responses are tolerated; other errors propagate.
-func (c *DefaultCompositionClient) findByRefs(ctx context.Context, comp *apiextensionsv1.Composition, refs []k8stypes.NamespacedName) ([]*un.Unstructured, error) {
+//
+// Converts the unstructured Composition to a typed *apiextensionsv1.Composition internally because
+// resolveCompositeTypes needs spec.compositeTypeRef. Conversion errors propagate.
+func (c *DefaultCompositionClient) findByRefs(ctx context.Context, comp *un.Unstructured, refs []k8stypes.NamespacedName) ([]*un.Unstructured, error) {
 	if len(refs) == 0 {
 		return nil, nil
 	}
 
-	types, err := c.resolveCompositeTypes(ctx, comp)
+	typedComp := &apiextensionsv1.Composition{}
+	if err := runtime.DefaultUnstructuredConverter.FromUnstructured(comp.Object, typedComp); err != nil {
+		return nil, errors.Wrapf(err, "cannot convert composition %s to typed for refs lookup", comp.GetName())
+	}
+
+	types, err := c.resolveCompositeTypes(ctx, typedComp)
 	if err != nil {
 		return nil, err
 	}
@@ -975,7 +989,7 @@ func (c *DefaultCompositionClient) tryLookupAtGVK(ctx context.Context, gvk schem
 }
 
 // FindComposites dispatches to ref-based or listing-based discovery based on opts.Refs.
-func (c *DefaultCompositionClient) FindComposites(ctx context.Context, comp *apiextensionsv1.Composition, opts dtypes.FindCompositesOptions) ([]*un.Unstructured, error) {
+func (c *DefaultCompositionClient) FindComposites(ctx context.Context, comp *un.Unstructured, opts dtypes.FindCompositesOptions) ([]*un.Unstructured, error) {
 	switch {
 	case len(opts.Refs) > 0:
 		return c.findByRefs(ctx, comp, opts.Refs)

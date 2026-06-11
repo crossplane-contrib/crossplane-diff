@@ -212,12 +212,9 @@ func (p *DefaultCompDiffProcessor) DiffComposition(ctx context.Context, composit
 			affectedXRs = preflightMatches[compositionID]
 			surfaceFiltered = true
 		default:
-			typedComp := &apiextensionsv1.Composition{}
-			if err := runtime.DefaultUnstructuredConverter.FromUnstructured(comp.Object, typedComp); err != nil {
-				return false, errors.Wrapf(err, "cannot convert composition %s to typed for default discovery", compositionID)
-			}
-
-			discovered, findErr := p.compositionClient.FindComposites(ctx, typedComp, dtypes.FindCompositesOptions{Namespace: namespace})
+			// Default-discovery only needs comp.GetName() — pass the unstructured directly.
+			// FindComposites converts to typed internally only in refs mode (which we're not in here).
+			discovered, findErr := p.compositionClient.FindComposites(ctx, comp, dtypes.FindCompositesOptions{Namespace: namespace})
 
 			switch {
 			case findErr != nil:
@@ -312,12 +309,9 @@ func (p *DefaultCompDiffProcessor) preflightResourceRefs(ctx context.Context, co
 			continue
 		}
 
-		typedComp := &apiextensionsv1.Composition{}
-		if err := runtime.DefaultUnstructuredConverter.FromUnstructured(comp.Object, typedComp); err != nil {
-			return nil, errors.Wrapf(err, "cannot convert composition %s to typed for preflight", comp.GetName())
-		}
-
-		matched, err := p.compositionClient.FindComposites(ctx, typedComp, dtypes.FindCompositesOptions{Refs: refs})
+		// FindComposites takes the unstructured composition; it converts to typed internally
+		// in refs mode (resolveCompositeTypes needs spec.compositeTypeRef).
+		matched, err := p.compositionClient.FindComposites(ctx, comp, dtypes.FindCompositesOptions{Refs: refs})
 		if err != nil {
 			return nil, errors.Wrapf(err, "preflight: cannot resolve --resource refs for composition %s", comp.GetName())
 		}

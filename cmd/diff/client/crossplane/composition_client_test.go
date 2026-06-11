@@ -1808,10 +1808,10 @@ func TestDefaultCompositionClient_getClaimTypeFromXRD(t *testing.T) {
 }
 
 func TestDefaultCompositionClient_FindComposites_WithRefs(t *testing.T) {
-	// Composition targeting (example.org/v1, XBucket).
+	// Composition targeting (example.org/v1, XBucket). FindComposites takes the unstructured form.
 	comp := tu.NewComposition("test-comp").
 		WithCompositeTypeRef("example.org/v1", "XBucket").
-		Build()
+		BuildAsUnstructured()
 
 	// XRD with claim "Bucket" (so claim GVK is example.org/v1, Bucket).
 	xrd := tu.NewXRD("xbuckets.example.org", "example.org", "XBucket").
@@ -1846,7 +1846,7 @@ func TestDefaultCompositionClient_FindComposites_WithRefs(t *testing.T) {
 		reason       string
 		mockResource *tu.MockResourceClient
 		mockDef      *tu.MockDefinitionClient
-		comp         *apiextensionsv1.Composition
+		comp         *un.Unstructured
 		refs         []k8stypes.NamespacedName
 		wantMatched  []string // names of matched composites
 		wantErr      bool
@@ -1943,9 +1943,11 @@ func TestDefaultCompositionClient_FindComposites_WithRefs(t *testing.T) {
 }
 
 func TestDefaultCompositionClient_FindComposites_DefaultDiscovery(t *testing.T) {
-	comp := tu.NewComposition("test-comp").
-		WithCompositeTypeRef("example.org/v1", "XBucket").
-		Build()
+	// FindComposites takes the unstructured composition; the typed copy is just for
+	// seeding the client's GetComposition cache (which findByListing reads through).
+	compBuilder := tu.NewComposition("test-comp").WithCompositeTypeRef("example.org/v1", "XBucket")
+	comp := compBuilder.BuildAsUnstructured()
+	compTyped := compBuilder.Build()
 
 	xrd := tu.NewXRD("xbuckets.example.org", "example.org", "XBucket").
 		WithPlural("xbuckets").
@@ -1970,7 +1972,7 @@ func TestDefaultCompositionClient_FindComposites_DefaultDiscovery(t *testing.T) 
 			}).
 			Build(),
 		definitionClient: tu.NewMockDefinitionClient().WithXRDForXR(xrd).Build(),
-		compositions:     map[string]*apiextensionsv1.Composition{"test-comp": comp},
+		compositions:     map[string]*apiextensionsv1.Composition{"test-comp": compTyped},
 		logger:           tu.TestLogger(t, false),
 	}
 

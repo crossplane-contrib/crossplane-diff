@@ -559,7 +559,7 @@ type MockCompositionClient struct {
 	FindMatchingCompositionFn func(ctx context.Context, res *un.Unstructured) (*xpextv1.Composition, error)
 	ListCompositionsFn        func(ctx context.Context) ([]*xpextv1.Composition, error)
 	GetCompositionFn          func(ctx context.Context, name string) (*xpextv1.Composition, error)
-	FindCompositesFn          func(ctx context.Context, comp *xpextv1.Composition, opts types.FindCompositesOptions) ([]*un.Unstructured, error)
+	FindCompositesFn          func(ctx context.Context, comp *un.Unstructured, opts types.FindCompositesOptions) ([]*un.Unstructured, error)
 }
 
 // Initialize implements crossplane.CompositionClient.
@@ -599,7 +599,7 @@ func (m *MockCompositionClient) GetComposition(ctx context.Context, name string)
 }
 
 // FindComposites implements crossplane.CompositionClient.
-func (m *MockCompositionClient) FindComposites(ctx context.Context, comp *xpextv1.Composition, opts types.FindCompositesOptions) ([]*un.Unstructured, error) {
+func (m *MockCompositionClient) FindComposites(ctx context.Context, comp *un.Unstructured, opts types.FindCompositesOptions) ([]*un.Unstructured, error) {
 	if m.FindCompositesFn != nil {
 		return m.FindCompositesFn(ctx, comp, opts)
 	}

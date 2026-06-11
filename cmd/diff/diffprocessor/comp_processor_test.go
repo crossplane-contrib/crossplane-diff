@@ -30,7 +30,6 @@ import (
 	"github.com/crossplane-contrib/crossplane-diff/cmd/diff/types"
 	"github.com/crossplane/cli/v2/cmd/crossplane/render"
 	gcmp "github.com/google/go-cmp/cmp"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	un "k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	k8stypes "k8s.io/apimachinery/pkg/types"
 
@@ -122,7 +121,9 @@ func TestDefaultCompDiffProcessor_findResourcesUsingComposition(t *testing.T) {
 				},
 			}
 
-			got, err := processor.compositionClient.FindComposites(ctx, &apiextensionsv1.Composition{ObjectMeta: metav1.ObjectMeta{Name: tt.compositionName}}, types.FindCompositesOptions{Namespace: tt.namespace})
+			comp := &un.Unstructured{}
+			comp.SetName(tt.compositionName)
+			got, err := processor.compositionClient.FindComposites(ctx, comp, types.FindCompositesOptions{Namespace: tt.namespace})
 
 			if (err != nil) != tt.wantErr {
 				t.Errorf("findResourcesUsingComposition() error = %v, wantErr %v", err, tt.wantErr)

@@ -44,7 +44,7 @@ User-visible CLI behavior is **unchanged**. All E2E tests should continue to pas
 
 ### R1 — `ResourceRef` is replaced by `k8s.io/apimachinery/pkg/types.NamespacedName`
 
-The `ResourceRef` struct and its `String()` method are removed from `cmd/diff/types/types.go`. The `CompositionProvider` declaration in that file stays (it's used elsewhere). Every reference to `dtypes.ResourceRef` in production and test code switches to `k8stypes.NamespacedName` (alias `k8stypes "k8s.io/apimachinery/pkg/types"`). A `formatRef(NamespacedName) string` helper is added in `cmd/diff/diffprocessor/comp_processor.go` (the only place that needs to render refs back to the user's CLI spelling — `preflightResourceRefs` builds the unmatched-refs error message there; the CLI itself only parses refs and forwards them) to preserve the bare-name rendering for cluster-scoped refs.
+The `ResourceRef` struct and its `String()` method are removed from `cmd/diff/types/types.go`. The `CompositionProvider` declaration in that file stays (it's used elsewhere). Every reference to `dtypes.ResourceRef` in production and test code switches to `k8stypes.NamespacedName` (alias `k8stypes "k8s.io/apimachinery/pkg/types"`). A new `cmd/diff/ref` package owns CLI ref I/O: `ref.Parse([namespace/]name string) (NamespacedName, error)`, `ref.ParseAll([]string)`, and `ref.Format(NamespacedName) string` (the inverse of Parse — preserves bare `name` for cluster-scoped). Both the CLI parsing and the processor's user-facing error messages use this package.
 
 ### R2 — `CompositionClient` exposes a single `FindComposites` method with options
 
@@ -87,7 +87,7 @@ The directive at `composition_client.go:23` is deleted; lint passes without it.
 - AC1.1: `cmd/diff/types/types.go` no longer declares a `ResourceRef` type or its `String()` method. `CompositionProvider` is still present.
 - AC1.2: `grep -rn "dtypes\.ResourceRef\|\\btypes\\.ResourceRef\\b" cmd/diff/` returns no matches (production or test).
 - AC1.3: `grep -rn "k8stypes\\.NamespacedName" cmd/diff/` returns matches in: `comp.go`, `comp_processor.go`, `composition_client.go`, `comp_test.go`, `comp_processor_test.go`, `composition_client_test.go`, `mocks.go`, `mock_builder.go`.
-- AC1.4: A `formatRef` function exists in `cmd/diff/diffprocessor/comp_processor.go` and renders cluster-scoped (empty namespace) as bare `Name` and namespaced as `Namespace + "/" + Name`. Unit tests cover both cases.
+- AC1.4: A `Format` function exists in `cmd/diff/ref/ref.go` and renders cluster-scoped (empty namespace) as bare `Name` and namespaced as `Namespace + "/" + Name`. Unit tests cover both cases. (Co-located with `Parse` and `ParseAll` — the package owns CLI ref I/O.)
 - AC1.5: All existing user-facing rendering of refs (error messages and structured logs) is identical to today: `default/foo` for namespaced, `foo` (NOT `/foo`) for cluster-scoped. Verified by adapted `TestParseResourceRef` (string outputs unchanged) and at least one preflight error-message test exercising the cluster-scoped case.
 
 ### AC for R2 (unified FindComposites)
@@ -196,7 +196,7 @@ The change is one logical refactor but is implemented in 5 small steps, each ind
 - Run `go test ./cmd/diff/...` — should fail at compile time on production code that still uses `dtypes.ResourceRef`.
 
 **Implementation:**
-- Add `formatRef(n k8stypes.NamespacedName) string` to `cmd/diff/diffprocessor/comp_processor.go` (uses a `switch` block). It lives next to `preflightResourceRefs` because that's the only call site — the processor renders user-facing error messages, the CLI just parses refs and hands them off.
+- Add `Format(n k8stypes.NamespacedName) string` to `cmd/diff/ref/ref.go` alongside `Parse`/`ParseAll`. The new package owns CLI ref I/O; both the CLI (parses incoming `--resource` values) and the processor (renders unmatched refs in error messages) call into it.
 - Add `import k8stypes "k8s.io/apimachinery/pkg/types"` everywhere `cmd/diff/types` was imported as `dtypes` (or where `types.ResourceRef` was used).
 - Mechanical rename: `dtypes.ResourceRef` → `k8stypes.NamespacedName` across all production and test files.
 - Update `parseResourceRef` return type and constructors.
