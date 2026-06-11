@@ -768,6 +768,30 @@ func (b *MockCompositionClientBuilder) WithFindResourcesError(errMsg string) *Mo
 	})
 }
 
+// WithCompositesByRef sets FindComposites (refs mode) to return the given resources for any
+// non-empty-Refs request. Default-discovery calls return an explicit error identifying this helper
+// as refs-only — use WithFindComposites directly if you need to mock both modes. Mirror of
+// WithResourcesForComposition for the refs-mode side.
+func (b *MockCompositionClientBuilder) WithCompositesByRef(matched ...*un.Unstructured) *MockCompositionClientBuilder {
+	return b.WithFindComposites(func(_ context.Context, _ *xpextv1.Composition, opts dtypes.FindCompositesOptions) ([]*un.Unstructured, error) {
+		if len(opts.Refs) == 0 {
+			return nil, errors.New("WithCompositesByRef only handles refs-mode (non-empty Refs)")
+		}
+
+		return matched, nil
+	})
+}
+
+// WithNoMatchingComposites sets FindComposites to return an empty matched set regardless of mode
+// (default-discovery or refs). Use for "nothing matches anywhere" tests where neither default nor
+// refs lookup should produce results. Mirrors WithNoMatchingComposition for the FindMatchingComposition
+// method.
+func (b *MockCompositionClientBuilder) WithNoMatchingComposites() *MockCompositionClientBuilder {
+	return b.WithFindComposites(func(context.Context, *xpextv1.Composition, dtypes.FindCompositesOptions) ([]*un.Unstructured, error) {
+		return nil, nil
+	})
+}
+
 // WithComposition is an alias for WithSuccessfulCompositionMatch for convenience.
 func (b *MockCompositionClientBuilder) WithComposition(comp *xpextv1.Composition) *MockCompositionClientBuilder {
 	return b.WithSuccessfulCompositionMatch(comp)

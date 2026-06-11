@@ -823,62 +823,38 @@ func TestDefaultCompDiffProcessor_DiffComposition_ResourceMode(t *testing.T) {
 		Build()
 
 	// DispatchesToCorrectFindMode: DiffComposition routes to ref-lookup vs default-discovery
-	// based on whether `resources` is non-empty.
+	// based on whether `resources` is non-empty. Verification is implicit via mode-specific
+	// helpers — WithResourcesForComposition errors on refs-mode, WithCompositesByRef errors on
+	// default-discovery, so wrong-mode dispatch surfaces as a non-nil DiffComposition error.
 	t.Run("DispatchesToCorrectFindMode", func(t *testing.T) {
 		dispatchTests := map[string]struct {
-			resources        []k8stypes.NamespacedName
-			namespace        string
-			matched          []*un.Unstructured // returned by FindComposites for the chosen path
-			wantDefaultCalls int
-			wantRefCalls     int
+			resources         []k8stypes.NamespacedName
+			namespace         string
+			compositionClient xp.CompositionClient
 		}{
 			"EmptyResources_DefaultDiscovery": {
-				resources:        nil,
-				namespace:        "ns",
-				matched:          []*un.Unstructured{xr1},
-				wantDefaultCalls: 1,
-				wantRefCalls:     0,
+				resources: nil,
+				namespace: "ns",
+				compositionClient: tu.NewMockCompositionClient().
+					WithSuccessfulCompositionFetch(&apiextensionsv1.Composition{}).
+					WithResourcesForComposition("test-comp", "ns", []*un.Unstructured{xr1}).
+					Build(),
 			},
 			"WithResources_RefLookup": {
-				resources:        []k8stypes.NamespacedName{{Namespace: "ns", Name: "xr-1"}, {Namespace: "ns", Name: "xr-2"}},
-				namespace:        "",
-				matched:          []*un.Unstructured{xr1, xr2},
-				wantDefaultCalls: 0,
-				wantRefCalls:     1,
+				resources: []k8stypes.NamespacedName{{Namespace: "ns", Name: "xr-1"}, {Namespace: "ns", Name: "xr-2"}},
+				namespace: "",
+				compositionClient: tu.NewMockCompositionClient().
+					WithSuccessfulCompositionFetch(&apiextensionsv1.Composition{}).
+					WithCompositesByRef(xr1, xr2).
+					Build(),
 			},
 		}
 
 		for name, tt := range dispatchTests {
 			t.Run(name, func(t *testing.T) {
-				var defaultCalls, refCalls int
-
-				client := tu.NewMockCompositionClient().
-					WithSuccessfulCompositionFetch(&apiextensionsv1.Composition{}).
-					WithFindComposites(func(_ context.Context, _ *apiextensionsv1.Composition, opts types.FindCompositesOptions) ([]*un.Unstructured, error) {
-						switch {
-						case len(opts.Refs) > 0:
-							refCalls++
-						default:
-							defaultCalls++
-						}
-
-						return tt.matched, nil
-					}).
-					Build()
-
-				proc, _ := newCompProcessorForTest(t, client, false)
-
-				_, err := proc.DiffComposition(t.Context(), []*un.Unstructured{comp}, tt.namespace, tt.resources)
-				if err != nil {
+				proc, _ := newCompProcessorForTest(t, tt.compositionClient, false)
+				if _, err := proc.DiffComposition(t.Context(), []*un.Unstructured{comp}, tt.namespace, tt.resources); err != nil {
 					t.Fatalf("unexpected error: %v", err)
-				}
-
-				if defaultCalls != tt.wantDefaultCalls {
-					t.Errorf("default-discovery calls: got %d, want %d", defaultCalls, tt.wantDefaultCalls)
-				}
-
-				if refCalls != tt.wantRefCalls {
-					t.Errorf("ref-lookup calls: got %d, want %d", refCalls, tt.wantRefCalls)
 				}
 			})
 		}
@@ -887,10 +863,7 @@ func TestDefaultCompDiffProcessor_DiffComposition_ResourceMode(t *testing.T) {
 	t.Run("ResourceMode_GloballyUnmatched_FailsFastNoRender", func(t *testing.T) {
 		client := tu.NewMockCompositionClient().
 			WithSuccessfulCompositionFetch(&apiextensionsv1.Composition{}).
-			WithFindComposites(func(_ context.Context, _ *apiextensionsv1.Composition, _ types.FindCompositesOptions) ([]*un.Unstructured, error) {
-				// No matches; everything unmatched (FindComposites returns the empty matched set).
-				return nil, nil
-			}).
+			WithNoMatchingComposites().
 			Build()
 
 		proc, stdout := newCompProcessorForTest(t, client, false)
