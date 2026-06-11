@@ -45,10 +45,16 @@ type CompositionClient interface {
 	// composition's XR GVK (then claim GVK on 404 if the XRD defines a claim type). A ref is included
 	// in the result only when (a) the cluster lookup succeeds AND (b) the resource references this
 	// composition by name. Refs that don't satisfy both are silently omitted; callers derive
-	// "unmatched" from the diff between input refs and returned objects.
+	// "unmatched" from the diff between input refs and returned objects. NotFound on per-ref XR/Claim
+	// lookups is tolerated; non-NotFound transport errors propagate.
+	//
 	// When opts.Refs is empty, it performs default discovery scoped to opts.Namespace, listing all
 	// XRs (and Claims, if the XRD defines them) of the appropriate GVK and filtering by composition.
-	// NotFound responses are tolerated; non-NotFound transport errors propagate.
+	// XR/Claim list errors are tolerated (each list is best-effort and produces an empty bucket on
+	// failure). However, the composition itself must be in the cluster cache: when GetComposition
+	// returns NotFound (a net-new composition not yet applied), FindComposites returns that error to
+	// the caller. Callers handle that case by treating it as "no affected XRs" — see
+	// DiffComposition's default-discovery branch.
 	FindComposites(ctx context.Context, comp *un.Unstructured, opts dtypes.FindCompositesOptions) ([]*un.Unstructured, error)
 }
 

@@ -1,6 +1,6 @@
 # Refactor: clean up the `--resource` filter architecture
 
-Companion plan file: `~/.claude/plans/peppy-sniffing-valley.md`. This document is the authoritative source during implementation.
+This document is the authoritative source during implementation.
 
 ## As Is
 
