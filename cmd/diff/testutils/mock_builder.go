@@ -127,6 +127,15 @@ func (b *MockResourceClientBuilder) WithResourceNotFound() *MockResourceClientBu
 	})
 }
 
+// WithGetResourceError sets GetResource to always return the given error
+// (for non-NotFound transport-failure scenarios; use WithResourceNotFound
+// for clean 404 cases).
+func (b *MockResourceClientBuilder) WithGetResourceError(err error) *MockResourceClientBuilder {
+	return b.WithGetResource(func(context.Context, schema.GroupVersionKind, string, string) (*un.Unstructured, error) {
+		return nil, err
+	})
+}
+
 // WithListResources sets the ListResources behavior.
 func (b *MockResourceClientBuilder) WithListResources(fn func(context.Context, schema.GroupVersionKind, string) ([]*un.Unstructured, error)) *MockResourceClientBuilder {
 	b.mock.ListResourcesFn = fn
