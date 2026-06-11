@@ -57,6 +57,9 @@ type IntegrationTestCase struct {
 	functionCredentials        string        // Path to function credentials file (optional)
 	eventualState              bool          // Enable eventual state simulation for XR or composition tests (optional)
 	timeout                    time.Duration // Custom timeout for this test (0 = use default)
+	resources                  []string      // For composition tests: --resource values; each entry passed as one --resource flag
+	resourcesCSV               string        // For composition tests: alternative single --resource=a,b style invocation
+	includeManual              bool          // For composition tests: pass --include-manual flag
 	skip                       bool
 	skipReason                 string
 	// JSON output support: set outputFormat to "json" to use structured assertions.
@@ -262,6 +265,21 @@ func runIntegrationTest(t *testing.T, testType DiffTestType, tt IntegrationTestC
 	// Add eventual-state flag if specified (supported by both `xr` and `comp`).
 	if tt.eventualState {
 		args = append(args, "--eventual-state")
+	}
+
+	// Add --resource flags (composition tests only)
+	if testType == CompositionDiffTest {
+		for _, r := range tt.resources {
+			args = append(args, fmt.Sprintf("--resource=%s", r))
+		}
+
+		if tt.resourcesCSV != "" {
+			args = append(args, fmt.Sprintf("--resource=%s", tt.resourcesCSV))
+		}
+
+		if tt.includeManual {
+			args = append(args, "--include-manual")
+		}
 	}
 
 	// Add files as positional arguments
@@ -3218,6 +3236,112 @@ Summary: 2 modified`,
 				WithField("spec.forProvider.configData", "updated-existing-value").
 				AndXR().AndComp().And(),
 			expectedError: false,
+		},
+		// --resource flag tests (issue #321)
+		"ResourceFilterScopesAffectedXRs": {
+			reason: "--resource limits impact analysis to the named composites and ignores the rest",
+			setupFiles: []string{
+				"testdata/comp/resources/xrd.yaml",
+				"testdata/comp/resources/original-composition.yaml",
+				"testdata/comp/resources/composition-revision-v1.yaml",
+				"testdata/comp/resources/functions.yaml",
+				"testdata/comp/resources/existing-xr-1.yaml", // test-resource (default ns)
+				"testdata/comp/resources/existing-downstream-1.yaml",
+				"testdata/comp/resources/existing-xr-2.yaml", // another-resource (default ns)
+				"testdata/comp/resources/existing-downstream-2.yaml",
+			},
+			inputFiles:       []string{"testdata/comp/updated-composition.yaml"},
+			resources:        []string{"default/test-resource"},
+			outputFormat:     "json",
+			expectedExitCode: dp.ExitCodeDiffDetected,
+			expectedStructuredCompOutput: tu.ExpectCompDiff().
+				WithComposition("xnopresources.diff.example.org").
+				WithCompositionModified().
+				WithAffectedResources(1, 1, 0, 0).
+				WithXRImpact("XNopResource", "test-resource", "default", "changed").
+				AndComp().And(),
+		},
+		"ResourceFilterCommaSeparated": {
+			reason: "--resource accepts comma-separated values via kong's auto-parsing",
+			setupFiles: []string{
+				"testdata/comp/resources/xrd.yaml",
+				"testdata/comp/resources/original-composition.yaml",
+				"testdata/comp/resources/composition-revision-v1.yaml",
+				"testdata/comp/resources/functions.yaml",
+				"testdata/comp/resources/existing-xr-1.yaml",
+				"testdata/comp/resources/existing-downstream-1.yaml",
+				"testdata/comp/resources/existing-xr-2.yaml",
+				"testdata/comp/resources/existing-downstream-2.yaml",
+			},
+			inputFiles:       []string{"testdata/comp/updated-composition.yaml"},
+			resourcesCSV:     "default/test-resource,default/another-resource",
+			outputFormat:     "json",
+			expectedExitCode: dp.ExitCodeDiffDetected,
+			expectedStructuredCompOutput: tu.ExpectCompDiff().
+				WithComposition("xnopresources.diff.example.org").
+				WithCompositionModified().
+				WithAffectedResources(2, 2, 0, 0).
+				WithXRImpact("XNopResource", "test-resource", "default", "changed").
+				AndComp().
+				WithXRImpact("XNopResource", "another-resource", "default", "changed").
+				AndComp().And(),
+		},
+		"ResourceFilterUnmatched_FailsBeforeRendering": {
+			reason: "--resource naming a non-existent composite fails fast with an error before any rendering",
+			setupFiles: []string{
+				"testdata/comp/resources/xrd.yaml",
+				"testdata/comp/resources/original-composition.yaml",
+				"testdata/comp/resources/composition-revision-v1.yaml",
+				"testdata/comp/resources/functions.yaml",
+				"testdata/comp/resources/existing-xr-1.yaml",
+				"testdata/comp/resources/existing-downstream-1.yaml",
+			},
+			inputFiles:            []string{"testdata/comp/updated-composition.yaml"},
+			resources:             []string{"default/does-not-exist"},
+			expectedError:         true,
+			expectedErrorContains: "does-not-exist",
+			expectedExitCode:      dp.ExitCodeToolError,
+		},
+		"ResourceFilterRespectsManualPolicy_WithoutIncludeManual": {
+			reason: "--resource matching a Manual-policy composite surfaces it as filtered_by_policy when --include-manual is unset",
+			setupFiles: []string{
+				"testdata/comp/resources/xrd.yaml",
+				"testdata/comp/resources/original-composition.yaml",
+				"testdata/comp/resources/composition-revision-v1.yaml",
+				"testdata/comp/resources/functions.yaml",
+				"testdata/comp/resources/existing-xr-manual.yaml",
+				"testdata/comp/resources/existing-downstream-manual.yaml",
+			},
+			inputFiles:       []string{"testdata/comp/updated-composition.yaml"},
+			resources:        []string{"default/manual-resource"},
+			outputFormat:     "json",
+			expectedExitCode: dp.ExitCodeDiffDetected, // composition itself changed
+			expectedStructuredCompOutput: tu.ExpectCompDiff().
+				WithComposition("xnopresources.diff.example.org").
+				WithCompositionModified().
+				WithXRImpact("XNopResource", "manual-resource", "default", "filtered_by_policy").
+				AndComp().And(),
+		},
+		"ResourceFilterRespectsManualPolicy_WithIncludeManual": {
+			reason: "--include-manual evaluates the Manual-policy composite normally instead of marking it filtered_by_policy",
+			setupFiles: []string{
+				"testdata/comp/resources/xrd.yaml",
+				"testdata/comp/resources/original-composition.yaml",
+				"testdata/comp/resources/composition-revision-v1.yaml",
+				"testdata/comp/resources/functions.yaml",
+				"testdata/comp/resources/existing-xr-manual.yaml",
+				"testdata/comp/resources/existing-downstream-manual.yaml",
+			},
+			inputFiles:       []string{"testdata/comp/updated-composition.yaml"},
+			resources:        []string{"default/manual-resource"},
+			includeManual:    true,
+			outputFormat:     "json",
+			expectedExitCode: dp.ExitCodeDiffDetected,
+			expectedStructuredCompOutput: tu.ExpectCompDiff().
+				WithComposition("xnopresources.diff.example.org").
+				WithCompositionModified().
+				WithXRImpact("XNopResource", "manual-resource", "default", "changed").
+				AndComp().And(),
 		},
 	}
 

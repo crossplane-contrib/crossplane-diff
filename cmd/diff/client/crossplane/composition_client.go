@@ -7,9 +7,13 @@ import (
 
 	"github.com/crossplane-contrib/crossplane-diff/cmd/diff/client/core"
 	"github.com/crossplane-contrib/crossplane-diff/cmd/diff/client/kubernetes"
+	"github.com/crossplane-contrib/crossplane-diff/cmd/diff/ref"
+	dtypes "github.com/crossplane-contrib/crossplane-diff/cmd/diff/types"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	un "k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	k8stypes "k8s.io/apimachinery/pkg/types"
 
 	"github.com/crossplane/crossplane-runtime/v2/pkg/errors"
 	"github.com/crossplane/crossplane-runtime/v2/pkg/logging"
@@ -30,8 +34,28 @@ type CompositionClient interface {
 	// GetComposition gets a composition by name
 	GetComposition(ctx context.Context, name string) (*apiextensionsv1.Composition, error)
 
-	// FindCompositesUsingComposition finds all composites (XRs and Claims) that use the specified composition
-	FindCompositesUsingComposition(ctx context.Context, compositionName string, namespace string) ([]*un.Unstructured, error)
+	// FindComposites locates composites (XRs and Claims) that reference a composition.
+	// `comp` is taken as the user-supplied unstructured Composition (typically loaded from a YAML
+	// file); the client converts to a typed *apiextensionsv1.Composition internally only when
+	// needed (i.e. in refs-mode, which reads spec.compositeTypeRef). Default-discovery only needs
+	// comp.GetName() and avoids the conversion entirely so it isn't tripped by version skew or
+	// unknown fields in the input file.
+	//
+	// When opts.Refs is non-empty, it performs ref-based lookup: each ref is resolved against the
+	// composition's XR GVK (then claim GVK on 404 if the XRD defines a claim type). A ref is included
+	// in the result only when (a) the cluster lookup succeeds AND (b) the resource references this
+	// composition by name. Refs that don't satisfy both are silently omitted; callers derive
+	// "unmatched" from the diff between input refs and returned objects. NotFound on per-ref XR/Claim
+	// lookups is tolerated; non-NotFound transport errors propagate.
+	//
+	// When opts.Refs is empty, it performs default discovery scoped to opts.Namespace, listing all
+	// XRs (and Claims, if the XRD defines them) of the appropriate GVK and filtering by composition.
+	// XR/Claim list errors are tolerated (each list is best-effort and produces an empty bucket on
+	// failure). However, the composition itself must be in the cluster cache: when GetComposition
+	// returns NotFound (a net-new composition not yet applied), FindComposites returns that error to
+	// the caller. Callers handle that case by treating it as "no affected XRs" — see
+	// DiffComposition's default-discovery branch.
+	FindComposites(ctx context.Context, comp *un.Unstructured, opts dtypes.FindCompositesOptions) ([]*un.Unstructured, error)
 }
 
 // DefaultCompositionClient implements CompositionClient.
@@ -689,8 +713,11 @@ func (c *DefaultCompositionClient) findByTypeReference(ctx context.Context, _ *u
 	return compatibleCompositions[0], nil
 }
 
-// FindCompositesUsingComposition finds all composites (XRs and Claims) that use the specified composition.
-func (c *DefaultCompositionClient) FindCompositesUsingComposition(ctx context.Context, compositionName string, namespace string) ([]*un.Unstructured, error) {
+// findByListing implements default-discovery for FindComposites: list every XR (and Claim, if the
+// XRD defines one) of the composition's target GVK, scoped to namespace, and filter by composition.
+// If the composition itself isn't in the cluster (net-new), the GetComposition lookup fails and the
+// error propagates to the caller, which is expected to handle "net-new" gracefully.
+func (c *DefaultCompositionClient) findByListing(ctx context.Context, compositionName string, namespace string) ([]*un.Unstructured, error) {
 	c.logger.Debug("Finding composites using composition",
 		"compositionName", compositionName,
 		"namespace", namespace)
@@ -821,4 +848,158 @@ func (c *DefaultCompositionClient) resourceUsesComposition(resource *un.Unstruct
 	}
 
 	return false
+}
+
+// findByRefs implements ref-based lookup for FindComposites: each ref is resolved against the
+// composition's XR GVK first, then the claim GVK on 404 if the XRD defines a claim type. Refs that
+// fail both lookups, or that exist but reference a different composition, are silently dropped from
+// the result. NotFound responses are tolerated; other errors propagate.
+//
+// Converts the unstructured Composition to a typed *apiextensionsv1.Composition internally because
+// resolveCompositeTypes needs spec.compositeTypeRef. Conversion errors propagate.
+func (c *DefaultCompositionClient) findByRefs(ctx context.Context, comp *un.Unstructured, refs []k8stypes.NamespacedName) ([]*un.Unstructured, error) {
+	if len(refs) == 0 {
+		return nil, nil
+	}
+
+	typedComp := &apiextensionsv1.Composition{}
+	if err := runtime.DefaultUnstructuredConverter.FromUnstructured(comp.Object, typedComp); err != nil {
+		return nil, errors.Wrapf(err, "cannot convert composition %s to typed for refs lookup", comp.GetName())
+	}
+
+	types, err := c.resolveCompositeTypes(ctx, typedComp)
+	if err != nil {
+		return nil, err
+	}
+
+	var matched []*un.Unstructured
+
+	for _, n := range refs {
+		obj, err := c.lookupRef(ctx, n, types, comp.GetName())
+		if err != nil {
+			return nil, err
+		}
+
+		if obj != nil {
+			matched = append(matched, obj)
+		}
+	}
+
+	return matched, nil
+}
+
+// compositeTypes holds the GVKs needed to look up a composite by name. claimGVK is empty
+// when the XRD has no claimNames or could not be retrieved (graceful degradation).
+type compositeTypes struct {
+	xrGVK    schema.GroupVersionKind
+	claimGVK schema.GroupVersionKind
+}
+
+// resolveCompositeTypes derives the XR GVK from the composition's CompositeTypeRef and
+// best-effort resolves the claim GVK from the XRD. XRD lookup failures and missing claimNames
+// produce an empty claim GVK without erroring (graceful degradation).
+func (c *DefaultCompositionClient) resolveCompositeTypes(ctx context.Context, comp *apiextensionsv1.Composition) (compositeTypes, error) {
+	gv, err := schema.ParseGroupVersion(comp.Spec.CompositeTypeRef.APIVersion)
+	if err != nil {
+		return compositeTypes{}, errors.Wrapf(err, "cannot parse compositeTypeRef apiVersion %q", comp.Spec.CompositeTypeRef.APIVersion)
+	}
+
+	types := compositeTypes{
+		xrGVK: schema.GroupVersionKind{
+			Group:   gv.Group,
+			Version: gv.Version,
+			Kind:    comp.Spec.CompositeTypeRef.Kind,
+		},
+	}
+
+	xrd, xrdErr := c.definitionClient.GetXRDForXR(ctx, types.xrGVK)
+
+	switch {
+	case xrdErr != nil:
+		c.logger.Debug("XRD lookup failed; skipping claim-GVK fallback for --resource lookups",
+			"xrGVK", types.xrGVK.String(), "error", xrdErr)
+	case xrd != nil:
+		gvk, err := c.getClaimTypeFromXRD(xrd)
+		if err != nil {
+			c.logger.Debug("could not extract claim type from XRD; skipping claim-GVK fallback",
+				"xrd", xrd.GetName(), "error", err)
+		} else {
+			types.claimGVK = gvk
+		}
+	}
+
+	return types, nil
+}
+
+// lookupRef resolves a single ref against (compName, types). Tries the XR GVK first; on miss
+// (404 OR found-but-wrong-composition) falls through to the claim GVK if non-empty. Returns the
+// matched object, or nil if neither GVK yielded a resource referencing compName. Non-NotFound
+// cluster errors propagate.
+//
+// "Found-but-wrong-composition" falls through (rather than short-circuiting to nil) so a same-name
+// XR + Claim collision in v2 namespaces resolves correctly: e.g. an XR `default/foo` (XBucket)
+// using composition Y and a Claim `default/foo` (Bucket) using composition X both exist; a
+// `--resource=default/foo` lookup against composition X must reach the Claim via the claim-GVK
+// path even though the XR GET succeeds first.
+func (c *DefaultCompositionClient) lookupRef(ctx context.Context, n k8stypes.NamespacedName, types compositeTypes, compName string) (*un.Unstructured, error) {
+	obj, err := c.tryLookupAtGVK(ctx, types.xrGVK, n, compName, "XR GVK")
+	if err != nil {
+		return nil, err
+	}
+
+	if obj != nil {
+		return obj, nil
+	}
+
+	if types.claimGVK.Empty() {
+		c.logger.Debug("ref not matched via XR GVK and no claim GVK to try",
+			"ref", n.String())
+
+		return nil, nil
+	}
+
+	return c.tryLookupAtGVK(ctx, types.claimGVK, n, compName, "claim GVK")
+}
+
+// tryLookupAtGVK fetches a single resource at (gvk, n.Namespace, n.Name) and returns it iff
+// the resource exists AND references compName. Returns (nil, nil) for both 404 and
+// found-but-wrong-composition — callers distinguish "missed at this GVK, try the next" from
+// "matched at this GVK". Non-NotFound errors propagate.
+func (c *DefaultCompositionClient) tryLookupAtGVK(ctx context.Context, gvk schema.GroupVersionKind, n k8stypes.NamespacedName, compName, kindLabel string) (*un.Unstructured, error) {
+	obj, err := c.resourceClient.GetResource(ctx, gvk, n.Namespace, n.Name)
+
+	switch {
+	case apierrors.IsNotFound(err):
+		c.logger.Debug("ref not found at GVK",
+			"ref", n.String(), "gvk", gvk.String(), "via", kindLabel)
+
+		return nil, nil
+	case err != nil:
+		// Render the ref the way the user typed it on the CLI ("foo" for cluster-scoped,
+		// "ns/foo" for namespaced) — n.String() always renders "/foo" for cluster-scoped,
+		// which contradicts the documented --resource format in user-facing errors.
+		return nil, errors.Wrapf(err, "cannot fetch composite %s as %s", ref.Format(n), gvk)
+	}
+
+	if c.resourceUsesComposition(obj, compName) {
+		c.logger.Debug("matched ref",
+			"ref", n.String(), "composition", compName, "via", kindLabel)
+
+		return obj, nil
+	}
+
+	c.logger.Debug("ref exists at GVK but does not reference this composition",
+		"ref", n.String(), "gvk", gvk.String(), "composition", compName, "via", kindLabel)
+
+	return nil, nil
+}
+
+// FindComposites dispatches to ref-based or listing-based discovery based on opts.Refs.
+func (c *DefaultCompositionClient) FindComposites(ctx context.Context, comp *un.Unstructured, opts dtypes.FindCompositesOptions) ([]*un.Unstructured, error) {
+	switch {
+	case len(opts.Refs) > 0:
+		return c.findByRefs(ctx, comp, opts.Refs)
+	default:
+		return c.findByListing(ctx, comp.GetName(), opts.Namespace)
+	}
 }

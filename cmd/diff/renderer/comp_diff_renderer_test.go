@@ -414,16 +414,22 @@ func Test_formatXRStatusSummary(t *testing.T) {
 }
 
 func Test_pluralize(t *testing.T) {
-	if pluralize(1) != "" {
-		t.Error("pluralize(1) should return empty string")
+	tests := map[string]struct {
+		count int
+		want  string
+	}{
+		"Singular_NoSuffix":  {count: 1, want: ""},
+		"Zero_HasSuffix":     {count: 0, want: "s"},
+		"Plural_HasSuffix":   {count: 2, want: "s"},
+		"Negative_HasSuffix": {count: -1, want: "s"},
 	}
 
-	if pluralize(0) != "s" {
-		t.Error("pluralize(0) should return 's'")
-	}
-
-	if pluralize(2) != "s" {
-		t.Error("pluralize(2) should return 's'")
+	for name, tt := range tests {
+		t.Run(name, func(t *testing.T) {
+			if got := pluralize(tt.count); got != tt.want {
+				t.Errorf("pluralize(%d) = %q, want %q", tt.count, got, tt.want)
+			}
+		})
 	}
 }
 
@@ -534,5 +540,89 @@ func TestCompDiffOutput_JSONSchema(t *testing.T) {
 
 	if comp.ImpactAnalysis[0].DownstreamChanges.Summary.Modified != 1 {
 		t.Errorf("Expected 1 modified, got %d", comp.ImpactAnalysis[0].DownstreamChanges.Summary.Modified)
+	}
+}
+
+func TestXRStatusFilteredByPolicy_JSON(t *testing.T) {
+	output := &CompDiffOutput{
+		Compositions: []CompositionDiff{{
+			Name:              "test-comp",
+			AffectedResources: AffectedResourcesSummary{Total: 1, FilteredByPolicy: 1},
+			ImpactAnalysis: []XRImpact{
+				{
+					ObjectReference: corev1.ObjectReference{APIVersion: "example.org/v1", Kind: "XR", Name: "manual-xr", Namespace: "ns"},
+					Status:          XRStatusFilteredByPolicy,
+				},
+			},
+		}},
+	}
+
+	logger := tu.TestLogger(t, false)
+
+	var jsonBuf bytes.Buffer
+
+	opts := DefaultDiffOptions()
+	opts.Format = OutputFormatJSON
+	opts.Stdout = &jsonBuf
+	opts.Stderr = &bytes.Buffer{}
+
+	r := NewStructuredCompDiffRenderer(logger, opts)
+	if err := r.RenderCompDiff(output); err != nil {
+		t.Fatalf("RenderCompDiff: %v", err)
+	}
+
+	var parsed compDiffJSONOutput
+	if err := json.Unmarshal(jsonBuf.Bytes(), &parsed); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+
+	if len(parsed.Compositions) != 1 || len(parsed.Compositions[0].ImpactAnalysis) != 1 {
+		t.Fatalf("expected 1 composition with 1 impact, got %+v", parsed)
+	}
+
+	imp := parsed.Compositions[0].ImpactAnalysis[0]
+	if got, want := string(imp.Status), "filtered_by_policy"; got != want {
+		t.Errorf("status: got %q, want %q", got, want)
+	}
+
+	if imp.DownstreamChanges != nil {
+		t.Errorf("downstreamChanges should be omitted for filtered_by_policy, got %+v", imp.DownstreamChanges)
+	}
+}
+
+func TestXRStatusFilteredByPolicy_TextRenderer(t *testing.T) {
+	comp := CompositionDiff{
+		Name:              "test-comp",
+		AffectedResources: AffectedResourcesSummary{Total: 1, FilteredByPolicy: 1},
+		ImpactAnalysis: []XRImpact{
+			{
+				ObjectReference: corev1.ObjectReference{APIVersion: "example.org/v1", Kind: "XR", Name: "manual-xr", Namespace: "ns"},
+				Status:          XRStatusFilteredByPolicy,
+			},
+		},
+	}
+
+	logger := tu.TestLogger(t, false)
+	r := &DefaultCompDiffRenderer{logger: logger, opts: DefaultDiffOptions()}
+	got := r.buildXRStatusList(comp.ImpactAnalysis)
+
+	if !strings.Contains(got, "manual-xr") {
+		t.Errorf("expected XR name in output, got %q", got)
+	}
+
+	if !strings.Contains(strings.ToLower(got), "manual") && !strings.Contains(strings.ToLower(got), "filtered") {
+		t.Errorf("expected 'manual' or 'filtered' marker in output, got %q", got)
+	}
+}
+
+func TestCompositionDiff_HasChanges_FilteredByPolicyOnly(t *testing.T) {
+	c := &CompositionDiff{
+		ImpactAnalysis: []XRImpact{
+			{Status: XRStatusFilteredByPolicy},
+			{Status: XRStatusFilteredByPolicy},
+		},
+	}
+	if c.HasChanges() {
+		t.Errorf("CompositionDiff with only filtered-by-policy impacts should not be HasChanges()")
 	}
 }

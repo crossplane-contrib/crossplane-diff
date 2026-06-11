@@ -22,10 +22,12 @@ import (
 
 	"github.com/alecthomas/kong"
 	dp "github.com/crossplane-contrib/crossplane-diff/cmd/diff/diffprocessor"
-	ld "github.com/crossplane/cli/v2/cmd/crossplane/common/load"
+	"github.com/crossplane-contrib/crossplane-diff/cmd/diff/ref"
 
 	"github.com/crossplane/crossplane-runtime/v2/pkg/errors"
 	"github.com/crossplane/crossplane-runtime/v2/pkg/logging"
+
+	ld "github.com/crossplane/cli/v2/cmd/crossplane/common/load"
 )
 
 // CompDiffProcessor is imported from the diffprocessor package
@@ -38,8 +40,18 @@ type CompCmd struct {
 	Files []string `arg:"" help:"YAML files containing updated Composition(s)." optional:""`
 
 	// Configuration options
-	Namespace     string `default:""      help:"Namespace to find XRs (empty = all namespaces)."                            name:"namespace"      short:"n"`
-	IncludeManual bool   `default:"false" help:"Include XRs with Manual update policy (default: only Automatic policy XRs)" name:"include-manual"`
+	Namespace     string   `default:""                                                                                                                                          help:"Namespace to find XRs (empty = all namespaces)."                            name:"namespace"      short:"n"`
+	IncludeManual bool     `default:"false"                                                                                                                                     help:"Include XRs with Manual update policy (default: only Automatic policy XRs)" name:"include-manual"`
+	Resources     []string `help:"Limit impact analysis to specific composites in [namespace/]name format. Repeatable or comma-separated. Mutually exclusive with --namespace." name:"resource"`
+}
+
+// validateFlags returns an error if mutually exclusive flags are set together.
+func (c *CompCmd) validateFlags() error {
+	if c.Namespace != "" && len(c.Resources) > 0 {
+		return errors.New("--namespace and --resource are mutually exclusive; use --resource=[namespace/]name to scope by name")
+	}
+
+	return nil
 }
 
 // Help returns help instructions for the composition diff command.
@@ -68,6 +80,15 @@ Examples:
 
   # Show eventual state with function-sequencer (all stages, not just first).
   crossplane-diff comp updated-composition.yaml --eventual-state
+
+  # Limit impact analysis to specific composites (by [namespace/]name)
+  crossplane-diff comp updated-composition.yaml --resource=default/my-claim
+  crossplane-diff comp updated-composition.yaml --resource=default/xr-1,default/xr-2
+
+Notes:
+  --resource cannot be combined with --namespace.
+  Composites with Manual update policy are surfaced as "filtered_by_policy"
+  unless --include-manual is also passed.
 `
 }
 
@@ -75,6 +96,10 @@ Examples:
 // AppContext is received via dependency injection - Kong resolves it through the provider chain:
 // ContextProvider (bound in CommonCmdFields.BeforeApply) -> provideRestConfig -> provideAppContext.
 func (c *CompCmd) AfterApply(ctx *kong.Context, log logging.Logger, appCtx *AppContext) error {
+	if err := c.validateFlags(); err != nil {
+		return err
+	}
+
 	proc := makeDefaultCompProc(c, ctx, appCtx, log)
 
 	loader, err := ld.NewCompositeLoader(c.Files)
@@ -147,7 +172,13 @@ func (c *CompCmd) Run(_ *kong.Context, log logging.Logger, appCtx *AppContext, p
 		return errors.Wrap(err, "cannot load compositions")
 	}
 
-	hasDiffs, err := proc.DiffComposition(ctx, compositions, c.Namespace)
+	parsedRefs, err := ref.ParseAll(c.Resources)
+	if err != nil {
+		exitCode.Code = dp.ExitCodeToolError
+		return err
+	}
+
+	hasDiffs, err := proc.DiffComposition(ctx, compositions, c.Namespace, parsedRefs)
 
 	// Determine exit code based on result
 	exitCode.Code = dp.DetermineExitCode(err, hasDiffs)

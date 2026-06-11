@@ -127,6 +127,15 @@ func (b *MockResourceClientBuilder) WithResourceNotFound() *MockResourceClientBu
 	})
 }
 
+// WithGetResourceError sets GetResource to always return the given error
+// (for non-NotFound transport-failure scenarios; use WithResourceNotFound
+// for clean 404 cases).
+func (b *MockResourceClientBuilder) WithGetResourceError(err error) *MockResourceClientBuilder {
+	return b.WithGetResource(func(context.Context, schema.GroupVersionKind, string, string) (*un.Unstructured, error) {
+		return nil, err
+	})
+}
+
 // WithListResources sets the ListResources behavior.
 func (b *MockResourceClientBuilder) WithListResources(fn func(context.Context, schema.GroupVersionKind, string) ([]*un.Unstructured, error)) *MockResourceClientBuilder {
 	b.mock.ListResourcesFn = fn
@@ -723,27 +732,63 @@ func (b *MockCompositionClientBuilder) WithSuccessfulCompositionFetches(comps []
 	})
 }
 
-// WithFindCompositesUsingComposition sets the FindCompositesUsingComposition behavior.
-func (b *MockCompositionClientBuilder) WithFindCompositesUsingComposition(fn func(context.Context, string, string) ([]*un.Unstructured, error)) *MockCompositionClientBuilder {
-	b.mock.FindCompositesUsingCompositionFn = fn
+// WithFindComposites sets the FindComposites behavior.
+func (b *MockCompositionClientBuilder) WithFindComposites(fn func(context.Context, *un.Unstructured, dtypes.FindCompositesOptions) ([]*un.Unstructured, error)) *MockCompositionClientBuilder {
+	b.mock.FindCompositesFn = fn
 	return b
 }
 
-// WithResourcesForComposition sets FindCompositesUsingComposition to return specific resources for a given composition name and namespace.
+// WithResourcesForComposition sets FindComposites (default-discovery mode) to return specific resources
+// for a given composition name and namespace. Refs-mode calls return an explicit error identifying this
+// helper as default-discovery only — use WithFindComposites directly if you need to mock both modes.
 func (b *MockCompositionClientBuilder) WithResourcesForComposition(compositionName, namespace string, resources []*un.Unstructured) *MockCompositionClientBuilder {
-	return b.WithFindCompositesUsingComposition(func(_ context.Context, compName, ns string) ([]*un.Unstructured, error) {
-		if compName == compositionName && ns == namespace {
+	return b.WithFindComposites(func(_ context.Context, comp *un.Unstructured, opts dtypes.FindCompositesOptions) ([]*un.Unstructured, error) {
+		if len(opts.Refs) > 0 {
+			return nil, errors.New("WithResourcesForComposition only handles default-discovery (empty Refs)")
+		}
+
+		if comp.GetName() == compositionName && opts.Namespace == namespace {
 			return resources, nil
 		}
 
-		return nil, errors.Errorf("no resources found for composition %s in namespace %s", compName, ns)
+		return nil, errors.Errorf("no resources found for composition %s in namespace %s", comp.GetName(), opts.Namespace)
 	})
 }
 
-// WithFindResourcesError sets FindCompositesUsingComposition to return an error.
+// WithFindResourcesError sets FindComposites (default-discovery mode) to return an error. Refs-mode calls
+// return an explicit error identifying this helper as default-discovery only — use WithFindComposites
+// directly if you need to mock both modes.
 func (b *MockCompositionClientBuilder) WithFindResourcesError(errMsg string) *MockCompositionClientBuilder {
-	return b.WithFindCompositesUsingComposition(func(context.Context, string, string) ([]*un.Unstructured, error) {
+	return b.WithFindComposites(func(_ context.Context, _ *un.Unstructured, opts dtypes.FindCompositesOptions) ([]*un.Unstructured, error) {
+		if len(opts.Refs) > 0 {
+			return nil, errors.New("WithFindResourcesError only handles default-discovery (empty Refs)")
+		}
+
 		return nil, errors.New(errMsg)
+	})
+}
+
+// WithCompositesByRef sets FindComposites (refs mode) to return the given resources for any
+// non-empty-Refs request. Default-discovery calls return an explicit error identifying this helper
+// as refs-only — use WithFindComposites directly if you need to mock both modes. Mirror of
+// WithResourcesForComposition for the refs-mode side.
+func (b *MockCompositionClientBuilder) WithCompositesByRef(matched ...*un.Unstructured) *MockCompositionClientBuilder {
+	return b.WithFindComposites(func(_ context.Context, _ *un.Unstructured, opts dtypes.FindCompositesOptions) ([]*un.Unstructured, error) {
+		if len(opts.Refs) == 0 {
+			return nil, errors.New("WithCompositesByRef only handles refs-mode (non-empty Refs)")
+		}
+
+		return matched, nil
+	})
+}
+
+// WithNoMatchingComposites sets FindComposites to return an empty matched set regardless of mode
+// (default-discovery or refs). Use for "nothing matches anywhere" tests where neither default nor
+// refs lookup should produce results. Mirrors WithNoMatchingComposition for the FindMatchingComposition
+// method.
+func (b *MockCompositionClientBuilder) WithNoMatchingComposites() *MockCompositionClientBuilder {
+	return b.WithFindComposites(func(context.Context, *un.Unstructured, dtypes.FindCompositesOptions) ([]*un.Unstructured, error) {
+		return nil, nil
 	})
 }
 

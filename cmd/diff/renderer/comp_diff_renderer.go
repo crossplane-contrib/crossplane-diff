@@ -238,7 +238,10 @@ func (r *DefaultCompDiffRenderer) buildXRStatusList(impacts []XRImpact) string {
 		}
 
 		// Determine status indicator and color based on status
-		var indicator, color string
+		var (
+			indicator, color string
+			suffix           string
+		)
 
 		switch impact.Status {
 		case XRStatusError:
@@ -250,12 +253,17 @@ func (r *DefaultCompDiffRenderer) buildXRStatusList(impacts []XRImpact) string {
 		case XRStatusUnchanged:
 			indicator = checkMark
 			color = colorGreen
+		case XRStatusFilteredByPolicy:
+			indicator = "⊘" // ⊘
+			color = colorYellow
+			suffix = " — filtered: Manual update policy (use --include-manual to evaluate)"
 		}
 
-		fmt.Fprintf(&sb, "%s  %s %s/%s (%s)%s\n",
+		fmt.Fprintf(&sb, "%s  %s %s/%s (%s)%s%s\n",
 			color,
 			indicator,
 			impact.Kind, impact.Name, scope,
+			suffix,
 			colorReset)
 
 		// Include error details for XRStatusError impacts so users can diagnose issues.
