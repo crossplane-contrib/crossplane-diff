@@ -7,6 +7,7 @@ import (
 
 	"github.com/crossplane-contrib/crossplane-diff/cmd/diff/client/core"
 	"github.com/crossplane-contrib/crossplane-diff/cmd/diff/client/kubernetes"
+	"github.com/crossplane-contrib/crossplane-diff/cmd/diff/ref"
 	dtypes "github.com/crossplane-contrib/crossplane-diff/cmd/diff/types"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	un "k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -853,8 +854,8 @@ func (c *DefaultCompositionClient) findByRefs(ctx context.Context, comp *apiexte
 
 	var matched []*un.Unstructured
 
-	for _, ref := range refs {
-		obj, err := c.lookupRef(ctx, ref, types, comp.GetName())
+	for _, n := range refs {
+		obj, err := c.lookupRef(ctx, n, types, comp.GetName())
 		if err != nil {
 			return nil, err
 		}
@@ -920,8 +921,8 @@ func (c *DefaultCompositionClient) resolveCompositeTypes(ctx context.Context, co
 // using composition Y and a Claim `default/foo` (Bucket) using composition X both exist; a
 // `--resource=default/foo` lookup against composition X must reach the Claim via the claim-GVK
 // path even though the XR GET succeeds first.
-func (c *DefaultCompositionClient) lookupRef(ctx context.Context, ref k8stypes.NamespacedName, types compositeTypes, compName string) (*un.Unstructured, error) {
-	obj, err := c.tryLookupAtGVK(ctx, types.xrGVK, ref, compName, "XR GVK")
+func (c *DefaultCompositionClient) lookupRef(ctx context.Context, n k8stypes.NamespacedName, types compositeTypes, compName string) (*un.Unstructured, error) {
+	obj, err := c.tryLookupAtGVK(ctx, types.xrGVK, n, compName, "XR GVK")
 	if err != nil {
 		return nil, err
 	}
@@ -932,40 +933,43 @@ func (c *DefaultCompositionClient) lookupRef(ctx context.Context, ref k8stypes.N
 
 	if types.claimGVK.Empty() {
 		c.logger.Debug("ref not matched via XR GVK and no claim GVK to try",
-			"ref", ref.String())
+			"ref", n.String())
 
 		return nil, nil
 	}
 
-	return c.tryLookupAtGVK(ctx, types.claimGVK, ref, compName, "claim GVK")
+	return c.tryLookupAtGVK(ctx, types.claimGVK, n, compName, "claim GVK")
 }
 
-// tryLookupAtGVK fetches a single resource at (gvk, ref.Namespace, ref.Name) and returns it iff
+// tryLookupAtGVK fetches a single resource at (gvk, n.Namespace, n.Name) and returns it iff
 // the resource exists AND references compName. Returns (nil, nil) for both 404 and
 // found-but-wrong-composition — callers distinguish "missed at this GVK, try the next" from
 // "matched at this GVK". Non-NotFound errors propagate.
-func (c *DefaultCompositionClient) tryLookupAtGVK(ctx context.Context, gvk schema.GroupVersionKind, ref k8stypes.NamespacedName, compName, kindLabel string) (*un.Unstructured, error) {
-	obj, err := c.resourceClient.GetResource(ctx, gvk, ref.Namespace, ref.Name)
+func (c *DefaultCompositionClient) tryLookupAtGVK(ctx context.Context, gvk schema.GroupVersionKind, n k8stypes.NamespacedName, compName, kindLabel string) (*un.Unstructured, error) {
+	obj, err := c.resourceClient.GetResource(ctx, gvk, n.Namespace, n.Name)
 
 	switch {
 	case apierrors.IsNotFound(err):
 		c.logger.Debug("ref not found at GVK",
-			"ref", ref.String(), "gvk", gvk.String(), "via", kindLabel)
+			"ref", n.String(), "gvk", gvk.String(), "via", kindLabel)
 
 		return nil, nil
 	case err != nil:
-		return nil, errors.Wrapf(err, "cannot fetch composite %s as %s", ref.String(), gvk)
+		// Render the ref the way the user typed it on the CLI ("foo" for cluster-scoped,
+		// "ns/foo" for namespaced) — n.String() always renders "/foo" for cluster-scoped,
+		// which contradicts the documented --resource format in user-facing errors.
+		return nil, errors.Wrapf(err, "cannot fetch composite %s as %s", ref.Format(n), gvk)
 	}
 
 	if c.resourceUsesComposition(obj, compName) {
 		c.logger.Debug("matched ref",
-			"ref", ref.String(), "composition", compName, "via", kindLabel)
+			"ref", n.String(), "composition", compName, "via", kindLabel)
 
 		return obj, nil
 	}
 
 	c.logger.Debug("ref exists at GVK but does not reference this composition",
-		"ref", ref.String(), "gvk", gvk.String(), "composition", compName, "via", kindLabel)
+		"ref", n.String(), "gvk", gvk.String(), "composition", compName, "via", kindLabel)
 
 	return nil, nil
 }
