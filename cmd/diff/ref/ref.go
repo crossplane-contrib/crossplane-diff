@@ -61,6 +61,14 @@ func Parse(value string) (k8stypes.NamespacedName, error) {
 	}
 
 	parts := strings.Split(trimmed, "/")
+	// Trim each part so inputs like "default / my-claim" — which would otherwise
+	// parse as namespace "default " and fail downstream with a confusing error —
+	// are normalized at the point of CLI parsing. Kubernetes names/namespaces
+	// can't contain whitespace, so per-part trimming never loses information.
+	for i := range parts {
+		parts[i] = strings.TrimSpace(parts[i])
+	}
+
 	switch len(parts) {
 	case 1:
 		return k8stypes.NamespacedName{Name: parts[0]}, nil

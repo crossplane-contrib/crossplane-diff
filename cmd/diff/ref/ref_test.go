@@ -41,6 +41,14 @@ func TestParse(t *testing.T) {
 			input: "  default/my-claim  ",
 			want:  k8stypes.NamespacedName{Namespace: "default", Name: "my-claim"},
 		},
+		"WhitespaceAroundSlash_TrimmedPerPart": {
+			input: "default / my-claim",
+			want:  k8stypes.NamespacedName{Namespace: "default", Name: "my-claim"},
+		},
+		"WhitespaceAroundClusterScopedName_Trimmed": {
+			input: "  my-xr  ",
+			want:  k8stypes.NamespacedName{Name: "my-xr"},
+		},
 		"Empty": {
 			input:   "",
 			wantErr: true,
