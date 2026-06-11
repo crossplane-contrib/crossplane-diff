@@ -20,7 +20,6 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"strings"
 
 	xp "github.com/crossplane-contrib/crossplane-diff/cmd/diff/client/crossplane"
 	"github.com/crossplane-contrib/crossplane-diff/cmd/diff/renderer"
@@ -349,16 +348,12 @@ func (p *DefaultCompDiffProcessor) preflightResourceRefs(ctx context.Context, co
 			names = append(names, formatRef(r))
 		}
 
-		return nil, errors.Errorf("--resource ref(s) not relevant to any supplied composition: %s (resource not found, or it doesn't reference one of the supplied compositions)", joinRefs(names))
+		return nil, errors.Errorf("--resource ref(s) not relevant to any supplied composition: %v (resource not found, or it doesn't reference one of the supplied compositions)", names)
 	}
 
 	return perComp, nil
 }
 
-// joinRefs renders a list of human-readable refs joined by commas.
-func joinRefs(refs []string) string {
-	return strings.Join(refs, ", ")
-}
 
 // formatRef renders a NamespacedName the way the user typed it on the command line:
 // bare "name" for cluster-scoped, "namespace/name" for namespaced. NamespacedName.String()
