@@ -39,34 +39,6 @@ import (
 	apiextensionsv1 "github.com/crossplane/crossplane/apis/v2/apiextensions/v1"
 )
 
-func TestFormatRef(t *testing.T) {
-	tests := map[string]struct {
-		ref  k8stypes.NamespacedName
-		want string
-	}{
-		"ClusterScoped_BareName": {
-			ref:  k8stypes.NamespacedName{Name: "my-xr"},
-			want: "my-xr",
-		},
-		"Namespaced": {
-			ref:  k8stypes.NamespacedName{Namespace: "default", Name: "my-claim"},
-			want: "default/my-claim",
-		},
-		"EmptyEverything": {
-			ref:  k8stypes.NamespacedName{},
-			want: "",
-		},
-	}
-
-	for name, tt := range tests {
-		t.Run(name, func(t *testing.T) {
-			if got := formatRef(tt.ref); got != tt.want {
-				t.Errorf("formatRef(%+v) = %q, want %q", tt.ref, got, tt.want)
-			}
-		})
-	}
-}
-
 func TestDefaultCompDiffProcessor_findResourcesUsingComposition(t *testing.T) {
 	ctx := t.Context()
 

@@ -19,76 +19,7 @@ package main
 import (
 	"strings"
 	"testing"
-
-	k8stypes "k8s.io/apimachinery/pkg/types"
 )
-
-func TestParseResourceRef(t *testing.T) {
-	tests := map[string]struct {
-		input   string
-		want    k8stypes.NamespacedName
-		wantErr bool
-	}{
-		"BareName_ClusterScoped": {
-			input: "my-xr",
-			want:  k8stypes.NamespacedName{Namespace: "", Name: "my-xr"},
-		},
-		"NamespaceAndName": {
-			input: "default/my-claim",
-			want:  k8stypes.NamespacedName{Namespace: "default", Name: "my-claim"},
-		},
-		"WhitespaceTrimmed": {
-			input: "  default/my-claim  ",
-			want:  k8stypes.NamespacedName{Namespace: "default", Name: "my-claim"},
-		},
-		"Empty": {
-			input:   "",
-			wantErr: true,
-		},
-		"OnlyWhitespace": {
-			input:   "   ",
-			wantErr: true,
-		},
-		"EmptyNameAfterSlash": {
-			input:   "default/",
-			wantErr: true,
-		},
-		"TooManySlashes": {
-			input:   "default/foo/bar",
-			wantErr: true,
-		},
-		"EmptyNamespaceLeadingSlash": {
-			input:   "/foo",
-			wantErr: true,
-		},
-	}
-
-	for name, tt := range tests {
-		t.Run(name, func(t *testing.T) {
-			got, err := parseResourceRef(tt.input)
-
-			if tt.wantErr {
-				if err == nil {
-					t.Fatalf("expected error for input %q, got %+v", tt.input, got)
-				}
-
-				if !strings.Contains(err.Error(), tt.input) && tt.input != "" {
-					t.Errorf("error message %q should reference offending input %q", err.Error(), tt.input)
-				}
-
-				return
-			}
-
-			if err != nil {
-				t.Fatalf("unexpected error for input %q: %v", tt.input, err)
-			}
-
-			if got != tt.want {
-				t.Errorf("parseResourceRef(%q) = %+v, want %+v", tt.input, got, tt.want)
-			}
-		})
-	}
-}
 
 func TestCompCmd_ValidateFlags(t *testing.T) {
 	tests := map[string]struct {

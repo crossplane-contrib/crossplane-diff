@@ -22,6 +22,7 @@ import (
 	"os"
 
 	xp "github.com/crossplane-contrib/crossplane-diff/cmd/diff/client/crossplane"
+	"github.com/crossplane-contrib/crossplane-diff/cmd/diff/ref"
 	"github.com/crossplane-contrib/crossplane-diff/cmd/diff/renderer"
 	dt "github.com/crossplane-contrib/crossplane-diff/cmd/diff/renderer/types"
 	dtypes "github.com/crossplane-contrib/crossplane-diff/cmd/diff/types"
@@ -345,27 +346,13 @@ func (p *DefaultCompDiffProcessor) preflightResourceRefs(ctx context.Context, co
 	if len(globallyUnmatched) > 0 {
 		names := make([]string, 0, len(globallyUnmatched))
 		for _, r := range globallyUnmatched {
-			names = append(names, formatRef(r))
+			names = append(names, ref.Format(r))
 		}
 
 		return nil, errors.Errorf("--resource ref(s) not relevant to any supplied composition: %v (resource not found, or it doesn't reference one of the supplied compositions)", names)
 	}
 
 	return perComp, nil
-}
-
-
-// formatRef renders a NamespacedName the way the user typed it on the command line:
-// bare "name" for cluster-scoped, "namespace/name" for namespaced. NamespacedName.String()
-// always renders "namespace/name" (so "/foo" for cluster-scoped), which is wrong for
-// human-facing output where users expect their original spelling.
-func formatRef(n k8stypes.NamespacedName) string {
-	switch n.Namespace {
-	case "":
-		return n.Name
-	default:
-		return n.Namespace + "/" + n.Name
-	}
 }
 
 // processSingleComposition processes a single composition and builds the result.

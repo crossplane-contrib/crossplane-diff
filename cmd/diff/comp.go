@@ -18,12 +18,11 @@ package main
 
 import (
 	"context"
-	"strings"
 	"time"
 
 	"github.com/alecthomas/kong"
 	dp "github.com/crossplane-contrib/crossplane-diff/cmd/diff/diffprocessor"
-	k8stypes "k8s.io/apimachinery/pkg/types"
+	"github.com/crossplane-contrib/crossplane-diff/cmd/diff/ref"
 
 	"github.com/crossplane/crossplane-runtime/v2/pkg/errors"
 	"github.com/crossplane/crossplane-runtime/v2/pkg/logging"
@@ -137,36 +136,6 @@ func makeDefaultCompProc(c *CompCmd, kongCtx *kong.Context, appCtx *AppContext, 
 	return dp.NewCompDiffProcessor(xrProc, appCtx.XpClients.Composition, opts...)
 }
 
-// parseResourceRef parses a "[namespace/]name" string into a NamespacedName.
-// Bare "name" (no slash) means cluster-scoped (v1 XRs, v2 cluster-scoped XRs).
-// "ns/name" means namespaced (Claims, v2 namespaced XRs).
-// "/name" (empty namespace before slash) is rejected because the user's intent is clearly namespaced.
-func parseResourceRef(value string) (k8stypes.NamespacedName, error) {
-	trimmed := strings.TrimSpace(value)
-	if trimmed == "" {
-		return k8stypes.NamespacedName{}, errors.Errorf("invalid --resource value %q: cannot be empty", value)
-	}
-
-	parts := strings.Split(trimmed, "/")
-	switch len(parts) {
-	case 1:
-		return k8stypes.NamespacedName{Name: parts[0]}, nil
-	case 2:
-		ns, name := parts[0], parts[1]
-		if ns == "" {
-			return k8stypes.NamespacedName{}, errors.Errorf("invalid --resource value %q: namespace must not be empty (use bare name for cluster-scoped composites)", value)
-		}
-
-		if name == "" {
-			return k8stypes.NamespacedName{}, errors.Errorf("invalid --resource value %q: name must not be empty", value)
-		}
-
-		return k8stypes.NamespacedName{Namespace: ns, Name: name}, nil
-	default:
-		return k8stypes.NamespacedName{}, errors.Errorf("invalid --resource value %q: expected [namespace/]name format, got %d slashes", value, len(parts)-1)
-	}
-}
-
 // Run executes the composition diff command.
 func (c *CompCmd) Run(_ *kong.Context, log logging.Logger, appCtx *AppContext, proc dp.CompDiffProcessor, loader ld.Loader, exitCode *ExitCode) error {
 	ctx, cancel, err := initializeAppContext(c.Timeout, appCtx, log)
@@ -203,16 +172,10 @@ func (c *CompCmd) Run(_ *kong.Context, log logging.Logger, appCtx *AppContext, p
 		return errors.Wrap(err, "cannot load compositions")
 	}
 
-	parsedRefs := make([]k8stypes.NamespacedName, 0, len(c.Resources))
-
-	for _, raw := range c.Resources {
-		ref, err := parseResourceRef(raw)
-		if err != nil {
-			exitCode.Code = dp.ExitCodeToolError
-			return err
-		}
-
-		parsedRefs = append(parsedRefs, ref)
+	parsedRefs, err := ref.ParseAll(c.Resources)
+	if err != nil {
+		exitCode.Code = dp.ExitCodeToolError
+		return err
 	}
 
 	hasDiffs, err := proc.DiffComposition(ctx, compositions, c.Namespace, parsedRefs)
