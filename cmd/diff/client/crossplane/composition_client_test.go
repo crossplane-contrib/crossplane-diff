@@ -1809,8 +1809,6 @@ func TestDefaultCompositionClient_getClaimTypeFromXRD(t *testing.T) {
 }
 
 func TestDefaultCompositionClient_FindComposites_WithRefs(t *testing.T) {
-	ctx := t.Context()
-
 	// Composition targeting (example.org/v1, XBucket).
 	comp := tu.NewComposition("test-comp").
 		WithCompositeTypeRef("example.org/v1", "XBucket").
@@ -1966,7 +1964,7 @@ func TestDefaultCompositionClient_FindComposites_WithRefs(t *testing.T) {
 				logger:           tu.TestLogger(t, false),
 			}
 
-			matched, err := c.FindComposites(ctx, tt.comp, dtypes.FindCompositesOptions{Refs: tt.refs})
+			matched, err := c.FindComposites(t.Context(), tt.comp, dtypes.FindCompositesOptions{Refs: tt.refs})
 
 			if tt.wantErr {
 				if err == nil {
@@ -1993,8 +1991,6 @@ func TestDefaultCompositionClient_FindComposites_WithRefs(t *testing.T) {
 }
 
 func TestDefaultCompositionClient_FindComposites_DefaultDiscovery(t *testing.T) {
-	ctx := t.Context()
-
 	comp := tu.NewComposition("test-comp").
 		WithCompositeTypeRef("example.org/v1", "XBucket").
 		Build()
@@ -2026,7 +2022,7 @@ func TestDefaultCompositionClient_FindComposites_DefaultDiscovery(t *testing.T) 
 		logger:           tu.TestLogger(t, false),
 	}
 
-	got, err := c.FindComposites(ctx, comp, dtypes.FindCompositesOptions{})
+	got, err := c.FindComposites(t.Context(), comp, dtypes.FindCompositesOptions{})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -2037,8 +2033,6 @@ func TestDefaultCompositionClient_FindComposites_DefaultDiscovery(t *testing.T) 
 }
 
 func TestDefaultCompositionClient_resolveCompositeTypes(t *testing.T) {
-	ctx := t.Context()
-
 	xrdWithClaim := tu.NewXRD("xbuckets.example.org", "example.org", "XBucket").
 		WithPlural("xbuckets").
 		WithClaimNames("Bucket", "buckets").
@@ -2099,7 +2093,7 @@ func TestDefaultCompositionClient_resolveCompositeTypes(t *testing.T) {
 				logger:           tu.TestLogger(t, false),
 			}
 
-			got, err := c.resolveCompositeTypes(ctx, tt.comp)
+			got, err := c.resolveCompositeTypes(t.Context(), tt.comp)
 
 			if tt.wantErr {
 				if err == nil {
@@ -2129,8 +2123,6 @@ func TestDefaultCompositionClient_resolveCompositeTypes(t *testing.T) {
 }
 
 func TestDefaultCompositionClient_lookupRef(t *testing.T) {
-	ctx := t.Context()
-
 	xrGVK := schema.GroupVersionKind{Group: "example.org", Version: "v1", Kind: "XBucket"}
 	claimGVK := schema.GroupVersionKind{Group: "example.org", Version: "v1", Kind: "Bucket"}
 
@@ -2260,7 +2252,7 @@ func TestDefaultCompositionClient_lookupRef(t *testing.T) {
 				logger:         tu.TestLogger(t, false),
 			}
 
-			got, err := c.lookupRef(ctx, tt.ref, tt.types, "test-comp")
+			got, err := c.lookupRef(t.Context(), tt.ref, tt.types, "test-comp")
 
 			if tt.wantErr {
 				if err == nil {

@@ -800,8 +800,6 @@ func newCompProcessorForTest(t *testing.T, compClient xp.CompositionClient, incl
 // TestDefaultCompDiffProcessor_DiffComposition_ResourceMode covers the --resource code path:
 // preflight, fail-fast on globally-unmatched refs, and surfacing of policy-filtered composites.
 func TestDefaultCompDiffProcessor_DiffComposition_ResourceMode(t *testing.T) {
-	ctx := t.Context()
-
 	comp := tu.NewComposition("test-comp").
 		WithCompositeTypeRef("example.org/v1", "XR").
 		WithPipelineMode().
@@ -870,7 +868,7 @@ func TestDefaultCompDiffProcessor_DiffComposition_ResourceMode(t *testing.T) {
 
 				proc, _ := newCompProcessorForTest(t, client, false)
 
-				_, err := proc.DiffComposition(ctx, []*un.Unstructured{comp}, tt.namespace, tt.resources)
+				_, err := proc.DiffComposition(t.Context(), []*un.Unstructured{comp}, tt.namespace, tt.resources)
 				if err != nil {
 					t.Fatalf("unexpected error: %v", err)
 				}
@@ -897,7 +895,7 @@ func TestDefaultCompDiffProcessor_DiffComposition_ResourceMode(t *testing.T) {
 
 		proc, stdout := newCompProcessorForTest(t, client, false)
 
-		_, err := proc.DiffComposition(ctx, []*un.Unstructured{comp}, "",
+		_, err := proc.DiffComposition(t.Context(), []*un.Unstructured{comp}, "",
 			[]k8stypes.NamespacedName{{Namespace: "ns", Name: "ghost"}})
 		if err == nil {
 			t.Fatal("expected error from globally-unmatched preflight, got nil")
@@ -940,7 +938,7 @@ func TestDefaultCompDiffProcessor_DiffComposition_ResourceMode(t *testing.T) {
 
 				proc, _ := newCompProcessorForTest(t, client, false /* IncludeManual */)
 
-				got, err := proc.processSingleComposition(ctx, comp, []*un.Unstructured{manualXR}, tt.surfaceFiltered)
+				got, err := proc.processSingleComposition(t.Context(), comp, []*un.Unstructured{manualXR}, tt.surfaceFiltered)
 				if err != nil {
 					t.Fatalf("processSingleComposition: %v", err)
 				}
