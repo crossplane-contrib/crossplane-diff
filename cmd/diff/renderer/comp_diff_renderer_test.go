@@ -414,16 +414,22 @@ func Test_formatXRStatusSummary(t *testing.T) {
 }
 
 func Test_pluralize(t *testing.T) {
-	if pluralize(1) != "" {
-		t.Error("pluralize(1) should return empty string")
+	tests := map[string]struct {
+		count int
+		want  string
+	}{
+		"Singular_NoSuffix":  {count: 1, want: ""},
+		"Zero_HasSuffix":     {count: 0, want: "s"},
+		"Plural_HasSuffix":   {count: 2, want: "s"},
+		"Negative_HasSuffix": {count: -1, want: "s"},
 	}
 
-	if pluralize(0) != "s" {
-		t.Error("pluralize(0) should return 's'")
-	}
-
-	if pluralize(2) != "s" {
-		t.Error("pluralize(2) should return 's'")
+	for name, tt := range tests {
+		t.Run(name, func(t *testing.T) {
+			if got := pluralize(tt.count); got != tt.want {
+				t.Errorf("pluralize(%d) = %q, want %q", tt.count, got, tt.want)
+			}
+		})
 	}
 }
 
