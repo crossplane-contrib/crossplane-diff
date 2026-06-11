@@ -730,7 +730,8 @@ func (b *MockCompositionClientBuilder) WithFindComposites(fn func(context.Contex
 }
 
 // WithResourcesForComposition sets FindComposites (default-discovery mode) to return specific resources
-// for a given composition name and namespace. Refs-mode calls fall through to the "not implemented" default.
+// for a given composition name and namespace. Refs-mode calls return an explicit error identifying this
+// helper as default-discovery only — use WithFindComposites directly if you need to mock both modes.
 func (b *MockCompositionClientBuilder) WithResourcesForComposition(compositionName, namespace string, resources []*un.Unstructured) *MockCompositionClientBuilder {
 	return b.WithFindComposites(func(_ context.Context, comp *xpextv1.Composition, opts dtypes.FindCompositesOptions) ([]*un.Unstructured, error) {
 		if len(opts.Refs) > 0 {
@@ -746,7 +747,8 @@ func (b *MockCompositionClientBuilder) WithResourcesForComposition(compositionNa
 }
 
 // WithFindResourcesError sets FindComposites (default-discovery mode) to return an error. Refs-mode calls
-// fall through to the "not implemented" default.
+// return an explicit error identifying this helper as default-discovery only — use WithFindComposites
+// directly if you need to mock both modes.
 func (b *MockCompositionClientBuilder) WithFindResourcesError(errMsg string) *MockCompositionClientBuilder {
 	return b.WithFindComposites(func(_ context.Context, _ *xpextv1.Composition, opts dtypes.FindCompositesOptions) ([]*un.Unstructured, error) {
 		if len(opts.Refs) > 0 {
