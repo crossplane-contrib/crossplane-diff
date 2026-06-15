@@ -329,13 +329,28 @@ func formatValidationErrors(result *pkgvalidate.ValidationResult) string {
 		case pkgvalidate.ValidationStatusMissingSchema:
 			msgs = append(msgs, "could not find CRD/XRD for: "+gvk)
 		case pkgvalidate.ValidationStatusInvalid:
+			// Suppress defaulting entries only when there are other
+			// actionable (schema / CEL / unknown-field) errors on the
+			// same resource: those already convey the failure, and the
+			// defaulting line would just be noise. Upstream's
+			// statusFromErrors today guarantees that an Invalid
+			// resource has at least one non-defaulting error, but we
+			// don't rely on that here — if a future change ever
+			// produced an Invalid resource whose Errors are all
+			// defaulting, we still emit them rather than silently drop
+			// everything and fall through to the generic "schema
+			// validation failed" message.
+			hasActionable := false
+
 			for _, e := range r.Errors {
-				if e.Type == pkgvalidate.FieldErrorTypeDefaulting {
-					// ResultError treats a defaulting error as a
-					// failure only when accompanied by a schema-class
-					// error on the same resource. The schema-class
-					// error already gets its own entry; emitting the
-					// defaulting line too would just be noise.
+				if e.Type != pkgvalidate.FieldErrorTypeDefaulting {
+					hasActionable = true
+					break
+				}
+			}
+
+			for _, e := range r.Errors {
+				if hasActionable && e.Type == pkgvalidate.FieldErrorTypeDefaulting {
 					continue
 				}
 

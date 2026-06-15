@@ -648,6 +648,25 @@ func TestFormatValidationErrors(t *testing.T) {
 			},
 			expected: "schema validation error example.org/v1, Kind=XR, my-xr : spec.field: Required value",
 		},
+		"InvalidWithOnlyDefaultingErrorsStillEmitted": {
+			// Defensive: upstream's statusFromErrors today won't return
+			// Invalid for a resource whose Errors are all defaulting,
+			// but if that ever changed we'd rather surface the
+			// defaulting message than silently fall back to the generic
+			// "schema validation failed" string.
+			result: &pkgvalidate.ValidationResult{
+				Resources: []pkgvalidate.ResourceValidationResult{{
+					APIVersion: "example.org/v1",
+					Kind:       "XR",
+					Name:       "my-xr",
+					Status:     pkgvalidate.ValidationStatusInvalid,
+					Errors: []pkgvalidate.FieldValidationError{
+						{Type: pkgvalidate.FieldErrorTypeDefaulting, Message: "cannot apply defaults"},
+					},
+				}},
+			},
+			expected: "schema validation error example.org/v1, Kind=XR, my-xr : cannot apply defaults",
+		},
 	}
 
 	for name, tt := range tests {
