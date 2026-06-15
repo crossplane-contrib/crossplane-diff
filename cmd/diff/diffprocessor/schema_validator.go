@@ -1,16 +1,14 @@
 package diffprocessor
 
 import (
-	"bytes"
 	"context"
 	"fmt"
-	"io"
 	"strings"
 
 	xp "github.com/crossplane-contrib/crossplane-diff/cmd/diff/client/crossplane"
 	k8 "github.com/crossplane-contrib/crossplane-diff/cmd/diff/client/kubernetes"
-	"github.com/crossplane/cli/v2/cmd/crossplane/common/loggerwriter"
-	"github.com/crossplane/cli/v2/cmd/crossplane/validate"
+	pkgvalidate "github.com/crossplane/cli/v2/pkg/validate"
+	clixr "github.com/crossplane/cli/v2/pkg/xr"
 	extv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	un "k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -108,32 +106,32 @@ func (v *DefaultSchemaValidator) ValidateResources(ctx context.Context, xr *un.U
 		return errors.Wrap(err, "unable to ensure CRDs")
 	}
 
-	// Create a buffer to capture validation output for error messages,
-	// and a MultiWriter to also send output to debug logs
-	var validationOutput bytes.Buffer
+	// Apply CRD-level defaults in place before handing resources off to
+	// the diff calculator. The structured SchemaValidate API
+	// intentionally deep-copies inputs and does not surface defaults
+	// to its caller, so without this step composed resources would
+	// reach diff calculation undefaulted and produce spurious diffs
+	// for fields the cluster's defaulter would have populated. The
+	// previous SchemaValidation entry point fused this defaulting
+	// into validation; doing it explicitly here makes the
+	// dependency obvious.
+	if err := v.applyCRDDefaults(ctx, resources); err != nil {
+		return err
+	}
 
-	multiWriter := io.MultiWriter(&validationOutput, loggerwriter.NewLoggerWriter(v.logger))
-
-	// SchemaValidation applies defaults IN-PLACE to the resources it sees,
-	// mutating the underlying Object map. For each managed resource we wrap
-	// `&un.Unstructured{Object: composed[i].UnstructuredContent()}` — the
-	// embedded unstructured.Unstructured returns its Object map by reference,
-	// so defaults applied here propagate back to the caller's
-	// `composed[i]` via the shared map. That preserves pre-existing
-	// defaulting behaviour for downstream diff calculation.
-	//
-	// The XR is passed by pointer; defaults applied to it land on the
-	// caller's object, which is then used downstream for diffing against
-	// cluster state. The real composite reconciler in the render pipeline
-	// already applied XRD schema defaults before we got here, so this is
-	// belt-and-braces.
+	// SchemaValidate is the structured-result API: it returns a
+	// *ValidationResult that callers inspect directly.
 	v.logger.Debug("Performing schema validation", "resourceCount", len(resources))
 
-	err = validate.SchemaValidation(ctx, resources, v.schemaClient.GetAllCRDs(), true, true, multiWriter)
+	result, err := pkgvalidate.SchemaValidate(ctx, resources, v.schemaClient.GetAllCRDs())
 	if err != nil {
-		// Parse and extract only the error lines from validation output
-		details := extractValidationErrors(validationOutput.String())
-		return NewSchemaValidationError("", details, err)
+		return errors.Wrap(err, "schema validation failed")
+	}
+
+	v.logResultDetails(result)
+
+	if rerr := pkgvalidate.ResultError(result, true); rerr != nil {
+		return NewSchemaValidationError("", formatValidationErrors(result), rerr)
 	}
 
 	// Additionally validate resource scope constraints (namespace requirements and cross-namespace refs)
@@ -259,25 +257,102 @@ func (v *DefaultSchemaValidator) ValidateScopeConstraints(ctx context.Context, r
 	return nil
 }
 
-// extractValidationErrors parses validation output and returns clean error messages.
-// It extracts lines starting with [x] (validation errors) and [!] (warnings/missing schemas),
-// stripping the prefixes for cleaner display.
-func extractValidationErrors(output string) string {
-	var validationErrs []string
+// applyCRDDefaults applies CRD-derived defaults to each resource in
+// place. Built-in types and resources whose CRD is unknown are
+// skipped; in both cases the diff calculator already handles them
+// without server-side defaulting. We treat a CRD lookup error here
+// as a no-op rather than a failure: EnsureComposedResourceCRDs is
+// the canonical gate on missing CRDs, and the subsequent SchemaValidate
+// call surfaces the same condition through ValidationStatusMissingSchema.
+func (v *DefaultSchemaValidator) applyCRDDefaults(ctx context.Context, resources []*un.Unstructured) error {
+	for _, r := range resources {
+		gvk := r.GroupVersionKind()
+		if !v.schemaClient.IsCRDRequired(ctx, gvk) {
+			continue
+		}
 
-	for line := range strings.SplitSeq(output, "\n") {
-		line = strings.TrimSpace(line)
-		// Use CutPrefix to check for prefix and strip it in one operation
-		if cleaned, found := strings.CutPrefix(line, "[x]"); found {
-			validationErrs = append(validationErrs, strings.TrimSpace(cleaned))
-		} else if cleaned, found := strings.CutPrefix(line, "[!]"); found {
-			validationErrs = append(validationErrs, strings.TrimSpace(cleaned))
+		crd, err := v.schemaClient.GetCRD(ctx, gvk)
+		if err != nil {
+			v.logger.Debug("skipping defaulting; CRD not found", "gvk", gvk.String(), "error", err)
+			continue
+		}
+
+		if err := clixr.ApplyCRDDefaults(r.Object, r.GetAPIVersion(), *crd); err != nil {
+			return errors.Wrapf(err, "cannot apply CRD defaults for %s/%s", gvk.String(), r.GetName())
 		}
 	}
 
-	if len(validationErrs) == 0 {
+	return nil
+}
+
+// logResultDetails emits per-resource debug logging for a validation
+// result. This replaces the incidental logging that the previous
+// stdout-capturing implementation produced via a loggerwriter, and
+// surfaces operational signals (defaulting failures, missing schemas)
+// even when ResultError reports success overall.
+func (v *DefaultSchemaValidator) logResultDetails(result *pkgvalidate.ValidationResult) {
+	for _, r := range result.Resources {
+		v.logger.Debug("validation result",
+			"apiVersion", r.APIVersion,
+			"kind", r.Kind,
+			"name", r.Name,
+			"status", string(r.Status),
+			"errors", len(r.Errors),
+		)
+
+		for _, e := range r.Errors {
+			v.logger.Debug("validation error",
+				"apiVersion", r.APIVersion,
+				"kind", r.Kind,
+				"name", r.Name,
+				"type", string(e.Type),
+				"field", e.Field,
+				"message", e.Message,
+			)
+		}
+	}
+}
+
+// formatValidationErrors produces a single-line, semicolon-joined string
+// describing the failures in a *ValidationResult. It mirrors the
+// previously extracted text-renderer output (one entry per
+// FieldValidationError, with a "could not find CRD/XRD for ..." entry
+// per missing-schema resource) so existing callers and tests that
+// match on these substrings keep working.
+func formatValidationErrors(result *pkgvalidate.ValidationResult) string {
+	var msgs []string
+
+	for _, r := range result.Resources {
+		gvk := fmt.Sprintf("%s, Kind=%s", r.APIVersion, r.Kind)
+
+		switch r.Status {
+		case pkgvalidate.ValidationStatusMissingSchema:
+			msgs = append(msgs, "could not find CRD/XRD for: "+gvk)
+		case pkgvalidate.ValidationStatusInvalid:
+			for _, e := range r.Errors {
+				if e.Type == pkgvalidate.FieldErrorTypeDefaulting {
+					// ResultError treats a defaulting error as a
+					// failure only when accompanied by a schema-class
+					// error on the same resource. The schema-class
+					// error already gets its own entry; emitting the
+					// defaulting line too would just be noise.
+					continue
+				}
+
+				msgs = append(msgs, fmt.Sprintf("schema validation error %s, %s : %s", gvk, r.Name, e.Message))
+			}
+		case pkgvalidate.ValidationStatusValid,
+			pkgvalidate.ValidationStatusDefaultingFailed:
+			// Valid: nothing to report. DefaultingFailed-only resources
+			// are reported by ResultError as success, so this function
+			// never sees them via the failure path; the case is here
+			// only to keep the switch exhaustive.
+		}
+	}
+
+	if len(msgs) == 0 {
 		return "schema validation failed"
 	}
 
-	return strings.Join(validationErrs, "; ")
+	return strings.Join(msgs, "; ")
 }

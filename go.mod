@@ -6,9 +6,9 @@ require (
 	dario.cat/mergo v1.0.2
 	github.com/Masterminds/semver v1.5.0
 	github.com/alecthomas/kong v1.15.0
-	github.com/crossplane/cli/v2 v2.3.2
-	github.com/crossplane/crossplane-runtime/v2 v2.3.2
-	github.com/crossplane/crossplane/apis/v2 v2.3.2
+	github.com/crossplane/cli/v2 v2.4.0-rc.0.0.20260615182009-ba59fbfac34b
+	github.com/crossplane/crossplane-runtime/v2 v2.4.0-rc.0
+	github.com/crossplane/crossplane/apis/v2 v2.4.0-rc.0
 	github.com/crossplane/crossplane/v2 v2.3.2
 	github.com/docker/docker v28.5.2+incompatible
 	github.com/google/go-cmp v0.7.0
@@ -32,7 +32,6 @@ require (
 require (
 	cel.dev/expr v0.25.1 // indirect
 	github.com/MakeNowJust/heredoc v1.0.0 // indirect
-	github.com/Masterminds/semver/v3 v3.4.0 // indirect
 	github.com/antlr4-go/antlr/v4 v4.13.1 // indirect
 	github.com/blang/semver/v4 v4.0.0 // indirect
 	github.com/chai2010/gettext-go v1.0.2 // indirect
@@ -121,7 +120,6 @@ require (
 	github.com/google/uuid v1.6.0
 	github.com/inconshreveable/mousetrap v1.1.0 // indirect
 	github.com/json-iterator/go v1.1.12 // indirect
-	github.com/klauspost/compress v1.18.6 // indirect
 	github.com/mattn/go-colorable v0.1.14 // indirect
 	github.com/mattn/go-isatty v0.0.22 // indirect
 	github.com/moby/spdystream v0.5.1 // indirect

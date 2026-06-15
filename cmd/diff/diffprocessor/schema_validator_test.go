@@ -7,6 +7,7 @@ import (
 
 	xp "github.com/crossplane-contrib/crossplane-diff/cmd/diff/client/crossplane"
 	tu "github.com/crossplane-contrib/crossplane-diff/cmd/diff/testutils"
+	pkgvalidate "github.com/crossplane/cli/v2/pkg/validate"
 	"github.com/google/go-cmp/cmp"
 	extv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	un "k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -501,7 +502,7 @@ func TestDefaultSchemaValidator_ValidateResources_AppliesDefaults(t *testing.T) 
 	}
 
 	// Verify defaults were applied to the ORIGINAL resource
-	// The defaults are applied in-place by validate.SchemaValidation, so they persist
+	// The defaults are applied in-place by applyCRDDefaults before validation, so they persist
 	deletionPolicy, found, err := un.NestedString(managedResource.Object, "spec", "deletionPolicy")
 	if err != nil {
 		t.Fatalf("Failed to get deletionPolicy: %v", err)
@@ -534,50 +535,126 @@ func TestDefaultSchemaValidator_ValidateResources_AppliesDefaults(t *testing.T) 
 	// The compositionRevisionRef remains in the original resource, which is correct behavior.
 }
 
-func TestExtractValidationErrors(t *testing.T) {
+func TestFormatValidationErrors(t *testing.T) {
 	tests := map[string]struct {
-		input    string
+		result   *pkgvalidate.ValidationResult
 		expected string
 	}{
-		"SingleValidationError": {
-			input:    "[x] schema validation error example.org/v1, my-xr : spec.region: Required value\nTotal 1 resources: 0 missing schemas, 0 success cases, 1 failure cases",
-			expected: "schema validation error example.org/v1, my-xr : spec.region: Required value",
+		"SingleSchemaError": {
+			result: &pkgvalidate.ValidationResult{
+				Resources: []pkgvalidate.ResourceValidationResult{{
+					APIVersion: "example.org/v1",
+					Kind:       "XR",
+					Name:       "my-xr",
+					Status:     pkgvalidate.ValidationStatusInvalid,
+					Errors: []pkgvalidate.FieldValidationError{{
+						Type:    pkgvalidate.FieldErrorTypeSchema,
+						Field:   "spec.region",
+						Message: "spec.region: Required value",
+					}},
+				}},
+			},
+			expected: "schema validation error example.org/v1, Kind=XR, my-xr : spec.region: Required value",
 		},
 		"SingleMissingSchema": {
-			input:    "[!] could not find CRD/XRD for: other.org/v1, Kind=SomeResource\nTotal 1 resources: 1 missing schemas, 0 success cases, 0 failure cases",
+			result: &pkgvalidate.ValidationResult{
+				Resources: []pkgvalidate.ResourceValidationResult{{
+					APIVersion: "other.org/v1",
+					Kind:       "SomeResource",
+					Name:       "thing",
+					Status:     pkgvalidate.ValidationStatusMissingSchema,
+				}},
+			},
 			expected: "could not find CRD/XRD for: other.org/v1, Kind=SomeResource",
 		},
-		"MultipleErrors": {
-			input:    "[x] schema validation error example.org/v1, my-xr : spec.region: Required value\n[!] could not find CRD/XRD for: other.org/v1\nTotal 2 resources: 1 missing schemas, 0 success cases, 1 failure cases",
-			expected: "schema validation error example.org/v1, my-xr : spec.region: Required value; could not find CRD/XRD for: other.org/v1",
+		"MultipleErrorsAcrossResources": {
+			result: &pkgvalidate.ValidationResult{
+				Resources: []pkgvalidate.ResourceValidationResult{
+					{
+						APIVersion: "example.org/v1",
+						Kind:       "XR",
+						Name:       "my-xr",
+						Status:     pkgvalidate.ValidationStatusInvalid,
+						Errors: []pkgvalidate.FieldValidationError{{
+							Type:    pkgvalidate.FieldErrorTypeSchema,
+							Message: "spec.region: Required value",
+						}},
+					},
+					{
+						APIVersion: "other.org/v1",
+						Kind:       "SomeResource",
+						Name:       "thing",
+						Status:     pkgvalidate.ValidationStatusMissingSchema,
+					},
+				},
+			},
+			expected: "schema validation error example.org/v1, Kind=XR, my-xr : spec.region: Required value; could not find CRD/XRD for: other.org/v1, Kind=SomeResource",
 		},
-		"MixedWithSuccessLines": {
-			input:    "[✓] example.org/v1, good-xr validated successfully\n[x] schema validation error example.org/v1, bad-xr : spec.field: Invalid value\nTotal 2 resources: 0 missing schemas, 1 success cases, 1 failure cases",
-			expected: "schema validation error example.org/v1, bad-xr : spec.field: Invalid value",
+		"ValidResourcesIgnored": {
+			result: &pkgvalidate.ValidationResult{
+				Resources: []pkgvalidate.ResourceValidationResult{
+					{
+						APIVersion: "example.org/v1",
+						Kind:       "XR",
+						Name:       "good-xr",
+						Status:     pkgvalidate.ValidationStatusValid,
+					},
+					{
+						APIVersion: "example.org/v1",
+						Kind:       "XR",
+						Name:       "bad-xr",
+						Status:     pkgvalidate.ValidationStatusInvalid,
+						Errors: []pkgvalidate.FieldValidationError{{
+							Type:    pkgvalidate.FieldErrorTypeSchema,
+							Message: "spec.field: Invalid value",
+						}},
+					},
+				},
+			},
+			expected: "schema validation error example.org/v1, Kind=XR, bad-xr : spec.field: Invalid value",
 		},
-		"EmptyInput": {
-			input:    "",
+		"EmptyResult": {
+			result:   &pkgvalidate.ValidationResult{},
 			expected: "schema validation failed",
 		},
-		"NoErrorsOnlySuccess": {
-			input:    "[✓] example.org/v1, my-xr validated successfully\nTotal 1 resources: 0 missing schemas, 1 success cases, 0 failure cases",
+		"OnlyValidResources": {
+			result: &pkgvalidate.ValidationResult{
+				Resources: []pkgvalidate.ResourceValidationResult{{
+					APIVersion: "example.org/v1",
+					Kind:       "XR",
+					Name:       "my-xr",
+					Status:     pkgvalidate.ValidationStatusValid,
+				}},
+			},
 			expected: "schema validation failed",
 		},
-		"WhitespaceHandling": {
-			input:    "  [x] error message with leading spaces  \n",
-			expected: "error message with leading spaces",
-		},
-		"MultipleValidationErrors": {
-			input:    "[x] error one\n[x] error two\n[x] error three",
-			expected: "error one; error two; error three",
+		"DefaultingErrorAccompanyingSchemaError": {
+			// A defaulting failure that co-occurs with a schema-class
+			// error must not produce a separate entry: the schema entry
+			// already conveys the failure, and dropping the defaulting
+			// line keeps the error string focused on the actionable
+			// problem.
+			result: &pkgvalidate.ValidationResult{
+				Resources: []pkgvalidate.ResourceValidationResult{{
+					APIVersion: "example.org/v1",
+					Kind:       "XR",
+					Name:       "my-xr",
+					Status:     pkgvalidate.ValidationStatusInvalid,
+					Errors: []pkgvalidate.FieldValidationError{
+						{Type: pkgvalidate.FieldErrorTypeDefaulting, Message: "cannot apply defaults"},
+						{Type: pkgvalidate.FieldErrorTypeSchema, Message: "spec.field: Required value"},
+					},
+				}},
+			},
+			expected: "schema validation error example.org/v1, Kind=XR, my-xr : spec.field: Required value",
 		},
 	}
 
 	for name, tt := range tests {
 		t.Run(name, func(t *testing.T) {
-			result := extractValidationErrors(tt.input)
-			if result != tt.expected {
-				t.Errorf("extractValidationErrors() = %q, want %q", result, tt.expected)
+			got := formatValidationErrors(tt.result)
+			if got != tt.expected {
+				t.Errorf("formatValidationErrors() = %q, want %q", got, tt.expected)
 			}
 		})
 	}
