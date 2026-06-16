@@ -1,119 +1,136 @@
 classDiagram
     class DiffProcessor {
         <<interface>>
-        +PerformDiff(ctx, stdout, resources) error
+        +PerformDiff(ctx, resources, compositionProvider) (bool, error)
+        +DiffSingleResource(ctx, res, compositionProvider) (map[string]*ResourceDiff, error)
         +Initialize(ctx) error
+        +Cleanup(ctx) error
     }
-    
+
+    class CompDiffProcessor {
+        <<interface>>
+        +DiffComposition(ctx, comps, namespace, resources) (bool, error)
+        +Initialize(ctx) error
+        +Cleanup(ctx) error
+    }
+
     class DefaultDiffProcessor {
-        -fnClient FunctionClient
+        -fnProvider FunctionProvider
         -compClient CompositionClient
+        -defClient DefinitionClient
+        -schemaClient SchemaClient
+        -treeClient ResourceTreeClient
+        -applyClient ApplyClient
         -config ProcessorConfig
         -schemaValidator SchemaValidator
         -diffCalculator DiffCalculator
         -diffRenderer DiffRenderer
         -requirementsProvider RequirementsProvider
         +Initialize(ctx) error
-        +PerformDiff(ctx, stdout, resources) error
-        -DiffSingleResource(ctx, res) error
-        -SanitizeXR(res, resourceID) error
-        -RenderWithRequirements(ctx, xr, comp, fns, resourceID) error
+        +Cleanup(ctx) error
+        +PerformDiff(ctx, resources, compositionProvider) (bool, error)
+        +DiffSingleResource(ctx, res, compositionProvider) (map[string]*ResourceDiff, error)
+        +RenderToStableState(ctx, xr, comp, fns, id, observed, synthReady) (render.CompositionOutputs, error)
     }
-    
+
+    class DefaultCompDiffProcessor {
+        -compositionClient CompositionClient
+        -config ProcessorConfig
+        -xrProc DiffProcessor
+        -compDiffRenderer CompDiffRenderer
+        +DiffComposition(ctx, comps, ns, resources) (bool, error)
+    }
+
     class ProcessorConfig {
-        +Namespace string
         +Colorize bool
         +Compact bool
+        +OutputFormat OutputFormat
+        +MaxNestedDepth int
+        +MaxRenderIterations int
+        +IncludeManual bool
+        +EventualState bool
+        +IgnorePaths []string
+        +FunctionCredentials []corev1.Secret
+        +FunctionRegistryOverride string
+        +CrossplaneRenderBinary string
+        +Stdout io.Writer
+        +Stderr io.Writer
         +Logger logging.Logger
-        +RenderFunc RenderFunc
+        +RenderFunc RenderFn
         +Factories ComponentFactories
-        +GetDiffOptions() DiffOptions
-        +SetDefaultFactories()
     }
-    
+
     class ComponentFactories {
-        +ResourceManager func(client, logger)
-        +SchemaValidator func(schema, def, logger)
-        +DiffCalculator func(apply, tree, rm, logger, opts)
-        +DiffRenderer func(logger, opts)
-        +RequirementsProvider func(res, def, render, logger)
+        +ResourceManager
+        +SchemaValidator
+        +DiffCalculator
+        +DiffRenderer
+        +CompDiffRenderer
+        +RequirementsProvider
+        +FunctionProvider
     }
-    
+
     class SchemaValidator {
         <<interface>>
         +ValidateResources(ctx, xr, composed) error
         +EnsureComposedResourceCRDs(ctx, resources) error
+        +ValidateScopeConstraints(ctx, resource, ns, isClaimRoot) error
     }
-    
-    class DefaultSchemaValidator {
-        -defClient DefinitionClient
-        -schemaClient SchemaClient
-        -logger logging.Logger
-        -crds []*CustomResourceDefinition
-        +LoadCRDs(ctx) error
-        +SetCRDs(crds)
-        +GetCRDs() []*CustomResourceDefinition
-    }
-    
+
     class DiffCalculator {
         <<interface>>
-        +CalculateDiff(ctx, composite, desired) error
-        +CalculateDiffs(ctx, xr, desired) error
-        +CalculateRemovedResourceDiffs(ctx, xr, rendered) error
+        +CalculateDiff(ctx, composite, desired) (*ResourceDiff, error)
+        +CalculateDiffs(ctx, xr, desired) (map[string]*ResourceDiff, error)
+        +CalculateNonRemovalDiffs(ctx, xr, parent, desired) (map[string]*ResourceDiff, map[string]bool, error)
+        +CalculateRemovedResourceDiffs(ctx, xr, rendered) (map[string]*ResourceDiff, error)
     }
-    
-    class DefaultDiffCalculator {
-        -treeClient ResourceTreeClient
-        -applyClient ApplyClient
-        -resourceManager ResourceManager
-        -logger logging.Logger
-        -diffOptions DiffOptions
-        +SetDiffOptions(options)
-    }
-    
+
     class ResourceManager {
         <<interface>>
-        +FetchCurrentObject(ctx, composite, desired) error
-        +UpdateOwnerRefs(parent, child)
+        +FetchCurrentObject(ctx, composite, desired) (*Unstructured, bool, error)
+        +UpdateOwnerRefs(ctx, parent, child)
+        +FetchObservedResources(ctx, xr) ([]Unstructured, error)
     }
-    
-    class DefaultResourceManager {
-        -client ResourceClient
-        -logger logging.Logger
-        -createResourceID(gvk, namespace, name, generateName) string
-        -lookupByComposite(ctx, composite, desired) error
+
+    class FunctionProvider {
+        <<interface>>
+        +GetFunctionsForComposition(comp) ([]Function, error)
+        +Cleanup(ctx) error
     }
-    
+
     class RequirementsProvider {
-        +client ResourceClient
-        +envClient EnvironmentClient
-        +renderFn RenderFunc
-        +logger logging.Logger
-        +resourceCache map[string]*Unstructured
+        -client ResourceClient
+        -envClient EnvironmentClient
+        -logger logging.Logger
+        -resourceCache map
+        -cacheMutex sync.RWMutex
         +Initialize(ctx) error
-        +ProvideRequirements(ctx, requirements) error
-        +getCachedResource(apiVersion, kind, name)
-        +cacheResources(resources)
+        +ResolveSelectors(ctx, selectors, ns) ([]Unstructured, error)
         +ClearCache()
     }
-    
+
     class DiffRenderer {
         <<interface>>
-        +RenderDiffs(stdout, diffs) error
+        +RenderDiffs(diffs, errs) error
     }
-    
+
+    class CompDiffRenderer {
+        <<interface>>
+        +RenderCompDiff(output) error
+    }
+
     DefaultDiffProcessor ..|> DiffProcessor
+    DefaultCompDiffProcessor ..|> CompDiffProcessor
+    DefaultCompDiffProcessor --> DiffProcessor : xrProc field
     DefaultDiffProcessor --> ProcessorConfig
     DefaultDiffProcessor --> SchemaValidator
     DefaultDiffProcessor --> DiffCalculator
     DefaultDiffProcessor --> ResourceManager
     DefaultDiffProcessor --> RequirementsProvider
+    DefaultDiffProcessor --> FunctionProvider
     DefaultDiffProcessor --> DiffRenderer
-    
+    DefaultCompDiffProcessor --> CompDiffRenderer
+
     ProcessorConfig --> ComponentFactories
-    
-    DefaultSchemaValidator ..|> SchemaValidator
-    DefaultDiffCalculator ..|> DiffCalculator
-    DefaultResourceManager ..|> ResourceManager
-    
-    DefaultDiffCalculator --> ResourceManager
+
+    DiffCalculator --> ResourceManager

@@ -189,13 +189,22 @@ Key implications:
 - This behavior is consistent across Crossplane versions
 
 **New Claim Handling with spec.claimRef**
-When diffing a new Claim (one that doesn't exist in the cluster yet), compositions may reference `spec.claimRef` fields like `{{ .observed.composite.resource.spec.claimRef.name }}`. Since `claimRef` is only populated by Crossplane on the backing XR at runtime, we synthesize a dummy backing XR with:
-- The XR kind/apiVersion derived from the XRD
+When diffing a new Claim (one that doesn't exist in the cluster yet), compositions may reference `spec.claimRef` fields
+like `{{ .observed.composite.resource.spec.claimRef.name }}`. Since `claimRef` is only populated by Crossplane on the
+backing XR at runtime, we synthesize a dummy backing XR. The synthesis happens in `DefaultDiffProcessor` (specifically
+`synthesizeDummyBackingXRForNewClaim`, called from `resolveBackingXRForClaim`) and delegates to upstream's
+`ConvertClaimToXR` helper from `crossplane/cli`. The synthesized XR carries:
+- The authoritative XR kind from the XRD's `spec.names.kind` (XRDs are not required to use the `"X" + claimKind`
+  convention)
+- The claim's name as the XR name (pinned, vs. the upstream default suffix — preserves cleaner diff output)
 - A synthesized `spec.claimRef` containing the claim's apiVersion, kind, name, and namespace
 - All spec fields from the claim copied to the XR
+- The claim's annotations copied to the XR (matching real Crossplane behavior)
+- `crossplane.io/claim-name` and `crossplane.io/claim-namespace` labels on the XR (matching real Crossplane behavior)
 - A generated UID for the dummy XR
 
-This allows compositions using claimRef to render correctly during diff operations for new claims.
+This allows compositions using `claimRef`, claim labels, or claim annotations to render correctly during diff operations
+for new claims.
 
 **Diff Calculation**
 - Compares rendered resources against cluster state via server-side dry-run
@@ -380,6 +389,71 @@ Keep a small set of ANSI tests (~5-7) to smoke test visual output formatting.
 - Avoid blanket or "quick fix" solutions that might hide errors
 - Always strive to diagnose and address root causes, not symptoms
 - Empty strings, nil maps, missing fields must all be handled correctly
+
+## Keeping Documentation in Sync
+
+The design doc at `design/design-doc-cli-diff.md` is hand-maintained and drifts quickly if it isn't updated alongside the
+code. Before completing a change, check whether any of these triggers apply and update the corresponding section.
+
+**Triggers and where to update**:
+
+| Code change                                                                    | Update                                                                     |
+|--------------------------------------------------------------------------------|----------------------------------------------------------------------------|
+| Interface in `cmd/diff/diffprocessor/` (`DiffProcessor`, `CompDiffProcessor`, `DiffCalculator`, `ResourceManager`, `SchemaValidator`, `FunctionProvider`) — added/removed/renamed methods or changed signatures | `§6` of the design doc (the relevant interface block); `diff-processor-architecture.mermaid` and `package-overview-fixed.mermaid` |
+| New or removed Kubernetes/Crossplane client in `cmd/diff/client/`              | `§5.2.4`, `§6.9`; `client-architecture.mermaid`, `layered-architecture.mermaid`, `conceptual-layers.mermaid` |
+| Renderer changes (`cmd/diff/renderer/`): new `OutputFormat`, new structured-output type, change to error-emission contract | `§6.8`; `diff-rendering-architecture.mermaid`                              |
+| New CLI flag, renamed flag, removed flag, or new subcommand                    | `§8.1` examples; if it's a `ProcessorConfig` field too, `§6.1.2`           |
+| Project layout: new top-level package under `cmd/diff/`, removed file/dir      | `§12.1` directory tree                                                     |
+| Changes to the iterative render loop, eventual-state behaviour, or how `RequiredResources`/`RequiredSchemas` are consumed | `§9.5.6` (esp. `§9.5.6.2`)                                                 |
+| Behavioural change to a domain component without a signature change (e.g. switching the schema-validation backend, moving defaulting in/out of validation, changing what errors propagate) | The relevant `§6` narrative paragraph; if it touches integration with upstream Crossplane libs, the matching `§9.5.x` block too |
+| Workflow change: nested-XR handling, two-phase diff split, cleanup semantics, claim handling | `§7`; `diff-call-sequence.mermaid`                                         |
+| New integration-test category (e.g. a new structured-assertion pattern, a new claim edge case) | `§4` test-case list                                                        |
+| A future-work item ships, or a new follow-up is identified                     | `§10` future enhancements                                                  |
+
+**Diagrams**: the `*.mermaid` sources under `design/design-doc-cli-diff/` are the source of truth. After editing a
+mermaid file, regenerate its `.svg` so the rendered doc matches. The upstream mermaid-cli project publishes Docker
+images on both Docker Hub (`minlag/mermaid-cli`) and GitHub Container Registry
+(`ghcr.io/mermaid-js/mermaid-cli/mermaid-cli`); either works. The Docker Hub image:
+
+```bash
+cd design/design-doc-cli-diff
+for f in *.mermaid; do
+  docker run --rm -u "$(id -u):$(id -g)" -v "$PWD:/data" minlag/mermaid-cli \
+    -i "/data/$f" -o "/data/${f%.mermaid}.svg"
+done
+```
+
+**README and E2E docs**: `README.md` documents user-facing CLI behaviour and output formats; update it for any change a
+user would notice in their workflow — flag/subcommand changes, exit-code changes, structured-output schema changes
+(new fields under `errors[]`, `validationFailures[]`, `impactAnalysis[]`, etc.), and human-readable rendering changes
+that meaningfully alter what hits stdout/stderr. `test/e2e/README.md` covers E2E structure; update it when adding a new
+test category, changing expectation-file conventions, or adding a new helper to the assertion harness.
+
+**When in doubt**, prefer updating the doc in the same PR as the code change. A single PR that ships drift is much
+cheaper than retroactively auditing several PRs' worth of changes (as happened in the doc-refresh on 2026-06-15).
+
+## Git, Commits, Issues, and Pull Requests
+
+A few project-wide conventions apply to every change you submit to this repository:
+
+- **Sign every commit (DCO)**. This repo enforces the Developer Certificate of Origin. Always commit with `git commit -s`
+  so a `Signed-off-by:` trailer is added; PRs without DCO sign-off on every commit will be blocked from merging. If you
+  need to fix a missing sign-off after the fact, use `git commit --amend -s --no-edit` (or `git rebase --signoff` for a
+  range of commits).
+- **Open PRs as drafts**. Always use `gh pr create --draft …` (or pass `draft: true` via the API). The maintainer can
+  mark the PR ready for review once they've assessed it; opening as a draft prevents premature reviewer notifications
+  and lets CI run before review starts.
+- **Follow the repository's issue and PR templates**. The PR body must follow `.github/PULL_REQUEST_TEMPLATE.md` —
+  including the `### Description of your changes` heading, the `Fixes #` line (with a real issue number, or omit the
+  line entirely if there is none), and the "I have:" checklist. The template's instruction is **either** `[x]` (checked,
+  no strike-through) **or** `[ ] ~~strike through~~` (unchecked box with the item text wrapped in `~~…~~`) — never
+  both at once. What isn't acceptable is leaving an item as a plain unchecked `[ ]` with no strike-through. If a
+  checklist item legitimately doesn't apply (e.g. no e2e tests for a docs-only change), strike it through with `~~…~~`
+  while leaving the checkbox unchecked. Note: GitHub Flavored Markdown requires double tildes for strikethrough — the
+  single-tilde notation in the template's HTML comment (`~strike through~`) is informal intent and won't actually
+  render as strike-through if copied literally. Issues filed via `gh issue create` must use the matching template
+  under `.github/ISSUE_TEMPLATE/` (`bug_report.md` or `feature_request.md`); pass it via `--template bug_report.md`
+  and fill in every section.
 
 ## Related Documentation
 

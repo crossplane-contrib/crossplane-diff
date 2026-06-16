@@ -390,6 +390,34 @@ Two supported modes:
   `kubectl` and other Kubernetes CLIs, and is why a `~/.kube/config` that
   exists in the pod always takes precedence over the pod's ServiceAccount.
 
+#### Reaching function containers from inside Docker
+
+`crossplane-diff` runs composition functions as Docker containers via the host's Docker socket. When `crossplane-diff`
+itself runs inside a container (a GitHub Actions container job, a dind setup, etc.), the function containers it spawns
+land on the default Docker bridge network and are unreachable from the caller's network. Set
+`CROSSPLANE_DIFF_DOCKER_NETWORK` to the network the caller is on, and the tool will stamp every function package with
+the `render.crossplane.io/runtime-docker-network` annotation so the Crossplane render runtime joins each function
+container to that network.
+
+GitHub Actions example:
+
+```yaml
+jobs:
+  diff:
+    runs-on: ubuntu-latest
+    container:
+      image: my-org/crossplane-diff:latest
+    env:
+      CROSSPLANE_DIFF_DOCKER_NETWORK: ${{ job.container.network }}
+    steps:
+      - run: crossplane-diff xr xr.yaml
+```
+
+The env var is read on every `GetFunctionsForComposition` call, so it works correctly even with the cached function
+provider (cached function packages are re-annotated on cache hits). If the env var is unset, the tool leaves the
+annotation alone — appropriate for the common case of running `crossplane-diff` directly on a host with Docker
+installed. Any value the user has already set on a function package is preserved.
+
 ## Output Format
 
 ### Human-Readable Diff (default)
@@ -441,14 +469,14 @@ For CI/CD pipelines or programmatic processing, use `--output json` or `--output
   },
   "changes": [
     {
-      "type": "+",
+      "type": "added",
       "apiVersion": "nop.crossplane.io/v1alpha1",
       "kind": "NopResource",
       "name": "new-resource",
-      "diff": { "spec": { ... } }
+      "diff": { "spec": { "apiVersion": "...", "kind": "...", "metadata": { ... }, "spec": { ... } } }
     },
     {
-      "type": "~",
+      "type": "modified",
       "apiVersion": "nop.crossplane.io/v1alpha1",
       "kind": "NopResource",
       "name": "modified-resource",
@@ -466,7 +494,7 @@ For CI/CD pipelines or programmatic processing, use `--output json` or `--output
     {
       "name": "xbuckets.example.org",
       "compositionChanges": {
-        "type": "~",
+        "type": "modified",
         "apiVersion": "apiextensions.crossplane.io/v1",
         "kind": "Composition",
         "name": "xbuckets.example.org",
@@ -509,11 +537,108 @@ For CI/CD pipelines or programmatic processing, use `--output json` or `--output
 ```
 
 The structured output includes:
-- **Change types**: `+` (added), `~` (modified), `-` (removed)
+- **Change types**: each entry's `type` field carries the word form — one of `"added"`, `"modified"`, or `"removed"`. (Unchanged resources are filtered out of structured output and never appear in `changes[]`. The `+` / `~` / `-` symbols appear only in the human-readable diff format described above.)
 - **Full resource details**: apiVersion, kind, name, namespace
-- **Diff content**: old/new values for modifications, full spec for additions/removals
+- **Diff content**: for modifications, `diff.old` and `diff.new` carry the full current/desired resource objects (apiVersion/kind/metadata/spec/status, etc.) — not just the diffing subset. For additions/removals, the full resource object lives under `diff.spec` (the JSON key is literally `spec` but the value is the entire resource, not its spec subtree).
 - **Impact analysis** (comp only): which XRs are affected by composition changes and their status
-- **Errors**: A top-level `errors` array with entries of the form `{ "resourceID": "...", "message": "..." }`, plus per-XR `error` fields in `impactAnalysis` for composition diffs
+- **Errors**: A top-level `errors` array of `OutputError` objects (see [Validation Errors](#validation-errors) below for the schema and an example), plus per-XR `error` fields in `impactAnalysis` for composition diffs
+
+### Validation Errors
+
+When schema validation fails on the input XR or any rendered composed resource, `crossplane-diff` reports the failure in both human-readable and machine-readable form. Exit-code precedence (per `DetermineExitCode`): any error in the run beats diff detection, so a partially-failed run never returns exit code 3 even if some XRs produced diffs. Among errors, tool errors (exit code 1) beat schema-validation errors (exit code 2). Exit code 2 therefore requires *every* error in the run to be a schema-validation error. See the [Exit Codes](#exit-codes) table below.
+
+**Human-readable output** (`crossplane-diff xr invalid-xr.yaml`):
+
+Per Unix convention, errors go to stderr and diff content goes to stdout. When validation is the only failure, stdout is empty and the structured failure detail appears on stderr, prefixed by an `ERROR: <resourceID>:` marker:
+
+```
+# stderr
+ERROR: XNopResource/invalid-schema-xr: cannot validate resources: ns.diff.example.org/v1alpha1/XNopResource default/invalid-schema-xr:
+  spec.coolField: Invalid value: "number": ... [schema]
+ns.nop.example.org/v1alpha1/XDownstreamResource default/invalid-schema-xr:
+  spec.forProvider.configData: Invalid value: "boolean": ... [schema]
+
+# stdout
+(empty)
+```
+
+The `cannot validate resources:` prefix is added by `DefaultDiffProcessor`'s `errors.Wrap` around the inner `SchemaValidationError` — every schema-validation failure carries that anchor.
+
+Each per-resource block starts with a header that includes the resource identity, followed by indented error lines:
+
+- Cluster-scoped resource: `<apiVersion>/<Kind> <name>:`
+- Namespaced resource: `<apiVersion>/<Kind> <namespace>/<name>:`
+- Resource without `metadata.name` (e.g. a resource discovered missing a schema before it was named): collapses to just `<apiVersion>/<Kind>:`
+
+Each indented error line has the shape `<message> [<type>]`, where `<type>` is one of `[schema]`, `[cel]`, `[unknownField]`, or `[defaulting]`. A bad value is appended as `(got <value>)` when it isn't already substring-present in the message. When some inputs in a batched run succeed and others fail validation, the successful diffs appear on stdout and the failing inputs' `ERROR:` blocks appear on stderr.
+
+**Machine-readable output** (`crossplane-diff xr invalid-xr.yaml --output json`):
+
+```json
+{
+  "summary": { "added": 0, "modified": 0, "removed": 0 },
+  "changes": [],
+  "errors": [
+    {
+      "resourceID": "XNopResource/invalid-schema-xr",
+      "message": "cannot validate resources: ns.diff.example.org/v1alpha1/XNopResource default/invalid-schema-xr:\n  spec.coolField: Invalid value: \"number\": ... [schema]\nns.nop.example.org/v1alpha1/XDownstreamResource default/invalid-schema-xr:\n  spec.forProvider.configData: Invalid value: \"boolean\": ... [schema]",
+      "validationFailures": [
+        {
+          "apiVersion": "ns.diff.example.org/v1alpha1",
+          "kind": "XNopResource",
+          "name": "invalid-schema-xr",
+          "namespace": "default",
+          "status": "invalid",
+          "errors": [
+            {
+              "type": "schema",
+              "field": "spec.coolField",
+              "message": "spec.coolField: Invalid value: \"number\": ...",
+              "value": "number"
+            }
+          ]
+        },
+        {
+          "apiVersion": "ns.nop.example.org/v1alpha1",
+          "kind": "XDownstreamResource",
+          "name": "invalid-schema-xr",
+          "namespace": "default",
+          "status": "invalid",
+          "errors": [
+            {
+              "type": "schema",
+              "field": "spec.forProvider.configData",
+              "message": "spec.forProvider.configData: Invalid value: \"boolean\": ...",
+              "value": "boolean"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}
+```
+
+The `OutputError` schema:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `resourceID` | string | Identifies which user-supplied input the diff was processing (one entry per batched run). Format: `<Kind>/<name>`. |
+| `message` | string | Human-readable error string — the same text written to stderr. |
+| `validationFailures` | `[]ResourceValidationFailure`, optional | Structured per-resource breakdown. Set only for schema-validation failures; `nil` for tool, IO, render, and scope-check errors. |
+
+`ResourceValidationFailure` carries `apiVersion`, `kind`, `name`, `namespace`, `status` (one of `"invalid"` or `"missingSchema"` — `"valid"` rows are filtered out), and `errors`, a list of `FieldValidationError` records:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `type` | string | `"schema"`, `"cel"`, `"unknownField"`, or `"defaulting"`. |
+| `field` | string, optional | JSONPath of the offending field, when locatable. |
+| `message` | string | Validator-emitted human-readable description; for k8s-derived schema errors this typically already embeds the field path and bad value. |
+| `value` | any, optional | The offending value as the validator saw it. Type-preserved (string, number, bool, struct). |
+
+`resourceID` and `validationFailures` are intentionally complementary: `resourceID` anchors the failure to one user-supplied input, while `validationFailures` enumerates every resource (the input itself plus any composed resource) that failed validation under that input. They overlap on `kind`+`name` when the input itself is among the failing resources — that's deliberate, so consumers iterating `validationFailures` never miss an XR-level rejection.
+
+For `comp` output the same `OutputError` structure (including `validationFailures`) appears only in the top-level `errors[]` of the composition-diff JSON. Per-composition and per-XR failures use a simpler `error` string field (under `compositions[]` and `impactAnalysis[]` respectively) — they don't carry the structured validation breakdown.
 
 ## Exit Codes
 

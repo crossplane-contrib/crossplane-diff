@@ -5,14 +5,14 @@ flowchart TD
     
     subgraph "Application Layer (Orchestration)"
         APP["AppContext\n(Context & client initialization)"]
-        DPR["DiffProcessor\n(Main processing logic)"]
+        DPR["DiffProcessor / CompDiffProcessor\n(xr and comp orchestration)"]
         LOAD["Loader\n(Resource loading)"]
     end
-    
+
     subgraph "Domain Layer (Business Logic)"
-        CALC["Diff & Resources\n(DiffCalculator, ResourceManager, RequirementsProvider)"]
+        CALC["Diff & Resources\n(DiffCalculator, ResourceManager, RequirementsProvider, FunctionProvider)"]
         VALD["Validation\n(SchemaValidator)"]
-        REND["Rendering\n(DiffRenderer, DiffFormatter)"]
+        REND["Rendering\n(DiffRenderer, CompDiffRenderer, structured renderers)"]
         RENFN["Render Function\n(Resource composition rendering)"]
     end
     

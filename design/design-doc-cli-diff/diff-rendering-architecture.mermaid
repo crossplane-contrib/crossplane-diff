@@ -1,17 +1,50 @@
 classDiagram
     class DiffRenderer {
         <<interface>>
-        +RenderDiffs(stdout, diffs) error
+        +RenderDiffs(diffs, errs) error
     }
-    
+
+    class CompDiffRenderer {
+        <<interface>>
+        +RenderCompDiff(output) error
+    }
+
     class DefaultDiffRenderer {
         -logger logging.Logger
         -diffOpts DiffOptions
-        +SetDiffOptions(options)
-        +RenderDiffs(stdout, diffs) error
+        +RenderDiffs(diffs, errs) error
     }
-    
+
+    class StructuredDiffRenderer {
+        -logger logging.Logger
+        -opts DiffOptions
+        +RenderDiffs(diffs, errs) error
+    }
+
+    class DefaultCompDiffRenderer {
+        -logger logging.Logger
+        -diffRenderer DiffRenderer
+        -opts DiffOptions
+        +RenderCompDiff(output) error
+    }
+
+    class StructuredCompDiffRenderer {
+        -logger logging.Logger
+        -opts DiffOptions
+        +RenderCompDiff(output) error
+    }
+
+    class OutputFormat {
+        <<enumeration>>
+        OutputFormatDiff
+        OutputFormatJSON
+        OutputFormatYAML
+    }
+
     class DiffOptions {
+        +Stdout io.Writer
+        +Stderr io.Writer
+        +Format OutputFormat
         +UseColors bool
         +AddPrefix string
         +DeletePrefix string
@@ -19,24 +52,96 @@ classDiagram
         +ContextLines int
         +ChunkSeparator string
         +Compact bool
+        +IgnorePaths []string
     }
-    
-    class DiffFormatter {
-        <<interface>>
-        +Format(diffs, options) string
+
+    class StructuredDiffOutput {
+        +Summary Summary
+        +Changes []ChangeDetail
+        +Errors []OutputError
     }
-    
-    class FullDiffFormatter {
-        +Format(diffs, options) string
+
+    class Summary {
+        +Added int
+        +Modified int
+        +Removed int
     }
-    
-    class CompactDiffFormatter {
-        +Format(diffs, options) string
-        -stringBlocksWithContext(changes, lines, opts) string
+
+    class ChangeDetail {
+        +Type string
+        +APIVersion string
+        +Kind string
+        +Name string
+        +Namespace string
+        +Diff map[string]any
     }
-    
+
+    class CompDiffOutput {
+        +Compositions []CompositionDiff
+        +Errors []OutputError
+    }
+
+    class CompositionDiff {
+        +Name string
+        +Error error
+        +CompositionDiff *ResourceDiff
+        +AffectedResources AffectedResourcesSummary
+        +ImpactAnalysis []XRImpact
+    }
+
+    class XRImpact {
+        +ObjectReference
+        +Status XRStatus
+        +Error error
+        +Diffs map[string]*ResourceDiff
+    }
+
+    class XRStatus {
+        <<enumeration>>
+        XRStatusChanged
+        XRStatusUnchanged
+        XRStatusError
+        XRStatusFilteredByPolicy
+    }
+
+    class AffectedResourcesSummary {
+        +Total int
+        +WithChanges int
+        +Unchanged int
+        +WithErrors int
+        +FilteredByPolicy int
+    }
+
+    class DownstreamChanges {
+        +Summary Summary
+        +Changes []ChangeDetail
+    }
+
+    class OutputError {
+        +ResourceID string
+        +Message string
+        +ValidationFailures []ResourceValidationFailure
+    }
+
+    class ResourceValidationFailure {
+        +APIVersion string
+        +Kind string
+        +Name string
+        +Namespace string
+        +Status string
+        +Errors []FieldValidationError
+    }
+
+    class FieldValidationError {
+        +Type string
+        +Field string
+        +Message string
+        +Value any
+    }
+
     class ResourceDiff {
         +Gvk GroupVersionKind
+        +Namespace string
         +ResourceName string
         +DiffType DiffType
         +LineDiffs []diffmatchpatch.Diff
@@ -44,7 +149,7 @@ classDiagram
         +Desired *Unstructured
         +GetDiffKey() string
     }
-    
+
     class DiffType {
         <<enumeration>>
         DiffTypeAdded
@@ -52,47 +157,30 @@ classDiagram
         DiffTypeModified
         DiffTypeEqual
     }
-    
+
     DefaultDiffRenderer ..|> DiffRenderer
+    StructuredDiffRenderer ..|> DiffRenderer
+    DefaultCompDiffRenderer ..|> CompDiffRenderer
+    StructuredCompDiffRenderer ..|> CompDiffRenderer
+
     DefaultDiffRenderer --> DiffOptions
     DefaultDiffRenderer ..> ResourceDiff
-    
-    FullDiffFormatter ..|> DiffFormatter
-    CompactDiffFormatter ..|> DiffFormatter
-    
+    StructuredDiffRenderer --> StructuredDiffOutput
+    StructuredCompDiffRenderer --> CompDiffOutput
+    DefaultCompDiffRenderer --> DiffRenderer
+
+    StructuredDiffOutput --> Summary
+    StructuredDiffOutput --> ChangeDetail
+    StructuredDiffOutput --> OutputError
+    CompDiffOutput --> CompositionDiff
+    CompDiffOutput --> OutputError
+    CompositionDiff --> AffectedResourcesSummary
+    CompositionDiff --> XRImpact
+    CompositionDiff --> ResourceDiff
+    OutputError --> ResourceValidationFailure
+    ResourceValidationFailure --> FieldValidationError
+    XRImpact --> XRStatus
+    DownstreamChanges --> Summary
+    DownstreamChanges --> ChangeDetail
+
     ResourceDiff --> DiffType
-    
-    %% Functions
-    class GenerateDiffWithOptions {
-        <<function>>
-        +GenerateDiffWithOptions(current, desired, logger, options) (*ResourceDiff, error)
-    }
-    
-    class FormatDiff {
-        <<function>>
-        +FormatDiff(diffs, options) string
-    }
-    
-    class GetLineDiff {
-        <<function>>
-        +GetLineDiff(oldText, newText) []diffmatchpatch.Diff
-    }
-    
-    class NewFormatter {
-        <<function>>
-        +NewFormatter(compact) DiffFormatter
-    }
-    
-    class MakeDiffKey {
-        <<function>>
-        +MakeDiffKey(apiVersion, kind, name) string
-    }
-    
-    FormatDiff --> NewFormatter
-    NewFormatter --> FullDiffFormatter
-    NewFormatter --> CompactDiffFormatter
-    
-    GenerateDiffWithOptions --> GetLineDiff
-    GenerateDiffWithOptions --> ResourceDiff
-    
-    DefaultDiffRenderer --> FormatDiff

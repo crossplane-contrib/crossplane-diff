@@ -7,27 +7,30 @@ flowchart TD
     subgraph "Application Layer"
         APP[AppContext]
         DPR[DiffProcessor]
+        CDPR[CompDiffProcessor]
         LOAD[Loader]
     end
-    
+
     subgraph "Domain Layer"
         subgraph "Processing Components"
             DIFFCALC[DiffCalculator]
             SCHMVLD[SchemaValidator]
             RESMGR[ResourceManager]
             REQPRV[RequirementsProvider]
+            FNPRV[FunctionProvider]
         end
-        
+
         subgraph "Rendering Components"
             DIFFRND[DiffRenderer]
+            CDIFFRND[CompDiffRenderer]
             DIFFFRM[DiffFormatter]
         end
-        
+
         subgraph "Resource Components"
             RENDER[Render Function]
         end
     end
-    
+
     subgraph "Client Layer"
         subgraph "Kubernetes Clients"
             APPLY[ApplyClient]
@@ -35,13 +38,15 @@ flowchart TD
             SCHMA[SchemaClient]
             TCONV[TypeConverter]
         end
-        
+
         subgraph "Crossplane Clients"
             COMP[CompositionClient]
             DEFN[DefinitionClient]
             ENVT[EnvironmentClient]
             FUNC[FunctionClient]
+            CRED[CredentialClient]
             TREE[ResourceTreeClient]
+            CREV[CompositionRevisionClient]
         end
     end
     
@@ -52,9 +57,10 @@ flowchart TD
     %% Command Layer connections
     CMD --> APP
     CMD --> DPR
+    CMD --> CDPR
     CMD --> LOAD
     CMD <--> HELP
-    
+
     %% Application Layer connections
     APP --> APPLY
     APP --> RESRC
@@ -64,31 +70,46 @@ flowchart TD
     APP --> DEFN
     APP --> ENVT
     APP --> FUNC
+    APP --> CRED
     APP --> TREE
-    
+
+    CDPR --> DPR
+    CDPR --> CDIFFRND
+    CDPR --> COMP
+
+    %% CompositionClient owns its CompositionRevisionClient internally;
+    %% callers don't wire CREV directly.
+    COMP --> CREV
+
     DPR --> DIFFCALC
     DPR --> SCHMVLD
     DPR --> RESMGR
     DPR --> REQPRV
+    DPR --> FNPRV
     DPR --> DIFFRND
     DPR --> RENDER
     DPR --> COMP
     DPR --> FUNC
-    
+
     %% Domain Layer connections
     DIFFCALC --> RESMGR
     DIFFCALC --> TREE
     DIFFCALC --> APPLY
-    
+
     SCHMVLD --> SCHMA
     SCHMVLD --> DEFN
-    
+
     RESMGR --> RESRC
-    
+    RESMGR --> TREE
+
     REQPRV --> RESRC
     REQPRV --> ENVT
-    
+
+    FNPRV --> FUNC
+    FNPRV --> CRED
+
     DIFFRND --> DIFFFRM
+    CDIFFRND --> DIFFRND
     
     %% Client Layer connections
     APPLY --> K8S
@@ -100,6 +121,8 @@ flowchart TD
     DEFN --> RESRC
     ENVT --> RESRC
     FUNC --> RESRC
+    CRED --> RESRC
+    CREV --> RESRC
     TREE --> K8S
     
     %% Styling
@@ -110,7 +133,7 @@ flowchart TD
     classDef externalSystems fill:#ffd3b6,stroke:#333,stroke-width:1px
     
     class CMD,HELP commandLayer
-    class APP,DPR,LOAD applicationLayer
-    class DIFFCALC,SCHMVLD,RESMGR,REQPRV,DIFFRND,DIFFFRM,RENDER domainLayer
-    class APPLY,RESRC,SCHMA,TCONV,COMP,DEFN,ENVT,FUNC,TREE clientLayer
+    class APP,DPR,CDPR,LOAD applicationLayer
+    class DIFFCALC,SCHMVLD,RESMGR,REQPRV,FNPRV,DIFFRND,CDIFFRND,DIFFFRM,RENDER domainLayer
+    class APPLY,RESRC,SCHMA,TCONV,COMP,CREV,DEFN,ENVT,FUNC,CRED,TREE clientLayer
     class K8S externalSystems
