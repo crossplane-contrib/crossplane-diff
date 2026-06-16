@@ -3,6 +3,7 @@ package diffprocessor
 import (
 	"context"
 	"fmt"
+	"regexp"
 	"strings"
 
 	xp "github.com/crossplane-contrib/crossplane-diff/cmd/diff/client/crossplane"
@@ -125,7 +126,15 @@ func (v *DefaultSchemaValidator) ValidateResources(ctx context.Context, xr *un.U
 
 	result, err := pkgvalidate.SchemaValidate(ctx, resources, v.schemaClient.GetAllCRDs())
 	if err != nil {
-		return errors.Wrap(err, "schema validation failed")
+		// SchemaValidate's error return is reserved for setup
+		// failures (e.g. a CRD that can't be compiled into a
+		// validator). Wrap it as a SchemaValidationError so
+		// IsSchemaValidationError / DetermineExitCode classify it the
+		// same way the pre-refactor SchemaValidation entry point
+		// did — exit code 2 (schema validation), not 1 (tool error).
+		// No Result is attached because the validator never produced
+		// one.
+		return NewSchemaValidationError("", "schema validation setup failed", err)
 	}
 
 	v.logResultDetails(result)
@@ -349,15 +358,19 @@ func formatValidationErrors(result *pkgvalidate.ValidationResult) string {
 
 // resourceHeader formats the per-resource header used by both the
 // missing-schema and invalid blocks. Cluster-scoped resources omit the
-// namespace prefix; namespaced resources produce "<ns>/<name>".
+// namespace prefix; namespaced resources produce "<ns>/<name>". A
+// resource without metadata.name collapses to just the GVK regardless
+// of namespace — the namespace alone isn't a useful identifier for a
+// nameless resource and emitting "<ns>/" would leave a stray trailing
+// slash.
 func resourceHeader(r pkgvalidate.ResourceValidationResult) string {
+	if r.Name == "" {
+		return fmt.Sprintf("%s/%s", r.APIVersion, r.Kind)
+	}
+
 	name := r.Name
 	if r.Namespace != "" {
 		name = r.Namespace + "/" + r.Name
-	}
-
-	if name == "" {
-		return fmt.Sprintf("%s/%s", r.APIVersion, r.Kind)
 	}
 
 	return fmt.Sprintf("%s/%s %s", r.APIVersion, r.Kind, name)
@@ -405,45 +418,63 @@ func formatInvalidBlock(r pkgvalidate.ResourceValidationResult) string {
 
 // formatErrorLine renders one FieldValidationError as
 // "<message>[ (got <value>)] [<type>]". The bad value tail is omitted
-// when Value is nil or already present in the message in the form
-// k8s validators emit it (quoted for strings, unquoted for numbers /
-// bools / structs). Matching the emit shape avoids both duplication
-// and the false-positive that an unquoted substring search would
-// produce — e.g. Value="k" against message "spec.kind: Required" must
-// not suppress the tail just because "k" appears inside "kind".
+// when Value is nil or already present in the message. Duplication
+// detection is type-aware to avoid false positives:
+//
+//   - String values are checked in their %q (quoted) form, matching
+//     how k8s validators emit them (`Invalid value: "five"`); the
+//     surrounding quotes give the search natural delimiters so
+//     Value="k" against message "spec.kind: Required" doesn't
+//     suppress the tail just because "k" sits inside "kind".
+//
+//   - Non-string values use a word-boundary regex so Value=42 against
+//     message "...Invalid value: 420..." doesn't suppress the tail
+//     just because "42" is a prefix of "420".
 func formatErrorLine(e pkgvalidate.FieldValidationError) string {
 	msg := e.Message
-	if rendered, found := renderBadValue(e.Value); rendered != "" && !strings.Contains(msg, found) {
+	if rendered := renderBadValue(e.Value); rendered != "" && !valueAlreadyInMessage(msg, e.Value, rendered) {
 		msg = fmt.Sprintf("%s (got %s)", msg, rendered)
 	}
 
 	return fmt.Sprintf("%s [%s]", msg, e.Type)
 }
 
-// renderBadValue formats a FieldValidationError.Value for display and
-// returns the substring to look for in the message when deciding
-// whether the value is already embedded.
+// valueAlreadyInMessage reports whether the rendered form of a bad
+// value is already present in the validator's message text. The check
+// shape depends on the value's Go type — see formatErrorLine's
+// comment for the rationale.
+func valueAlreadyInMessage(msg string, value any, rendered string) bool {
+	if _, ok := value.(string); ok {
+		// rendered already includes surrounding %q quotes; substring
+		// search is delimiter-safe.
+		return strings.Contains(msg, rendered)
+	}
+
+	// For non-strings rendered is unquoted, so anchor the search at
+	// word boundaries to avoid 42 matching inside 420.
+	return regexp.MustCompile(`\b` + regexp.QuoteMeta(rendered) + `\b`).MatchString(msg)
+}
+
+// renderBadValue formats a FieldValidationError.Value for display.
+// Returns the empty string for a nil Value so callers can use it as a
+// presence check.
 //
-// Strings get %q (quoted) for both purposes: k8s validation messages
-// embed string bad values as `Invalid value: "five"`, so quoting is
-// what the user expects to read AND is the form to search for. Other
-// types use %v unchanged: numbers and booleans appear unquoted in
-// k8s messages and read naturally in our display.
+// Strings get %q (quoted), matching how k8s validation messages embed
+// them (`Invalid value: "five"`). Other types use %v: numbers and
+// booleans read naturally unquoted, and structs render via their
+// default Go representation.
 //
-// Returns the empty rendered string for a nil Value so callers can
-// use it as a presence check; the returned `found` mirrors `rendered`
-// in that case.
-func renderBadValue(value any) (rendered, found string) {
+// Duplication detection against the validator's message text is done
+// separately by valueAlreadyInMessage, which knows how to anchor the
+// search at the right boundaries for each value type.
+func renderBadValue(value any) string {
 	if value == nil {
-		return "", ""
+		return ""
 	}
 
 	if s, ok := value.(string); ok {
-		quoted := fmt.Sprintf("%q", s)
-		return quoted, quoted
+		return fmt.Sprintf("%q", s)
 	}
 
-	rendered = fmt.Sprintf("%v", value)
-
-	return rendered, rendered
+	return fmt.Sprintf("%v", value)
 }

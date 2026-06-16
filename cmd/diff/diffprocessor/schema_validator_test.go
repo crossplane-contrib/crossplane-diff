@@ -572,6 +572,18 @@ func TestFormatValidationErrors(t *testing.T) {
 			},
 			expected: "example.org/v1/Thing production/my-thing:\n  spec.size: Required value [schema]",
 		},
+		"NamespaceWithoutNameCollapsesToGVK": {
+			reason: "When namespace is set but name is empty, the header collapses to just the GVK rather than rendering '<ns>/' with a stray trailing slash.",
+			result: &pkgvalidate.ValidationResult{
+				Resources: []pkgvalidate.ResourceValidationResult{{
+					APIVersion: "example.org/v1",
+					Kind:       "Thing",
+					Namespace:  "production",
+					Status:     pkgvalidate.ValidationStatusMissingSchema,
+				}},
+			},
+			expected: "example.org/v1/Thing: missing schema",
+		},
 		"MultipleErrorsGroupedUnderResource": {
 			reason: "Multiple errors on the same resource share a single header rather than producing a header per error.",
 			result: &pkgvalidate.ValidationResult{
@@ -655,6 +667,40 @@ func TestFormatValidationErrors(t *testing.T) {
 				}},
 			},
 			expected: "example.org/v1/XR my-xr:\n  spec.replicas: must be > 0 (got 42) [cel]",
+		},
+		"NumericBadValueNotSuppressedByDigitPrefix": {
+			reason: "Regression: a raw substring search would suppress the tail when the rendered number is a digit-prefix of another token (Value=42 vs message containing '420'). Word-boundary matching keeps the tail rendered so the user sees the actual rejected value.",
+			result: &pkgvalidate.ValidationResult{
+				Resources: []pkgvalidate.ResourceValidationResult{{
+					APIVersion: "example.org/v1",
+					Kind:       "XR",
+					Name:       "my-xr",
+					Status:     pkgvalidate.ValidationStatusInvalid,
+					Errors: []pkgvalidate.FieldValidationError{{
+						Type:    pkgvalidate.FieldErrorTypeCEL,
+						Message: "spec.size: must be at most 420",
+						Value:   42,
+					}},
+				}},
+			},
+			expected: "example.org/v1/XR my-xr:\n  spec.size: must be at most 420 (got 42) [cel]",
+		},
+		"NumericBadValueSuppressedAsToken": {
+			reason: "When the rendered number does appear as a standalone token in the message (delimited by non-word chars), the tail is correctly suppressed to avoid duplication.",
+			result: &pkgvalidate.ValidationResult{
+				Resources: []pkgvalidate.ResourceValidationResult{{
+					APIVersion: "example.org/v1",
+					Kind:       "XR",
+					Name:       "my-xr",
+					Status:     pkgvalidate.ValidationStatusInvalid,
+					Errors: []pkgvalidate.FieldValidationError{{
+						Type:    pkgvalidate.FieldErrorTypeSchema,
+						Message: "spec.replicas: Invalid value: 42: must be at most 10",
+						Value:   42,
+					}},
+				}},
+			},
+			expected: "example.org/v1/XR my-xr:\n  spec.replicas: Invalid value: 42: must be at most 10 [schema]",
 		},
 		"MultipleResourcesEachOnTheirOwnBlock": {
 			reason: "Failures from distinct resources produce distinct blocks joined by newlines, in input order.",
