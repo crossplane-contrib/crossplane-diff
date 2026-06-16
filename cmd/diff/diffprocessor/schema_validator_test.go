@@ -11,7 +11,6 @@ import (
 	"github.com/google/go-cmp/cmp"
 	extv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	un "k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
-	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 
 	"github.com/crossplane/crossplane-runtime/v2/pkg/errors"
@@ -21,9 +20,8 @@ import (
 var _ SchemaValidator = (*tu.MockSchemaValidator)(nil)
 
 const (
-	testExampleOrg       = "example.org"
-	testComposedResource = "ComposedResource"
-	testCpdOrg           = "cpd.org"
+	testExampleOrg = "example.org"
+	testCpdOrg     = "cpd.org"
 )
 
 func TestDefaultSchemaValidator_ValidateResources(t *testing.T) {
@@ -57,7 +55,6 @@ func TestDefaultSchemaValidator_ValidateResources(t *testing.T) {
 		setupClients   func() (*tu.MockSchemaClient, *tu.MockDefinitionClient)
 		xr             *un.Unstructured
 		composed       []cpd.Unstructured
-		preloadedCRDs  []*extv1.CustomResourceDefinition
 		expectedErr    bool
 		expectedErrMsg string
 	}{
@@ -74,10 +71,9 @@ func TestDefaultSchemaValidator_ValidateResources(t *testing.T) {
 
 				return sch, tu.NewMockDefinitionClient().Build()
 			},
-			xr:            xr,
-			composed:      []cpd.Unstructured{*composedResource1, *composedResource2},
-			preloadedCRDs: []*extv1.CustomResourceDefinition{}, // No longer needed
-			expectedErr:   false,
+			xr:          xr,
+			composed:    []cpd.Unstructured{*composedResource1, *composedResource2},
+			expectedErr: false,
 		},
 		"SuccessfulValidationWithFetchedCRDs": {
 			setupClients: func() (*tu.MockSchemaClient, *tu.MockDefinitionClient) {
@@ -97,10 +93,9 @@ func TestDefaultSchemaValidator_ValidateResources(t *testing.T) {
 
 				return sch, def
 			},
-			xr:            xr,
-			composed:      []cpd.Unstructured{*composedResource1, *composedResource2},
-			preloadedCRDs: []*extv1.CustomResourceDefinition{},
-			expectedErr:   false,
+			xr:          xr,
+			composed:    []cpd.Unstructured{*composedResource1, *composedResource2},
+			expectedErr: false,
 		},
 		"MissingCRD": {
 			setupClients: func() (*tu.MockSchemaClient, *tu.MockDefinitionClient) {
@@ -119,22 +114,14 @@ func TestDefaultSchemaValidator_ValidateResources(t *testing.T) {
 
 				return sch, def
 			},
-			xr:            xr,
-			composed:      []cpd.Unstructured{*composedResource1, *composedResource2},
-			preloadedCRDs: []*extv1.CustomResourceDefinition{},
+			xr:       xr,
+			composed: []cpd.Unstructured{*composedResource1, *composedResource2},
 			// Now we expect an error because we've configured it to require a CRD but can't find it
 			expectedErr:    true,
 			expectedErrMsg: "unable to find CRDs for",
 		},
 		"ValidationError": {
 			setupClients: func() (*tu.MockSchemaClient, *tu.MockDefinitionClient) {
-				// Convert CRDs to un for the mock
-				composedCRDUn := &un.Unstructured{}
-				_ = runtime.DefaultUnstructuredConverter.FromUnstructured(
-					MustToUnstructured(createCRDWithStringField(composedCRD)),
-					composedCRDUn,
-				)
-
 				sch := tu.NewMockSchemaClient().
 					// Add GetCRD implementation for typed CRDs
 					WithGetCRD(func(_ context.Context, gvk schema.GroupVersionKind) (*extv1.CustomResourceDefinition, error) {
@@ -161,7 +148,6 @@ func TestDefaultSchemaValidator_ValidateResources(t *testing.T) {
 				WithSpecField("field", int64(123)).
 				Build(),
 			composed:       []cpd.Unstructured{*composedResource1, *composedResource2},
-			preloadedCRDs:  []*extv1.CustomResourceDefinition{},
 			expectedErr:    true,
 			expectedErrMsg: "missing schema",
 		},
@@ -297,7 +283,6 @@ func TestDefaultSchemaValidator_LoadCRDs(t *testing.T) {
 
 	tests := map[string]struct {
 		setupClient    func() xp.DefinitionClient
-		preloadedCRDs  []*extv1.CustomResourceDefinition
 		expectedErr    bool
 		expectedErrMsg string
 		// for caching tests
@@ -329,7 +314,6 @@ func TestDefaultSchemaValidator_LoadCRDs(t *testing.T) {
 						Build(),
 				}
 			},
-			preloadedCRDs:  nil, // No preloaded CRDs
 			expectedErr:    false,
 			callTwice:      true, // Make two calls to LoadCRDs
 			expectXRDCalls: 1,    // GetXRDs should only be called once due to caching
@@ -390,16 +374,6 @@ func createCRDWithStringField(baseCRD *extv1.CustomResourceDefinition) *extv1.Cu
 	}
 
 	return crd
-}
-
-// Helper function to convert to un.
-func MustToUnstructured(obj any) map[string]any {
-	u, err := runtime.DefaultUnstructuredConverter.ToUnstructured(obj)
-	if err != nil {
-		panic(err)
-	}
-
-	return u
 }
 
 // Helper type to track GetXRDs calls.
@@ -797,7 +771,6 @@ func TestDefaultSchemaValidator_ValidateScopeConstraints(t *testing.T) {
 
 	tests := map[string]struct {
 		setupClient       func() *tu.MockSchemaClient
-		preloadedCRDs     []*extv1.CustomResourceDefinition
 		resource          *un.Unstructured
 		expectedNamespace string
 		isClaimRoot       bool
@@ -810,7 +783,6 @@ func TestDefaultSchemaValidator_ValidateScopeConstraints(t *testing.T) {
 					WithFoundCRD(testExampleOrg, "NamespacedResource", namespacedCRD).
 					Build()
 			},
-			preloadedCRDs: []*extv1.CustomResourceDefinition{}, // No longer needed
 			resource: tu.NewResource(testExampleOrg+"/v1", "NamespacedResource", "test-resource").
 				InNamespace("default").
 				Build(),
@@ -824,7 +796,6 @@ func TestDefaultSchemaValidator_ValidateScopeConstraints(t *testing.T) {
 					WithFoundCRD(testExampleOrg, "NamespacedResource", namespacedCRD).
 					Build()
 			},
-			preloadedCRDs: []*extv1.CustomResourceDefinition{namespacedCRD},
 			resource: tu.NewResource(testExampleOrg+"/v1", "NamespacedResource", "test-resource").
 				Build(), // No namespace
 			expectedNamespace: "default",
@@ -838,7 +809,6 @@ func TestDefaultSchemaValidator_ValidateScopeConstraints(t *testing.T) {
 					WithFoundCRD(testExampleOrg, "NamespacedResource", namespacedCRD).
 					Build()
 			},
-			preloadedCRDs: []*extv1.CustomResourceDefinition{namespacedCRD},
 			resource: tu.NewResource(testExampleOrg+"/v1", "NamespacedResource", "test-resource").
 				InNamespace("wrong").
 				Build(),
@@ -853,7 +823,6 @@ func TestDefaultSchemaValidator_ValidateScopeConstraints(t *testing.T) {
 					WithFoundCRD(testExampleOrg, "ClusterResource", clusterCRD).
 					Build()
 			},
-			preloadedCRDs: []*extv1.CustomResourceDefinition{clusterCRD},
 			resource: tu.NewResource(testExampleOrg+"/v1", "ClusterResource", "test-resource").
 				Build(), // No namespace - correct for cluster-scoped
 			expectedNamespace: "",
@@ -866,7 +835,6 @@ func TestDefaultSchemaValidator_ValidateScopeConstraints(t *testing.T) {
 					WithFoundCRD(testExampleOrg, "ClusterResource", clusterCRD).
 					Build()
 			},
-			preloadedCRDs: []*extv1.CustomResourceDefinition{clusterCRD},
 			resource: tu.NewResource(testExampleOrg+"/v1", "ClusterResource", "test-resource").
 				InNamespace("default").
 				Build(),
@@ -881,7 +849,6 @@ func TestDefaultSchemaValidator_ValidateScopeConstraints(t *testing.T) {
 					WithFoundCRD(testExampleOrg, "ClusterResource", clusterCRD).
 					Build()
 			},
-			preloadedCRDs: []*extv1.CustomResourceDefinition{clusterCRD},
 			resource: tu.NewResource(testExampleOrg+"/v1", "ClusterResource", "test-resource").
 				Build(),
 			expectedNamespace: "default", // XR is namespaced
@@ -895,7 +862,6 @@ func TestDefaultSchemaValidator_ValidateScopeConstraints(t *testing.T) {
 					WithFoundCRD(testExampleOrg, "ClusterResource", clusterCRD).
 					Build()
 			},
-			preloadedCRDs: []*extv1.CustomResourceDefinition{clusterCRD},
 			resource: tu.NewResource(testExampleOrg+"/v1", "ClusterResource", "test-resource").
 				Build(),
 			expectedNamespace: "default", // Claim is namespaced
@@ -910,7 +876,6 @@ func TestDefaultSchemaValidator_ValidateScopeConstraints(t *testing.T) {
 					}).
 					Build()
 			},
-			preloadedCRDs: []*extv1.CustomResourceDefinition{},
 			resource: tu.NewResource(testExampleOrg+"/v1", "UnknownResource", "test-resource").
 				Build(),
 			expectedNamespace: "default",
