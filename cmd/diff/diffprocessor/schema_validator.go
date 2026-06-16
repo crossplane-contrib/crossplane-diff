@@ -405,26 +405,45 @@ func formatInvalidBlock(r pkgvalidate.ResourceValidationResult) string {
 
 // formatErrorLine renders one FieldValidationError as
 // "<message>[ (got <value>)] [<type>]". The bad value tail is omitted
-// when Value is nil or already substring-present in the message, so
-// k8s-derived errors (which embed the value in their text) don't
-// produce duplicate output.
+// when Value is nil or already present in the message in the form
+// k8s validators emit it (quoted for strings, unquoted for numbers /
+// bools / structs). Matching the emit shape avoids both duplication
+// and the false-positive that an unquoted substring search would
+// produce — e.g. Value="k" against message "spec.kind: Required" must
+// not suppress the tail just because "k" appears inside "kind".
 func formatErrorLine(e pkgvalidate.FieldValidationError) string {
 	msg := e.Message
-	if rendered := renderBadValue(e.Value); rendered != "" && !strings.Contains(msg, rendered) {
+	if rendered, found := renderBadValue(e.Value); rendered != "" && !strings.Contains(msg, found) {
 		msg = fmt.Sprintf("%s (got %s)", msg, rendered)
 	}
 
 	return fmt.Sprintf("%s [%s]", msg, e.Type)
 }
 
-// renderBadValue formats a FieldValidationError.Value for display.
-// Returns the empty string for nil so callers can use it as a presence
-// check; non-empty results are suitable for direct concatenation into
-// an error message.
-func renderBadValue(value any) string {
+// renderBadValue formats a FieldValidationError.Value for display and
+// returns the substring to look for in the message when deciding
+// whether the value is already embedded.
+//
+// Strings get %q (quoted) for both purposes: k8s validation messages
+// embed string bad values as `Invalid value: "five"`, so quoting is
+// what the user expects to read AND is the form to search for. Other
+// types use %v unchanged: numbers and booleans appear unquoted in
+// k8s messages and read naturally in our display.
+//
+// Returns the empty rendered string for a nil Value so callers can
+// use it as a presence check; the returned `found` mirrors `rendered`
+// in that case.
+func renderBadValue(value any) (rendered, found string) {
 	if value == nil {
-		return ""
+		return "", ""
 	}
 
-	return fmt.Sprintf("%v", value)
+	if s, ok := value.(string); ok {
+		quoted := fmt.Sprintf("%q", s)
+		return quoted, quoted
+	}
+
+	rendered = fmt.Sprintf("%v", value)
+
+	return rendered, rendered
 }

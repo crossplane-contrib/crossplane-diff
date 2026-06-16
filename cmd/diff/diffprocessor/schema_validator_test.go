@@ -161,7 +161,7 @@ func TestDefaultSchemaValidator_ValidateResources(t *testing.T) {
 				WithSpecField("field", int64(123)).
 				Build(),
 			composed:       []cpd.Unstructured{*composedResource1, *composedResource2},
-			preloadedCRDs:  []*extv1.CustomResourceDefinition{createCRDWithStringField(xrCRD)},
+			preloadedCRDs:  []*extv1.CustomResourceDefinition{},
 			expectedErr:    true,
 			expectedErrMsg: "missing schema",
 		},
@@ -537,10 +537,12 @@ func TestDefaultSchemaValidator_ValidateResources_AppliesDefaults(t *testing.T) 
 
 func TestFormatValidationErrors(t *testing.T) {
 	tests := map[string]struct {
+		reason   string
 		result   *pkgvalidate.ValidationResult
 		expected string
 	}{
 		"SingleSchemaError": {
+			reason: "A single field-level schema error renders as '<gvk> <name>:' header plus an indented '<message> [schema]' line.",
 			result: &pkgvalidate.ValidationResult{
 				Resources: []pkgvalidate.ResourceValidationResult{{
 					APIVersion: "example.org/v1",
@@ -557,6 +559,7 @@ func TestFormatValidationErrors(t *testing.T) {
 			expected: "example.org/v1/XR my-xr:\n  spec.region: Required value [schema]",
 		},
 		"SingleMissingSchema": {
+			reason: "A missing-schema resource collapses to a single '<gvk> <name>: missing schema' line (no errors[] to expand).",
 			result: &pkgvalidate.ValidationResult{
 				Resources: []pkgvalidate.ResourceValidationResult{{
 					APIVersion: "other.org/v1",
@@ -568,9 +571,7 @@ func TestFormatValidationErrors(t *testing.T) {
 			expected: "other.org/v1/SomeResource thing: missing schema",
 		},
 		"MissingSchemaWithoutName": {
-			// We may not always have a name (e.g. when the user feeds a
-			// resource without metadata.name). Header collapses to just
-			// the GVK rather than producing a trailing space.
+			reason: "A resource without metadata.name collapses to just the GVK in the header rather than producing a trailing space.",
 			result: &pkgvalidate.ValidationResult{
 				Resources: []pkgvalidate.ResourceValidationResult{{
 					APIVersion: "other.org/v1",
@@ -581,6 +582,7 @@ func TestFormatValidationErrors(t *testing.T) {
 			expected: "other.org/v1/SomeResource: missing schema",
 		},
 		"NamespacedResource": {
+			reason: "Namespaced resources render '<ns>/<name>' in the header so cluster-vs-namespaced scope is visible.",
 			result: &pkgvalidate.ValidationResult{
 				Resources: []pkgvalidate.ResourceValidationResult{{
 					APIVersion: "example.org/v1",
@@ -597,8 +599,7 @@ func TestFormatValidationErrors(t *testing.T) {
 			expected: "example.org/v1/Thing production/my-thing:\n  spec.size: Required value [schema]",
 		},
 		"MultipleErrorsGroupedUnderResource": {
-			// Two errors on the same resource should be grouped under a
-			// single header, not produce a header per error.
+			reason: "Multiple errors on the same resource share a single header rather than producing a header per error.",
 			result: &pkgvalidate.ValidationResult{
 				Resources: []pkgvalidate.ResourceValidationResult{{
 					APIVersion: "example.org/v1",
@@ -614,9 +615,7 @@ func TestFormatValidationErrors(t *testing.T) {
 			expected: "example.org/v1/XR my-xr:\n  spec.region: Required value [schema]\n  spec.replicas: must be > 0 [cel]",
 		},
 		"BadValueAppendedWhenAbsentFromMessage": {
-			// CEL-style errors don't always embed the bad value into
-			// the message; the structured Value should be rendered as
-			// "(got <value>)" so users can see what was rejected.
+			reason: "When Value is set and the message doesn't already include it (typical for CEL errors), '(got <value>)' is appended so users see what was rejected.",
 			result: &pkgvalidate.ValidationResult{
 				Resources: []pkgvalidate.ResourceValidationResult{{
 					APIVersion: "example.org/v1",
@@ -633,9 +632,7 @@ func TestFormatValidationErrors(t *testing.T) {
 			expected: "example.org/v1/XR my-xr:\n  spec.replicas: must be > 0 (got -1) [cel]",
 		},
 		"BadValueOmittedWhenAlreadyInMessage": {
-			// k8s field errors typically embed the bad value as a
-			// quoted string in the message text. Avoid duplicating it
-			// when the message already contains the rendered form.
+			reason: "k8s field errors typically embed the bad value as a quoted string in the message text; the '(got <value>)' tail is omitted to avoid duplication.",
 			result: &pkgvalidate.ValidationResult{
 				Resources: []pkgvalidate.ResourceValidationResult{{
 					APIVersion: "example.org/v1",
@@ -651,7 +648,42 @@ func TestFormatValidationErrors(t *testing.T) {
 			},
 			expected: `example.org/v1/XR my-xr:` + "\n" + `  spec.replicas: Invalid value: "five": must be integer [schema]`,
 		},
+		"BadValueNotSuppressedByIncidentalSubstring": {
+			reason: "Regression: the duplication check matches the quoted form for strings (\"k\") so an unquoted incidental substring (\"k\" inside \"kind\") doesn't suppress the tail.",
+			result: &pkgvalidate.ValidationResult{
+				Resources: []pkgvalidate.ResourceValidationResult{{
+					APIVersion: "example.org/v1",
+					Kind:       "XR",
+					Name:       "my-xr",
+					Status:     pkgvalidate.ValidationStatusInvalid,
+					Errors: []pkgvalidate.FieldValidationError{{
+						Type:    pkgvalidate.FieldErrorTypeCEL,
+						Message: "spec.kind: Required value",
+						Value:   "k",
+					}},
+				}},
+			},
+			expected: `example.org/v1/XR my-xr:` + "\n" + `  spec.kind: Required value (got "k") [cel]`,
+		},
+		"NumericBadValueRendersUnquoted": {
+			reason: "Numbers / bools / structs aren't quoted in k8s messages and shouldn't be quoted in our display either.",
+			result: &pkgvalidate.ValidationResult{
+				Resources: []pkgvalidate.ResourceValidationResult{{
+					APIVersion: "example.org/v1",
+					Kind:       "XR",
+					Name:       "my-xr",
+					Status:     pkgvalidate.ValidationStatusInvalid,
+					Errors: []pkgvalidate.FieldValidationError{{
+						Type:    pkgvalidate.FieldErrorTypeCEL,
+						Message: "spec.replicas: must be > 0",
+						Value:   42,
+					}},
+				}},
+			},
+			expected: "example.org/v1/XR my-xr:\n  spec.replicas: must be > 0 (got 42) [cel]",
+		},
 		"MultipleResourcesEachOnTheirOwnBlock": {
+			reason: "Failures from distinct resources produce distinct blocks joined by newlines, in input order.",
 			result: &pkgvalidate.ValidationResult{
 				Resources: []pkgvalidate.ResourceValidationResult{
 					{
@@ -675,8 +707,7 @@ func TestFormatValidationErrors(t *testing.T) {
 			expected: "example.org/v1/XR my-xr:\n  spec.region: Required value [schema]\nother.org/v1/SomeResource thing: missing schema",
 		},
 		"ValidResourcesProduceNoBlock": {
-			// A resource that passed validation shouldn't appear in the
-			// output at all; only the failing resource does.
+			reason: "Only failing resources contribute blocks; valid resources are filtered out so the output is the failure summary, not an audit log.",
 			result: &pkgvalidate.ValidationResult{
 				Resources: []pkgvalidate.ResourceValidationResult{
 					{
@@ -700,10 +731,7 @@ func TestFormatValidationErrors(t *testing.T) {
 			expected: "example.org/v1/XR bad-xr:\n  spec.field: Invalid value [schema]",
 		},
 		"NoApplicableEntriesReturnsEmpty": {
-			// formatValidationErrors is only invoked after ResultError
-			// has flagged a failure, so an empty/all-valid input is
-			// unreachable in production. We pin the contract anyway:
-			// no entries → empty string, not a misleading fallback.
+			reason: "formatValidationErrors is only invoked after ResultError has flagged a failure; an all-valid input is unreachable in production. The contract is empty string (not a generic fallback) so the wrapping ResultError carries the message.",
 			result: &pkgvalidate.ValidationResult{
 				Resources: []pkgvalidate.ResourceValidationResult{{
 					APIVersion: "example.org/v1",
@@ -715,11 +743,7 @@ func TestFormatValidationErrors(t *testing.T) {
 			expected: "",
 		},
 		"DefaultingErrorAccompanyingSchemaError": {
-			// A defaulting failure that co-occurs with a schema-class
-			// error must not produce a separate entry: the schema entry
-			// already conveys the failure, and dropping the defaulting
-			// line keeps the error block focused on the actionable
-			// problem.
+			reason: "A defaulting entry that co-occurs with a schema-class error is suppressed: the schema entry already conveys the failure, and the defaulting line would just be noise.",
 			result: &pkgvalidate.ValidationResult{
 				Resources: []pkgvalidate.ResourceValidationResult{{
 					APIVersion: "example.org/v1",
@@ -735,10 +759,7 @@ func TestFormatValidationErrors(t *testing.T) {
 			expected: "example.org/v1/XR my-xr:\n  spec.field: Required value [schema]",
 		},
 		"InvalidWithOnlyDefaultingErrorsStillEmitted": {
-			// Defensive: upstream's statusFromErrors today won't return
-			// Invalid for a resource whose Errors are all defaulting,
-			// but if that ever changed we'd rather surface the
-			// defaulting message than emit an empty block.
+			reason: "Defensive: upstream's statusFromErrors won't produce Invalid+only-defaulting today, but if it ever did we surface the defaulting message rather than emit an empty block.",
 			result: &pkgvalidate.ValidationResult{
 				Resources: []pkgvalidate.ResourceValidationResult{{
 					APIVersion: "example.org/v1",
@@ -758,7 +779,7 @@ func TestFormatValidationErrors(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			got := formatValidationErrors(tt.result)
 			if got != tt.expected {
-				t.Errorf("formatValidationErrors() = %q, want %q", got, tt.expected)
+				t.Errorf("\n%s\nformatValidationErrors() = %q, want %q", tt.reason, got, tt.expected)
 			}
 		})
 	}
