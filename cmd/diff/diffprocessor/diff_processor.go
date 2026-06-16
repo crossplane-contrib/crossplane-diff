@@ -231,11 +231,11 @@ func (p *DefaultDiffProcessor) PerformDiff(ctx context.Context, resources []*un.
 				"error", err)
 			errs = append(errs, errors.Wrapf(err, "unable to process resource %s", resourceID))
 
-			// Collect error for structured output
-			outputErrors = append(outputErrors, dt.OutputError{
-				ResourceID: resourceID,
-				Message:    err.Error(),
-			})
+			// Collect error for structured output. NewOutputError
+			// surfaces typed validation failures via
+			// OutputError.ValidationFailures when err wraps a
+			// SchemaValidationError that carries a structured Result.
+			outputErrors = append(outputErrors, NewOutputError(resourceID, err))
 		} else {
 			// Only merge diffs on success - we don't emit partial results for a single XR
 			maps.Copy(allDiffs, diffs)

@@ -131,7 +131,7 @@ func (v *DefaultSchemaValidator) ValidateResources(ctx context.Context, xr *un.U
 	v.logResultDetails(result)
 
 	if rerr := pkgvalidate.ResultError(result, true); rerr != nil {
-		return NewSchemaValidationError("", formatValidationErrors(result), rerr)
+		return NewSchemaValidationError("", formatValidationErrors(result), rerr).WithResult(result)
 	}
 
 	// Additionally validate resource scope constraints (namespace requirements and cross-namespace refs)

@@ -48,6 +48,7 @@ type DiffExpectation interface {
 type ExpectedDiff struct {
 	summary   *expectedSummary
 	resources []*ResourceExpectation
+	errors    []*ErrorExpectation
 }
 
 func (e *ExpectedDiff) expectation() *ExpectedDiff { return e }
@@ -125,6 +126,145 @@ func (e *ExpectedDiff) WithModifiedResource(kind, name, namespace string) *Resou
 	e.resources = append(e.resources, r)
 
 	return r
+}
+
+// ErrorExpectation describes one expected entry in the structured
+// errors[] payload. Match is by ResourceID; ValidationFailures, when
+// non-nil, asserts the per-resource typed validation breakdown.
+type ErrorExpectation struct {
+	parent             *ExpectedDiff
+	resourceID         string
+	messageContains    string
+	validationFailures []*ValidationFailureExpectation
+}
+
+func (e *ErrorExpectation) expectation() *ExpectedDiff { return e.parent }
+
+// ValidationFailureExpectation describes one expected entry in
+// errors[].validationFailures[]. Match is by APIVersion/Kind/Name;
+// Errors asserts on the per-field validation entries within.
+type ValidationFailureExpectation struct {
+	parent     *ErrorExpectation
+	apiVersion string
+	kind       string
+	name       string
+	namespace  string
+	status     string                   // optional; if "", no assertion
+	errors     []*FieldErrorExpectation // optional; nil = no assertion on per-field errors
+}
+
+func (v *ValidationFailureExpectation) expectation() *ExpectedDiff { return v.parent.parent }
+
+// FieldErrorExpectation describes one expected entry in
+// errors[].validationFailures[].errors[]. Match is by Type+Field
+// (Field may be empty for non-localized errors); messageContains and
+// value are optional refinements.
+type FieldErrorExpectation struct {
+	parent          *ValidationFailureExpectation
+	errType         string
+	field           string
+	messageContains string
+	hasValue        bool
+	value           any
+}
+
+func (f *FieldErrorExpectation) expectation() *ExpectedDiff { return f.parent.parent.parent }
+
+// WithError attaches an expectation for an entry in the structured
+// errors[] payload, matched by resourceID. Use the returned
+// ErrorExpectation to add validationFailures expectations.
+func (e *ExpectedDiff) WithError(resourceID string) *ErrorExpectation {
+	er := &ErrorExpectation{
+		parent:     e,
+		resourceID: resourceID,
+	}
+	e.errors = append(e.errors, er)
+
+	return er
+}
+
+// WithMessageContaining adds a substring assertion on the error's
+// Message field. Optional — useful when machine consumers care about
+// the human-readable message too.
+func (e *ErrorExpectation) WithMessageContaining(s string) *ErrorExpectation {
+	e.messageContains = s
+	return e
+}
+
+// WithValidationFailure adds an expectation for one entry in the
+// error's validationFailures[] slice, matched by APIVersion/Kind/Name.
+// namespace is optional (empty string skips the namespace assertion);
+// pass the actual namespace to lock down namespaced resources.
+func (e *ErrorExpectation) WithValidationFailure(apiVersion, kind, name, namespace string) *ValidationFailureExpectation {
+	v := &ValidationFailureExpectation{
+		parent:     e,
+		apiVersion: apiVersion,
+		kind:       kind,
+		name:       name,
+		namespace:  namespace,
+	}
+	e.validationFailures = append(e.validationFailures, v)
+
+	return v
+}
+
+// AndError returns to the parent ExpectedDiff to chain another
+// WithError call, mirroring the AndXR / AndComp helpers elsewhere in
+// this file.
+func (e *ErrorExpectation) AndError() *ExpectedDiff {
+	return e.parent
+}
+
+// WithStatus pins the validation status on this resource entry
+// ("invalid", "missingSchema"). Optional; empty status skips the
+// assertion.
+func (v *ValidationFailureExpectation) WithStatus(status string) *ValidationFailureExpectation {
+	v.status = status
+	return v
+}
+
+// WithFieldError adds an expectation for one entry in the failure's
+// errors[] slice, matched by errType ("schema", "cel",
+// "unknownField", "defaulting") and field (empty matches
+// non-localized errors like defaulting).
+func (v *ValidationFailureExpectation) WithFieldError(errType, field string) *FieldErrorExpectation {
+	f := &FieldErrorExpectation{
+		parent:  v,
+		errType: errType,
+		field:   field,
+	}
+	v.errors = append(v.errors, f)
+
+	return f
+}
+
+// AndValidationFailure returns to the parent ErrorExpectation to chain
+// another WithValidationFailure.
+func (v *ValidationFailureExpectation) AndValidationFailure() *ErrorExpectation {
+	return v.parent
+}
+
+// WithMessageContaining adds a substring assertion on this field
+// error's Message. Optional.
+func (f *FieldErrorExpectation) WithMessageContaining(s string) *FieldErrorExpectation {
+	f.messageContains = s
+	return f
+}
+
+// WithValue pins the bad value on this field error. Pass the value as
+// it would arrive after JSON decoding (e.g. float64 for numbers,
+// string for strings); for "any number is fine" omit this method.
+func (f *FieldErrorExpectation) WithValue(v any) *FieldErrorExpectation {
+	f.hasValue = true
+	f.value = v
+
+	return f
+}
+
+// AndFieldError returns to the parent ValidationFailureExpectation to
+// chain another WithFieldError.
+func (f *FieldErrorExpectation) AndFieldError() *ValidationFailureExpectation {
+	return f.parent
 }
 
 // WithRemovedResource adds an expectation for a removed resource.
@@ -311,6 +451,146 @@ func AssertStructuredDiff(t *testing.T, jsonOutput string, e DiffExpectation) {
 	if len(expected.resources) > 0 && len(output.Changes) != len(expected.resources) {
 		t.Errorf("Expected %d changes, got %d", len(expected.resources), len(output.Changes))
 	}
+
+	// Check each error expectation against output.Errors.
+	for _, want := range expected.errors {
+		got := findMatchingError(output.Errors, want.resourceID)
+		if got == nil {
+			actualIDs := make([]string, 0, len(output.Errors))
+			for _, e := range output.Errors {
+				actualIDs = append(actualIDs, e.ResourceID)
+			}
+
+			t.Errorf("Expected error for resourceID %q not found in output. Actual error IDs: %v",
+				want.resourceID, actualIDs)
+
+			continue
+		}
+
+		assertErrorMatch(t, *got, want)
+	}
+
+	// If the test pinned a specific number of error expectations, verify
+	// no extras were emitted. Zero expectations = no opinion on errors.
+	if len(expected.errors) > 0 && len(output.Errors) != len(expected.errors) {
+		t.Errorf("Expected %d errors in structured output, got %d", len(expected.errors), len(output.Errors))
+	}
+}
+
+// assertErrorMatch validates a single OutputError against its
+// expectation. Split out from AssertStructuredDiff so the per-error
+// branching doesn't push that function further over the gocognit
+// threshold its existing exemption already silences.
+func assertErrorMatch(t *testing.T, got OutputError, want *ErrorExpectation) {
+	t.Helper()
+
+	if want.messageContains != "" && !strings.Contains(got.Message, want.messageContains) {
+		t.Errorf("error %q: message %q does not contain %q",
+			want.resourceID, got.Message, want.messageContains)
+	}
+
+	for _, wantVF := range want.validationFailures {
+		gotVF := findMatchingValidationFailure(got.ValidationFailures, wantVF)
+		if gotVF == nil {
+			actual := make([]string, 0, len(got.ValidationFailures))
+			for _, vf := range got.ValidationFailures {
+				actual = append(actual, fmt.Sprintf("%s/%s %s/%s", vf.APIVersion, vf.Kind, vf.Namespace, vf.Name))
+			}
+
+			t.Errorf("error %q: expected validationFailure %s/%s %s/%s not found. Actual: %v",
+				want.resourceID, wantVF.apiVersion, wantVF.kind, wantVF.namespace, wantVF.name, actual)
+
+			continue
+		}
+
+		assertValidationFailureMatch(t, *gotVF, wantVF)
+	}
+
+	if len(want.validationFailures) > 0 && len(got.ValidationFailures) != len(want.validationFailures) {
+		t.Errorf("error %q: expected %d validationFailures, got %d",
+			want.resourceID, len(want.validationFailures), len(got.ValidationFailures))
+	}
+}
+
+// assertValidationFailureMatch validates a single
+// ResourceValidationFailure against its expectation.
+func assertValidationFailureMatch(t *testing.T, got ResourceValidationFailure, want *ValidationFailureExpectation) {
+	t.Helper()
+
+	if want.status != "" && got.Status != want.status {
+		t.Errorf("validationFailure %s/%s %s: status: expected %q, got %q",
+			want.apiVersion, want.kind, want.name, want.status, got.Status)
+	}
+
+	for _, wantFE := range want.errors {
+		gotFE := findMatchingFieldError(got.Errors, wantFE)
+		if gotFE == nil {
+			actual := make([]string, 0, len(got.Errors))
+			for _, fe := range got.Errors {
+				actual = append(actual, fmt.Sprintf("[%s] %s", fe.Type, fe.Field))
+			}
+
+			t.Errorf("validationFailure %s/%s %s: expected fieldError [%s] %s not found. Actual: %v",
+				want.apiVersion, want.kind, want.name, wantFE.errType, wantFE.field, actual)
+
+			continue
+		}
+
+		if wantFE.messageContains != "" && !strings.Contains(gotFE.Message, wantFE.messageContains) {
+			t.Errorf("validationFailure %s/%s %s: fieldError [%s] %s: message %q does not contain %q",
+				want.apiVersion, want.kind, want.name, wantFE.errType, wantFE.field,
+				gotFE.Message, wantFE.messageContains)
+		}
+
+		if wantFE.hasValue && !reflect.DeepEqual(gotFE.Value, wantFE.value) {
+			t.Errorf("validationFailure %s/%s %s: fieldError [%s] %s: value: expected %v (%T), got %v (%T)",
+				want.apiVersion, want.kind, want.name, wantFE.errType, wantFE.field,
+				wantFE.value, wantFE.value, gotFE.Value, gotFE.Value)
+		}
+	}
+
+	if len(want.errors) > 0 && len(got.Errors) != len(want.errors) {
+		t.Errorf("validationFailure %s/%s %s: expected %d field errors, got %d",
+			want.apiVersion, want.kind, want.name, len(want.errors), len(got.Errors))
+	}
+}
+
+func findMatchingError(errs []OutputError, resourceID string) *OutputError {
+	for i := range errs {
+		if errs[i].ResourceID == resourceID {
+			return &errs[i]
+		}
+	}
+
+	return nil
+}
+
+func findMatchingValidationFailure(vfs []ResourceValidationFailure, want *ValidationFailureExpectation) *ResourceValidationFailure {
+	for i := range vfs {
+		v := &vfs[i]
+		if v.APIVersion != want.apiVersion || v.Kind != want.kind || v.Name != want.name {
+			continue
+		}
+
+		if want.namespace != "" && v.Namespace != want.namespace {
+			continue
+		}
+
+		return v
+	}
+
+	return nil
+}
+
+func findMatchingFieldError(fes []FieldValidationError, want *FieldErrorExpectation) *FieldValidationError {
+	for i := range fes {
+		fe := &fes[i]
+		if fe.Type == want.errType && fe.Field == want.field {
+			return fe
+		}
+	}
+
+	return nil
 }
 
 // findMatchingChange finds a change that matches the resource expectation.
@@ -449,8 +729,27 @@ type StructuredCompDiffOutput struct {
 
 // OutputError mirrors dt.OutputError.
 type OutputError struct {
-	ResourceID string `json:"resourceID,omitempty"`
-	Message    string `json:"message"`
+	ResourceID         string                      `json:"resourceID,omitempty"`
+	Message            string                      `json:"message"`
+	ValidationFailures []ResourceValidationFailure `json:"validationFailures,omitempty"`
+}
+
+// ResourceValidationFailure mirrors dt.ResourceValidationFailure.
+type ResourceValidationFailure struct {
+	APIVersion string                 `json:"apiVersion"`
+	Kind       string                 `json:"kind"`
+	Name       string                 `json:"name,omitempty"`
+	Namespace  string                 `json:"namespace,omitempty"`
+	Status     string                 `json:"status"`
+	Errors     []FieldValidationError `json:"errors,omitempty"`
+}
+
+// FieldValidationError mirrors dt.FieldValidationError.
+type FieldValidationError struct {
+	Type    string `json:"type"`
+	Field   string `json:"field,omitempty"`
+	Message string `json:"message"`
+	Value   any    `json:"value,omitempty"`
 }
 
 // CompositionDiffJSON mirrors compositionDiffJSON from the renderer.

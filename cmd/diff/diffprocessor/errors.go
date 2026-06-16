@@ -19,6 +19,9 @@ package diffprocessor
 import (
 	"errors"
 	"fmt"
+
+	dt "github.com/crossplane-contrib/crossplane-diff/cmd/diff/renderer/types"
+	pkgvalidate "github.com/crossplane/cli/v2/pkg/validate"
 )
 
 // Exit codes for crossplane-diff CLI.
@@ -37,11 +40,21 @@ const (
 )
 
 // SchemaValidationError indicates schema validation failed.
-// Used to distinguish validation errors from other tool errors for exit code handling.
+// Used to distinguish validation errors from other tool errors for exit
+// code handling.
+//
+// Result, when non-nil, carries the structured per-resource validation
+// outcome that produced this error. Output renderers use it to surface
+// typed FieldValidationError records under OutputError.ValidationFailures
+// in JSON / YAML output. It is left nil for paths that fail validation
+// without a *pkgvalidate.ValidationResult in hand — for example
+// scope-validation errors raised after schema validation succeeded — so
+// the absence of structured detail is observable rather than fabricated.
 type SchemaValidationError struct {
 	ResourceID string
 	Message    string
 	Err        error
+	Result     *pkgvalidate.ValidationResult
 }
 
 // Error implements the error interface.
@@ -58,13 +71,118 @@ func (e *SchemaValidationError) Unwrap() error {
 	return e.Err
 }
 
-// NewSchemaValidationError creates a new SchemaValidationError.
+// NewSchemaValidationError creates a new SchemaValidationError without
+// a structured Result. Use WithResult on the returned value to attach
+// one when the failure originated from pkg/validate.SchemaValidate.
 func NewSchemaValidationError(resourceID, message string, err error) *SchemaValidationError {
 	return &SchemaValidationError{
 		ResourceID: resourceID,
 		Message:    message,
 		Err:        err,
 	}
+}
+
+// WithResult attaches the structured *pkgvalidate.ValidationResult
+// that produced this error so downstream renderers can emit typed
+// per-resource failures alongside the human-readable Message. Returns
+// the receiver for fluent chaining.
+func (e *SchemaValidationError) WithResult(result *pkgvalidate.ValidationResult) *SchemaValidationError {
+	e.Result = result
+	return e
+}
+
+// NewOutputError builds a structured-output entry for err, tagged with
+// resourceID. When err contains a *SchemaValidationError that carries a
+// pkgvalidate.ValidationResult, the returned OutputError also exposes a
+// typed per-resource breakdown via ValidationFailures so machine
+// consumers don't need to parse Message. Non-validation errors return
+// an OutputError with only ResourceID and Message populated.
+func NewOutputError(resourceID string, err error) dt.OutputError {
+	out := dt.OutputError{
+		ResourceID: resourceID,
+		Message:    err.Error(),
+	}
+
+	var sve *SchemaValidationError
+	if errors.As(err, &sve) && sve.Result != nil {
+		out.ValidationFailures = validationFailuresFromResult(sve.Result)
+	}
+
+	return out
+}
+
+// validationFailuresFromResult maps a pkgvalidate.ValidationResult into
+// the wire types crossplane-diff exposes through OutputError. Resources
+// with status Valid are filtered out — ValidationFailures is "what went
+// wrong", not "the full audit log". Resources with status
+// DefaultingFailed are filtered out too: pkgvalidate.ResultError treats
+// defaulting-only failures as success, so a SchemaValidationError
+// reaching this code path should not advertise them as failures.
+func validationFailuresFromResult(result *pkgvalidate.ValidationResult) []dt.ResourceValidationFailure {
+	if result == nil {
+		return nil
+	}
+
+	var out []dt.ResourceValidationFailure
+
+	for _, r := range result.Resources {
+		switch r.Status {
+		case pkgvalidate.ValidationStatusValid,
+			pkgvalidate.ValidationStatusDefaultingFailed:
+			continue
+		case pkgvalidate.ValidationStatusInvalid,
+			pkgvalidate.ValidationStatusMissingSchema:
+			// fall through
+		}
+
+		out = append(out, dt.ResourceValidationFailure{
+			APIVersion: r.APIVersion,
+			Kind:       r.Kind,
+			Name:       r.Name,
+			Namespace:  r.Namespace,
+			Status:     string(r.Status),
+			Errors:     fieldValidationErrorsFromUpstream(r.Errors),
+		})
+	}
+
+	return out
+}
+
+// fieldValidationErrorsFromUpstream converts the cli's per-field error
+// slice into our wire shape. Defaulting entries are filtered out when
+// at least one actionable (schema / CEL / unknown-field) error is
+// present on the same resource, mirroring the suppression policy of
+// formatValidationErrors so the typed and human-readable views agree.
+func fieldValidationErrorsFromUpstream(errs []pkgvalidate.FieldValidationError) []dt.FieldValidationError {
+	if len(errs) == 0 {
+		return nil
+	}
+
+	hasActionable := false
+
+	for _, e := range errs {
+		if e.Type != pkgvalidate.FieldErrorTypeDefaulting {
+			hasActionable = true
+			break
+		}
+	}
+
+	out := make([]dt.FieldValidationError, 0, len(errs))
+
+	for _, e := range errs {
+		if hasActionable && e.Type == pkgvalidate.FieldErrorTypeDefaulting {
+			continue
+		}
+
+		out = append(out, dt.FieldValidationError{
+			Type:    string(e.Type),
+			Field:   e.Field,
+			Message: e.Message,
+			Value:   e.Value,
+		})
+	}
+
+	return out
 }
 
 // IsSchemaValidationError checks if any error in the chain is a schema validation error.
