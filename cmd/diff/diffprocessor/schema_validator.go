@@ -313,61 +313,118 @@ func (v *DefaultSchemaValidator) logResultDetails(result *pkgvalidate.Validation
 	}
 }
 
-// formatValidationErrors produces a single-line, semicolon-joined string
-// describing the failures in a *ValidationResult. It mirrors the
-// previously extracted text-renderer output (one entry per
-// FieldValidationError, with a "could not find CRD/XRD for ..." entry
-// per missing-schema resource) so existing callers and tests that
-// match on these substrings keep working.
+// formatValidationErrors produces a multi-line, per-resource breakdown
+// of the failures in a *ValidationResult. Each resource that has
+// something to report contributes a header line "<gvk> <name>:"
+// followed by one indented line per FieldValidationError, with the
+// error type appended in brackets and the structured Value rendered as
+// "(got <value>)" when it isn't already quoted into the message text.
+// Missing-schema resources collapse to a single "<gvk> <name>: missing
+// schema" line.
+//
+// Callers invoke this only after pkgvalidate.ResultError has already
+// returned a non-nil error, so an empty result means "no per-resource
+// detail to report" — we return "" and let the wrapping
+// SchemaValidationError carry the underlying ResultError message.
 func formatValidationErrors(result *pkgvalidate.ValidationResult) string {
-	var msgs []string
+	var blocks []string
 
 	for _, r := range result.Resources {
-		gvk := fmt.Sprintf("%s, Kind=%s", r.APIVersion, r.Kind)
-
 		switch r.Status {
 		case pkgvalidate.ValidationStatusMissingSchema:
-			msgs = append(msgs, "could not find CRD/XRD for: "+gvk)
+			blocks = append(blocks, formatMissingSchemaBlock(r))
 		case pkgvalidate.ValidationStatusInvalid:
-			// Suppress defaulting entries only when there are other
-			// actionable (schema / CEL / unknown-field) errors on the
-			// same resource: those already convey the failure, and the
-			// defaulting line would just be noise. Upstream's
-			// statusFromErrors today guarantees that an Invalid
-			// resource has at least one non-defaulting error, but we
-			// don't rely on that here — if a future change ever
-			// produced an Invalid resource whose Errors are all
-			// defaulting, we still emit them rather than silently drop
-			// everything and fall through to the generic "schema
-			// validation failed" message.
-			hasActionable := false
-
-			for _, e := range r.Errors {
-				if e.Type != pkgvalidate.FieldErrorTypeDefaulting {
-					hasActionable = true
-					break
-				}
-			}
-
-			for _, e := range r.Errors {
-				if hasActionable && e.Type == pkgvalidate.FieldErrorTypeDefaulting {
-					continue
-				}
-
-				msgs = append(msgs, fmt.Sprintf("schema validation error %s, %s : %s", gvk, r.Name, e.Message))
-			}
+			blocks = append(blocks, formatInvalidBlock(r))
 		case pkgvalidate.ValidationStatusValid,
 			pkgvalidate.ValidationStatusDefaultingFailed:
 			// Valid: nothing to report. DefaultingFailed-only resources
 			// are reported by ResultError as success, so this function
-			// never sees them via the failure path; the case is here
+			// never sees them via the failure path; the cases are here
 			// only to keep the switch exhaustive.
 		}
 	}
 
-	if len(msgs) == 0 {
-		return "schema validation failed"
+	return strings.Join(blocks, "\n")
+}
+
+// resourceHeader formats the per-resource header used by both the
+// missing-schema and invalid blocks. Cluster-scoped resources omit the
+// namespace prefix; namespaced resources produce "<ns>/<name>".
+func resourceHeader(r pkgvalidate.ResourceValidationResult) string {
+	name := r.Name
+	if r.Namespace != "" {
+		name = r.Namespace + "/" + r.Name
 	}
 
-	return strings.Join(msgs, "; ")
+	if name == "" {
+		return fmt.Sprintf("%s/%s", r.APIVersion, r.Kind)
+	}
+
+	return fmt.Sprintf("%s/%s %s", r.APIVersion, r.Kind, name)
+}
+
+// formatMissingSchemaBlock renders a single line for a resource whose
+// CRD/XRD wasn't found. The resource was never validated, so there are
+// no per-error lines to indent under it.
+func formatMissingSchemaBlock(r pkgvalidate.ResourceValidationResult) string {
+	return resourceHeader(r) + ": missing schema"
+}
+
+// formatInvalidBlock renders a header line plus one indented line per
+// surfaced error.
+//
+// Defaulting entries are suppressed only when an actionable (schema /
+// CEL / unknown-field) error is present on the same resource: those
+// already convey the failure and the defaulting line would just be
+// noise. Upstream's statusFromErrors today guarantees an Invalid
+// resource has at least one non-defaulting error, but if a future
+// change ever produced an Invalid resource whose Errors are all
+// defaulting we'd rather emit them than silently drop everything.
+func formatInvalidBlock(r pkgvalidate.ResourceValidationResult) string {
+	hasActionable := false
+
+	for _, e := range r.Errors {
+		if e.Type != pkgvalidate.FieldErrorTypeDefaulting {
+			hasActionable = true
+			break
+		}
+	}
+
+	lines := []string{resourceHeader(r) + ":"}
+
+	for _, e := range r.Errors {
+		if hasActionable && e.Type == pkgvalidate.FieldErrorTypeDefaulting {
+			continue
+		}
+
+		lines = append(lines, "  "+formatErrorLine(e))
+	}
+
+	return strings.Join(lines, "\n")
+}
+
+// formatErrorLine renders one FieldValidationError as
+// "<message>[ (got <value>)] [<type>]". The bad value tail is omitted
+// when Value is nil or already substring-present in the message, so
+// k8s-derived errors (which embed the value in their text) don't
+// produce duplicate output.
+func formatErrorLine(e pkgvalidate.FieldValidationError) string {
+	msg := e.Message
+	if rendered := renderBadValue(e.Value); rendered != "" && !strings.Contains(msg, rendered) {
+		msg = fmt.Sprintf("%s (got %s)", msg, rendered)
+	}
+
+	return fmt.Sprintf("%s [%s]", msg, e.Type)
+}
+
+// renderBadValue formats a FieldValidationError.Value for display.
+// Returns the empty string for nil so callers can use it as a presence
+// check; non-empty results are suitable for direct concatenation into
+// an error message.
+func renderBadValue(value any) string {
+	if value == nil {
+		return ""
+	}
+
+	return fmt.Sprintf("%v", value)
 }

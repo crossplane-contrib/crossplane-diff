@@ -1150,9 +1150,12 @@ Summary: 2 modified, 2 removed`,
 			inputFiles: []string{
 				"testdata/diff/invalid-schema-xr.yaml",
 			},
-			expectedError:         true,
-			expectedExitCode:      dp.ExitCodeSchemaValidation,
-			expectedErrorContains: "schema validation",
+			expectedError:    true,
+			expectedExitCode: dp.ExitCodeSchemaValidation,
+			// The wrap prefix from diff_processor.go is the stable
+			// anchor here; the inner per-resource formatter no longer
+			// repeats "schema validation" in its rendered text.
+			expectedErrorContains: "cannot validate resources",
 			noColor:               true,
 		},
 		"NewClaimShowsDiff": {
