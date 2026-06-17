@@ -55,12 +55,11 @@ type FunctionProvider interface {
 // function containers are on the same network and reachable via container IP.
 const EnvDockerNetwork = "CROSSPLANE_DIFF_DOCKER_NETWORK"
 
-// annotationRuntimeDockerNetwork is the render annotation that configures the
-// Docker network for function containers.
-const annotationRuntimeDockerNetwork = "render.crossplane.io/runtime-docker-network"
-
-// applyDockerNetworkAnnotation sets the Docker network annotation on functions
-// if the CROSSPLANE_DIFF_DOCKER_NETWORK environment variable is set.
+// applyDockerNetworkAnnotation stamps each function with the Docker network
+// annotation drawn from EnvDockerNetwork when that variable is set. The
+// underlying applyNetworkAnnotation helper preserves any non-empty value the
+// caller has already set, so this function never overwrites an explicitly
+// configured network.
 func applyDockerNetworkAnnotation(fns []pkgv1.Function, log logging.Logger) {
 	network := os.Getenv(EnvDockerNetwork)
 	if network == "" {
@@ -68,14 +67,7 @@ func applyDockerNetworkAnnotation(fns []pkgv1.Function, log logging.Logger) {
 	}
 
 	log.Debug("Setting Docker network annotation on functions", "network", network)
-
-	for i := range fns {
-		if fns[i].Annotations == nil {
-			fns[i].Annotations = make(map[string]string)
-		}
-
-		fns[i].Annotations[annotationRuntimeDockerNetwork] = network
-	}
+	applyNetworkAnnotation(fns, network)
 }
 
 // DefaultFunctionProvider fetches functions from the cluster on each call.
@@ -153,9 +145,15 @@ func generateInstanceID() string {
 func (p *CachedFunctionProvider) GetFunctionsForComposition(comp *apiextensionsv1.Composition) ([]pkgv1.Function, error) {
 	compName := comp.GetName()
 
-	// Check cache first
+	// Check cache first. Re-apply the Docker network annotation on every cache
+	// hit so an entry first cached when EnvDockerNetwork was unset still gets
+	// stamped on a later call once the env var is set. applyNetworkAnnotation
+	// preserves any non-empty value already present, so this is safe to run
+	// unconditionally.
 	if cached, ok := p.cache[compName]; ok {
 		p.logger.Debug("Using cached functions", "composition", compName, "count", len(cached))
+		applyDockerNetworkAnnotation(cached, p.logger)
+
 		return cached, nil
 	}
 
@@ -197,10 +195,10 @@ func (p *CachedFunctionProvider) GetFunctionsForComposition(comp *apiextensionsv
 		p.containerNames = append(p.containerNames, containerName)
 	}
 
+	applyDockerNetworkAnnotation(fns, p.logger)
+
 	// Cache for future calls
 	p.cache[compName] = fns
-
-	applyDockerNetworkAnnotation(fns, p.logger)
 
 	return fns, nil
 }
