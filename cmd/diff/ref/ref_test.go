@@ -100,10 +100,10 @@ func TestParse(t *testing.T) {
 
 func TestParseAll(t *testing.T) {
 	tests := map[string]struct {
-		input          []string
-		want           []k8stypes.NamespacedName
-		wantErr        bool
-		wantErrSubstr  string
+		input         []string
+		want          []k8stypes.NamespacedName
+		wantErr       bool
+		wantErrSubstr string
 	}{
 		"Empty_NilInput": {
 			input: nil,

@@ -623,8 +623,8 @@ func (p *DefaultCompDiffProcessor) partitionXRsByUpdatePolicy(xrs []*un.Unstruct
 			"kind", xr.GetKind(),
 			"policy", policy)
 
-		switch {
-		case policy == compositionUpdatePolicyManual:
+		switch policy {
+		case compositionUpdatePolicyManual:
 			dropped = append(dropped, xr)
 		default:
 			// Automatic or empty/default policy — keep.

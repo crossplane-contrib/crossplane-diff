@@ -23,11 +23,10 @@ import (
 	"github.com/alecthomas/kong"
 	dp "github.com/crossplane-contrib/crossplane-diff/cmd/diff/diffprocessor"
 	"github.com/crossplane-contrib/crossplane-diff/cmd/diff/ref"
+	ld "github.com/crossplane/cli/v2/cmd/crossplane/common/load"
 
 	"github.com/crossplane/crossplane-runtime/v2/pkg/errors"
 	"github.com/crossplane/crossplane-runtime/v2/pkg/logging"
-
-	ld "github.com/crossplane/cli/v2/cmd/crossplane/common/load"
 )
 
 // CompDiffProcessor is imported from the diffprocessor package
