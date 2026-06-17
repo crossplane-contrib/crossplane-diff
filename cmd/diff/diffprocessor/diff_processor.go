@@ -18,6 +18,7 @@ import (
 	dt "github.com/crossplane-contrib/crossplane-diff/cmd/diff/renderer/types"
 	"github.com/crossplane-contrib/crossplane-diff/cmd/diff/types"
 	"github.com/crossplane/cli/v2/cmd/crossplane/render"
+	clixr "github.com/crossplane/cli/v2/pkg/xr"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	un "k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -230,11 +231,11 @@ func (p *DefaultDiffProcessor) PerformDiff(ctx context.Context, resources []*un.
 				"error", err)
 			errs = append(errs, errors.Wrapf(err, "unable to process resource %s", resourceID))
 
-			// Collect error for structured output
-			outputErrors = append(outputErrors, dt.OutputError{
-				ResourceID: resourceID,
-				Message:    err.Error(),
-			})
+			// Collect error for structured output. NewOutputError
+			// surfaces typed validation failures via
+			// OutputError.ValidationFailures when err wraps a
+			// SchemaValidationError that carries a structured Result.
+			outputErrors = append(outputErrors, NewOutputError(resourceID, err))
 		} else {
 			// Only merge diffs on success - we don't emit partial results for a single XR
 			maps.Copy(allDiffs, diffs)
@@ -1557,7 +1558,10 @@ func (p *DefaultDiffProcessor) applyXRDDefaults(ctx context.Context, xr *cmp.Uns
 		return errors.Wrapf(err, "cannot find CRD for XRD %s (resource %s)", xrdName, resourceID)
 	}
 
-	// Apply defaults using the render.DefaultValues function
+	// Apply defaults using the cli's pkg/xr defaulting helper. The
+	// previous home, render.DefaultValues, was renamed to
+	// xr.ApplyCRDDefaults and moved out of cmd/crossplane/render in
+	// crossplane/cli when that package was promoted to a library.
 	apiVersion := xr.GetAPIVersion()
 	xrContent := xr.UnstructuredContent()
 
@@ -1566,7 +1570,7 @@ func (p *DefaultDiffProcessor) applyXRDDefaults(ctx context.Context, xr *cmp.Uns
 		"apiVersion", apiVersion,
 		"crdName", crdForDefaults.Name)
 
-	err = render.DefaultValues(xrContent, apiVersion, *crdForDefaults)
+	err = clixr.ApplyCRDDefaults(xrContent, apiVersion, *crdForDefaults)
 	if err != nil {
 		return errors.Wrapf(err, "cannot apply default values for XR %s", resourceID)
 	}

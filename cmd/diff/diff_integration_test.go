@@ -220,8 +220,11 @@ func runIntegrationTest(t *testing.T, testType DiffTestType, tt IntegrationTestC
 	// so we can pass paths directly without special handling
 	testFiles = append(testFiles, tt.inputFiles...)
 
-	// Create a buffer to capture the output
-	var stdout bytes.Buffer
+	// Capture stdout and stderr into separate buffers. The diff command
+	// writes structured output (JSON / YAML / text diff) to stdout and
+	// human-readable error lines to stderr; mixing them defeats JSON
+	// parsing for tests that drive the structured assertion path.
+	var stdout, stderr bytes.Buffer
 
 	// Create command line args that match your pre-populated struct
 	args := []string{
@@ -304,7 +307,7 @@ func runIntegrationTest(t *testing.T, testType DiffTestType, tt IntegrationTestC
 
 	// Create a Kong context with stdout
 	parser, err := kong.New(cmd,
-		kong.Writers(&stdout, &stdout),
+		kong.Writers(&stdout, &stderr),
 		kong.Bind(appCtx),
 		kong.Bind(exitCode),
 		kong.BindTo(logger, (*logging.Logger)(nil)),
@@ -333,19 +336,35 @@ func runIntegrationTest(t *testing.T, testType DiffTestType, tt IntegrationTestC
 		t.Fatalf("expected no error but got: %v", err)
 	}
 
-	// Check for specific error message if expected
-	if err != nil {
-		if tt.expectedErrorContains != "" && strings.Contains(err.Error(), tt.expectedErrorContains) {
-			// This is an expected error with the expected message
-			t.Logf("Got expected error containing: %s", tt.expectedErrorContains)
-		} else {
-			t.Errorf("Expected no error or specific error message, got: %v", err)
+	// Check for specific error message if expected.
+	//
+	// Three modes:
+	//   1. expectedError + expectedErrorContains: substring-check the error.
+	//   2. expectedError + structured assertion: any error is fine here;
+	//      the structured assertion below validates errors[].
+	//   3. unexpected error: already caught by the t.Fatalf above.
+	if err != nil && tt.expectedError {
+		hasStructuredAssertion := tt.expectedStructuredOutput != nil || tt.expectedStructuredCompOutput != nil
+
+		switch {
+		case tt.expectedErrorContains != "":
+			if strings.Contains(err.Error(), tt.expectedErrorContains) {
+				t.Logf("Got expected error containing: %s", tt.expectedErrorContains)
+			} else {
+				t.Errorf("Expected error containing %q, got: %v", tt.expectedErrorContains, err)
+			}
+		case hasStructuredAssertion:
+			t.Logf("Got expected error; structured assertion will validate errors[]")
+		default:
+			t.Errorf("expectedError set without expectedErrorContains or structured assertion; got: %v", err)
 		}
 	}
 
-	// For expected errors with specific messages, we've already checked above
-	if tt.expectedError && tt.expectedErrorContains != "" {
-		// Skip output check for expected error cases
+	// Skip stdout check for expected-error cases that use the legacy
+	// substring assertion. Cases that pin a structured assertion fall
+	// through so the JSON path is exercised against errors[] / changes.
+	if tt.expectedError && tt.expectedErrorContains != "" &&
+		tt.expectedStructuredOutput == nil && tt.expectedStructuredCompOutput == nil {
 		return
 	}
 
@@ -1141,7 +1160,7 @@ Summary: 2 modified, 2 removed`,
 			noColor:               true,
 		},
 		"SchemaValidationError": {
-			reason: "Validates exit code 2 for schema validation errors",
+			reason: "Validates exit code 2 for schema validation errors and structured per-resource failure detail in JSON output",
 			setupFiles: []string{
 				"testdata/diff/resources/xrd.yaml",
 				"testdata/diff/resources/composition.yaml",
@@ -1150,10 +1169,29 @@ Summary: 2 modified, 2 removed`,
 			inputFiles: []string{
 				"testdata/diff/invalid-schema-xr.yaml",
 			},
-			expectedError:         true,
-			expectedExitCode:      dp.ExitCodeSchemaValidation,
-			expectedErrorContains: "schema validation",
-			noColor:               true,
+			outputFormat:     "json",
+			expectedError:    true,
+			expectedExitCode: dp.ExitCodeSchemaValidation,
+			// Structured assertion: lock down the typed
+			// validationFailures payload for both the failing XR and
+			// its composed resource. Field paths and error types are
+			// ours to assert; the embedded k8s message wording is
+			// left unasserted (apimachinery upgrades can shift its
+			// phrasing without changing our output contract).
+			expectedStructuredOutput: tu.ExpectDiff().
+				WithError("XNopResource/invalid-schema-xr").
+				WithValidationFailure("ns.diff.example.org/v1alpha1", "XNopResource", "invalid-schema-xr", "default").
+				WithStatus("invalid").
+				WithFieldError("schema", "spec.coolField").
+				AndFieldError().
+				AndValidationFailure().
+				WithValidationFailure("ns.nop.example.org/v1alpha1", "XDownstreamResource", "invalid-schema-xr", "default").
+				WithStatus("invalid").
+				WithFieldError("schema", "spec.forProvider.configData").
+				AndFieldError().
+				AndValidationFailure().
+				AndError(),
+			noColor: true,
 		},
 		"NewClaimShowsDiff": {
 			reason:       "Shows diff for new claim",

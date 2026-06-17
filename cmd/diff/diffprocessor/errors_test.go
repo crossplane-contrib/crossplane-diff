@@ -21,6 +21,8 @@ import (
 	"fmt"
 	"testing"
 
+	dt "github.com/crossplane-contrib/crossplane-diff/cmd/diff/renderer/types"
+	pkgvalidate "github.com/crossplane/cli/v2/pkg/validate"
 	gcmp "github.com/google/go-cmp/cmp"
 
 	xperrors "github.com/crossplane/crossplane-runtime/v2/pkg/errors"
@@ -134,6 +136,318 @@ func TestNewSchemaValidationError(t *testing.T) {
 
 	if !errors.Is(err.Err, wrappedErr) {
 		t.Errorf("Err = %v, want %v", err.Err, wrappedErr)
+	}
+
+	if err.Result != nil {
+		t.Errorf("Result = %v, want nil for the basic constructor", err.Result)
+	}
+}
+
+func TestSchemaValidationError_WithResult(t *testing.T) {
+	result := &pkgvalidate.ValidationResult{
+		Resources: []pkgvalidate.ResourceValidationResult{{
+			APIVersion: "example.org/v1",
+			Kind:       "XR",
+			Name:       "x",
+			Status:     pkgvalidate.ValidationStatusInvalid,
+		}},
+	}
+
+	err := NewSchemaValidationError("", "msg", errors.New("inner")).WithResult(result)
+	if err.Result != result {
+		t.Errorf("Result = %v, want %v", err.Result, result)
+	}
+}
+
+func TestNewOutputError(t *testing.T) {
+	tests := map[string]struct {
+		reason     string
+		resourceID string
+		err        error
+		want       dt.OutputError
+	}{
+		"NonValidationError_NoFailuresAttached": {
+			reason:     "A plain error has no structured slot to populate; ValidationFailures stays nil and only Message is set.",
+			resourceID: "XR/my-xr",
+			err:        errors.New("kube unreachable"),
+			want: dt.OutputError{
+				ResourceID: "XR/my-xr",
+				Message:    "kube unreachable",
+			},
+		},
+		"SchemaValidationError_WithoutResult_NoFailuresAttached": {
+			reason:     "A SchemaValidationError without a Result (e.g. scope-validation path) contributes only Message; the typed slot stays nil so consumers can distinguish 'no failures' from 'no structured detail available'.",
+			resourceID: "XR/my-xr",
+			err:        NewSchemaValidationError("", "scope failure", errors.New("inner")),
+			want: dt.OutputError{
+				ResourceID: "XR/my-xr",
+				Message:    "scope failure",
+			},
+		},
+		"SchemaValidationError_WithResult_ExposesTypedFailures": {
+			reason:     "A SchemaValidationError carrying a Result populates ValidationFailures with the converted per-resource breakdown.",
+			resourceID: "XR/my-xr",
+			err: NewSchemaValidationError("", "msg", errors.New("inner")).WithResult(
+				&pkgvalidate.ValidationResult{
+					Resources: []pkgvalidate.ResourceValidationResult{{
+						APIVersion: "example.org/v1",
+						Kind:       "XR",
+						Name:       "my-xr",
+						Status:     pkgvalidate.ValidationStatusInvalid,
+						Errors: []pkgvalidate.FieldValidationError{{
+							Type:    pkgvalidate.FieldErrorTypeSchema,
+							Field:   "spec.region",
+							Message: "spec.region: Required value",
+						}},
+					}},
+				}),
+			want: dt.OutputError{
+				ResourceID: "XR/my-xr",
+				Message:    "msg",
+				ValidationFailures: []dt.ResourceValidationFailure{{
+					APIVersion: "example.org/v1",
+					Kind:       "XR",
+					Name:       "my-xr",
+					Status:     "invalid",
+					Errors: []dt.FieldValidationError{{
+						Type:    "schema",
+						Field:   "spec.region",
+						Message: "spec.region: Required value",
+					}},
+				}},
+			},
+		},
+		"WrappedSchemaValidationError_StillSurfacesFailures": {
+			reason:     "errors.As walks the chain, so a SchemaValidationError behind errors.Wrap still has its Result extracted into ValidationFailures.",
+			resourceID: "XR/my-xr",
+			err: xperrors.Wrap(
+				NewSchemaValidationError("", "msg", errors.New("inner")).WithResult(
+					&pkgvalidate.ValidationResult{
+						Resources: []pkgvalidate.ResourceValidationResult{{
+							APIVersion: "other.org/v1",
+							Kind:       "Thing",
+							Name:       "thing",
+							Status:     pkgvalidate.ValidationStatusMissingSchema,
+						}},
+					}),
+				"cannot validate resources"),
+			want: dt.OutputError{
+				ResourceID: "XR/my-xr",
+				Message:    "cannot validate resources: msg",
+				ValidationFailures: []dt.ResourceValidationFailure{{
+					APIVersion: "other.org/v1",
+					Kind:       "Thing",
+					Name:       "thing",
+					Status:     "missingSchema",
+				}},
+			},
+		},
+	}
+
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			got := NewOutputError(tc.resourceID, tc.err)
+			if diff := gcmp.Diff(tc.want, got); diff != "" {
+				t.Errorf("\n%s\nNewOutputError() mismatch (-want +got):\n%s", tc.reason, diff)
+			}
+		})
+	}
+}
+
+func TestValidationFailuresFromResult(t *testing.T) {
+	tests := map[string]struct {
+		reason string
+		result *pkgvalidate.ValidationResult
+		want   []dt.ResourceValidationFailure
+	}{
+		"NilResultReturnsNil": {
+			reason: "A nil ValidationResult yields nil; the converter never invents structure.",
+			result: nil,
+			want:   nil,
+		},
+		"OnlyValidResourcesReturnsNil": {
+			reason: "ValidationFailures lists 'what failed', not the full audit log; valid resources are filtered out.",
+			result: &pkgvalidate.ValidationResult{
+				Resources: []pkgvalidate.ResourceValidationResult{{
+					APIVersion: "example.org/v1",
+					Kind:       "XR",
+					Name:       "ok",
+					Status:     pkgvalidate.ValidationStatusValid,
+				}},
+			},
+			want: nil,
+		},
+		"DefaultingFailedFiltered": {
+			reason: "pkgvalidate.ResultError treats DefaultingFailed as success, so a SchemaValidationError reaching us shouldn't advertise these resources as failures via ValidationFailures.",
+			result: &pkgvalidate.ValidationResult{
+				Resources: []pkgvalidate.ResourceValidationResult{{
+					APIVersion: "example.org/v1",
+					Kind:       "XR",
+					Name:       "x",
+					Status:     pkgvalidate.ValidationStatusDefaultingFailed,
+					Errors: []pkgvalidate.FieldValidationError{{
+						Type:    pkgvalidate.FieldErrorTypeDefaulting,
+						Message: "cannot apply defaults",
+					}},
+				}},
+			},
+			want: nil,
+		},
+		"InvalidWithMixedErrorsSuppressesDefaulting": {
+			reason: "Mirrors formatValidationErrors: when actionable errors are present, defaulting entries are dropped so the typed and rendered views agree on the failure detail.",
+			result: &pkgvalidate.ValidationResult{
+				Resources: []pkgvalidate.ResourceValidationResult{{
+					APIVersion: "example.org/v1",
+					Kind:       "XR",
+					Name:       "my-xr",
+					Namespace:  "production",
+					Status:     pkgvalidate.ValidationStatusInvalid,
+					Errors: []pkgvalidate.FieldValidationError{
+						{Type: pkgvalidate.FieldErrorTypeDefaulting, Message: "cannot apply defaults"},
+						{Type: pkgvalidate.FieldErrorTypeSchema, Field: "spec.region", Message: "spec.region: Required value"},
+					},
+				}},
+			},
+			want: []dt.ResourceValidationFailure{{
+				APIVersion: "example.org/v1",
+				Kind:       "XR",
+				Name:       "my-xr",
+				Namespace:  "production",
+				Status:     "invalid",
+				Errors: []dt.FieldValidationError{{
+					Type:    "schema",
+					Field:   "spec.region",
+					Message: "spec.region: Required value",
+				}},
+			}},
+		},
+		"InvalidWithOnlyDefaultingErrorsKeepsThem": {
+			reason: "Defensive: upstream's statusFromErrors won't produce Invalid+only-defaulting today, but if it ever did we surface the defaulting entries rather than emit an Invalid row with no errors.",
+			result: &pkgvalidate.ValidationResult{
+				Resources: []pkgvalidate.ResourceValidationResult{{
+					APIVersion: "example.org/v1",
+					Kind:       "XR",
+					Name:       "my-xr",
+					Status:     pkgvalidate.ValidationStatusInvalid,
+					Errors: []pkgvalidate.FieldValidationError{{
+						Type:    pkgvalidate.FieldErrorTypeDefaulting,
+						Message: "cannot apply defaults",
+					}},
+				}},
+			},
+			want: []dt.ResourceValidationFailure{{
+				APIVersion: "example.org/v1",
+				Kind:       "XR",
+				Name:       "my-xr",
+				Status:     "invalid",
+				Errors: []dt.FieldValidationError{{
+					Type:    "defaulting",
+					Message: "cannot apply defaults",
+				}},
+			}},
+		},
+		"MissingSchemaSurfacedWithoutErrors": {
+			reason: "Missing-schema resources surface with their GVK / name / namespace and Status, but no errors[] (the validator never ran).",
+			result: &pkgvalidate.ValidationResult{
+				Resources: []pkgvalidate.ResourceValidationResult{{
+					APIVersion: "other.org/v1",
+					Kind:       "SomeResource",
+					Name:       "thing",
+					Status:     pkgvalidate.ValidationStatusMissingSchema,
+				}},
+			},
+			want: []dt.ResourceValidationFailure{{
+				APIVersion: "other.org/v1",
+				Kind:       "SomeResource",
+				Name:       "thing",
+				Status:     "missingSchema",
+			}},
+		},
+		"BadValuePropagated": {
+			reason: "FieldValidationError.Value travels through unchanged, preserving its Go type, so JSON output renders it without forcing callers to parse it back.",
+			result: &pkgvalidate.ValidationResult{
+				Resources: []pkgvalidate.ResourceValidationResult{{
+					APIVersion: "example.org/v1",
+					Kind:       "XR",
+					Name:       "my-xr",
+					Status:     pkgvalidate.ValidationStatusInvalid,
+					Errors: []pkgvalidate.FieldValidationError{{
+						Type:    pkgvalidate.FieldErrorTypeSchema,
+						Field:   "spec.replicas",
+						Message: `spec.replicas: Invalid value: "five"`,
+						Value:   "five",
+					}},
+				}},
+			},
+			want: []dt.ResourceValidationFailure{{
+				APIVersion: "example.org/v1",
+				Kind:       "XR",
+				Name:       "my-xr",
+				Status:     "invalid",
+				Errors: []dt.FieldValidationError{{
+					Type:    "schema",
+					Field:   "spec.replicas",
+					Message: `spec.replicas: Invalid value: "five"`,
+					Value:   "five",
+				}},
+			}},
+		},
+		"MultipleResourcesPreserveOrder": {
+			reason: "The output preserves input order across resources and skips valid ones, so consumers can rely on the position correspondence between input resources and emitted failures.",
+			result: &pkgvalidate.ValidationResult{
+				Resources: []pkgvalidate.ResourceValidationResult{
+					{
+						APIVersion: "example.org/v1",
+						Kind:       "XR",
+						Name:       "first",
+						Status:     pkgvalidate.ValidationStatusInvalid,
+						Errors: []pkgvalidate.FieldValidationError{{
+							Type:    pkgvalidate.FieldErrorTypeSchema,
+							Message: "first error",
+						}},
+					},
+					{
+						APIVersion: "example.org/v1",
+						Kind:       "XR",
+						Name:       "ok-skipped",
+						Status:     pkgvalidate.ValidationStatusValid,
+					},
+					{
+						APIVersion: "other.org/v1",
+						Kind:       "Thing",
+						Name:       "third",
+						Status:     pkgvalidate.ValidationStatusMissingSchema,
+					},
+				},
+			},
+			want: []dt.ResourceValidationFailure{
+				{
+					APIVersion: "example.org/v1",
+					Kind:       "XR",
+					Name:       "first",
+					Status:     "invalid",
+					Errors: []dt.FieldValidationError{{
+						Type:    "schema",
+						Message: "first error",
+					}},
+				},
+				{
+					APIVersion: "other.org/v1",
+					Kind:       "Thing",
+					Name:       "third",
+					Status:     "missingSchema",
+				},
+			},
+		},
+	}
+
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			got := validationFailuresFromResult(tc.result)
+			if diff := gcmp.Diff(tc.want, got); diff != "" {
+				t.Errorf("\n%s\nvalidationFailuresFromResult() mismatch (-want +got):\n%s", tc.reason, diff)
+			}
+		})
 	}
 }
 

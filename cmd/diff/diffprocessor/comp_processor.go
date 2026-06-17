@@ -261,10 +261,11 @@ func (p *DefaultCompDiffProcessor) DiffComposition(ctx context.Context, composit
 		for _, impact := range comp.ImpactAnalysis {
 			if impact.Status == renderer.XRStatusError && impact.Error != nil {
 				resourceID := fmt.Sprintf("%s/%s", impact.Kind, impact.Name)
-				output.Errors = append(output.Errors, dt.OutputError{
-					ResourceID: resourceID,
-					Message:    impact.Error.Error(),
-				})
+				// NewOutputError surfaces typed validation failures
+				// via OutputError.ValidationFailures when impact.Error
+				// wraps a SchemaValidationError carrying a structured
+				// Result.
+				output.Errors = append(output.Errors, NewOutputError(resourceID, impact.Error))
 			}
 		}
 	}

@@ -7,10 +7,10 @@ import (
 
 	xp "github.com/crossplane-contrib/crossplane-diff/cmd/diff/client/crossplane"
 	tu "github.com/crossplane-contrib/crossplane-diff/cmd/diff/testutils"
+	pkgvalidate "github.com/crossplane/cli/v2/pkg/validate"
 	"github.com/google/go-cmp/cmp"
 	extv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	un "k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
-	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 
 	"github.com/crossplane/crossplane-runtime/v2/pkg/errors"
@@ -20,9 +20,8 @@ import (
 var _ SchemaValidator = (*tu.MockSchemaValidator)(nil)
 
 const (
-	testExampleOrg       = "example.org"
-	testComposedResource = "ComposedResource"
-	testCpdOrg           = "cpd.org"
+	testExampleOrg = "example.org"
+	testCpdOrg     = "cpd.org"
 )
 
 func TestDefaultSchemaValidator_ValidateResources(t *testing.T) {
@@ -56,7 +55,6 @@ func TestDefaultSchemaValidator_ValidateResources(t *testing.T) {
 		setupClients   func() (*tu.MockSchemaClient, *tu.MockDefinitionClient)
 		xr             *un.Unstructured
 		composed       []cpd.Unstructured
-		preloadedCRDs  []*extv1.CustomResourceDefinition
 		expectedErr    bool
 		expectedErrMsg string
 	}{
@@ -73,10 +71,9 @@ func TestDefaultSchemaValidator_ValidateResources(t *testing.T) {
 
 				return sch, tu.NewMockDefinitionClient().Build()
 			},
-			xr:            xr,
-			composed:      []cpd.Unstructured{*composedResource1, *composedResource2},
-			preloadedCRDs: []*extv1.CustomResourceDefinition{}, // No longer needed
-			expectedErr:   false,
+			xr:          xr,
+			composed:    []cpd.Unstructured{*composedResource1, *composedResource2},
+			expectedErr: false,
 		},
 		"SuccessfulValidationWithFetchedCRDs": {
 			setupClients: func() (*tu.MockSchemaClient, *tu.MockDefinitionClient) {
@@ -96,10 +93,9 @@ func TestDefaultSchemaValidator_ValidateResources(t *testing.T) {
 
 				return sch, def
 			},
-			xr:            xr,
-			composed:      []cpd.Unstructured{*composedResource1, *composedResource2},
-			preloadedCRDs: []*extv1.CustomResourceDefinition{},
-			expectedErr:   false,
+			xr:          xr,
+			composed:    []cpd.Unstructured{*composedResource1, *composedResource2},
+			expectedErr: false,
 		},
 		"MissingCRD": {
 			setupClients: func() (*tu.MockSchemaClient, *tu.MockDefinitionClient) {
@@ -118,22 +114,14 @@ func TestDefaultSchemaValidator_ValidateResources(t *testing.T) {
 
 				return sch, def
 			},
-			xr:            xr,
-			composed:      []cpd.Unstructured{*composedResource1, *composedResource2},
-			preloadedCRDs: []*extv1.CustomResourceDefinition{},
+			xr:       xr,
+			composed: []cpd.Unstructured{*composedResource1, *composedResource2},
 			// Now we expect an error because we've configured it to require a CRD but can't find it
 			expectedErr:    true,
 			expectedErrMsg: "unable to find CRDs for",
 		},
 		"ValidationError": {
 			setupClients: func() (*tu.MockSchemaClient, *tu.MockDefinitionClient) {
-				// Convert CRDs to un for the mock
-				composedCRDUn := &un.Unstructured{}
-				_ = runtime.DefaultUnstructuredConverter.FromUnstructured(
-					MustToUnstructured(createCRDWithStringField(composedCRD)),
-					composedCRDUn,
-				)
-
 				sch := tu.NewMockSchemaClient().
 					// Add GetCRD implementation for typed CRDs
 					WithGetCRD(func(_ context.Context, gvk schema.GroupVersionKind) (*extv1.CustomResourceDefinition, error) {
@@ -160,9 +148,8 @@ func TestDefaultSchemaValidator_ValidateResources(t *testing.T) {
 				WithSpecField("field", int64(123)).
 				Build(),
 			composed:       []cpd.Unstructured{*composedResource1, *composedResource2},
-			preloadedCRDs:  []*extv1.CustomResourceDefinition{createCRDWithStringField(xrCRD)},
 			expectedErr:    true,
-			expectedErrMsg: "could not find CRD/XRD",
+			expectedErrMsg: "missing schema",
 		},
 	}
 
@@ -296,7 +283,6 @@ func TestDefaultSchemaValidator_LoadCRDs(t *testing.T) {
 
 	tests := map[string]struct {
 		setupClient    func() xp.DefinitionClient
-		preloadedCRDs  []*extv1.CustomResourceDefinition
 		expectedErr    bool
 		expectedErrMsg string
 		// for caching tests
@@ -328,7 +314,6 @@ func TestDefaultSchemaValidator_LoadCRDs(t *testing.T) {
 						Build(),
 				}
 			},
-			preloadedCRDs:  nil, // No preloaded CRDs
 			expectedErr:    false,
 			callTwice:      true, // Make two calls to LoadCRDs
 			expectXRDCalls: 1,    // GetXRDs should only be called once due to caching
@@ -389,16 +374,6 @@ func createCRDWithStringField(baseCRD *extv1.CustomResourceDefinition) *extv1.Cu
 	}
 
 	return crd
-}
-
-// Helper function to convert to un.
-func MustToUnstructured(obj any) map[string]any {
-	u, err := runtime.DefaultUnstructuredConverter.ToUnstructured(obj)
-	if err != nil {
-		panic(err)
-	}
-
-	return u
 }
 
 // Helper type to track GetXRDs calls.
@@ -501,7 +476,7 @@ func TestDefaultSchemaValidator_ValidateResources_AppliesDefaults(t *testing.T) 
 	}
 
 	// Verify defaults were applied to the ORIGINAL resource
-	// The defaults are applied in-place by validate.SchemaValidation, so they persist
+	// The defaults are applied in-place by applyCRDDefaults before validation, so they persist
 	deletionPolicy, found, err := un.NestedString(managedResource.Object, "spec", "deletionPolicy")
 	if err != nil {
 		t.Fatalf("Failed to get deletionPolicy: %v", err)
@@ -534,50 +509,297 @@ func TestDefaultSchemaValidator_ValidateResources_AppliesDefaults(t *testing.T) 
 	// The compositionRevisionRef remains in the original resource, which is correct behavior.
 }
 
-func TestExtractValidationErrors(t *testing.T) {
+func TestFormatValidationErrors(t *testing.T) {
 	tests := map[string]struct {
-		input    string
+		reason   string
+		result   *pkgvalidate.ValidationResult
 		expected string
 	}{
-		"SingleValidationError": {
-			input:    "[x] schema validation error example.org/v1, my-xr : spec.region: Required value\nTotal 1 resources: 0 missing schemas, 0 success cases, 1 failure cases",
-			expected: "schema validation error example.org/v1, my-xr : spec.region: Required value",
+		"SingleSchemaError": {
+			reason: "A single field-level schema error renders as '<gvk> <name>:' header plus an indented '<message> [schema]' line.",
+			result: &pkgvalidate.ValidationResult{
+				Resources: []pkgvalidate.ResourceValidationResult{{
+					APIVersion: "example.org/v1",
+					Kind:       "XR",
+					Name:       "my-xr",
+					Status:     pkgvalidate.ValidationStatusInvalid,
+					Errors: []pkgvalidate.FieldValidationError{{
+						Type:    pkgvalidate.FieldErrorTypeSchema,
+						Field:   "spec.region",
+						Message: "spec.region: Required value",
+					}},
+				}},
+			},
+			expected: "example.org/v1/XR my-xr:\n  spec.region: Required value [schema]",
 		},
 		"SingleMissingSchema": {
-			input:    "[!] could not find CRD/XRD for: other.org/v1, Kind=SomeResource\nTotal 1 resources: 1 missing schemas, 0 success cases, 0 failure cases",
-			expected: "could not find CRD/XRD for: other.org/v1, Kind=SomeResource",
+			reason: "A missing-schema resource collapses to a single '<gvk> <name>: missing schema' line (no errors[] to expand).",
+			result: &pkgvalidate.ValidationResult{
+				Resources: []pkgvalidate.ResourceValidationResult{{
+					APIVersion: "other.org/v1",
+					Kind:       "SomeResource",
+					Name:       "thing",
+					Status:     pkgvalidate.ValidationStatusMissingSchema,
+				}},
+			},
+			expected: "other.org/v1/SomeResource thing: missing schema",
 		},
-		"MultipleErrors": {
-			input:    "[x] schema validation error example.org/v1, my-xr : spec.region: Required value\n[!] could not find CRD/XRD for: other.org/v1\nTotal 2 resources: 1 missing schemas, 0 success cases, 1 failure cases",
-			expected: "schema validation error example.org/v1, my-xr : spec.region: Required value; could not find CRD/XRD for: other.org/v1",
+		"MissingSchemaWithoutName": {
+			reason: "A resource without metadata.name collapses to just the GVK in the header rather than producing a trailing space.",
+			result: &pkgvalidate.ValidationResult{
+				Resources: []pkgvalidate.ResourceValidationResult{{
+					APIVersion: "other.org/v1",
+					Kind:       "SomeResource",
+					Status:     pkgvalidate.ValidationStatusMissingSchema,
+				}},
+			},
+			expected: "other.org/v1/SomeResource: missing schema",
 		},
-		"MixedWithSuccessLines": {
-			input:    "[✓] example.org/v1, good-xr validated successfully\n[x] schema validation error example.org/v1, bad-xr : spec.field: Invalid value\nTotal 2 resources: 0 missing schemas, 1 success cases, 1 failure cases",
-			expected: "schema validation error example.org/v1, bad-xr : spec.field: Invalid value",
+		"NamespacedResource": {
+			reason: "Namespaced resources render '<ns>/<name>' in the header so cluster-vs-namespaced scope is visible.",
+			result: &pkgvalidate.ValidationResult{
+				Resources: []pkgvalidate.ResourceValidationResult{{
+					APIVersion: "example.org/v1",
+					Kind:       "Thing",
+					Namespace:  "production",
+					Name:       "my-thing",
+					Status:     pkgvalidate.ValidationStatusInvalid,
+					Errors: []pkgvalidate.FieldValidationError{{
+						Type:    pkgvalidate.FieldErrorTypeSchema,
+						Message: "spec.size: Required value",
+					}},
+				}},
+			},
+			expected: "example.org/v1/Thing production/my-thing:\n  spec.size: Required value [schema]",
 		},
-		"EmptyInput": {
-			input:    "",
-			expected: "schema validation failed",
+		"NamespaceWithoutNameCollapsesToGVK": {
+			reason: "When namespace is set but name is empty, the header collapses to just the GVK rather than rendering '<ns>/' with a stray trailing slash.",
+			result: &pkgvalidate.ValidationResult{
+				Resources: []pkgvalidate.ResourceValidationResult{{
+					APIVersion: "example.org/v1",
+					Kind:       "Thing",
+					Namespace:  "production",
+					Status:     pkgvalidate.ValidationStatusMissingSchema,
+				}},
+			},
+			expected: "example.org/v1/Thing: missing schema",
 		},
-		"NoErrorsOnlySuccess": {
-			input:    "[✓] example.org/v1, my-xr validated successfully\nTotal 1 resources: 0 missing schemas, 1 success cases, 0 failure cases",
-			expected: "schema validation failed",
+		"MultipleErrorsGroupedUnderResource": {
+			reason: "Multiple errors on the same resource share a single header rather than producing a header per error.",
+			result: &pkgvalidate.ValidationResult{
+				Resources: []pkgvalidate.ResourceValidationResult{{
+					APIVersion: "example.org/v1",
+					Kind:       "XR",
+					Name:       "my-xr",
+					Status:     pkgvalidate.ValidationStatusInvalid,
+					Errors: []pkgvalidate.FieldValidationError{
+						{Type: pkgvalidate.FieldErrorTypeSchema, Message: "spec.region: Required value"},
+						{Type: pkgvalidate.FieldErrorTypeCEL, Message: "spec.replicas: must be > 0"},
+					},
+				}},
+			},
+			expected: "example.org/v1/XR my-xr:\n  spec.region: Required value [schema]\n  spec.replicas: must be > 0 [cel]",
 		},
-		"WhitespaceHandling": {
-			input:    "  [x] error message with leading spaces  \n",
-			expected: "error message with leading spaces",
+		"BadValueAppendedWhenAbsentFromMessage": {
+			reason: "When Value is set and the message doesn't already include it (typical for CEL errors), '(got <value>)' is appended so users see what was rejected.",
+			result: &pkgvalidate.ValidationResult{
+				Resources: []pkgvalidate.ResourceValidationResult{{
+					APIVersion: "example.org/v1",
+					Kind:       "XR",
+					Name:       "my-xr",
+					Status:     pkgvalidate.ValidationStatusInvalid,
+					Errors: []pkgvalidate.FieldValidationError{{
+						Type:    pkgvalidate.FieldErrorTypeCEL,
+						Message: "spec.replicas: must be > 0",
+						Value:   -1,
+					}},
+				}},
+			},
+			expected: "example.org/v1/XR my-xr:\n  spec.replicas: must be > 0 (got -1) [cel]",
 		},
-		"MultipleValidationErrors": {
-			input:    "[x] error one\n[x] error two\n[x] error three",
-			expected: "error one; error two; error three",
+		"BadValueOmittedWhenAlreadyInMessage": {
+			reason: "k8s field errors typically embed the bad value as a quoted string in the message text; the '(got <value>)' tail is omitted to avoid duplication.",
+			result: &pkgvalidate.ValidationResult{
+				Resources: []pkgvalidate.ResourceValidationResult{{
+					APIVersion: "example.org/v1",
+					Kind:       "XR",
+					Name:       "my-xr",
+					Status:     pkgvalidate.ValidationStatusInvalid,
+					Errors: []pkgvalidate.FieldValidationError{{
+						Type:    pkgvalidate.FieldErrorTypeSchema,
+						Message: `spec.replicas: Invalid value: "five": must be integer`,
+						Value:   "five",
+					}},
+				}},
+			},
+			expected: `example.org/v1/XR my-xr:` + "\n" + `  spec.replicas: Invalid value: "five": must be integer [schema]`,
+		},
+		"BadValueNotSuppressedByIncidentalSubstring": {
+			reason: "Regression: the duplication check matches the quoted form for strings (\"k\") so an unquoted incidental substring (\"k\" inside \"kind\") doesn't suppress the tail.",
+			result: &pkgvalidate.ValidationResult{
+				Resources: []pkgvalidate.ResourceValidationResult{{
+					APIVersion: "example.org/v1",
+					Kind:       "XR",
+					Name:       "my-xr",
+					Status:     pkgvalidate.ValidationStatusInvalid,
+					Errors: []pkgvalidate.FieldValidationError{{
+						Type:    pkgvalidate.FieldErrorTypeCEL,
+						Message: "spec.kind: Required value",
+						Value:   "k",
+					}},
+				}},
+			},
+			expected: `example.org/v1/XR my-xr:` + "\n" + `  spec.kind: Required value (got "k") [cel]`,
+		},
+		"NumericBadValueRendersUnquoted": {
+			reason: "Numbers / bools / structs aren't quoted in k8s messages and shouldn't be quoted in our display either.",
+			result: &pkgvalidate.ValidationResult{
+				Resources: []pkgvalidate.ResourceValidationResult{{
+					APIVersion: "example.org/v1",
+					Kind:       "XR",
+					Name:       "my-xr",
+					Status:     pkgvalidate.ValidationStatusInvalid,
+					Errors: []pkgvalidate.FieldValidationError{{
+						Type:    pkgvalidate.FieldErrorTypeCEL,
+						Message: "spec.replicas: must be > 0",
+						Value:   42,
+					}},
+				}},
+			},
+			expected: "example.org/v1/XR my-xr:\n  spec.replicas: must be > 0 (got 42) [cel]",
+		},
+		"NumericBadValueNotSuppressedByDigitPrefix": {
+			reason: "Regression: a raw substring search would suppress the tail when the rendered number is a digit-prefix of another token (Value=42 vs message containing '420'). Word-boundary matching keeps the tail rendered so the user sees the actual rejected value.",
+			result: &pkgvalidate.ValidationResult{
+				Resources: []pkgvalidate.ResourceValidationResult{{
+					APIVersion: "example.org/v1",
+					Kind:       "XR",
+					Name:       "my-xr",
+					Status:     pkgvalidate.ValidationStatusInvalid,
+					Errors: []pkgvalidate.FieldValidationError{{
+						Type:    pkgvalidate.FieldErrorTypeCEL,
+						Message: "spec.size: must be at most 420",
+						Value:   42,
+					}},
+				}},
+			},
+			expected: "example.org/v1/XR my-xr:\n  spec.size: must be at most 420 (got 42) [cel]",
+		},
+		"NumericBadValueSuppressedAsToken": {
+			reason: "When the rendered number does appear as a standalone token in the message (delimited by non-word chars), the tail is correctly suppressed to avoid duplication.",
+			result: &pkgvalidate.ValidationResult{
+				Resources: []pkgvalidate.ResourceValidationResult{{
+					APIVersion: "example.org/v1",
+					Kind:       "XR",
+					Name:       "my-xr",
+					Status:     pkgvalidate.ValidationStatusInvalid,
+					Errors: []pkgvalidate.FieldValidationError{{
+						Type:    pkgvalidate.FieldErrorTypeSchema,
+						Message: "spec.replicas: Invalid value: 42: must be at most 10",
+						Value:   42,
+					}},
+				}},
+			},
+			expected: "example.org/v1/XR my-xr:\n  spec.replicas: Invalid value: 42: must be at most 10 [schema]",
+		},
+		"MultipleResourcesEachOnTheirOwnBlock": {
+			reason: "Failures from distinct resources produce distinct blocks joined by newlines, in input order.",
+			result: &pkgvalidate.ValidationResult{
+				Resources: []pkgvalidate.ResourceValidationResult{
+					{
+						APIVersion: "example.org/v1",
+						Kind:       "XR",
+						Name:       "my-xr",
+						Status:     pkgvalidate.ValidationStatusInvalid,
+						Errors: []pkgvalidate.FieldValidationError{{
+							Type:    pkgvalidate.FieldErrorTypeSchema,
+							Message: "spec.region: Required value",
+						}},
+					},
+					{
+						APIVersion: "other.org/v1",
+						Kind:       "SomeResource",
+						Name:       "thing",
+						Status:     pkgvalidate.ValidationStatusMissingSchema,
+					},
+				},
+			},
+			expected: "example.org/v1/XR my-xr:\n  spec.region: Required value [schema]\nother.org/v1/SomeResource thing: missing schema",
+		},
+		"ValidResourcesProduceNoBlock": {
+			reason: "Only failing resources contribute blocks; valid resources are filtered out so the output is the failure summary, not an audit log.",
+			result: &pkgvalidate.ValidationResult{
+				Resources: []pkgvalidate.ResourceValidationResult{
+					{
+						APIVersion: "example.org/v1",
+						Kind:       "XR",
+						Name:       "good-xr",
+						Status:     pkgvalidate.ValidationStatusValid,
+					},
+					{
+						APIVersion: "example.org/v1",
+						Kind:       "XR",
+						Name:       "bad-xr",
+						Status:     pkgvalidate.ValidationStatusInvalid,
+						Errors: []pkgvalidate.FieldValidationError{{
+							Type:    pkgvalidate.FieldErrorTypeSchema,
+							Message: "spec.field: Invalid value",
+						}},
+					},
+				},
+			},
+			expected: "example.org/v1/XR bad-xr:\n  spec.field: Invalid value [schema]",
+		},
+		"NoApplicableEntriesReturnsEmpty": {
+			reason: "formatValidationErrors is only invoked after ResultError has flagged a failure; an all-valid input is unreachable in production. The contract is empty string (not a generic fallback) so the wrapping ResultError carries the message.",
+			result: &pkgvalidate.ValidationResult{
+				Resources: []pkgvalidate.ResourceValidationResult{{
+					APIVersion: "example.org/v1",
+					Kind:       "XR",
+					Name:       "my-xr",
+					Status:     pkgvalidate.ValidationStatusValid,
+				}},
+			},
+			expected: "",
+		},
+		"DefaultingErrorAccompanyingSchemaError": {
+			reason: "A defaulting entry that co-occurs with a schema-class error is suppressed: the schema entry already conveys the failure, and the defaulting line would just be noise.",
+			result: &pkgvalidate.ValidationResult{
+				Resources: []pkgvalidate.ResourceValidationResult{{
+					APIVersion: "example.org/v1",
+					Kind:       "XR",
+					Name:       "my-xr",
+					Status:     pkgvalidate.ValidationStatusInvalid,
+					Errors: []pkgvalidate.FieldValidationError{
+						{Type: pkgvalidate.FieldErrorTypeDefaulting, Message: "cannot apply defaults"},
+						{Type: pkgvalidate.FieldErrorTypeSchema, Message: "spec.field: Required value"},
+					},
+				}},
+			},
+			expected: "example.org/v1/XR my-xr:\n  spec.field: Required value [schema]",
+		},
+		"InvalidWithOnlyDefaultingErrorsStillEmitted": {
+			reason: "Defensive: upstream's statusFromErrors won't produce Invalid+only-defaulting today, but if it ever did we surface the defaulting message rather than emit an empty block.",
+			result: &pkgvalidate.ValidationResult{
+				Resources: []pkgvalidate.ResourceValidationResult{{
+					APIVersion: "example.org/v1",
+					Kind:       "XR",
+					Name:       "my-xr",
+					Status:     pkgvalidate.ValidationStatusInvalid,
+					Errors: []pkgvalidate.FieldValidationError{
+						{Type: pkgvalidate.FieldErrorTypeDefaulting, Message: "cannot apply defaults"},
+					},
+				}},
+			},
+			expected: "example.org/v1/XR my-xr:\n  cannot apply defaults [defaulting]",
 		},
 	}
 
 	for name, tt := range tests {
 		t.Run(name, func(t *testing.T) {
-			result := extractValidationErrors(tt.input)
-			if result != tt.expected {
-				t.Errorf("extractValidationErrors() = %q, want %q", result, tt.expected)
+			got := formatValidationErrors(tt.result)
+			if got != tt.expected {
+				t.Errorf("\n%s\nformatValidationErrors() = %q, want %q", tt.reason, got, tt.expected)
 			}
 		})
 	}
@@ -595,7 +817,6 @@ func TestDefaultSchemaValidator_ValidateScopeConstraints(t *testing.T) {
 
 	tests := map[string]struct {
 		setupClient       func() *tu.MockSchemaClient
-		preloadedCRDs     []*extv1.CustomResourceDefinition
 		resource          *un.Unstructured
 		expectedNamespace string
 		isClaimRoot       bool
@@ -608,7 +829,6 @@ func TestDefaultSchemaValidator_ValidateScopeConstraints(t *testing.T) {
 					WithFoundCRD(testExampleOrg, "NamespacedResource", namespacedCRD).
 					Build()
 			},
-			preloadedCRDs: []*extv1.CustomResourceDefinition{}, // No longer needed
 			resource: tu.NewResource(testExampleOrg+"/v1", "NamespacedResource", "test-resource").
 				InNamespace("default").
 				Build(),
@@ -622,7 +842,6 @@ func TestDefaultSchemaValidator_ValidateScopeConstraints(t *testing.T) {
 					WithFoundCRD(testExampleOrg, "NamespacedResource", namespacedCRD).
 					Build()
 			},
-			preloadedCRDs: []*extv1.CustomResourceDefinition{namespacedCRD},
 			resource: tu.NewResource(testExampleOrg+"/v1", "NamespacedResource", "test-resource").
 				Build(), // No namespace
 			expectedNamespace: "default",
@@ -636,7 +855,6 @@ func TestDefaultSchemaValidator_ValidateScopeConstraints(t *testing.T) {
 					WithFoundCRD(testExampleOrg, "NamespacedResource", namespacedCRD).
 					Build()
 			},
-			preloadedCRDs: []*extv1.CustomResourceDefinition{namespacedCRD},
 			resource: tu.NewResource(testExampleOrg+"/v1", "NamespacedResource", "test-resource").
 				InNamespace("wrong").
 				Build(),
@@ -651,7 +869,6 @@ func TestDefaultSchemaValidator_ValidateScopeConstraints(t *testing.T) {
 					WithFoundCRD(testExampleOrg, "ClusterResource", clusterCRD).
 					Build()
 			},
-			preloadedCRDs: []*extv1.CustomResourceDefinition{clusterCRD},
 			resource: tu.NewResource(testExampleOrg+"/v1", "ClusterResource", "test-resource").
 				Build(), // No namespace - correct for cluster-scoped
 			expectedNamespace: "",
@@ -664,7 +881,6 @@ func TestDefaultSchemaValidator_ValidateScopeConstraints(t *testing.T) {
 					WithFoundCRD(testExampleOrg, "ClusterResource", clusterCRD).
 					Build()
 			},
-			preloadedCRDs: []*extv1.CustomResourceDefinition{clusterCRD},
 			resource: tu.NewResource(testExampleOrg+"/v1", "ClusterResource", "test-resource").
 				InNamespace("default").
 				Build(),
@@ -679,7 +895,6 @@ func TestDefaultSchemaValidator_ValidateScopeConstraints(t *testing.T) {
 					WithFoundCRD(testExampleOrg, "ClusterResource", clusterCRD).
 					Build()
 			},
-			preloadedCRDs: []*extv1.CustomResourceDefinition{clusterCRD},
 			resource: tu.NewResource(testExampleOrg+"/v1", "ClusterResource", "test-resource").
 				Build(),
 			expectedNamespace: "default", // XR is namespaced
@@ -693,7 +908,6 @@ func TestDefaultSchemaValidator_ValidateScopeConstraints(t *testing.T) {
 					WithFoundCRD(testExampleOrg, "ClusterResource", clusterCRD).
 					Build()
 			},
-			preloadedCRDs: []*extv1.CustomResourceDefinition{clusterCRD},
 			resource: tu.NewResource(testExampleOrg+"/v1", "ClusterResource", "test-resource").
 				Build(),
 			expectedNamespace: "default", // Claim is namespaced
@@ -708,7 +922,6 @@ func TestDefaultSchemaValidator_ValidateScopeConstraints(t *testing.T) {
 					}).
 					Build()
 			},
-			preloadedCRDs: []*extv1.CustomResourceDefinition{},
 			resource: tu.NewResource(testExampleOrg+"/v1", "UnknownResource", "test-resource").
 				Build(),
 			expectedNamespace: "default",

@@ -212,9 +212,74 @@ func MakeDiffKeyFromResource(res *un.Unstructured) string {
 // OutputError represents an error in structured output.
 // Used consistently by both XR diff and comp diff for machine-readable error handling.
 // Note: Only JSON tags are used because sigs.k8s.io/yaml uses JSON tags for YAML serialization.
+//
+// ResourceID and ValidationFailures play complementary roles:
+//
+//   - ResourceID identifies the input the diff command was processing
+//     (the XR or claim file the user fed in). It is "<Kind>/<Name>"
+//     so machine consumers can correlate an error to a specific
+//     input across batched runs.
+//
+//   - ValidationFailures, when non-empty, gives a structured
+//     per-resource breakdown of *what* the schema validator rejected
+//     within that input's render tree. It contains one entry per
+//     resource (the input itself plus any composed resource) that
+//     failed validation, with full GVK / namespace / typed errors,
+//     so consumers can drive UI or programmatic decisions without
+//     parsing the human-readable Message.
+//
+// The two fields therefore partially overlap when the input itself is
+// among the failing resources — that's intentional. ValidationFailures
+// is the complete failure list (so consumers iterating it never miss
+// an XR-level rejection); ResourceID independently anchors the error
+// to a user-supplied input. ValidationFailures is set only for schema
+// validation errors; it is nil for tool, IO, and render errors.
 type OutputError struct {
-	ResourceID string `json:"resourceID,omitempty"`
-	Message    string `json:"message"`
+	ResourceID         string                      `json:"resourceID,omitempty"`
+	Message            string                      `json:"message"`
+	ValidationFailures []ResourceValidationFailure `json:"validationFailures,omitempty"`
+}
+
+// ResourceValidationFailure is the per-resource view inside an
+// OutputError.ValidationFailures slice. It mirrors the shape of
+// crossplane/cli's pkg/validate.ResourceValidationResult so the
+// information transfers cleanly, but is defined here so crossplane-diff's
+// JSON output schema is owned by us — consumers depend on this struct,
+// not the upstream type.
+type ResourceValidationFailure struct {
+	APIVersion string `json:"apiVersion"`
+	Kind       string `json:"kind"`
+	Name       string `json:"name,omitempty"`
+	Namespace  string `json:"namespace,omitempty"`
+	// Status is the validator-assigned outcome for this resource.
+	// Today the surfaced values are "invalid" and "missingSchema";
+	// "valid" entries are filtered out by the converter so machine
+	// consumers iterating ValidationFailures see only the failure rows.
+	Status string                 `json:"status"`
+	Errors []FieldValidationError `json:"errors,omitempty"`
+}
+
+// FieldValidationError is the wire shape for a single field-level
+// validation error. Mirrors pkg/validate.FieldValidationError; defined
+// here so consumers of our JSON output bind to a stable schema we
+// control rather than the upstream type.
+type FieldValidationError struct {
+	// Type categorizes the error: "schema", "cel", "unknownField",
+	// or "defaulting".
+	Type string `json:"type"`
+	// Field is the JSONPath of the offending field (e.g.
+	// "spec.forProvider.region"), set when the validator can pinpoint
+	// a path. Empty for errors with no field locality (e.g.
+	// defaulting failures).
+	Field string `json:"field,omitempty"`
+	// Message is the validator-emitted human-readable description.
+	// For k8s-derived schema errors this typically embeds the field
+	// path and bad value already.
+	Message string `json:"message"`
+	// Value, when set, is the offending value as the validator saw
+	// it. Type is preserved (string, number, bool, struct), so JSON
+	// consumers can present or compare it directly.
+	Value any `json:"value,omitempty"`
 }
 
 // FormatError returns a human-readable error string.
