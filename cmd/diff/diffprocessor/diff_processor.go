@@ -18,12 +18,12 @@ import (
 	dt "github.com/crossplane-contrib/crossplane-diff/cmd/diff/renderer/types"
 	"github.com/crossplane-contrib/crossplane-diff/cmd/diff/types"
 	"github.com/crossplane/cli/v2/cmd/crossplane/render"
+	clixrgen "github.com/crossplane/cli/v2/cmd/crossplane/xr"
 	clixr "github.com/crossplane/cli/v2/pkg/xr"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	un "k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
-	"k8s.io/apimachinery/pkg/util/uuid"
 
 	"github.com/crossplane/crossplane-runtime/v2/pkg/errors"
 	"github.com/crossplane/crossplane-runtime/v2/pkg/logging"
@@ -747,6 +747,10 @@ func buildMergedSpec(claimSpecMap, xrSpecMap map[string]any, xrForRendering *cmp
 // synthesizeDummyBackingXRForNewClaim creates a synthetic backing XR for a new claim that doesn't
 // exist in the cluster yet. This allows compositions that reference spec.claimRef to work correctly
 // during diff operations, since claimRef is only populated by Crossplane on the backing XR at runtime.
+//
+// Delegates the conversion to the upstream cli helper, passing the XRD-derived XR kind so we
+// honor non-conventional XRD names (e.g. claimNames.kind != "X"+names.kind), and pinning the
+// XR name to the claim's name for cleaner diff output (vs. the upstream default suffix).
 func (p *DefaultDiffProcessor) synthesizeDummyBackingXRForNewClaim(ctx context.Context, claim *cmp.Unstructured) (backingXRInfo, error) {
 	result := backingXRInfo{}
 	claimGVK := claim.GroupVersionKind()
@@ -760,44 +764,23 @@ func (p *DefaultDiffProcessor) synthesizeDummyBackingXRForNewClaim(ctx context.C
 		"claim", claim.GetName(),
 		"namespace", claim.GetNamespace())
 
-	// Get XRD for this claim type
+	// Get XRD for this claim type so we can use the authoritative XR kind
+	// (XRDs may use names that don't follow the "X"+claimKind convention).
 	xrd, err := p.defClient.GetXRDForClaim(ctx, claimGVK)
 	if err != nil {
 		return result, errors.Wrap(err, "cannot get XRD for claim")
 	}
 
-	// Extract XR kind from XRD
 	xrKind, _, _ := un.NestedString(xrd.Object, "spec", "names", "kind")
-	group, _, _ := un.NestedString(xrd.Object, "spec", "group")
 
-	// Create the dummy XR
-	dummyXR := cmp.New()
-	dummyXR.SetAPIVersion(group + "/" + claimGVK.Version)
-	dummyXR.SetKind(xrKind)
-	dummyXR.SetName(claim.GetName()) // Use claim name directly for cleaner diff output
-	dummyXR.SetUID(uuid.NewUUID())
-
-	// Set spec.claimRef - the key field that compositions need
-	claimRef := map[string]any{
-		"apiVersion": claim.GetAPIVersion(),
-		"kind":       claim.GetKind(),
-		"name":       claim.GetName(),
-		"namespace":  claim.GetNamespace(),
-	}
-	if err := un.SetNestedField(dummyXR.Object, claimRef, "spec", "claimRef"); err != nil {
-		return result, errors.Wrap(err, "cannot set claimRef on dummy backing XR")
-	}
-
-	// Merge claim's spec into XR's spec (preserving claimRef we just set)
-	claimSpec, hasSpec, _ := un.NestedFieldCopy(claim.Object, "spec")
-	if hasSpec && claimSpec != nil {
-		if claimSpecMap, ok := claimSpec.(map[string]any); ok {
-			for k, v := range claimSpecMap {
-				if err := un.SetNestedField(dummyXR.Object, v, "spec", k); err != nil {
-					p.config.Logger.Debug("Failed to set spec field on dummy XR", "field", k, "error", err)
-				}
-			}
-		}
+	dummyXR, err := clixrgen.ConvertClaimToXR(claim.GetUnstructured(), clixrgen.Options{
+		Name:        claim.GetName(), // override the random suffix for cleaner diff output
+		Kind:        xrKind,
+		Direct:      false, // sets spec.claimRef, which compositions may reference
+		GenerateUID: true,
+	})
+	if err != nil {
+		return result, errors.Wrap(err, "cannot convert claim to dummy backing XR")
 	}
 
 	result.xrForRendering = dummyXR

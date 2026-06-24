@@ -24,8 +24,9 @@ package ref
 import (
 	"strings"
 
-	"github.com/crossplane/crossplane-runtime/v2/pkg/errors"
 	k8stypes "k8s.io/apimachinery/pkg/types"
+
+	"github.com/crossplane/crossplane-runtime/v2/pkg/errors"
 )
 
 // ParseAll parses each value via Parse and returns the resulting slice.
@@ -95,8 +96,8 @@ func Parse(value string) (k8stypes.NamespacedName, error) {
 // cluster-scoped), which is wrong for human-facing output where users expect
 // their original spelling.
 func Format(n k8stypes.NamespacedName) string {
-	switch {
-	case n.Namespace == "":
+	switch n.Namespace {
+	case "":
 		return n.Name
 	default:
 		return n.Namespace + "/" + n.Name
