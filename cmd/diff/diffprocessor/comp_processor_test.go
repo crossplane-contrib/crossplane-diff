@@ -269,12 +269,11 @@ func TestDefaultCompDiffProcessor_DiffComposition(t *testing.T) {
 			var stdout bytes.Buffer
 
 			config := ProcessorConfig{
-				Namespace: tt.namespace,
-				Colorize:  false,
-				Compact:   false,
-				Logger:    logger,
-				Stdout:    &stdout,         // Set stdout in config so renderers can access it
-				Stderr:    &bytes.Buffer{}, // Discard stderr for tests
+				Colorize: false,
+				Compact:  false,
+				Logger:   logger,
+				Stdout:   &stdout,         // Set stdout in config so renderers can access it
+				Stderr:   &bytes.Buffer{}, // Discard stderr for tests
 				RenderFunc: func(_ context.Context, _ logging.Logger, in RenderInputs) (render.CompositionOutputs, error) {
 					return render.CompositionOutputs{
 						CompositeResource: in.CompositeResource,

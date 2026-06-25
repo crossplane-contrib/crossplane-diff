@@ -414,7 +414,6 @@ The `DefaultDiffProcessor` implements this interface and uses several subcompone
 
 The `ProcessorConfig` structure provides configuration options:
 
-- `Namespace`: The namespace for resources
 - `Colorize`: Whether to colorize the output
 - `Compact`: Whether to show compact diffs
 - `Logger`: The logger to use
@@ -952,8 +951,6 @@ Several potential enhancements could be made to the Diff command:
     least-privilege implementations in restricted environments
 14. **Persona-specific Output Formats**: Provide different output formats optimized for each user persona (e.g.,
     machine-readable JSON for CI, verbose explanations for composition developers, simplified views for end users)
-15. **Namespace Flag Implementation**: The `--namespace` flag is currently defined but unused. Future implementation
-    could use it as a default namespace for XRs that don't specify one, or for looking up cluster resources
 
 These enhancements would expand the utility of the Diff command and make it more accessible to all user personas.
 

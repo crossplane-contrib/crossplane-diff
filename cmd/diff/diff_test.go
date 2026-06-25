@@ -909,7 +909,6 @@ spec:
 			// Create options for the DiffProcessor
 			options := []dp.ProcessorOption{
 				dp.WithLogger(logger),
-				dp.WithNamespace("default"),
 				// Add other options as needed
 			}
 

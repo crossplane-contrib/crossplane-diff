@@ -113,14 +113,8 @@ func (c *CompCmd) AfterApply(ctx *kong.Context, log logging.Logger, appCtx *AppC
 }
 
 func makeDefaultCompProc(c *CompCmd, kongCtx *kong.Context, appCtx *AppContext, log logging.Logger) dp.CompDiffProcessor {
-	// Use provided namespace or default to "default"
-	namespace := c.Namespace
-	if namespace == "" {
-		namespace = "default"
-	}
-
 	// Both processors share the same options since they're part of the same command
-	opts := defaultProcessorOptions(c.CommonCmdFields, namespace)
+	opts := defaultProcessorOptions(c.CommonCmdFields)
 	opts = append(opts,
 		dp.WithLogger(log),
 		dp.WithIncludeManual(c.IncludeManual),

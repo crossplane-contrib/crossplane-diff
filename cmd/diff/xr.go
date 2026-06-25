@@ -83,10 +83,7 @@ func (c *XRCmd) AfterApply(ctx *kong.Context, log logging.Logger, appCtx *AppCon
 }
 
 func makeDefaultXRProc(c *XRCmd, kongCtx *kong.Context, appCtx *AppContext, log logging.Logger) dp.DiffProcessor {
-	// Use default namespace for processor options (not actually used for XR diffs)
-	namespace := "default"
-
-	opts := defaultProcessorOptions(c.CommonCmdFields, namespace)
+	opts := defaultProcessorOptions(c.CommonCmdFields)
 	opts = append(opts,
 		dp.WithLogger(log),
 		dp.WithStdout(kongCtx.Stdout),

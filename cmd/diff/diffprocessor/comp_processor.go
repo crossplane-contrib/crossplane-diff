@@ -92,11 +92,10 @@ type DefaultCompDiffProcessor struct {
 func NewCompDiffProcessor(xrProc DiffProcessor, compositionClient xp.CompositionClient, opts ...ProcessorOption) CompDiffProcessor {
 	// Create default configuration
 	config := ProcessorConfig{
-		Namespace: "",
-		Colorize:  true,
-		Compact:   false,
-		Stderr:    os.Stderr,
-		Logger:    logging.NewNopLogger(),
+		Colorize: true,
+		Compact:  false,
+		Stderr:   os.Stderr,
+		Logger:   logging.NewNopLogger(),
 	}
 
 	// Apply all provided options
