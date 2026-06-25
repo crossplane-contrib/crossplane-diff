@@ -16,9 +16,6 @@ const DefaultMaxRenderIterations = 20
 
 // ProcessorConfig contains configuration for the DiffProcessor.
 type ProcessorConfig struct {
-	// Namespace is the namespace to use for resources
-	Namespace string
-
 	// Colorize determines whether to use colors in the diff output
 	Colorize bool
 
@@ -103,13 +100,6 @@ type ComponentFactories struct {
 
 // ProcessorOption defines a function that can modify a ProcessorConfig.
 type ProcessorOption func(*ProcessorConfig)
-
-// WithNamespace sets the namespace for the processor.
-func WithNamespace(namespace string) ProcessorOption {
-	return func(config *ProcessorConfig) {
-		config.Namespace = namespace
-	}
-}
 
 // WithColorize sets whether to use colors in diff output.
 func WithColorize(colorize bool) ProcessorOption {

@@ -74,7 +74,6 @@ func testProcessorOptions(t *testing.T) []ProcessorOption {
 	t.Helper()
 
 	return []ProcessorOption{
-		WithNamespace("default"),
 		WithColorize(false),
 		WithCompact(false),
 		WithMaxNestedDepth(10),

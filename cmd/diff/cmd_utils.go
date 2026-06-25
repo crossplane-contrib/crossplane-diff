@@ -43,7 +43,7 @@ func initializeAppContext(timeout time.Duration, appCtx *AppContext, log logging
 
 // defaultProcessorOptions returns the standard default options used by both XR and composition processors.
 // This is the single source of truth for behavior defaults in the CLI layer.
-func defaultProcessorOptions(fields CommonCmdFields, namespace string) []dp.ProcessorOption {
+func defaultProcessorOptions(fields CommonCmdFields) []dp.ProcessorOption {
 	// Default ignored paths - always filtered from diffs
 	// Preallocate with capacity for default + user-specified paths
 	allIgnorePaths := make([]string, 0, 1+len(fields.IgnorePaths))
@@ -53,7 +53,6 @@ func defaultProcessorOptions(fields CommonCmdFields, namespace string) []dp.Proc
 	allIgnorePaths = append(allIgnorePaths, fields.IgnorePaths...)
 
 	opts := []dp.ProcessorOption{
-		dp.WithNamespace(namespace),
 		dp.WithColorize(!fields.NoColor),
 		dp.WithCompact(fields.Compact),
 		dp.WithMaxNestedDepth(fields.MaxNestedDepth),

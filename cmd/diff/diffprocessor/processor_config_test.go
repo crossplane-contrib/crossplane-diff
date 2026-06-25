@@ -18,7 +18,7 @@ func TestNewDiffProcessor(t *testing.T) {
 		expectError bool
 	}{
 		"WithOptions": {
-			options:     []ProcessorOption{WithNamespace("test"), WithColorize(false), WithCompact(true)},
+			options:     []ProcessorOption{WithColorize(false), WithCompact(true)},
 			expectError: false,
 		},
 		"BasicOptions": {
@@ -170,27 +170,14 @@ func TestWithOptions(t *testing.T) {
 		expected ProcessorConfig
 	}{
 		{
-			name: "WithNamespace",
-			options: []ProcessorOption{
-				WithNamespace("test-namespace"),
-			},
-			expected: ProcessorConfig{
-				Namespace: "test-namespace",
-				Colorize:  true,  // Default
-				Compact:   false, // Default
-			},
-		},
-		{
 			name: "WithMultipleOptions",
 			options: []ProcessorOption{
-				WithNamespace("test-namespace"),
 				WithColorize(false),
 				WithCompact(true),
 			},
 			expected: ProcessorConfig{
-				Namespace: "test-namespace",
-				Colorize:  false,
-				Compact:   true,
+				Colorize: false,
+				Compact:  true,
 			},
 		},
 	}
@@ -199,19 +186,13 @@ func TestWithOptions(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			// Create a default config
 			config := ProcessorConfig{
-				Namespace: "default",
-				Colorize:  true,
-				Compact:   false,
+				Colorize: true,
+				Compact:  false,
 			}
 
 			// Apply the options
 			for _, option := range tt.options {
 				option(&config)
-			}
-
-			// Check namespace
-			if diff := gcmp.Diff(tt.expected.Namespace, config.Namespace); diff != "" {
-				t.Errorf("Namespace mismatch (-want +got):\n%s", diff)
 			}
 
 			// Check colorize
