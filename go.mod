@@ -9,7 +9,7 @@ require (
 	github.com/crossplane/cli/v2 v2.4.0-rc.0.0.20260617170926-a416505fb016
 	github.com/crossplane/crossplane-runtime/v2 v2.4.0-rc.0
 	github.com/crossplane/crossplane/apis/v2 v2.4.0-rc.0
-	github.com/crossplane/crossplane/v2 v2.3.2
+	github.com/crossplane/crossplane/v2 v2.3.3
 	github.com/docker/docker v28.5.2+incompatible
 	github.com/google/go-cmp v0.7.0
 	github.com/google/go-containerregistry v0.21.6
