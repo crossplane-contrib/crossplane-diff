@@ -19,6 +19,7 @@ package diffprocessor
 import (
 	"context"
 	"maps"
+	"slices"
 	"sync"
 
 	"github.com/crossplane/cli/v2/cmd/crossplane/render"
@@ -309,8 +310,8 @@ func (e *EngineRenderFn) Cleanup(_ context.Context) error {
 
 	// Run cleanups in LIFO order so the first Setup's real cleanup (which
 	// owns the docker network) runs last, after any later no-op cleanups.
-	for i := len(e.cleanups) - 1; i >= 0; i-- {
-		e.cleanups[i]()
+	for _, v := range slices.Backward(e.cleanups) {
+		v()
 	}
 
 	e.cleanups = nil

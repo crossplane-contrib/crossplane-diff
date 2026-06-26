@@ -21,9 +21,8 @@ import (
 	"testing"
 
 	tu "github.com/crossplane-contrib/crossplane-diff/cmd/diff/testutils"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-
 	"github.com/crossplane/cli/v2/cmd/crossplane/render"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	apiextensionsv1 "github.com/crossplane/crossplane/apis/v2/apiextensions/v1"
 	pkgv1 "github.com/crossplane/crossplane/apis/v2/pkg/v1"
