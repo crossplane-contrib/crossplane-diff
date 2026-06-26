@@ -158,3 +158,5 @@ require (
 	k8s.io/kube-openapi v0.0.0-20260127142750-a19766b6e2d4
 	sigs.k8s.io/json v0.0.0-20250730193827-2d320260d730 // indirect
 )
+
+replace github.com/crossplane/cli/v2 => github.com/jcogilvie/cli/v2 v2.0.0-20260626152547-5050d31ad43d

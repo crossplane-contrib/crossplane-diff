@@ -68,41 +68,26 @@ type RenderInputs struct {
 // render engine and starts function runtimes on first use, reuses them across
 // subsequent calls, and serializes concurrent renders with an internal mutex.
 //
-// Multi-composition note. A single `xr` invocation can render against XRs from
-// multiple compositions whose function pipelines overlap but aren't identical.
-// To handle this correctly without leaking docker networks (upstream's
-// dockerRenderEngine.Setup creates a fresh network on every call as of cli
-// v2.3.2), we:
-//   - call engine.Setup exactly once on the first render — that creates the
-//     docker network N and stamps each first-batch function with its name via
-//     the runtime-docker-network annotation;
-//   - capture N from any first-batch function's annotation into networkName;
-//   - on later renders, manually apply the same annotation to any function we
-//     haven't already started (preserving any value the caller pre-set);
-//   - track started functions by name in addrs, and accumulate every
-//     *FunctionAddresses returned by startRuntimes in fnAddrsList so Cleanup
-//     can stop them all.
-//
-// This is a self-contained workaround. The cleaner shape — Engine.Setup either
-// idempotent or paired with an Engine.AnnotateFunctions method — needs an
-// upstream API change in crossplane/cli (tracked in crossplane/cli#96).
-// Unwind once a cli release ships that fix; tracked downstream in
-// crossplane-contrib/crossplane-diff#338.
+// A single `xr` invocation can render against XRs from multiple compositions
+// whose function pipelines overlap but aren't identical. Upstream's
+// dockerRenderEngine.Setup is idempotent (crossplane/cli#159): the first call
+// creates the docker network and annotates the supplied fns; later calls
+// annotate any newly-arrived fns with the same network and return a no-op
+// cleanup. We accumulate every cleanup and call them in LIFO order on
+// Cleanup, alongside stopping every FunctionAddresses we ever started.
 type EngineRenderFn struct {
-	engine         render.Engine
-	networkCleanup func()
-	networkName    string
-	fnAddrsList    []*render.FunctionAddresses
+	engine    render.Engine
+	cleanups  []func()
+	addrsList []*render.FunctionAddresses
 	// startedNames is the set of function names we've already passed to
 	// startRuntimes; used for dedup so we don't restart a function that's
 	// already running.
 	startedNames map[string]struct{}
 	// addrs is the merged Addresses() map from every startRuntimes call.
 	// Filtered to in.Functions when building each render request.
-	addrs   map[string]string
-	started bool
-	mu      sync.Mutex
-	log     logging.Logger
+	addrs map[string]string
+	mu    sync.Mutex
+	log   logging.Logger
 
 	// startRuntimes / stopRuntimes are seams for testing. They default to the
 	// real render package functions.
@@ -130,9 +115,9 @@ func NewEngineRenderFn(log logging.Logger, binaryPath string) *EngineRenderFn {
 }
 
 // Render performs one render. It is safe for concurrent use — calls are
-// serialized internally. Setup runs on the first invocation (creating the
-// docker network); subsequent invocations annotate any newly-encountered
-// functions with the captured network name and start their runtimes.
+// serialized internally. Setup runs on every invocation; upstream guarantees
+// it is idempotent (the first call creates the docker network, later calls
+// just annotate any newly-arrived functions with it).
 func (e *EngineRenderFn) Render(ctx context.Context, log logging.Logger, in RenderInputs) (render.CompositionOutputs, error) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
@@ -157,49 +142,35 @@ func (e *EngineRenderFn) Render(ctx context.Context, log logging.Logger, in Rend
 		newFns = append(newFns, in.Functions[i])
 	}
 
-	switch {
-	case !e.started:
-		// First call: let upstream Setup create the docker network and
-		// stamp the first batch with the network annotation. We then read
-		// the network name off the annotated functions for use on later
-		// calls.
-		cleanup, err := e.engine.Setup(ctx, newFns)
-		if err != nil {
-			return render.CompositionOutputs{}, errors.Wrap(err, "cannot setup render engine")
-		}
-
-		e.networkCleanup = cleanup
-		e.networkName = firstNetworkAnnotation(newFns)
-		e.started = true
-	case e.networkName != "":
-		// Subsequent call: upstream's Setup is single-shot in cli v2.3.2
-		// (calling it again would create a new network and leak the first
-		// one), so we apply the same annotation to new functions ourselves.
-		// Preserve any value the caller pre-set.
-		applyNetworkAnnotation(newFns, e.networkName)
+	// Setup is idempotent (crossplane/cli#159): the first call creates the
+	// docker network and returns the real cleanup; subsequent calls only
+	// annotate newFns to join the existing network and return a no-op
+	// cleanup. Accumulating every returned cleanup and calling them in LIFO
+	// order on Cleanup is the recommended caller shape.
+	cleanup, err := e.engine.Setup(ctx, newFns)
+	if err != nil {
+		return render.CompositionOutputs{}, errors.Wrap(err, "cannot setup render engine")
 	}
 
 	if len(newFns) > 0 {
-		fa, err := e.startRuntimes(ctx, log, newFns)
-		if err != nil {
-			// Unwind the setup cleanup on the first-call failure path so
-			// we don't leak a network when no functions are running.
-			if e.networkCleanup != nil && len(e.fnAddrsList) == 0 {
-				e.networkCleanup()
-				e.networkCleanup = nil
-				e.started = false
-			}
-
-			return render.CompositionOutputs{}, errors.Wrap(err, "cannot start function runtimes")
+		fa, startErr := e.startRuntimes(ctx, log, newFns)
+		if startErr != nil {
+			// Roll back this Setup. If it was the very first call, this
+			// releases the docker network it just created; if it was a
+			// subsequent call, the cleanup is a no-op and no harm is done.
+			cleanup()
+			return render.CompositionOutputs{}, errors.Wrap(startErr, "cannot start function runtimes")
 		}
 
-		e.fnAddrsList = append(e.fnAddrsList, fa)
+		e.addrsList = append(e.addrsList, fa)
 		for i := range newFns {
 			e.startedNames[newFns[i].GetName()] = struct{}{}
 		}
 
 		maps.Copy(e.addrs, fa.Addresses())
 	}
+
+	e.cleanups = append(e.cleanups, cleanup)
 
 	// Build request with addresses for in.Functions only — the binary needs
 	// addresses for this render's pipeline, not for every function we've
@@ -254,37 +225,6 @@ func (e *EngineRenderFn) Render(ctx context.Context, log logging.Logger, in Rend
 	}
 
 	return out, nil
-}
-
-// firstNetworkAnnotation returns the value of the runtime-docker-network
-// annotation of the first function in fns that has it, or "" if none do.
-// Upstream's dockerRenderEngine.Setup stamps every function in its input slice
-// with the same value, so picking the first non-empty one is sufficient. The
-// local engine path leaves no annotation, so this returns "" for that case.
-func firstNetworkAnnotation(fns []pkgv1.Function) string {
-	for i := range fns {
-		if v := fns[i].GetAnnotations()[render.AnnotationKeyRuntimeDockerNetwork]; v != "" {
-			return v
-		}
-	}
-
-	return ""
-}
-
-// applyNetworkAnnotation sets the runtime-docker-network annotation on each
-// function that doesn't already have a non-empty value for it. Mirrors the
-// upstream injectNetworkAnnotation helper (which is unexported) so we can do
-// the same job for functions discovered after the first Setup call.
-func applyNetworkAnnotation(fns []pkgv1.Function, networkName string) {
-	for i := range fns {
-		if fns[i].Annotations == nil {
-			fns[i].Annotations = make(map[string]string)
-		}
-
-		if fns[i].Annotations[render.AnnotationKeyRuntimeDockerNetwork] == "" {
-			fns[i].Annotations[render.AnnotationKeyRuntimeDockerNetwork] = networkName
-		}
-	}
 }
 
 // fakeXRUID mirrors the deterministic UID the binary assigns to the XR after
@@ -359,21 +299,21 @@ func (e *EngineRenderFn) Cleanup(_ context.Context) error {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
-	for _, fa := range e.fnAddrsList {
+	for _, fa := range e.addrsList {
 		e.stopRuntimes(e.log, fa)
 	}
 
-	e.fnAddrsList = nil
+	e.addrsList = nil
 	e.addrs = nil
 	e.startedNames = nil
-	e.networkName = ""
 
-	if e.networkCleanup != nil {
-		e.networkCleanup()
-		e.networkCleanup = nil
+	// Run cleanups in LIFO order so the first Setup's real cleanup (which
+	// owns the docker network) runs last, after any later no-op cleanups.
+	for i := len(e.cleanups) - 1; i >= 0; i-- {
+		e.cleanups[i]()
 	}
 
-	e.started = false
+	e.cleanups = nil
 
 	return nil
 }

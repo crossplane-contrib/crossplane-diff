@@ -27,6 +27,7 @@ import (
 	"time"
 
 	xp "github.com/crossplane-contrib/crossplane-diff/cmd/diff/client/crossplane"
+	"github.com/crossplane/cli/v2/cmd/crossplane/render"
 	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/api/types/filters"
 	"github.com/docker/docker/client"
@@ -56,10 +57,9 @@ type FunctionProvider interface {
 const EnvDockerNetwork = "CROSSPLANE_DIFF_DOCKER_NETWORK"
 
 // applyDockerNetworkAnnotation stamps each function with the Docker network
-// annotation drawn from EnvDockerNetwork when that variable is set. The
-// underlying applyNetworkAnnotation helper preserves any non-empty value the
-// caller has already set, so this function never overwrites an explicitly
-// configured network.
+// annotation drawn from EnvDockerNetwork when that variable is set. Functions
+// that already carry a non-empty value for the annotation are left untouched,
+// so this never overwrites an explicitly configured network.
 func applyDockerNetworkAnnotation(fns []pkgv1.Function, log logging.Logger) {
 	network := os.Getenv(EnvDockerNetwork)
 	if network == "" {
@@ -67,7 +67,16 @@ func applyDockerNetworkAnnotation(fns []pkgv1.Function, log logging.Logger) {
 	}
 
 	log.Debug("Setting Docker network annotation on functions", "network", network)
-	applyNetworkAnnotation(fns, network)
+
+	for i := range fns {
+		if fns[i].Annotations == nil {
+			fns[i].Annotations = make(map[string]string)
+		}
+
+		if fns[i].Annotations[render.AnnotationKeyRuntimeDockerNetwork] == "" {
+			fns[i].Annotations[render.AnnotationKeyRuntimeDockerNetwork] = network
+		}
+	}
 }
 
 // DefaultFunctionProvider fetches functions from the cluster on each call.
