@@ -22,7 +22,6 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
-	"os"
 	"strings"
 	"time"
 
@@ -50,25 +49,13 @@ type FunctionProvider interface {
 }
 
 // EnvDockerNetwork is the environment variable that specifies which Docker
-// network function containers should join. This is needed when crossplane-diff
-// runs inside a Docker container (e.g. a GitHub Actions container job) so that
-// function containers are on the same network and reachable via container IP.
+// network the crossplane-render container and function containers should
+// join. NewEngineRenderFn reads this once and routes the value through
+// render.EngineFlags.CrossplaneDockerNetwork; the upstream docker engine
+// then both runs the render container on that network and annotates fns
+// to join it at Setup time. This is needed when crossplane-diff runs
+// inside a Docker container (e.g. a GitHub Actions container job).
 const EnvDockerNetwork = "CROSSPLANE_DIFF_DOCKER_NETWORK"
-
-// applyDockerNetworkAnnotation stamps each function with the Docker network
-// annotation drawn from EnvDockerNetwork when that variable is set. The
-// underlying applyNetworkAnnotation helper preserves any non-empty value the
-// caller has already set, so this function never overwrites an explicitly
-// configured network.
-func applyDockerNetworkAnnotation(fns []pkgv1.Function, log logging.Logger) {
-	network := os.Getenv(EnvDockerNetwork)
-	if network == "" {
-		return
-	}
-
-	log.Debug("Setting Docker network annotation on functions", "network", network)
-	applyNetworkAnnotation(fns, network)
-}
 
 // DefaultFunctionProvider fetches functions from the cluster on each call.
 // This is appropriate for the xr command where each XR is processed independently.
@@ -95,8 +82,6 @@ func (p *DefaultFunctionProvider) GetFunctionsForComposition(comp *apiextensions
 	}
 
 	p.logger.Debug("Fetched functions from pipeline", "composition", comp.GetName(), "count", len(fns))
-
-	applyDockerNetworkAnnotation(fns, p.logger)
 
 	return fns, nil
 }
@@ -145,15 +130,8 @@ func generateInstanceID() string {
 func (p *CachedFunctionProvider) GetFunctionsForComposition(comp *apiextensionsv1.Composition) ([]pkgv1.Function, error) {
 	compName := comp.GetName()
 
-	// Check cache first. Re-apply the Docker network annotation on every cache
-	// hit so an entry first cached when EnvDockerNetwork was unset still gets
-	// stamped on a later call once the env var is set. applyNetworkAnnotation
-	// preserves any non-empty value already present, so this is safe to run
-	// unconditionally.
 	if cached, ok := p.cache[compName]; ok {
 		p.logger.Debug("Using cached functions", "composition", compName, "count", len(cached))
-		applyDockerNetworkAnnotation(cached, p.logger)
-
 		return cached, nil
 	}
 
@@ -194,8 +172,6 @@ func (p *CachedFunctionProvider) GetFunctionsForComposition(comp *apiextensionsv
 		// Track container name for cleanup
 		p.containerNames = append(p.containerNames, containerName)
 	}
-
-	applyDockerNetworkAnnotation(fns, p.logger)
 
 	// Cache for future calls
 	p.cache[compName] = fns
