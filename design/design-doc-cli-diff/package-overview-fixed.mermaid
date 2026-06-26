@@ -1,106 +1,145 @@
 classDiagram
-    class Cmd {
-        +Namespace string
+    class XRCmd {
         +Files []string
+        +CommonCmdFields
+        +Run(ctx, log, appCtx, proc, loader, exitCode) error
+    }
+
+    class CompCmd {
+        +Files []string
+        +Namespace string
+        +IncludeManual bool
+        +Resources []string
+        +CommonCmdFields
+        +Run(ctx, log, appCtx, proc, loader, exitCode) error
+    }
+
+    class CommonCmdFields {
+        +Context KubeContext
+        +Output string
         +NoColor bool
         +Compact bool
+        +MaxNestedDepth int
+        +MaxIterations int
         +Timeout time.Duration
-        +Run(context, logger, appCtx, processor, loader) error
+        +IgnorePaths []string
+        +FunctionCredentials FunctionCredentials
+        +FunctionRegistryOverride string
+        +EventualState bool
+        +CrossplaneRenderBinary string
     }
-    
+
     class AppContext {
         +K8sClients kubernetes.Clients
         +XpClients crossplane.Clients
         +Initialize(ctx, logger) error
     }
-    
+
     class DiffProcessor {
         <<interface>>
-        +PerformDiff(ctx, stdout, resources) error
+        +PerformDiff(ctx, resources, compositionProvider) (bool, error)
+        +DiffSingleResource(ctx, res, compositionProvider) (map[string]*ResourceDiff, error)
         +Initialize(ctx) error
+        +Cleanup(ctx) error
     }
-    
-    class DefaultDiffProcessor {
-        -fnClient FunctionClient
-        -compClient CompositionClient
-        -schemaValidator SchemaValidator
-        -diffCalculator DiffCalculator
-        -diffRenderer DiffRenderer
-        +PerformDiff(ctx, stdout, resources) error
+
+    class CompDiffProcessor {
+        <<interface>>
+        +DiffComposition(ctx, comps, namespace, resources) (bool, error)
         +Initialize(ctx) error
+        +Cleanup(ctx) error
     }
-    
+
     class DiffCalculator {
         <<interface>>
-        +CalculateDiff(ctx, composite, desired) error
-        +CalculateDiffs(ctx, xr, desired) error
+        +CalculateDiff(ctx, composite, desired) (*ResourceDiff, error)
+        +CalculateDiffs(ctx, xr, desired) (map[string]*ResourceDiff, error)
+        +CalculateNonRemovalDiffs(ctx, xr, parent, desired) (map[string]*ResourceDiff, map[string]bool, error)
+        +CalculateRemovedResourceDiffs(ctx, xr, rendered) (map[string]*ResourceDiff, error)
     }
-    
+
     class ResourceManager {
         <<interface>>
-        +FetchCurrentObject(ctx, composite, desired) error
-        +UpdateOwnerRefs(parent, child) error
+        +FetchCurrentObject(ctx, composite, desired) (*Unstructured, bool, error)
+        +UpdateOwnerRefs(ctx, parent, child)
+        +FetchObservedResources(ctx, xr) ([]Unstructured, error)
     }
-    
+
     class SchemaValidator {
         <<interface>>
         +ValidateResources(ctx, xr, composed) error
         +EnsureComposedResourceCRDs(ctx, resources) error
+        +ValidateScopeConstraints(ctx, resource, ns, isClaimRoot) error
     }
-    
+
+    class FunctionProvider {
+        <<interface>>
+        +GetFunctionsForComposition(comp) ([]Function, error)
+        +Cleanup(ctx) error
+    }
+
     class DiffRenderer {
         <<interface>>
-        +RenderDiffs(stdout, diffs) error
+        +RenderDiffs(diffs, errs) error
     }
-    
+
+    class CompDiffRenderer {
+        <<interface>>
+        +RenderCompDiff(output) error
+    }
+
     class Loader {
         <<interface>>
-        +Load() error
+        +Load() ([]*Unstructured, error)
     }
-    
+
     class KubernetesClients {
         +Apply ApplyClient
         +Resource ResourceClient
         +Schema SchemaClient
         +Type TypeConverter
     }
-    
+
     class CrossplaneClients {
         +Composition CompositionClient
+        +Credential CredentialClient
         +Definition DefinitionClient
         +Environment EnvironmentClient
         +Function FunctionClient
         +ResourceTree ResourceTreeClient
     }
-    
-    class Inputs {
-        +CompositeResource *Unstructured
-        +Composition *Composition
-        +Functions []Function
-        +ExtraResources []Unstructured
-    }
-    
-    class Outputs {
-        +CompositeResource *Unstructured
+
+    class CompositionOutputs {
+        +CompositeResource Unstructured
         +ComposedResources []Unstructured
         +Results []Unstructured
-        +Requirements map[string]Requirements
+        +Context Unstructured
+        +RequiredResources []ResourceSelector
+        +RequiredSchemas []SchemaSelector
     }
-    
+
     class RenderFunc {
         <<function>>
-        +Render(ctx, log, inputs) (outputs, error)
+        +Render(ctx, log, inputs) (CompositionOutputs, error)
     }
-    
-    Cmd --> AppContext
-    Cmd --> DiffProcessor
-    Cmd --> Loader
-    
-    DefaultDiffProcessor ..|> DiffProcessor
-    DefaultDiffProcessor --> DiffCalculator
-    DefaultDiffProcessor --> SchemaValidator
-    DefaultDiffProcessor --> ResourceManager
-    DefaultDiffProcessor --> DiffRenderer
-    
+
+    XRCmd --> CommonCmdFields
+    CompCmd --> CommonCmdFields
+    XRCmd --> AppContext
+    CompCmd --> AppContext
+    XRCmd --> DiffProcessor
+    CompCmd --> CompDiffProcessor
+    XRCmd --> Loader
+    CompCmd --> Loader
+
+    CompDiffProcessor --> DiffProcessor : delegates via xrProc
+
+    DiffProcessor --> DiffCalculator
+    DiffProcessor --> SchemaValidator
+    DiffProcessor --> ResourceManager
+    DiffProcessor --> FunctionProvider
+    DiffProcessor --> DiffRenderer
+    CompDiffProcessor --> CompDiffRenderer
+
     AppContext --> KubernetesClients
     AppContext --> CrossplaneClients

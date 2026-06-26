@@ -1,62 +1,91 @@
 sequenceDiagram
     participant CLI as CLI Entry Point
-    participant Cmd as diff.Cmd
+    participant Cmd as XRCmd / CompCmd
     participant Loader as CompositeLoader
+    participant CDP as DefaultCompDiffProcessor
     participant DP as DefaultDiffProcessor
     participant CompClient as CompositionClient
+    participant FnProv as FunctionProvider
     participant Render as Render Function
     participant ReqProv as RequirementsProvider
+    participant ResMgr as ResourceManager
+    participant Validator as SchemaValidator
     participant DiffCalc as DiffCalculator
     participant K8sAPI as Kubernetes API
-    participant DiffRend as DiffRenderer
-    
+    participant Renderer as DiffRenderer / CompDiffRenderer
+
     CLI->>Cmd: Run()
     Cmd->>Loader: Load()
-    Loader-->>Cmd: []*unstructured.Unstructured
-    
-    Cmd->>DP: Initialize(ctx)
-    DP->>DP: Load CRDs and Resources
-    
-    Cmd->>DP: PerformDiff(ctx, stdout, resources)
-    
-    loop For each resource
-        DP->>DP: SanitizeXR(res)
-        DP->>CompClient: FindMatchingComposition(ctx, res)
-        CompClient-->>DP: *apiextensionsv1.Composition
-        
-        DP->>DP: RenderWithRequirements(ctx, xr, comp, fns)
-        
-        loop Until no new requirements
-            DP->>Render: Render(ctx, inputs)
-            Render-->>DP: outputs with requirements
-            
-            alt Has Requirements
-                DP->>ReqProv: ProvideRequirements(ctx, requirements)
-                ReqProv->>K8sAPI: GetResource/GetResourcesByLabel
-                K8sAPI-->>ReqProv: Resources
-                ReqProv-->>DP: Additional Resources
-            end
-        end
+    Loader-->>Cmd: []*Unstructured
 
-        DP->>DP: propagateNamespacesToManagedResources(ctx, xr, composed)
-        DP->>DP: ValidateResources(ctx, xr, composed)
-        
-        DP->>DiffCalc: CalculateDiffs(ctx, xr, desired)
-        
-        loop For each rendered resource
-            DiffCalc->>K8sAPI: FetchCurrentObject
-            K8sAPI-->>DiffCalc: Current Object
-            DiffCalc->>K8sAPI: DryRunApply(desired)
-            K8sAPI-->>DiffCalc: Result
-            DiffCalc->>DiffCalc: GenerateDiffWithOptions()
-        end
-        
-        DiffCalc-->>DP: map[string]*ResourceDiff
+    Note over Cmd, CDP: Outer setup differs by subcommand. The per-XR body is identical.
+    alt comp subcommand
+        Cmd->>CDP: Initialize(ctx)
+        Cmd->>CDP: DiffComposition(ctx, comps, ns, resources)
+        CDP->>CompClient: FindComposites(ctx, comp, opts)
+        CompClient-->>CDP: [affected XRs]
+        CDP->>DiffCalc: CalculateDiff(ctx, currentComp, newComp)
+        DiffCalc-->>CDP: composition-level diff
+        Note over CDP, DP: For each affected XR, CDP calls DP.DiffSingleResource. See per-XR body below.
+    else xr subcommand
+        Cmd->>DP: Initialize(ctx)
+        Cmd->>DP: PerformDiff(ctx, resources, clusterCompositionProvider)
+        Note over DP: PerformDiff iterates the input resources, calling DiffSingleResource on each. See per-XR body below.
     end
-    
-    DP->>DiffRend: RenderDiffs(stdout, allDiffs)
-    DiffRend->>DiffRend: FormatDiff(diffs, options)
-    DiffRend-->>DP: Formatted Output
-    
-    DP-->>Cmd: Success/Error
-    Cmd-->>CLI: Return Code
+
+    rect rgb(245, 245, 255)
+        Note over DP, DiffCalc: per-XR body. DiffSingleResource(ctx, xr, compositionProvider). Driven once per input XR (xr) or once per affected XR (comp).
+        loop For each XR being diffed
+            DP->>DP: SanitizeXR(res)
+            DP->>CompClient: compositionProvider(ctx, res)
+            CompClient-->>DP: *Composition (cluster's, or proposed under comp)
+            DP->>FnProv: GetFunctionsForComposition(comp)
+            FnProv-->>DP: []Function
+            DP->>ResMgr: FetchCurrentObject(ctx, xr) / FetchObservedResources(ctx, xr)
+            ResMgr-->>DP: existing XR + observed composed resources
+
+            DP->>DP: RenderToStableState(ctx, xr, comp, fns, id, observed, eventualState)
+            loop Until requirements stabilise (or steady state under --eventual-state)
+                DP->>Render: Render(ctx, inputs)
+                Render-->>DP: CompositionOutputs (incl. RequiredResources)
+                alt Has unresolved RequiredResources
+                    DP->>ReqProv: ResolveSelectors(ctx, selectors, ns)
+                    ReqProv->>K8sAPI: GetResource / GetResourcesByLabel
+                    K8sAPI-->>ReqProv: resources
+                    ReqProv-->>DP: additional inputs
+                end
+            end
+
+            DP->>DP: removeNamespacesFromClusterScopedResources(...)
+            opt Nested XRs present
+                DP->>DP: Recurse via diffSingleResourceInternal (subject to --max-nested-depth)
+            end
+            DP->>Validator: ValidateResources / ValidateScopeConstraints
+            Validator-->>DP: ok / err
+
+            DP->>DiffCalc: CalculateNonRemovalDiffs(ctx, xr, parent, desired)
+            loop For each rendered resource
+                DiffCalc->>ResMgr: FetchCurrentObject
+                ResMgr->>K8sAPI: GET
+                K8sAPI-->>ResMgr: current
+                DiffCalc->>K8sAPI: DryRunApply(desired)
+                K8sAPI-->>DiffCalc: result
+            end
+            DiffCalc-->>DP: diffs + rendered keys
+
+            DP->>DiffCalc: CalculateRemovedResourceDiffs(ctx, xr, renderedKeys)
+            DiffCalc->>ResMgr: walk live tree
+            DiffCalc-->>DP: removal diffs
+        end
+    end
+
+    alt comp subcommand
+        CDP->>Renderer: RenderCompDiff(output)
+        CDP->>DP: Cleanup(ctx)
+    else xr subcommand
+        DP->>Renderer: RenderDiffs(allDiffs, errs)
+        DP->>FnProv: Cleanup(ctx)
+    end
+
+    Renderer-->>Cmd: formatted output
+    Cmd-->>CLI: ExitCode

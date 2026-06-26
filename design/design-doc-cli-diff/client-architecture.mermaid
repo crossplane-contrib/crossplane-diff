@@ -35,9 +35,11 @@ classDiagram
     
     class SchemaClient {
         <<interface>>
-        +GetCRD(ctx, gvk) (*Unstructured, error)
+        +GetCRD(ctx, gvk) (*CustomResourceDefinition, error)
+        +GetCRDByName(name) (*CustomResourceDefinition, error)
         +IsCRDRequired(ctx, gvk) bool
-        +ValidateResource(ctx, resource) error
+        +LoadCRDsFromXRDs(ctx, xrds) error
+        +GetAllCRDs() []*CustomResourceDefinition
     }
     
     class DefaultSchemaClient {
@@ -65,25 +67,44 @@ classDiagram
     %% Crossplane Clients
     class XpClients {
         +Composition CompositionClient
+        +Credential CredentialClient
         +Definition DefinitionClient
         +Environment EnvironmentClient
         +Function FunctionClient
         +ResourceTree ResourceTreeClient
         +Initialize(ctx, logger) error
     }
-    
+
+    class CompositionRevisionClient {
+        <<interface>>
+        +Initialize(ctx) error
+        +GetCompositionRevision(ctx, name) (*CompositionRevision, error)
+        +ListCompositionRevisions(ctx) ([]*CompositionRevision, error)
+        +GetLatestRevisionForComposition(ctx, compName) (*CompositionRevision, error)
+        +GetCompositionFromRevision(rev) *Composition
+    }
+
+    class CredentialClient {
+        <<interface>>
+        +FetchCompositionCredentials(ctx, comp) []corev1.Secret
+    }
+
     class CompositionClient {
         <<interface>>
         +Initialize(ctx) error
         +FindMatchingComposition(ctx, res) (*Composition, error)
         +ListCompositions(ctx) ([]*Composition, error)
         +GetComposition(ctx, name) (*Composition, error)
+        +FindComposites(ctx, comp, opts) ([]*Unstructured, error)
     }
-    
+
     class DefaultCompositionClient {
         -resourceClient ResourceClient
+        -definitionClient DefinitionClient
+        -revisionClient CompositionRevisionClient
         -logger logging.Logger
         -compositions map[string]*Composition
+        -gvks map
     }
     
     class DefinitionClient {
@@ -92,6 +113,8 @@ classDiagram
         +GetXRDs(ctx) ([]*Unstructured, error)
         +GetXRDForClaim(ctx, gvk) (*Unstructured, error)
         +GetXRDForXR(ctx, gvk) (*Unstructured, error)
+        +IsClaimResource(ctx, resource) bool
+        +GetCompositeSchema(ctx, gvk) (Schema, error)
     }
     
     class FunctionClient {
@@ -130,9 +153,12 @@ classDiagram
     
     DefaultCompositionClient ..|> CompositionClient
     DefaultCompositionClient --> ResourceClient
-    
+    DefaultCompositionClient --> DefinitionClient
+    DefaultCompositionClient --> CompositionRevisionClient
+
     XpClients --> CompositionClient
     XpClients --> DefinitionClient
     XpClients --> EnvironmentClient
     XpClients --> FunctionClient
+    XpClients --> CredentialClient
     XpClients --> ResourceTreeClient

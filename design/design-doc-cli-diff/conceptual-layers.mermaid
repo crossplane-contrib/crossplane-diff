@@ -53,7 +53,7 @@ classDiagram
     ClientLayer --> ExternalSystems : interacts with
     
     note for CommandLayer "Key Components: Cmd, Help functions"
-    note for ApplicationLayer "Key Components: AppContext, DiffProcessor, Loader"
-    note for DomainLayer "Key Components: DiffCalculator, SchemaValidator, RequirementsProvider, ResourceManager, DiffRenderer, Render Function"
-    note for ClientLayer "Key Components: Kubernetes Clients (Apply, Resource, Schema, TypeConverter), Crossplane Clients (Composition, Definition, Function, etc.)"
+    note for ApplicationLayer "Key Components: AppContext, DiffProcessor, CompDiffProcessor, Loader"
+    note for DomainLayer "Key Components: DiffCalculator, SchemaValidator, RequirementsProvider, FunctionProvider, ResourceManager, DiffRenderer, CompDiffRenderer, Render Function"
+    note for ClientLayer "Key Components: Kubernetes Clients (Apply, Resource, Schema, TypeConverter), Crossplane Clients (Composition, CompositionRevision, Definition, Environment, Function, Credential, ResourceTree)"
     note for ExternalSystems "Kubernetes API running in a live cluster with Crossplane installed"

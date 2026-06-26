@@ -37,43 +37,41 @@ classDiagram
         <<interface>>
         +ValidateResources(ctx, xr, composed) error
         +EnsureComposedResourceCRDs(ctx, resources) error
+        +ValidateScopeConstraints(ctx, resource, ns, isClaimRoot) error
     }
-    
+
     class DefaultSchemaValidator {
         -defClient DefinitionClient
         -schemaClient SchemaClient
         -logger logging.Logger
-        -crds []*CustomResourceDefinition
-        +LoadCRDs(ctx) error
-        +SetCRDs(crds)
-        +GetCRDs() []*CustomResourceDefinition
         +ValidateResources(ctx, xr, composed) error
         +EnsureComposedResourceCRDs(ctx, resources) error
+        +ValidateScopeConstraints(ctx, resource, ns, isClaimRoot) error
     }
-    
-    class ConvertToCRDs {
+
+    class SchemaValidate {
         <<function>>
-        +ConvertToCRDs(xrds) ([]*CustomResourceDefinition, error)
+        +pkgvalidate.SchemaValidate(ctx, resources, crds) (*ValidationResult, error)
     }
-    
-    class SchemaValidation {
+
+    class ApplyCRDDefaults {
         <<function>>
-        +SchemaValidation(ctx, resources, crds, skipWarn, skipSuccess, writer) error
+        +clixr.ApplyCRDDefaults(obj, apiVersion, crd) error
     }
-    
+
     CompositeLoader ..|> Loader
     FileLoader ..|> Loader
     StdinLoader ..|> Loader
     FolderLoader ..|> Loader
-    
+
     CompositeLoader --> Loader
-    
+
     FileLoader --> LoadYamlStream
     StdinLoader --> LoadYamlStream
     FolderLoader --> LoadYamlStream
-    
+
     LoadYamlStream --> streamToUnstructured
-    
+
     DefaultSchemaValidator ..|> SchemaValidator
-    DefaultSchemaValidator --> ConvertToCRDs
-    DefaultSchemaValidator --> SchemaValidation
+    DefaultSchemaValidator --> ApplyCRDDefaults
+    DefaultSchemaValidator --> SchemaValidate
