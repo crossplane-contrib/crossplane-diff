@@ -157,21 +157,25 @@ func (e *EngineRenderFn) Render(ctx context.Context, log logging.Logger, in Rend
 		newFns = append(newFns, in.Functions[i])
 	}
 
-	// Setup integrates newFns into the engine's environment. Whether this
-	// call creates the environment or only adds to one that already exists
-	// is the engine's concern; we just hold onto whatever cleanup it gives
-	// back and let Cleanup walk them LIFO.
-	cleanup, err := e.engine.Setup(ctx, newFns)
-	if err != nil {
-		return render.CompositionOutputs{}, errors.Wrap(err, "cannot setup render engine")
-	}
-
+	// Only call Setup when there's actually a new batch to integrate.
+	// Renders where all fns are already running (newFns is empty) have no
+	// work for the engine and would just accumulate no-op cleanups in the
+	// slice for the lifetime of the engine.
 	if len(newFns) > 0 {
+		// Setup integrates newFns into the engine's environment. Whether
+		// this call creates the environment or only adds to one that
+		// already exists is the engine's concern; we just hold onto
+		// whatever cleanup it gives back and let Cleanup walk them LIFO.
+		cleanup, err := e.engine.Setup(ctx, newFns)
+		if err != nil {
+			return render.CompositionOutputs{}, errors.Wrap(err, "cannot setup render engine")
+		}
+
 		fa, startErr := e.startRuntimes(ctx, log, newFns)
 		if startErr != nil {
 			// Roll back this Setup. If this call created the environment,
-			// cleanup releases it; otherwise cleanup is a no-op and no harm
-			// is done.
+			// cleanup releases it; otherwise cleanup is a no-op and no
+			// harm is done.
 			cleanup()
 			return render.CompositionOutputs{}, errors.Wrap(startErr, "cannot start function runtimes")
 		}
@@ -182,9 +186,8 @@ func (e *EngineRenderFn) Render(ctx context.Context, log logging.Logger, in Rend
 		}
 
 		maps.Copy(e.addrs, fa.Addresses())
+		e.cleanups = append(e.cleanups, cleanup)
 	}
-
-	e.cleanups = append(e.cleanups, cleanup)
 
 	// Build request with addresses for in.Functions only — the binary needs
 	// addresses for this render's pipeline, not for every function we've
