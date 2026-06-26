@@ -131,8 +131,10 @@ func NewEngineRenderFn(log logging.Logger, binaryPath string) *EngineRenderFn {
 }
 
 // Render performs one render. It is safe for concurrent use — calls are
-// serialized internally. Setup runs on every invocation; upstream's Engine
-// contract makes that safe across batches (see the EngineRenderFn docstring).
+// serialized internally. Setup runs only on invocations that introduce
+// previously-unseen functions; renders whose fns are all already running
+// skip straight to building the request. See the EngineRenderFn docstring
+// for the per-batch Setup contract this relies on.
 func (e *EngineRenderFn) Render(ctx context.Context, log logging.Logger, in RenderInputs) (render.CompositionOutputs, error) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
@@ -310,8 +312,12 @@ func alignObservedOwnerRefs(xr *ucomposite.Unstructured, observed []composed.Uns
 }
 
 // Cleanup stops every function runtime started across the engine's lifetime
-// and releases the docker network. Idempotent and safe to call when Render
-// was never invoked.
+// and runs the cleanups accumulated from each engine.Setup call in LIFO
+// order. The effect of those cleanups is engine-specific — for the docker
+// engine the one real cleanup releases the docker network it created;
+// other engines (local, or docker pre-configured with an externally-managed
+// network) accumulate only no-op cleanups. Idempotent and safe to call when
+// Render was never invoked.
 func (e *EngineRenderFn) Cleanup(_ context.Context) error {
 	e.mu.Lock()
 	defer e.mu.Unlock()
