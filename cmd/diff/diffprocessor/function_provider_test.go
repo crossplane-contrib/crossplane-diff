@@ -21,7 +21,6 @@ import (
 	"testing"
 
 	tu "github.com/crossplane-contrib/crossplane-diff/cmd/diff/testutils"
-	"github.com/crossplane/cli/v2/cmd/crossplane/render"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	apiextensionsv1 "github.com/crossplane/crossplane/apis/v2/apiextensions/v1"
@@ -240,56 +239,6 @@ func TestCachedFunctionProvider_GetFunctionsForComposition_CacheHit(t *testing.T
 
 	if fns1[0].Name != fns2[0].Name {
 		t.Errorf("Cache returned different function: first=%s, second=%s", fns1[0].Name, fns2[0].Name)
-	}
-}
-
-// TestCachedFunctionProvider_DockerNetworkAnnotation_CacheHit verifies that
-// the Docker network annotation reflects the *current* value of
-// CROSSPLANE_DIFF_DOCKER_NETWORK on every call, including when a cached entry
-// is returned. Without this guarantee, a cache populated before the env var
-// was set would keep returning unannotated functions for the rest of the
-// process, defeating the feature.
-func TestCachedFunctionProvider_DockerNetworkAnnotation_CacheHit(t *testing.T) {
-	functions := []pkgv1.Function{
-		{ObjectMeta: metav1.ObjectMeta{Name: "function-test"}},
-	}
-
-	fnClient := tu.NewMockFunctionClient().
-		WithFunctionsFetchCallback(func() ([]pkgv1.Function, error) {
-			return functions, nil
-		}).
-		Build()
-
-	logger := tu.TestLogger(t, false)
-	provider := NewCachedFunctionProvider(fnClient, logger)
-
-	comp := &apiextensionsv1.Composition{
-		ObjectMeta: metav1.ObjectMeta{Name: "test-composition"},
-	}
-
-	// Prime the cache with the env var unset so the cached entry has no
-	// network annotation written during the miss path.
-	t.Setenv(EnvDockerNetwork, "")
-
-	if _, err := provider.GetFunctionsForComposition(comp); err != nil {
-		t.Fatalf("priming GetFunctionsForComposition() error = %v", err)
-	}
-
-	// Now set the env var and request the same composition again. The
-	// returned (cached) functions must carry the annotation.
-	t.Setenv(EnvDockerNetwork, "ci-network")
-
-	fns, err := provider.GetFunctionsForComposition(comp)
-	if err != nil {
-		t.Fatalf("cache-hit GetFunctionsForComposition() error = %v", err)
-	}
-
-	if len(fns) != 1 {
-		t.Fatalf("got %d functions, want 1", len(fns))
-	}
-
-	if got := fns[0].Annotations[render.AnnotationKeyRuntimeDockerNetwork]; got != "ci-network" {
-		t.Errorf("cache-hit network annotation = %q, want %q", got, "ci-network")
 	}
 }
 
@@ -718,97 +667,6 @@ func TestGenerateContainerName(t *testing.T) {
 			got := generateContainerName(tt.pkg, testInstanceID)
 			if got != tt.want {
 				t.Errorf("generateContainerName(%q, %q) = %q, want %q", tt.pkg, testInstanceID, got, tt.want)
-			}
-		})
-	}
-}
-
-func TestApplyDockerNetworkAnnotation(t *testing.T) {
-	tests := map[string]struct {
-		envValue               string
-		fns                    []pkgv1.Function
-		wantNetwork            string
-		checkExistingPreserved bool
-	}{
-		"EnvSet": {
-			envValue: "github_network_abc123",
-			fns: []pkgv1.Function{
-				{ObjectMeta: metav1.ObjectMeta{Name: "function-1"}},
-				{ObjectMeta: metav1.ObjectMeta{Name: "function-2"}},
-			},
-			wantNetwork: "github_network_abc123",
-		},
-		"EnvNotSet": {
-			envValue: "",
-			fns: []pkgv1.Function{
-				{ObjectMeta: metav1.ObjectMeta{Name: "function-1"}},
-			},
-			wantNetwork: "",
-		},
-		"PreservesPreSetNetwork": {
-			// When a function already carries a runtime-docker-network
-			// annotation (e.g. set by the render engine's Setup pass or by a
-			// caller), the env var must not clobber it. See applyNetworkAnnotation
-			// in render_engine.go.
-			envValue: "env-network",
-			fns: []pkgv1.Function{
-				{
-					ObjectMeta: metav1.ObjectMeta{
-						Name: "function-1",
-						Annotations: map[string]string{
-							render.AnnotationKeyRuntimeDockerNetwork: "pre-set-network",
-						},
-					},
-				},
-			},
-			wantNetwork: "pre-set-network",
-		},
-		"ExistingAnnotations": {
-			envValue: "my-network",
-			fns: []pkgv1.Function{
-				{
-					ObjectMeta: metav1.ObjectMeta{
-						Name: "function-1",
-						Annotations: map[string]string{
-							"existing-key": "existing-value",
-						},
-					},
-				},
-			},
-			wantNetwork:            "my-network",
-			checkExistingPreserved: true,
-		},
-	}
-
-	for name, tt := range tests {
-		t.Run(name, func(t *testing.T) {
-			// t.Setenv (even with an empty value) snapshots the prior value
-			// and restores it on subtest cleanup, avoiding leaks into other
-			// tests in this package or into the developer's shell.
-			t.Setenv(EnvDockerNetwork, tt.envValue)
-
-			logger := tu.TestLogger(t, false)
-			applyDockerNetworkAnnotation(tt.fns, logger)
-
-			for _, fn := range tt.fns {
-				got := fn.Annotations[render.AnnotationKeyRuntimeDockerNetwork]
-				if got != tt.wantNetwork {
-					t.Errorf("function %q: network annotation = %q, want %q", fn.Name, got, tt.wantNetwork)
-				}
-			}
-
-			if tt.checkExistingPreserved {
-				for _, fn := range tt.fns {
-					v, ok := fn.Annotations["existing-key"]
-					if !ok {
-						t.Errorf("function %q: existing annotation %q was removed", fn.Name, "existing-key")
-						continue
-					}
-
-					if v != "existing-value" {
-						t.Errorf("function %q: existing annotation = %q, want %q", fn.Name, v, "existing-value")
-					}
-				}
 			}
 		})
 	}
