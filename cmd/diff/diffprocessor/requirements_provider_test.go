@@ -7,6 +7,7 @@ import (
 	tu "github.com/crossplane-contrib/crossplane-diff/cmd/diff/testutils"
 	v1 "github.com/crossplane/function-sdk-go/proto/v1"
 	"github.com/google/go-cmp/cmp"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	un "k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -137,6 +138,63 @@ func TestRequirementsProvider_ResolveSelectors(t *testing.T) {
 			},
 			wantCount: 2,
 			wantNames: []string{"cache-a", "cache-b"},
+		},
+		// Reproduction for crossplane-contrib/crossplane-diff#355: a go-templating
+		// ExtraResources block using matchName for a Secret that doesn't exist
+		// surfaces as a hard failure in `crossplane-diff comp` under the
+		// "Affected Composite Resources" section. The matchLabels equivalent
+		// (zero matches) is a non-error today — see "MatchLabelsNoMatches" below
+		// for the parity case. Both should be no-ops since an unmet ExtraResource
+		// requirement is a normal Crossplane state, not a failure.
+		"MatchNameNotFound": {
+			selectors: []*v1.ResourceSelector{selFor("Secret", "some-secret")},
+			setupRes: func() *tu.MockResourceClient {
+				return tu.NewMockResourceClient().
+					WithNamespacedResource(schema.GroupVersionKind{Group: "", Version: "v1", Kind: "Secret"}).
+					WithGetResource(func(_ context.Context, _ schema.GroupVersionKind, _, name string) (*un.Unstructured, error) {
+						return nil, apierrors.NewNotFound(schema.GroupResource{Group: "", Resource: "secrets"}, name)
+					}).
+					Build()
+			},
+			wantCount: 0,
+		},
+		"MatchNameNotFoundWrapped": {
+			// Production parity: DefaultResourceClient.GetResource wraps the
+			// dynamic client's NotFound with crossplane-runtime errors.Wrapf
+			// (resource_client.go:70). apierrors.IsNotFound must still detect
+			// it through the wrap.
+			selectors: []*v1.ResourceSelector{selFor("Secret", "some-secret")},
+			setupRes: func() *tu.MockResourceClient {
+				return tu.NewMockResourceClient().
+					WithNamespacedResource(schema.GroupVersionKind{Group: "", Version: "v1", Kind: "Secret"}).
+					WithGetResource(func(_ context.Context, gvk schema.GroupVersionKind, ns, name string) (*un.Unstructured, error) {
+						nf := apierrors.NewNotFound(schema.GroupResource{Group: "", Resource: "secrets"}, name)
+						return nil, errors.Wrapf(nf, "cannot get resource %s/%s of kind %s", ns, name, gvk.Kind)
+					}).
+					Build()
+			},
+			wantCount: 0,
+		},
+		"MatchLabelsNoMatches": {
+			// Parity case: matchLabels with zero results is already a non-error.
+			selectors: []*v1.ResourceSelector{
+				{
+					ApiVersion: "v1",
+					Kind:       "Secret",
+					Match: &v1.ResourceSelector_MatchLabels{
+						MatchLabels: &v1.MatchLabels{Labels: map[string]string{"tier": "nope"}},
+					},
+				},
+			},
+			setupRes: func() *tu.MockResourceClient {
+				return tu.NewMockResourceClient().
+					WithNamespacedResource(schema.GroupVersionKind{Group: "", Version: "v1", Kind: "Secret"}).
+					WithGetResourcesByLabel(func(context.Context, schema.GroupVersionKind, string, metav1.LabelSelector) ([]*un.Unstructured, error) {
+						return nil, nil
+					}).
+					Build()
+			},
+			wantCount: 0,
 		},
 		"MatchLabelsFetchError": {
 			// Error path for the label-selector branch, parallel to FetchError.
