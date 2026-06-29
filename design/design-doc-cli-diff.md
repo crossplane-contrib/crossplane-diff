@@ -681,13 +681,13 @@ The `RequirementsProvider` handles:
 - Loading EnvironmentConfigs as a baseline available to every render
 
 **Unmet requirements are non-fatal.** A `matchName` selector that resolves to a NotFound (the referenced resource
-doesn't exist) returns `(nil, nil)` from `processNameSelector`, matching how `matchLabels` already handles a zero-match
-result and how upstream Crossplane treats unmet requirements in
+doesn't exist) returns `(nil, false, nil)` from `processNameSelector` — no resources, not from cache, no error —
+matching how `matchLabels` already handles a zero-match result and how upstream Crossplane treats unmet requirements in
 `internal/xfn/required_resources.go`. The function pipeline sees an empty entry for that requirement key — exactly as
 it would during real reconcile — and any user-facing diagnostic comes from the function's own conditions/results,
 which the diff tool captures in the final render output. A debug log records the unmet requirement so a user running
-with `-v=1` (or higher) can trace why a composition behaved as if a required resource was missing. All other fetch
-errors (RBAC denial, API server unreachable, etc.) still wrap and propagate, aborting the diff.
+with `--verbose` can trace why a composition behaved as if a required resource was missing. All other fetch errors
+(RBAC denial, API server unreachable, etc.) still wrap and propagate, aborting the diff.
 
 (Claim-to-XR synthesis for new claims is not a `RequirementsProvider` responsibility — it happens in
 `DefaultDiffProcessor.resolveBackingXRForClaim` and delegates to upstream's `ConvertClaimToXR`. See §7.1.)
