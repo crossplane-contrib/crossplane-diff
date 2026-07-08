@@ -2,6 +2,7 @@ package renderer
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"strings"
 	"testing"
@@ -9,6 +10,7 @@ import (
 	dt "github.com/crossplane-contrib/crossplane-diff/cmd/diff/renderer/types"
 	tu "github.com/crossplane-contrib/crossplane-diff/cmd/diff/testutils"
 	"github.com/google/go-cmp/cmp"
+	un "k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	sigsyaml "sigs.k8s.io/yaml"
 )
@@ -314,5 +316,302 @@ func TestStructuredDiffRenderer_RenderDiffs_ErrorsToStderr(t *testing.T) {
 				t.Errorf("Structured output errors mismatch (-want +got):\n%s", diff)
 			}
 		})
+	}
+}
+
+// TestStructuredDiffRenderer_RespectsIgnorePaths verifies that --ignore-paths
+// and the unconditional cleanup performed for the human diff are also honored
+// when rendering structured (JSON/YAML) output.
+//
+// Each case runs GenerateDiffWithOptions to classify the diff (matching real
+// CLI flow) and then renders through the structured renderer, then asserts on
+// the parsed structured output.
+//
+// See: .requirements/20260708T154751Z_ignore_paths_machine_output/REQUIREMENTS.md.
+func TestStructuredDiffRenderer_RespectsIgnorePaths(t *testing.T) {
+	const (
+		ignoredAnnotation = "argocd.argoproj.io/tracking-id"
+		ignoredLabel      = "argocd.argoproj.io/instance"
+		uidKey            = "uid"
+	)
+
+	ignorePaths := []string{
+		"metadata.annotations[" + ignoredAnnotation + "]",
+		"metadata.labels[" + ignoredLabel + "]",
+	}
+
+	// xExample returns a builder for a namespaced XExample resource named "r1".
+	// Callers chain expressive builder methods (WithSpecField, WithAnnotations,
+	// WithServerMetadata, WithStatus, WithOwnerReference, …) to add exactly the
+	// fields the case needs, then call Build().
+	xExample := func() *tu.ResourceBuilder {
+		return tu.NewResource("example.org/v1alpha1", "XExample", "r1").
+			InNamespace("default")
+	}
+
+	// hasNestedKey reports whether m contains the given dotted path.
+	hasNestedKey := func(t *testing.T, m map[string]any, path ...string) bool {
+		t.Helper()
+
+		cur := any(m)
+		for _, p := range path {
+			asMap, ok := cur.(map[string]any)
+			if !ok {
+				return false
+			}
+
+			cur, ok = asMap[p]
+			if !ok {
+				return false
+			}
+		}
+
+		return true
+	}
+
+	cases := []struct {
+		name        string
+		current     *un.Unstructured // pass nil for Added
+		desired     *un.Unstructured // pass nil for Removed
+		ignorePaths []string
+		wantSummary Summary
+		wantChanges int
+		validate    func(t *testing.T, out *StructuredDiffOutput)
+	}{
+		{
+			// AC5.2: only user-supplied ignored path differs -> classified Equal.
+			name: "OnlyIgnoredAnnotation_UnchangedInSummary",
+			current: xExample().WithSpecField("configData", "same").
+				WithAnnotations(map[string]string{ignoredAnnotation: "id-old"}).Build(),
+			desired: xExample().WithSpecField("configData", "same").
+				WithAnnotations(map[string]string{ignoredAnnotation: "id-new"}).Build(),
+			ignorePaths: ignorePaths,
+			wantSummary: Summary{},
+			wantChanges: 0,
+		},
+		{
+			// AC5.1 / AC2.2: only ownerReferences differ -> classified Equal
+			// via unconditional cleanup, without any user --ignore-paths.
+			name: "OnlyOwnerReferences_UnchangedInSummary",
+			current: xExample().WithSpecField("configData", "same").
+				WithOwnerReference("Owner", "old", "v1", "u1").Build(),
+			desired: xExample().WithSpecField("configData", "same").
+				WithOwnerReference("Owner", "new", "v1", "u2").Build(),
+			wantSummary: Summary{},
+			wantChanges: 0,
+		},
+		{
+			// AC1.1 / AC5.3: mixed ignored + non-ignored change. Modified count
+			// increments once; diff.old and diff.new must not leak the ignored
+			// path but must contain the non-ignored spec change.
+			name: "IgnoredPlusNonIgnored_CountOneAndIgnoredStripped",
+			current: xExample().WithSpecField("configData", "old").
+				WithAnnotations(map[string]string{ignoredAnnotation: "id-old"}).
+				WithLabels(map[string]string{ignoredLabel: "app-old"}).Build(),
+			desired: xExample().WithSpecField("configData", "new").
+				WithAnnotations(map[string]string{ignoredAnnotation: "id-new"}).
+				WithLabels(map[string]string{ignoredLabel: "app-new"}).Build(),
+			ignorePaths: ignorePaths,
+			wantSummary: Summary{Modified: 1},
+			wantChanges: 1,
+			validate: func(t *testing.T, out *StructuredDiffOutput) {
+				t.Helper()
+
+				c := out.Changes[0]
+				oldObj, _ := c.Diff[dt.DiffKeyOld].(map[string]any)
+
+				newObj, _ := c.Diff[dt.DiffKeyNew].(map[string]any)
+				if oldObj == nil || newObj == nil {
+					t.Fatalf("expected map old/new, got: %#v / %#v", c.Diff[dt.DiffKeyOld], c.Diff[dt.DiffKeyNew])
+				}
+
+				if hasNestedKey(t, oldObj, "metadata", "annotations", ignoredAnnotation) {
+					t.Errorf("diff.old leaked ignored annotation %q", ignoredAnnotation)
+				}
+
+				if hasNestedKey(t, newObj, "metadata", "annotations", ignoredAnnotation) {
+					t.Errorf("diff.new leaked ignored annotation %q", ignoredAnnotation)
+				}
+
+				if hasNestedKey(t, oldObj, "metadata", "labels", ignoredLabel) {
+					t.Errorf("diff.old leaked ignored label %q", ignoredLabel)
+				}
+
+				if hasNestedKey(t, newObj, "metadata", "labels", ignoredLabel) {
+					t.Errorf("diff.new leaked ignored label %q", ignoredLabel)
+				}
+
+				if got, _, _ := un.NestedString(oldObj, "spec", "configData"); got != "old" {
+					t.Errorf("diff.old spec.configData = %q, want %q", got, "old")
+				}
+
+				if got, _, _ := un.NestedString(newObj, "spec", "configData"); got != "new" {
+					t.Errorf("diff.new spec.configData = %q, want %q", got, "new")
+				}
+			},
+		},
+		{
+			// AC2.1: unconditional-cleanup fields must not leak into JSON diff
+			// even without user-supplied --ignore-paths.
+			name: "ServerSideFieldsStripped",
+			current: xExample().WithSpecField("configData", "old").
+				WithServerMetadata().
+				WithFieldManagers("kubectl").
+				WithOwnerReference("Owner", "o", "v1", "u").
+				WithStatus(map[string]any{"phase": "Ready"}).Build(),
+			desired: xExample().WithSpecField("configData", "new").
+				WithServerMetadata().
+				WithFieldManagers("kubectl").
+				WithOwnerReference("Owner", "o", "v1", "u").
+				WithStatus(map[string]any{"phase": "Ready"}).Build(),
+			wantSummary: Summary{Modified: 1},
+			wantChanges: 1,
+			validate: func(t *testing.T, out *StructuredDiffOutput) {
+				t.Helper()
+
+				c := out.Changes[0]
+				for _, key := range []string{dt.DiffKeyOld, dt.DiffKeyNew} {
+					m, _ := c.Diff[key].(map[string]any)
+					if m == nil {
+						t.Fatalf("diff.%s not a map: %#v", key, c.Diff[key])
+					}
+
+					for _, mf := range []string{"resourceVersion", uidKey, "generation", "creationTimestamp", "managedFields", "ownerReferences"} {
+						if hasNestedKey(t, m, "metadata", mf) {
+							t.Errorf("diff.%s leaked metadata.%s", key, mf)
+						}
+					}
+
+					if _, ok := m["status"]; ok {
+						t.Errorf("diff.%s leaked status field", key)
+					}
+				}
+			},
+		},
+		{
+			// AC3.1: Added resource, ignored annotation must not appear in
+			// diff.spec.
+			name:    "AddedResource_IgnoresPathsInSpec",
+			current: nil,
+			desired: xExample().WithSpecField("configData", "new").
+				WithAnnotations(map[string]string{ignoredAnnotation: "id-new"}).
+				WithServerMetadata().
+				WithFieldManagers("kubectl").Build(),
+			ignorePaths: ignorePaths,
+			wantSummary: Summary{Added: 1},
+			wantChanges: 1,
+			validate: func(t *testing.T, out *StructuredDiffOutput) {
+				t.Helper()
+
+				spec, _ := out.Changes[0].Diff[dt.DiffKeySpec].(map[string]any)
+				if spec == nil {
+					t.Fatalf("diff.spec not a map: %#v", out.Changes[0].Diff[dt.DiffKeySpec])
+				}
+
+				if hasNestedKey(t, spec, "metadata", "annotations", ignoredAnnotation) {
+					t.Errorf("diff.spec leaked ignored annotation on Added resource")
+				}
+
+				if hasNestedKey(t, spec, "metadata", "managedFields") {
+					t.Errorf("diff.spec leaked managedFields on Added resource")
+				}
+			},
+		},
+		{
+			// AC4.1: Removed resource, ignored annotation must not appear in
+			// diff.spec.
+			name: "RemovedResource_IgnoresPathsInSpec",
+			current: xExample().WithSpecField("configData", "old").
+				WithAnnotations(map[string]string{ignoredAnnotation: "id-old"}).
+				WithServerMetadata().
+				WithOwnerReference("Owner", "o", "v1", "u").Build(),
+			desired:     nil,
+			ignorePaths: ignorePaths,
+			wantSummary: Summary{Removed: 1},
+			wantChanges: 1,
+			validate: func(t *testing.T, out *StructuredDiffOutput) {
+				t.Helper()
+
+				spec, _ := out.Changes[0].Diff[dt.DiffKeySpec].(map[string]any)
+				if spec == nil {
+					t.Fatalf("diff.spec not a map: %#v", out.Changes[0].Diff[dt.DiffKeySpec])
+				}
+
+				if hasNestedKey(t, spec, "metadata", "annotations", ignoredAnnotation) {
+					t.Errorf("diff.spec leaked ignored annotation on Removed resource")
+				}
+
+				if hasNestedKey(t, spec, "metadata", "ownerReferences") {
+					t.Errorf("diff.spec leaked ownerReferences on Removed resource")
+				}
+			},
+		},
+	}
+
+	// R6: run every case through both JSON and YAML.
+	formats := []OutputFormat{OutputFormatJSON, OutputFormatYAML}
+
+	for _, format := range formats {
+		for _, tc := range cases {
+			t.Run(string(format)+"/"+tc.name, func(t *testing.T) {
+				logger := tu.TestLogger(t, false)
+
+				// Run the same classify-then-render pipeline the CLI uses, so
+				// we exercise classification + rendering together rather than
+				// only the renderer. Note: this uses tc.ignorePaths verbatim
+				// and does NOT prepend the CLI's built-in default ignore path
+				// (metadata.annotations[kubectl.kubernetes.io/last-applied-configuration],
+				// added in defaultProcessorOptions, cmd_utils.go). That default
+				// wiring is covered end-to-end by the IgnorePathsArgoCD
+				// integration test in diff_integration_test.go.
+				diffOpts := DefaultDiffOptions()
+				diffOpts.IgnorePaths = tc.ignorePaths
+
+				rd, err := GenerateDiffWithOptions(context.Background(), tc.current, tc.desired, logger, diffOpts)
+				if err != nil {
+					t.Fatalf("GenerateDiffWithOptions: %v", err)
+				}
+
+				var buf bytes.Buffer
+
+				renderOpts := DefaultDiffOptions()
+				renderOpts.Format = format
+				renderOpts.Stdout = &buf
+				renderOpts.Stderr = &bytes.Buffer{}
+				renderOpts.IgnorePaths = tc.ignorePaths
+
+				r := NewStructuredDiffRenderer(logger, renderOpts)
+				if err := r.RenderDiffs(map[string]*dt.ResourceDiff{"r1": rd}, nil); err != nil {
+					t.Fatalf("RenderDiffs() failed: %v", err)
+				}
+
+				var output StructuredDiffOutput
+
+				switch format {
+				case OutputFormatJSON:
+					if err := json.Unmarshal(buf.Bytes(), &output); err != nil {
+						t.Fatalf("json.Unmarshal: %v\noutput: %s", err, buf.String())
+					}
+				case OutputFormatYAML:
+					if err := sigsyaml.Unmarshal(buf.Bytes(), &output); err != nil {
+						t.Fatalf("yaml.Unmarshal: %v\noutput: %s", err, buf.String())
+					}
+				case OutputFormatDiff:
+					t.Fatal("diff format not supported by structured renderer")
+				}
+
+				if diff := cmp.Diff(tc.wantSummary, output.Summary); diff != "" {
+					t.Errorf("summary mismatch (-want +got):\n%s", diff)
+				}
+
+				if len(output.Changes) != tc.wantChanges {
+					t.Errorf("len(Changes) = %d, want %d\noutput: %s", len(output.Changes), tc.wantChanges, buf.String())
+				}
+
+				if tc.validate != nil && len(output.Changes) > 0 {
+					tc.validate(t, &output)
+				}
+			})
+		}
 	}
 }

@@ -779,6 +779,14 @@ pipelines can parse them programmatically). The structured renderers always emit
 fails — by attaching errors to an `OutputError` field. `OutputError` uses JSON struct tags only (the YAML library reads
 JSON tags), so the field naming is consistent across formats.
 
+`--ignore-paths` and the built-in server-side / non-diff-relevant field cleanup (`managedFields`, `resourceVersion`,
+`uid`, `generation`, `creationTimestamp`, `selfLink`, `ownerReferences`, `spec.resourceRefs`,
+`spec.crossplane.resourceRefs`, `status`) apply uniformly across output formats. The structured renderer strips these
+from `changes[].diff.old`, `changes[].diff.new`, and `changes[].diff.spec` before emitting, so the machine-readable
+payload matches what the human diff shows. This matches the semantic-filter convention used by ArgoCD
+(`ignoreDifferences`) and Terraform (`ignore_changes`): ignore is applied once at diff-calculation/emit time and is
+visible in classification, summary counts, and rendered bodies alike.
+
 #### 6.8.3 Structured output types
 
 The structured types are split across two files:

@@ -351,7 +351,7 @@ func (r *StructuredCompDiffRenderer) buildStructuredCompOutput(output *CompDiffO
 
 		// Convert composition diff if present and not equal
 		if comp.CompositionDiff != nil && comp.CompositionDiff.DiffType != dt.DiffTypeEqual {
-			jsonComp.CompositionChanges = resourceDiffToChangeDetail(comp.CompositionDiff)
+			jsonComp.CompositionChanges = resourceDiffToChangeDetail(comp.CompositionDiff, r.opts.IgnorePaths)
 		}
 
 		// Convert each XR impact
@@ -365,7 +365,7 @@ func (r *StructuredCompDiffRenderer) buildStructuredCompOutput(output *CompDiffO
 			}
 
 			if impact.Status == XRStatusChanged && len(impact.Diffs) > 0 {
-				jsonImpact.DownstreamChanges = buildDownstreamChanges(impact.Diffs)
+				jsonImpact.DownstreamChanges = buildDownstreamChanges(impact.Diffs, r.opts.IgnorePaths)
 			}
 
 			jsonComp.ImpactAnalysis = append(jsonComp.ImpactAnalysis, jsonImpact)
