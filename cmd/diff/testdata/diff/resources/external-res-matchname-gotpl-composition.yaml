@@ -1,0 +1,46 @@
+apiVersion: apiextensions.crossplane.io/v1
+kind: Composition
+metadata:
+  name: templated-extra-resources-matchname.diff.example.org
+spec:
+  compositeTypeRef:
+    apiVersion: ns.diff.example.org/v1alpha1
+    kind: XNopResource
+  mode: Pipeline
+  pipeline:
+    - step: render-templates
+      functionRef:
+        name: function-go-templating
+      input:
+        apiVersion: gotemplating.fn.crossplane.io/v1beta1
+        kind: GoTemplate
+        source: Inline
+        inline:
+          # Regression scenario for crossplane-contrib/crossplane-diff#355:
+          # ExtraResources block uses matchName to reference a Secret that
+          # does not exist in the cluster. Pre-fix this aborted the diff with
+          # "cannot get referenced resource"; post-fix the unmet requirement
+          # is silently skipped (mirroring upstream xfn behavior) and the
+          # composition continues to render its downstream resource.
+          template: |
+            ---
+            apiVersion: meta.gotemplating.fn.crossplane.io/v1alpha1
+            kind: ExtraResources
+            requirements:
+              optional-secret:
+                apiVersion: v1
+                kind: Secret
+                matchName: nonexistent-secret
+                namespace: default
+            ---
+            apiVersion: ns.nop.example.org/v1alpha1
+            kind: XDownstreamResource
+            metadata:
+              name: {{ .observed.composite.resource.metadata.name }}
+              namespace: {{ .observed.composite.resource.metadata.namespace }}
+              annotations:
+                gotemplating.fn.crossplane.io/composition-resource-name: nop-resource
+            spec:
+              forProvider:
+                configData: {{ .observed.composite.resource.spec.coolField }}
+                roleName: static-role

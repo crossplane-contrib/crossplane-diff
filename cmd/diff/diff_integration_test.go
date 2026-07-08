@@ -634,6 +634,35 @@ Summary: 2 modified`,
 			expectedError:    false,
 			expectedExitCode: dp.ExitCodeDiffDetected,
 		},
+		"TemplatedExtraResourcesMatchNameNotFound": {
+			// Regression test for crossplane-contrib/crossplane-diff#355: a
+			// go-templating ExtraResources block using matchName for a
+			// resource that does not exist in the cluster must NOT abort the
+			// diff. Pre-fix, the iterative render loop received an error
+			// from requirements_provider.processNameSelector and surfaced it
+			// as a per-XR failure. Post-fix, the unmet requirement is silently
+			// skipped (mirroring upstream xfn.required_resources.go) and the
+			// composition renders its downstream resource normally.
+			reason:       "matchName requirement for a missing resource must not abort the diff (issue #355)",
+			outputFormat: "json",
+			setupFiles: []string{
+				"testdata/diff/resources/xrd.yaml",
+				"testdata/diff/resources/functions.yaml",
+				"testdata/diff/resources/external-res-matchname-gotpl-composition.yaml",
+			},
+			inputFiles: []string{"testdata/diff/new-xr.yaml"},
+			expectedStructuredOutput: tu.ExpectDiff().
+				WithSummary(2, 0, 0).
+				WithAddedResource("XDownstreamResource", "test-resource", "default").
+				WithField("spec.forProvider.configData", "new-value").
+				WithField("spec.forProvider.roleName", "static-role").
+				And().
+				WithAddedResource("XNopResource", "test-resource", "default").
+				WithField("spec.coolField", "new-value").
+				And(),
+			expectedError:    false,
+			expectedExitCode: dp.ExitCodeDiffDetected,
+		},
 		"MultiStepFatalAfterExtraResources": {
 			// Reproduces the PR #295 bug #1 scenario: a multi-step pipeline where
 			// step 1 successfully emits ExtraResources requirements and composed

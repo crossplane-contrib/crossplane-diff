@@ -1249,6 +1249,56 @@ func TestDefaultDiffProcessor_RenderToStableState(t *testing.T) {
 			wantErr:              true, // Must return error, not silently swallow it
 		},
 		"RequirementsProcessingError": {
+			// A transport-level / non-NotFound failure during requirement
+			// resolution must still propagate (e.g. RBAC denial, API server
+			// unreachable). The NotFound case is exercised in
+			// RequirementsNotFoundConverges below.
+			xr:          xr,
+			composition: composition,
+			functions:   functions,
+			resourceID:  "XR/test-xr",
+			setupResourceClient: func() *tu.MockResourceClient {
+				return tu.NewMockResourceClient().
+					WithNamespacedResource(
+						schema.GroupVersionKind{Group: "", Version: "v1", Kind: "ConfigMap"},
+					).
+					WithGetResourceError(errors.New("forbidden: user cannot get configmaps")).
+					Build()
+			},
+			setupEnvironmentClient: func() *tu.MockEnvironmentClient {
+				return tu.NewMockEnvironmentClient().
+					WithNoEnvironmentConfigs().
+					Build()
+			},
+			setupRenderFunc: func() RenderFn {
+				return func(_ context.Context, _ logging.Logger, in RenderInputs) (render.CompositionOutputs, error) {
+					reqs := []*v1.ResourceSelector{
+						{
+							ApiVersion: "v1",
+							Kind:       ConfigMap,
+							Match: &v1.ResourceSelector_MatchName{
+								MatchName: "missing-config",
+							},
+						},
+					}
+
+					return render.CompositionOutputs{
+						CompositeResource: in.CompositeResource,
+						RequiredResources: reqs,
+					}, nil
+				}
+			},
+			wantComposedCount:    0,
+			wantRenderIterations: 1,
+			wantErr:              true, // Non-NotFound errors still surface.
+		},
+		"RequirementsNotFoundConverges": {
+			// Regression test for crossplane-contrib/crossplane-diff#355: a
+			// matchName selector whose target does not exist must NOT abort
+			// the diff. The render loop converges on iteration 1 — render
+			// emits the selector, ResolveSelectors silently skips the
+			// NotFound (mirrors upstream xfn.required_resources.go), no new
+			// requirements are accumulated, the stability check fires.
 			xr:          xr,
 			composition: composition,
 			functions:   functions,
@@ -1286,7 +1336,7 @@ func TestDefaultDiffProcessor_RenderToStableState(t *testing.T) {
 			},
 			wantComposedCount:    0,
 			wantRenderIterations: 1,
-			wantErr:              true, // Should error because requirements processing fails
+			wantErr:              false,
 		},
 		"ObservedResourcesPassedToRenderFunc": {
 			xr:          xr,
