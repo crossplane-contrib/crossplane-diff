@@ -166,9 +166,15 @@ Flags:
       --eventual-state         Show eventual state after all reconciliation cycles
                                complete. Useful with function-sequencer which hides
                                later stage resources until earlier stages become Ready.
+      --max-recv-message-size=0  Max gRPC message size (MB) for render function
+                               containers. 0 leaves the function default (4MB). Falls
+                               back to the CROSSPLANE_DIFF_MAX_RECV_MESSAGE_SIZE env var
+                               when unset.
 ```
 
 **Note**: XR namespaces are read directly from the YAML files being diffed, not from command-line flags.
+
+**Large composites**: `crossplane render` starts functions with the function-sdk-go default 4MB gRPC receive limit and does not apply the cluster's DeploymentRuntimeConfig. Very large XRs (many/large observed resources) can exceed this and fail with `ResourceExhausted: received message larger than max`. Set `--max-recv-message-size` (or `CROSSPLANE_DIFF_MAX_RECV_MESSAGE_SIZE`) to raise it; crossplane-diff injects the value as the `MAX_RECV_MESSAGE_SIZE` container env var. This only takes effect on functions whose image reads that variable.
 
 **Ignored Paths**: By default, `metadata.annotations[kubectl.kubernetes.io/last-applied-configuration]` is always ignored. Additional paths can be specified with `--ignore-paths`. This is useful for filtering out metadata added by tools like ArgoCD (e.g., tracking IDs, sync waves) that shouldn't affect diff results.
 
@@ -210,6 +216,10 @@ Flags:
       --eventual-state         Show eventual state after all reconciliation cycles
                                complete. Useful with function-sequencer which hides
                                later stage resources until earlier stages become Ready.
+      --max-recv-message-size=0  Max gRPC message size (MB) for render function
+                               containers. 0 leaves the function default (4MB). Falls
+                               back to the CROSSPLANE_DIFF_MAX_RECV_MESSAGE_SIZE env var
+                               when unset.
       --resource=STRING,...    Limit impact analysis to specific composites in
                                [namespace/]name format. Repeatable or comma-separated.
                                Bare name means cluster-scoped. Mutually exclusive with

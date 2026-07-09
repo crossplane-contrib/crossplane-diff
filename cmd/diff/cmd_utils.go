@@ -18,6 +18,8 @@ package main
 
 import (
 	"context"
+	"os"
+	"strconv"
 	"time"
 
 	dp "github.com/crossplane-contrib/crossplane-diff/cmd/diff/diffprocessor"
@@ -29,6 +31,29 @@ import (
 	"github.com/crossplane/crossplane-runtime/v2/pkg/errors"
 	"github.com/crossplane/crossplane-runtime/v2/pkg/logging"
 )
+
+// envMaxRecvMessageSize is crossplane-diff's own process env var providing the
+// fallback value for --max-recv-message-size (MB). Named after the existing
+// CROSSPLANE_DIFF_DOCKER_NETWORK convention. This is distinct from the
+// dp.EnvMaxRecvMessageSize var that gets injected INTO function containers.
+const envMaxRecvMessageSize = "CROSSPLANE_DIFF_MAX_RECV_MESSAGE_SIZE"
+
+// resolveMaxRecvMessageSize returns the max gRPC recv size (MB) to inject into
+// function containers: the flag when >0, else the CROSSPLANE_DIFF_MAX_RECV_MESSAGE_SIZE
+// env var when it parses to a positive integer, else 0 (inject nothing).
+func resolveMaxRecvMessageSize(flag int) int {
+	if flag > 0 {
+		return flag
+	}
+
+	if v := os.Getenv(envMaxRecvMessageSize); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			return n
+		}
+	}
+
+	return 0
+}
 
 // initializeAppContext initializes the application context with timeout and error handling.
 func initializeAppContext(timeout time.Duration, appCtx *AppContext, log logging.Logger) (context.Context, context.CancelFunc, error) {
@@ -86,6 +111,10 @@ func defaultProcessorOptions(fields CommonCmdFields) []dp.ProcessorOption {
 
 	if fields.FunctionRegistryOverride != "" {
 		opts = append(opts, dp.WithFunctionRegistryOverride(fields.FunctionRegistryOverride))
+	}
+
+	if sz := resolveMaxRecvMessageSize(fields.MaxRecvMessageSize); sz > 0 {
+		opts = append(opts, dp.WithMaxRecvMessageSize(sz))
 	}
 
 	if fields.CrossplaneRenderBinary != "" {

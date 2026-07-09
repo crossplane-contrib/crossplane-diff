@@ -496,6 +496,10 @@ The `ProcessorConfig` structure provides configuration options:
 - `IgnorePaths`: Field paths to suppress from diffs (e.g., status fields known to be reconciler-set).
 - `FunctionCredentials`: Image-pull credentials for private function registries.
 - `FunctionRegistryOverride`: Rewrites function image references to a mirror.
+- `MaxRecvMessageSize`: Max gRPC message size (MB) injected into render function containers as the
+  `MAX_RECV_MESSAGE_SIZE` env var (`--max-recv-message-size`, falling back to `CROSSPLANE_DIFF_MAX_RECV_MESSAGE_SIZE`).
+  Zero leaves the function-sdk-go 4MB default. Needed because `crossplane render` ignores the cluster
+  DeploymentRuntimeConfig, so large XRs can otherwise exceed the default limit.
 - `CrossplaneRenderBinary`: Optional path to an external `crossplane render` binary (otherwise the in-process render
   package is used).
 - `Stdout`, `Stderr`: Output sinks (writers are no longer threaded through method calls).
@@ -963,6 +967,10 @@ crossplane-diff xr --max-nested-depth 3 xr.yaml
 
 # Show steady-state diff for compositions that need multiple reconciliation cycles
 crossplane-diff xr --eventual-state xr.yaml
+
+# Raise the function gRPC receive limit for very large XRs (MB); injected as the
+# MAX_RECV_MESSAGE_SIZE container env var. Also settable via CROSSPLANE_DIFF_MAX_RECV_MESSAGE_SIZE.
+crossplane-diff xr --max-recv-message-size 16 xr.yaml
 ```
 
 `comp` examples:

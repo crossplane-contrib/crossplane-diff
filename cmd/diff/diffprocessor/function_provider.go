@@ -357,6 +357,103 @@ func (p *RegistryOverrideFunctionProvider) Cleanup(ctx context.Context) error {
 	return p.inner.Cleanup(ctx)
 }
 
+// EnvMaxRecvMessageSize is the container env var crossplane-diff injects to
+// raise a function's gRPC max receive size. It is intentionally unprefixed and
+// function-agnostic, mirroring the SDK-wide TLS_SERVER_CERTS_DIR convention
+// shared by crossplane composition functions: functions that bind it honor it,
+// functions that don't simply ignore it.
+const EnvMaxRecvMessageSize = "MAX_RECV_MESSAGE_SIZE"
+
+// annKeyRuntimeDockerEnv mirrors crossplane/cli render's
+// AnnotationKeyRuntimeEnvironmentVariables: a comma-separated list of key=value
+// pairs set as env on the function's render container.
+const annKeyRuntimeDockerEnv = "render.crossplane.io/runtime-docker-env"
+
+// EnvInjectingFunctionProvider wraps another FunctionProvider and upserts a set
+// of env pairs into each function's runtime-docker-env annotation before
+// returning them. Used to raise the function gRPC max-recv-message-size so large
+// XRs don't trip the function-sdk-go 4MB default under `crossplane render`
+// (which, unlike the in-cluster runtime, does not apply DeploymentRuntimeConfig).
+type EnvInjectingFunctionProvider struct {
+	inner  FunctionProvider
+	envs   map[string]string
+	logger logging.Logger
+}
+
+// NewEnvInjectingFunctionProvider wraps inner, upserting the given env pairs
+// into each returned function's runtime-docker-env annotation.
+func NewEnvInjectingFunctionProvider(inner FunctionProvider, envs map[string]string, logger logging.Logger) FunctionProvider {
+	return &EnvInjectingFunctionProvider{
+		inner:  inner,
+		envs:   envs,
+		logger: logger,
+	}
+}
+
+// GetFunctionsForComposition delegates to the wrapped provider and upserts the
+// configured env pairs into each function's runtime-docker-env annotation. The
+// upsert is idempotent so repeated calls over a caching inner provider don't
+// duplicate pairs.
+func (p *EnvInjectingFunctionProvider) GetFunctionsForComposition(comp *apiextensionsv1.Composition) ([]pkgv1.Function, error) {
+	fns, err := p.inner.GetFunctionsForComposition(comp)
+	if err != nil {
+		return nil, err
+	}
+
+	for i := range fns {
+		if fns[i].Annotations == nil {
+			fns[i].Annotations = make(map[string]string)
+		}
+
+		cur := fns[i].Annotations[annKeyRuntimeDockerEnv]
+		for k, v := range p.envs {
+			cur = upsertEnvPair(cur, k, v)
+		}
+
+		fns[i].Annotations[annKeyRuntimeDockerEnv] = cur
+
+		p.logger.Debug("Injected function runtime env",
+			"function", fns[i].GetName(),
+			annKeyRuntimeDockerEnv, cur)
+	}
+
+	return fns, nil
+}
+
+// Cleanup delegates to the wrapped provider.
+func (p *EnvInjectingFunctionProvider) Cleanup(ctx context.Context) error {
+	return p.inner.Cleanup(ctx)
+}
+
+// upsertEnvPair sets key=val in a comma-separated "k=v,k=v" list, replacing an
+// existing entry for key (idempotent) or appending a new one. Blank segments
+// are dropped.
+func upsertEnvPair(cur, key, val string) string {
+	pairs := make([]string, 0, 4)
+	replaced := false
+
+	for seg := range strings.SplitSeq(cur, ",") {
+		if seg == "" {
+			continue
+		}
+
+		if k, _, ok := strings.Cut(seg, "="); ok && k == key {
+			pairs = append(pairs, key+"="+val)
+			replaced = true
+
+			continue
+		}
+
+		pairs = append(pairs, seg)
+	}
+
+	if !replaced {
+		pairs = append(pairs, key+"="+val)
+	}
+
+	return strings.Join(pairs, ",")
+}
+
 // replaceRegistry replaces the registry portion of an OCI package reference,
 // preserving the repository path, tag, and/or digest. A trailing slash on
 // newRegistry is trimmed.
