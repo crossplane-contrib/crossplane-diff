@@ -154,14 +154,6 @@ type DownstreamChanges struct {
 	Changes []ChangeDetail `json:"changes"`
 }
 
-// renderCleanupLogger returns the logger used for the cleanupForDiff calls made
-// while building structured output. That cleanup is a byte-for-byte repeat of
-// the cleanup already performed (and Debug-logged, including the full object
-// body) during diff generation, so logging it again would duplicate large
-// payloads under --verbose for every resource. We discard those logs by using
-// a no-op logger.
-func renderCleanupLogger() logging.Logger { return logging.NewNopLogger() }
-
 // StructuredDiffRenderer renders diffs in structured formats (JSON/YAML).
 type StructuredDiffRenderer struct {
 	logger logging.Logger
@@ -263,21 +255,17 @@ func (r *StructuredDiffRenderer) buildStructuredOutput(diffs map[string]*dt.Reso
 			// Equal diffs are filtered above, this case satisfies exhaustive lint check
 		}
 
-		// Extract namespace from resource if available
-		var namespace string
-		if diff.Desired != nil {
-			namespace = diff.Desired.GetNamespace()
-		} else if diff.Current != nil {
-			namespace = diff.Current.GetNamespace()
-		}
-
-		// Build change detail
+		// Build change detail. Use diff.Namespace, which generation already
+		// resolved with the "prefer current (existing) namespace, else desired"
+		// rule — matching resourceDiffToChangeDetail and the human diff, and
+		// avoiding an empty namespace when the desired manifest omits it but the
+		// current cluster object has one.
 		change := ChangeDetail{
 			Type:       diff.DiffType.ToWord(),
 			APIVersion: diff.Gvk.GroupVersion().String(),
 			Kind:       diff.Gvk.Kind,
 			Name:       diff.ResourceName,
-			Namespace:  namespace,
+			Namespace:  diff.Namespace,
 			Diff:       r.buildDiffDetail(diff),
 		}
 
@@ -289,34 +277,30 @@ func (r *StructuredDiffRenderer) buildStructuredOutput(diffs map[string]*dt.Reso
 
 // buildDiffDetail creates the diff detail structure for a resource change.
 //
-// Both --ignore-paths and the unconditional-cleanup fields (managedFields,
-// resourceVersion, uid, status, etc. — see cleanupForDiff) are stripped so
-// that structured output matches what the human diff produces.
+// It reads the pre-cleaned views populated during diff generation, so
+// --ignore-paths and the unconditional-cleanup fields are already stripped;
+// the renderer performs no cleanup of its own.
 func (r *StructuredDiffRenderer) buildDiffDetail(diff *dt.ResourceDiff) map[string]any {
 	detail := make(map[string]any)
 
 	switch diff.DiffType {
 	case dt.DiffTypeAdded:
-		if diff.Desired != nil {
-			clean := cleanupForDiff(diff.Desired.DeepCopy(), renderCleanupLogger(), r.opts.IgnorePaths)
-			detail[dt.DiffKeySpec] = clean.Object
+		if diff.Desired.Clean != nil {
+			detail[dt.DiffKeySpec] = diff.Desired.Clean.Object
 		}
 
 	case dt.DiffTypeRemoved:
-		if diff.Current != nil {
-			clean := cleanupForDiff(diff.Current.DeepCopy(), renderCleanupLogger(), r.opts.IgnorePaths)
-			detail[dt.DiffKeySpec] = clean.Object
+		if diff.Current.Clean != nil {
+			detail[dt.DiffKeySpec] = diff.Current.Clean.Object
 		}
 
 	case dt.DiffTypeEqual:
 		// Equal diffs have no detail to show
 
 	case dt.DiffTypeModified:
-		if diff.Current != nil && diff.Desired != nil {
-			currentClean := cleanupForDiff(diff.Current.DeepCopy(), renderCleanupLogger(), r.opts.IgnorePaths)
-			desiredClean := cleanupForDiff(diff.Desired.DeepCopy(), renderCleanupLogger(), r.opts.IgnorePaths)
-			detail[dt.DiffKeyOld] = currentClean.Object
-			detail[dt.DiffKeyNew] = desiredClean.Object
+		if diff.Current.Clean != nil && diff.Desired.Clean != nil {
+			detail[dt.DiffKeyOld] = diff.Current.Clean.Object
+			detail[dt.DiffKeyNew] = diff.Desired.Clean.Object
 		}
 	}
 
@@ -339,10 +323,10 @@ func compareStrings(a, b string) int {
 // resourceDiffToChangeDetail converts a ResourceDiff to a ChangeDetail for
 // structured (JSON/YAML) output.
 //
-// Both --ignore-paths (via ignorePaths) and the unconditional-cleanup fields
-// handled by cleanupForDiff are stripped so that structured output matches
-// what the human diff produces.
-func resourceDiffToChangeDetail(diff *dt.ResourceDiff, ignorePaths []string) *ChangeDetail {
+// It reads the pre-cleaned views populated during diff generation, so
+// --ignore-paths and the unconditional-cleanup fields are already stripped;
+// the renderer performs no cleanup of its own.
+func resourceDiffToChangeDetail(diff *dt.ResourceDiff) *ChangeDetail {
 	change := &ChangeDetail{
 		Type:       diff.DiffType.ToWord(),
 		APIVersion: diff.Gvk.GroupVersion().String(),
@@ -354,21 +338,17 @@ func resourceDiffToChangeDetail(diff *dt.ResourceDiff, ignorePaths []string) *Ch
 
 	switch diff.DiffType {
 	case dt.DiffTypeAdded:
-		if diff.Desired != nil {
-			clean := cleanupForDiff(diff.Desired.DeepCopy(), renderCleanupLogger(), ignorePaths)
-			change.Diff[dt.DiffKeySpec] = clean.Object
+		if diff.Desired.Clean != nil {
+			change.Diff[dt.DiffKeySpec] = diff.Desired.Clean.Object
 		}
 	case dt.DiffTypeRemoved:
-		if diff.Current != nil {
-			clean := cleanupForDiff(diff.Current.DeepCopy(), renderCleanupLogger(), ignorePaths)
-			change.Diff[dt.DiffKeySpec] = clean.Object
+		if diff.Current.Clean != nil {
+			change.Diff[dt.DiffKeySpec] = diff.Current.Clean.Object
 		}
 	case dt.DiffTypeModified:
-		if diff.Current != nil && diff.Desired != nil {
-			currentClean := cleanupForDiff(diff.Current.DeepCopy(), renderCleanupLogger(), ignorePaths)
-			desiredClean := cleanupForDiff(diff.Desired.DeepCopy(), renderCleanupLogger(), ignorePaths)
-			change.Diff[dt.DiffKeyOld] = currentClean.Object
-			change.Diff[dt.DiffKeyNew] = desiredClean.Object
+		if diff.Current.Clean != nil && diff.Desired.Clean != nil {
+			change.Diff[dt.DiffKeyOld] = diff.Current.Clean.Object
+			change.Diff[dt.DiffKeyNew] = diff.Desired.Clean.Object
 		}
 	case dt.DiffTypeEqual:
 		// Equal diffs have no detail to show
@@ -378,7 +358,7 @@ func resourceDiffToChangeDetail(diff *dt.ResourceDiff, ignorePaths []string) *Ch
 }
 
 // buildDownstreamChanges builds DownstreamChanges from a map of ResourceDiffs.
-func buildDownstreamChanges(diffs map[string]*dt.ResourceDiff, ignorePaths []string) *DownstreamChanges {
+func buildDownstreamChanges(diffs map[string]*dt.ResourceDiff) *DownstreamChanges {
 	if len(diffs) == 0 {
 		return nil
 	}
@@ -410,7 +390,7 @@ func buildDownstreamChanges(diffs map[string]*dt.ResourceDiff, ignorePaths []str
 			// Equal diffs already filtered above, this case satisfies exhaustive lint check
 		}
 
-		changes.Changes = append(changes.Changes, *resourceDiffToChangeDetail(diff, ignorePaths))
+		changes.Changes = append(changes.Changes, *resourceDiffToChangeDetail(diff))
 	}
 
 	// Return nil if no non-equal changes

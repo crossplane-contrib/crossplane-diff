@@ -12,6 +12,21 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 )
 
+// ResourceViews holds the two representations of a single resource involved in
+// a diff: the Raw object (as rendered, or as fetched from the cluster) and the
+// Clean object (Raw after cleanupForDiff has stripped ignored paths and
+// server-side/non-diff-relevant fields).
+//
+// Raw is load-bearing beyond rendering (removal detection and XR
+// reconstruction in the diffprocessor). Clean is what structured output emits,
+// and is populated by diff generation only when there is something to render
+// (i.e. not for equal diffs). Either field may be nil: for an added resource
+// the current side is zero-valued, for a removed resource the desired side is.
+type ResourceViews struct {
+	Raw   *un.Unstructured
+	Clean *un.Unstructured
+}
+
 // ResourceDiff represents the diff for a specific resource.
 type ResourceDiff struct {
 	Gvk          schema.GroupVersionKind
@@ -19,8 +34,8 @@ type ResourceDiff struct {
 	ResourceName string
 	DiffType     DiffType
 	LineDiffs    []diffmatchpatch.Diff
-	Current      *un.Unstructured // Optional, for reference
-	Desired      *un.Unstructured // Optional, for reference
+	Current      ResourceViews // the resource's current (cluster) state, raw + clean
+	Desired      ResourceViews // the resource's desired (rendered) state, raw + clean
 }
 
 // DiffType represents the type of diff (added, removed, modified).

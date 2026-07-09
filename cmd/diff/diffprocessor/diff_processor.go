@@ -440,11 +440,11 @@ func (p *DefaultDiffProcessor) diffSingleResourceInternal(ctx context.Context, r
 	var existingXR *cmp.Unstructured
 
 	xrDiffKey := dt.MakeDiffKeyFromResource(&xr.Unstructured)
-	if xrDiff, ok := diffs[xrDiffKey]; ok && xrDiff.Current != nil {
+	if xrDiff, ok := diffs[xrDiffKey]; ok && xrDiff.Current.Raw != nil {
 		// Convert from unstructured.Unstructured to composite.Unstructured
 		existingXR = cmp.New()
 
-		err := runtime.DefaultUnstructuredConverter.FromUnstructured(xrDiff.Current.Object, existingXR)
+		err := runtime.DefaultUnstructuredConverter.FromUnstructured(xrDiff.Current.Raw.Object, existingXR)
 		if err != nil {
 			p.config.Logger.Debug("Failed to convert existing XR to composite unstructured",
 				"resource", resourceID,
