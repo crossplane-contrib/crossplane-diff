@@ -166,10 +166,8 @@ Flags:
       --eventual-state         Show eventual state after all reconciliation cycles
                                complete. Useful with function-sequencer which hides
                                later stage resources until earlier stages become Ready.
-      --max-recv-message-size=0  Max gRPC message size (MB) for render function
-                               containers. 0 leaves the function default (4MB). Falls
-                               back to the CROSSPLANE_DIFF_MAX_RECV_MESSAGE_SIZE env var
-                               when unset.
+      --max-recv-message-size=INT  Max gRPC message size (MB) for render function
+                               containers (4MB if undefined) ($CROSSPLANE_DIFF_MAX_RECV_MESSAGE_SIZE).
 ```
 
 **Note**: XR namespaces are read directly from the YAML files being diffed, not from command-line flags.
@@ -216,10 +214,8 @@ Flags:
       --eventual-state         Show eventual state after all reconciliation cycles
                                complete. Useful with function-sequencer which hides
                                later stage resources until earlier stages become Ready.
-      --max-recv-message-size=0  Max gRPC message size (MB) for render function
-                               containers. 0 leaves the function default (4MB). Falls
-                               back to the CROSSPLANE_DIFF_MAX_RECV_MESSAGE_SIZE env var
-                               when unset.
+      --max-recv-message-size=INT  Max gRPC message size (MB) for render function
+                               containers (4MB if undefined) ($CROSSPLANE_DIFF_MAX_RECV_MESSAGE_SIZE).
       --resource=STRING,...    Limit impact analysis to specific composites in
                                [namespace/]name format. Repeatable or comma-separated.
                                Bare name means cluster-scoped. Mutually exclusive with

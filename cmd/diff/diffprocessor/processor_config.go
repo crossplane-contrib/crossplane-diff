@@ -50,8 +50,8 @@ type ProcessorConfig struct {
 
 	// MaxRecvMessageSize is the max gRPC message size (MB) for render function
 	// containers. Zero leaves the function's own default (function-sdk-go uses
-	// 4MB). When >0 it is injected as the FUNCTION_GO_TEMPLATING_MAX_RECV_MESSAGE_SIZE
-	// container env var so large XRs don't trip the default limit under render.
+	// 4MB). When >0 it is injected as the appropriate container env var,
+	//  so large XRs don't trip the default limit under render.
 	MaxRecvMessageSize int
 
 	// Stdout is the writer for diff output (defaults to os.Stdout)
@@ -182,7 +182,7 @@ func WithFunctionRegistryOverride(registry string) ProcessorOption {
 }
 
 // WithMaxRecvMessageSize sets the max gRPC message size (MB) injected into
-// render function containers. Zero leaves the function default.
+// render function containers.
 func WithMaxRecvMessageSize(mb int) ProcessorOption {
 	return func(config *ProcessorConfig) {
 		config.MaxRecvMessageSize = mb

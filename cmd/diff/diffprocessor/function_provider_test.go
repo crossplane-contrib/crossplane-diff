@@ -639,11 +639,6 @@ func TestUpsertEnvPair(t *testing.T) {
 // value, and is idempotent across repeated calls (which matters when the inner
 // provider caches and returns the same Function values).
 func TestEnvInjectingFunctionProvider(t *testing.T) {
-	const (
-		envKey = EnvMaxRecvMessageSize
-		annKey = "render.crossplane.io/runtime-docker-env"
-	)
-
 	newInner := func(anns map[string]string) FunctionProvider {
 		fn := pkgv1.Function{ObjectMeta: metav1.ObjectMeta{Name: "function-go-templating"}}
 		if anns != nil {
@@ -659,7 +654,7 @@ func TestEnvInjectingFunctionProvider(t *testing.T) {
 	}
 
 	comp := &apiextensionsv1.Composition{ObjectMeta: metav1.ObjectMeta{Name: "test-composition"}}
-	envs := map[string]string{envKey: "16"}
+	envs := map[string]string{EnvMaxRecvMessageSize: "16"}
 
 	t.Run("injects when annotation absent", func(t *testing.T) {
 		p := NewEnvInjectingFunctionProvider(newInner(nil), envs, tu.TestLogger(t, false))
@@ -669,21 +664,21 @@ func TestEnvInjectingFunctionProvider(t *testing.T) {
 			t.Fatalf("GetFunctionsForComposition() error = %v", err)
 		}
 
-		if got := fns[0].Annotations[annKey]; got != envKey+"=16" {
-			t.Errorf("annotation = %q, want %q", got, envKey+"=16")
+		if got := fns[0].Annotations[annKeyRuntimeDockerEnv]; got != EnvMaxRecvMessageSize+"=16" {
+			t.Errorf("annotation = %q, want %q", got, EnvMaxRecvMessageSize+"=16")
 		}
 	})
 
 	t.Run("appends to existing runtime-docker-env", func(t *testing.T) {
-		p := NewEnvInjectingFunctionProvider(newInner(map[string]string{annKey: "FOO=bar"}), envs, tu.TestLogger(t, false))
+		p := NewEnvInjectingFunctionProvider(newInner(map[string]string{annKeyRuntimeDockerEnv: "FOO=bar"}), envs, tu.TestLogger(t, false))
 
 		fns, err := p.GetFunctionsForComposition(comp)
 		if err != nil {
 			t.Fatalf("GetFunctionsForComposition() error = %v", err)
 		}
 
-		if got := fns[0].Annotations[annKey]; got != "FOO=bar,"+envKey+"=16" {
-			t.Errorf("annotation = %q, want %q", got, "FOO=bar,"+envKey+"=16")
+		if got := fns[0].Annotations[annKeyRuntimeDockerEnv]; got != "FOO=bar,"+EnvMaxRecvMessageSize+"=16" {
+			t.Errorf("annotation = %q, want %q", got, "FOO=bar,"+EnvMaxRecvMessageSize+"=16")
 		}
 	})
 
@@ -698,8 +693,8 @@ func TestEnvInjectingFunctionProvider(t *testing.T) {
 			t.Fatalf("second call error = %v", err)
 		}
 
-		if got := fns[0].Annotations[annKey]; got != envKey+"=16" {
-			t.Errorf("annotation after repeat = %q, want single pair %q", got, envKey+"=16")
+		if got := fns[0].Annotations[annKeyRuntimeDockerEnv]; got != EnvMaxRecvMessageSize+"=16" {
+			t.Errorf("annotation after repeat = %q, want single pair %q", got, EnvMaxRecvMessageSize+"=16")
 		}
 	})
 }
