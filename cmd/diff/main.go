@@ -105,6 +105,7 @@ type CommonCmdFields struct {
 	FunctionCredentials      FunctionCredentials `help:"A YAML file or directory of YAML files specifying Secret credentials to pass to Functions." name:"function-credentials"                                                                                                                                  placeholder:"PATH"`
 	FunctionRegistryOverride string              `help:"Override the registry for all function images (e.g., 'my-company.registry.io')."            name:"function-registry-override"`
 	EventualState            bool                `default:"false"                                                                                   help:"Show eventual state after all reconciliation cycles complete (useful with function-sequencer)."                                                        name:"eventual-state"`
+	MaxRecvMessageSize       int                 `env:"CROSSPLANE_DIFF_MAX_RECV_MESSAGE_SIZE"                                                       help:"Max gRPC message size (MB) for render function containers (4MB if undefined)."                                                                         name:"max-recv-message-size"`
 
 	// CrossplaneRenderBinary is a hidden test-only override that points the
 	// render engine at a local `crossplane` binary. Production users leave

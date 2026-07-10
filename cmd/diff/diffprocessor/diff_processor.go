@@ -8,6 +8,7 @@ import (
 	"os"
 	"slices"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -127,6 +128,11 @@ func NewDiffProcessor(k8cs k8.Clients, xpcs xp.Clients, opts ...ProcessorOption)
 	functionProvider := config.Factories.FunctionProvider(xpcs.Function, config.Logger)
 	if config.FunctionRegistryOverride != "" {
 		functionProvider = NewRegistryOverrideFunctionProvider(functionProvider, config.FunctionRegistryOverride, config.Logger)
+	}
+
+	if config.MaxRecvMessageSize > 0 {
+		functionProvider = NewEnvInjectingFunctionProvider(functionProvider,
+			map[string]string{EnvMaxRecvMessageSize: strconv.Itoa(config.MaxRecvMessageSize)}, config.Logger)
 	}
 
 	processor := &DefaultDiffProcessor{

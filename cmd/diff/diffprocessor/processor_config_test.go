@@ -229,3 +229,19 @@ func TestWithStdoutStderr(t *testing.T) {
 		t.Errorf("Expected config.Stderr to be the injected buffer, got: %v", config.Stderr)
 	}
 }
+
+// TestWithMaxRecvMessageSize verifies the option sets the field and that the
+// zero value is preserved when the option is not applied.
+func TestWithMaxRecvMessageSize(t *testing.T) {
+	def := ProcessorConfig{}
+	if def.MaxRecvMessageSize != 0 {
+		t.Errorf("Expected default MaxRecvMessageSize to be 0, got: %d", def.MaxRecvMessageSize)
+	}
+
+	config := ProcessorConfig{}
+	WithMaxRecvMessageSize(16)(&config)
+
+	if config.MaxRecvMessageSize != 16 {
+		t.Errorf("Expected config.MaxRecvMessageSize to be 16, got: %d", config.MaxRecvMessageSize)
+	}
+}

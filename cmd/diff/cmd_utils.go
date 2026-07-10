@@ -88,6 +88,10 @@ func defaultProcessorOptions(fields CommonCmdFields) []dp.ProcessorOption {
 		opts = append(opts, dp.WithFunctionRegistryOverride(fields.FunctionRegistryOverride))
 	}
 
+	if fields.MaxRecvMessageSize > 0 {
+		opts = append(opts, dp.WithMaxRecvMessageSize(fields.MaxRecvMessageSize))
+	}
+
 	if fields.CrossplaneRenderBinary != "" {
 		opts = append(opts, dp.WithCrossplaneRenderBinary(fields.CrossplaneRenderBinary))
 	}
