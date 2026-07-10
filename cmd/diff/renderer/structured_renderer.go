@@ -255,21 +255,17 @@ func (r *StructuredDiffRenderer) buildStructuredOutput(diffs map[string]*dt.Reso
 			// Equal diffs are filtered above, this case satisfies exhaustive lint check
 		}
 
-		// Extract namespace from resource if available
-		var namespace string
-		if diff.Desired != nil {
-			namespace = diff.Desired.GetNamespace()
-		} else if diff.Current != nil {
-			namespace = diff.Current.GetNamespace()
-		}
-
-		// Build change detail
+		// Build change detail. Use diff.Namespace, which generation already
+		// resolved with the "prefer current (existing) namespace, else desired"
+		// rule — matching resourceDiffToChangeDetail and the human diff, and
+		// avoiding an empty namespace when the desired manifest omits it but the
+		// current cluster object has one.
 		change := ChangeDetail{
 			Type:       diff.DiffType.ToWord(),
 			APIVersion: diff.Gvk.GroupVersion().String(),
 			Kind:       diff.Gvk.Kind,
 			Name:       diff.ResourceName,
-			Namespace:  namespace,
+			Namespace:  diff.Namespace,
 			Diff:       r.buildDiffDetail(diff),
 		}
 
@@ -280,30 +276,31 @@ func (r *StructuredDiffRenderer) buildStructuredOutput(diffs map[string]*dt.Reso
 }
 
 // buildDiffDetail creates the diff detail structure for a resource change.
+//
+// It reads the pre-cleaned views populated during diff generation, so
+// --ignore-paths and the unconditional-cleanup fields are already stripped;
+// the renderer performs no cleanup of its own.
 func (r *StructuredDiffRenderer) buildDiffDetail(diff *dt.ResourceDiff) map[string]any {
 	detail := make(map[string]any)
 
 	switch diff.DiffType {
 	case dt.DiffTypeAdded:
-		// For added resources, include the full spec
-		if diff.Desired != nil {
-			detail[dt.DiffKeySpec] = diff.Desired.Object
+		if diff.Desired.Clean != nil {
+			detail[dt.DiffKeySpec] = diff.Desired.Clean.Object
 		}
 
 	case dt.DiffTypeRemoved:
-		// For removed resources, include the old spec
-		if diff.Current != nil {
-			detail[dt.DiffKeySpec] = diff.Current.Object
+		if diff.Current.Clean != nil {
+			detail[dt.DiffKeySpec] = diff.Current.Clean.Object
 		}
 
 	case dt.DiffTypeEqual:
 		// Equal diffs have no detail to show
 
 	case dt.DiffTypeModified:
-		// For modified resources, show both old and new
-		if diff.Current != nil && diff.Desired != nil {
-			detail[dt.DiffKeyOld] = diff.Current.Object
-			detail[dt.DiffKeyNew] = diff.Desired.Object
+		if diff.Current.Clean != nil && diff.Desired.Clean != nil {
+			detail[dt.DiffKeyOld] = diff.Current.Clean.Object
+			detail[dt.DiffKeyNew] = diff.Desired.Clean.Object
 		}
 	}
 
@@ -323,7 +320,12 @@ func compareStrings(a, b string) int {
 	return 0
 }
 
-// resourceDiffToChangeDetail converts a ResourceDiff to a ChangeDetail for JSON output.
+// resourceDiffToChangeDetail converts a ResourceDiff to a ChangeDetail for
+// structured (JSON/YAML) output.
+//
+// It reads the pre-cleaned views populated during diff generation, so
+// --ignore-paths and the unconditional-cleanup fields are already stripped;
+// the renderer performs no cleanup of its own.
 func resourceDiffToChangeDetail(diff *dt.ResourceDiff) *ChangeDetail {
 	change := &ChangeDetail{
 		Type:       diff.DiffType.ToWord(),
@@ -334,20 +336,19 @@ func resourceDiffToChangeDetail(diff *dt.ResourceDiff) *ChangeDetail {
 		Diff:       make(map[string]any),
 	}
 
-	// Build the diff detail structure
 	switch diff.DiffType {
 	case dt.DiffTypeAdded:
-		if diff.Desired != nil {
-			change.Diff[dt.DiffKeySpec] = diff.Desired.Object
+		if diff.Desired.Clean != nil {
+			change.Diff[dt.DiffKeySpec] = diff.Desired.Clean.Object
 		}
 	case dt.DiffTypeRemoved:
-		if diff.Current != nil {
-			change.Diff[dt.DiffKeySpec] = diff.Current.Object
+		if diff.Current.Clean != nil {
+			change.Diff[dt.DiffKeySpec] = diff.Current.Clean.Object
 		}
 	case dt.DiffTypeModified:
-		if diff.Current != nil && diff.Desired != nil {
-			change.Diff[dt.DiffKeyOld] = diff.Current.Object
-			change.Diff[dt.DiffKeyNew] = diff.Desired.Object
+		if diff.Current.Clean != nil && diff.Desired.Clean != nil {
+			change.Diff[dt.DiffKeyOld] = diff.Current.Clean.Object
+			change.Diff[dt.DiffKeyNew] = diff.Desired.Clean.Object
 		}
 	case dt.DiffTypeEqual:
 		// Equal diffs have no detail to show

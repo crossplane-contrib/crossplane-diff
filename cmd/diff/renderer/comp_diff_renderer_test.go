@@ -21,6 +21,13 @@ type testCompDiffFixture struct {
 	validate func(t *testing.T, format OutputFormat, result string)
 }
 
+// bothViews returns a ResourceViews whose Raw and Clean both point at obj. Test
+// fixtures use it when the object has no ignorable / server-side fields, so the
+// cleaned view equals the raw one.
+func bothViews(obj *un.Unstructured) dt.ResourceViews {
+	return dt.ResourceViews{Raw: obj, Clean: obj}
+}
+
 // sharedCompDiffFixtures returns test fixtures that should be run through both JSON and YAML renderers.
 func sharedCompDiffFixtures() []testCompDiffFixture {
 	return []testCompDiffFixture{
@@ -53,7 +60,7 @@ func sharedCompDiffFixtures() []testCompDiffFixture {
 						DiffType:     dt.DiffTypeAdded,
 						ResourceName: "test-comp",
 						Gvk:          schema.GroupVersionKind{Group: "apiextensions.crossplane.io", Version: "v1", Kind: "Composition"},
-						Desired:      &un.Unstructured{Object: map[string]any{"apiVersion": "apiextensions.crossplane.io/v1", "kind": "Composition"}},
+						Desired:      bothViews(&un.Unstructured{Object: map[string]any{"apiVersion": "apiextensions.crossplane.io/v1", "kind": "Composition"}}),
 					},
 					AffectedResources: AffectedResourcesSummary{Total: 2, WithChanges: 1, Unchanged: 1},
 					ImpactAnalysis: []XRImpact{
@@ -451,8 +458,8 @@ func TestCompDiffOutput_JSONSchema(t *testing.T) {
 				DiffType:     dt.DiffTypeModified,
 				ResourceName: "xbuckets.example.org",
 				Gvk:          schema.GroupVersionKind{Group: "apiextensions.crossplane.io", Version: "v1", Kind: "Composition"},
-				Current:      &un.Unstructured{Object: map[string]any{"apiVersion": "apiextensions.crossplane.io/v1", "kind": "Composition"}},
-				Desired:      &un.Unstructured{Object: map[string]any{"apiVersion": "apiextensions.crossplane.io/v1", "kind": "Composition"}},
+				Current:      bothViews(&un.Unstructured{Object: map[string]any{"apiVersion": "apiextensions.crossplane.io/v1", "kind": "Composition"}}),
+				Desired:      bothViews(&un.Unstructured{Object: map[string]any{"apiVersion": "apiextensions.crossplane.io/v1", "kind": "Composition"}}),
 			},
 			AffectedResources: AffectedResourcesSummary{Total: 5, WithChanges: 2, Unchanged: 2, WithErrors: 1},
 			ImpactAnalysis: []XRImpact{
@@ -464,14 +471,14 @@ func TestCompDiffOutput_JSONSchema(t *testing.T) {
 							DiffType:     dt.DiffTypeAdded,
 							ResourceName: "new-bucket",
 							Gvk:          schema.GroupVersionKind{Group: "s3.aws.upbound.io", Version: "v1beta1", Kind: "Bucket"},
-							Desired:      &un.Unstructured{Object: map[string]any{"apiVersion": "s3.aws.upbound.io/v1beta1", "kind": "Bucket"}},
+							Desired:      bothViews(&un.Unstructured{Object: map[string]any{"apiVersion": "s3.aws.upbound.io/v1beta1", "kind": "Bucket"}}),
 						},
 						"s3.aws.upbound.io/v1beta1/Bucket//existing-bucket": {
 							DiffType:     dt.DiffTypeModified,
 							ResourceName: "existing-bucket",
 							Gvk:          schema.GroupVersionKind{Group: "s3.aws.upbound.io", Version: "v1beta1", Kind: "Bucket"},
-							Current:      &un.Unstructured{Object: map[string]any{"apiVersion": "s3.aws.upbound.io/v1beta1", "kind": "Bucket"}},
-							Desired:      &un.Unstructured{Object: map[string]any{"apiVersion": "s3.aws.upbound.io/v1beta1", "kind": "Bucket"}},
+							Current:      bothViews(&un.Unstructured{Object: map[string]any{"apiVersion": "s3.aws.upbound.io/v1beta1", "kind": "Bucket"}}),
+							Desired:      bothViews(&un.Unstructured{Object: map[string]any{"apiVersion": "s3.aws.upbound.io/v1beta1", "kind": "Bucket"}}),
 						},
 					},
 				},

@@ -301,34 +301,39 @@ func GenerateDiffWithOptions(_ context.Context, current, desired *un.Unstructure
 		return nil, errors.New("both current and desired cannot be nil")
 	}
 
-	// For modifications, check if objects are semantically equal
-	if diffType == t.DiffTypeModified {
-		// Check for deep equality first
-		if equality.Semantic.DeepEqual(current, desired) {
-			logger.Debug("Resources are semantically equal", "resource", resourceKey, "namespace", resourceNamespace)
-			return equalDiff(current, desired), nil
-		}
-
-		// Clean up both objects for comparison
-		currentClean := cleanupForDiff(current.DeepCopy(), logger.WithValues("resourceStage", "current", "before", current), options.IgnorePaths)
-		desiredClean := cleanupForDiff(desired.DeepCopy(), logger.WithValues("resourceStage", "desired", "before", desired), options.IgnorePaths)
-
-		// Check if the cleaned objects are equal
-		if equality.Semantic.DeepEqual(currentClean.Object, desiredClean.Object) {
-			logger.Debug("Resources are equal after cleanup (only metadata differences)", "resource", resourceKey, "namespace", resourceNamespace)
-			return equalDiff(current, desired), nil
-		}
-
-		logger.Debug("Resources are not equal after cleanup", "resource", resourceKey, "namespace", resourceNamespace)
+	// Fast path for modifications: if the raw objects are already deeply equal
+	// there is nothing to clean or diff.
+	if diffType == t.DiffTypeModified && equality.Semantic.DeepEqual(current, desired) {
+		logger.Debug("Resources are semantically equal", "resource", resourceKey, "namespace", resourceNamespace)
+		return equalDiff(current, desired), nil
 	}
 
-	// Convert to YAML for text diff
-	asString := func(obj *un.Unstructured) (string, error) {
-		if obj == nil {
+	// Clean each present object exactly once. The cleaned copies are reused for
+	// the cleaned-equality check, the YAML text diff, and are stored on the
+	// returned ResourceDiff for structured renderers to emit — so cleanup runs
+	// once per object rather than once per consumer.
+	var currentClean, desiredClean *un.Unstructured
+
+	if current != nil {
+		currentClean = cleanupForDiff(current.DeepCopy(), logger.WithValues("resourceStage", "current", "before", current), options.IgnorePaths)
+	}
+
+	if desired != nil {
+		desiredClean = cleanupForDiff(desired.DeepCopy(), logger.WithValues("resourceStage", "desired", "before", desired), options.IgnorePaths)
+	}
+
+	// For modifications, if the cleaned objects are equal the only differences
+	// were in ignored / server-side fields.
+	if diffType == t.DiffTypeModified && equality.Semantic.DeepEqual(currentClean.Object, desiredClean.Object) {
+		logger.Debug("Resources are equal after cleanup (only metadata differences)", "resource", resourceKey, "namespace", resourceNamespace)
+		return equalDiff(current, desired), nil
+	}
+
+	// Convert the already-cleaned objects to YAML for the text diff.
+	asString := func(clean *un.Unstructured) (string, error) {
+		if clean == nil {
 			return "", nil
 		}
-
-		clean := cleanupForDiff(obj.DeepCopy(), logger, options.IgnorePaths)
 
 		yaml, err := sigsyaml.Marshal(clean.Object)
 		if err != nil {
@@ -338,13 +343,13 @@ func GenerateDiffWithOptions(_ context.Context, current, desired *un.Unstructure
 		return string(yaml), nil
 	}
 
-	currentStr, err := asString(current)
+	currentStr, err := asString(currentClean)
 	if err != nil {
 		logger.Debug("Error marshaling current object to YAML", "error", err)
 		return nil, errors.Wrap(err, "cannot marshal current object to YAML")
 	}
 
-	desiredStr, err := asString(desired)
+	desiredStr, err := asString(desiredClean)
 	if err != nil {
 		logger.Debug("Error marshaling desired object to YAML", "error", err)
 		return nil, errors.Wrap(err, "cannot marshal desired object to YAML")
@@ -417,8 +422,8 @@ func GenerateDiffWithOptions(_ context.Context, current, desired *un.Unstructure
 		ResourceName: name,
 		DiffType:     diffType,
 		LineDiffs:    lineDiffs,
-		Current:      current,
-		Desired:      desired,
+		Current:      t.ResourceViews{Raw: current, Clean: currentClean},
+		Desired:      t.ResourceViews{Raw: desired, Clean: desiredClean},
 	}, nil
 }
 
@@ -455,8 +460,10 @@ func equalDiff(current *un.Unstructured, desired *un.Unstructured) *t.ResourceDi
 		ResourceName: current.GetName(),
 		DiffType:     t.DiffTypeEqual,
 		LineDiffs:    []diffmatchpatch.Diff{},
-		Current:      current,
-		Desired:      desired,
+		// Equal diffs render nothing, so only the Raw views are populated
+		// (kept for identity/reference); Clean is intentionally left nil.
+		Current: t.ResourceViews{Raw: current},
+		Desired: t.ResourceViews{Raw: desired},
 	}
 }
 

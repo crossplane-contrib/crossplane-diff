@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/crossplane-contrib/crossplane-diff/cmd/diff/renderer/types"
 	dtypes "github.com/crossplane-contrib/crossplane-diff/cmd/diff/types"
@@ -1519,6 +1520,20 @@ func (b *ResourceBuilder) WithFieldManagers(managers ...string) *ResourceBuilder
 	}
 
 	b.resource.SetManagedFields(entries)
+
+	return b
+}
+
+// WithServerMetadata stamps the server-populated identity and versioning
+// metadata fields (resourceVersion, uid, generation, creationTimestamp) that
+// Kubernetes adds to a persisted object. Values are deterministic placeholders
+// so tests remain stable. Use this to construct a resource that looks like it
+// was fetched from the cluster (e.g. to verify diff cleanup strips these).
+func (b *ResourceBuilder) WithServerMetadata() *ResourceBuilder {
+	b.resource.SetResourceVersion("12345")
+	b.resource.SetUID(k8stypes.UID("00000000-0000-0000-0000-000000000000"))
+	b.resource.SetGeneration(1)
+	b.resource.SetCreationTimestamp(metav1.NewTime(time.Unix(0, 0).UTC()))
 
 	return b
 }

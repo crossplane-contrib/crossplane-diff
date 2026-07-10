@@ -779,6 +779,19 @@ pipelines can parse them programmatically). The structured renderers always emit
 fails — by attaching errors to an `OutputError` field. `OutputError` uses JSON struct tags only (the YAML library reads
 JSON tags), so the field naming is consistent across formats.
 
+`--ignore-paths` and the built-in server-side / non-diff-relevant field cleanup (`managedFields`, `resourceVersion`,
+`uid`, `generation`, `creationTimestamp`, `selfLink`, `ownerReferences`, `spec.resourceRefs`,
+`spec.crossplane.resourceRefs`, `status`) apply uniformly across output formats. Cleanup happens during diff
+generation (`GenerateDiffWithOptions`), not in the renderers, and each object is cleaned at most once: the results are
+stored on the `ResourceDiff` as `ResourceViews{Raw, Clean}`. `Raw` is the original object (load-bearing for removal
+detection and existing-XR reconstruction); `Clean` is the post-cleanup object. `Clean` is populated only for non-equal
+diffs — the ones that will actually be rendered. Equal diffs render nothing, so they retain only `Raw` and leave
+`Clean` nil (and the raw-deep-equal fast path returns before running cleanup at all). The structured renderer is a pure
+formatter: it emits `Clean` into `changes[].diff.old`, `changes[].diff.new`, and `changes[].diff.spec` and performs no
+cleanup of its own, so the machine-readable payload matches what the human diff shows. This matches the semantic-filter
+convention used by ArgoCD (`ignoreDifferences`) and Terraform (`ignore_changes`): ignore is applied once, before output,
+and is visible in classification, summary counts, and rendered bodies alike.
+
 #### 6.8.3 Structured output types
 
 The structured types are split across two files:

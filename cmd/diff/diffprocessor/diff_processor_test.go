@@ -440,9 +440,9 @@ func TestDefaultDiffProcessor_PerformDiff(t *testing.T) {
 								Gvk:          schema.GroupVersionKind{Group: "example.org", Version: "v1", Kind: "XR1"},
 								ResourceName: "test-xr",
 								DiffType:     dt.DiffTypeModified,
-								LineDiffs:    lineDiffs, // Add line diffs
-								Current:      resource1, // Set current for completeness
-								Desired:      resource1, // Set desired for completeness
+								LineDiffs:    lineDiffs,                                          // Add line diffs
+								Current:      dt.ResourceViews{Raw: resource1, Clean: resource1}, // for completeness
+								Desired:      dt.ResourceViews{Raw: resource1, Clean: resource1}, // for completeness
 							}
 							rendered[diffKey1] = true
 
@@ -453,8 +453,8 @@ func TestDefaultDiffProcessor_PerformDiff(t *testing.T) {
 								ResourceName: "resource-a",
 								DiffType:     dt.DiffTypeModified,
 								LineDiffs:    lineDiffs,
-								Current:      composedResource,
-								Desired:      composedResource,
+								Current:      dt.ResourceViews{Raw: composedResource, Clean: composedResource},
+								Desired:      dt.ResourceViews{Raw: composedResource, Clean: composedResource},
 							}
 							rendered[diffKey2] = true
 

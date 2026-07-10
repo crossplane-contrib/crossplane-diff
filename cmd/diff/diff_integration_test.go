@@ -535,6 +535,41 @@ Summary: 2 modified`,
 			expectedStructuredOutput: tu.ExpectDiff().WithSummary(0, 0, 0),
 			expectedError:            false,
 		},
+		"IgnorePathsMixedChanges": {
+			// Regression test: when a resource has BOTH ignored path changes
+			// AND non-ignored spec changes, the summary must count the
+			// resource as modified once and the emitted diff bodies must not
+			// leak the ignored paths. The renderer-level unit test
+			// TestStructuredDiffRenderer_RespectsIgnorePaths asserts the
+			// absence of ignored fields in diff.old / diff.new; this test
+			// pins the summary counts and the visible non-ignored changes
+			// through the full CLI stack.
+			reason: "Ignores ArgoCD annotations/labels while still reporting a non-ignored spec change",
+			setupFiles: []string{
+				"testdata/diff/resources/xrd.yaml",
+				"testdata/diff/resources/composition.yaml",
+				"testdata/diff/resources/composition-revision-default.yaml",
+				"testdata/diff/resources/functions.yaml",
+				"testdata/diff/resources/existing-downstream-resource-with-argocd.yaml",
+				"testdata/diff/resources/existing-xr-with-argocd.yaml",
+			},
+			inputFiles: []string{"testdata/diff/xr-with-argocd-mixed-changes.yaml"},
+			ignorePaths: []string{
+				"metadata.annotations[argocd.argoproj.io/tracking-id]",
+				"metadata.labels[argocd.argoproj.io/instance]",
+			},
+			outputFormat: "json",
+			expectedStructuredOutput: tu.ExpectDiff().
+				WithSummary(0, 2, 0).
+				WithModifiedResource("XDownstreamResource", "test-resource", "default").
+				WithFieldChange("spec.forProvider.configData", "new-value", "modified-value").
+				And().
+				WithModifiedResource("XNopResource", "test-resource", "default").
+				WithFieldChange("spec.coolField", "new-value", "modified-value").
+				And(),
+			expectedError:    false,
+			expectedExitCode: dp.ExitCodeDiffDetected,
+		},
 		"ModifiedXRCreatesDownstream": {
 			reason:       "Shows diff when modified XR creates new downstream resource",
 			outputFormat: "json",
