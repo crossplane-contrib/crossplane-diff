@@ -1,0 +1,59 @@
+name: Renovate Auto-Approve
+
+# Approves Renovate's dependency-update PRs so they can be automerged
+# unattended. The main branch ruleset requires one approving review with
+# require_last_push_approval, but Renovate cannot approve its own PRs. This
+# workflow approves them as github-actions[bot] -- a distinct identity from
+# renovate[bot] -- which satisfies the review requirement.
+#
+# Automerge itself, and the decision of *which* updates to merge, live in
+# .github/renovate.json5. This workflow only supplies the approval; the
+# required status checks (unit-tests, e2e-tests) remain the real gate, so a
+# failing update never merges even though it is approved.
+#
+# NOTE: This requires "Allow GitHub Actions to create and approve pull
+# requests" to be enabled under Settings -> Actions -> General. Without it,
+# GitHub rejects the approval with a permissions error.
+
+on:
+  # pull_request_target runs in the context of the base branch, so the
+  # GITHUB_TOKEN always has write access (even for the bot's own branches) and
+  # no PR code is checked out or executed here.
+  pull_request_target:
+    types:
+      - opened
+      - reopened
+      # synchronize: Renovate rebases dismiss the prior approval under
+      # require_last_push_approval, so we must re-approve each new push.
+      - synchronize
+
+permissions:
+  pull-requests: write
+
+jobs:
+  auto-approve:
+    runs-on: ubuntu-24.04
+    # Only approve PRs authored by Renovate.
+    if: ${{ github.event.pull_request.user.login == 'renovate[bot]' }}
+    steps:
+      - name: Approve the pull request
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_URL: ${{ github.event.pull_request.html_url }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        # Approve only if github-actions[bot] has not already approved the
+        # CURRENT head commit. We must match the review's commit to HEAD_SHA:
+        # under require_last_push_approval with dismiss_stale_reviews_on_push
+        # false, an approval of an earlier commit still shows state APPROVED in
+        # the API but no longer counts toward the latest push, so a plain
+        # "has any approval" check would wrongly skip re-approving after a
+        # Renovate rebase.
+        run: |
+          approved=$(gh pr view "$PR_URL" \
+            --json reviews \
+            --jq "[.reviews[] | select(.author.login == \"github-actions\" and .state == \"APPROVED\" and .commit.oid == \"$HEAD_SHA\")] | length")
+          if [ "$approved" -gt 0 ]; then
+            echo "Head commit $HEAD_SHA already approved by github-actions[bot]; nothing to do."
+          else
+            gh pr review "$PR_URL" --approve --body "Automatically approved: Renovate dependency update. Merge is gated on required status checks."
+          fi
