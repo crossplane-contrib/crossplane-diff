@@ -1,0 +1,74 @@
+name: Renovate Auto-Approve
+
+# Approves Renovate's dependency-update PRs so they can be automerged
+# unattended. The main branch ruleset requires one approving review with
+# require_last_push_approval, but Renovate cannot approve its own PRs. This
+# workflow approves them as github-actions[bot] -- a distinct identity from
+# renovate[bot] -- which satisfies the review requirement.
+#
+# Automerge itself, and the decision of *which* updates to merge, live in
+# .github/renovate.json5. This workflow only supplies the approval; the
+# required status checks (unit-tests, e2e-tests) remain the real gate, so a
+# failing update never merges even though it is approved.
+#
+# NOTE: This requires "Allow GitHub Actions to create and approve pull
+# requests" to be enabled under Settings -> Actions -> General. Without it,
+# GitHub rejects the approval with a permissions error.
+
+on:
+  # pull_request_target runs in the context of the base branch, so the
+  # GITHUB_TOKEN always has write access (even for the bot's own branches) and
+  # no PR code is checked out or executed here.
+  pull_request_target:
+    types:
+      - opened
+      - reopened
+      # synchronize: Renovate rebases dismiss the prior approval under
+      # require_last_push_approval, so we must re-approve each new push.
+      - synchronize
+
+permissions:
+  pull-requests: write
+
+jobs:
+  auto-approve:
+    runs-on: ubuntu-24.04
+    # Only approve PRs authored by Renovate.
+    if: ${{ github.event.pull_request.user.login == 'renovate[bot]' }}
+    steps:
+      - name: Approve the pull request
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_URL: ${{ github.event.pull_request.html_url }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+
+          # Do not approve PRs that touch E2E manifests. Those are excluded from
+          # automerge in .github/renovate.json5 because they change which
+          # Crossplane version the E2E matrix tests against and warrant human
+          # review; auto-approving them would undermine that. Keep this path
+          # prefix in sync with the matchFileNames rule in renovate.json5.
+          if gh pr diff "$PR_URL" --name-only | grep -q '^test/e2e/'; then
+            echo "PR touches test/e2e/; leaving for human review (excluded from automerge)."
+            exit 0
+          fi
+
+          # Approve only if we have not already approved the CURRENT head commit.
+          # We must match the review's commit to HEAD_SHA: under
+          # require_last_push_approval with dismiss_stale_reviews_on_push false,
+          # an approval of an earlier commit still shows state APPROVED in the
+          # API but no longer counts toward the latest push, so a plain "has any
+          # approval" check would wrongly skip re-approving after a Renovate
+          # rebase. The login is matched against both 'github-actions' (GraphQL,
+          # which `gh pr view --json` uses) and 'github-actions[bot]' (REST), so
+          # the guard holds regardless of which form GitHub returns; the only
+          # cost of a miss would be a harmless redundant approval on re-runs.
+          approved=$(gh pr view "$PR_URL" \
+            --json reviews \
+            --jq "[.reviews[] | select((.author.login == \"github-actions\" or .author.login == \"github-actions[bot]\") and .state == \"APPROVED\" and .commit.oid == \"$HEAD_SHA\")] | length")
+          if [ "$approved" -gt 0 ]; then
+            echo "Head commit $HEAD_SHA already approved; nothing to do."
+          else
+            gh pr review "$PR_URL" --approve --body "Automatically approved: Renovate dependency update. Merge is gated on required status checks."
+          fi
