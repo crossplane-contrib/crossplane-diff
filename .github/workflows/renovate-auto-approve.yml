@@ -41,19 +41,34 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           PR_URL: ${{ github.event.pull_request.html_url }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-        # Approve only if github-actions[bot] has not already approved the
-        # CURRENT head commit. We must match the review's commit to HEAD_SHA:
-        # under require_last_push_approval with dismiss_stale_reviews_on_push
-        # false, an approval of an earlier commit still shows state APPROVED in
-        # the API but no longer counts toward the latest push, so a plain
-        # "has any approval" check would wrongly skip re-approving after a
-        # Renovate rebase.
         run: |
+          set -euo pipefail
+
+          # Do not approve PRs that touch E2E manifests. Those are excluded from
+          # automerge in .github/renovate.json5 because they change which
+          # Crossplane version the E2E matrix tests against and warrant human
+          # review; auto-approving them would undermine that. Keep this path
+          # prefix in sync with the matchFileNames rule in renovate.json5.
+          if gh pr diff "$PR_URL" --name-only | grep -q '^test/e2e/'; then
+            echo "PR touches test/e2e/; leaving for human review (excluded from automerge)."
+            exit 0
+          fi
+
+          # Approve only if we have not already approved the CURRENT head commit.
+          # We must match the review's commit to HEAD_SHA: under
+          # require_last_push_approval with dismiss_stale_reviews_on_push false,
+          # an approval of an earlier commit still shows state APPROVED in the
+          # API but no longer counts toward the latest push, so a plain "has any
+          # approval" check would wrongly skip re-approving after a Renovate
+          # rebase. The login is matched against both 'github-actions' (GraphQL,
+          # which `gh pr view --json` uses) and 'github-actions[bot]' (REST), so
+          # the guard holds regardless of which form GitHub returns; the only
+          # cost of a miss would be a harmless redundant approval on re-runs.
           approved=$(gh pr view "$PR_URL" \
             --json reviews \
-            --jq "[.reviews[] | select(.author.login == \"github-actions\" and .state == \"APPROVED\" and .commit.oid == \"$HEAD_SHA\")] | length")
+            --jq "[.reviews[] | select((.author.login == \"github-actions\" or .author.login == \"github-actions[bot]\") and .state == \"APPROVED\" and .commit.oid == \"$HEAD_SHA\")] | length")
           if [ "$approved" -gt 0 ]; then
-            echo "Head commit $HEAD_SHA already approved by github-actions[bot]; nothing to do."
+            echo "Head commit $HEAD_SHA already approved; nothing to do."
           else
             gh pr review "$PR_URL" --approve --body "Automatically approved: Renovate dependency update. Merge is gated on required status checks."
           fi
