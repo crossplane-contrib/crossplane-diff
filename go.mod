@@ -5,7 +5,7 @@ go 1.26.2
 require (
 	dario.cat/mergo v1.0.2
 	github.com/Masterminds/semver v1.5.0
-	github.com/alecthomas/kong v1.15.0
+	github.com/alecthomas/kong v1.16.0
 	github.com/crossplane/cli/v2 v2.5.0-rc.0.0.20260626181113-86f5f7a0c4bf
 	github.com/crossplane/crossplane-runtime/v2 v2.4.0-rc.0
 	github.com/crossplane/crossplane/apis/v2 v2.4.0-rc.0
