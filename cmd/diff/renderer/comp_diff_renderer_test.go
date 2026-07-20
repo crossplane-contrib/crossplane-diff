@@ -18,6 +18,7 @@ import (
 type testCompDiffFixture struct {
 	name     string
 	output   *CompDiffOutput
+	minimize bool
 	validate func(t *testing.T, format OutputFormat, result string)
 }
 
@@ -150,6 +151,46 @@ func sharedCompDiffFixtures() []testCompDiffFixture {
 				}
 			},
 		},
+		{
+			// MinimizeComposition is a human-output affordance only: structured
+			// (JSON/YAML) output must always retain full compositionChanges.
+			name:     "MinimizeKeepsStructuredFidelity",
+			minimize: true,
+			output: &CompDiffOutput{
+				Compositions: []CompositionDiff{{
+					Name: "test-comp",
+					CompositionDiff: &dt.ResourceDiff{
+						DiffType:     dt.DiffTypeModified,
+						ResourceName: "test-comp",
+						Gvk:          schema.GroupVersionKind{Group: "apiextensions.crossplane.io", Version: "v1", Kind: "Composition"},
+						Current:      bothViews(&un.Unstructured{Object: map[string]any{"apiVersion": "apiextensions.crossplane.io/v1", "kind": "Composition"}}),
+						Desired:      bothViews(&un.Unstructured{Object: map[string]any{"apiVersion": "apiextensions.crossplane.io/v1", "kind": "Composition"}}),
+					},
+					AffectedResources: AffectedResourcesSummary{Total: 1, Unchanged: 1},
+					ImpactAnalysis:    []XRImpact{{ObjectReference: corev1.ObjectReference{APIVersion: "example.org/v1", Kind: "XResource", Name: "xr-1"}, Status: XRStatusUnchanged}},
+				}},
+			},
+			validate: func(t *testing.T, format OutputFormat, result string) {
+				t.Helper()
+
+				if format == OutputFormatJSON {
+					var parsed compDiffJSONOutput
+					if err := json.Unmarshal([]byte(result), &parsed); err != nil {
+						t.Fatalf("Failed to parse JSON: %v", err)
+					}
+
+					if parsed.Compositions[0].CompositionChanges == nil {
+						t.Error("expected compositionChanges preserved in structured output when minimized")
+					}
+
+					if len(parsed.Compositions[0].ImpactAnalysis) != 1 {
+						t.Errorf("expected impact analysis preserved, got %d", len(parsed.Compositions[0].ImpactAnalysis))
+					}
+				} else if !strings.Contains(result, "compositionChanges:") {
+					t.Error("expected YAML to retain 'compositionChanges:' when minimized")
+				}
+			},
+		},
 	}
 }
 
@@ -167,6 +208,7 @@ func TestStructuredCompDiffRenderer_RenderCompDiff(t *testing.T) {
 
 				opts := DefaultDiffOptions()
 				opts.Format = format
+				opts.MinimizeComposition = fixture.minimize
 				opts.Stdout = &buf
 				opts.Stderr = &bytes.Buffer{} // discard stderr
 
@@ -187,6 +229,7 @@ func TestDefaultCompDiffRenderer_RenderCompDiff(t *testing.T) {
 	tests := map[string]struct {
 		output   *CompDiffOutput
 		colorize bool
+		minimize bool
 		validate func(t *testing.T, result string)
 	}{
 		"EmptyCompositions": {
@@ -279,6 +322,63 @@ func TestDefaultCompDiffRenderer_RenderCompDiff(t *testing.T) {
 				}
 			},
 		},
+		"MinimizeChangedComposition": {
+			// A changed composition collapses to a single marker line (no YAML body,
+			// no per-composition Summary footer), while the impact sections remain.
+			output: &CompDiffOutput{
+				Compositions: []CompositionDiff{{
+					Name:              "test-comp",
+					CompositionDiff:   &dt.ResourceDiff{DiffType: dt.DiffTypeModified, ResourceName: "test-comp", Gvk: schema.GroupVersionKind{Group: "apiextensions.crossplane.io", Version: "v1", Kind: "Composition"}},
+					AffectedResources: AffectedResourcesSummary{Total: 1, Unchanged: 1},
+					ImpactAnalysis:    []XRImpact{{ObjectReference: corev1.ObjectReference{APIVersion: "example.org/v1", Kind: "XResource", Name: "xr-1"}, Status: XRStatusUnchanged}},
+				}},
+			},
+			colorize: false,
+			minimize: true,
+			validate: func(t *testing.T, result string) {
+				t.Helper()
+
+				if !strings.Contains(result, "=== Composition Changes ===") {
+					t.Errorf("expected composition changes header, got: %q", result)
+				}
+
+				if !strings.Contains(result, "~~~ Composition/test-comp (minimized)") {
+					t.Errorf("expected minimized marker line, got: %q", result)
+				}
+
+				if !strings.Contains(result, "=== Affected Composite Resources ===") {
+					t.Errorf("expected affected resources section, got: %q", result)
+				}
+
+				if !strings.Contains(result, "=== Impact Analysis ===") {
+					t.Errorf("expected impact analysis section, got: %q", result)
+				}
+
+				if strings.Contains(result, "Summary: 1 modified") {
+					t.Errorf("expected no composition Summary footer when minimized, got: %q", result)
+				}
+			},
+		},
+		"MinimizeErrorStillSurfaces": {
+			// A processing error must render in full even when minimized: only the
+			// diff body is collapsed, never the error.
+			output: &CompDiffOutput{
+				Compositions: []CompositionDiff{{
+					Name:           "error-comp",
+					Error:          errors.New("boom"),
+					ImpactAnalysis: []XRImpact{},
+				}},
+			},
+			colorize: false,
+			minimize: true,
+			validate: func(t *testing.T, result string) {
+				t.Helper()
+
+				if !strings.Contains(result, "Error processing composition error-comp") {
+					t.Errorf("expected error to surface when minimized, got: %q", result)
+				}
+			},
+		},
 	}
 
 	for name, tt := range tests {
@@ -289,6 +389,7 @@ func TestDefaultCompDiffRenderer_RenderCompDiff(t *testing.T) {
 
 			opts := DefaultDiffOptions()
 			opts.UseColors = tt.colorize
+			opts.MinimizeComposition = tt.minimize
 			opts.Stdout = &buf
 			opts.Stderr = &bytes.Buffer{} // discard stderr
 

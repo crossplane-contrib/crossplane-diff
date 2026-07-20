@@ -28,11 +28,19 @@ import (
 	"github.com/crossplane/crossplane-runtime/v2/pkg/logging"
 )
 
+const (
+	headerCompositionChanges = "=== Composition Changes ==="
+	headerAffectedResources  = "=== Affected Composite Resources ==="
+	headerImpactAnalysis     = "=== Impact Analysis ==="
+)
+
 // CompDiffRenderer renders composition diff results.
 // Both human-readable and structured (JSON/YAML) renderers implement this interface.
 type CompDiffRenderer interface {
 	// RenderCompDiff renders the complete composition diff output.
-	// Diff output goes to DiffOptions.Stdout, errors go to DiffOptions.Stderr.
+	// Top-level and tool errors go to DiffOptions.Stderr and are included in
+	// structured output payloads. Per-composition messages (diffs, "no changes",
+	// per-composition errors) go to DiffOptions.Stdout as part of the diff narrative.
 	RenderCompDiff(output *CompDiffOutput) error
 }
 
@@ -53,7 +61,8 @@ func NewDefaultCompDiffRenderer(logger logging.Logger, diffRenderer DiffRenderer
 }
 
 // RenderCompDiff renders the composition diff in human-readable format.
-// Diff output goes to r.opts.Stdout, errors go to r.opts.Stderr.
+// Top-level errors go to r.opts.Stderr. Per-composition output (diffs, status
+// messages, per-composition errors) goes to r.opts.Stdout.
 func (r *DefaultCompDiffRenderer) RenderCompDiff(output *CompDiffOutput) error {
 	stdout := r.opts.Stdout
 
@@ -64,9 +73,15 @@ func (r *DefaultCompDiffRenderer) RenderCompDiff(output *CompDiffOutput) error {
 			}
 		}
 
-		// Render composition changes section
-		if err := r.renderCompositionChanges(&comp); err != nil {
-			return err
+		switch {
+		case r.opts.MinimizeComposition:
+			if err := r.renderMinimizedCompositionChanges(&comp); err != nil {
+				return err
+			}
+		default:
+			if err := r.renderCompositionChanges(&comp); err != nil {
+				return err
+			}
 		}
 
 		// Skip remaining sections if composition had a processing error
@@ -99,7 +114,7 @@ func (r *DefaultCompDiffRenderer) RenderCompDiff(output *CompDiffOutput) error {
 func (r *DefaultCompDiffRenderer) renderCompositionChanges(comp *CompositionDiff) error {
 	stdout := r.opts.Stdout
 
-	if _, err := fmt.Fprintf(stdout, "=== Composition Changes ===\n\n"); err != nil {
+	if _, err := fmt.Fprintf(stdout, headerCompositionChanges+"\n\n"); err != nil {
 		return errors.Wrap(err, "cannot write composition changes header")
 	}
 
@@ -130,6 +145,58 @@ func (r *DefaultCompDiffRenderer) renderCompositionChanges(comp *CompositionDiff
 
 	if _, err := fmt.Fprintf(stdout, "\n"); err != nil {
 		return errors.Wrap(err, "cannot write separator")
+	}
+
+	return nil
+}
+
+// renderMinimizedCompositionChanges renders a single marker line per composition
+// instead of the full YAML diff body. Errors and no-change compositions are
+// rendered in full — only changed compositions are collapsed.
+func (r *DefaultCompDiffRenderer) renderMinimizedCompositionChanges(comp *CompositionDiff) error {
+	stdout := r.opts.Stdout
+
+	if _, err := fmt.Fprintf(stdout, headerCompositionChanges+"\n\n"); err != nil {
+		return errors.Wrap(err, "cannot write composition changes header")
+	}
+
+	if comp.Error != nil {
+		if _, err := fmt.Fprintf(stdout, "Error processing composition %s: %s\n\n", comp.Name, comp.Error.Error()); err != nil {
+			return errors.Wrap(err, "cannot write composition error")
+		}
+
+		return nil
+	}
+
+	if comp.CompositionDiff == nil || comp.CompositionDiff.DiffType == dt.DiffTypeEqual {
+		if _, err := fmt.Fprintf(stdout, "No changes detected in composition %s\n\n", comp.Name); err != nil {
+			return errors.Wrap(err, "cannot write no changes message")
+		}
+
+		return nil
+	}
+
+	marker := strings.Repeat(string(comp.CompositionDiff.DiffType), 3)
+
+	color, resetColor := "", ""
+
+	if r.opts.UseColors {
+		switch comp.CompositionDiff.DiffType {
+		case dt.DiffTypeModified:
+			color = dt.ColorYellow
+		case dt.DiffTypeAdded:
+			color = dt.ColorGreen
+		case dt.DiffTypeRemoved:
+			color = dt.ColorRed
+		case dt.DiffTypeEqual:
+			// no color for equal
+		}
+
+		resetColor = dt.ColorReset
+	}
+
+	if _, err := fmt.Fprintf(stdout, "%s%s Composition/%s (minimized)%s\n\n", color, marker, comp.Name, resetColor); err != nil {
+		return errors.Wrap(err, "cannot write minimized composition line")
 	}
 
 	return nil
@@ -166,7 +233,7 @@ func (r *DefaultCompDiffRenderer) renderAffectedResourcesList(comp *CompositionD
 	)
 
 	// Write the XR list with summary
-	if _, err := fmt.Fprintf(stdout, "=== Affected Composite Resources ===\n\n%s%s\n", xrList, summary); err != nil {
+	if _, err := fmt.Fprintf(stdout, headerAffectedResources+"\n\n%s%s\n", xrList, summary); err != nil {
 		return errors.Wrap(err, "cannot write XR list")
 	}
 
@@ -177,7 +244,7 @@ func (r *DefaultCompDiffRenderer) renderAffectedResourcesList(comp *CompositionD
 func (r *DefaultCompDiffRenderer) renderImpactAnalysis(comp *CompositionDiff) error {
 	stdout := r.opts.Stdout
 
-	if _, err := fmt.Fprintf(stdout, "=== Impact Analysis ===\n\n"); err != nil {
+	if _, err := fmt.Fprintf(stdout, headerImpactAnalysis+"\n\n"); err != nil {
 		return errors.Wrap(err, "cannot write impact analysis header")
 	}
 
@@ -290,7 +357,8 @@ func NewStructuredCompDiffRenderer(logger logging.Logger, opts DiffOptions) Comp
 }
 
 // RenderCompDiff renders the composition diff in structured format (JSON/YAML).
-// Diff output goes to r.opts.Stdout, errors go to r.opts.Stderr.
+// Top-level errors go to both r.opts.Stderr (for human visibility) and the
+// structured output payload. Per-composition data goes to r.opts.Stdout.
 func (r *StructuredCompDiffRenderer) RenderCompDiff(output *CompDiffOutput) error {
 	// Convert internal representation to JSON output structure
 	jsonOutput := r.buildStructuredCompOutput(output)
@@ -349,7 +417,7 @@ func (r *StructuredCompDiffRenderer) buildStructuredCompOutput(output *CompDiffO
 			jsonComp.Error = comp.Error.Error()
 		}
 
-		// Convert composition diff if present and not equal
+		// Convert composition diff if present and not equal.
 		if comp.CompositionDiff != nil && comp.CompositionDiff.DiffType != dt.DiffTypeEqual {
 			jsonComp.CompositionChanges = resourceDiffToChangeDetail(comp.CompositionDiff)
 		}

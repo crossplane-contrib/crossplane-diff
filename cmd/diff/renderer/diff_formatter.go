@@ -56,6 +56,11 @@ type DiffOptions struct {
 	// Supports both simple paths (e.g., "metadata.annotations") and
 	// map key paths (e.g., "metadata.annotations[key.name/value]")
 	IgnorePaths []string
+
+	// MinimizeComposition collapses composition changes to a single marker line
+	// per composition, omitting the full YAML diff body. Only consumed by the
+	// human-readable composition diff renderer; structured output is unaffected.
+	MinimizeComposition bool
 }
 
 // DefaultDiffOptions returns the default options with colors enabled.

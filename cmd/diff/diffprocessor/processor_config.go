@@ -31,6 +31,11 @@ type ProcessorConfig struct {
 	// IncludeManual determines whether to include XRs with Manual update policy in composition diffs
 	IncludeManual bool
 
+	// MinimizeComposition collapses composition changes to a single marker line per
+	// composition, omitting the full YAML diff body. Human renderer only; structured
+	// output always includes full compositionChanges.
+	MinimizeComposition bool
+
 	// EventualState enables iterative simulation to show eventual state after all reconciliation
 	// cycles complete. Useful with function-sequencer which hides later stage resources.
 	EventualState bool
@@ -133,6 +138,13 @@ func WithMaxNestedDepth(depth int) ProcessorOption {
 func WithIncludeManual(includeManual bool) ProcessorOption {
 	return func(config *ProcessorConfig) {
 		config.IncludeManual = includeManual
+	}
+}
+
+// WithMinimizeComposition sets whether to collapse composition changes to a single marker line.
+func WithMinimizeComposition(minimize bool) ProcessorOption {
+	return func(config *ProcessorConfig) {
+		config.MinimizeComposition = minimize
 	}
 }
 
@@ -260,6 +272,7 @@ func (c *ProcessorConfig) GetDiffOptions() renderer.DiffOptions {
 	opts := renderer.DefaultDiffOptions()
 	opts.UseColors = c.Colorize
 	opts.Compact = c.Compact
+	opts.MinimizeComposition = c.MinimizeComposition
 
 	opts.IgnorePaths = c.IgnorePaths
 	if c.OutputFormat != "" {

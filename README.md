@@ -114,6 +114,10 @@ crossplane-diff comp updated-composition.yaml --resource=default/xr-1,default/xr
 # Include XRs with Manual update policy (pinned revisions)
 crossplane-diff comp updated-composition.yaml --include-manual
 
+# Collapse each changed composition to a single change-marker line (human output only;
+# JSON/YAML keeps full detail), keeping the affected XRs and their downstream diffs
+crossplane-diff comp updated-composition.yaml --minimize-composition
+
 # Ignore specific fields in diffs (useful for filtering out metadata like ArgoCD annotations)
 crossplane-diff comp updated-composition.yaml \
   --ignore-paths 'metadata.annotations[argocd.argoproj.io/tracking-id]' \
@@ -195,6 +199,11 @@ Flags:
   -n, --namespace=""           Namespace to find Composites (empty = all namespaces).
       --include-manual         Include Composites with Manual update policy (default:
                                only Automatic policy Composites)
+      --minimize-composition   Collapse each changed composition to a single
+                               change-marker line instead of the full YAML diff.
+                               Affects human-readable output only; JSON/YAML keeps
+                               full detail. Errors and no-change compositions still
+                               print in full.
       --ignore-paths=STRING,... Paths to ignore in diffs. Supports simple paths
                                (e.g., 'metadata.annotations') and map key paths with
                                bracket notation (e.g., 'metadata.annotations[key]').
