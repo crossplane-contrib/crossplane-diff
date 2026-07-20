@@ -39,9 +39,10 @@ type CompCmd struct {
 	Files []string `arg:"" help:"YAML files containing updated Composition(s)." optional:""`
 
 	// Configuration options
-	Namespace     string   `default:""                                                                                                                                          help:"Namespace to find XRs (empty = all namespaces)."                            name:"namespace"      short:"n"`
-	IncludeManual bool     `default:"false"                                                                                                                                     help:"Include XRs with Manual update policy (default: only Automatic policy XRs)" name:"include-manual"`
-	Resources     []string `help:"Limit impact analysis to specific composites in [namespace/]name format. Repeatable or comma-separated. Mutually exclusive with --namespace." name:"resource"`
+	Namespace           string   `default:""                                                                                                                                          help:"Namespace to find XRs (empty = all namespaces)."                                                                                                                             name:"namespace"            short:"n"`
+	IncludeManual       bool     `default:"false"                                                                                                                                     help:"Include XRs with Manual update policy (default: only Automatic policy XRs)"                                                                                                  name:"include-manual"`
+	MinimizeComposition bool     `default:"false"                                                                                                                                     help:"Collapse each changed composition to a single marker line (human-readable output only; JSON/YAML keeps full detail; errors and no-change compositions still print in full)." name:"minimize-composition"`
+	Resources           []string `help:"Limit impact analysis to specific composites in [namespace/]name format. Repeatable or comma-separated. Mutually exclusive with --namespace." name:"resource"`
 }
 
 // validateFlags returns an error if mutually exclusive flags are set together.
@@ -76,6 +77,10 @@ Examples:
 
   # Include XRs with Manual update policy (pinned revisions)
   crossplane-diff comp updated-composition.yaml --include-manual
+
+  # Collapse each changed composition to a single change-marker line (human output only;
+  # JSON/YAML keeps full detail), keeping the affected XRs and downstream diffs
+  crossplane-diff comp updated-composition.yaml --minimize-composition
 
   # Show eventual state with function-sequencer (all stages, not just first).
   crossplane-diff comp updated-composition.yaml --eventual-state
@@ -118,6 +123,7 @@ func makeDefaultCompProc(c *CompCmd, kongCtx *kong.Context, appCtx *AppContext, 
 	opts = append(opts,
 		dp.WithLogger(log),
 		dp.WithIncludeManual(c.IncludeManual),
+		dp.WithMinimizeComposition(c.MinimizeComposition),
 		dp.WithStdout(kongCtx.Stdout),
 		dp.WithStderr(kongCtx.Stderr),
 	)
