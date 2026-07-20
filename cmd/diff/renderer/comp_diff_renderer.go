@@ -152,7 +152,7 @@ func (r *DefaultCompDiffRenderer) renderCompositionChanges(comp *CompositionDiff
 
 // renderMinimizedCompositionChanges renders a single marker line per composition
 // instead of the full YAML diff body. Errors and no-change compositions are
-// rendered in full — only changed compositions are collapsed.
+// shown as usual (i.e., not minimized); only changed compositions are collapsed.
 func (r *DefaultCompDiffRenderer) renderMinimizedCompositionChanges(comp *CompositionDiff) error {
 	stdout := r.opts.Stdout
 
