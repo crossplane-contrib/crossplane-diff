@@ -207,13 +207,17 @@ func (r *DefaultCompDiffRenderer) renderAffectedResourcesList(comp *CompositionD
 	stdout := r.opts.Stdout
 
 	if len(comp.ImpactAnalysis) == 0 {
-		// Check if all resources were filtered by policy
-		if comp.AffectedResources.FilteredByPolicy > 0 {
-			if _, err := fmt.Fprintf(stdout, "All %d XR(s) using composition %s have Manual update policy (use --include-manual to see them)\n",
-				comp.AffectedResources.FilteredByPolicy, comp.Name); err != nil {
+		// No XRs surfaced. Either none were found, or all matched-by-name XRs were filtered out
+		// (by Manual policy and/or revision-selector mismatch); report the breakdown if so.
+		byPolicy := comp.AffectedResources.FilteredByPolicy
+		bySelector := comp.AffectedResources.FilteredBySelector
+
+		switch {
+		case byPolicy > 0 || bySelector > 0:
+			if _, err := fmt.Fprintf(stdout, "%s\n", allFilteredMessage(comp.Name, byPolicy, bySelector)); err != nil {
 				return errors.Wrap(err, "cannot write filtered XRs message")
 			}
-		} else {
+		default:
 			if _, err := fmt.Fprintf(stdout, "No XRs found using composition %s\n", comp.Name); err != nil {
 				return errors.Wrap(err, "cannot write no XRs message")
 			}
@@ -277,6 +281,43 @@ func (r *DefaultCompDiffRenderer) renderImpactAnalysis(comp *CompositionDiff) er
 	return nil
 }
 
+// allFilteredMessage builds the default-discovery summary line for the case where every
+// matched-by-name XR was filtered out, breaking the total down by reason so users understand why
+// nothing is shown and how to see more.
+func allFilteredMessage(compName string, byPolicy, bySelector int) string {
+	total := byPolicy + bySelector
+
+	switch {
+	case byPolicy > 0 && bySelector > 0:
+		return fmt.Sprintf("All %d XR(s) using composition %s were filtered: %d with Manual update policy (use --include-manual to see them), %d with a compositionRevisionSelector that does not match the composition's labels",
+			total, compName, byPolicy, bySelector)
+	case bySelector > 0:
+		return fmt.Sprintf("All %d XR(s) using composition %s have a compositionRevisionSelector that does not match the composition's labels, so they would not adopt this revision",
+			total, compName)
+	default:
+		return fmt.Sprintf("All %d XR(s) using composition %s have Manual update policy (use --include-manual to see them)",
+			total, compName)
+	}
+}
+
+// filteredSuffix returns the human-readable explanation appended to a filtered XR line, chosen by
+// the XR's FilterReason. Selector-mismatch entries additionally surface the concrete FilterDetail
+// hint (which selector failed to match which labels) so users can self-diagnose the exclusion.
+func filteredSuffix(impact XRImpact) string {
+	switch impact.FilterReason {
+	case FilterReasonManualPolicy:
+		return " — filtered: Manual update policy (use --include-manual to evaluate)"
+	case FilterReasonRevisionSelectorMismatch:
+		if impact.FilterDetail != "" {
+			return fmt.Sprintf(" — filtered: revision selector mismatch (%s)", impact.FilterDetail)
+		}
+
+		return " — filtered: revision selector mismatch"
+	default:
+		return " — filtered"
+	}
+}
+
 // buildXRStatusList builds the XR list with status indicators.
 func (r *DefaultCompDiffRenderer) buildXRStatusList(impacts []XRImpact) string {
 	var sb strings.Builder
@@ -320,10 +361,10 @@ func (r *DefaultCompDiffRenderer) buildXRStatusList(impacts []XRImpact) string {
 		case XRStatusUnchanged:
 			indicator = checkMark
 			color = colorGreen
-		case XRStatusFilteredByPolicy:
+		case XRStatusFiltered:
 			indicator = "⊘" // ⊘
 			color = colorYellow
-			suffix = " — filtered: Manual update policy (use --include-manual to evaluate)"
+			suffix = filteredSuffix(impact)
 		}
 
 		fmt.Fprintf(&sb, "%s  %s %s/%s (%s)%s%s\n",
@@ -427,6 +468,8 @@ func (r *StructuredCompDiffRenderer) buildStructuredCompOutput(output *CompDiffO
 			jsonImpact := xrImpactJSON{
 				ObjectReference: impact.ObjectReference,
 				Status:          impact.Status,
+				FilterReason:    impact.FilterReason,
+				FilterDetail:    impact.FilterDetail,
 			}
 			if impact.Error != nil {
 				jsonImpact.Error = impact.Error.Error()

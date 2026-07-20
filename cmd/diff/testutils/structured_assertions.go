@@ -763,11 +763,12 @@ type CompositionDiffJSON struct {
 
 // AffectedResourcesSummary mirrors renderer.AffectedResourcesSummary.
 type AffectedResourcesSummary struct {
-	Total            int `json:"total"`
-	WithChanges      int `json:"withChanges"`
-	Unchanged        int `json:"unchanged"`
-	WithErrors       int `json:"withErrors"`
-	FilteredByPolicy int `json:"filteredByPolicy,omitempty"`
+	Total              int `json:"total"`
+	WithChanges        int `json:"withChanges"`
+	Unchanged          int `json:"unchanged"`
+	WithErrors         int `json:"withErrors"`
+	FilteredByPolicy   int `json:"filteredByPolicy,omitempty"`
+	FilteredBySelector int `json:"filteredBySelector,omitempty"`
 }
 
 // XRImpactJSON mirrors xrImpactJSON from the renderer.
@@ -778,6 +779,8 @@ type XRImpactJSON struct {
 	Namespace         string             `json:"namespace,omitempty"`
 	UID               string             `json:"uid,omitempty"`
 	Status            string             `json:"status"`
+	FilterReason      string             `json:"filterReason,omitempty"`
+	FilterDetail      string             `json:"filterDetail,omitempty"`
 	Error             string             `json:"error,omitempty"`
 	DownstreamChanges *DownstreamChanges `json:"downstreamChanges,omitempty"`
 }
@@ -834,7 +837,8 @@ type XRImpactExpectation struct {
 	name                string
 	namespace           string
 	anyNameAllowed      bool
-	status              string // "changed", "unchanged", "error"
+	status              string // "changed", "unchanged", "error", "filtered"
+	filterReason        string // "manual_policy", "revision_selector_mismatch"; only checked when set
 	downstreamSummary   *expectedSummary
 	downstreamResources []*DownstreamResourceExpectation
 }
@@ -908,6 +912,13 @@ func (c *CompositionExpectation) WithXRImpact(kind, name, namespace, status stri
 // WithAnyName allows any XR name (useful for generated names).
 func (x *XRImpactExpectation) WithAnyName() *XRImpactExpectation {
 	x.anyNameAllowed = true
+	return x
+}
+
+// WithFilterReason pins the expected FilterReason on a filtered XR impact (e.g. "manual_policy" or
+// "revision_selector_mismatch"). Only asserted when set.
+func (x *XRImpactExpectation) WithFilterReason(reason string) *XRImpactExpectation {
+	x.filterReason = reason
 	return x
 }
 
@@ -1116,6 +1127,12 @@ func AssertStructuredCompDiff(t *testing.T, jsonOutput string, e CompDiffExpecta
 			if foundXR.Status != expectXR.status {
 				t.Errorf("Composition %s: XR %s/%s: expected status %s, got %s",
 					expectComp.name, expectXR.kind, expectXR.name, expectXR.status, foundXR.Status)
+			}
+
+			// Check filter reason if specified
+			if expectXR.filterReason != "" && foundXR.FilterReason != expectXR.filterReason {
+				t.Errorf("Composition %s: XR %s/%s: expected filterReason %s, got %s",
+					expectComp.name, expectXR.kind, expectXR.name, expectXR.filterReason, foundXR.FilterReason)
 			}
 
 			// Check downstream summary if specified

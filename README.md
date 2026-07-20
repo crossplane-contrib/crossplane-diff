@@ -108,10 +108,17 @@ crossplane-diff comp updated-composition.yaml -n production
 # Format is [namespace/]name; bare name means cluster-scoped (v1 XRs and v2 cluster-scoped XRs).
 crossplane-diff comp updated-composition.yaml --resource=default/my-claim
 crossplane-diff comp updated-composition.yaml --resource=default/xr-1,default/xr-2
-# Note: --resource cannot be combined with --namespace. Composites with Manual update policy
-# are surfaced with status "filtered_by_policy" unless --include-manual is also passed.
+# Note: --resource cannot be combined with --namespace. Composites that would not adopt the diffed
+# composition are surfaced with status "filtered" and a "filterReason": Manual update policy
+# ("manual_policy") unless --include-manual is passed, or a compositionRevisionSelector that does
+# not match the composition's labels ("revision_selector_mismatch").
 
-# Include XRs with Manual update policy (pinned revisions)
+# Include XRs with Manual update policy (pinned revisions).
+# Note: --include-manual only affects Manual-policy XRs. An Automatic XR whose
+# compositionRevisionSelector does not match the composition's labels stays filtered even with this
+# flag, because it would not select the resulting revision. To preview against a different revision
+# label (e.g. a "preview" channel), edit the composition's labels in your CI runner (jq/yq) and run
+# comp again — the composition file's labels are the authoritative prediction of the new revision.
 crossplane-diff comp updated-composition.yaml --include-manual
 
 # Collapse each changed composition to a single change-marker line (human output only;
@@ -223,9 +230,12 @@ Flags:
                                [namespace/]name format. Repeatable or comma-separated.
                                Bare name means cluster-scoped. Mutually exclusive with
                                --namespace. Composites matched by --resource but excluded
-                               by the update-policy filter are reported in the impact
-                               analysis with status "filtered_by_policy" (use
-                               --include-manual to evaluate them instead).
+                               (because they would not adopt the diffed composition) are
+                               reported in the impact analysis with status "filtered" and a
+                               "filterReason": "manual_policy" (use --include-manual to
+                               evaluate them instead) or "revision_selector_mismatch" (their
+                               compositionRevisionSelector does not match the composition's
+                               labels; --include-manual does not re-include these).
 ```
 
 **Note**: The `diff` subcommand is deprecated. Use `xr` instead.
@@ -512,8 +522,9 @@ For CI/CD pipelines or programmatic processing, use `--output json` or `--output
       "affectedResources": {
         "total": 5,
         "withChanges": 2,
-        "unchanged": 2,
-        "withErrors": 1
+        "unchanged": 1,
+        "withErrors": 1,
+        "filteredBySelector": 1
       },
       "impactAnalysis": [
         {
@@ -538,6 +549,14 @@ For CI/CD pipelines or programmatic processing, use `--output json` or `--output
           "name": "bucket-3",
           "status": "error",
           "error": "render failed: ..."
+        },
+        {
+          "apiVersion": "example.org/v1",
+          "kind": "XBucket",
+          "name": "bucket-4",
+          "status": "filtered",
+          "filterReason": "revision_selector_mismatch",
+          "filterDetail": "compositionRevisionSelector {version: 0.0.1} does not match composition labels {version: 0.0.2}"
         }
       ]
     }

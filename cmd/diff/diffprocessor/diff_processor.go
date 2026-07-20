@@ -43,11 +43,9 @@ const (
 	fieldCompositionSelector        = "compositionSelector"
 	fieldWriteConnectionSecretToRef = "writeConnectionSecretToRef"
 	fieldCompositionRevisionRef     = "compositionRevisionRef"
-	fieldCompositionUpdatePolicy    = "compositionUpdatePolicy"
 
 	// Composition update policy values, mirroring Crossplane's CompositionUpdatePolicy.
-	compositionUpdatePolicyManual    = "Manual"
-	compositionUpdatePolicyAutomatic = "Automatic"
+	compositionUpdatePolicyManual = "Manual"
 )
 
 // DiffProcessor interface for processing resources.
@@ -684,7 +682,10 @@ func mergeClaimSpecIntoBackingXR(claim, xrForRendering *cmp.Unstructured, backin
 	}
 
 	// Build merged spec using field-filtered copying
-	mergedSpec := buildMergedSpec(claimSpecMap, xrSpecMap, xrForRendering)
+	mergedSpec, err := buildMergedSpec(claimSpecMap, xrSpecMap, xrForRendering)
+	if err != nil {
+		return err
+	}
 
 	if err := un.SetNestedField(xrForRendering.Object, mergedSpec, "spec"); err != nil {
 		return errors.Wrapf(err, "cannot set merged spec on backing XR %q", backingXRName)
@@ -699,7 +700,7 @@ func mergeClaimSpecIntoBackingXR(claim, xrForRendering *cmp.Unstructured, backin
 // - Crossplane-managed fields preserved from the XR (claimRef, resourceRefs)
 // - Optional fields from XR only if NOT provided in Claim
 // - compositionRevisionRef based on update policy.
-func buildMergedSpec(claimSpecMap, xrSpecMap map[string]any, xrForRendering *cmp.Unstructured) map[string]any {
+func buildMergedSpec(claimSpecMap, xrSpecMap map[string]any, xrForRendering *cmp.Unstructured) (map[string]any, error) {
 	// Start with the Claim's spec as the base (this ensures removed fields are gone)
 	mergedSpec := make(map[string]any)
 	maps.Copy(mergedSpec, claimSpecMap)
@@ -733,7 +734,11 @@ func buildMergedSpec(claimSpecMap, xrSpecMap map[string]any, xrForRendering *cmp
 	// With Automatic policy, Crossplane manages the revision, so we don't preserve it
 	// (allowing Crossplane to select the latest revision).
 	if _, existsInClaim := claimSpecMap[fieldCompositionRevisionRef]; !existsInClaim {
-		updatePolicy := getCompositionUpdatePolicy(xrForRendering)
+		updatePolicy, err := xp.XRUpdatePolicy(xrForRendering.Object, xrForRendering.GetAPIVersion())
+		if err != nil {
+			return nil, errors.Wrap(err, "cannot read compositionUpdatePolicy from backing XR")
+		}
+
 		if updatePolicy == compositionUpdatePolicyManual {
 			if val, exists := xrSpecMap[fieldCompositionRevisionRef]; exists {
 				mergedSpec[fieldCompositionRevisionRef] = val
@@ -741,7 +746,7 @@ func buildMergedSpec(claimSpecMap, xrSpecMap map[string]any, xrForRendering *cmp
 		}
 	}
 
-	return mergedSpec
+	return mergedSpec, nil
 }
 
 // synthesizeDummyBackingXRForNewClaim creates a synthetic backing XR for a new claim that doesn't
@@ -1614,24 +1619,4 @@ func mergeCredentials(cliCredentials, autoFetchedCredentials []corev1.Secret) []
 	}
 
 	return result
-}
-
-// getCompositionUpdatePolicy retrieves the compositionUpdatePolicy from an XR/Claim.
-// It checks both v2 (spec.crossplane.compositionUpdatePolicy) and v1 (spec.compositionUpdatePolicy) field paths.
-// Returns "Automatic" as the default if not found (matching Crossplane behavior).
-func getCompositionUpdatePolicy(xr *cmp.Unstructured) string {
-	// Try v2 path first: spec.crossplane.compositionUpdatePolicy
-	policy, found, err := un.NestedString(xr.Object, "spec", "crossplane", fieldCompositionUpdatePolicy)
-	if err == nil && found && policy != "" {
-		return policy
-	}
-
-	// Try v1 path: spec.compositionUpdatePolicy
-	policy, found, err = un.NestedString(xr.Object, "spec", fieldCompositionUpdatePolicy)
-	if err == nil && found && policy != "" {
-		return policy
-	}
-
-	// Default to Automatic if not found (matching Crossplane default behavior)
-	return compositionUpdatePolicyAutomatic
 }

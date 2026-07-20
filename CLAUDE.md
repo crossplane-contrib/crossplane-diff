@@ -454,6 +454,13 @@ A few project-wide conventions apply to every change you submit to this reposito
   render as strike-through if copied literally. Issues filed via `gh issue create` must use the matching template
   under `.github/ISSUE_TEMPLATE/` (`bug_report.md` or `feature_request.md`); pass it via `--template bug_report.md`
   and fill in every section.
+- **Triage across commands, not just the one the issue names**. Bugs are usually filed against the single command the
+  reporter hit (`comp` or `xr`), but the two commands often share underlying logic (composition/revision resolution,
+  update-policy handling, schema validation, requirements resolution). Before scoping a fix, check whether the same
+  root cause also affects the *other* command's code path, and decide deliberately whether to fix both or file a
+  follow-up for the mirror case. Example: issue #388 was filed against `comp` (affected-XR filtering ignored
+  `compositionRevisionSelector`), but the same omission also made `xr` resolve the wrong CompositionRevision — one
+  root cause, two commands.
 
 ## Related Documentation
 

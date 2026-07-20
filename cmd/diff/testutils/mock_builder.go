@@ -1512,6 +1512,44 @@ func (b *ResourceBuilder) WithNestedField(value any, fields ...string) *Resource
 	return b
 }
 
+// WithCompositionRevisionSelector sets spec[.crossplane].compositionRevisionSelector on the
+// resource. Pass CrossplaneAPIExtGroupV2 ("apiextensions.crossplane.io/v2") to use the v2 path
+// (spec.crossplane.compositionRevisionSelector) or CrossplaneAPIExtGroupV1 for the legacy v1 path
+// (spec.compositionRevisionSelector). matchLabels and matchExpressions are omitted when nil, so a
+// selector with only expressions (or only labels) can be built. matchExpressions entries use the
+// standard LabelSelectorRequirement shape: {"key": string, "operator": string, "values": []any}.
+func (b *ResourceBuilder) WithCompositionRevisionSelector(apiGroup string, matchLabels map[string]string, matchExpressions []map[string]any) *ResourceBuilder {
+	selector := map[string]any{}
+
+	if matchLabels != nil {
+		ml := make(map[string]any, len(matchLabels))
+		for k, v := range matchLabels {
+			ml[k] = v
+		}
+
+		selector["matchLabels"] = ml
+	}
+
+	if matchExpressions != nil {
+		exprs := make([]any, len(matchExpressions))
+		for i, e := range matchExpressions {
+			exprs[i] = e
+		}
+
+		selector["matchExpressions"] = exprs
+	}
+
+	// v2 XRs nest crossplane spec fields under spec.crossplane; v1 keeps them under spec.
+	path := []string{"spec", "compositionRevisionSelector"}
+	if apiGroup != "apiextensions.crossplane.io/v1" {
+		path = []string{"spec", "crossplane", "compositionRevisionSelector"}
+	}
+
+	_ = un.SetNestedField(b.resource.Object, selector, path...)
+
+	return b
+}
+
 // WithFieldManagers sets the managed fields on the resource using the provided manager names.
 func (b *ResourceBuilder) WithFieldManagers(managers ...string) *ResourceBuilder {
 	entries := make([]metav1.ManagedFieldsEntry, len(managers))
@@ -1875,6 +1913,13 @@ func (b *CompositionBuilder) WithCompositeTypeRef(apiVersion, kind string) *Comp
 		Kind:       kind,
 	}
 
+	return b
+}
+
+// WithLabels sets metadata.labels on the composition. CompositionRevisions inherit these labels, so
+// they drive compositionRevisionSelector matching in comp-diff tests.
+func (b *CompositionBuilder) WithLabels(labels map[string]string) *CompositionBuilder {
+	b.composition.SetLabels(labels)
 	return b
 }
 

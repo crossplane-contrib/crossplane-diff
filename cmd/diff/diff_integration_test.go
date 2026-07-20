@@ -1500,6 +1500,52 @@ Summary: 2 modified, 2 removed`,
 			expectedError:    false,
 			expectedExitCode: dp.ExitCodeDiffDetected,
 		},
+		"V2AutomaticPolicyRevisionSelectorPinsMatchingRevision": {
+			// Issue #388 (Bug B): under Automatic policy WITH a compositionRevisionSelector, the XR
+			// resolves to the latest revision MATCHING the selector, not the latest overall. Here the
+			// selector pins channel=stable (revision 1) even though channel=preview (revision 2) is
+			// newer — so the diff must render against the stable template (stable-*), not preview-*.
+			reason:       "Validates v2 Automatic XR with compositionRevisionSelector resolves to the selector-matching revision, not the newest overall",
+			outputFormat: "json",
+			setupFiles: []string{
+				"testdata/diff/resources/xrd.yaml",
+				"testdata/diff/resources/composition-revision-stable.yaml",  // revision 1, channel=stable
+				"testdata/diff/resources/composition-revision-preview.yaml", // revision 2, channel=preview (newest)
+				"testdata/diff/resources/composition-v2.yaml",               // current composition
+				"testdata/diff/resources/functions.yaml",
+				"testdata/diff/resources/existing-xr-selector-stable.yaml",
+				"testdata/diff/resources/existing-downstream-selector-stable.yaml",
+			},
+			inputFiles: []string{"testdata/diff/modified-xr-selector-stable.yaml"},
+			expectedStructuredOutput: tu.ExpectDiff().
+				WithSummary(0, 2, 0).
+				WithModifiedResource("XDownstreamResource", "test-selector", "default").
+				// stable-* (not preview-*) proves the selector, not "latest overall", chose the revision.
+				WithFieldChange("spec.forProvider.configData", "stable-existing-value", "stable-modified-value").
+				And().
+				WithModifiedResource("XNopResource", "test-selector", "default").
+				WithFieldChange("spec.coolField", "existing-value", "modified-value").
+				And(),
+			expectedError:    false,
+			expectedExitCode: dp.ExitCodeDiffDetected,
+		},
+		"V2AutomaticPolicyRevisionSelectorNoMatchErrors": {
+			// The mirror of the above: a selector matching NO revision must fail the diff rather than
+			// silently rendering against a non-matching revision (accuracy over guessing).
+			reason:       "Validates v2 Automatic XR whose compositionRevisionSelector matches no revision fails the diff",
+			outputFormat: "json",
+			setupFiles: []string{
+				"testdata/diff/resources/xrd.yaml",
+				"testdata/diff/resources/composition-revision-stable.yaml",
+				"testdata/diff/resources/composition-revision-preview.yaml",
+				"testdata/diff/resources/composition-v2.yaml",
+				"testdata/diff/resources/functions.yaml",
+			},
+			inputFiles:            []string{"testdata/diff/modified-xr-selector-nomatch.yaml"},
+			expectedError:         true,
+			expectedErrorContains: "match selector",
+			expectedExitCode:      dp.ExitCodeToolError,
+		},
 		"V2ManualRevisionUpgradeDiff": {
 			reason:       "Validates v2 XR changing revision in Manual mode shows upgrade diff",
 			outputFormat: "json",
@@ -3405,7 +3451,7 @@ Summary: 2 modified`,
 			expectedExitCode:      dp.ExitCodeToolError,
 		},
 		"ResourceFilterRespectsManualPolicy_WithoutIncludeManual": {
-			reason: "--resource matching a Manual-policy composite surfaces it as filtered_by_policy when --include-manual is unset",
+			reason: "--resource matching a Manual-policy composite surfaces it as filtered (reason manual_policy) when --include-manual is unset",
 			setupFiles: []string{
 				"testdata/comp/resources/xrd.yaml",
 				"testdata/comp/resources/original-composition.yaml",
@@ -3421,11 +3467,12 @@ Summary: 2 modified`,
 			expectedStructuredCompOutput: tu.ExpectCompDiff().
 				WithComposition("xnopresources.diff.example.org").
 				WithCompositionModified().
-				WithXRImpact("XNopResource", "manual-resource", "default", "filtered_by_policy").
+				WithXRImpact("XNopResource", "manual-resource", "default", "filtered").
+				WithFilterReason("manual_policy").
 				AndComp().And(),
 		},
 		"ResourceFilterRespectsManualPolicy_WithIncludeManual": {
-			reason: "--include-manual evaluates the Manual-policy composite normally instead of marking it filtered_by_policy",
+			reason: "--include-manual evaluates the Manual-policy composite normally instead of marking it filtered",
 			setupFiles: []string{
 				"testdata/comp/resources/xrd.yaml",
 				"testdata/comp/resources/original-composition.yaml",
@@ -3443,6 +3490,54 @@ Summary: 2 modified`,
 				WithComposition("xnopresources.diff.example.org").
 				WithCompositionModified().
 				WithXRImpact("XNopResource", "manual-resource", "default", "changed").
+				AndComp().And(),
+		},
+		// Issue #388 (Bug A): an Automatic-policy XR whose compositionRevisionSelector does not match
+		// the edited composition's labels would not adopt the resulting revision, so it must be
+		// surfaced as filtered (reason revision_selector_mismatch), NOT evaluated for changes.
+		"ResourceFilterRespectsRevisionSelectorMismatch": {
+			reason: "--resource matching an Automatic XR whose compositionRevisionSelector does not match the composition's labels surfaces it as filtered (reason revision_selector_mismatch)",
+			setupFiles: []string{
+				"testdata/comp/resources/xrd.yaml",
+				"testdata/comp/resources/original-composition.yaml",
+				"testdata/comp/resources/composition-revision-v1.yaml",
+				"testdata/comp/resources/functions.yaml",
+				"testdata/comp/resources/existing-xr-selector-mismatch.yaml",
+			},
+			inputFiles:       []string{"testdata/comp/updated-composition-labeled.yaml"},
+			resources:        []string{"default/selector-mismatch-resource"},
+			outputFormat:     "json",
+			expectedExitCode: dp.ExitCodeDiffDetected, // composition itself changed
+			expectedStructuredCompOutput: tu.ExpectCompDiff().
+				WithComposition("xnopresources.diff.example.org").
+				WithCompositionModified().
+				WithXRImpact("XNopResource", "selector-mismatch-resource", "default", "filtered").
+				WithFilterReason("revision_selector_mismatch").
+				AndComp().And(),
+			// Note: that --include-manual does NOT rescue a selector-mismatched Automatic XR is
+			// proven at the unit level (TestDefaultCompDiffProcessor_partitionXRsByUpdatePolicy /
+			// IncludeManualTrue_StillDropsSelectorMismatchedAutomaticXRs). A second slow
+			// docker-render integration case for that flag interaction would be redundant.
+		},
+		// Issue #388 (Bug A, positive): an Automatic XR whose compositionRevisionSelector DOES match
+		// the edited composition's labels is kept and evaluated for downstream changes (not filtered).
+		"ResourceFilterRespectsRevisionSelectorMatch": {
+			reason: "--resource matching an Automatic XR whose compositionRevisionSelector matches the composition's labels keeps it and reports downstream changes",
+			setupFiles: []string{
+				"testdata/comp/resources/xrd.yaml",
+				"testdata/comp/resources/original-composition.yaml",
+				"testdata/comp/resources/composition-revision-v1.yaml",
+				"testdata/comp/resources/functions.yaml",
+				"testdata/comp/resources/existing-xr-selector-match.yaml",
+			},
+			inputFiles:       []string{"testdata/comp/updated-composition-labeled.yaml"},
+			resources:        []string{"default/selector-match-resource"},
+			outputFormat:     "json",
+			expectedExitCode: dp.ExitCodeDiffDetected,
+			expectedStructuredCompOutput: tu.ExpectCompDiff().
+				WithComposition("xnopresources.diff.example.org").
+				WithCompositionModified().
+				WithXRImpact("XNopResource", "selector-match-resource", "default", "changed").
 				AndComp().And(),
 		},
 	}
