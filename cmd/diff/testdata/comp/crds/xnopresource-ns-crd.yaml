@@ -41,6 +41,34 @@ spec:
                           type: object
                           additionalProperties:
                             type: string
+                    compositionRevisionRef:
+                      type: object
+                      properties:
+                        name:
+                          type: string
+                    compositionRevisionSelector:
+                      type: object
+                      properties:
+                        matchLabels:
+                          type: object
+                          additionalProperties:
+                            type: string
+                        matchExpressions:
+                          type: array
+                          items:
+                            type: object
+                            required:
+                              - key
+                              - operator
+                            properties:
+                              key:
+                                type: string
+                              operator:
+                                type: string
+                              values:
+                                type: array
+                                items:
+                                  type: string
                     compositeDeletePolicy:
                       type: string
                     compositionUpdatePolicy:

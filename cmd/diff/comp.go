@@ -91,8 +91,12 @@ Examples:
 
 Notes:
   --resource cannot be combined with --namespace.
-  Composites with Manual update policy are surfaced as "filtered_by_policy"
-  unless --include-manual is also passed.
+  Composites with Manual update policy are surfaced with status "filtered"
+  (reason "manual_policy") unless --include-manual is also passed. Composites with an
+  Automatic update policy whose compositionRevisionSelector does not match the diffed
+  composition's labels are surfaced with status "filtered" (reason
+  "revision_selector_mismatch"); --include-manual does not re-include them, since they
+  would not select the resulting revision.
 `
 }
 

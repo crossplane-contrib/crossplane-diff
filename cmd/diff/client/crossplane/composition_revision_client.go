@@ -7,6 +7,7 @@ import (
 	"github.com/crossplane-contrib/crossplane-diff/cmd/diff/client/core"
 	"github.com/crossplane-contrib/crossplane-diff/cmd/diff/client/kubernetes"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 
@@ -31,8 +32,12 @@ type CompositionRevisionClient interface {
 	// ListCompositionRevisions lists all composition revisions in the cluster
 	ListCompositionRevisions(ctx context.Context) ([]*apiextensionsv1.CompositionRevision, error)
 
-	// GetLatestRevisionForComposition finds the latest revision for a given composition
-	GetLatestRevisionForComposition(ctx context.Context, compositionName string) (*apiextensionsv1.CompositionRevision, error)
+	// GetLatestRevisionForComposition finds the latest (highest-numbered) revision for a given
+	// composition whose labels match the provided selector. This mirrors how Crossplane selects a
+	// revision for an XR with an Automatic compositionUpdatePolicy: with a compositionRevisionSelector
+	// it picks the newest matching revision, otherwise the newest overall. A nil selector means no
+	// restriction (latest overall).
+	GetLatestRevisionForComposition(ctx context.Context, compositionName string, selector labels.Selector) (*apiextensionsv1.CompositionRevision, error)
 
 	// GetCompositionFromRevision extracts a Composition from a CompositionRevision
 	GetCompositionFromRevision(revision *apiextensionsv1.CompositionRevision) *apiextensionsv1.Composition
@@ -193,34 +198,62 @@ func (c *DefaultCompositionRevisionClient) GetCompositionRevision(ctx context.Co
 	return rev, nil
 }
 
-// GetLatestRevisionForComposition finds the latest revision for a given composition.
-func (c *DefaultCompositionRevisionClient) GetLatestRevisionForComposition(ctx context.Context, compositionName string) (*apiextensionsv1.CompositionRevision, error) {
-	c.logger.Debug("Finding latest revision for composition", "compositionName", compositionName)
+// revisionsForComposition returns all CompositionRevisions for the named composition, loading and
+// caching them (by composition and by name) on first access.
+func (c *DefaultCompositionRevisionClient) revisionsForComposition(ctx context.Context, compositionName string) ([]*apiextensionsv1.CompositionRevision, error) {
+	if cached, ok := c.revisionsByComposition[compositionName]; ok {
+		return cached, nil
+	}
 
-	// Check if we've already loaded revisions for this composition
-	matchingRevisions, cached := c.revisionsByComposition[compositionName]
-	if !cached {
-		// Load revisions for this specific composition using label selector
-		c.logger.Debug("Loading revisions for composition", "compositionName", compositionName)
+	c.logger.Debug("Loading revisions for composition", "compositionName", compositionName)
 
-		revisions, err := c.listCompositionRevisionsForComposition(ctx, compositionName)
-		if err != nil {
-			return nil, errors.Wrap(err, "cannot list composition revisions")
+	revisions, err := c.listCompositionRevisionsForComposition(ctx, compositionName)
+	if err != nil {
+		return nil, errors.Wrap(err, "cannot list composition revisions")
+	}
+
+	// Cache by name for individual lookups.
+	for _, rev := range revisions {
+		c.revisions[rev.GetName()] = rev
+	}
+
+	// Cache the list even if empty (to avoid re-querying).
+	c.revisionsByComposition[compositionName] = revisions
+
+	return revisions, nil
+}
+
+// GetLatestRevisionForComposition finds the latest (highest-numbered) revision for a given
+// composition whose labels match the provided selector. A nil selector means no restriction
+// (latest revision overall).
+func (c *DefaultCompositionRevisionClient) GetLatestRevisionForComposition(ctx context.Context, compositionName string, selector labels.Selector) (*apiextensionsv1.CompositionRevision, error) {
+	// A nil selector means "no restriction"; treat it as matching every revision.
+	if selector == nil {
+		selector = labels.Everything()
+	}
+
+	c.logger.Debug("Finding latest revision for composition", "compositionName", compositionName, "selector", selector.String())
+
+	revisions, err := c.revisionsForComposition(ctx, compositionName)
+	if err != nil {
+		return nil, err
+	}
+
+	if len(revisions) == 0 {
+		return nil, errors.Errorf("no composition revisions found for composition %s", compositionName)
+	}
+
+	// Filter to revisions whose labels match the selector (Crossplane selects among these).
+	matchingRevisions := make([]*apiextensionsv1.CompositionRevision, 0, len(revisions))
+
+	for _, rev := range revisions {
+		if selector.Matches(labels.Set(rev.GetLabels())) {
+			matchingRevisions = append(matchingRevisions, rev)
 		}
-
-		matchingRevisions = revisions
-
-		// Cache by name for individual lookups
-		for _, rev := range matchingRevisions {
-			c.revisions[rev.GetName()] = rev
-		}
-
-		// Cache the filtered list even if empty (to avoid re-querying)
-		c.revisionsByComposition[compositionName] = matchingRevisions
 	}
 
 	if len(matchingRevisions) == 0 {
-		return nil, errors.Errorf("no composition revisions found for composition %s", compositionName)
+		return nil, errors.Errorf("no composition revisions for composition %s match selector %s", compositionName, selector.String())
 	}
 
 	// Sort by revision number (highest first)

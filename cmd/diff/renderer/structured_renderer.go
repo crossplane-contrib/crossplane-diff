@@ -36,10 +36,27 @@ const (
 	XRStatusUnchanged XRStatus = "unchanged"
 	// XRStatusError indicates an error occurred while processing the XR.
 	XRStatusError XRStatus = "error"
-	// XRStatusFilteredByPolicy indicates the XR matched a user --resource selector but was excluded
-	// from evaluation by the update-policy filter (e.g., Manual policy without --include-manual).
-	// The XR is surfaced in impact analysis with no downstream changes so users see the skip explicitly.
-	XRStatusFilteredByPolicy XRStatus = "filtered_by_policy"
+	// XRStatusFiltered indicates the XR matched the composition by name but was excluded from
+	// evaluation because it would not adopt the composition change being diffed. The specific cause
+	// is carried separately in XRImpact.FilterReason (outcome and reason are intentionally divorced
+	// so the reason set can grow without expanding the status enum). The XR is surfaced in impact
+	// analysis with no downstream changes so users see the skip explicitly.
+	XRStatusFiltered XRStatus = "filtered"
+)
+
+// FilterReason explains why an XRImpact has XRStatusFiltered. It is only meaningful when
+// XRImpact.Status == XRStatusFiltered.
+type FilterReason string
+
+const (
+	// FilterReasonManualPolicy indicates the XR was excluded because it has a Manual
+	// compositionUpdatePolicy and --include-manual was not set. Such XRs are pinned to a specific
+	// revision and would not adopt the composition change automatically.
+	FilterReasonManualPolicy FilterReason = "manual_policy"
+	// FilterReasonRevisionSelectorMismatch indicates the XR was excluded because it has an Automatic
+	// compositionUpdatePolicy with a compositionRevisionSelector that does not match the labels of
+	// the composition change being diffed. Such XRs would not select the resulting revision.
+	FilterReasonRevisionSelectorMismatch FilterReason = "revision_selector_mismatch"
 )
 
 // OutputError is an alias for dt.OutputError for convenience.
@@ -105,11 +122,18 @@ func (c *CompositionDiff) HasChanges() bool {
 
 // AffectedResourcesSummary contains counts of affected resources by status.
 type AffectedResourcesSummary struct {
-	Total            int `json:"total"`
-	WithChanges      int `json:"withChanges"`
-	Unchanged        int `json:"unchanged"`
-	WithErrors       int `json:"withErrors"`
+	Total       int `json:"total"`
+	WithChanges int `json:"withChanges"`
+	Unchanged   int `json:"unchanged"`
+	WithErrors  int `json:"withErrors"`
+	// FilteredByPolicy counts XRs excluded because of a Manual compositionUpdatePolicy
+	// (FilterReasonManualPolicy).
 	FilteredByPolicy int `json:"filteredByPolicy,omitempty"`
+	// FilteredBySelector counts XRs excluded because their compositionRevisionSelector does not match
+	// the diffed composition's labels (FilterReasonRevisionSelectorMismatch). Kept separate from
+	// FilteredByPolicy so the breakdown is visible even in default-discovery mode, where individual
+	// XR impacts are not surfaced.
+	FilteredBySelector int `json:"filteredBySelector,omitempty"`
 }
 
 // XRImpact represents the impact analysis for a single XR (internal).
@@ -119,8 +143,13 @@ type XRImpact struct {
 	corev1.ObjectReference
 
 	Status XRStatus
-	Error  error                       // store actual error, not string
-	Diffs  map[string]*dt.ResourceDiff // downstream diffs (nil if unchanged/error)
+	// FilterReason explains a Status == XRStatusFiltered outcome; empty otherwise.
+	FilterReason FilterReason
+	// FilterDetail is an optional human-readable explanation for a filtered outcome (e.g. which
+	// selector failed to match which labels), surfaced to help users self-diagnose the exclusion.
+	FilterDetail string
+	Error        error                       // store actual error, not string
+	Diffs        map[string]*dt.ResourceDiff // downstream diffs (nil if unchanged/error)
 }
 
 // --- JSON Output Types (used by StructuredCompDiffRenderer) ---
@@ -144,6 +173,8 @@ type xrImpactJSON struct {
 	corev1.ObjectReference `json:",inline"`
 
 	Status            XRStatus           `json:"status"`
+	FilterReason      FilterReason       `json:"filterReason,omitempty"`
+	FilterDetail      string             `json:"filterDetail,omitempty"`
 	Error             string             `json:"error,omitempty"`
 	DownstreamChanges *DownstreamChanges `json:"downstreamChanges,omitempty"`
 }

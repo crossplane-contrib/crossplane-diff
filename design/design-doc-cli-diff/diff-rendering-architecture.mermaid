@@ -92,6 +92,8 @@ classDiagram
     class XRImpact {
         +ObjectReference
         +Status XRStatus
+        +FilterReason FilterReason
+        +FilterDetail string
         +Error error
         +Diffs map[string]*ResourceDiff
     }
@@ -101,7 +103,13 @@ classDiagram
         XRStatusChanged
         XRStatusUnchanged
         XRStatusError
-        XRStatusFilteredByPolicy
+        XRStatusFiltered
+    }
+
+    class FilterReason {
+        <<enumeration>>
+        FilterReasonManualPolicy
+        FilterReasonRevisionSelectorMismatch
     }
 
     class AffectedResourcesSummary {
@@ -110,6 +118,7 @@ classDiagram
         +Unchanged int
         +WithErrors int
         +FilteredByPolicy int
+        +FilteredBySelector int
     }
 
     class DownstreamChanges {
@@ -180,6 +189,7 @@ classDiagram
     OutputError --> ResourceValidationFailure
     ResourceValidationFailure --> FieldValidationError
     XRImpact --> XRStatus
+    XRImpact --> FilterReason
     DownstreamChanges --> Summary
     DownstreamChanges --> ChangeDetail
 

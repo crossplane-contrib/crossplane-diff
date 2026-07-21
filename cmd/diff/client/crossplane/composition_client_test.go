@@ -1347,6 +1347,31 @@ func TestDefaultCompositionClient_ResolveCompositionFromRevisions(t *testing.T) 
 			expectNil:   true,
 			expectError: false,
 		},
+		// Bug B (issue #388): an Automatic XR with a compositionRevisionSelector that matches none of
+		// the composition's revisions must fail loudly rather than silently render against the newest
+		// (non-matching) revision. This proves the resolve path actually consults the selector.
+		"AutomaticPolicyWithNonMatchingRevisionSelectorErrors": {
+			reason: "Should error when the compositionRevisionSelector matches no revision",
+			xrd:    v1XRD,
+			res: tu.NewResource("example.org/v1", "XR1", "my-xr").
+				WithSpecField("compositionRef", map[string]any{
+					"name": "test-comp",
+				}).
+				WithSpecField("compositionUpdatePolicy", "Automatic").
+				WithSpecField("compositionRevisionSelector", map[string]any{
+					"matchLabels": map[string]any{"channel": "nonexistent"},
+				}).
+				Build(),
+			compositionName: "test-comp",
+			mockResource: tu.NewMockResourceClient().
+				WithSuccessfulInitialize().
+				WithResourcesFoundByLabel([]*un.Unstructured{
+					toUnstructured(rev1), toUnstructured(rev2),
+				}, LabelCompositionName, "test-comp").
+				Build(),
+			expectError:  true,
+			errorPattern: "match selector",
+		},
 		"ManualPolicyWithNonexistentRevisionRef": {
 			reason: "Should return error when specified revision doesn't exist",
 			xrd:    v1XRD,

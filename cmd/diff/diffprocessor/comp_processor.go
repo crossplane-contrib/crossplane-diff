@@ -19,6 +19,7 @@ package diffprocessor
 import (
 	"context"
 	"fmt"
+	"maps"
 	"os"
 
 	xp "github.com/crossplane-contrib/crossplane-diff/cmd/diff/client/crossplane"
@@ -377,38 +378,47 @@ func (p *DefaultCompDiffProcessor) processSingleComposition(ctx context.Context,
 
 	p.config.Logger.Debug("Processing affected XRs", "composition", newComp.GetName(), "count", len(affectedXRs), "surfaceFiltered", surfaceFiltered)
 
-	// Filter XRs based on IncludeManual flag
-	keptXRs, droppedXRs := p.partitionXRsByUpdatePolicy(affectedXRs)
-	filteredByPolicy := len(droppedXRs)
+	// Partition XRs by whether they would adopt the diffed composition's resulting revision.
+	keptXRs, droppedXRs, err := p.partitionXRsByUpdatePolicy(affectedXRs, newComp)
+	if err != nil {
+		return nil, err
+	}
 
-	p.config.Logger.Debug("Filtered XRs by update policy",
+	filteredByPolicy, filteredBySelector := countFilterReasons(droppedXRs)
+
+	p.config.Logger.Debug("Filtered XRs by update policy and revision selector",
 		"composition", newComp.GetName(),
 		"originalCount", len(affectedXRs),
 		"keptCount", len(keptXRs),
-		"droppedCount", filteredByPolicy,
+		"droppedCount", len(droppedXRs),
+		"filteredByPolicy", filteredByPolicy,
+		"filteredBySelector", filteredBySelector,
 		"includeManual", p.config.IncludeManual)
 
 	// In --resource mode (surfaceFiltered=true), surface filtered composites in the impact
-	// analysis as XRStatusFilteredByPolicy so users see what was matched-but-skipped. In
-	// default-discovery mode, preserve the existing summary-only behavior.
+	// analysis as XRStatusFiltered (with their reason) so users see what was matched-but-skipped.
+	// In default-discovery mode, preserve the existing summary-only behavior.
 	if surfaceFiltered {
-		for _, xr := range droppedXRs {
+		for _, d := range droppedXRs {
 			result.ImpactAnalysis = append(result.ImpactAnalysis, renderer.XRImpact{
 				ObjectReference: corev1.ObjectReference{
-					APIVersion: xr.GetAPIVersion(),
-					Kind:       xr.GetKind(),
-					Name:       xr.GetName(),
-					Namespace:  xr.GetNamespace(),
+					APIVersion: d.xr.GetAPIVersion(),
+					Kind:       d.xr.GetKind(),
+					Name:       d.xr.GetName(),
+					Namespace:  d.xr.GetNamespace(),
 				},
-				Status: renderer.XRStatusFilteredByPolicy,
+				Status:       renderer.XRStatusFiltered,
+				FilterReason: d.reason,
+				FilterDetail: d.detail,
 			})
 		}
 	}
 
 	if len(keptXRs) == 0 {
-		// All XRs were filtered by policy
+		// All XRs were filtered.
 		result.AffectedResources.Total = len(affectedXRs)
 		result.AffectedResources.FilteredByPolicy = filteredByPolicy
+		result.AffectedResources.FilteredBySelector = filteredBySelector
 
 		return result, nil
 	}
@@ -419,12 +429,13 @@ func (p *DefaultCompDiffProcessor) processSingleComposition(ctx context.Context,
 	xrResults := p.collectXRDiffs(ctx, keptXRs, newComp)
 
 	// Build impact analysis and counts from results for the kept set, then merge in any
-	// already-appended filtered-by-policy entries.
+	// already-appended filtered entries.
 	keptImpacts, keptSummary := p.buildImpactAnalysis(keptXRs, xrResults)
 	result.ImpactAnalysis = append(result.ImpactAnalysis, keptImpacts...)
 	// keptSummary.Total counts only kept; widen to include filtered so totals stay consistent.
 	keptSummary.Total = len(affectedXRs)
 	keptSummary.FilteredByPolicy = filteredByPolicy
+	keptSummary.FilteredBySelector = filteredBySelector
 	result.AffectedResources = keptSummary
 
 	return result, nil
@@ -607,51 +618,118 @@ func (p *DefaultCompDiffProcessor) calculateCompositionDiff(ctx context.Context,
 	return compDiff, nil
 }
 
-// partitionXRsByUpdatePolicy splits XRs into a kept set (Automatic policy or default) and a
-// dropped set (Manual policy). When IncludeManual is true, all XRs are kept.
-func (p *DefaultCompDiffProcessor) partitionXRsByUpdatePolicy(xrs []*un.Unstructured) (kept, dropped []*un.Unstructured) {
-	if p.config.IncludeManual {
-		return xrs, nil
-	}
+// predictedRevisionLabels returns the label set the CompositionRevision resulting from this
+// composition would carry, for evaluating an XR's compositionRevisionSelector. Crossplane stamps
+// every revision with the composition's own metadata.labels plus crossplane.io/composition-name
+// (and appends that label before matching a selector), so we mirror that here. The
+// composition-hash label is intentionally omitted — it isn't predictable before the revision is
+// created. newComp is not mutated.
+func predictedRevisionLabels(newComp *un.Unstructured) map[string]string {
+	compLabels := newComp.GetLabels()
+
+	labels := make(map[string]string, len(compLabels)+1)
+	maps.Copy(labels, compLabels)
+
+	labels[xp.LabelCompositionName] = newComp.GetName()
+
+	return labels
+}
+
+// filteredXR pairs a dropped XR with the reason it was excluded from impact analysis and an
+// optional human-readable detail (e.g. which selector failed to match which labels).
+type filteredXR struct {
+	xr     *un.Unstructured
+	reason renderer.FilterReason
+	detail string
+}
+
+// partitionXRsByUpdatePolicy splits XRs into a kept set and a dropped set, based on whether each XR
+// would adopt the CompositionRevision resulting from newComp. See classifyXR for the per-XR rules.
+// A malformed compositionRevisionSelector is a hard error (accuracy over guessing).
+func (p *DefaultCompDiffProcessor) partitionXRsByUpdatePolicy(xrs []*un.Unstructured, newComp *un.Unstructured) (kept []*un.Unstructured, dropped []filteredXR, err error) {
+	// The selector is matched against the label set the new revision would carry (composition labels
+	// plus the stamped crossplane.io/composition-name), while mismatch messages display the user's
+	// own composition labels; see predictedRevisionLabels and xp.XRRevisionSelectorMatch.
+	targetLabels := predictedRevisionLabels(newComp)
+	compLabels := newComp.GetLabels()
 
 	for _, xr := range xrs {
-		policy := p.getCompositionUpdatePolicy(xr)
+		drop, classifyErr := p.classifyXR(xr, targetLabels, compLabels)
+		if classifyErr != nil {
+			return nil, nil, classifyErr
+		}
 
-		p.config.Logger.Debug("Checking XR update policy",
-			"xr", xr.GetName(),
-			"kind", xr.GetKind(),
-			"policy", policy)
+		if drop != nil {
+			dropped = append(dropped, *drop)
+			continue
+		}
 
-		switch policy {
-		case compositionUpdatePolicyManual:
-			dropped = append(dropped, xr)
-		default:
-			// Automatic or empty/default policy — keep.
-			kept = append(kept, xr)
+		kept = append(kept, xr)
+	}
+
+	return kept, dropped, nil
+}
+
+// classifyXR decides whether a single XR should be kept for impact analysis or dropped (and why),
+// based on whether it would adopt the CompositionRevision resulting from the diffed composition.
+// It returns a non-nil *filteredXR when the XR is dropped, or nil to keep it. targetLabels is the
+// predicted revision label set (used for selector matching); compLabels is the composition's own
+// metadata.labels (used for the user-facing mismatch detail).
+//
+// Rules:
+//   - Manual compositionUpdatePolicy: dropped (reason manual_policy) — pinned via
+//     compositionRevisionRef — unless IncludeManual is set.
+//   - Automatic policy with a compositionRevisionSelector that does not match: dropped (reason
+//     revision_selector_mismatch). NOT overridden by IncludeManual, since the XR genuinely would
+//     not select the resulting revision.
+//   - Automatic policy with no selector, or a matching selector: kept.
+func (p *DefaultCompDiffProcessor) classifyXR(xr *un.Unstructured, targetLabels, compLabels map[string]string) (*filteredXR, error) {
+	policy, err := xp.XRUpdatePolicy(xr.Object, xr.GetAPIVersion())
+	if err != nil {
+		return nil, errors.Wrapf(err, "cannot read compositionUpdatePolicy for XR %q", xr.GetName())
+	}
+
+	p.config.Logger.Debug("Classifying XR",
+		"xr", xr.GetName(),
+		"kind", xr.GetKind(),
+		"policy", policy)
+
+	// Manual policy: pinned to a specific revision; excluded unless the user opts in.
+	if policy == compositionUpdatePolicyManual {
+		if p.config.IncludeManual {
+			return nil, nil
+		}
+
+		return &filteredXR{xr: xr, reason: renderer.FilterReasonManualPolicy}, nil
+	}
+
+	// Automatic (or default) policy: honor compositionRevisionSelector. An XR whose selector does not
+	// match the predicted revision labels would not select the resulting revision, so it is excluded —
+	// regardless of IncludeManual.
+	matches, detail, err := xp.XRRevisionSelectorMatch(xr, targetLabels, compLabels)
+	if err != nil {
+		return nil, errors.Wrapf(err, "cannot evaluate compositionRevisionSelector for XR %q", xr.GetName())
+	}
+
+	if !matches {
+		return &filteredXR{xr: xr, reason: renderer.FilterReasonRevisionSelectorMismatch, detail: detail}, nil
+	}
+
+	return nil, nil
+}
+
+// countFilterReasons tallies dropped XRs by filter reason for the affected-resources summary.
+func countFilterReasons(dropped []filteredXR) (filteredByPolicy, filteredBySelector int) {
+	for _, d := range dropped {
+		switch d.reason {
+		case renderer.FilterReasonManualPolicy:
+			filteredByPolicy++
+		case renderer.FilterReasonRevisionSelectorMismatch:
+			filteredBySelector++
 		}
 	}
 
-	return kept, dropped
-}
-
-// getCompositionUpdatePolicy retrieves the compositionUpdatePolicy from an XR.
-// It checks both v2 (spec.crossplane.compositionUpdatePolicy) and v1 (spec.compositionUpdatePolicy) field paths.
-// Returns "Automatic" as the default if not found (matching Crossplane behavior).
-func (p *DefaultCompDiffProcessor) getCompositionUpdatePolicy(xr *un.Unstructured) string {
-	// Try v2 path first: spec.crossplane.compositionUpdatePolicy
-	policy, found, err := un.NestedString(xr.Object, "spec", "crossplane", "compositionUpdatePolicy")
-	if err == nil && found && policy != "" {
-		return policy
-	}
-
-	// Try v1 path: spec.compositionUpdatePolicy
-	policy, found, err = un.NestedString(xr.Object, "spec", "compositionUpdatePolicy")
-	if err == nil && found && policy != "" {
-		return policy
-	}
-
-	// Default to Automatic if not found (matching Crossplane default behavior)
-	return compositionUpdatePolicyAutomatic
+	return filteredByPolicy, filteredBySelector
 }
 
 // buildImpactAnalysis builds the impact analysis and summary from XR results.

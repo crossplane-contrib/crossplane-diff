@@ -285,6 +285,40 @@ func TestDefaultCompDiffRenderer_RenderCompDiff(t *testing.T) {
 				}
 			},
 		},
+		"FilteredBySelectorOnly": {
+			output: &CompDiffOutput{
+				Compositions: []CompositionDiff{{
+					Name:              "test-comp",
+					AffectedResources: AffectedResourcesSummary{FilteredBySelector: 2},
+					ImpactAnalysis:    []XRImpact{},
+				}},
+			},
+			colorize: false,
+			validate: func(t *testing.T, result string) {
+				t.Helper()
+
+				if !strings.Contains(result, "compositionRevisionSelector") {
+					t.Errorf("Expected compositionRevisionSelector message, got %q", result)
+				}
+			},
+		},
+		"FilteredByPolicyAndSelector": {
+			output: &CompDiffOutput{
+				Compositions: []CompositionDiff{{
+					Name:              "test-comp",
+					AffectedResources: AffectedResourcesSummary{FilteredByPolicy: 1, FilteredBySelector: 2},
+					ImpactAnalysis:    []XRImpact{},
+				}},
+			},
+			colorize: false,
+			validate: func(t *testing.T, result string) {
+				t.Helper()
+
+				if !strings.Contains(result, "Manual update policy") || !strings.Contains(result, "compositionRevisionSelector") {
+					t.Errorf("Expected both Manual-policy and selector messages, got %q", result)
+				}
+			},
+		},
 		"CompositionWithError": {
 			output: &CompDiffOutput{
 				Compositions: []CompositionDiff{{
@@ -651,15 +685,22 @@ func TestCompDiffOutput_JSONSchema(t *testing.T) {
 	}
 }
 
-func TestXRStatusFilteredByPolicy_JSON(t *testing.T) {
+func TestXRStatusFiltered_JSON(t *testing.T) {
 	output := &CompDiffOutput{
 		Compositions: []CompositionDiff{{
 			Name:              "test-comp",
-			AffectedResources: AffectedResourcesSummary{Total: 1, FilteredByPolicy: 1},
+			AffectedResources: AffectedResourcesSummary{Total: 2, FilteredByPolicy: 1, FilteredBySelector: 1},
 			ImpactAnalysis: []XRImpact{
 				{
 					ObjectReference: corev1.ObjectReference{APIVersion: "example.org/v1", Kind: "XR", Name: "manual-xr", Namespace: "ns"},
-					Status:          XRStatusFilteredByPolicy,
+					Status:          XRStatusFiltered,
+					FilterReason:    FilterReasonManualPolicy,
+				},
+				{
+					ObjectReference: corev1.ObjectReference{APIVersion: "example.org/v1", Kind: "XR", Name: "selector-xr", Namespace: "ns"},
+					Status:          XRStatusFiltered,
+					FilterReason:    FilterReasonRevisionSelectorMismatch,
+					FilterDetail:    "compositionRevisionSelector {version: 0.0.1} does not match composition labels {version: 0.0.2}",
 				},
 			},
 		}},
@@ -684,28 +725,58 @@ func TestXRStatusFilteredByPolicy_JSON(t *testing.T) {
 		t.Fatalf("unmarshal: %v", err)
 	}
 
-	if len(parsed.Compositions) != 1 || len(parsed.Compositions[0].ImpactAnalysis) != 1 {
-		t.Fatalf("expected 1 composition with 1 impact, got %+v", parsed)
+	if len(parsed.Compositions) != 1 || len(parsed.Compositions[0].ImpactAnalysis) != 2 {
+		t.Fatalf("expected 1 composition with 2 impacts, got %+v", parsed)
 	}
 
-	imp := parsed.Compositions[0].ImpactAnalysis[0]
-	if got, want := string(imp.Status), "filtered_by_policy"; got != want {
-		t.Errorf("status: got %q, want %q", got, want)
+	// No impact should carry the removed "filtered_by_policy" status value.
+	for _, imp := range parsed.Compositions[0].ImpactAnalysis {
+		if string(imp.Status) != "filtered" {
+			t.Errorf("status: got %q, want %q", imp.Status, "filtered")
+		}
+
+		if imp.DownstreamChanges != nil {
+			t.Errorf("downstreamChanges should be omitted for filtered impacts, got %+v", imp.DownstreamChanges)
+		}
 	}
 
-	if imp.DownstreamChanges != nil {
-		t.Errorf("downstreamChanges should be omitted for filtered_by_policy, got %+v", imp.DownstreamChanges)
+	byName := map[string]xrImpactJSON{}
+	for _, imp := range parsed.Compositions[0].ImpactAnalysis {
+		byName[imp.Name] = imp
+	}
+
+	if got, want := string(byName["manual-xr"].FilterReason), "manual_policy"; got != want {
+		t.Errorf("manual-xr filterReason: got %q, want %q", got, want)
+	}
+
+	if got, want := string(byName["selector-xr"].FilterReason), "revision_selector_mismatch"; got != want {
+		t.Errorf("selector-xr filterReason: got %q, want %q", got, want)
+	}
+
+	if byName["selector-xr"].FilterDetail == "" {
+		t.Errorf("selector-xr expected a filterDetail hint, got empty")
+	}
+
+	if got := parsed.Compositions[0].AffectedResources.FilteredBySelector; got != 1 {
+		t.Errorf("filteredBySelector: got %d, want 1", got)
 	}
 }
 
-func TestXRStatusFilteredByPolicy_TextRenderer(t *testing.T) {
+func TestXRStatusFiltered_TextRenderer(t *testing.T) {
 	comp := CompositionDiff{
 		Name:              "test-comp",
-		AffectedResources: AffectedResourcesSummary{Total: 1, FilteredByPolicy: 1},
+		AffectedResources: AffectedResourcesSummary{Total: 2, FilteredByPolicy: 1, FilteredBySelector: 1},
 		ImpactAnalysis: []XRImpact{
 			{
 				ObjectReference: corev1.ObjectReference{APIVersion: "example.org/v1", Kind: "XR", Name: "manual-xr", Namespace: "ns"},
-				Status:          XRStatusFilteredByPolicy,
+				Status:          XRStatusFiltered,
+				FilterReason:    FilterReasonManualPolicy,
+			},
+			{
+				ObjectReference: corev1.ObjectReference{APIVersion: "example.org/v1", Kind: "XR", Name: "selector-xr", Namespace: "ns"},
+				Status:          XRStatusFiltered,
+				FilterReason:    FilterReasonRevisionSelectorMismatch,
+				FilterDetail:    "compositionRevisionSelector {version: 0.0.1} does not match composition labels {version: 0.0.2}",
 			},
 		},
 	}
@@ -714,23 +785,33 @@ func TestXRStatusFilteredByPolicy_TextRenderer(t *testing.T) {
 	r := &DefaultCompDiffRenderer{logger: logger, opts: DefaultDiffOptions()}
 	got := r.buildXRStatusList(comp.ImpactAnalysis)
 
-	if !strings.Contains(got, "manual-xr") {
-		t.Errorf("expected XR name in output, got %q", got)
+	if !strings.Contains(got, "manual-xr") || !strings.Contains(got, "selector-xr") {
+		t.Errorf("expected both XR names in output, got %q", got)
 	}
 
-	if !strings.Contains(strings.ToLower(got), "manual") && !strings.Contains(strings.ToLower(got), "filtered") {
-		t.Errorf("expected 'manual' or 'filtered' marker in output, got %q", got)
+	// Manual-policy exclusion must mention the policy and the escape hatch.
+	if !strings.Contains(strings.ToLower(got), "manual update policy") {
+		t.Errorf("expected 'Manual update policy' verbiage, got %q", got)
+	}
+
+	// Selector-mismatch exclusion must distinguish itself from policy and surface the hint.
+	if !strings.Contains(strings.ToLower(got), "revision selector") {
+		t.Errorf("expected 'revision selector' verbiage for selector mismatch, got %q", got)
+	}
+
+	if !strings.Contains(got, "does not match composition labels") {
+		t.Errorf("expected the selector-mismatch fix hint in output, got %q", got)
 	}
 }
 
-func TestCompositionDiff_HasChanges_FilteredByPolicyOnly(t *testing.T) {
+func TestCompositionDiff_HasChanges_FilteredOnly(t *testing.T) {
 	c := &CompositionDiff{
 		ImpactAnalysis: []XRImpact{
-			{Status: XRStatusFilteredByPolicy},
-			{Status: XRStatusFilteredByPolicy},
+			{Status: XRStatusFiltered, FilterReason: FilterReasonManualPolicy},
+			{Status: XRStatusFiltered, FilterReason: FilterReasonRevisionSelectorMismatch},
 		},
 	}
 	if c.HasChanges() {
-		t.Errorf("CompositionDiff with only filtered-by-policy impacts should not be HasChanges()")
+		t.Errorf("CompositionDiff with only filtered impacts should not be HasChanges()")
 	}
 }

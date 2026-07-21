@@ -31,6 +31,12 @@ const (
 	CompositionRevisionKind = "CompositionRevision"
 	// FunctionKind is the kind for Crossplane Functions.
 	FunctionKind = "Function"
+
+	// updatePolicyAutomatic is the Automatic compositionUpdatePolicy value (also the default when
+	// unset), mirroring Crossplane's CompositionUpdatePolicy.
+	updatePolicyAutomatic = "Automatic"
+	// updatePolicyManual is the Manual compositionUpdatePolicy value.
+	updatePolicyManual = "Manual"
 )
 
 // Initialize initializes all the clients in this bundle.
