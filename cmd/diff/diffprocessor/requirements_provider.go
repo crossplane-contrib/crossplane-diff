@@ -278,16 +278,21 @@ func (p *RequirementsProvider) processNameSelector(ctx context.Context, selector
 }
 
 // processLabelSelector handles resource selection by labels.
-func (p *RequirementsProvider) processLabelSelector(ctx context.Context, selector *v1.ResourceSelector, gvk schema.GroupVersionKind, xrNamespace string) ([]*un.Unstructured, error) {
+//
+// The selector namespace is passed through verbatim, mirroring upstream
+// Crossplane (internal/xfn/required_resources.go), which lists label-matched
+// resources with client.InNamespace(rs.GetNamespace()). An empty namespace
+// therefore lists across ALL namespaces — the documented behavior for a
+// matchLabels requirement that omits the namespace. Unlike the matchName path,
+// this must NOT fall back to the XR namespace: doing so would scope a
+// cluster-wide requirement to a single namespace and silently drop matches
+// (crossplane-contrib/crossplane-diff#376).
+func (p *RequirementsProvider) processLabelSelector(ctx context.Context, selector *v1.ResourceSelector, gvk schema.GroupVersionKind, _ string) ([]*un.Unstructured, error) {
 	labelSelector := metav1.LabelSelector{
 		MatchLabels: selector.GetMatchLabels().GetLabels(),
 	}
 
-	// Resolve namespace
-	ns, err := p.resolveNamespace(ctx, gvk, selector, xrNamespace)
-	if err != nil {
-		return nil, err
-	}
+	ns := selector.GetNamespace()
 
 	p.logger.Debug("Fetching resources by label",
 		"gvk", gvk.String(),

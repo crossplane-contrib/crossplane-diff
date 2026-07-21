@@ -263,6 +263,88 @@ func TestRequirementsProvider_ResolveSelectors(t *testing.T) {
 	}
 }
 
+// TestRequirementsProvider_MatchLabelsCrossNamespace reproduces
+// crossplane-contrib/crossplane-diff#376: a go-templating ExtraResources block
+// that selects a namespaced kind (e.g. v1/Secret) by matchLabels only, omitting
+// the namespace, is a cluster-wide (all-namespaces) lookup in Crossplane.
+//
+// Upstream reference: crossplane/v2 internal/xfn/required_resources.go
+// ExistingRequiredResourcesFetcher.Fetch passes rs.GetNamespace() verbatim to
+// client.InNamespace(...); an empty namespace lists across ALL namespaces. It
+// never falls back to the XR namespace for the matchLabels path.
+//
+// crossplane-diff's resolveNamespace instead defaults an empty selector
+// namespace to xrNamespace for any namespaced kind, which scopes the label
+// lookup to a single namespace. The Secret then isn't found, the ExtraResource
+// requirement comes back empty, and function-go-templating fatals reading the
+// Crossplane Context value it expected to be populated
+// ("Failed to read context '...': ValueError('Value not set')").
+func TestRequirementsProvider_MatchLabelsCrossNamespace(t *testing.T) {
+	ctx := t.Context()
+
+	// A Secret living in some other namespace than the XR's.
+	secretInOther := tu.NewResource("v1", "Secret", "parameter-store-config").
+		WithNamespace("other-ns").
+		Build()
+
+	var gotNamespace string
+
+	resourceClient := tu.NewMockResourceClient().
+		WithNamespacedResource(schema.GroupVersionKind{Group: "", Version: "v1", Kind: "Secret"}).
+		WithGetResourcesByLabel(func(_ context.Context, gvk schema.GroupVersionKind, namespace string, sel metav1.LabelSelector) ([]*un.Unstructured, error) {
+			gotNamespace = namespace
+
+			// Mirror a real all-namespaces list: only return the Secret when
+			// the lookup is cluster-wide (empty namespace). A namespace-scoped
+			// lookup to the XR namespace ("xr-ns") finds nothing.
+			if gvk.Kind == "Secret" &&
+				sel.MatchLabels["app.kubernetes.io/name"] == "parameter-store-config" &&
+				namespace == "" {
+				return []*un.Unstructured{secretInOther}, nil
+			}
+
+			return nil, nil
+		}).
+		Build()
+
+	provider := NewRequirementsProvider(
+		resourceClient,
+		tu.NewMockEnvironmentClient().WithNoEnvironmentConfigs().Build(),
+		tu.TestLogger(t, false),
+	)
+	if err := provider.Initialize(ctx); err != nil {
+		t.Fatalf("Initialize: %v", err)
+	}
+
+	// matchLabels, no namespace — the #376 selector shape.
+	selectors := []*v1.ResourceSelector{
+		{
+			ApiVersion: "v1",
+			Kind:       "Secret",
+			Match: &v1.ResourceSelector_MatchLabels{
+				MatchLabels: &v1.MatchLabels{
+					Labels: map[string]string{"app.kubernetes.io/name": "parameter-store-config"},
+				},
+			},
+		},
+	}
+
+	// XR is namespaced ("xr-ns"); the Secret lives in "other-ns".
+	got, err := provider.ResolveSelectors(ctx, selectors, "xr-ns")
+	if err != nil {
+		t.Fatalf("ResolveSelectors: unexpected error: %v", err)
+	}
+
+	if gotNamespace != "" {
+		t.Errorf("matchLabels without namespace must list across all namespaces (empty namespace), "+
+			"matching upstream required_resources.go; got namespace %q (scoped to XR namespace)", gotNamespace)
+	}
+
+	if len(got) != 1 {
+		t.Fatalf("expected 1 resource from cluster-wide label lookup, got %d", len(got))
+	}
+}
+
 // TestRequirementsProvider_NamespaceCollision tests that resources with the same name
 // but different namespaces are correctly distinguished in the cache.
 //
