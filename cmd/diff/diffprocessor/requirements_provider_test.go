@@ -282,29 +282,16 @@ func TestRequirementsProvider_ResolveSelectors(t *testing.T) {
 func TestRequirementsProvider_MatchLabelsCrossNamespace(t *testing.T) {
 	ctx := t.Context()
 
-	// A Secret living in some other namespace than the XR's.
+	// A Secret living in some other namespace than the XR's. The mock returns
+	// it ONLY for a cluster-wide (empty-namespace) label lookup — a regression
+	// that scopes the lookup to the XR namespace yields zero results.
 	secretInOther := tu.NewResource("v1", "Secret", "parameter-store-config").
 		WithNamespace("other-ns").
 		Build()
 
-	var gotNamespace string
-
 	resourceClient := tu.NewMockResourceClient().
 		WithNamespacedResource(schema.GroupVersionKind{Group: "", Version: "v1", Kind: "Secret"}).
-		WithGetResourcesByLabel(func(_ context.Context, gvk schema.GroupVersionKind, namespace string, sel metav1.LabelSelector) ([]*un.Unstructured, error) {
-			gotNamespace = namespace
-
-			// Mirror a real all-namespaces list: only return the Secret when
-			// the lookup is cluster-wide (empty namespace). A namespace-scoped
-			// lookup to the XR namespace ("xr-ns") finds nothing.
-			if gvk.Kind == "Secret" &&
-				sel.MatchLabels["app.kubernetes.io/name"] == "parameter-store-config" &&
-				namespace == "" {
-				return []*un.Unstructured{secretInOther}, nil
-			}
-
-			return nil, nil
-		}).
+		WithResourcesFoundByLabel([]*un.Unstructured{secretInOther}, "app.kubernetes.io/name", "parameter-store-config", metav1.NamespaceAll).
 		Build()
 
 	provider := NewRequirementsProvider(
@@ -329,19 +316,73 @@ func TestRequirementsProvider_MatchLabelsCrossNamespace(t *testing.T) {
 		},
 	}
 
-	// XR is namespaced ("xr-ns"); the Secret lives in "other-ns".
+	// XR is namespaced ("xr-ns"); the Secret lives in "other-ns". A single
+	// result proves the lookup was cluster-wide, not scoped to the XR namespace.
 	got, err := provider.ResolveSelectors(ctx, selectors, "xr-ns")
 	if err != nil {
 		t.Fatalf("ResolveSelectors: unexpected error: %v", err)
 	}
 
-	if gotNamespace != "" {
-		t.Errorf("matchLabels without namespace must list across all namespaces (empty namespace), "+
-			"matching upstream required_resources.go; got namespace %q (scoped to XR namespace)", gotNamespace)
+	if len(got) != 1 {
+		t.Fatalf("expected 1 resource from cluster-wide label lookup, got %d "+
+			"(matchLabels without namespace must list across all namespaces, matching upstream required_resources.go)", len(got))
+	}
+}
+
+// TestRequirementsProvider_MatchLabelsClusterScoped asserts that a matchLabels
+// requirement for a cluster-scoped kind always lists with an empty namespace,
+// even if the selector carries one.
+//
+// crossplane-diff lists via the dynamic client, which — unlike upstream's
+// controller-runtime client — honors .Namespace(...) without consulting the
+// RESTMapper. Passing a namespace for a cluster-scoped kind would build an
+// invalid namespaced request path and silently return nothing (the same class
+// of failure as #376). processLabelSelector must therefore clear the namespace
+// for cluster-scoped kinds to stay aligned with upstream's effective behavior.
+func TestRequirementsProvider_MatchLabelsClusterScoped(t *testing.T) {
+	ctx := t.Context()
+
+	// Returned only for a cluster-wide (empty namespace) lookup — if the stray
+	// selector namespace leaked through, the namespaced lookup finds nothing.
+	clusterXR := tu.NewResource("example.org/v1", "XClusterThing", "thing-1").Build()
+
+	resourceClient := tu.NewMockResourceClient().
+		WithClusterScopedResource(schema.GroupVersionKind{Group: "example.org", Version: "v1", Kind: "XClusterThing"}).
+		WithResourcesFoundByLabel([]*un.Unstructured{clusterXR}, "tier", "cache", metav1.NamespaceAll).
+		Build()
+
+	provider := NewRequirementsProvider(
+		resourceClient,
+		tu.NewMockEnvironmentClient().WithNoEnvironmentConfigs().Build(),
+		tu.TestLogger(t, false),
+	)
+	if err := provider.Initialize(ctx); err != nil {
+		t.Fatalf("Initialize: %v", err)
 	}
 
+	// Cluster-scoped kind, but the selector mistakenly carries a namespace.
+	// It must be ignored (cleared to "").
+	selectors := []*v1.ResourceSelector{
+		{
+			ApiVersion: "example.org/v1",
+			Kind:       "XClusterThing",
+			Namespace:  new("stray-ns"),
+			Match: &v1.ResourceSelector_MatchLabels{
+				MatchLabels: &v1.MatchLabels{Labels: map[string]string{"tier": "cache"}},
+			},
+		},
+	}
+
+	got, err := provider.ResolveSelectors(ctx, selectors, "xr-ns")
+	if err != nil {
+		t.Fatalf("ResolveSelectors: unexpected error: %v", err)
+	}
+
+	// A single result proves the stray selector namespace was cleared: the mock
+	// only returns the resource for a cluster-wide (empty namespace) lookup.
 	if len(got) != 1 {
-		t.Fatalf("expected 1 resource from cluster-wide label lookup, got %d", len(got))
+		t.Fatalf("expected 1 resource from cluster-scoped label lookup, got %d "+
+			"(cluster-scoped matchLabels must list with empty namespace regardless of selector namespace)", len(got))
 	}
 }
 

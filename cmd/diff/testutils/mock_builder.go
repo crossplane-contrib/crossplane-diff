@@ -170,19 +170,29 @@ func (b *MockResourceClientBuilder) WithGetResourcesByLabel(fn func(context.Cont
 // WithResourcesFoundByLabel sets GetResourcesByLabel to return resources for a specific label value.
 // This method is stateful - multiple calls accumulate mappings for different label values.
 // The label parameter specifies which label key to match on (e.g., "crossplane.io/composition-name").
-func (b *MockResourceClientBuilder) WithResourcesFoundByLabel(resources []*un.Unstructured, label, value string) *MockResourceClientBuilder {
+//
+// An optional expectNamespace pins the lookup namespace: when supplied, the
+// resources are returned only if GetResourcesByLabel is called with that exact
+// namespace. Pass metav1.NamespaceAll to require a cluster-wide (all-namespaces)
+// lookup, as for matchLabels ExtraResources
+// (crossplane-contrib/crossplane-diff#376) — a regression that scopes the lookup
+// to a specific namespace then yields zero results. When omitted, the namespace
+// is not considered and only the label value is matched.
+func (b *MockResourceClientBuilder) WithResourcesFoundByLabel(resources []*un.Unstructured, label, value string, expectNamespace ...string) *MockResourceClientBuilder {
+	matches := func(namespace string, selector metav1.LabelSelector) bool {
+		labelValue, exists := selector.MatchLabels[label]
+		if !exists || labelValue != value {
+			return false
+		}
+
+		return len(expectNamespace) == 0 || namespace == expectNamespace[0]
+	}
+
 	// If we don't have an existing GetResourcesByLabel function, create a new one
 	if b.mock.GetResourcesByLabelFn == nil {
-		// Create a map to store resources by label value
-		resourcesByValue := make(map[string][]*un.Unstructured)
-		resourcesByValue[value] = resources
-
-		return b.WithGetResourcesByLabel(func(_ context.Context, _ schema.GroupVersionKind, _ string, selector metav1.LabelSelector) ([]*un.Unstructured, error) {
-			// Check if the selector matches our expected label
-			if labelValue, exists := selector.MatchLabels[label]; exists {
-				if res, found := resourcesByValue[labelValue]; found {
-					return res, nil
-				}
+		return b.WithGetResourcesByLabel(func(_ context.Context, _ schema.GroupVersionKind, namespace string, selector metav1.LabelSelector) ([]*un.Unstructured, error) {
+			if matches(namespace, selector) {
+				return resources, nil
 			}
 
 			return []*un.Unstructured{}, nil
@@ -194,8 +204,7 @@ func (b *MockResourceClientBuilder) WithResourcesFoundByLabel(resources []*un.Un
 	originalFn := b.mock.GetResourcesByLabelFn
 
 	return b.WithGetResourcesByLabel(func(ctx context.Context, gvk schema.GroupVersionKind, namespace string, selector metav1.LabelSelector) ([]*un.Unstructured, error) {
-		// Check if the selector matches our new label/value pair
-		if labelValue, exists := selector.MatchLabels[label]; exists && labelValue == value {
+		if matches(namespace, selector) {
 			return resources, nil
 		}
 

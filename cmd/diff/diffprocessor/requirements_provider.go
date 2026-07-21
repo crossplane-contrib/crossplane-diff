@@ -279,25 +279,44 @@ func (p *RequirementsProvider) processNameSelector(ctx context.Context, selector
 
 // processLabelSelector handles resource selection by labels.
 //
-// The selector namespace is passed through verbatim, mirroring upstream
-// Crossplane (internal/xfn/required_resources.go), which lists label-matched
-// resources with client.InNamespace(rs.GetNamespace()). An empty namespace
-// therefore lists across ALL namespaces — the documented behavior for a
-// matchLabels requirement that omits the namespace. Unlike the matchName path,
-// this must NOT fall back to the XR namespace: doing so would scope a
-// cluster-wide requirement to a single namespace and silently drop matches
-// (crossplane-contrib/crossplane-diff#376).
+// The selector namespace is passed through as-is for namespaced kinds,
+// mirroring upstream Crossplane (internal/xfn/required_resources.go), which
+// lists label-matched resources with client.InNamespace(rs.GetNamespace()). An
+// empty namespace therefore lists across ALL namespaces — the documented
+// behavior for a matchLabels requirement that omits the namespace. Unlike the
+// matchName path, this must NOT fall back to the XR namespace: doing so would
+// scope a cluster-wide requirement to a single namespace and silently drop
+// matches (crossplane-contrib/crossplane-diff#376).
+//
+// For cluster-scoped kinds the namespace is forced to "". Upstream relies on
+// controller-runtime, whose client consults the RESTMapper and ignores a
+// namespace on a cluster-scoped list. We instead use the dynamic client
+// directly, which honors .Namespace(...) blindly — passing a namespace for a
+// cluster-scoped kind would build an invalid namespaced request path and
+// silently return nothing. Consulting the scope keeps our effective behavior
+// aligned with upstream.
 func (p *RequirementsProvider) processLabelSelector(ctx context.Context, selector *v1.ResourceSelector, gvk schema.GroupVersionKind, _ string) ([]*un.Unstructured, error) {
 	labelSelector := metav1.LabelSelector{
 		MatchLabels: selector.GetMatchLabels().GetLabels(),
 	}
 
-	ns := selector.GetNamespace()
+	isNamespaced, err := p.client.IsNamespacedResource(ctx, gvk)
+	if err != nil {
+		return nil, errors.Wrapf(err, "cannot determine namespace scope for resource %s", gvk.String())
+	}
+
+	// Namespaced: use the selector namespace verbatim (empty = all namespaces).
+	// Cluster-scoped: always "".
+	var ns string
+	if isNamespaced {
+		ns = selector.GetNamespace()
+	}
 
 	p.logger.Debug("Fetching resources by label",
 		"gvk", gvk.String(),
 		"labels", labelSelector.MatchLabels,
-		"namespace", ns)
+		"namespace", ns,
+		"namespaced", isNamespaced)
 
 	return p.client.GetResourcesByLabel(ctx, gvk, ns, labelSelector)
 }
