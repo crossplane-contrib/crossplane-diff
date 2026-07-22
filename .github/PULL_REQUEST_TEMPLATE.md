@@ -21,7 +21,13 @@ I have: <!--You MUST either [x] check or [ ] ~strike through~ every item.-->
 - [ ] Read and followed Crossplane's [contribution process].
 - [ ] Run `earthly -P +reviewable` to ensure this PR is ready for review.
 - [ ] Added or updated unit tests.
-- [ ] Added or updated e2e tests.
+- [ ] Added or updated integration or e2e tests.
+<!--
+Prefer integration tests (cmd/diff/*_integration_test.go,
+envtest + real functions, seconds/case) for crossplane-diff's
+own logic. Reserve e2e tests (test/e2e, minutes) for behavior
+only a live Crossplane controller reconcile can prove.
+-->
 - [ ] Documented this change as needed.
 - [ ] Followed the [API promotion workflow] if this PR introduces, removes, or promotes an API.
 
