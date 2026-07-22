@@ -1,0 +1,22 @@
+# Reproduction fixture for crossplane-contrib/crossplane-diff#376.
+#
+# A ConfigMap matched by a matchLabels ExtraResources selector (no namespace)
+# that lives in a DIFFERENT namespace than the XR being diffed. The XR is in
+# "default"; this resource is in "other-namespace". A correct all-namespaces
+# lookup (matching upstream Crossplane) finds it; a lookup wrongly scoped to the
+# XR namespace does not.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: other-namespace
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: external-resource-crossns
+  namespace: other-namespace
+  labels:
+    app: test-app
+    environment: crossns
+data:
+  resource-data: "cross-namespace-external-resource-data"

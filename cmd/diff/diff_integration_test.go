@@ -644,8 +644,15 @@ Summary: 2 modified`,
 			expectedError:    false,
 			expectedExitCode: dp.ExitCodeDiffDetected,
 		},
-		"TemplatedExtraResources": {
-			reason:       "Validates diff with templated ExtraResources embedded in go-templating function",
+		// Same-namespace case: the matchLabels ExtraResources selector omits the
+		// namespace, and the matched ConfigMap lives in "default" — the SAME
+		// namespace as the XR. This passed even before the #376 fix, because the
+		// old resolveNamespace defaulted an empty selector namespace to the XR
+		// namespace, which happened to be where the ConfigMap was. See
+		// "TemplatedExtraResourcesCrossNamespace" for the cross-namespace case
+		// that requires the all-namespaces lookup.
+		"TemplatedExtraResourcesSameNamespace": {
+			reason:       "Validates diff with templated ExtraResources (matchLabels, no namespace) resolving a resource in the XR's own namespace",
 			outputFormat: "json",
 			setupFiles: []string{
 				"testdata/diff/resources/xrd.yaml",
@@ -665,6 +672,43 @@ Summary: 2 modified`,
 				WithModifiedResource("XNopResource", "test-resource", "default").
 				WithFieldChange("spec.coolField", "existing-value", "modified-with-external-dep").
 				WithFieldChange("spec.environment", "staging", "testing").
+				And(),
+			expectedError:    false,
+			expectedExitCode: dp.ExitCodeDiffDetected,
+		},
+		// Reproduction for crossplane-contrib/crossplane-diff#376: a matchLabels
+		// ExtraResources selector that omits the namespace is a cluster-wide
+		// (all-namespaces) lookup in Crossplane (internal/xfn/required_resources.go
+		// lists with client.InNamespace(rs.GetNamespace()); empty = all
+		// namespaces). Here the matched ConfigMap lives in "other-namespace" while
+		// the XR is in "default". Pre-fix, resolveNamespace defaulted the empty
+		// selector namespace to the XR namespace ("default"), so the dynamic
+		// client listed only "default", found nothing, and the go-templating
+		// requirement came back empty — the downstream XDownstreamResource would
+		// not render at all (or a real template reading the value would fatal with
+		// ValueError). Post-fix the lookup spans all namespaces, finds the
+		// ConfigMap, and the downstream renders with roleName derived from it.
+		"TemplatedExtraResourcesCrossNamespace": {
+			reason:       "matchLabels ExtraResources (no namespace) must resolve a resource in a DIFFERENT namespace than the XR via an all-namespaces lookup (issue #376)",
+			outputFormat: "json",
+			setupFiles: []string{
+				"testdata/diff/resources/xrd.yaml",
+				"testdata/diff/resources/functions.yaml",
+				"testdata/diff/resources/external-resource-configmap-other-namespace.yaml",
+				"testdata/diff/resources/external-res-gotpl-composition.yaml",
+			},
+			inputFiles: []string{"testdata/diff/new-xr-with-cross-ns-external-dep.yaml"},
+			expectedStructuredOutput: tu.ExpectDiff().
+				WithSummary(2, 0, 0).
+				WithAddedResource("XDownstreamResource", "test-resource", "default").
+				WithField("spec.forProvider.configData", "new-value").
+				// roleName is templated from the matched ConfigMap's name, proving
+				// the cross-namespace resource was resolved.
+				WithField("spec.forProvider.roleName", "templated-external-resource-crossns").
+				And().
+				WithAddedResource("XNopResource", "test-resource", "default").
+				WithField("spec.coolField", "new-value").
+				WithField("spec.environment", "crossns").
 				And(),
 			expectedError:    false,
 			expectedExitCode: dp.ExitCodeDiffDetected,
