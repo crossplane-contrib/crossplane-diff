@@ -247,6 +247,10 @@ Flags:
 - A running Kubernetes cluster with Crossplane installed
 - `kubectl` configured to access your cluster
 - Appropriate RBAC permissions (see [Required Permissions](#required-permissions))
+- A `crossplane` render image/binary of **v2.3.4 or newer** (the tool renders via
+  `xpkg.crossplane.io/crossplane/crossplane:stable` by default, which already satisfies this). Older
+  images silently drop cluster-observed composed resources from the render pipeline, which produces
+  incorrect diffs (e.g. missing removals). If a locally cached `:stable` image predates v2.3.4, re-pull it.
 
 ## How It Works
 

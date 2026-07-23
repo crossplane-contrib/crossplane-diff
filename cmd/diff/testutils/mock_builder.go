@@ -1481,6 +1481,36 @@ func (b *ResourceBuilder) WithOwnerReference(kind, name, apiVersion, uid string)
 	return b
 }
 
+// WithControllerReference adds a controller owner reference (Controller=true,
+// BlockOwnerDeletion=true) to the resource. This mirrors how Crossplane sets
+// the controlling XR on a composed resource, so tests that exercise
+// controller-ref-based logic (e.g. observed-resource scoping in
+// FetchObservedResources) can build realistic fixtures.
+func (b *ResourceBuilder) WithControllerReference(kind, name, apiVersion, uid string) *ResourceBuilder {
+	ownerRefs := b.resource.GetOwnerReferences()
+
+	controller := true
+	newOwnerRef := metav1.OwnerReference{
+		APIVersion:         apiVersion,
+		Kind:               kind,
+		Name:               name,
+		UID:                k8stypes.UID(uid),
+		Controller:         &controller,
+		BlockOwnerDeletion: &controller,
+	}
+
+	ownerRefs = append(ownerRefs, newOwnerRef)
+	b.resource.SetOwnerReferences(ownerRefs)
+
+	return b
+}
+
+// WithUID sets the resource's metadata.uid.
+func (b *ResourceBuilder) WithUID(uid string) *ResourceBuilder {
+	b.resource.SetUID(k8stypes.UID(uid))
+	return b
+}
+
 // WithCompositeOwner sets up the resource as a cpd resource with the given composite owner.
 func (b *ResourceBuilder) WithCompositeOwner(owner string) *ResourceBuilder {
 	// Add standard Crossplane labels and annotations for a cpd resource
