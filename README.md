@@ -177,9 +177,20 @@ Flags:
       --eventual-state         Show eventual state after all reconciliation cycles
                                complete. Useful with function-sequencer which hides
                                later stage resources until earlier stages become Ready.
+      --crossplane-version=VERSION
+                               Pin the crossplane render version; the docker engine
+                               pulls xpkg.crossplane.io/crossplane/crossplane:<version>.
+                               Minimum v2.3.4 (older renders drop cluster-observed
+                               resources; see Prerequisites). Mutually exclusive with
+                               --crossplane-image.
+      --crossplane-image=IMAGE Override the full crossplane render image reference
+                               (e.g. for a private mirror). Mutually exclusive with
+                               --crossplane-version.
 ```
 
 **Note**: XR namespaces are read directly from the YAML files being diffed, not from command-line flags.
+
+**Render version**: When neither `--crossplane-version` nor `--crossplane-image` is set, rendering uses the floating `xpkg.crossplane.io/crossplane/crossplane:stable` tag. Pin `--crossplane-version` for reproducible diffs or to hold a known-good version; `--crossplane-image` targets a mirrored/air-gapped registry. Only `--crossplane-version` is floor-checked against the v2.3.4 minimum — a full image reference carries no comparable version.
 
 **Ignored Paths**: By default, `metadata.annotations[kubectl.kubernetes.io/last-applied-configuration]` is always ignored. Additional paths can be specified with `--ignore-paths`. This is useful for filtering out metadata added by tools like ArgoCD (e.g., tracking IDs, sync waves) that shouldn't affect diff results. The `--ignore-paths` flag applies uniformly across all output modes: the human diff, JSON, and YAML output all strip ignored fields, and summary counts are computed after ignore-filtering so a resource whose only changes are in ignored fields is not counted as modified.
 
@@ -236,6 +247,15 @@ Flags:
                                evaluate them instead) or "revision_selector_mismatch" (their
                                compositionRevisionSelector does not match the composition's
                                labels; --include-manual does not re-include these).
+      --crossplane-version=VERSION
+                               Pin the crossplane render version; the docker engine
+                               pulls xpkg.crossplane.io/crossplane/crossplane:<version>.
+                               Minimum v2.3.4 (older renders drop cluster-observed
+                               resources; see Prerequisites). Mutually exclusive with
+                               --crossplane-image.
+      --crossplane-image=IMAGE Override the full crossplane render image reference
+                               (e.g. for a private mirror). Mutually exclusive with
+                               --crossplane-version.
 ```
 
 **Note**: The `diff` subcommand is deprecated. Use `xr` instead.

@@ -92,6 +92,14 @@ func defaultProcessorOptions(fields CommonCmdFields) []dp.ProcessorOption {
 		opts = append(opts, dp.WithCrossplaneRenderBinary(fields.CrossplaneRenderBinary))
 	}
 
+	if fields.CrossplaneVersion != "" {
+		opts = append(opts, dp.WithCrossplaneVersion(fields.CrossplaneVersion))
+	}
+
+	if fields.CrossplaneImage != "" {
+		opts = append(opts, dp.WithCrossplaneImage(fields.CrossplaneImage))
+	}
+
 	return opts
 }
 

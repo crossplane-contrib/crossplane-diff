@@ -101,9 +101,16 @@ type EngineRenderFn struct {
 
 // NewEngineRenderFn constructs an EngineRenderFn.
 //
-// binaryPath threads through to render.EngineFlags.CrossplaneBinary, so when
-// non-empty the upstream localRenderEngine drives rendering against a local
-// `crossplane` binary; when empty the upstream dockerRenderEngine pulls
+// binaryPath, version, and image select the render backend via
+// render.EngineFlags (they are mutually exclusive upstream, grouped under the
+// "crossplane-selector" xor):
+//   - binaryPath (CrossplaneBinary): drives the upstream localRenderEngine
+//     against a local `crossplane` binary.
+//   - version (CrossplaneVersion): the docker engine pulls
+//     xpkg.crossplane.io/crossplane/crossplane:<version>.
+//   - image (CrossplaneImage): the docker engine pulls that full image ref.
+//
+// When all three are empty the docker engine pulls
 // xpkg.crossplane.io/crossplane/crossplane:stable. Both engines now capture
 // stderr into the returned error and honour exit code 3 (partial-output-on-
 // fatal — crossplane/crossplane#7455) per crossplane/cli#91, so we no longer
@@ -116,10 +123,12 @@ type EngineRenderFn struct {
 // annotates each fn at Setup time so its container joins it too — closing
 // both halves of the "crossplane-diff inside a container" case
 // (crossplane/cli#75). For the local engine the flag is a no-op.
-func NewEngineRenderFn(log logging.Logger, binaryPath string) *EngineRenderFn {
+func NewEngineRenderFn(log logging.Logger, binaryPath, version, image string) *EngineRenderFn {
 	return &EngineRenderFn{
 		engine: render.NewEngineFromFlags(&render.EngineFlags{
 			CrossplaneBinary:        binaryPath,
+			CrossplaneVersion:       version,
+			CrossplaneImage:         image,
 			CrossplaneDockerNetwork: os.Getenv(EnvDockerNetwork),
 		}, log),
 		log:           log,
