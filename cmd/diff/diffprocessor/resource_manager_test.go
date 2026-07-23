@@ -1233,6 +1233,79 @@ func TestDefaultResourceManager_FetchObservedResources(t *testing.T) {
 			xr:      testXR,
 			wantErr: true,
 		},
+		"FiltersGrandchildrenControlledByNestedXR": {
+			// Regression for the "has a controller ref but is not controlled by
+			// the XR" render error (issue #399). A grandchild controlled by a
+			// nested XR (different UID than the top XR) must NOT be returned as
+			// an observed resource for the top-level XR's render, because the
+			// crossplane render binary (>= v2.3.4) rejects observed resources
+			// whose controller-ref UID does not match the XR being rendered.
+			setupTreeClient: func() *tu.MockResourceTreeClient {
+				// XR (uid xr-uid)
+				//   -> composedResource1        (controlled by XR)
+				//   -> nestedXR                 (controlled by XR, uid nested-uid)
+				//        -> grandchild          (controlled by nestedXR)  <- must be dropped
+				topXR := tu.NewResource("example.org/v1", "XR", "test-xr").
+					WithSpecField("field", "value").
+					WithUID("xr-uid").
+					Build()
+
+				directChild := tu.NewResource("example.org/v1", "ManagedResource", "resource-1").
+					WithSpecField("field", "value1").
+					WithAnnotations(map[string]string{
+						"crossplane.io/composition-resource-name": "db-instance",
+					}).
+					WithControllerReference("XR", "test-xr", "example.org/v1", "xr-uid").
+					Build()
+
+				nestedXRWithUID := tu.NewResource("example.org/v1", "ChildXR", "nested-xr").
+					WithSpecField("nested", "value").
+					WithAnnotations(map[string]string{
+						"crossplane.io/composition-resource-name": "child-xr",
+					}).
+					WithControllerReference("XR", "test-xr", "example.org/v1", "xr-uid").
+					WithUID("nested-uid").
+					Build()
+
+				grandchild := tu.NewResource("example.org/v1", "NestedResource", "grandchild-1").
+					WithSpecField("field", "nested-value").
+					WithAnnotations(map[string]string{
+						"crossplane.io/composition-resource-name": "nested-db",
+					}).
+					WithControllerReference("ChildXR", "nested-xr", "example.org/v1", "nested-uid").
+					Build()
+
+				return tu.NewMockResourceTreeClient().
+					WithGetResourceTree(func(_ context.Context, _ *un.Unstructured) (*resource.Resource, error) {
+						return &resource.Resource{
+							Unstructured: *topXR.DeepCopy(),
+							Children: []*resource.Resource{
+								{
+									Unstructured: *directChild.DeepCopy(),
+									Children:     []*resource.Resource{},
+								},
+								{
+									Unstructured: *nestedXRWithUID.DeepCopy(),
+									Children: []*resource.Resource{
+										{
+											Unstructured: *grandchild.DeepCopy(),
+											Children:     []*resource.Resource{},
+										},
+									},
+								},
+							},
+						}, nil
+					}).
+					Build()
+			},
+			xr: tu.NewResource("example.org/v1", "XR", "test-xr").
+				WithSpecField("field", "value").
+				WithUID("xr-uid").
+				Build(),
+			wantCount:       2, // directChild + nestedXR; grandchild filtered out
+			wantResourceIDs: []string{"resource-1", "nested-xr"},
+			wantErr:         false,
+		},
 		"HandlesDeepNestedStructure": {
 			setupTreeClient: func() *tu.MockResourceTreeClient {
 				// Build a deeply nested tree:
