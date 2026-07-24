@@ -31,6 +31,14 @@ import (
 // observed resources (crossplane/crossplane#7544).
 const MinCrossplaneRenderVersion = "v2.3.4"
 
+// minRenderVersion is MinCrossplaneRenderVersion parsed once at package init.
+// semver.MustParse panics if the constant is not valid semver — that is a
+// compile-time-constant programming error, caught immediately on first import
+// rather than deferred to a per-call error branch.
+//
+//nolint:gochecknoglobals // Parsed-once view of the MinCrossplaneRenderVersion constant; immutable.
+var minRenderVersion = semver.MustParse(MinCrossplaneRenderVersion)
+
 // ValidateMinRenderVersion returns an error if version parses to a semantic
 // version older than MinCrossplaneRenderVersion, or if it cannot be parsed as
 // a semantic version at all. A leading "v" is accepted (and optional). It is
@@ -43,13 +51,7 @@ func ValidateMinRenderVersion(version string) error {
 		return errors.Wrapf(err, "cannot parse crossplane render version %q as a semantic version", version)
 	}
 
-	minVer, err := semver.NewVersion(MinCrossplaneRenderVersion)
-	if err != nil {
-		// Programming error: the constant must always be a valid semver.
-		return errors.Wrapf(err, "cannot parse minimum crossplane render version %q", MinCrossplaneRenderVersion)
-	}
-
-	if v.LessThan(minVer) {
+	if v.LessThan(minRenderVersion) {
 		return errors.Errorf("crossplane render version %q is below the minimum supported version %s", version, MinCrossplaneRenderVersion)
 	}
 
