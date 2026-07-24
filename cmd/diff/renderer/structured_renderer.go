@@ -66,6 +66,45 @@ type OutputError = dt.OutputError
 // StructuredDiffOutput represents the structured output format for diffs.
 // Note: Only JSON tags are used because sigs.k8s.io/yaml uses JSON tags for YAML serialization.
 type StructuredDiffOutput struct {
+	// Summary is the aggregate change count across every input XR.
+	Summary Summary `json:"summary"`
+
+	// Changes is the flat, ungrouped list of all resource changes across every
+	// input XR.
+	//
+	// Deprecated: use Xrs for per-input-XR grouping. This field is retained for
+	// backward compatibility and will be removed in a future major release.
+	Changes []ChangeDetail `json:"changes"`
+
+	// Errors is the union of resource-processing errors across all input XRs
+	// (the top-level/global error list). Each errored XR also surfaces its
+	// error inside its own Xrs entry; this list stays complete for consumers
+	// that read errors here.
+	Errors []dt.OutputError `json:"errors,omitempty"`
+
+	// Xrs groups changes by the input XR/claim that produced them, one entry
+	// per input in input order. This is the recommended view; the flat Changes
+	// field above is deprecated.
+	Xrs []XRDiffJSON `json:"xrs"`
+}
+
+// XRIdentity identifies an input XR/claim in structured output. It is a
+// deliberately small projection of the input's metadata (not the full
+// corev1.ObjectReference) so the JSON schema stays stable and free of
+// server-side fields like UID or resourceVersion.
+type XRIdentity struct {
+	APIVersion string `json:"apiVersion"`
+	Kind       string `json:"kind"`
+	Name       string `json:"name"`
+	Namespace  string `json:"namespace,omitempty"`
+}
+
+// XRDiffJSON is the per-input-XR entry in StructuredDiffOutput.Xrs. It carries
+// the input XR's identity, its processing status, and its own summary,
+// changes, and errors.
+type XRDiffJSON struct {
+	XR      XRIdentity       `json:"xr"`
+	Status  XRStatus         `json:"status"`
 	Summary Summary          `json:"summary"`
 	Changes []ChangeDetail   `json:"changes"`
 	Errors  []dt.OutputError `json:"errors,omitempty"`
@@ -201,19 +240,22 @@ func NewStructuredDiffRenderer(logger logging.Logger, opts DiffOptions) DiffRend
 
 // RenderDiffs renders the diffs in the configured structured format.
 //
-// TODO(#405, S4): build the per-XR xrs[] view from groups. For now this
-// flattens all groups into the deprecated flat changes[] view so the signature
-// change lands green.
+// It emits two views built from the same groups: the deprecated flat
+// changes[]/summary (merged across all groups) for backward compatibility, and
+// the per-input-XR xrs[] grouping. The top-level errors[] is the union passed
+// by the caller.
 func (r *StructuredDiffRenderer) RenderDiffs(groups []dt.XRDiffGroup, errs []dt.OutputError) error {
-	diffs := flattenGroups(groups)
-
 	r.logger.Debug("Rendering diffs in structured format",
 		"format", r.opts.Format,
-		"diffCount", len(diffs),
+		"groupCount", len(groups),
 		"errorCount", len(errs))
 
-	output := r.buildStructuredOutput(diffs)
+	// Flat, deprecated view: merge all groups' diffs.
+	output := r.buildStructuredOutput(flattenGroups(groups))
 	output.Errors = errs
+
+	// Grouped view: one entry per input XR, in input order.
+	output.Xrs = buildXRGroups(groups)
 
 	var (
 		data []byte
@@ -392,6 +434,46 @@ func resourceDiffToChangeDetail(diff *dt.ResourceDiff) *ChangeDetail {
 	}
 
 	return change
+}
+
+// buildXRGroups converts the processor's per-input-XR groups into the xrs[]
+// structured view, preserving input order. Each entry gets its identity, a
+// derived status, and (for changed XRs) its own summary and changes; errored
+// XRs carry their error.
+func buildXRGroups(groups []dt.XRDiffGroup) []XRDiffJSON {
+	out := make([]XRDiffJSON, 0, len(groups))
+
+	for _, g := range groups {
+		entry := XRDiffJSON{
+			XR: XRIdentity{
+				APIVersion: g.XR.APIVersion,
+				Kind:       g.XR.Kind,
+				Name:       g.XR.Name,
+				Namespace:  g.XR.Namespace,
+			},
+			Changes: []ChangeDetail{},
+		}
+
+		switch {
+		case g.Err != nil:
+			entry.Status = XRStatusError
+			entry.Errors = []dt.OutputError{*g.Err}
+		default:
+			// buildDownstreamChanges returns nil when there are no non-equal
+			// diffs, which is exactly the "unchanged" case.
+			if changes := buildDownstreamChanges(g.Diffs); changes != nil {
+				entry.Status = XRStatusChanged
+				entry.Summary = changes.Summary
+				entry.Changes = changes.Changes
+			} else {
+				entry.Status = XRStatusUnchanged
+			}
+		}
+
+		out = append(out, entry)
+	}
+
+	return out
 }
 
 // buildDownstreamChanges builds DownstreamChanges from a map of ResourceDiffs.
