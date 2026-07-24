@@ -8,6 +8,7 @@ import (
 	dt "github.com/crossplane-contrib/crossplane-diff/cmd/diff/renderer/types"
 	tu "github.com/crossplane-contrib/crossplane-diff/cmd/diff/testutils"
 	"github.com/sergi/go-diff/diffmatchpatch"
+	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 )
 
@@ -263,6 +264,128 @@ func TestDefaultDiffRenderer_RenderDiffs_WithErrors(t *testing.T) {
 			for _, expectedMsg := range tt.expected {
 				if !strings.Contains(output, expectedMsg) {
 					t.Errorf("Expected stderr to contain %q but it didn't\nStderr: %s", expectedMsg, output)
+				}
+			}
+		})
+	}
+}
+
+// modifiedDiffFor builds a minimal modified diff for a composed resource of the
+// given kind/name, used to populate identity-bearing groups in grouped tests.
+func modifiedDiffFor(kind, name string) *dt.ResourceDiff {
+	return &dt.ResourceDiff{
+		Gvk:          schema.GroupVersionKind{Group: "example.org", Version: "v1", Kind: kind},
+		ResourceName: name,
+		DiffType:     dt.DiffTypeModified,
+		LineDiffs: []diffmatchpatch.Diff{
+			{Type: diffmatchpatch.DiffDelete, Text: "spec:\n  field: old"},
+			{Type: diffmatchpatch.DiffInsert, Text: "spec:\n  field: new"},
+		},
+	}
+}
+
+// xrGroup builds an identity-bearing XRDiffGroup for the given input XR kind/name.
+func xrGroup(kind, name string, diffs map[string]*dt.ResourceDiff) dt.XRDiffGroup {
+	return dt.XRDiffGroup{
+		XR:    corev1.ObjectReference{APIVersion: "example.org/v1", Kind: kind, Name: name},
+		Diffs: diffs,
+	}
+}
+
+func TestDefaultDiffRenderer_RenderDiffs_GroupedByXR(t *testing.T) {
+	changedBucket := modifiedDiffFor("Bucket", "my-xr-bucket")
+
+	tests := map[string]struct {
+		groups      []dt.XRDiffGroup
+		expected    []string
+		notExpected []string
+	}{
+		// A single identity-bearing group prints its section header and a
+		// per-section summary, but no aggregate footer (only one XR).
+		"SingleChangedXR": {
+			groups: []dt.XRDiffGroup{
+				xrGroup("XNopResource", "my-xr", map[string]*dt.ResourceDiff{
+					changedBucket.GetDiffKey(): changedBucket,
+				}),
+			},
+			expected: []string{
+				"=== XNopResource/my-xr ===",
+				"~~~ Bucket/my-xr-bucket",
+				"Summary: 1 modified",
+			},
+			notExpected: []string{"Total:"},
+		},
+		// Multiple identity-bearing groups: each gets a header in input order, an
+		// unchanged group says "No changes.", and an aggregate footer tallies all.
+		"MultipleXRsWithUnchanged": {
+			groups: []dt.XRDiffGroup{
+				xrGroup("XNopResource", "first-xr", map[string]*dt.ResourceDiff{
+					changedBucket.GetDiffKey(): changedBucket,
+				}),
+				xrGroup("XNopResource", "second-xr", map[string]*dt.ResourceDiff{}),
+			},
+			expected: []string{
+				"=== XNopResource/first-xr ===",
+				"=== XNopResource/second-xr ===",
+				"No changes.",
+				"Total: 1 modified across 2 XRs (1 unchanged)",
+			},
+		},
+		// An errored group prints an inline Error section on stdout.
+		"ErroredXR": {
+			groups: []dt.XRDiffGroup{
+				{
+					XR:  corev1.ObjectReference{APIVersion: "example.org/v1", Kind: "XNopResource", Name: "broken-xr"},
+					Err: &dt.OutputError{ResourceID: "XNopResource/broken-xr", Message: "cannot get composition"},
+				},
+			},
+			expected: []string{
+				"=== XNopResource/broken-xr ===",
+				"Error: cannot get composition",
+			},
+		},
+		// An identity-less group (the composition renderer's reuse) renders flat:
+		// no section header, no aggregate footer.
+		"IdentityLessRendersFlat": {
+			groups: flatGroups(map[string]*dt.ResourceDiff{
+				changedBucket.GetDiffKey(): changedBucket,
+			}),
+			expected: []string{
+				"~~~ Bucket/my-xr-bucket",
+				"Summary: 1 modified",
+			},
+			notExpected: []string{"===", "Total:"},
+		},
+	}
+
+	for name, tt := range tests {
+		t.Run(name, func(t *testing.T) {
+			logger := tu.TestLogger(t, false)
+
+			var buffer bytes.Buffer
+
+			opts := DefaultDiffOptions()
+			opts.UseColors = false
+			opts.Stdout = &buffer
+			opts.Stderr = &bytes.Buffer{}
+
+			renderer := NewDiffRenderer(logger, opts)
+
+			if err := renderer.RenderDiffs(tt.groups, nil); err != nil {
+				t.Fatalf("RenderDiffs() failed: %v", err)
+			}
+
+			output := buffer.String()
+
+			for _, expected := range tt.expected {
+				if !strings.Contains(output, expected) {
+					t.Errorf("expected output to contain %q\nOutput:\n%s", expected, output)
+				}
+			}
+
+			for _, notExpected := range tt.notExpected {
+				if strings.Contains(output, notExpected) {
+					t.Errorf("output should not contain %q\nOutput:\n%s", notExpected, output)
 				}
 			}
 		})

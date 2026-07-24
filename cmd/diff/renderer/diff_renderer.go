@@ -142,23 +142,64 @@ func summaryLine(counts diffCounts) string {
 	return strings.Join(parts, ", ")
 }
 
+// hasIdentity reports whether a group carries input-XR identity. The
+// composition renderer reuses this renderer with identity-less groups (no
+// single owning XR); those render as a flat, header-less block, preserving
+// comp's output. The xr command always sets identity, producing per-XR
+// sections.
+func hasIdentity(g dt.XRDiffGroup) bool {
+	return g.XR.Kind != "" || g.XR.Name != ""
+}
+
 // RenderDiffs formats and prints the diffs.
 // Diff output goes to r.diffOpts.Stdout, errors go to r.diffOpts.Stderr.
 //
-// TODO(#405, S3): render identity-bearing groups as per-XR sections. For now
-// this flattens all groups and preserves the pre-change flat behavior.
+// Identity-bearing groups (the xr command) render as per-input-XR sections,
+// each with a header and per-section summary, followed by an aggregate footer
+// when there is more than one such group. Identity-less groups (the
+// composition renderer's reuse) render as a single flat block, preserving the
+// pre-grouping behavior.
 func (r *DefaultDiffRenderer) RenderDiffs(groups []dt.XRDiffGroup, errs []dt.OutputError) error {
-	diffs := flattenGroups(groups)
-
 	r.logger.Debug("Rendering diffs to output",
-		"diffCount", len(diffs),
+		"groupCount", len(groups),
 		"errorCount", len(errs),
 		"useColors", r.diffOpts.UseColors,
 		"compact", r.diffOpts.Compact)
 
-	stdout := r.diffOpts.Stdout
-	stderr := r.diffOpts.Stderr
+	// Count identity-bearing groups to decide whether to render sections and an
+	// aggregate footer. If none carry identity, fall back to the flat rendering.
+	identityGroups := 0
 
+	for _, g := range groups {
+		if hasIdentity(g) {
+			identityGroups++
+		}
+	}
+
+	var err error
+	if identityGroups == 0 {
+		err = r.renderFlat(flattenGroups(groups))
+	} else {
+		err = r.renderGrouped(groups, identityGroups > 1)
+	}
+
+	if err != nil {
+		return err
+	}
+
+	// Write errors to stderr following Unix conventions
+	for _, e := range errs {
+		if _, err := fmt.Fprintln(r.diffOpts.Stderr, e.FormatError()); err != nil {
+			return errors.Wrap(err, "failed to write error to stderr")
+		}
+	}
+
+	return nil
+}
+
+// renderFlat renders a single flat block of diffs plus a "Summary:" line. This
+// is the pre-grouping behavior, used for identity-less groups (comp reuse).
+func (r *DefaultDiffRenderer) renderFlat(diffs map[string]*dt.ResourceDiff) error {
 	counts, err := r.renderDiffList(diffs)
 	if err != nil {
 		return err
@@ -171,20 +212,110 @@ func (r *DefaultDiffRenderer) RenderDiffs(groups []dt.XRDiffGroup, errs []dt.Out
 		"equal", counts.equal,
 		"output", counts.output)
 
-	// Add a summary to the output if there were diffs.
 	if counts.output > 0 {
 		if line := summaryLine(counts); line != "" {
-			if _, err := fmt.Fprintf(stdout, "\nSummary: %s\n", line); err != nil {
+			if _, err := fmt.Fprintf(r.diffOpts.Stdout, "\nSummary: %s\n", line); err != nil {
 				return errors.Wrap(err, "failed to write summary to output")
 			}
 		}
 	}
 
-	// Write errors to stderr following Unix conventions
-	for _, e := range errs {
-		if _, err := fmt.Fprintln(stderr, e.FormatError()); err != nil {
-			return errors.Wrap(err, "failed to write error to stderr")
+	return nil
+}
+
+// renderGrouped renders each group as a per-input-XR section (header + diffs +
+// per-section summary, or an inline error / "No changes."), then an aggregate
+// footer when withFooter is true. Sections are emitted in input (slice) order.
+func (r *DefaultDiffRenderer) renderGrouped(groups []dt.XRDiffGroup, withFooter bool) error {
+	stdout := r.diffOpts.Stdout
+
+	var (
+		total       diffCounts
+		unchangedXR int
+		errorXR     int
+	)
+
+	for _, g := range groups {
+		// Identity-less groups shouldn't normally be mixed with identity-bearing
+		// ones; if they are, fold their diffs into the aggregate without a header.
+		header := "(unknown)"
+		if hasIdentity(g) {
+			header = fmt.Sprintf("%s/%s", g.XR.Kind, g.XR.Name)
 		}
+
+		if _, err := fmt.Fprintf(stdout, "=== %s ===\n\n", header); err != nil {
+			return errors.Wrap(err, "failed to write XR section header")
+		}
+
+		switch {
+		case g.Err != nil:
+			errorXR++
+
+			if _, err := fmt.Fprintf(stdout, "Error: %s\n\n", g.Err.Message); err != nil {
+				return errors.Wrap(err, "failed to write XR error")
+			}
+
+			continue
+		}
+
+		counts, err := r.renderDiffList(g.Diffs)
+		if err != nil {
+			return err
+		}
+
+		total.added += counts.added
+		total.modified += counts.modified
+		total.removed += counts.removed
+
+		if counts.output == 0 {
+			unchangedXR++
+
+			if _, err := fmt.Fprintf(stdout, "No changes.\n\n"); err != nil {
+				return errors.Wrap(err, "failed to write no-changes message")
+			}
+
+			continue
+		}
+
+		if line := summaryLine(counts); line != "" {
+			if _, err := fmt.Fprintf(stdout, "\nSummary: %s\n\n", line); err != nil {
+				return errors.Wrap(err, "failed to write section summary")
+			}
+		}
+	}
+
+	if !withFooter {
+		return nil
+	}
+
+	return r.renderAggregateFooter(len(groups), total, unchangedXR, errorXR)
+}
+
+// renderAggregateFooter writes the cross-XR totals line shown when more than one
+// input XR was diffed.
+func (r *DefaultDiffRenderer) renderAggregateFooter(xrCount int, total diffCounts, unchangedXR, errorXR int) error {
+	line := summaryLine(total)
+	if line == "" {
+		line = "no changes"
+	}
+
+	var qualifiers []string
+	if unchangedXR > 0 {
+		qualifiers = append(qualifiers, fmt.Sprintf("%d unchanged", unchangedXR))
+	}
+
+	if errorXR > 0 {
+		qualifiers = append(qualifiers, fmt.Sprintf("%d error", errorXR))
+	}
+
+	suffix := ""
+	if len(qualifiers) > 0 {
+		suffix = fmt.Sprintf(" (%s)", strings.Join(qualifiers, ", "))
+	}
+
+	if _, err := fmt.Fprintf(r.diffOpts.Stdout, "%s\nTotal: %s across %d XRs%s\n",
+		strings.Repeat("=", 80), line, xrCount, suffix); err != nil {
+		return errors.Wrap(err, "failed to write aggregate footer")
 	}
 
 	return nil
