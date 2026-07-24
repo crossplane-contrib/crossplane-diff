@@ -75,6 +75,20 @@ type ProcessorConfig struct {
 	// RenderFunc is set explicitly.
 	CrossplaneRenderBinary string
 
+	// CrossplaneVersion, when non-empty, causes the default engine-backed
+	// RenderFn's docker engine to pull
+	// xpkg.crossplane.io/crossplane/crossplane:<version> instead of :stable.
+	// Mutually exclusive with CrossplaneImage and CrossplaneRenderBinary.
+	// Ignored when RenderFunc is set explicitly.
+	CrossplaneVersion string
+
+	// CrossplaneImage, when non-empty, causes the default engine-backed
+	// RenderFn's docker engine to pull this full image reference instead of
+	// the default xpkg.crossplane.io/crossplane/crossplane:stable. Mutually
+	// exclusive with CrossplaneVersion and CrossplaneRenderBinary. Ignored
+	// when RenderFunc is set explicitly.
+	CrossplaneImage string
+
 	// Factories provide factory functions for creating components
 	Factories ComponentFactories
 }
@@ -222,6 +236,26 @@ func WithRenderFunc(renderFn RenderFn) ProcessorOption {
 func WithCrossplaneRenderBinary(path string) ProcessorOption {
 	return func(config *ProcessorConfig) {
 		config.CrossplaneRenderBinary = path
+	}
+}
+
+// WithCrossplaneVersion pins the crossplane render version the default
+// engine-backed RenderFn's docker engine pulls (…/crossplane:<version>).
+// See ProcessorConfig.CrossplaneVersion. Mutually exclusive with
+// WithCrossplaneImage and WithCrossplaneRenderBinary.
+func WithCrossplaneVersion(version string) ProcessorOption {
+	return func(config *ProcessorConfig) {
+		config.CrossplaneVersion = version
+	}
+}
+
+// WithCrossplaneImage pins the full crossplane render image reference the
+// default engine-backed RenderFn's docker engine pulls. See
+// ProcessorConfig.CrossplaneImage. Mutually exclusive with
+// WithCrossplaneVersion and WithCrossplaneRenderBinary.
+func WithCrossplaneImage(image string) ProcessorOption {
+	return func(config *ProcessorConfig) {
+		config.CrossplaneImage = image
 	}
 }
 

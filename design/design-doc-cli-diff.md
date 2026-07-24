@@ -502,6 +502,10 @@ The `ProcessorConfig` structure provides configuration options:
 - `FunctionRegistryOverride`: Rewrites function image references to a mirror.
 - `CrossplaneRenderBinary`: Optional path to an external `crossplane render` binary (otherwise the in-process render
   package is used).
+- `CrossplaneVersion`: Optional pinned render version; the docker engine pulls `…/crossplane:<version>` instead of
+  `:stable`. Validated against `MinCrossplaneRenderVersion` (v2.3.4) at the CLI layer.
+- `CrossplaneImage`: Optional full render image reference (e.g. a private mirror). Mutually exclusive with
+  `CrossplaneVersion` and `CrossplaneRenderBinary`.
 - `Stdout`, `Stderr`: Output sinks (writers are no longer threaded through method calls).
 - `Logger`: Structured logger, propagated to all subcomponents.
 - `RenderFunc`: Renders a composition pipeline; defaults to the in-process engine.
@@ -1001,7 +1005,21 @@ crossplane-diff xr --max-nested-depth 3 xr.yaml
 
 # Show steady-state diff for compositions that need multiple reconciliation cycles
 crossplane-diff xr --eventual-state xr.yaml
+
+# Pin the crossplane render version (minimum v2.3.4) for reproducible diffs
+crossplane-diff xr --crossplane-version v2.3.4 xr.yaml
+
+# Render from a mirrored/air-gapped image reference instead of :stable
+crossplane-diff xr --crossplane-image my-registry.example.com/crossplane/crossplane:v2.4.0 xr.yaml
 ```
+
+The render backend is selected by three mutually-exclusive flags that thread through to upstream
+`render.EngineFlags`: `--crossplane-version` (pulls `…/crossplane:<version>`), `--crossplane-image` (full
+image ref), and the hidden test-only `--crossplane-render-binary` (local binary). When none is set the docker
+engine pulls `…/crossplane:stable`. `--crossplane-version` is validated against
+`diffprocessor.MinCrossplaneRenderVersion` (v2.3.4) at parse time via a kong `Validate` hook, failing fast
+before any cluster work; `--crossplane-image` is not floor-checked (a full reference carries no comparable
+version).
 
 `comp` examples:
 ```

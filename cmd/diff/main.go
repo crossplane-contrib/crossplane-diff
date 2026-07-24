@@ -106,10 +106,31 @@ type CommonCmdFields struct {
 	FunctionRegistryOverride string              `help:"Override the registry for all function images (e.g., 'my-company.registry.io')."            name:"function-registry-override"`
 	EventualState            bool                `default:"false"                                                                                   help:"Show eventual state after all reconciliation cycles complete (useful with function-sequencer)."                                                        name:"eventual-state"`
 
+	// CrossplaneVersion / CrossplaneImage / CrossplaneRenderBinary select the
+	// crossplane render backend. They are mutually exclusive (kong "xor"
+	// group; upstream render.EngineFlags enforces the same). When none is set,
+	// the docker engine pulls xpkg.crossplane.io/crossplane/crossplane:stable.
+	CrossplaneVersion string `help:"Pin the crossplane render version (e.g. v2.3.4); the docker engine pulls xpkg.crossplane.io/crossplane/crossplane:<version>. Minimum v2.3.4." name:"crossplane-version" placeholder:"VERSION" xor:"crossplane-render-backend"`
+	CrossplaneImage   string `help:"Override the full crossplane render image reference (e.g. for a private mirror)."                                                             name:"crossplane-image"   placeholder:"IMAGE"   xor:"crossplane-render-backend"`
+
 	// CrossplaneRenderBinary is a hidden test-only override that points the
 	// render engine at a local `crossplane` binary. Production users leave
 	// this unset and the docker engine handles rendering.
-	CrossplaneRenderBinary string `help:"(test only) Path to a local crossplane binary used by the render engine instead of the docker image." hidden:"" name:"crossplane-render-binary"`
+	CrossplaneRenderBinary string `help:"(test only) Path to a local crossplane binary used by the render engine instead of the docker image." hidden:"" name:"crossplane-render-binary" xor:"crossplane-render-backend"`
+}
+
+// Validate enforces the minimum supported crossplane render version when a
+// version is explicitly pinned via --crossplane-version. kong invokes this
+// during Parse (before Run), so an unsupported pin fails fast, before any
+// cluster connection or render. --crossplane-image is not checked: a full
+// image reference carries no comparable version. See
+// diffprocessor.MinCrossplaneRenderVersion / crossplane-diff#399.
+func (c *CommonCmdFields) Validate() error {
+	if c.CrossplaneVersion == "" {
+		return nil
+	}
+
+	return dp.ValidateMinRenderVersion(c.CrossplaneVersion)
 }
 
 // GetKubeContext implements ContextProvider.
