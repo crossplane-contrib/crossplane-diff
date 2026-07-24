@@ -466,7 +466,7 @@ func TestDefaultDiffProcessor_PerformDiff(t *testing.T) {
 				// The factory receives DiffOptions which contains Stdout where output should be written
 				WithDiffRendererFactory(func(_ logging.Logger, opts renderer.DiffOptions) renderer.DiffRenderer {
 					return &tu.MockDiffRenderer{
-						RenderDiffsFn: func(_ map[string]*dt.ResourceDiff, _ []dt.OutputError) error {
+						RenderDiffsFn: func(_ []dt.XRDiffGroup, _ []dt.OutputError) error {
 							// Write a simple summary to the output via opts.Stdout
 							w := opts.Stdout
 

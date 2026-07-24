@@ -200,7 +200,13 @@ func NewStructuredDiffRenderer(logger logging.Logger, opts DiffOptions) DiffRend
 }
 
 // RenderDiffs renders the diffs in the configured structured format.
-func (r *StructuredDiffRenderer) RenderDiffs(diffs map[string]*dt.ResourceDiff, errs []dt.OutputError) error {
+//
+// TODO(#405, S4): build the per-XR xrs[] view from groups. For now this
+// flattens all groups into the deprecated flat changes[] view so the signature
+// change lands green.
+func (r *StructuredDiffRenderer) RenderDiffs(groups []dt.XRDiffGroup, errs []dt.OutputError) error {
+	diffs := flattenGroups(groups)
+
 	r.logger.Debug("Rendering diffs in structured format",
 		"format", r.opts.Format,
 		"diffCount", len(diffs),

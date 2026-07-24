@@ -13,12 +13,26 @@ import (
 	"github.com/crossplane/crossplane-runtime/v2/pkg/logging"
 )
 
+// flattenGroups merges every group's diffs into a single map. It is the basis
+// for the deprecated flat changes[] view in structured output and for the
+// composition renderer's flat reuse of the human renderer. A nil group.Diffs
+// is a safe no-op under maps.Copy.
+func flattenGroups(groups []dt.XRDiffGroup) map[string]*dt.ResourceDiff {
+	out := make(map[string]*dt.ResourceDiff)
+	for _, g := range groups {
+		maps.Copy(out, g.Diffs)
+	}
+
+	return out
+}
+
 // DiffRenderer handles rendering diffs to output.
 type DiffRenderer interface {
-	// RenderDiffs formats and outputs diffs.
+	// RenderDiffs formats and outputs diffs, grouped by input XR.
 	// Diff output goes to DiffOptions.Stdout, errors go to DiffOptions.Stderr.
-	// The errs parameter contains any resource processing errors to include in output.
-	RenderDiffs(diffs map[string]*dt.ResourceDiff, errs []dt.OutputError) error
+	// The errs parameter contains the union of resource processing errors to
+	// include in output (the top-level/global error list).
+	RenderDiffs(groups []dt.XRDiffGroup, errs []dt.OutputError) error
 }
 
 // DefaultDiffRenderer implements the DiffRenderer interface.
@@ -46,7 +60,13 @@ func getKindName(d *dt.ResourceDiff) string {
 
 // RenderDiffs formats and prints the diffs.
 // Diff output goes to r.diffOpts.Stdout, errors go to r.diffOpts.Stderr.
-func (r *DefaultDiffRenderer) RenderDiffs(diffs map[string]*dt.ResourceDiff, errs []dt.OutputError) error {
+//
+// TODO(#405, S2/S3): render identity-bearing groups as per-XR sections. For now
+// this flattens all groups and preserves the pre-change flat behavior so the
+// signature change lands green.
+func (r *DefaultDiffRenderer) RenderDiffs(groups []dt.XRDiffGroup, errs []dt.OutputError) error {
+	diffs := flattenGroups(groups)
+
 	r.logger.Debug("Rendering diffs to output",
 		"diffCount", len(diffs),
 		"errorCount", len(errs),

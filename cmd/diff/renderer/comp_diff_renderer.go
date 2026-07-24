@@ -139,7 +139,10 @@ func (r *DefaultCompDiffRenderer) renderCompositionChanges(comp *CompositionDiff
 		fmt.Sprintf("Composition/%s", comp.Name): comp.CompositionDiff,
 	}
 
-	if err := r.diffRenderer.RenderDiffs(diffs, nil); err != nil {
+	// Identity-less group: the human renderer renders it as a flat, header-less
+	// block, preserving comp's output. Comp provides its own XR grouping via
+	// impact analysis one level up.
+	if err := r.diffRenderer.RenderDiffs([]dt.XRDiffGroup{{Diffs: diffs}}, nil); err != nil {
 		return errors.Wrap(err, "cannot render composition diff")
 	}
 
@@ -266,9 +269,11 @@ func (r *DefaultCompDiffRenderer) renderImpactAnalysis(comp *CompositionDiff) er
 		}
 	}
 
-	// Render all diffs if we found some, or show a message if empty
+	// Render all diffs if we found some, or show a message if empty.
+	// Identity-less group: rendered flat (no per-XR header); comp groups via
+	// impact analysis one level up.
 	if len(allDiffs) > 0 {
-		if err := r.diffRenderer.RenderDiffs(allDiffs, nil); err != nil {
+		if err := r.diffRenderer.RenderDiffs([]dt.XRDiffGroup{{Diffs: allDiffs}}, nil); err != nil {
 			r.logger.Debug("Failed to render diffs", "error", err)
 			return errors.Wrap(err, "failed to render diffs")
 		}

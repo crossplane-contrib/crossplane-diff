@@ -8,9 +8,36 @@ import (
 	"strings"
 
 	"github.com/sergi/go-diff/diffmatchpatch"
+	corev1 "k8s.io/api/core/v1"
 	un "k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 )
+
+// XRDiffGroup pairs one input XR/claim with the diffs its render produced (or
+// the error that prevented them). It is built by the diff processor's
+// per-input loop and passed to the renderer so structured output can group by
+// input XR (see the xrs[] output field) and the human renderer can render
+// per-XR sections.
+//
+// XR carries the input XR/claim identity (apiVersion, kind, name, namespace).
+// It is left zero-valued for the composition renderer's internal reuse of the
+// human diff renderer, which has no single owning XR; the human renderer treats
+// an identity-less group as a flat, header-less block (preserving comp output).
+//
+// Err is a pre-converted *OutputError (not a raw error) because the conversion
+// (NewOutputError, which extracts typed validation failures) lives in the
+// diffprocessor package; having the renderer convert would require a
+// renderer -> diffprocessor import cycle. It is nil unless this XR failed.
+//
+// This type lives in the leaf types package (rather than the renderer package
+// alongside the DiffRenderer interface) so that testutils — which provides the
+// DiffRenderer mock — can reference it without importing renderer, which would
+// close an import cycle through renderer's in-package tests.
+type XRDiffGroup struct {
+	XR    corev1.ObjectReference
+	Diffs map[string]*ResourceDiff
+	Err   *OutputError
+}
 
 // ResourceViews holds the two representations of a single resource involved in
 // a diff: the Raw object (as rendered, or as fetched from the cluster) and the

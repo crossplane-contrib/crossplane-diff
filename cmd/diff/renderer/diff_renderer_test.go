@@ -11,6 +11,14 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 )
 
+// flatGroups wraps a flat diff map in a single identity-less XRDiffGroup, the
+// shape callers used before RenderDiffs became group-aware. Identity-less
+// groups render flat (no per-XR header), so these helpers keep pre-grouping
+// tests asserting the unchanged flat behavior.
+func flatGroups(diffs map[string]*dt.ResourceDiff) []dt.XRDiffGroup {
+	return []dt.XRDiffGroup{{Diffs: diffs}}
+}
+
 func TestDefaultDiffRenderer_RenderDiffs(t *testing.T) {
 	// Create test diffs
 	addedDiff := &dt.ResourceDiff{
@@ -176,7 +184,7 @@ func TestDefaultDiffRenderer_RenderDiffs(t *testing.T) {
 			renderer := NewDiffRenderer(logger, opts)
 
 			// Call the method under test
-			err := renderer.RenderDiffs(tt.diffs, nil)
+			err := renderer.RenderDiffs(flatGroups(tt.diffs), nil)
 			if err != nil {
 				t.Fatalf("RenderDiffs() failed with error: %v", err)
 			}
@@ -245,7 +253,7 @@ func TestDefaultDiffRenderer_RenderDiffs_WithErrors(t *testing.T) {
 
 			renderer := NewDiffRenderer(logger, opts)
 
-			err := renderer.RenderDiffs(map[string]*dt.ResourceDiff{}, tt.errs)
+			err := renderer.RenderDiffs(flatGroups(map[string]*dt.ResourceDiff{}), tt.errs)
 			if err != nil {
 				t.Fatalf("RenderDiffs() failed with error: %v", err)
 			}
