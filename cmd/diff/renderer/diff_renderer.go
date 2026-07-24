@@ -58,12 +58,95 @@ func getKindName(d *dt.ResourceDiff) string {
 	return fmt.Sprintf("%s/%s", d.Gvk.Kind, d.ResourceName)
 }
 
+// diffCounts holds the per-diff-type tally produced while rendering a list of
+// diffs. outputCount is the number of diffs that actually emitted content
+// (non-equal with a non-empty rendered body).
+type diffCounts struct {
+	added    int
+	modified int
+	removed  int
+	equal    int
+	output   int
+}
+
+// renderDiffList renders a flat set of diffs (sorted by kind/name) to stdout in
+// the human-readable +++/~~~/--- form and returns the per-type counts. It does
+// not print a summary; callers decide whether to emit a per-section or
+// aggregate summary from the returned counts. Equal diffs are skipped.
+func (r *DefaultDiffRenderer) renderDiffList(diffs map[string]*dt.ResourceDiff) (diffCounts, error) {
+	stdout := r.diffOpts.Stdout
+
+	// Sort by GetKindName, which is how it's displayed to the user.
+	d := slices.AppendSeq(make([]*dt.ResourceDiff, 0, len(diffs)), maps.Values(diffs))
+	slices.SortFunc(d, func(a, b *dt.ResourceDiff) int {
+		return cmp.Compare(getKindName(a), getKindName(b))
+	})
+
+	var counts diffCounts
+
+	for _, diff := range d {
+		resourceID := getKindName(diff)
+
+		var header string
+
+		switch diff.DiffType {
+		case dt.DiffTypeAdded:
+			counts.added++
+			header = fmt.Sprintf("+++ %s", resourceID)
+		case dt.DiffTypeRemoved:
+			counts.removed++
+			header = fmt.Sprintf("--- %s", resourceID)
+		case dt.DiffTypeModified:
+			counts.modified++
+			header = fmt.Sprintf("~~~ %s", resourceID)
+		case dt.DiffTypeEqual:
+			counts.equal++
+			// Skip rendering equal resources
+			continue
+		}
+
+		content := FormatDiff(diff.LineDiffs, r.diffOpts)
+
+		if content != "" {
+			if _, err := fmt.Fprintf(stdout, "%s\n%s\n---\n", header, content); err != nil {
+				r.logger.Debug("Error writing diff to output", "resource", resourceID, "error", err)
+				return counts, errors.Wrap(err, "failed to write diff to output")
+			}
+
+			counts.output++
+		} else {
+			r.logger.Debug("Empty diff content, skipping output", "resource", resourceID)
+		}
+	}
+
+	return counts, nil
+}
+
+// summaryLine formats a "N added, N modified, N removed" fragment from counts,
+// omitting zero categories. Returns "" when there is nothing to report.
+func summaryLine(counts diffCounts) string {
+	parts := make([]string, 0, 3)
+
+	if counts.added > 0 {
+		parts = append(parts, fmt.Sprintf("%d added", counts.added))
+	}
+
+	if counts.modified > 0 {
+		parts = append(parts, fmt.Sprintf("%d modified", counts.modified))
+	}
+
+	if counts.removed > 0 {
+		parts = append(parts, fmt.Sprintf("%d removed", counts.removed))
+	}
+
+	return strings.Join(parts, ", ")
+}
+
 // RenderDiffs formats and prints the diffs.
 // Diff output goes to r.diffOpts.Stdout, errors go to r.diffOpts.Stderr.
 //
-// TODO(#405, S2/S3): render identity-bearing groups as per-XR sections. For now
-// this flattens all groups and preserves the pre-change flat behavior so the
-// signature change lands green.
+// TODO(#405, S3): render identity-bearing groups as per-XR sections. For now
+// this flattens all groups and preserves the pre-change flat behavior.
 func (r *DefaultDiffRenderer) RenderDiffs(groups []dt.XRDiffGroup, errs []dt.OutputError) error {
 	diffs := flattenGroups(groups)
 
@@ -76,99 +159,22 @@ func (r *DefaultDiffRenderer) RenderDiffs(groups []dt.XRDiffGroup, errs []dt.Out
 	stdout := r.diffOpts.Stdout
 	stderr := r.diffOpts.Stderr
 
-	// Sort the keys to ensure a consistent output order
-	d := slices.AppendSeq(make([]*dt.ResourceDiff, 0, len(diffs)), maps.Values(diffs))
-
-	// Sort by GetKindName which is how it's displayed to the user
-	slices.SortFunc(d, func(a, b *dt.ResourceDiff) int {
-		return cmp.Compare(getKindName(a), getKindName(b))
-	})
-
-	// Track stats for summary logging
-	addedCount := 0
-	modifiedCount := 0
-	removedCount := 0
-	equalCount := 0
-	outputCount := 0
-
-	for _, diff := range d {
-		resourceID := getKindName(diff)
-
-		// Count by diff type for summary
-		switch diff.DiffType {
-		case dt.DiffTypeAdded:
-			addedCount++
-		case dt.DiffTypeRemoved:
-			removedCount++
-		case dt.DiffTypeModified:
-			modifiedCount++
-		case dt.DiffTypeEqual:
-			equalCount++
-			// Skip rendering equal resources
-			continue
-		}
-
-		// Format the diff header based on the diff type
-		var header string
-
-		switch diff.DiffType {
-		case dt.DiffTypeAdded:
-			header = fmt.Sprintf("+++ %s", resourceID)
-		case dt.DiffTypeRemoved:
-			header = fmt.Sprintf("--- %s", resourceID)
-		case dt.DiffTypeModified:
-			header = fmt.Sprintf("~~~ %s", resourceID)
-		case dt.DiffTypeEqual:
-			// should never get here
-			header = ""
-		}
-
-		// Format the diff content
-		content := FormatDiff(diff.LineDiffs, r.diffOpts)
-
-		if content != "" {
-			_, err := fmt.Fprintf(stdout, "%s\n%s\n---\n", header, content)
-			if err != nil {
-				r.logger.Debug("Error writing diff to output", "resource", resourceID, "error", err)
-				return errors.Wrap(err, "failed to write diff to output")
-			}
-
-			outputCount++
-		} else {
-			r.logger.Debug("Empty diff content, skipping output", "resource", resourceID)
-		}
+	counts, err := r.renderDiffList(diffs)
+	if err != nil {
+		return err
 	}
 
 	r.logger.Debug("Diff rendering complete",
-		"added", addedCount,
-		"removed", removedCount,
-		"modified", modifiedCount,
-		"equal", equalCount,
-		"output", outputCount)
+		"added", counts.added,
+		"removed", counts.removed,
+		"modified", counts.modified,
+		"equal", counts.equal,
+		"output", counts.output)
 
-	// Add a summary to the output if there were diffs
-	if outputCount > 0 {
-		summary := strings.Builder{}
-		summary.WriteString("\nSummary: ")
-
-		if addedCount > 0 {
-			fmt.Fprintf(&summary, "%d added, ", addedCount)
-		}
-
-		if modifiedCount > 0 {
-			fmt.Fprintf(&summary, "%d modified, ", modifiedCount)
-		}
-
-		if removedCount > 0 {
-			fmt.Fprintf(&summary, "%d removed, ", removedCount)
-		}
-
-		// Remove trailing comma and space
-		summaryStr := strings.TrimSuffix(summary.String(), ", ")
-
-		if summaryStr != "\nSummary: " {
-			_, err := fmt.Fprintln(stdout, summaryStr)
-			if err != nil {
+	// Add a summary to the output if there were diffs.
+	if counts.output > 0 {
+		if line := summaryLine(counts); line != "" {
+			if _, err := fmt.Fprintf(stdout, "\nSummary: %s\n", line); err != nil {
 				return errors.Wrap(err, "failed to write summary to output")
 			}
 		}
