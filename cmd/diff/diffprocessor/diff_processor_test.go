@@ -640,6 +640,114 @@ func TestDefaultDiffProcessor_PerformDiff(t *testing.T) {
 	}
 }
 
+// TestDefaultDiffProcessor_PerformDiff_BuildsGroups verifies that PerformDiff
+// builds one XRDiffGroup per input resource, in input order, with the input
+// XR's identity populated, and — for a failing resource — attaches the error to
+// both the group and the top-level union slice. This pins the group-building
+// contract that the renderer's per-XR output depends on.
+func TestDefaultDiffProcessor_PerformDiff_BuildsGroups(t *testing.T) {
+	ctx := t.Context()
+
+	// Two inputs; both fail composition lookup (no matching composition), which
+	// is the simplest reliable way to exercise the error branch for every input
+	// without a full render mock setup. Order and identity assertions don't
+	// depend on success vs failure.
+	resource1 := tu.NewResource("example.org/v1", "XR1", "my-xr-1").
+		WithSpecField("coolField", "test-value-1").
+		Build()
+	resource2 := tu.NewResource("example.org/v1", "XR1", "my-xr-2").
+		InNamespace("team-a").
+		WithSpecField("coolField", "test-value-2").
+		Build()
+
+	k8sClients := k8.Clients{
+		Apply:    tu.NewMockApplyClient().Build(),
+		Resource: tu.NewMockResourceClient().Build(),
+		Schema:   tu.NewMockSchemaClient().Build(),
+		Type:     tu.NewMockTypeConverter().Build(),
+	}
+	xpClients := xp.Clients{
+		Composition:  tu.NewMockCompositionClient().WithNoMatchingComposition().Build(),
+		Credential:   &tu.MockCredentialClient{},
+		Definition:   tu.NewMockDefinitionClient().Build(),
+		Environment:  tu.NewMockEnvironmentClient().WithNoEnvironmentConfigs().Build(),
+		Function:     tu.NewMockFunctionClient().Build(),
+		ResourceTree: tu.NewMockResourceTreeClient().Build(),
+	}
+
+	// Capture the groups (and union errors) the processor hands to the renderer.
+	var (
+		gotGroups []dt.XRDiffGroup
+		gotErrs   []dt.OutputError
+	)
+
+	opts := append(testProcessorOptions(t),
+		WithDiffRendererFactory(func(_ logging.Logger, _ renderer.DiffOptions) renderer.DiffRenderer {
+			return &tu.MockDiffRenderer{
+				RenderDiffsFn: func(groups []dt.XRDiffGroup, errs []dt.OutputError) error {
+					gotGroups = groups
+					gotErrs = errs
+					return nil
+				},
+			}
+		}),
+	)
+
+	processor := NewDiffProcessor(k8sClients, xpClients, opts...)
+
+	compositionProvider := func(ctx context.Context, res *un.Unstructured) (*apiextensionsv1.Composition, error) {
+		return xpClients.Composition.FindMatchingComposition(ctx, res)
+	}
+
+	// Both inputs error; PerformDiff returns a joined error but still renders.
+	if _, err := processor.PerformDiff(ctx, []*un.Unstructured{resource1, resource2}, compositionProvider); err == nil {
+		t.Fatal("PerformDiff(...): expected error from failed resources, got nil")
+	}
+
+	// One group per input, in input order.
+	if len(gotGroups) != 2 {
+		t.Fatalf("groups = %d, want 2", len(gotGroups))
+	}
+
+	wantIdentities := []corev1.ObjectReference{
+		{APIVersion: "example.org/v1", Kind: "XR1", Name: "my-xr-1", Namespace: ""},
+		{APIVersion: "example.org/v1", Kind: "XR1", Name: "my-xr-2", Namespace: "team-a"},
+	}
+
+	for i, want := range wantIdentities {
+		if diff := gcmp.Diff(want, gotGroups[i].XR); diff != "" {
+			t.Errorf("groups[%d].XR mismatch (-want +got):\n%s", i, diff)
+		}
+
+		// Failing input: no diffs, error attached to the group.
+		if gotGroups[i].Diffs != nil {
+			t.Errorf("groups[%d].Diffs = %v, want nil for a failed input", i, gotGroups[i].Diffs)
+		}
+
+		if gotGroups[i].Err == nil {
+			t.Errorf("groups[%d].Err = nil, want an error for a failed input", i)
+			continue
+		}
+
+		wantID := fmt.Sprintf("XR1/%s", want.Name)
+		if gotGroups[i].Err.ResourceID != wantID {
+			t.Errorf("groups[%d].Err.ResourceID = %q, want %q", i, gotGroups[i].Err.ResourceID, wantID)
+		}
+	}
+
+	// The same errors also appear in the top-level union, in order.
+	if len(gotErrs) != 2 {
+		t.Fatalf("union errors = %d, want 2", len(gotErrs))
+	}
+
+	for i, want := range wantIdentities {
+		wantID := fmt.Sprintf("XR1/%s", want.Name)
+		if gotErrs[i].ResourceID != wantID {
+			t.Errorf("gotErrs[%d].ResourceID = %q, want %q", i, gotErrs[i].ResourceID, wantID)
+		}
+	}
+}
+
 // TestDefaultDiffProcessor_PerformDiff_StderrErrorOutput verifies that when
 // resource processing fails, detailed errors are written to stderr for human visibility.
 // This tests the WithStderr option and the stderr error output path.
