@@ -128,21 +128,31 @@ func (r *DefaultDiffRenderer) renderDiffList(diffs map[string]*dt.ResourceDiff) 
 	return counts, nil
 }
 
-// summaryLine formats a "N added, N modified, N removed" fragment from counts,
-// omitting zero categories. Returns "" when there is nothing to report.
-func summaryLine(counts diffCounts) string {
+// add accumulates another tally into this one, field by field. Used to roll up
+// per-XR counts into the cross-XR total for the aggregate footer.
+func (c *diffCounts) add(other diffCounts) {
+	c.added += other.added
+	c.modified += other.modified
+	c.removed += other.removed
+	c.equal += other.equal
+	c.output += other.output
+}
+
+// summaryLine formats a "N added, N modified, N removed" fragment, omitting
+// zero categories. Returns "" when there is nothing to report.
+func (c *diffCounts) summaryLine() string {
 	parts := make([]string, 0, 3)
 
-	if counts.added > 0 {
-		parts = append(parts, fmt.Sprintf("%d added", counts.added))
+	if c.added > 0 {
+		parts = append(parts, fmt.Sprintf("%d added", c.added))
 	}
 
-	if counts.modified > 0 {
-		parts = append(parts, fmt.Sprintf("%d modified", counts.modified))
+	if c.modified > 0 {
+		parts = append(parts, fmt.Sprintf("%d modified", c.modified))
 	}
 
-	if counts.removed > 0 {
-		parts = append(parts, fmt.Sprintf("%d removed", counts.removed))
+	if c.removed > 0 {
+		parts = append(parts, fmt.Sprintf("%d removed", c.removed))
 	}
 
 	return strings.Join(parts, ", ")
@@ -221,7 +231,7 @@ func (r *DefaultDiffRenderer) renderFlat(diffs map[string]*dt.ResourceDiff) erro
 		"output", counts.output)
 
 	if counts.output > 0 {
-		if line := summaryLine(counts); line != "" {
+		if line := counts.summaryLine(); line != "" {
 			if _, err := fmt.Fprintf(r.diffOpts.Stdout, "\nSummary: %s\n", line); err != nil {
 				return errors.Wrap(err, "failed to write summary to output")
 			}
@@ -280,9 +290,7 @@ func (r *DefaultDiffRenderer) renderGrouped(groups []dt.XRDiffGroup) error {
 			return err
 		}
 
-		total.added += counts.added
-		total.modified += counts.modified
-		total.removed += counts.removed
+		total.add(counts)
 
 		if counts.output == 0 {
 			unchangedXR++
@@ -294,7 +302,7 @@ func (r *DefaultDiffRenderer) renderGrouped(groups []dt.XRDiffGroup) error {
 			continue
 		}
 
-		if line := summaryLine(counts); line != "" {
+		if line := counts.summaryLine(); line != "" {
 			if _, err := fmt.Fprintf(stdout, "\nSummary: %s\n\n", line); err != nil {
 				return errors.Wrap(err, "failed to write section summary")
 			}
@@ -307,7 +315,7 @@ func (r *DefaultDiffRenderer) renderGrouped(groups []dt.XRDiffGroup) error {
 // renderAggregateFooter writes the cross-XR totals line shown when more than one
 // input XR was diffed.
 func (r *DefaultDiffRenderer) renderAggregateFooter(xrCount int, total diffCounts, unchangedXR, errorXR int) error {
-	line := summaryLine(total)
+	line := total.summaryLine()
 	if line == "" {
 		line = "no changes"
 	}
