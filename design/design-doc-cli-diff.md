@@ -755,10 +755,11 @@ human-readable and a structured (JSON/YAML) implementation.
 ```go
 // DiffRenderer handles rendering XR diffs.
 type DiffRenderer interface {
-    // RenderDiffs writes per-resource diffs and any per-resource errors. The output writer is held
-    // by the renderer (configured at construction time), not passed in per call, so the same
-    // interface can serve human-readable and structured renderers without leaking io.Writer.
-    RenderDiffs(diffs map[string]*dt.ResourceDiff, errs []dt.OutputError) error
+    // RenderDiffs writes diffs grouped by input XR, plus the top-level (union) errors. The output
+    // writer is held by the renderer (configured at construction time), not passed in per call, so
+    // the same interface can serve human-readable and structured renderers without leaking
+    // io.Writer.
+    RenderDiffs(groups []dt.XRDiffGroup, errs []dt.OutputError) error
 }
 
 // CompDiffRenderer handles rendering composition diffs.
@@ -766,6 +767,14 @@ type CompDiffRenderer interface {
     RenderCompDiff(output *CompDiffOutput) error
 }
 ```
+
+`RenderDiffs` takes a slice of `dt.XRDiffGroup` rather than a flat diff map so both renderers can
+group output by the input XR that produced each change (see §6.8.3). Each group pairs one input
+XR/claim's identity with its diff tree (on success) or its pre-converted `*dt.OutputError` (on
+failure); the processor builds them in `PerformDiff`, one per input, in input order. The human
+renderer renders per-XR sections when more than one XR is present (a single XR, and the
+composition renderer's identity-less internal reuse, render as a flat block); the structured
+renderer emits both the deprecated flat `changes[]` and the grouped `xrs[]`.
 
 Implementations:
 
@@ -800,8 +809,9 @@ stored on the `ResourceDiff` as `ResourceViews{Raw, Clean}`. `Raw` is the origin
 detection and existing-XR reconstruction); `Clean` is the post-cleanup object. `Clean` is populated only for non-equal
 diffs — the ones that will actually be rendered. Equal diffs render nothing, so they retain only `Raw` and leave
 `Clean` nil (and the raw-deep-equal fast path returns before running cleanup at all). The structured renderer is a pure
-formatter: it emits `Clean` into `changes[].diff.old`, `changes[].diff.new`, and `changes[].diff.spec` and performs no
-cleanup of its own, so the machine-readable payload matches what the human diff shows. This matches the semantic-filter
+formatter: it emits `Clean` into `changes[].diff.old`, `changes[].diff.new`, and `changes[].diff.spec` (and the
+identical fields under each `xrs[].changes[]`) and performs no cleanup of its own, so the machine-readable payload
+matches what the human diff shows. This matches the semantic-filter
 convention used by ArgoCD (`ignoreDifferences`) and Terraform (`ignore_changes`): ignore is applied once, before output,
 and is visible in classification, summary counts, and rendered bodies alike.
 
@@ -815,12 +825,26 @@ The structured types are split across two files:
 - The error envelope and the validation-failure types live in `cmd/diff/renderer/types/`: `OutputError`,
   `ResourceValidationFailure`, `FieldValidationError`. These are separated because they're consumed by the
   human-readable renderer too, not just the structured ones.
+- `XRDiffGroup` also lives in `cmd/diff/renderer/types/`. It is the processor→renderer handoff type (input-XR
+  identity + its `Diffs map[string]*ResourceDiff` + a pre-converted `*OutputError`), not a wire type. It lives in the
+  leaf `types` package rather than alongside the `DiffRenderer` interface so `testutils` (which mocks `DiffRenderer`)
+  can reference it without importing `renderer`, which would close an import cycle through `renderer`'s in-package
+  tests. The pre-converted error (vs. a raw `error`) keeps the conversion — `NewOutputError`, which lives in
+  `diffprocessor` — out of the renderer, avoiding a renderer→diffprocessor dependency.
 
-All of these are part of the public output contract:
+All of the wire types below are part of the public output contract:
 
-- `StructuredDiffOutput` — XR diff JSON/YAML root: `Summary` (added/modified/removed counts), `Changes []ChangeDetail`
-  (one entry per non-equal resource, carrying type/apiVersion/kind/name/namespace and the old/new field map), optional
-  `Errors []OutputError`.
+- `StructuredDiffOutput` — XR diff JSON/YAML root: `Summary` (aggregate added/modified/removed counts across all input
+  XRs), `Changes []ChangeDetail` (flat list, one entry per non-equal resource across all XRs), optional
+  `Errors []OutputError` (union), and `Xrs []XRDiffJSON` (per-input-XR grouping). **`Changes` is deprecated** in favor
+  of `Xrs` and will be removed in a future major release; `Summary` and `Errors` are retained.
+- `XRDiffJSON` — one entry in `StructuredDiffOutput.Xrs`, per input XR/claim in input order: `XR XRIdentity`, a
+  `Status` (`"changed"` / `"unchanged"` / `"error"` — the same `XRStatus` enum comp uses; `"filtered"` does not apply
+  to `xr`), its own `Summary`, its own `Changes []ChangeDetail`, and (for a failed XR) its own `Errors []OutputError`.
+  An errored XR's error also appears in the top-level union `Errors`.
+- `XRIdentity` — the input XR/claim identity projected into `XRDiffJSON`: `apiVersion`, `kind`, `name`, `namespace`. A
+  deliberately small projection (not the full `corev1.ObjectReference`) so the JSON schema stays stable and free of
+  server-side fields.
 - `CompDiffOutput` — composition diff JSON/YAML root: `Compositions []CompositionDiff` (one entry per input
   composition) plus optional top-level `Errors []OutputError` for failures that couldn't be attributed to a single
   composition.

@@ -525,9 +525,54 @@ For CI/CD pipelines or programmatic processing, use `--output json` or `--output
       "name": "modified-resource",
       "diff": { "old": { ... }, "new": { ... } }
     }
+  ],
+  "xrs": [
+    {
+      "xr": { "apiVersion": "example.org/v1", "kind": "XNopResource", "name": "my-xr", "namespace": "default" },
+      "status": "changed",
+      "summary": { "added": 1, "modified": 1, "removed": 0 },
+      "changes": [
+        {
+          "type": "added",
+          "apiVersion": "nop.crossplane.io/v1alpha1",
+          "kind": "NopResource",
+          "name": "new-resource",
+          "diff": { "spec": { ... } }
+        },
+        {
+          "type": "modified",
+          "apiVersion": "nop.crossplane.io/v1alpha1",
+          "kind": "NopResource",
+          "name": "modified-resource",
+          "diff": { "old": { ... }, "new": { ... } }
+        }
+      ]
+    }
   ]
 }
 ```
+
+**Per-input-XR grouping (`xrs[]`).** When you diff more than one XR/claim in a
+single invocation, the flat `changes[]` list gives no indication of which input
+XR produced each change. The `xrs[]` array solves this: it carries one entry per
+input XR/claim (in input order), each with the input XR's identity, a `status`
+(`"changed"`, `"unchanged"`, or `"error"`), its own `summary`, its own
+`changes[]`, and — for a failed XR — its own `errors[]`. This is the
+authoritative grouping the tool already computes while rendering each XR's
+composed tree, so wrappers no longer need to invoke `xr` once per resource to
+get per-XR output. Unchanged XRs appear with `status: "unchanged"` and an empty
+`changes[]`; errored XRs appear with `status: "error"` and their error in the
+entry's `errors[]` (and also in the top-level `errors[]`).
+
+> **Deprecation:** the top-level flat `changes[]` is **deprecated** in favor of
+> `xrs[]` and will be removed in a future major release. The aggregate
+> `summary` and top-level `errors[]` remain. New consumers should read `xrs[]`;
+> existing consumers of `changes[]` keep working during the deprecation window.
+
+The human-readable (`diff`) output likewise groups by input XR when more than
+one is supplied: each XR gets a `=== Kind/name ===` section with its own diffs
+and summary, followed by an aggregate `Total: … across N XRs (…)` footer. A
+single-XR invocation renders flat, exactly as before.
 
 **Composition Diff JSON output** (`crossplane-diff comp composition.yaml -o json`):
 

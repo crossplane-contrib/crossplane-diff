@@ -57,8 +57,24 @@ classDiagram
 
     class StructuredDiffOutput {
         +Summary Summary
+        +Changes []ChangeDetail (deprecated)
+        +Errors []OutputError
+        +Xrs []XRDiffJSON
+    }
+
+    class XRDiffJSON {
+        +XR XRIdentity
+        +Status XRStatus
+        +Summary Summary
         +Changes []ChangeDetail
         +Errors []OutputError
+    }
+
+    class XRIdentity {
+        +APIVersion string
+        +Kind string
+        +Name string
+        +Namespace string
     }
 
     class Summary {
@@ -181,6 +197,12 @@ classDiagram
     StructuredDiffOutput --> Summary
     StructuredDiffOutput --> ChangeDetail
     StructuredDiffOutput --> OutputError
+    StructuredDiffOutput --> XRDiffJSON
+    XRDiffJSON --> XRIdentity
+    XRDiffJSON --> Summary
+    XRDiffJSON --> ChangeDetail
+    XRDiffJSON --> XRStatus
+    XRDiffJSON --> OutputError
     CompDiffOutput --> CompositionDiff
     CompDiffOutput --> OutputError
     CompositionDiff --> AffectedResourcesSummary
