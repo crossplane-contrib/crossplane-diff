@@ -43,16 +43,21 @@ changes are reflected inline in `design/design-doc-cli-diff.md` (§6.8) and the
    `unchanged`. Equal diffs are excluded from `changes[]` and counts (the XR
    stored as `DiffTypeEqual` for removal detection must not inflate counts).
 
-5. **Do not consolidate the `comp` and `xr` per-XR paths now.** Both carry a
-   per-XR bucket (`XRImpact` / `XRDiffGroup`) but diverge in four load-bearing
-   ways: `comp`'s diffs are downstream-only (XR is the axis, not a change);
-   `comp` has filter concepts meaningless to `xr`; `comp`'s wire error is a
-   single string vs. `xr`'s richer `errors[]`/`validationFailures[]`; `comp` is
-   two-level vs. `xr`'s one-level. Reuse the shared building blocks (`Summary`,
+5. **Do not consolidate the `comp` and `xr` per-XR paths now, but design `xrs[]`
+   as the eventual target shape.** Both commands carry a per-XR bucket
+   (`XRImpact` / `XRDiffGroup`) but diverge in four load-bearing ways: `comp`'s
+   diffs are downstream-only (XR is the axis, not a change); `comp` has filter
+   concepts meaningless to `xr`; `comp`'s wire error is a single string vs.
+   `xr`'s richer `errors[]`/`validationFailures[]`; `comp` is two-level vs.
+   `xr`'s one-level. Because `xrs[]` is additive/greenfield (no existing
+   consumers), it is designed up front to be the *converged* form — so the
+   deferred work is "migrate comp onto xr's shape", not a mutual reconciliation,
+   and `xr` should NOT be regressed toward comp's current shape (e.g. do not
+   inline `corev1.ObjectReference` to match comp; keep the nested `xrIdentity`
+   projection). For now: reuse the shared building blocks (`Summary`,
    `ChangeDetail`, `XRStatus`, the `renderDiffList` helper); defer full wire-shape
-   unification to the next breaking `comp` window (bundled with comp's
-   error-model upgrade and the flat-`changes[]` removal), when a breaking `comp`
-   change is already on the table. See Future Work.
+   unification to the next breaking `comp` window. See Future Work for the full
+   comp-side migration checklist.
 
 Correction of record: issue #405's text claims the human output "already renders
 per-file/per-XR sections." It does not — before this change the human renderer
@@ -250,12 +255,35 @@ relevant `go test`.
 ## Future Work
 
 - **Unify the per-XR structured shape across `comp` and `xr`.** At the next
-  breaking `comp` window — bundled with (a) upgrading `comp`'s wire error from
-  `string` to the richer `OutputError`/`validationFailures[]` model `xr` uses,
-  and (b) removing the deprecated flat `xr` `changes[]` — harmonize `XRImpact`
-  and `XRDiffJSON` into one per-XR entry shape so CI wrappers parse both
-  commands identically. Free to do then (a breaking `comp` change is already on
-  the table); a separate breaking event now is not warranted. See Decision 5.
+  breaking `comp` window — a breaking `comp` change is already on the table, so
+  the marginal cost is low — converge comp's `impactAnalysis[]` entry
+  (`xrImpactWire`) and xr's `xrs[]` entry (`xrDiffWire`) onto a single per-XR
+  wire shape. **`xr`'s `xrs[]` shape is deliberately the target; this is
+  "migrate comp onto xr", not a mutual reconciliation** — `xrs[]` was greenfield
+  when added (additive, no existing consumers), so it was designed up front to
+  be the converged form. The specific comp-side changes required:
+
+  1. **Error model:** comp's per-XR `error string` → `errors []OutputError`
+     (the richer model, with `validationFailures[]`, that `xr` already emits).
+  2. **Identity representation:** comp inlines `corev1.ObjectReference` at the
+     top of each entry (apiVersion/kind/name/namespace as sibling fields, plus
+     upstream's optional uid/resourceVersion/fieldPath); converge to `xr`'s
+     nested `xr: {}` carrying the 4-field `xrIdentity` projection. Nesting
+     separates "which XR" from "what happened to it", and the projection pins
+     the public schema (matching the `OutputError`/`ResourceValidationFailure`
+     "own our schema, don't inherit upstream's" precedent). Note: xr uses the
+     projection *because* comp's inlined-ObjectReference approach is the one we
+     intend to drop — do not regress xr to match comp here.
+  3. **Changes wrapper:** reconcile comp's `downstreamChanges: {summary,
+     changes}` wrapper vs. xr's flatter sibling `summary` + `changes[]`. Prefer
+     xr's flatter shape unless the nested wrapper earns its keep.
+  4. **Filter concepts:** comp's `filterReason`/`filterDetail` are comp-only
+     (no analogue in `xr`); keep them as optional fields on the unified entry,
+     populated only by `comp`.
+  5. **Also bundle:** removing the deprecated flat `xr` `changes[]` (Decision 1).
+
+  End state: one per-XR entry type both commands emit, so CI wrappers parse
+  `comp` and `xr` identically. See Decision 5.
 
 ## Notes / constraints
 
