@@ -128,19 +128,33 @@ func (r *DefaultDiffRenderer) renderDiffList(diffs map[string]*dt.ResourceDiff) 
 	return counts, nil
 }
 
-// add accumulates another tally into this one, field by field. Used to roll up
-// per-XR counts into the cross-XR total for the aggregate footer.
-func (c *diffCounts) add(other diffCounts) {
-	c.added += other.added
-	c.modified += other.modified
-	c.removed += other.removed
-	c.equal += other.equal
-	c.output += other.output
+// plus returns the field-wise sum of two tallies. Used to roll up per-XR counts
+// into the cross-XR total for the aggregate footer. Returning a new value
+// (rather than mutating) keeps every diffCounts method a value receiver, which
+// also lets String satisfy Stringer on a value passed to the logger.
+func (c diffCounts) plus(other diffCounts) diffCounts {
+	return diffCounts{
+		added:    c.added + other.added,
+		modified: c.modified + other.modified,
+		removed:  c.removed + other.removed,
+		equal:    c.equal + other.equal,
+		output:   c.output + other.output,
+	}
+}
+
+// String renders the tally as a single log-friendly field. Implementing
+// Stringer lets callers log a diffCounts as one value ("counts", counts)
+// instead of spelling out every field; fmt-based logr sinks honor it. (A
+// structured-logging pass could later swap this for a logr.Marshaler to regain
+// per-field queryability.)
+func (c diffCounts) String() string {
+	return fmt.Sprintf("added=%d modified=%d removed=%d equal=%d output=%d",
+		c.added, c.modified, c.removed, c.equal, c.output)
 }
 
 // summaryLine formats a "N added, N modified, N removed" fragment, omitting
 // zero categories. Returns "" when there is nothing to report.
-func (c *diffCounts) summaryLine() string {
+func (c diffCounts) summaryLine() string {
 	parts := make([]string, 0, 3)
 
 	if c.added > 0 {
@@ -231,12 +245,7 @@ func (r *DefaultDiffRenderer) renderFlat(diffs map[string]*dt.ResourceDiff) erro
 		return err
 	}
 
-	r.logger.Debug("Diff rendering complete",
-		"added", counts.added,
-		"removed", counts.removed,
-		"modified", counts.modified,
-		"equal", counts.equal,
-		"output", counts.output)
+	r.logger.Debug("Diff rendering complete", "counts", counts)
 
 	if counts.output > 0 {
 		if line := counts.summaryLine(); line != "" {
@@ -272,9 +281,7 @@ func (r *DefaultDiffRenderer) renderGrouped(groups []dt.XRDiffGroup) error {
 				return err
 			}
 
-			total.added += counts.added
-			total.modified += counts.modified
-			total.removed += counts.removed
+			total = total.plus(counts)
 
 			continue
 		}
@@ -298,7 +305,7 @@ func (r *DefaultDiffRenderer) renderGrouped(groups []dt.XRDiffGroup) error {
 			return err
 		}
 
-		total.add(counts)
+		total = total.plus(counts)
 
 		if counts.output == 0 {
 			unchangedXR++
