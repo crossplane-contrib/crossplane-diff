@@ -559,3 +559,78 @@ func TestAssertStructuredCompDiff_FieldValuePattern(_ *testing.T) {
 			AndComp().
 			And())
 }
+
+func TestAssertStructuredDiff_GroupedByXR(t *testing.T) {
+	// A multi-XR xr structured payload: one changed XR (with a modified
+	// composed resource), one unchanged XR, and one errored XR. The flat
+	// changes[]/summary reflect the merge; xrs[] carries the per-XR grouping.
+	jsonOutput := `{
+		"summary": {"added": 0, "modified": 1, "removed": 0},
+		"changes": [{
+			"type": "modified", "apiVersion": "example.org/v1", "kind": "Bucket",
+			"name": "bucket-a", "namespace": "default",
+			"diff": {"old": {"spec": {"region": "us-east-1"}}, "new": {"spec": {"region": "us-west-2"}}}
+		}],
+		"errors": [{"resourceID": "XBucket/broken-xr", "message": "cannot get composition"}],
+		"xrs": [
+			{
+				"xr": {"apiVersion": "example.org/v1", "kind": "XBucket", "name": "changed-xr", "namespace": "default"},
+				"status": "changed",
+				"summary": {"added": 0, "modified": 1, "removed": 0},
+				"changes": [{
+					"type": "modified", "apiVersion": "example.org/v1", "kind": "Bucket",
+					"name": "bucket-a", "namespace": "default",
+					"diff": {"old": {"spec": {"region": "us-east-1"}}, "new": {"spec": {"region": "us-west-2"}}}
+				}]
+			},
+			{
+				"xr": {"apiVersion": "example.org/v1", "kind": "XBucket", "name": "unchanged-xr", "namespace": "default"},
+				"status": "unchanged",
+				"summary": {"added": 0, "modified": 0, "removed": 0},
+				"changes": []
+			},
+			{
+				"xr": {"apiVersion": "example.org/v1", "kind": "XBucket", "name": "broken-xr", "namespace": "default"},
+				"status": "error",
+				"summary": {"added": 0, "modified": 0, "removed": 0},
+				"changes": [],
+				"errors": [{"resourceID": "XBucket/broken-xr", "message": "cannot get composition"}]
+			}
+		]
+	}`
+
+	mockT := &testing.T{}
+	AssertStructuredDiff(mockT, jsonOutput,
+		ExpectDiff().
+			WithSummary(0, 1, 0).
+			WithXR("XBucket", "changed-xr", "default").
+			WithXRStatus("changed").
+			WithXRSummary(0, 1, 0).
+			WithXRChange("modified", "Bucket", "bucket-a", "default").
+			WithFieldChange("spec.region", "us-east-1", "us-west-2").
+			AndXR().
+			AndXR().
+			WithXR("XBucket", "unchanged-xr", "default").
+			WithXRStatus("unchanged").
+			AndXR().
+			WithXR("XBucket", "broken-xr", "default").
+			WithXRStatus("error").
+			WithXRError("XBucket/broken-xr").
+			AndXR())
+
+	if mockT.Failed() {
+		t.Errorf("grouped assertions unexpectedly failed on a matching payload")
+	}
+
+	// Negative path: a wrong status must be caught (guards against a no-op matcher).
+	badT := &testing.T{}
+	AssertStructuredDiff(badT, jsonOutput,
+		ExpectDiff().
+			WithXR("XBucket", "changed-xr", "default").
+			WithXRStatus("unchanged"). // actual is "changed"
+			AndXR())
+
+	if !badT.Failed() {
+		t.Errorf("grouped assertions should have failed on a mismatched status")
+	}
+}

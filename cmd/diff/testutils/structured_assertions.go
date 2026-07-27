@@ -19,6 +19,25 @@ type StructuredDiffOutput struct {
 	Summary Summary        `json:"summary"`
 	Changes []ChangeDetail `json:"changes"`
 	Errors  []OutputError  `json:"errors,omitempty"`
+	Xrs     []XRDiffJSON   `json:"xrs"`
+}
+
+// XRDiffJSON mirrors renderer.XRDiffJSON — a per-input-XR entry in the xrs[]
+// grouped view.
+type XRDiffJSON struct {
+	XR      XRIdentity     `json:"xr"`
+	Status  string         `json:"status"`
+	Summary Summary        `json:"summary"`
+	Changes []ChangeDetail `json:"changes"`
+	Errors  []OutputError  `json:"errors,omitempty"`
+}
+
+// XRIdentity mirrors renderer.XRIdentity.
+type XRIdentity struct {
+	APIVersion string `json:"apiVersion"`
+	Kind       string `json:"kind"`
+	Name       string `json:"name"`
+	Namespace  string `json:"namespace,omitempty"`
 }
 
 // Summary mirrors renderer.Summary.
@@ -49,6 +68,7 @@ type ExpectedDiff struct {
 	summary   *expectedSummary
 	resources []*ResourceExpectation
 	errors    []*ErrorExpectation
+	xrs       []*XRExpectation
 }
 
 func (e *ExpectedDiff) expectation() *ExpectedDiff { return e }
@@ -62,7 +82,8 @@ type expectedSummary struct {
 // ResourceExpectation defines expectations for a single resource change.
 type ResourceExpectation struct {
 	parent             *ExpectedDiff
-	changeType         string // "added", "modified", "removed"
+	xrParent           *XRExpectation // set when this change is scoped to an xrs[] entry
+	changeType         string         // "added", "modified", "removed"
 	kind               string
 	name               string
 	namePattern        *regexp.Regexp
@@ -74,7 +95,13 @@ type ResourceExpectation struct {
 	anyNameAllowed     bool                      // If true, any name is accepted
 }
 
-func (r *ResourceExpectation) expectation() *ExpectedDiff { return r.parent }
+func (r *ResourceExpectation) expectation() *ExpectedDiff {
+	if r.xrParent != nil {
+		return r.xrParent.parent
+	}
+
+	return r.parent
+}
 
 // ExpectDiff creates a new ExpectedDiff builder.
 func ExpectDiff() *ExpectedDiff {
@@ -337,11 +364,106 @@ func (r *ResourceExpectation) WithAnyName() *ResourceExpectation {
 
 // And returns to parent to chain more resource expectations.
 // Not needed at the end of a chain - AssertStructuredDiff accepts ResourceExpectation directly.
+// For a change opened via WithXRChange, use AndXR to return to the XR entry.
 func (r *ResourceExpectation) And() *ExpectedDiff {
+	if r.xrParent != nil {
+		return r.xrParent.parent
+	}
+
 	return r.parent
 }
 
+// AndXR returns to the enclosing XR entry when this change was opened via
+// WithXRChange, to chain more per-XR expectations.
+func (r *ResourceExpectation) AndXR() *XRExpectation {
+	return r.xrParent
+}
+
 // ParseStructuredOutput parses JSON output into StructuredDiffOutput.
+// XRExpectation defines expectations for a single entry in the xrs[] grouped
+// view: the input XR's identity, its status, its per-XR summary, and its
+// per-XR changes.
+type XRExpectation struct {
+	parent      *ExpectedDiff
+	kind        string
+	name        string
+	namePattern *regexp.Regexp
+	namespace   string
+	anyName     bool
+	status      string
+	summary     *expectedSummary
+	changes     []*ResourceExpectation
+	errorIDs    []string
+}
+
+func (x *XRExpectation) expectation() *ExpectedDiff { return x.parent }
+
+// WithXR opens an expectation for an xrs[] entry keyed by the input XR's
+// kind/name/namespace.
+func (e *ExpectedDiff) WithXR(kind, name, namespace string) *XRExpectation {
+	x := &XRExpectation{
+		parent:    e,
+		kind:      kind,
+		name:      name,
+		namespace: namespace,
+	}
+	e.xrs = append(e.xrs, x)
+
+	return x
+}
+
+// WithXRStatus asserts the entry's status (changed/unchanged/error).
+func (x *XRExpectation) WithXRStatus(status string) *XRExpectation {
+	x.status = status
+	return x
+}
+
+// WithXRSummary asserts the entry's per-XR summary counts.
+func (x *XRExpectation) WithXRSummary(added, modified, removed int) *XRExpectation {
+	x.summary = &expectedSummary{added: added, modified: modified, removed: removed}
+	return x
+}
+
+// WithAnyName matches the XR by kind/namespace only, accepting any name (useful
+// for generated XR names).
+func (x *XRExpectation) WithAnyName() *XRExpectation {
+	x.anyName = true
+	return x
+}
+
+// WithNamePattern matches the XR name against a regex instead of an exact name.
+func (x *XRExpectation) WithNamePattern(pattern string) *XRExpectation {
+	x.namePattern = regexp.MustCompile(pattern)
+	return x
+}
+
+// WithXRError asserts the entry carries an error with the given resourceID.
+func (x *XRExpectation) WithXRError(resourceID string) *XRExpectation {
+	x.errorIDs = append(x.errorIDs, resourceID)
+	return x
+}
+
+// WithXRChange opens a change expectation scoped to this XR entry's changes[].
+// changeType is "added", "modified", or "removed".
+func (x *XRExpectation) WithXRChange(changeType, kind, name, namespace string) *ResourceExpectation {
+	r := &ResourceExpectation{
+		xrParent:           x,
+		changeType:         changeType,
+		kind:               kind,
+		name:               name,
+		namespace:          namespace,
+		fieldValues:        make(map[string]any),
+		fieldChanges:       make(map[string][2]any),
+		fieldValuePatterns: make(map[string]*regexp.Regexp),
+	}
+	x.changes = append(x.changes, r)
+
+	return r
+}
+
+// AndXR returns to the root ExpectedDiff to chain more expectations.
+func (x *XRExpectation) AndXR() *ExpectedDiff { return x.parent }
+
 func ParseStructuredOutput(jsonOutput string) (StructuredDiffOutput, error) {
 	var output StructuredDiffOutput
 	if err := json.Unmarshal([]byte(jsonOutput), &output); err != nil {
@@ -380,72 +502,8 @@ func AssertStructuredDiff(t *testing.T, jsonOutput string, e DiffExpectation) {
 		}
 	}
 
-	// Check each resource expectation
-	for _, expectRes := range expected.resources {
-		found := findMatchingChange(output.Changes, expectRes)
-		if found == nil {
-			// Build detailed message showing what we expected vs what we got
-			actualResources := make([]string, 0, len(output.Changes))
-			for _, c := range output.Changes {
-				actualResources = append(actualResources, fmt.Sprintf("%s %s/%s (ns=%s)", c.Type, c.Kind, c.Name, c.Namespace))
-			}
-
-			t.Errorf("Expected %s resource %s/%s (ns=%s) not found in output. Actual resources: %v",
-				expectRes.changeType, expectRes.kind, expectRes.name, expectRes.namespace, actualResources)
-
-			continue
-		}
-
-		// Validate field values for added/removed resources
-		for path, expectedValue := range expectRes.fieldValues {
-			actualValue := getFieldFromDiff(found.Diff, expectRes.changeType, path)
-			if !reflect.DeepEqual(actualValue, expectedValue) {
-				t.Errorf("%s %s/%s: field %s: expected %v, got %v",
-					expectRes.changeType, expectRes.kind, expectRes.name, path, expectedValue, actualValue)
-			}
-		}
-
-		// Validate field changes for modified resources
-		for path, change := range expectRes.fieldChanges {
-			oldVal := getFieldFromDiff(found.Diff, dt.DiffKeyOld, path)
-			newVal := getFieldFromDiff(found.Diff, dt.DiffKeyNew, path)
-
-			if !reflect.DeepEqual(oldVal, change[0]) {
-				t.Errorf("%s %s/%s: field %s old value: expected %v, got %v",
-					expectRes.changeType, expectRes.kind, expectRes.name, path, change[0], oldVal)
-			}
-
-			if !reflect.DeepEqual(newVal, change[1]) {
-				t.Errorf("%s %s/%s: field %s new value: expected %v, got %v",
-					expectRes.changeType, expectRes.kind, expectRes.name, path, change[1], newVal)
-			}
-		}
-
-		// Validate field value patterns
-		for path, pattern := range expectRes.fieldValuePatterns {
-			actualValue := getNewFieldValue(found.Diff, expectRes.changeType, path)
-
-			actualStr := fmt.Sprintf("%v", actualValue)
-			if !pattern.MatchString(actualStr) {
-				t.Errorf("%s %s/%s: field %s value %q does not match pattern %q",
-					expectRes.changeType, expectRes.kind, expectRes.name, path, actualStr, pattern.String())
-			}
-		}
-
-		// Validate spec match if specified
-		if expectRes.specMatch != nil {
-			spec := getFieldFromDiff(found.Diff, expectRes.changeType, "spec")
-			if specMap, ok := spec.(map[string]any); ok {
-				if !reflect.DeepEqual(specMap, expectRes.specMatch) {
-					t.Errorf("%s %s/%s: spec mismatch: expected %v, got %v",
-						expectRes.changeType, expectRes.kind, expectRes.name, expectRes.specMatch, specMap)
-				}
-			} else {
-				t.Errorf("%s %s/%s: spec is not a map: %v",
-					expectRes.changeType, expectRes.kind, expectRes.name, spec)
-			}
-		}
-	}
+	// Check each resource expectation against the flat changes[] view.
+	assertResourceExpectations(t, "", output.Changes, expected.resources)
 
 	// Check for unexpected resources
 	if len(expected.resources) > 0 && len(output.Changes) != len(expected.resources) {
@@ -475,6 +533,155 @@ func AssertStructuredDiff(t *testing.T, jsonOutput string, e DiffExpectation) {
 	if len(expected.errors) > 0 && len(output.Errors) != len(expected.errors) {
 		t.Errorf("Expected %d errors in structured output, got %d", len(expected.errors), len(output.Errors))
 	}
+
+	// Check each xrs[] entry expectation.
+	assertXRExpectations(t, output.Xrs, expected.xrs)
+}
+
+// assertResourceExpectations validates a set of ResourceExpectations against a
+// changes[] slice. scope is a label ("" for the flat view, or an XR name) used
+// only in failure messages. Extracted so both the flat changes[] and each
+// xrs[] entry's changes[] can be validated with identical logic.
+func assertResourceExpectations(t *testing.T, scope string, changes []ChangeDetail, resources []*ResourceExpectation) {
+	t.Helper()
+
+	prefix := ""
+	if scope != "" {
+		prefix = "xr " + scope + ": "
+	}
+
+	for _, expectRes := range resources {
+		found := findMatchingChange(changes, expectRes)
+		if found == nil {
+			actualResources := make([]string, 0, len(changes))
+			for _, c := range changes {
+				actualResources = append(actualResources, fmt.Sprintf("%s %s/%s (ns=%s)", c.Type, c.Kind, c.Name, c.Namespace))
+			}
+
+			t.Errorf("%sExpected %s resource %s/%s (ns=%s) not found. Actual resources: %v",
+				prefix, expectRes.changeType, expectRes.kind, expectRes.name, expectRes.namespace, actualResources)
+
+			continue
+		}
+
+		// Validate field values for added/removed resources
+		for path, expectedValue := range expectRes.fieldValues {
+			actualValue := getFieldFromDiff(found.Diff, expectRes.changeType, path)
+			if !reflect.DeepEqual(actualValue, expectedValue) {
+				t.Errorf("%s%s %s/%s: field %s: expected %v, got %v",
+					prefix, expectRes.changeType, expectRes.kind, expectRes.name, path, expectedValue, actualValue)
+			}
+		}
+
+		// Validate field changes for modified resources
+		for path, change := range expectRes.fieldChanges {
+			oldVal := getFieldFromDiff(found.Diff, dt.DiffKeyOld, path)
+			newVal := getFieldFromDiff(found.Diff, dt.DiffKeyNew, path)
+
+			if !reflect.DeepEqual(oldVal, change[0]) {
+				t.Errorf("%s%s %s/%s: field %s old value: expected %v, got %v",
+					prefix, expectRes.changeType, expectRes.kind, expectRes.name, path, change[0], oldVal)
+			}
+
+			if !reflect.DeepEqual(newVal, change[1]) {
+				t.Errorf("%s%s %s/%s: field %s new value: expected %v, got %v",
+					prefix, expectRes.changeType, expectRes.kind, expectRes.name, path, change[1], newVal)
+			}
+		}
+
+		// Validate field value patterns
+		for path, pattern := range expectRes.fieldValuePatterns {
+			actualValue := getNewFieldValue(found.Diff, expectRes.changeType, path)
+
+			actualStr := fmt.Sprintf("%v", actualValue)
+			if !pattern.MatchString(actualStr) {
+				t.Errorf("%s%s %s/%s: field %s value %q does not match pattern %q",
+					prefix, expectRes.changeType, expectRes.kind, expectRes.name, path, actualStr, pattern.String())
+			}
+		}
+
+		// Validate spec match if specified
+		if expectRes.specMatch != nil {
+			spec := getFieldFromDiff(found.Diff, expectRes.changeType, "spec")
+			if specMap, ok := spec.(map[string]any); ok {
+				if !reflect.DeepEqual(specMap, expectRes.specMatch) {
+					t.Errorf("%s%s %s/%s: spec mismatch: expected %v, got %v",
+						prefix, expectRes.changeType, expectRes.kind, expectRes.name, expectRes.specMatch, specMap)
+				}
+			} else {
+				t.Errorf("%s%s %s/%s: spec is not a map: %v",
+					prefix, expectRes.changeType, expectRes.kind, expectRes.name, spec)
+			}
+		}
+	}
+}
+
+// assertXRExpectations validates xrs[] entry expectations against the actual
+// grouped output.
+func assertXRExpectations(t *testing.T, actual []XRDiffJSON, expected []*XRExpectation) {
+	t.Helper()
+
+	for _, want := range expected {
+		got := findMatchingXR(actual, want)
+		if got == nil {
+			actualXRs := make([]string, 0, len(actual))
+			for _, x := range actual {
+				actualXRs = append(actualXRs, fmt.Sprintf("%s/%s (ns=%s, status=%s)", x.XR.Kind, x.XR.Name, x.XR.Namespace, x.Status))
+			}
+
+			t.Errorf("Expected xrs[] entry %s/%s (ns=%s) not found. Actual: %v",
+				want.kind, want.name, want.namespace, actualXRs)
+
+			continue
+		}
+
+		label := fmt.Sprintf("%s/%s", got.XR.Kind, got.XR.Name)
+
+		if want.status != "" && got.Status != want.status {
+			t.Errorf("xr %s: status: expected %q, got %q", label, want.status, got.Status)
+		}
+
+		if want.summary != nil {
+			if got.Summary.Added != want.summary.added || got.Summary.Modified != want.summary.modified || got.Summary.Removed != want.summary.removed {
+				t.Errorf("xr %s: summary: expected {added:%d modified:%d removed:%d}, got {added:%d modified:%d removed:%d}",
+					label, want.summary.added, want.summary.modified, want.summary.removed,
+					got.Summary.Added, got.Summary.Modified, got.Summary.Removed)
+			}
+		}
+
+		assertResourceExpectations(t, label, got.Changes, want.changes)
+
+		for _, id := range want.errorIDs {
+			if findMatchingError(got.Errors, id) == nil {
+				t.Errorf("xr %s: expected error with resourceID %q not found in entry errors", label, id)
+			}
+		}
+	}
+}
+
+// findMatchingXR locates the xrs[] entry matching an XRExpectation by
+// kind/namespace and (unless anyName / a name pattern is used) exact name.
+func findMatchingXR(actual []XRDiffJSON, want *XRExpectation) *XRDiffJSON {
+	for i := range actual {
+		x := &actual[i]
+
+		if x.XR.Kind != want.kind || x.XR.Namespace != want.namespace {
+			continue
+		}
+
+		switch {
+		case want.anyName:
+			return x
+		case want.namePattern != nil:
+			if want.namePattern.MatchString(x.XR.Name) {
+				return x
+			}
+		case x.XR.Name == want.name:
+			return x
+		}
+	}
+
+	return nil
 }
 
 // assertErrorMatch validates a single OutputError against its
