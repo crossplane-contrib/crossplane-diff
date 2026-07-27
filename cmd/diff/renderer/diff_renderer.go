@@ -89,6 +89,12 @@ func (r *DefaultDiffRenderer) renderDiffList(diffs map[string]*dt.ResourceDiff) 
 
 		var header string
 
+		// The added/modified/removed counters increment here, before the
+		// content-empty check below. This relies on the invariant that a
+		// non-equal ResourceDiff always renders non-empty content (its
+		// LineDiffs are non-trivial by construction). If that ever ceased to
+		// hold, counts.output could lag the type counters, desyncing the
+		// summary line from the number of rendered blocks.
 		switch diff.DiffType {
 		case dt.DiffTypeAdded:
 			counts.added++
@@ -236,14 +242,23 @@ func (r *DefaultDiffRenderer) renderGrouped(groups []dt.XRDiffGroup, withFooter 
 	)
 
 	for _, g := range groups {
-		// Identity-less groups shouldn't normally be mixed with identity-bearing
-		// ones; if they are, fold their diffs into the aggregate without a header.
-		header := "(unknown)"
-		if hasIdentity(g) {
-			header = fmt.Sprintf("%s/%s", g.XR.Kind, g.XR.Name)
+		// An identity-less group (should not normally be mixed in here) has no
+		// owning XR to head a section, so fold its diffs into the aggregate
+		// without a header or per-section summary.
+		if !hasIdentity(g) {
+			counts, err := r.renderDiffList(g.Diffs)
+			if err != nil {
+				return err
+			}
+
+			total.added += counts.added
+			total.modified += counts.modified
+			total.removed += counts.removed
+
+			continue
 		}
 
-		if _, err := fmt.Fprintf(stdout, "=== %s ===\n\n", header); err != nil {
+		if _, err := fmt.Fprintf(stdout, "=== %s/%s ===\n\n", g.XR.Kind, g.XR.Name); err != nil {
 			return errors.Wrap(err, "failed to write XR section header")
 		}
 

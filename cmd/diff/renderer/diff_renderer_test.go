@@ -356,6 +356,70 @@ func TestDefaultDiffRenderer_RenderDiffs_GroupedByXR(t *testing.T) {
 			},
 			notExpected: []string{"===", "Total:"},
 		},
+		// Changed + unchanged + errored in one batch: the footer reports all
+		// three qualifiers together (the design doc's illustrative example).
+		"AllThreeFooterQualifiers": {
+			groups: []dt.XRDiffGroup{
+				xrGroup("XNopResource", "changed-xr", map[string]*dt.ResourceDiff{
+					changedBucket.GetDiffKey(): changedBucket,
+				}),
+				xrGroup("XNopResource", "unchanged-xr", map[string]*dt.ResourceDiff{}),
+				{
+					XR:  corev1.ObjectReference{APIVersion: "example.org/v1", Kind: "XNopResource", Name: "broken-xr"},
+					Err: &dt.OutputError{ResourceID: "XNopResource/broken-xr", Message: "boom"},
+				},
+			},
+			expected: []string{
+				"Total: 1 modified across 3 XRs (1 unchanged, 1 error)",
+			},
+		},
+		// A group whose only diff is equal renders "No changes." and counts as
+		// unchanged in the footer.
+		"GroupedEqualOnlyIsUnchanged": {
+			groups: []dt.XRDiffGroup{
+				xrGroup("XNopResource", "equal-xr", map[string]*dt.ResourceDiff{
+					"equal": {
+						Gvk:          schema.GroupVersionKind{Group: "example.org", Version: "v1", Kind: "Bucket"},
+						ResourceName: "bucket-eq",
+						DiffType:     dt.DiffTypeEqual,
+					},
+				}),
+				xrGroup("XNopResource", "changed-xr", map[string]*dt.ResourceDiff{
+					changedBucket.GetDiffKey(): changedBucket,
+				}),
+			},
+			expected: []string{
+				"=== XNopResource/equal-xr ===",
+				"No changes.",
+				"Total: 1 modified across 2 XRs (1 unchanged)",
+			},
+		},
+		// A mixed batch (identity-less group alongside identity-bearing ones):
+		// the identity-less group's diffs fold into the aggregate with no header.
+		// Two identity-bearing groups ensure the footer fires so the fold-in is
+		// observable in the total.
+		"MixedIdentityLessFoldsInWithoutHeader": {
+			groups: []dt.XRDiffGroup{
+				xrGroup("XNopResource", "real-xr", map[string]*dt.ResourceDiff{
+					changedBucket.GetDiffKey(): changedBucket,
+				}),
+				xrGroup("XNopResource", "real-xr-2", map[string]*dt.ResourceDiff{
+					"q": modifiedDiffFor("Queue", "real-queue"),
+				}),
+				{Diffs: map[string]*dt.ResourceDiff{
+					"extra": modifiedDiffFor("Topic", "loose-topic"),
+				}},
+			},
+			expected: []string{
+				"=== XNopResource/real-xr ===",
+				"=== XNopResource/real-xr-2 ===",
+				"~~~ Topic/loose-topic",          // identity-less diff still rendered
+				"Total: 3 modified across 3 XRs", // all three counted
+			},
+			notExpected: []string{
+				"=== /", "=== (unknown)", // no header for the identity-less group
+			},
+		},
 	}
 
 	for name, tt := range tests {
