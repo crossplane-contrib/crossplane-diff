@@ -63,19 +63,13 @@ classDiagram
     }
 
     class xrDiffWire {
-        +XR xrIdentity
+        +XR ObjectReference
         +Status XRStatus
         +Summary Summary
         +Changes []ChangeDetail
         +Errors []OutputError
     }
 
-    class xrIdentity {
-        +APIVersion string
-        +Kind string
-        +Name string
-        +Namespace string
-    }
 
     class Summary {
         +Added int
@@ -198,7 +192,6 @@ classDiagram
     StructuredDiffOutput --> ChangeDetail
     StructuredDiffOutput --> OutputError
     StructuredDiffOutput --> xrDiffWire
-    xrDiffWire --> xrIdentity
     xrDiffWire --> Summary
     xrDiffWire --> ChangeDetail
     xrDiffWire --> XRStatus

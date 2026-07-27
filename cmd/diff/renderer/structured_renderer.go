@@ -89,26 +89,21 @@ type StructuredDiffOutput struct {
 	Xrs []xrDiffWire `json:"xrs"`
 }
 
-// xrIdentity identifies an input XR/claim in structured output. It is a
-// deliberately small projection of the input's metadata (not the full
-// corev1.ObjectReference) so the JSON schema stays stable and free of
-// server-side fields like UID or resourceVersion.
-type xrIdentity struct {
-	APIVersion string `json:"apiVersion"`
-	Kind       string `json:"kind"`
-	Name       string `json:"name"`
-	Namespace  string `json:"namespace,omitempty"`
-}
-
 // xrDiffWire is the per-input-XR entry in StructuredDiffOutput.Xrs. It carries
 // the input XR's identity, its processing status, and its own summary,
 // changes, and errors.
+//
+// XR is a corev1.ObjectReference nested under the "xr" key (not inlined),
+// carrying apiVersion/kind/name/namespace. Reusing the platform-standard type
+// lets consumers unmarshal the "xr" object straight into an ObjectReference;
+// its other fields (uid/resourceVersion/fieldPath) are omitempty and never
+// populated here, so they do not appear in output.
 type xrDiffWire struct {
-	XR      xrIdentity       `json:"xr"`
-	Status  XRStatus         `json:"status"`
-	Summary Summary          `json:"summary"`
-	Changes []ChangeDetail   `json:"changes"`
-	Errors  []dt.OutputError `json:"errors,omitempty"`
+	XR      corev1.ObjectReference `json:"xr"`
+	Status  XRStatus               `json:"status"`
+	Summary Summary                `json:"summary"`
+	Changes []ChangeDetail         `json:"changes"`
+	Errors  []dt.OutputError       `json:"errors,omitempty"`
 }
 
 // Summary contains aggregated counts of changes.
@@ -396,8 +391,16 @@ func buildXRGroups(groups []dt.XRDiffGroup) []xrDiffWire {
 	out := make([]xrDiffWire, 0, len(groups))
 
 	for _, g := range groups {
+		// Project to exactly apiVersion/kind/name/namespace. We use
+		// ObjectReference as the type (so consumers can unmarshal "xr" into the
+		// platform-standard struct), but deliberately omit its other fields:
+		// fieldPath is meaningless for an XR; uid is unstable across
+		// delete/recreate and would mislead consumers tracking an XR across runs
+		// (stable identity is kind/namespace/name); and resourceVersion, if ever
+		// wanted, is a property of the diff run (belongs once at top level), not
+		// per-XR identity.
 		entry := xrDiffWire{
-			XR: xrIdentity{
+			XR: corev1.ObjectReference{
 				APIVersion: g.XR.APIVersion,
 				Kind:       g.XR.Kind,
 				Name:       g.XR.Name,
