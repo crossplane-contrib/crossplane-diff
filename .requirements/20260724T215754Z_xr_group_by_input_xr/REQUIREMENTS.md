@@ -1,7 +1,62 @@
 # REQUIREMENTS: Group `xr` structured output by input XR (#405)
 
-Design source of truth: `docs/superpowers/specs/2026-07-24-xr-per-xr-grouping-design.md`
-(commit `53c4181` on branch `feat/xr-group-by-input-xr`).
+This file is the single source of truth for the design and plan. Architecture
+changes are reflected inline in `design/design-doc-cli-diff.md` (§6.8) and the
+`diff-rendering-architecture.{mermaid,svg}` diagram.
+
+## Design Decisions
+
+1. **Back-compat: additive, always-present `xrs[]`, with documented deprecation
+   of flat `changes[]`.** `xrs[]` is always emitted alongside the existing flat
+   `summary`/`changes[]`/`errors[]`. `changes[]` is marked deprecated (Go doc
+   comment + README + design doc) in favor of `xrs[]`; the aggregate `summary`
+   and top-level `errors[]` union are retained. Removal of flat `changes[]` is
+   deferred to a future major (`feat(xr)!:`). Rejected: a `--group-by-xr` flag
+   (permanent dual path, can't express deprecation) and an immediate breaking
+   reshape (breaks live consumers on the ship date). Deprecation signal is
+   docs + Go doc comment only — no runtime stderr warning.
+
+2. **Data flow: widen the `DiffRenderer` interface to carry per-XR groups.**
+   `RenderDiffs([]dt.XRDiffGroup, []dt.OutputError)`. `PerformDiff` builds one
+   group per input in input order (identity + diffs on success, or a
+   pre-converted `*dt.OutputError` on failure) instead of merging into a flat
+   map. `XRDiffGroup` lives in `renderer/types` (not `renderer`) so `testutils`
+   can reference it without an import cycle through `renderer`'s in-package
+   tests; the pre-converted error keeps `NewOutputError` (in `diffprocessor`)
+   out of the renderer. This mirrors how `comp` already builds renderer-package
+   types (`XRImpact`) in the processor. Application(diffprocessor)→Domain(renderer)
+   is the sanctioned dependency direction.
+
+3. **Human output also groups by input XR — but only for >1 XR.** Multiple input
+   XRs render as per-XR sections (`=== Kind/name ===` + diffs + per-section
+   summary, `No changes.` for unchanged, inline `Error:` for failed) plus an
+   aggregate `Total: … across N XRs (…)` footer. A **single** XR renders flat,
+   exactly as before this change — the common case is byte-for-byte unchanged,
+   so existing single-XR E2E `.ansi` goldens do not churn. The seam:
+   identity-bearing groups (set only by the `xr` command) get sections;
+   identity-less groups (the composition renderer's internal reuse) render flat
+   with no header, so `comp` output is unaffected.
+
+4. **`status` reuses the existing `XRStatus` constants** (`changed`/`unchanged`/
+   `error`); `filtered` does not apply to `xr`. Derivation: `error` if the group
+   carries an error; else `changed` if it has ≥1 non-equal diff; else
+   `unchanged`. Equal diffs are excluded from `changes[]` and counts (the XR
+   stored as `DiffTypeEqual` for removal detection must not inflate counts).
+
+5. **Do not consolidate the `comp` and `xr` per-XR paths now.** Both carry a
+   per-XR bucket (`XRImpact` / `XRDiffGroup`) but diverge in four load-bearing
+   ways: `comp`'s diffs are downstream-only (XR is the axis, not a change);
+   `comp` has filter concepts meaningless to `xr`; `comp`'s wire error is a
+   single string vs. `xr`'s richer `errors[]`/`validationFailures[]`; `comp` is
+   two-level vs. `xr`'s one-level. Reuse the shared building blocks (`Summary`,
+   `ChangeDetail`, `XRStatus`, the `renderDiffList` helper); defer full wire-shape
+   unification to the next breaking `comp` window (bundled with comp's
+   error-model upgrade and the flat-`changes[]` removal), when a breaking `comp`
+   change is already on the table. See Future Work.
+
+Correction of record: issue #405's text claims the human output "already renders
+per-file/per-XR sections." It does not — before this change the human renderer
+emitted a single flat sorted list with one summary.
 
 ## As Is
 
@@ -192,17 +247,27 @@ relevant `go test`.
   and human-review `.ansi` goldens per the gate.
   Test: `earthly -P +reviewable` (bare, no pipe — exit code must not be masked).
 
+## Future Work
+
+- **Unify the per-XR structured shape across `comp` and `xr`.** At the next
+  breaking `comp` window — bundled with (a) upgrading `comp`'s wire error from
+  `string` to the richer `OutputError`/`validationFailures[]` model `xr` uses,
+  and (b) removing the deprecated flat `xr` `changes[]` — harmonize `XRImpact`
+  and `XRDiffJSON` into one per-XR entry shape so CI wrappers parse both
+  commands identically. Free to do then (a breaking `comp` change is already on
+  the table); a separate breaking event now is not warranted. See Decision 5.
+
 ## Notes / constraints
 
-- **Import direction:** `XRDiffGroup` lives in `renderer` (domain); `diffprocessor`
-  (application) imports it — sanctioned direction. `Err` is pre-converted
-  `*dt.OutputError` (via existing `NewOutputError` in `diffprocessor`) to avoid a
-  renderer→diffprocessor cycle.
-- **Lad MCP review steps in the tdd skill are skipped** — those tools are not
-  available in this environment. Substitute the superpowers code-reviewer at
-  checkpoints (after S3, S5, and pre-PR).
+- **Import direction:** `XRDiffGroup` lives in `renderer/types` (the leaf `dt`
+  package), referenced by both `renderer` (domain) and `diffprocessor`
+  (application). Placing it there (rather than in `renderer` alongside the
+  `DiffRenderer` interface) lets `testutils` mock the interface without importing
+  `renderer`, which would close an import cycle through `renderer`'s in-package
+  tests. `Err` is a pre-converted `*dt.OutputError` (via `NewOutputError` in
+  `diffprocessor`) to keep the conversion out of the renderer.
 - **No `tee`/`tail`/`grep` on gate commands** (`earthly +reviewable`/`+go-test`) when
   the exit code matters — run bare (per project convention).
-- **Consolidation with `comp` is deferred** (spec Decision 5 / Future Work) — do not
+- **Consolidation with `comp` is deferred** (Decision 5 / Future Work) — do not
   refactor comp's `XRImpact` in this change; only reuse `Summary`/`ChangeDetail`/
   `XRStatus`/`renderDiffList`.
