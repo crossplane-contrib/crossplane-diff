@@ -172,8 +172,10 @@ func (r *DefaultDiffRenderer) RenderDiffs(groups []dt.XRDiffGroup, errs []dt.Out
 		"useColors", r.diffOpts.UseColors,
 		"compact", r.diffOpts.Compact)
 
-	// Count identity-bearing groups to decide whether to render sections and an
-	// aggregate footer. If none carry identity, fall back to the flat rendering.
+	// Per-XR sections (and the aggregate footer) are only meaningful when more
+	// than one input XR is present — that's what there is to disambiguate. A
+	// single XR (or identity-less comp reuse) renders as a flat block, exactly
+	// as before grouping was introduced.
 	identityGroups := 0
 
 	for _, g := range groups {
@@ -183,10 +185,10 @@ func (r *DefaultDiffRenderer) RenderDiffs(groups []dt.XRDiffGroup, errs []dt.Out
 	}
 
 	var err error
-	if identityGroups == 0 {
-		err = r.renderFlat(flattenGroups(groups))
+	if identityGroups > 1 {
+		err = r.renderGrouped(groups)
 	} else {
-		err = r.renderGrouped(groups, identityGroups > 1)
+		err = r.renderFlat(flattenGroups(groups))
 	}
 
 	if err != nil {
@@ -231,8 +233,9 @@ func (r *DefaultDiffRenderer) renderFlat(diffs map[string]*dt.ResourceDiff) erro
 
 // renderGrouped renders each group as a per-input-XR section (header + diffs +
 // per-section summary, or an inline error / "No changes."), then an aggregate
-// footer when withFooter is true. Sections are emitted in input (slice) order.
-func (r *DefaultDiffRenderer) renderGrouped(groups []dt.XRDiffGroup, withFooter bool) error {
+// footer. Only called when there is more than one input XR (a single XR renders
+// flat), so the footer always applies. Sections are emitted in input order.
+func (r *DefaultDiffRenderer) renderGrouped(groups []dt.XRDiffGroup) error {
 	stdout := r.diffOpts.Stdout
 
 	var (
@@ -297,10 +300,6 @@ func (r *DefaultDiffRenderer) renderGrouped(groups []dt.XRDiffGroup, withFooter 
 				return errors.Wrap(err, "failed to write section summary")
 			}
 		}
-	}
-
-	if !withFooter {
-		return nil
 	}
 
 	return r.renderAggregateFooter(len(groups), total, unchangedXR, errorXR)

@@ -246,9 +246,13 @@ Total: 0 added, 1 modified, 0 removed across 3 XRs (1 unchanged, 1 error)
 - **Sections in input order**; diffs within a section stay kind/name-sorted.
 - **Per-section summary** reuses today's summary line; unchanged sections print
   `No changes.`
-- **Aggregate footer** only when >1 identity-bearing group (a single `xr` file
-  gets just its section).
-- A single-XR invocation gains a section header vs. today. Accepted trade.
+- **Single XR renders flat.** Per-XR sections and the aggregate footer are
+  emitted **only when there is more than one input XR** — that is the case where
+  grouping disambiguates. A single-XR invocation renders as a flat block exactly
+  as before this change, so the common case is byte-for-byte unchanged and the
+  existing single-XR E2E `.ansi` goldens do not churn. (This refines an earlier
+  draft where a single XR also got a header; keeping the common case unchanged
+  is the better trade.)
 
 **Errored XRs in human output:** errors continue to go to stderr (unchanged,
 back-compat via the `errs` param). Additionally, an errored XR gets an inline
@@ -295,10 +299,13 @@ vocabulary on grouped changes. The parse target gains an `Xrs` field.
   a multi-XR invocation asserting grouped JSON via the new harness — the
   real-cluster proof the grouping is authoritative. Preferred over E2E per the
   repo's IT-over-E2E preference for its own code.
-- **E2E ANSI goldens:** the human output changes (headers/footer), so affected
-  `xr` `.ansi` fixtures must be regenerated. **Gated review (see below).**
+- **E2E ANSI goldens:** because a single XR now renders flat (unchanged), the
+  existing single-XR `.ansi` fixtures do **not** change. New per-XR sections and
+  the footer appear only for multi-XR invocations, of which there is no existing
+  E2E fixture. If a multi-XR E2E case is added later, regenerate under the gate
+  below. No golden churn is expected for this change.
 
-### E2E golden regeneration gate
+### E2E golden regeneration gate (if goldens ever change)
 
 `E2E_DUMP_EXPECTED=1` regenerates candidate goldens but does **not** make them
 correct — it blesses whatever the code currently emits, bugs included. A

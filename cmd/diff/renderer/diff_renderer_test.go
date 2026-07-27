@@ -300,20 +300,20 @@ func TestDefaultDiffRenderer_RenderDiffs_GroupedByXR(t *testing.T) {
 		expected    []string
 		notExpected []string
 	}{
-		// A single identity-bearing group prints its section header and a
-		// per-section summary, but no aggregate footer (only one XR).
-		"SingleChangedXR": {
+		// A single identity-bearing group renders flat, exactly as before
+		// grouping existed: no section header and no aggregate footer, since
+		// there is nothing to disambiguate.
+		"SingleChangedXRRendersFlat": {
 			groups: []dt.XRDiffGroup{
 				xrGroup("XNopResource", "my-xr", map[string]*dt.ResourceDiff{
 					changedBucket.GetDiffKey(): changedBucket,
 				}),
 			},
 			expected: []string{
-				"=== XNopResource/my-xr ===",
 				"~~~ Bucket/my-xr-bucket",
 				"Summary: 1 modified",
 			},
-			notExpected: []string{"Total:"},
+			notExpected: []string{"===", "Total:"},
 		},
 		// Multiple identity-bearing groups: each gets a header in input order, an
 		// unchanged group says "No changes.", and an aggregate footer tallies all.
@@ -331,17 +331,23 @@ func TestDefaultDiffRenderer_RenderDiffs_GroupedByXR(t *testing.T) {
 				"Total: 1 modified across 2 XRs (1 unchanged)",
 			},
 		},
-		// An errored group prints an inline Error section on stdout.
-		"ErroredXR": {
+		// Multiple XRs where one errored: the errored XR gets an inline Error
+		// section on stdout and is tallied in the footer.
+		"MultipleXRsWithError": {
 			groups: []dt.XRDiffGroup{
+				xrGroup("XNopResource", "ok-xr", map[string]*dt.ResourceDiff{
+					changedBucket.GetDiffKey(): changedBucket,
+				}),
 				{
 					XR:  corev1.ObjectReference{APIVersion: "example.org/v1", Kind: "XNopResource", Name: "broken-xr"},
 					Err: &dt.OutputError{ResourceID: "XNopResource/broken-xr", Message: "cannot get composition"},
 				},
 			},
 			expected: []string{
+				"=== XNopResource/ok-xr ===",
 				"=== XNopResource/broken-xr ===",
 				"Error: cannot get composition",
+				"Total: 1 modified across 2 XRs (1 error)",
 			},
 		},
 		// An identity-less group (the composition renderer's reuse) renders flat:
