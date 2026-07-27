@@ -254,9 +254,10 @@ relevant `go test`.
 
 ## Future Work
 
-- **Unify the per-XR structured shape across `comp` and `xr`.** At the next
-  breaking `comp` window — a breaking `comp` change is already on the table, so
-  the marginal cost is low — converge comp's `impactAnalysis[]` entry
+- **Unify the per-XR structured shape across `comp` and `xr`.** Tracked as
+  [#410](https://github.com/crossplane-contrib/crossplane-diff/issues/410). At
+  the next breaking `comp` window — a breaking `comp` change is already on the
+  table, so the marginal cost is low — converge comp's `impactAnalysis[]` entry
   (`xrImpactWire`) and xr's `xrs[]` entry (`xrDiffWire`) onto a single per-XR
   wire shape. **`xr`'s `xrs[]` shape is deliberately the target; this is
   "migrate comp onto xr", not a mutual reconciliation** — `xrs[]` was greenfield
