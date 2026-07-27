@@ -469,6 +469,45 @@ func TestDiffIntegration(t *testing.T) {
 			expectedError:    false,
 			expectedExitCode: dp.ExitCodeDiffDetected,
 		},
+		"MultipleXRsGroupedByInputXR": {
+			reason:       "Two input XRs in one invocation are grouped per input XR in the xrs[] structured view",
+			outputFormat: "json",
+			inputFiles: []string{
+				"testdata/diff/new-xr.yaml",
+				"testdata/diff/new-xr-second.yaml",
+			},
+			setupFiles: []string{
+				"testdata/diff/resources/xrd.yaml",
+				"testdata/diff/resources/composition.yaml",
+				"testdata/diff/resources/functions.yaml",
+			},
+			expectedStructuredOutput: tu.ExpectDiff().
+				// Aggregate flat view still reports the merged total (2 adds per XR).
+				WithSummary(4, 0, 0).
+				// Grouped view: one entry per input XR, each changed with its own tree.
+				WithXR("XNopResource", "test-resource", "default").
+				WithXRStatus("changed").
+				WithXRSummary(2, 0, 0).
+				WithXRChange("added", "XNopResource", "test-resource", "default").
+				WithField("spec.coolField", "new-value").
+				AndXR().
+				WithXRChange("added", "XDownstreamResource", "test-resource", "default").
+				WithField("spec.forProvider.configData", "new-value").
+				AndXR().
+				AndXR().
+				WithXR("XNopResource", "second-resource", "default").
+				WithXRStatus("changed").
+				WithXRSummary(2, 0, 0).
+				WithXRChange("added", "XNopResource", "second-resource", "default").
+				WithField("spec.coolField", "second-value").
+				AndXR().
+				WithXRChange("added", "XDownstreamResource", "second-resource", "default").
+				WithField("spec.forProvider.configData", "second-value").
+				AndXR().
+				AndXR(),
+			expectedError:    false,
+			expectedExitCode: dp.ExitCodeDiffDetected,
+		},
 		"ModifiedResourceDiff": {
 			reason: "Shows color diff for modified resources",
 			setupFiles: []string{
