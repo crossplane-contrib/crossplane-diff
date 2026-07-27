@@ -318,58 +318,51 @@ func TestStructuredDiffRenderer_GroupsByXR(t *testing.T) {
 		t.Fatalf("Failed to parse JSON: %v\nOutput: %s", err, buf.String())
 	}
 
-	// Flat back-compat view: one modified change across all groups.
-	if diff := cmp.Diff(Summary{Modified: 1}, output.Summary); diff != "" {
-		t.Errorf("aggregate Summary mismatch (-want +got):\n%s", diff)
+	xrRef := func(name string) corev1.ObjectReference {
+		return corev1.ObjectReference{APIVersion: "example.org/v1", Kind: "XBucket", Name: name, Namespace: "default"}
+	}
+	bucketChange := ChangeDetail{
+		Type:       dt.DiffTypeWordModified,
+		APIVersion: "example.org/v1",
+		Kind:       "Bucket",
+		Name:       "bucket-a",
+		Namespace:  "default",
+		Diff: map[string]any{
+			dt.DiffKeyOld: map[string]any{"apiVersion": "example.org/v1", "kind": "Bucket", "metadata": map[string]any{"name": "bucket-a"}, "spec": map[string]any{"region": "us-east-1"}},
+			dt.DiffKeyNew: map[string]any{"apiVersion": "example.org/v1", "kind": "Bucket", "metadata": map[string]any{"name": "bucket-a"}, "spec": map[string]any{"region": "us-west-2"}},
+		},
 	}
 
-	if len(output.Changes) != 1 {
-		t.Errorf("flat Changes = %d, want 1", len(output.Changes))
+	// The whole output asserted as one value: flat back-compat view (aggregate
+	// summary + merged changes + union errors) plus the per-input-XR xrs[] view
+	// (changed / unchanged / errored, in input order).
+	want := StructuredDiffOutput{
+		Summary: Summary{Modified: 1},
+		Changes: []ChangeDetail{bucketChange},
+		Errors:  unionErrs,
+		Xrs: []xrDiffWire{
+			{
+				XR:      xrRef("changed-xr"),
+				Status:  XRStatusChanged,
+				Summary: Summary{Modified: 1},
+				Changes: []ChangeDetail{bucketChange},
+			},
+			{
+				XR:      xrRef("unchanged-xr"),
+				Status:  XRStatusUnchanged,
+				Changes: []ChangeDetail{},
+			},
+			{
+				XR:      xrRef("broken-xr"),
+				Status:  XRStatusError,
+				Changes: []ChangeDetail{},
+				Errors:  []dt.OutputError{{ResourceID: "XBucket/broken-xr", Message: "cannot get composition"}},
+			},
+		},
 	}
 
-	// Top-level errors = union (unchanged contract).
-	if diff := cmp.Diff(unionErrs, output.Errors); diff != "" {
-		t.Errorf("top-level Errors mismatch (-want +got):\n%s", diff)
-	}
-
-	// Grouped view: three entries, in input order.
-	if len(output.Xrs) != 3 {
-		t.Fatalf("Xrs = %d, want 3", len(output.Xrs))
-	}
-
-	// changed-xr
-	if got := output.Xrs[0]; got.XR.Name != "changed-xr" || got.Status != XRStatusChanged {
-		t.Errorf("Xrs[0] = {name=%q status=%q}, want {changed-xr changed}", got.XR.Name, got.Status)
-	}
-
-	if got := output.Xrs[0]; got.XR.Kind != "XBucket" || got.XR.APIVersion != "example.org/v1" || got.XR.Namespace != "default" {
-		t.Errorf("Xrs[0].XR identity = %+v, want XBucket/example.org/v1/default", got.XR)
-	}
-
-	if diff := cmp.Diff((Summary{Modified: 1}), output.Xrs[0].Summary); diff != "" {
-		t.Errorf("Xrs[0].Summary mismatch (-want +got):\n%s", diff)
-	}
-
-	if len(output.Xrs[0].Changes) != 1 || output.Xrs[0].Changes[0].Name != "bucket-a" {
-		t.Errorf("Xrs[0].Changes = %+v, want one change for bucket-a", output.Xrs[0].Changes)
-	}
-
-	// unchanged-xr
-	if got := output.Xrs[1]; got.XR.Name != "unchanged-xr" || got.Status != XRStatusUnchanged {
-		t.Errorf("Xrs[1] = {name=%q status=%q}, want {unchanged-xr unchanged}", got.XR.Name, got.Status)
-	}
-
-	if len(output.Xrs[1].Changes) != 0 {
-		t.Errorf("Xrs[1].Changes = %d, want 0 (unchanged)", len(output.Xrs[1].Changes))
-	}
-
-	// broken-xr
-	if got := output.Xrs[2]; got.XR.Name != "broken-xr" || got.Status != XRStatusError {
-		t.Errorf("Xrs[2] = {name=%q status=%q}, want {broken-xr error}", got.XR.Name, got.Status)
-	}
-
-	if len(output.Xrs[2].Errors) != 1 || output.Xrs[2].Errors[0].Message != "cannot get composition" {
-		t.Errorf("Xrs[2].Errors = %+v, want one 'cannot get composition'", output.Xrs[2].Errors)
+	if diff := cmp.Diff(want, output); diff != "" {
+		t.Errorf("structured output mismatch (-want +got):\n%s", diff)
 	}
 }
 
