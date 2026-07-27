@@ -379,7 +379,6 @@ func (r *ResourceExpectation) AndXR() *XRExpectation {
 	return r.xrParent
 }
 
-// ParseStructuredOutput parses JSON output into StructuredDiffOutput.
 // XRExpectation defines expectations for a single entry in the xrs[] grouped
 // view: the input XR's identity, its status, its per-XR summary, and its
 // per-XR changes.
@@ -464,6 +463,7 @@ func (x *XRExpectation) WithXRChange(changeType, kind, name, namespace string) *
 // AndXR returns to the root ExpectedDiff to chain more expectations.
 func (x *XRExpectation) AndXR() *ExpectedDiff { return x.parent }
 
+// ParseStructuredOutput parses JSON output into StructuredDiffOutput.
 func ParseStructuredOutput(jsonOutput string) (StructuredDiffOutput, error) {
 	var output StructuredDiffOutput
 	if err := json.Unmarshal([]byte(jsonOutput), &output); err != nil {
@@ -476,7 +476,7 @@ func ParseStructuredOutput(jsonOutput string) (StructuredDiffOutput, error) {
 // AssertStructuredDiff compares actual JSON output against expected.
 // Accepts DiffExpectation interface so callers don't need to call And() to return to root.
 //
-//nolint:gocognit // Test assertion function with necessary branching for comprehensive validation
+
 func AssertStructuredDiff(t *testing.T, jsonOutput string, e DiffExpectation) {
 	t.Helper()
 
@@ -564,54 +564,64 @@ func assertResourceExpectations(t *testing.T, scope string, changes []ChangeDeta
 			continue
 		}
 
-		// Validate field values for added/removed resources
-		for path, expectedValue := range expectRes.fieldValues {
-			actualValue := getFieldFromDiff(found.Diff, expectRes.changeType, path)
-			if !reflect.DeepEqual(actualValue, expectedValue) {
-				t.Errorf("%s%s %s/%s: field %s: expected %v, got %v",
-					prefix, expectRes.changeType, expectRes.kind, expectRes.name, path, expectedValue, actualValue)
-			}
+		assertChangeFields(t, prefix, found, expectRes)
+	}
+}
+
+// assertChangeFields validates the field-level expectations (exact values,
+// old/new changes, value patterns, and strict spec match) of a single matched
+// change. Split out of assertResourceExpectations to keep that function's
+// cognitive complexity in check.
+func assertChangeFields(t *testing.T, prefix string, found *ChangeDetail, expectRes *ResourceExpectation) {
+	t.Helper()
+
+	// Validate field values for added/removed resources
+	for path, expectedValue := range expectRes.fieldValues {
+		actualValue := getFieldFromDiff(found.Diff, expectRes.changeType, path)
+		if !reflect.DeepEqual(actualValue, expectedValue) {
+			t.Errorf("%s%s %s/%s: field %s: expected %v, got %v",
+				prefix, expectRes.changeType, expectRes.kind, expectRes.name, path, expectedValue, actualValue)
+		}
+	}
+
+	// Validate field changes for modified resources
+	for path, change := range expectRes.fieldChanges {
+		oldVal := getFieldFromDiff(found.Diff, dt.DiffKeyOld, path)
+		newVal := getFieldFromDiff(found.Diff, dt.DiffKeyNew, path)
+
+		if !reflect.DeepEqual(oldVal, change[0]) {
+			t.Errorf("%s%s %s/%s: field %s old value: expected %v, got %v",
+				prefix, expectRes.changeType, expectRes.kind, expectRes.name, path, change[0], oldVal)
 		}
 
-		// Validate field changes for modified resources
-		for path, change := range expectRes.fieldChanges {
-			oldVal := getFieldFromDiff(found.Diff, dt.DiffKeyOld, path)
-			newVal := getFieldFromDiff(found.Diff, dt.DiffKeyNew, path)
-
-			if !reflect.DeepEqual(oldVal, change[0]) {
-				t.Errorf("%s%s %s/%s: field %s old value: expected %v, got %v",
-					prefix, expectRes.changeType, expectRes.kind, expectRes.name, path, change[0], oldVal)
-			}
-
-			if !reflect.DeepEqual(newVal, change[1]) {
-				t.Errorf("%s%s %s/%s: field %s new value: expected %v, got %v",
-					prefix, expectRes.changeType, expectRes.kind, expectRes.name, path, change[1], newVal)
-			}
+		if !reflect.DeepEqual(newVal, change[1]) {
+			t.Errorf("%s%s %s/%s: field %s new value: expected %v, got %v",
+				prefix, expectRes.changeType, expectRes.kind, expectRes.name, path, change[1], newVal)
 		}
+	}
 
-		// Validate field value patterns
-		for path, pattern := range expectRes.fieldValuePatterns {
-			actualValue := getNewFieldValue(found.Diff, expectRes.changeType, path)
+	// Validate field value patterns
+	for path, pattern := range expectRes.fieldValuePatterns {
+		actualValue := getNewFieldValue(found.Diff, expectRes.changeType, path)
 
-			actualStr := fmt.Sprintf("%v", actualValue)
-			if !pattern.MatchString(actualStr) {
-				t.Errorf("%s%s %s/%s: field %s value %q does not match pattern %q",
-					prefix, expectRes.changeType, expectRes.kind, expectRes.name, path, actualStr, pattern.String())
-			}
+		actualStr := fmt.Sprintf("%v", actualValue)
+		if !pattern.MatchString(actualStr) {
+			t.Errorf("%s%s %s/%s: field %s value %q does not match pattern %q",
+				prefix, expectRes.changeType, expectRes.kind, expectRes.name, path, actualStr, pattern.String())
 		}
+	}
 
-		// Validate spec match if specified
-		if expectRes.specMatch != nil {
-			spec := getFieldFromDiff(found.Diff, expectRes.changeType, "spec")
-			if specMap, ok := spec.(map[string]any); ok {
-				if !reflect.DeepEqual(specMap, expectRes.specMatch) {
-					t.Errorf("%s%s %s/%s: spec mismatch: expected %v, got %v",
-						prefix, expectRes.changeType, expectRes.kind, expectRes.name, expectRes.specMatch, specMap)
-				}
-			} else {
-				t.Errorf("%s%s %s/%s: spec is not a map: %v",
-					prefix, expectRes.changeType, expectRes.kind, expectRes.name, spec)
+	// Validate spec match if specified
+	if expectRes.specMatch != nil {
+		spec := getFieldFromDiff(found.Diff, expectRes.changeType, "spec")
+		if specMap, ok := spec.(map[string]any); ok {
+			if !reflect.DeepEqual(specMap, expectRes.specMatch) {
+				t.Errorf("%s%s %s/%s: spec mismatch: expected %v, got %v",
+					prefix, expectRes.changeType, expectRes.kind, expectRes.name, expectRes.specMatch, specMap)
 			}
+		} else {
+			t.Errorf("%s%s %s/%s: spec is not a map: %v",
+				prefix, expectRes.changeType, expectRes.kind, expectRes.name, spec)
 		}
 	}
 }

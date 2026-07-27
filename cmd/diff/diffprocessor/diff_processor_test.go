@@ -687,6 +687,7 @@ func TestDefaultDiffProcessor_PerformDiff_BuildsGroups(t *testing.T) {
 				RenderDiffsFn: func(groups []dt.XRDiffGroup, errs []dt.OutputError) error {
 					gotGroups = groups
 					gotErrs = errs
+
 					return nil
 				},
 			}

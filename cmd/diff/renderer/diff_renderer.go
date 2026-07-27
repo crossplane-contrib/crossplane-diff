@@ -265,8 +265,7 @@ func (r *DefaultDiffRenderer) renderGrouped(groups []dt.XRDiffGroup) error {
 			return errors.Wrap(err, "failed to write XR section header")
 		}
 
-		switch {
-		case g.Err != nil:
+		if g.Err != nil {
 			errorXR++
 
 			if _, err := fmt.Fprintf(stdout, "Error: %s\n\n", g.Err.Message); err != nil {
