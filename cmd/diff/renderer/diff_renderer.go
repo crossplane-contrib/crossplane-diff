@@ -167,6 +167,14 @@ func hasIdentity(g dt.XRDiffGroup) bool {
 	return g.XR.Kind != "" || g.XR.Name != ""
 }
 
+// identitylessGroups wraps a flat diff map as a single group with no XR
+// identity, the shape callers use when there is no single owning XR (the
+// composition renderer's downstream diffs). RenderDiffs renders an
+// identity-less group as a flat, header-less block. See hasIdentity.
+func identitylessGroups(diffs map[string]*dt.ResourceDiff) []dt.XRDiffGroup {
+	return []dt.XRDiffGroup{{Diffs: diffs}}
+}
+
 // RenderDiffs formats and prints the diffs.
 // Diff output goes to r.diffOpts.Stdout, errors go to r.diffOpts.Stderr.
 //
