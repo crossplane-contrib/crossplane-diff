@@ -39,7 +39,7 @@ func sharedCompDiffFixtures() []testCompDiffFixture {
 				t.Helper()
 
 				if format == OutputFormatJSON {
-					var parsed compDiffJSONOutput
+					var parsed compDiffWire
 					if err := json.Unmarshal([]byte(result), &parsed); err != nil {
 						t.Fatalf("Failed to parse JSON: %v", err)
 					}
@@ -74,7 +74,7 @@ func sharedCompDiffFixtures() []testCompDiffFixture {
 				t.Helper()
 
 				if format == OutputFormatJSON {
-					var parsed compDiffJSONOutput
+					var parsed compDiffWire
 					if err := json.Unmarshal([]byte(result), &parsed); err != nil {
 						t.Fatalf("Failed to parse JSON: %v", err)
 					}
@@ -125,15 +125,15 @@ func sharedCompDiffFixtures() []testCompDiffFixture {
 
 					// Verify apiVersion, kind, name are top-level keys (not nested under "objectReference")
 					if _, ok := impact["apiVersion"]; !ok {
-						t.Error("Expected 'apiVersion' to be a top-level field in xrImpactJSON (embedded from ObjectReference)")
+						t.Error("Expected 'apiVersion' to be a top-level field in xrImpactWire (embedded from ObjectReference)")
 					}
 
 					if _, ok := impact["kind"]; !ok {
-						t.Error("Expected 'kind' to be a top-level field in xrImpactJSON (embedded from ObjectReference)")
+						t.Error("Expected 'kind' to be a top-level field in xrImpactWire (embedded from ObjectReference)")
 					}
 
 					if _, ok := impact["name"]; !ok {
-						t.Error("Expected 'name' to be a top-level field in xrImpactJSON (embedded from ObjectReference)")
+						t.Error("Expected 'name' to be a top-level field in xrImpactWire (embedded from ObjectReference)")
 					}
 
 					// ObjectReference should NOT be nested
@@ -174,7 +174,7 @@ func sharedCompDiffFixtures() []testCompDiffFixture {
 				t.Helper()
 
 				if format == OutputFormatJSON {
-					var parsed compDiffJSONOutput
+					var parsed compDiffWire
 					if err := json.Unmarshal([]byte(result), &parsed); err != nil {
 						t.Fatalf("Failed to parse JSON: %v", err)
 					}
@@ -639,7 +639,7 @@ func TestCompDiffOutput_JSONSchema(t *testing.T) {
 		t.Fatalf("Failed to render JSON: %v", err)
 	}
 
-	var parsed compDiffJSONOutput
+	var parsed compDiffWire
 	if err := json.Unmarshal(jsonBuf.Bytes(), &parsed); err != nil {
 		t.Fatalf("Failed to unmarshal: %v", err)
 	}
@@ -720,7 +720,7 @@ func TestXRStatusFiltered_JSON(t *testing.T) {
 		t.Fatalf("RenderCompDiff: %v", err)
 	}
 
-	var parsed compDiffJSONOutput
+	var parsed compDiffWire
 	if err := json.Unmarshal(jsonBuf.Bytes(), &parsed); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
@@ -740,7 +740,7 @@ func TestXRStatusFiltered_JSON(t *testing.T) {
 		}
 	}
 
-	byName := map[string]xrImpactJSON{}
+	byName := map[string]xrImpactWire{}
 	for _, imp := range parsed.Compositions[0].ImpactAnalysis {
 		byName[imp.Name] = imp
 	}

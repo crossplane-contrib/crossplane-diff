@@ -19,21 +19,21 @@ type StructuredDiffOutput struct {
 	Summary Summary        `json:"summary"`
 	Changes []ChangeDetail `json:"changes"`
 	Errors  []OutputError  `json:"errors,omitempty"`
-	Xrs     []XRDiffJSON   `json:"xrs"`
+	Xrs     []XRDiffWire   `json:"xrs"`
 }
 
-// XRDiffJSON mirrors renderer.XRDiffJSON — a per-input-XR entry in the xrs[]
-// grouped view.
-type XRDiffJSON struct {
-	XR      XRIdentity     `json:"xr"`
+// XRDiffWire mirrors the renderer's per-input-XR wire entry (xrDiffWire) in the
+// xrs[] grouped view.
+type XRDiffWire struct {
+	XR      XRIdentityWire `json:"xr"`
 	Status  string         `json:"status"`
 	Summary Summary        `json:"summary"`
 	Changes []ChangeDetail `json:"changes"`
 	Errors  []OutputError  `json:"errors,omitempty"`
 }
 
-// XRIdentity mirrors renderer.XRIdentity.
-type XRIdentity struct {
+// XRIdentityWire mirrors the renderer's input-XR identity wire shape (xrIdentity).
+type XRIdentityWire struct {
 	APIVersion string `json:"apiVersion"`
 	Kind       string `json:"kind"`
 	Name       string `json:"name"`
@@ -626,7 +626,7 @@ func assertChangeFields(t *testing.T, prefix string, found *ChangeDetail, expect
 
 // assertXRExpectations validates xrs[] entry expectations against the actual
 // grouped output.
-func assertXRExpectations(t *testing.T, actual []XRDiffJSON, expected []*XRExpectation) {
+func assertXRExpectations(t *testing.T, actual []XRDiffWire, expected []*XRExpectation) {
 	t.Helper()
 
 	for _, want := range expected {
@@ -669,7 +669,7 @@ func assertXRExpectations(t *testing.T, actual []XRDiffJSON, expected []*XRExpec
 
 // findMatchingXR locates the xrs[] entry matching an XRExpectation by
 // kind/namespace and (unless anyName / a name pattern is used) exact name.
-func findMatchingXR(actual []XRDiffJSON, want *XRExpectation) *XRDiffJSON {
+func findMatchingXR(actual []XRDiffWire, want *XRExpectation) *XRDiffWire {
 	for i := range actual {
 		x := &actual[i]
 
@@ -938,7 +938,7 @@ func convertBracketNotation(path string) string {
 
 // StructuredCompDiffOutput mirrors the JSON schema for composition diffs.
 type StructuredCompDiffOutput struct {
-	Compositions []CompositionDiffJSON `json:"compositions"`
+	Compositions []CompositionDiffWire `json:"compositions"`
 	Errors       []OutputError         `json:"errors,omitempty"`
 }
 
@@ -967,13 +967,13 @@ type FieldValidationError struct {
 	Value   any    `json:"value,omitempty"`
 }
 
-// CompositionDiffJSON mirrors compositionDiffJSON from the renderer.
-type CompositionDiffJSON struct {
+// CompositionDiffWire mirrors compositionDiffWire from the renderer.
+type CompositionDiffWire struct {
 	Name               string                   `json:"name"`
 	Error              string                   `json:"error,omitempty"`
 	CompositionChanges *ChangeDetail            `json:"compositionChanges,omitempty"`
 	AffectedResources  AffectedResourcesSummary `json:"affectedResources"`
-	ImpactAnalysis     []XRImpactJSON           `json:"impactAnalysis"`
+	ImpactAnalysis     []XRImpactWire           `json:"impactAnalysis"`
 }
 
 // AffectedResourcesSummary mirrors renderer.AffectedResourcesSummary.
@@ -986,8 +986,8 @@ type AffectedResourcesSummary struct {
 	FilteredBySelector int `json:"filteredBySelector,omitempty"`
 }
 
-// XRImpactJSON mirrors xrImpactJSON from the renderer.
-type XRImpactJSON struct {
+// XRImpactWire mirrors xrImpactWire from the renderer.
+type XRImpactWire struct {
 	APIVersion        string             `json:"apiVersion,omitempty"`
 	Kind              string             `json:"kind,omitempty"`
 	Name              string             `json:"name,omitempty"`
@@ -1417,7 +1417,7 @@ func AssertStructuredCompDiff(t *testing.T, jsonOutput string, e CompDiffExpecta
 }
 
 // findMatchingComposition finds a composition by name.
-func findMatchingComposition(comps []CompositionDiffJSON, name string) *CompositionDiffJSON {
+func findMatchingComposition(comps []CompositionDiffWire, name string) *CompositionDiffWire {
 	for i := range comps {
 		if comps[i].Name == name {
 			return &comps[i]
@@ -1428,7 +1428,7 @@ func findMatchingComposition(comps []CompositionDiffJSON, name string) *Composit
 }
 
 // findMatchingXRImpact finds an XR impact that matches the expectation.
-func findMatchingXRImpact(impacts []XRImpactJSON, expect *XRImpactExpectation) *XRImpactJSON {
+func findMatchingXRImpact(impacts []XRImpactWire, expect *XRImpactExpectation) *XRImpactWire {
 	for i := range impacts {
 		impact := &impacts[i]
 		if impact.Kind != expect.kind {

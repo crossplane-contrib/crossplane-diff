@@ -86,25 +86,25 @@ type StructuredDiffOutput struct {
 	// Xrs groups changes by the input XR/claim that produced them, one entry
 	// per input in input order. This is the recommended view; the flat Changes
 	// field above is deprecated.
-	Xrs []XRDiffJSON `json:"xrs"`
+	Xrs []xrDiffWire `json:"xrs"`
 }
 
-// XRIdentity identifies an input XR/claim in structured output. It is a
+// xrIdentity identifies an input XR/claim in structured output. It is a
 // deliberately small projection of the input's metadata (not the full
 // corev1.ObjectReference) so the JSON schema stays stable and free of
 // server-side fields like UID or resourceVersion.
-type XRIdentity struct {
+type xrIdentity struct {
 	APIVersion string `json:"apiVersion"`
 	Kind       string `json:"kind"`
 	Name       string `json:"name"`
 	Namespace  string `json:"namespace,omitempty"`
 }
 
-// XRDiffJSON is the per-input-XR entry in StructuredDiffOutput.Xrs. It carries
+// xrDiffWire is the per-input-XR entry in StructuredDiffOutput.Xrs. It carries
 // the input XR's identity, its processing status, and its own summary,
 // changes, and errors.
-type XRDiffJSON struct {
-	XR      XRIdentity       `json:"xr"`
+type xrDiffWire struct {
+	XR      xrIdentity       `json:"xr"`
 	Status  XRStatus         `json:"status"`
 	Summary Summary          `json:"summary"`
 	Changes []ChangeDetail   `json:"changes"`
@@ -211,21 +211,21 @@ type XRImpact struct {
 // --- JSON Output Types (used by StructuredCompDiffRenderer) ---
 // Note: Only JSON tags are used because sigs.k8s.io/yaml uses JSON tags for YAML serialization.
 
-// compDiffJSONOutput is the JSON schema for composition diffs.
-type compDiffJSONOutput struct {
-	Compositions []compositionDiffJSON `json:"compositions"`
+// compDiffWire is the serialized (JSON/YAML) shape for composition diffs.
+type compDiffWire struct {
+	Compositions []compositionDiffWire `json:"compositions"`
 	Errors       []dt.OutputError      `json:"errors,omitempty"`
 }
 
-type compositionDiffJSON struct {
+type compositionDiffWire struct {
 	Name               string                   `json:"name"`
 	Error              string                   `json:"error,omitempty"`
 	CompositionChanges *ChangeDetail            `json:"compositionChanges,omitempty"`
 	AffectedResources  AffectedResourcesSummary `json:"affectedResources"`
-	ImpactAnalysis     []xrImpactJSON           `json:"impactAnalysis"`
+	ImpactAnalysis     []xrImpactWire           `json:"impactAnalysis"`
 }
 
-type xrImpactJSON struct {
+type xrImpactWire struct {
 	corev1.ObjectReference `json:",inline"`
 
 	Status            XRStatus           `json:"status"`
@@ -392,12 +392,12 @@ func resourceDiffToChangeDetail(diff *dt.ResourceDiff) *ChangeDetail {
 // structured view, preserving input order. Each entry gets its identity, a
 // derived status, and (for changed XRs) its own summary and changes; errored
 // XRs carry their error.
-func buildXRGroups(groups []dt.XRDiffGroup) []XRDiffJSON {
-	out := make([]XRDiffJSON, 0, len(groups))
+func buildXRGroups(groups []dt.XRDiffGroup) []xrDiffWire {
+	out := make([]xrDiffWire, 0, len(groups))
 
 	for _, g := range groups {
-		entry := XRDiffJSON{
-			XR: XRIdentity{
+		entry := xrDiffWire{
+			XR: xrIdentity{
 				APIVersion: g.XR.APIVersion,
 				Kind:       g.XR.Kind,
 				Name:       g.XR.Name,

@@ -445,17 +445,17 @@ func (r *StructuredCompDiffRenderer) RenderCompDiff(output *CompDiffOutput) erro
 }
 
 // buildStructuredCompOutput converts internal CompDiffOutput to JSON-serializable structure.
-func (r *StructuredCompDiffRenderer) buildStructuredCompOutput(output *CompDiffOutput) *compDiffJSONOutput {
-	result := &compDiffJSONOutput{
-		Compositions: make([]compositionDiffJSON, 0, len(output.Compositions)),
+func (r *StructuredCompDiffRenderer) buildStructuredCompOutput(output *CompDiffOutput) *compDiffWire {
+	result := &compDiffWire{
+		Compositions: make([]compositionDiffWire, 0, len(output.Compositions)),
 		Errors:       output.Errors,
 	}
 
 	for _, comp := range output.Compositions {
-		jsonComp := compositionDiffJSON{
+		jsonComp := compositionDiffWire{
 			Name:              comp.Name,
 			AffectedResources: comp.AffectedResources,
-			ImpactAnalysis:    make([]xrImpactJSON, 0, len(comp.ImpactAnalysis)),
+			ImpactAnalysis:    make([]xrImpactWire, 0, len(comp.ImpactAnalysis)),
 		}
 
 		// Include per-composition error if present
@@ -470,7 +470,7 @@ func (r *StructuredCompDiffRenderer) buildStructuredCompOutput(output *CompDiffO
 
 		// Convert each XR impact
 		for _, impact := range comp.ImpactAnalysis {
-			jsonImpact := xrImpactJSON{
+			jsonImpact := xrImpactWire{
 				ObjectReference: impact.ObjectReference,
 				Status:          impact.Status,
 				FilterReason:    impact.FilterReason,

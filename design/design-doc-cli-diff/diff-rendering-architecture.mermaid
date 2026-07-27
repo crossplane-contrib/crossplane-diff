@@ -59,18 +59,18 @@ classDiagram
         +Summary Summary
         +Changes []ChangeDetail (deprecated)
         +Errors []OutputError
-        +Xrs []XRDiffJSON
+        +Xrs []xrDiffWire
     }
 
-    class XRDiffJSON {
-        +XR XRIdentity
+    class xrDiffWire {
+        +XR xrIdentity
         +Status XRStatus
         +Summary Summary
         +Changes []ChangeDetail
         +Errors []OutputError
     }
 
-    class XRIdentity {
+    class xrIdentity {
         +APIVersion string
         +Kind string
         +Name string
@@ -197,12 +197,12 @@ classDiagram
     StructuredDiffOutput --> Summary
     StructuredDiffOutput --> ChangeDetail
     StructuredDiffOutput --> OutputError
-    StructuredDiffOutput --> XRDiffJSON
-    XRDiffJSON --> XRIdentity
-    XRDiffJSON --> Summary
-    XRDiffJSON --> ChangeDetail
-    XRDiffJSON --> XRStatus
-    XRDiffJSON --> OutputError
+    StructuredDiffOutput --> xrDiffWire
+    xrDiffWire --> xrIdentity
+    xrDiffWire --> Summary
+    xrDiffWire --> ChangeDetail
+    xrDiffWire --> XRStatus
+    xrDiffWire --> OutputError
     CompDiffOutput --> CompositionDiff
     CompDiffOutput --> OutputError
     CompositionDiff --> AffectedResourcesSummary

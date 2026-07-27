@@ -832,18 +832,24 @@ The structured types are split across two files:
   tests. The pre-converted error (vs. a raw `error`) keeps the conversion — `NewOutputError`, which lives in
   `diffprocessor` — out of the renderer, avoiding a renderer→diffprocessor dependency.
 
-All of the wire types below are part of the public output contract:
+The output contract is defined by the JSON/YAML field names (the struct tags), not the Go type identifiers: the
+serialized shaping types are unexported (`compDiffWire`, `compositionDiffWire`, `xrImpactWire`, `xrDiffWire`,
+`xrIdentity`) and follow the same `…Wire` naming convention across `comp` and `xr`. The `…Wire` suffix marks them as
+the serialized (JSON/YAML) representation, distinct from the rich, exported internal types the processor builds
+(`CompDiffOutput`, `CompositionDiff`, `XRImpact`). `StructuredDiffOutput` and the field-level types it embeds
+(`Summary`, `ChangeDetail`, `OutputError`) remain exported, as they are shared and referenced directly. The fields
+below are the public output contract:
 
 - `StructuredDiffOutput` — XR diff JSON/YAML root: `Summary` (aggregate added/modified/removed counts across all input
   XRs), `Changes []ChangeDetail` (flat list, one entry per non-equal resource across all XRs), optional
-  `Errors []OutputError` (union), and `Xrs []XRDiffJSON` (per-input-XR grouping). **`Changes` is deprecated** in favor
-  of `Xrs` and will be removed in a future major release; `Summary` and `Errors` are retained.
-- `XRDiffJSON` — one entry in `StructuredDiffOutput.Xrs`, per input XR/claim in input order: `XR XRIdentity`, a
-  `Status` (`"changed"` / `"unchanged"` / `"error"` — the same `XRStatus` enum comp uses; `"filtered"` does not apply
-  to `xr`), its own `Summary`, its own `Changes []ChangeDetail`, and (for a failed XR) its own `Errors []OutputError`.
-  An errored XR's error also appears in the top-level union `Errors`.
-- `XRIdentity` — the input XR/claim identity projected into `XRDiffJSON`: `apiVersion`, `kind`, `name`, `namespace`. A
-  deliberately small projection (not the full `corev1.ObjectReference`) so the JSON schema stays stable and free of
+  `Errors []OutputError` (union), and `Xrs` (per-input-XR grouping, JSON key `xrs`). **`Changes` is deprecated** in
+  favor of `Xrs` and will be removed in a future major release; `Summary` and `Errors` are retained.
+- `xrDiffWire` — one entry in the `xrs[]` array, per input XR/claim in input order: an `xr` identity, a
+  `status` (`"changed"` / `"unchanged"` / `"error"` — the same `XRStatus` enum comp uses; `"filtered"` does not apply
+  to `xr`), its own `summary`, its own `changes[]`, and (for a failed XR) its own `errors[]`.
+  An errored XR's error also appears in the top-level union `errors[]`.
+- `xrIdentity` — the input XR/claim identity projected into each `xrs[]` entry's `xr` field: `apiVersion`, `kind`,
+  `name`, `namespace`. A deliberately small projection (not the full `corev1.ObjectReference`) so the JSON schema stays stable and free of
   server-side fields.
 - `CompDiffOutput` — composition diff JSON/YAML root: `Compositions []CompositionDiff` (one entry per input
   composition) plus optional top-level `Errors []OutputError` for failures that couldn't be attributed to a single
@@ -866,7 +872,7 @@ All of the wire types below are part of the public output contract:
   `--include-manual` re-includes) and `"revision_selector_mismatch"` (`compositionRevisionSelector` does not match the
   diffed composition's labels; `--include-manual` does *not* re-include, since the XR would not select the resulting
   revision).
-- `DownstreamChanges` — the JSON-shape wrapper for an XR's downstream diffs, used inside `xrImpactJSON`: a `Summary`
+- `DownstreamChanges` — the serialized wrapper for an XR's downstream diffs, used inside `xrImpactWire`: a `Summary`
   plus a `[]ChangeDetail`.
 - `OutputError` — error envelope used by both XR and comp diff outputs. Carries:
     - `ResourceID`: which user-supplied input the diff was processing (one entry per batched run)
