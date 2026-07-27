@@ -484,27 +484,25 @@ func TestDiffIntegration(t *testing.T) {
 			expectedStructuredOutput: tu.ExpectDiff().
 				// Aggregate flat view still reports the merged total (2 adds per XR).
 				WithSummary(4, 0, 0).
-				// Grouped view: one entry per input XR, each changed with its own tree.
-				WithXR("XNopResource", "test-resource", "default").
-				WithXRStatus("changed").
-				WithXRSummary(2, 0, 0).
-				WithXRChange("added", "XNopResource", "test-resource", "default").
-				WithField("spec.coolField", "new-value").
-				AndXR().
-				WithXRChange("added", "XDownstreamResource", "test-resource", "default").
-				WithField("spec.forProvider.configData", "new-value").
-				AndXR().
-				AndXR().
-				WithXR("XNopResource", "second-resource", "default").
-				WithXRStatus("changed").
-				WithXRSummary(2, 0, 0).
-				WithXRChange("added", "XNopResource", "second-resource", "default").
-				WithField("spec.coolField", "second-value").
-				AndXR().
-				WithXRChange("added", "XDownstreamResource", "second-resource", "default").
-				WithField("spec.forProvider.configData", "second-value").
-				AndXR().
-				AndXR(),
+				// Grouped view: one XR(...) sub-expression per input XR, each with
+				// its own changed tree.
+				WithXRs(
+					tu.XR("XNopResource", "test-resource", "default").
+						Status("changed").
+						Summary(2, 0, 0).
+						Change("added", "XNopResource", "test-resource", "default").
+						WithField("spec.coolField", "new-value").
+						Change("added", "XDownstreamResource", "test-resource", "default").
+						WithField("spec.forProvider.configData", "new-value"),
+					tu.XR("XNopResource", "second-resource", "default").
+						Status("changed").
+						Summary(2, 0, 0).
+						Change("added", "XNopResource", "second-resource", "default").
+						WithField("spec.coolField", "second-value").
+						Change("added", "XDownstreamResource", "second-resource", "default").
+						WithField("spec.forProvider.configData", "second-value"),
+				).
+				Build(),
 			expectedError:    false,
 			expectedExitCode: dp.ExitCodeDiffDetected,
 		},

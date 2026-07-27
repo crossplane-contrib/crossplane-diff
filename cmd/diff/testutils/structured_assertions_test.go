@@ -603,20 +603,19 @@ func TestAssertStructuredDiff_GroupedByXR(t *testing.T) {
 	AssertStructuredDiff(mockT, jsonOutput,
 		ExpectDiff().
 			WithSummary(0, 1, 0).
-			WithXR("XBucket", "changed-xr", "default").
-			WithXRStatus("changed").
-			WithXRSummary(0, 1, 0).
-			WithXRChange("modified", "Bucket", "bucket-a", "default").
-			WithFieldChange("spec.region", "us-east-1", "us-west-2").
-			AndXR().
-			AndXR().
-			WithXR("XBucket", "unchanged-xr", "default").
-			WithXRStatus("unchanged").
-			AndXR().
-			WithXR("XBucket", "broken-xr", "default").
-			WithXRStatus("error").
-			WithXRError("XBucket/broken-xr").
-			AndXR())
+			WithXRs(
+				XR("XBucket", "changed-xr", "default").
+					Status("changed").
+					Summary(0, 1, 0).
+					Change("modified", "Bucket", "bucket-a", "default").
+					WithFieldChange("spec.region", "us-east-1", "us-west-2"),
+				XR("XBucket", "unchanged-xr", "default").
+					Status("unchanged"),
+				XR("XBucket", "broken-xr", "default").
+					Status("error").
+					Err("XBucket/broken-xr"),
+			).
+			Build())
 
 	if mockT.Failed() {
 		t.Errorf("grouped assertions unexpectedly failed on a matching payload")
@@ -626,9 +625,11 @@ func TestAssertStructuredDiff_GroupedByXR(t *testing.T) {
 	badT := &testing.T{}
 	AssertStructuredDiff(badT, jsonOutput,
 		ExpectDiff().
-			WithXR("XBucket", "changed-xr", "default").
-			WithXRStatus("unchanged"). // actual is "changed"
-			AndXR())
+			WithXRs(
+				XR("XBucket", "changed-xr", "default").
+					Status("unchanged"), // actual is "changed"
+			).
+			Build())
 
 	if !badT.Failed() {
 		t.Errorf("grouped assertions should have failed on a mismatched status")

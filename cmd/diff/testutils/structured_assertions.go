@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	dt "github.com/crossplane-contrib/crossplane-diff/cmd/diff/renderer/types"
+	corev1 "k8s.io/api/core/v1"
 	"k8s.io/client-go/util/jsonpath"
 )
 
@@ -23,21 +24,15 @@ type StructuredDiffOutput struct {
 }
 
 // XRDiffWire mirrors the renderer's per-input-XR wire entry (xrDiffWire) in the
-// xrs[] grouped view.
+// xrs[] grouped view. XR is a corev1.ObjectReference nested under "xr",
+// matching the renderer — asserting into the same platform type here also
+// exercises that the "xr" object round-trips into an ObjectReference.
 type XRDiffWire struct {
-	XR      XRIdentityWire `json:"xr"`
-	Status  string         `json:"status"`
-	Summary Summary        `json:"summary"`
-	Changes []ChangeDetail `json:"changes"`
-	Errors  []OutputError  `json:"errors,omitempty"`
-}
-
-// XRIdentityWire mirrors the renderer's input-XR identity wire shape (xrIdentity).
-type XRIdentityWire struct {
-	APIVersion string `json:"apiVersion"`
-	Kind       string `json:"kind"`
-	Name       string `json:"name"`
-	Namespace  string `json:"namespace,omitempty"`
+	XR      corev1.ObjectReference `json:"xr"`
+	Status  string                 `json:"status"`
+	Summary Summary                `json:"summary"`
+	Changes []ChangeDetail         `json:"changes"`
+	Errors  []OutputError          `json:"errors,omitempty"`
 }
 
 // Summary mirrors renderer.Summary.
@@ -95,11 +90,11 @@ type ResourceExpectation struct {
 	anyNameAllowed     bool                      // If true, any name is accepted
 }
 
+// expectation returns the root builder. Only meaningful for a flat top-level
+// change (r.parent set); an XR-scoped change (r.xrParent set) is built as a
+// standalone sub-expression passed to WithXRs and is never walked back to a
+// root, so r.parent is nil there and that is fine.
 func (r *ResourceExpectation) expectation() *ExpectedDiff {
-	if r.xrParent != nil {
-		return r.xrParent.parent
-	}
-
 	return r.parent
 }
 
@@ -362,28 +357,30 @@ func (r *ResourceExpectation) WithAnyName() *ResourceExpectation {
 	return r
 }
 
-// And returns to parent to chain more resource expectations.
-// Not needed at the end of a chain - AssertStructuredDiff accepts ResourceExpectation directly.
-// For a change opened via WithXRChange, use AndXR to return to the XR entry.
+// And returns to the root ExpectedDiff to chain more expectations.
+// Not needed at the end of a chain - AssertStructuredDiff accepts a
+// ResourceExpectation directly.
 func (r *ResourceExpectation) And() *ExpectedDiff {
-	if r.xrParent != nil {
-		return r.xrParent.parent
-	}
-
-	return r.parent
+	return r.expectation()
 }
 
-// AndXR returns to the enclosing XR entry when this change was opened via
-// WithXRChange, to chain more per-XR expectations.
-func (r *ResourceExpectation) AndXR() *XRExpectation {
-	return r.xrParent
+// Change opens a sibling change on the same enclosing XR entry (only valid on a
+// change opened via XRExpectation.Change). Lets an XR's changes chain without a
+// scope-closing call: xr.Change(...).FieldChange(...).Change(...). Panics if
+// called on a flat top-level change (which has no enclosing XR).
+func (r *ResourceExpectation) Change(changeType, kind, name, namespace string) *ResourceExpectation {
+	if r.xrParent == nil {
+		panic("Change chained on a flat (non-XR) change; open the change via XR(...).Change(...)")
+	}
+
+	return r.xrParent.Change(changeType, kind, name, namespace)
 }
 
 // XRExpectation defines expectations for a single entry in the xrs[] grouped
 // view: the input XR's identity, its status, its per-XR summary, and its
-// per-XR changes.
+// per-XR changes. Build one with XR(...), configure it with the methods below,
+// then pass it (with any siblings) to ExpectedDiff.WithXRs.
 type XRExpectation struct {
-	parent      *ExpectedDiff
 	kind        string
 	name        string
 	namePattern *regexp.Regexp
@@ -395,56 +392,76 @@ type XRExpectation struct {
 	errorIDs    []string
 }
 
-func (x *XRExpectation) expectation() *ExpectedDiff { return x.parent }
-
-// WithXR opens an expectation for an xrs[] entry keyed by the input XR's
-// kind/name/namespace.
-func (e *ExpectedDiff) WithXR(kind, name, namespace string) *XRExpectation {
-	x := &XRExpectation{
-		parent:    e,
-		kind:      kind,
-		name:      name,
-		namespace: namespace,
-	}
-	e.xrs = append(e.xrs, x)
-
-	return x
+// XR begins a standalone expectation for one xrs[] entry, keyed by the input
+// XR's kind/name/namespace. Pass the result(s) to ExpectedDiff.WithXRs.
+func XR(kind, name, namespace string) *XRExpectation {
+	return &XRExpectation{kind: kind, name: name, namespace: namespace}
 }
 
-// WithXRStatus asserts the entry's status (changed/unchanged/error).
-func (x *XRExpectation) WithXRStatus(status string) *XRExpectation {
+// xrSpec is satisfied by the two things a WithXRs argument can end on: an
+// XRExpectation itself, or a ResourceExpectation returned by an XR's Change(…)
+// sub-chain (which resolves back to its enclosing XR). This lets a per-XR
+// sub-expression terminate on either a status/summary call or a field call
+// without an explicit scope-closing step.
+type xrSpec interface {
+	xrExpectation() *XRExpectation
+}
+
+func (x *XRExpectation) xrExpectation() *XRExpectation { return x }
+
+func (r *ResourceExpectation) xrExpectation() *XRExpectation { return r.xrParent }
+
+// WithXRs attaches per-input-XR expectations (built via XR(...)) to assert
+// against the xrs[] grouped view, in order.
+func (e *ExpectedDiff) WithXRs(xrs ...xrSpec) *ExpectedDiff {
+	for _, x := range xrs {
+		e.xrs = append(e.xrs, x.xrExpectation())
+	}
+
+	return e
+}
+
+// Build terminates the chain and returns the root expectation. Optional —
+// AssertStructuredDiff accepts an *ExpectedDiff directly — but it reads as an
+// explicit "done building" marker.
+func (e *ExpectedDiff) Build() *ExpectedDiff { return e }
+
+// Status asserts the entry's status (changed/unchanged/error).
+func (x *XRExpectation) Status(status string) *XRExpectation {
 	x.status = status
 	return x
 }
 
-// WithXRSummary asserts the entry's per-XR summary counts.
-func (x *XRExpectation) WithXRSummary(added, modified, removed int) *XRExpectation {
+// Summary asserts the entry's per-XR summary counts.
+func (x *XRExpectation) Summary(added, modified, removed int) *XRExpectation {
 	x.summary = &expectedSummary{added: added, modified: modified, removed: removed}
 	return x
 }
 
-// WithAnyName matches the XR by kind/namespace only, accepting any name (useful
-// for generated XR names).
-func (x *XRExpectation) WithAnyName() *XRExpectation {
+// AnyName matches the XR by kind/namespace only, accepting any name (useful for
+// generated XR names).
+func (x *XRExpectation) AnyName() *XRExpectation {
 	x.anyName = true
 	return x
 }
 
-// WithNamePattern matches the XR name against a regex instead of an exact name.
-func (x *XRExpectation) WithNamePattern(pattern string) *XRExpectation {
+// NamePattern matches the XR name against a regex instead of an exact name.
+func (x *XRExpectation) NamePattern(pattern string) *XRExpectation {
 	x.namePattern = regexp.MustCompile(pattern)
 	return x
 }
 
-// WithXRError asserts the entry carries an error with the given resourceID.
-func (x *XRExpectation) WithXRError(resourceID string) *XRExpectation {
+// Err asserts the entry carries an error with the given resourceID.
+func (x *XRExpectation) Err(resourceID string) *XRExpectation {
 	x.errorIDs = append(x.errorIDs, resourceID)
 	return x
 }
 
-// WithXRChange opens a change expectation scoped to this XR entry's changes[].
-// changeType is "added", "modified", or "removed".
-func (x *XRExpectation) WithXRChange(changeType, kind, name, namespace string) *ResourceExpectation {
+// Change opens a change expectation scoped to this XR entry's changes[].
+// changeType is "added", "modified", or "removed". Returns a
+// ResourceExpectation whose field methods (WithField/WithFieldChange/…) and
+// chained Change(...) let a change and its siblings be expressed inline.
+func (x *XRExpectation) Change(changeType, kind, name, namespace string) *ResourceExpectation {
 	r := &ResourceExpectation{
 		xrParent:           x,
 		changeType:         changeType,
@@ -459,9 +476,6 @@ func (x *XRExpectation) WithXRChange(changeType, kind, name, namespace string) *
 
 	return r
 }
-
-// AndXR returns to the root ExpectedDiff to chain more expectations.
-func (x *XRExpectation) AndXR() *ExpectedDiff { return x.parent }
 
 // ParseStructuredOutput parses JSON output into StructuredDiffOutput.
 func ParseStructuredOutput(jsonOutput string) (StructuredDiffOutput, error) {
