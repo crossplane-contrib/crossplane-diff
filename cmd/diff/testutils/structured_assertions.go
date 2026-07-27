@@ -475,8 +475,6 @@ func ParseStructuredOutput(jsonOutput string) (StructuredDiffOutput, error) {
 
 // AssertStructuredDiff compares actual JSON output against expected.
 // Accepts DiffExpectation interface so callers don't need to call And() to return to root.
-//
-
 func AssertStructuredDiff(t *testing.T, jsonOutput string, e DiffExpectation) {
 	t.Helper()
 
