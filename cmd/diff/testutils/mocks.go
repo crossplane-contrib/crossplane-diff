@@ -825,13 +825,13 @@ func (m *MockDiffCalculator) CalculateRemovedResourceDiffs(ctx context.Context, 
 
 // MockDiffRenderer provides a mock implementation for DiffRenderer.
 type MockDiffRenderer struct {
-	RenderDiffsFn func(map[string]*dt.ResourceDiff, []dt.OutputError) error
+	RenderDiffsFn func([]dt.XRDiffGroup, []dt.OutputError) error
 }
 
 // RenderDiffs implements RenderDiffs from the DiffRenderer interface.
-func (m *MockDiffRenderer) RenderDiffs(diffs map[string]*dt.ResourceDiff, errs []dt.OutputError) error {
+func (m *MockDiffRenderer) RenderDiffs(groups []dt.XRDiffGroup, errs []dt.OutputError) error {
 	if m.RenderDiffsFn != nil {
-		return m.RenderDiffsFn(diffs, errs)
+		return m.RenderDiffsFn(groups, errs)
 	}
 
 	return nil

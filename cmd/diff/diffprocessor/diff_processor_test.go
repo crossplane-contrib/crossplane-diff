@@ -466,7 +466,7 @@ func TestDefaultDiffProcessor_PerformDiff(t *testing.T) {
 				// The factory receives DiffOptions which contains Stdout where output should be written
 				WithDiffRendererFactory(func(_ logging.Logger, opts renderer.DiffOptions) renderer.DiffRenderer {
 					return &tu.MockDiffRenderer{
-						RenderDiffsFn: func(_ map[string]*dt.ResourceDiff, _ []dt.OutputError) error {
+						RenderDiffsFn: func(_ []dt.XRDiffGroup, _ []dt.OutputError) error {
 							// Write a simple summary to the output via opts.Stdout
 							w := opts.Stdout
 
@@ -639,6 +639,12 @@ func TestDefaultDiffProcessor_PerformDiff(t *testing.T) {
 		})
 	}
 }
+
+// Note: PerformDiff's per-XR grouping structure is verified end-to-end (real
+// renderer, real JSON) by TestDiffIntegration/MultipleXRsGroupedByInputXR, and
+// the per-group xrs[] shape — including errored groups — by
+// TestStructuredDiffRenderer_GroupsByXR, so there is no separate unit test
+// asserting the intermediate []XRDiffGroup handoff.
 
 // TestDefaultDiffProcessor_PerformDiff_StderrErrorOutput verifies that when
 // resource processing fails, detailed errors are written to stderr for human visibility.

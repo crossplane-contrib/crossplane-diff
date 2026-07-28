@@ -209,16 +209,28 @@ func (p *DefaultDiffProcessor) PerformDiff(ctx context.Context, resources []*un.
 		return false, nil
 	}
 
-	// Collect all diffs across all resources
-	allDiffs := make(map[string]*dt.ResourceDiff)
+	// Build one diff group per input XR/claim, in input order, so the renderer
+	// can group structured output (xrs[]) and human output (per-XR sections) by
+	// the input that produced each change. See renderer/types.XRDiffGroup.
+	groups := make([]dt.XRDiffGroup, 0, len(resources))
 
-	// Collect errors for structured output
+	// Collect errors for the top-level/global (union) error list, preserved for
+	// back-compat alongside the per-group errors.
 	var outputErrors []dt.OutputError
 
 	var errs []error
 
 	for _, res := range resources {
 		resourceID := fmt.Sprintf("%s/%s", res.GetKind(), res.GetName())
+
+		group := dt.XRDiffGroup{
+			XR: corev1.ObjectReference{
+				APIVersion: res.GetAPIVersion(),
+				Kind:       res.GetKind(),
+				Name:       res.GetName(),
+				Namespace:  res.GetNamespace(),
+			},
+		}
 
 		diffs, err := p.DiffSingleResource(ctx, res, compositionProvider)
 		if err != nil {
@@ -233,16 +245,24 @@ func (p *DefaultDiffProcessor) PerformDiff(ctx context.Context, resources []*un.
 			// surfaces typed validation failures via
 			// OutputError.ValidationFailures when err wraps a
 			// SchemaValidationError that carries a structured Result.
-			outputErrors = append(outputErrors, NewOutputError(resourceID, err))
+			// The same converted error goes to both the top-level union
+			// (outputErrors) and the per-group entry so consumers of
+			// either view see it.
+			outErr := NewOutputError(resourceID, err)
+			outputErrors = append(outputErrors, outErr)
+			group.Err = &outErr
 		} else {
-			// Only merge diffs on success - we don't emit partial results for a single XR
-			maps.Copy(allDiffs, diffs)
+			// We don't emit partial results for a single XR: on success the
+			// whole diff tree is attached, on failure none of it.
+			group.Diffs = diffs
 		}
+
+		groups = append(groups, group)
 	}
 
 	// Always render (even if only errors exist) to ensure valid structured output
 	// The renderer will include errors in the structured output and write them to stderr
-	err := p.diffRenderer.RenderDiffs(allDiffs, outputErrors)
+	err := p.diffRenderer.RenderDiffs(groups, outputErrors)
 	if err != nil {
 		p.config.Logger.Debug("Failed to render diffs", "error", err)
 		errs = append(errs, errors.Wrap(err, "failed to render diffs"))
@@ -251,17 +271,21 @@ func (p *DefaultDiffProcessor) PerformDiff(ctx context.Context, resources []*un.
 	// Count only non-equal diffs as "having diffs".
 	// The diffs map may contain DiffTypeEqual entries (e.g., XR stored for removal detection).
 	hasDiffs := false
+	totalDiffs := 0
 
-	for _, diff := range allDiffs {
-		if diff.DiffType != dt.DiffTypeEqual {
-			hasDiffs = true
-			break
+	for _, group := range groups {
+		for _, diff := range group.Diffs {
+			totalDiffs++
+
+			if diff.DiffType != dt.DiffTypeEqual {
+				hasDiffs = true
+			}
 		}
 	}
 
 	p.config.Logger.Debug("Processing complete",
 		"resourceCount", len(resources),
-		"totalDiffs", len(allDiffs),
+		"totalDiffs", totalDiffs,
 		"hasDiffs", hasDiffs,
 		"errorCount", len(errs))
 

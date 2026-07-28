@@ -13,12 +13,26 @@ import (
 	"github.com/crossplane/crossplane-runtime/v2/pkg/logging"
 )
 
+// flattenGroups merges every group's diffs into a single map. It is the basis
+// for the deprecated flat changes[] view in structured output and for the
+// composition renderer's flat reuse of the human renderer. A nil group.Diffs
+// is a safe no-op under maps.Copy.
+func flattenGroups(groups []dt.XRDiffGroup) map[string]*dt.ResourceDiff {
+	out := make(map[string]*dt.ResourceDiff)
+	for _, g := range groups {
+		maps.Copy(out, g.Diffs)
+	}
+
+	return out
+}
+
 // DiffRenderer handles rendering diffs to output.
 type DiffRenderer interface {
-	// RenderDiffs formats and outputs diffs.
+	// RenderDiffs formats and outputs diffs, grouped by input XR.
 	// Diff output goes to DiffOptions.Stdout, errors go to DiffOptions.Stderr.
-	// The errs parameter contains any resource processing errors to include in output.
-	RenderDiffs(diffs map[string]*dt.ResourceDiff, errs []dt.OutputError) error
+	// The errs parameter contains the union of resource processing errors to
+	// include in output (the top-level/global error list).
+	RenderDiffs(groups []dt.XRDiffGroup, errs []dt.OutputError) error
 }
 
 // DefaultDiffRenderer implements the DiffRenderer interface.
@@ -44,121 +58,300 @@ func getKindName(d *dt.ResourceDiff) string {
 	return fmt.Sprintf("%s/%s", d.Gvk.Kind, d.ResourceName)
 }
 
-// RenderDiffs formats and prints the diffs.
-// Diff output goes to r.diffOpts.Stdout, errors go to r.diffOpts.Stderr.
-func (r *DefaultDiffRenderer) RenderDiffs(diffs map[string]*dt.ResourceDiff, errs []dt.OutputError) error {
-	r.logger.Debug("Rendering diffs to output",
-		"diffCount", len(diffs),
-		"errorCount", len(errs),
-		"useColors", r.diffOpts.UseColors,
-		"compact", r.diffOpts.Compact)
+// diffCounts holds the per-diff-type tally produced while rendering a list of
+// diffs. outputCount is the number of diffs that actually emitted content
+// (non-equal with a non-empty rendered body).
+type diffCounts struct {
+	added    int
+	modified int
+	removed  int
+	equal    int
+	output   int
+}
 
+// renderDiffList renders a flat set of diffs (sorted by kind/name) to stdout in
+// the human-readable +++/~~~/--- form and returns the per-type counts. It does
+// not print a summary; callers decide whether to emit a per-section or
+// aggregate summary from the returned counts. Equal diffs are skipped.
+func (r *DefaultDiffRenderer) renderDiffList(diffs map[string]*dt.ResourceDiff) (diffCounts, error) {
 	stdout := r.diffOpts.Stdout
-	stderr := r.diffOpts.Stderr
 
-	// Sort the keys to ensure a consistent output order
+	// Sort by GetKindName, which is how it's displayed to the user.
 	d := slices.AppendSeq(make([]*dt.ResourceDiff, 0, len(diffs)), maps.Values(diffs))
-
-	// Sort by GetKindName which is how it's displayed to the user
 	slices.SortFunc(d, func(a, b *dt.ResourceDiff) int {
 		return cmp.Compare(getKindName(a), getKindName(b))
 	})
 
-	// Track stats for summary logging
-	addedCount := 0
-	modifiedCount := 0
-	removedCount := 0
-	equalCount := 0
-	outputCount := 0
+	var counts diffCounts
 
 	for _, diff := range d {
 		resourceID := getKindName(diff)
 
-		// Count by diff type for summary
+		var header string
+
+		// The added/modified/removed counters increment here, before the
+		// content-empty check below. This relies on the invariant that a
+		// non-equal ResourceDiff always renders non-empty content (its
+		// LineDiffs are non-trivial by construction). If that ever ceased to
+		// hold, counts.output could lag the type counters, desyncing the
+		// summary line from the number of rendered blocks.
 		switch diff.DiffType {
 		case dt.DiffTypeAdded:
-			addedCount++
+			counts.added++
+			header = fmt.Sprintf("+++ %s", resourceID)
 		case dt.DiffTypeRemoved:
-			removedCount++
+			counts.removed++
+			header = fmt.Sprintf("--- %s", resourceID)
 		case dt.DiffTypeModified:
-			modifiedCount++
+			counts.modified++
+			header = fmt.Sprintf("~~~ %s", resourceID)
 		case dt.DiffTypeEqual:
-			equalCount++
+			counts.equal++
 			// Skip rendering equal resources
 			continue
 		}
 
-		// Format the diff header based on the diff type
-		var header string
-
-		switch diff.DiffType {
-		case dt.DiffTypeAdded:
-			header = fmt.Sprintf("+++ %s", resourceID)
-		case dt.DiffTypeRemoved:
-			header = fmt.Sprintf("--- %s", resourceID)
-		case dt.DiffTypeModified:
-			header = fmt.Sprintf("~~~ %s", resourceID)
-		case dt.DiffTypeEqual:
-			// should never get here
-			header = ""
-		}
-
-		// Format the diff content
 		content := FormatDiff(diff.LineDiffs, r.diffOpts)
 
 		if content != "" {
-			_, err := fmt.Fprintf(stdout, "%s\n%s\n---\n", header, content)
-			if err != nil {
+			if _, err := fmt.Fprintf(stdout, "%s\n%s\n---\n", header, content); err != nil {
 				r.logger.Debug("Error writing diff to output", "resource", resourceID, "error", err)
-				return errors.Wrap(err, "failed to write diff to output")
+				return counts, errors.Wrap(err, "failed to write diff to output")
 			}
 
-			outputCount++
+			counts.output++
 		} else {
 			r.logger.Debug("Empty diff content, skipping output", "resource", resourceID)
 		}
 	}
 
-	r.logger.Debug("Diff rendering complete",
-		"added", addedCount,
-		"removed", removedCount,
-		"modified", modifiedCount,
-		"equal", equalCount,
-		"output", outputCount)
+	return counts, nil
+}
 
-	// Add a summary to the output if there were diffs
-	if outputCount > 0 {
-		summary := strings.Builder{}
-		summary.WriteString("\nSummary: ")
+// plus returns the field-wise sum of two tallies. Used to roll up per-XR counts
+// into the cross-XR total for the aggregate footer. Returning a new value
+// (rather than mutating) keeps every diffCounts method a value receiver, which
+// also lets String satisfy Stringer on a value passed to the logger.
+func (c diffCounts) plus(other diffCounts) diffCounts {
+	return diffCounts{
+		added:    c.added + other.added,
+		modified: c.modified + other.modified,
+		removed:  c.removed + other.removed,
+		equal:    c.equal + other.equal,
+		output:   c.output + other.output,
+	}
+}
 
-		if addedCount > 0 {
-			fmt.Fprintf(&summary, "%d added, ", addedCount)
+// String renders the tally as a single log-friendly field. Implementing
+// Stringer lets callers log a diffCounts as one value ("counts", counts)
+// instead of spelling out every field; fmt-based logr sinks honor it. (A
+// structured-logging pass could later swap this for a logr.Marshaler to regain
+// per-field queryability.)
+func (c diffCounts) String() string {
+	return fmt.Sprintf("added=%d modified=%d removed=%d equal=%d output=%d",
+		c.added, c.modified, c.removed, c.equal, c.output)
+}
+
+// summaryLine formats a "N added, N modified, N removed" fragment, omitting
+// zero categories. Returns "" when there is nothing to report.
+func (c diffCounts) summaryLine() string {
+	parts := make([]string, 0, 3)
+
+	if c.added > 0 {
+		parts = append(parts, fmt.Sprintf("%d added", c.added))
+	}
+
+	if c.modified > 0 {
+		parts = append(parts, fmt.Sprintf("%d modified", c.modified))
+	}
+
+	if c.removed > 0 {
+		parts = append(parts, fmt.Sprintf("%d removed", c.removed))
+	}
+
+	return strings.Join(parts, ", ")
+}
+
+// hasIdentity reports whether a group carries input-XR identity. The
+// composition renderer reuses this renderer with identity-less groups (no
+// single owning XR); those render as a flat, header-less block, preserving
+// comp's output. The xr command always sets identity, producing per-XR
+// sections.
+func hasIdentity(g dt.XRDiffGroup) bool {
+	return g.XR.Kind != "" || g.XR.Name != ""
+}
+
+// identitylessGroups wraps a flat diff map as a single group with no XR
+// identity, the shape callers use when there is no single owning XR (the
+// composition renderer's downstream diffs). RenderDiffs renders an
+// identity-less group as a flat, header-less block. See hasIdentity.
+func identitylessGroups(diffs map[string]*dt.ResourceDiff) []dt.XRDiffGroup {
+	return []dt.XRDiffGroup{{Diffs: diffs}}
+}
+
+// RenderDiffs formats and prints the diffs.
+// Diff output goes to r.diffOpts.Stdout, errors go to r.diffOpts.Stderr.
+//
+// Identity-bearing groups (the xr command) render as per-input-XR sections,
+// each with a header and per-section summary, followed by an aggregate footer
+// when there is more than one such group. Identity-less groups (the
+// composition renderer's reuse) render as a single flat block, preserving the
+// pre-grouping behavior.
+func (r *DefaultDiffRenderer) RenderDiffs(groups []dt.XRDiffGroup, errs []dt.OutputError) error {
+	r.logger.Debug("Rendering diffs to output",
+		"groupCount", len(groups),
+		"errorCount", len(errs),
+		"useColors", r.diffOpts.UseColors,
+		"compact", r.diffOpts.Compact)
+
+	// Per-XR sections (and the aggregate footer) are only meaningful when more
+	// than one input XR is present — that's what there is to disambiguate. A
+	// single XR (or identity-less comp reuse) renders as a flat block, exactly
+	// as before grouping was introduced.
+	identityGroups := 0
+
+	for _, g := range groups {
+		if hasIdentity(g) {
+			identityGroups++
 		}
+	}
 
-		if modifiedCount > 0 {
-			fmt.Fprintf(&summary, "%d modified, ", modifiedCount)
+	var err error
+	if identityGroups > 1 {
+		err = r.renderGrouped(groups)
+	} else {
+		err = r.renderFlat(flattenGroups(groups))
+	}
+
+	if err != nil {
+		return err
+	}
+
+	// Write errors to stderr following Unix conventions
+	for _, e := range errs {
+		if _, err := fmt.Fprintln(r.diffOpts.Stderr, e.FormatError()); err != nil {
+			return errors.Wrap(err, "failed to write error to stderr")
 		}
+	}
 
-		if removedCount > 0 {
-			fmt.Fprintf(&summary, "%d removed, ", removedCount)
-		}
+	return nil
+}
 
-		// Remove trailing comma and space
-		summaryStr := strings.TrimSuffix(summary.String(), ", ")
+// renderFlat renders a single flat block of diffs plus a "Summary:" line. This
+// is the pre-grouping behavior, used for identity-less groups (comp reuse).
+func (r *DefaultDiffRenderer) renderFlat(diffs map[string]*dt.ResourceDiff) error {
+	counts, err := r.renderDiffList(diffs)
+	if err != nil {
+		return err
+	}
 
-		if summaryStr != "\nSummary: " {
-			_, err := fmt.Fprintln(stdout, summaryStr)
-			if err != nil {
+	r.logger.Debug("Diff rendering complete", "counts", counts)
+
+	if counts.output > 0 {
+		if line := counts.summaryLine(); line != "" {
+			if _, err := fmt.Fprintf(r.diffOpts.Stdout, "\nSummary: %s\n", line); err != nil {
 				return errors.Wrap(err, "failed to write summary to output")
 			}
 		}
 	}
 
-	// Write errors to stderr following Unix conventions
-	for _, e := range errs {
-		if _, err := fmt.Fprintln(stderr, e.FormatError()); err != nil {
-			return errors.Wrap(err, "failed to write error to stderr")
+	return nil
+}
+
+// renderGrouped renders each group as a per-input-XR section (header + diffs +
+// per-section summary, or an inline error / "No changes."), then an aggregate
+// footer. Only called when there is more than one input XR (a single XR renders
+// flat), so the footer always applies. Sections are emitted in input order.
+func (r *DefaultDiffRenderer) renderGrouped(groups []dt.XRDiffGroup) error {
+	stdout := r.diffOpts.Stdout
+
+	var (
+		total       diffCounts
+		unchangedXR int
+		errorXR     int
+	)
+
+	for _, g := range groups {
+		// An identity-less group (should not normally be mixed in here) has no
+		// owning XR to head a section, so fold its diffs into the aggregate
+		// without a header or per-section summary.
+		if !hasIdentity(g) {
+			counts, err := r.renderDiffList(g.Diffs)
+			if err != nil {
+				return err
+			}
+
+			total = total.plus(counts)
+
+			continue
 		}
+
+		if _, err := fmt.Fprintf(stdout, "=== %s/%s ===\n\n", g.XR.Kind, g.XR.Name); err != nil {
+			return errors.Wrap(err, "failed to write XR section header")
+		}
+
+		if g.Err != nil {
+			errorXR++
+
+			if _, err := fmt.Fprintf(stdout, "Error: %s\n\n", g.Err.Message); err != nil {
+				return errors.Wrap(err, "failed to write XR error")
+			}
+
+			continue
+		}
+
+		counts, err := r.renderDiffList(g.Diffs)
+		if err != nil {
+			return err
+		}
+
+		total = total.plus(counts)
+
+		if counts.output == 0 {
+			unchangedXR++
+
+			if _, err := fmt.Fprintf(stdout, "No changes.\n\n"); err != nil {
+				return errors.Wrap(err, "failed to write no-changes message")
+			}
+
+			continue
+		}
+
+		if line := counts.summaryLine(); line != "" {
+			if _, err := fmt.Fprintf(stdout, "\nSummary: %s\n\n", line); err != nil {
+				return errors.Wrap(err, "failed to write section summary")
+			}
+		}
+	}
+
+	return r.renderAggregateFooter(len(groups), total, unchangedXR, errorXR)
+}
+
+// renderAggregateFooter writes the cross-XR totals line shown when more than one
+// input XR was diffed.
+func (r *DefaultDiffRenderer) renderAggregateFooter(xrCount int, total diffCounts, unchangedXR, errorXR int) error {
+	line := total.summaryLine()
+	if line == "" {
+		line = "no changes"
+	}
+
+	var qualifiers []string
+	if unchangedXR > 0 {
+		qualifiers = append(qualifiers, fmt.Sprintf("%d unchanged", unchangedXR))
+	}
+
+	if errorXR > 0 {
+		qualifiers = append(qualifiers, fmt.Sprintf("%d error", errorXR))
+	}
+
+	suffix := ""
+	if len(qualifiers) > 0 {
+		suffix = fmt.Sprintf(" (%s)", strings.Join(qualifiers, ", "))
+	}
+
+	if _, err := fmt.Fprintf(r.diffOpts.Stdout, "%s\nTotal: %s across %d XRs%s\n",
+		strings.Repeat("=", 80), line, xrCount, suffix); err != nil {
+		return errors.Wrap(err, "failed to write aggregate footer")
 	}
 
 	return nil

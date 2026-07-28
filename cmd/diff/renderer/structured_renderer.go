@@ -1,6 +1,7 @@
 package renderer
 
 import (
+	"cmp"
 	"encoding/json"
 	"fmt"
 	"maps"
@@ -66,9 +67,43 @@ type OutputError = dt.OutputError
 // StructuredDiffOutput represents the structured output format for diffs.
 // Note: Only JSON tags are used because sigs.k8s.io/yaml uses JSON tags for YAML serialization.
 type StructuredDiffOutput struct {
-	Summary Summary          `json:"summary"`
-	Changes []ChangeDetail   `json:"changes"`
-	Errors  []dt.OutputError `json:"errors,omitempty"`
+	// Summary is the aggregate change count across every input XR.
+	Summary Summary `json:"summary"`
+
+	// Changes is the flat, ungrouped list of all resource changes across every
+	// input XR.
+	//
+	// Deprecated: use Xrs for per-input-XR grouping. This field is retained for
+	// backward compatibility and will be removed in a future major release.
+	Changes []ChangeDetail `json:"changes"`
+
+	// Errors is the union of resource-processing errors across all input XRs
+	// (the top-level/global error list). Each errored XR also surfaces its
+	// error inside its own Xrs entry; this list stays complete for consumers
+	// that read errors here.
+	Errors []dt.OutputError `json:"errors,omitempty"`
+
+	// Xrs groups changes by the input XR/claim that produced them, one entry
+	// per input in input order. This is the recommended view; the flat Changes
+	// field above is deprecated.
+	Xrs []xrDiffWire `json:"xrs"`
+}
+
+// xrDiffWire is the per-input-XR entry in StructuredDiffOutput.Xrs. It carries
+// the input XR's identity, its processing status, and its own summary,
+// changes, and errors.
+//
+// XR is a corev1.ObjectReference nested under the "xr" key (not inlined),
+// carrying apiVersion/kind/name/namespace. Reusing the platform-standard type
+// lets consumers unmarshal the "xr" object straight into an ObjectReference;
+// its other fields (uid/resourceVersion/fieldPath) are omitempty and never
+// populated here, so they do not appear in output.
+type xrDiffWire struct {
+	XR      corev1.ObjectReference `json:"xr"`
+	Status  XRStatus               `json:"status"`
+	Summary Summary                `json:"summary"`
+	Changes []ChangeDetail         `json:"changes"`
+	Errors  []dt.OutputError       `json:"errors,omitempty"`
 }
 
 // Summary contains aggregated counts of changes.
@@ -76,6 +111,22 @@ type Summary struct {
 	Added    int `json:"added"`
 	Modified int `json:"modified"`
 	Removed  int `json:"removed"`
+}
+
+// increment bumps the counter for the given diff type. Equal (and any unknown)
+// types are no-ops, since equal diffs are excluded from structured output; the
+// explicit case keeps the exhaustive-switch linter satisfied.
+func (s *Summary) increment(t dt.DiffType) {
+	switch t {
+	case dt.DiffTypeAdded:
+		s.Added++
+	case dt.DiffTypeModified:
+		s.Modified++
+	case dt.DiffTypeRemoved:
+		s.Removed++
+	case dt.DiffTypeEqual:
+		// Equal diffs are not counted.
+	}
 }
 
 // ChangeDetail represents a single resource change.
@@ -155,21 +206,21 @@ type XRImpact struct {
 // --- JSON Output Types (used by StructuredCompDiffRenderer) ---
 // Note: Only JSON tags are used because sigs.k8s.io/yaml uses JSON tags for YAML serialization.
 
-// compDiffJSONOutput is the JSON schema for composition diffs.
-type compDiffJSONOutput struct {
-	Compositions []compositionDiffJSON `json:"compositions"`
+// compDiffWire is the serialized (JSON/YAML) shape for composition diffs.
+type compDiffWire struct {
+	Compositions []compositionDiffWire `json:"compositions"`
 	Errors       []dt.OutputError      `json:"errors,omitempty"`
 }
 
-type compositionDiffJSON struct {
+type compositionDiffWire struct {
 	Name               string                   `json:"name"`
 	Error              string                   `json:"error,omitempty"`
 	CompositionChanges *ChangeDetail            `json:"compositionChanges,omitempty"`
 	AffectedResources  AffectedResourcesSummary `json:"affectedResources"`
-	ImpactAnalysis     []xrImpactJSON           `json:"impactAnalysis"`
+	ImpactAnalysis     []xrImpactWire           `json:"impactAnalysis"`
 }
 
-type xrImpactJSON struct {
+type xrImpactWire struct {
 	corev1.ObjectReference `json:",inline"`
 
 	Status            XRStatus           `json:"status"`
@@ -200,14 +251,24 @@ func NewStructuredDiffRenderer(logger logging.Logger, opts DiffOptions) DiffRend
 }
 
 // RenderDiffs renders the diffs in the configured structured format.
-func (r *StructuredDiffRenderer) RenderDiffs(diffs map[string]*dt.ResourceDiff, errs []dt.OutputError) error {
+//
+// It emits two views built from the same groups: the deprecated flat
+// changes[]/summary (merged across all groups) for backward compatibility, and
+// the per-input-XR xrs[] grouping. The top-level errors[] is the union passed
+// by the caller.
+func (r *StructuredDiffRenderer) RenderDiffs(groups []dt.XRDiffGroup, errs []dt.OutputError) error {
 	r.logger.Debug("Rendering diffs in structured format",
 		"format", r.opts.Format,
-		"diffCount", len(diffs),
+		"groupCount", len(groups),
 		"errorCount", len(errs))
 
-	output := r.buildStructuredOutput(diffs)
+	// Flat, deprecated view: merge all groups' diffs.
+	summary, changes := buildChangeSet(flattenGroups(groups))
+	output := StructuredDiffOutput{Summary: summary, Changes: changes}
 	output.Errors = errs
+
+	// Grouped view: one entry per input XR, in input order.
+	output.Xrs = buildXRGroups(groups)
 
 	var (
 		data []byte
@@ -248,107 +309,41 @@ func (r *StructuredDiffRenderer) RenderDiffs(diffs map[string]*dt.ResourceDiff, 
 	return nil
 }
 
-// buildStructuredOutput converts ResourceDiff map into structured output format.
-func (r *StructuredDiffRenderer) buildStructuredOutput(diffs map[string]*dt.ResourceDiff) StructuredDiffOutput {
-	output := StructuredDiffOutput{
-		Summary: Summary{},
-		Changes: []ChangeDetail{},
-	}
+// buildChangeSet walks a diff map into the (summary, changes) pair shared by
+// every structured view: the flat top-level changes[], each xrs[] entry, and
+// each comp downstreamChanges block. Equal diffs are skipped (they contribute
+// to neither the summary nor the change list). Changes are sorted by the
+// canonical order (see diffSortFunc) for deterministic output.
+func buildChangeSet(diffs map[string]*dt.ResourceDiff) (Summary, []ChangeDetail) {
+	sorted := slices.AppendSeq(make([]*dt.ResourceDiff, 0, len(diffs)), maps.Values(diffs))
+	slices.SortFunc(sorted, diffSortFunc)
 
-	// Sort diffs for consistent output
-	sortedDiffs := slices.AppendSeq(make([]*dt.ResourceDiff, 0, len(diffs)), maps.Values(diffs))
-	slices.SortFunc(sortedDiffs, func(a, b *dt.ResourceDiff) int {
-		aKey := fmt.Sprintf("%s/%s", a.Gvk.Kind, a.ResourceName)
+	summary := Summary{}
+	changes := make([]ChangeDetail, 0, len(sorted))
 
-		bKey := fmt.Sprintf("%s/%s", b.Gvk.Kind, b.ResourceName)
-		if aKey != bKey {
-			return compareStrings(aKey, bKey)
-		}
-
-		return 0
-	})
-
-	for _, diff := range sortedDiffs {
-		// Skip equal resources
+	for _, diff := range sorted {
 		if diff.DiffType == dt.DiffTypeEqual {
 			continue
 		}
 
-		// Update summary counts
-		switch diff.DiffType {
-		case dt.DiffTypeAdded:
-			output.Summary.Added++
-		case dt.DiffTypeModified:
-			output.Summary.Modified++
-		case dt.DiffTypeRemoved:
-			output.Summary.Removed++
-		case dt.DiffTypeEqual:
-			// Equal diffs are filtered above, this case satisfies exhaustive lint check
-		}
-
-		// Build change detail. Use diff.Namespace, which generation already
-		// resolved with the "prefer current (existing) namespace, else desired"
-		// rule — matching resourceDiffToChangeDetail and the human diff, and
-		// avoiding an empty namespace when the desired manifest omits it but the
-		// current cluster object has one.
-		change := ChangeDetail{
-			Type:       diff.DiffType.ToWord(),
-			APIVersion: diff.Gvk.GroupVersion().String(),
-			Kind:       diff.Gvk.Kind,
-			Name:       diff.ResourceName,
-			Namespace:  diff.Namespace,
-			Diff:       r.buildDiffDetail(diff),
-		}
-
-		output.Changes = append(output.Changes, change)
+		summary.increment(diff.DiffType)
+		changes = append(changes, *resourceDiffToChangeDetail(diff))
 	}
 
-	return output
+	return summary, changes
 }
 
-// buildDiffDetail creates the diff detail structure for a resource change.
-//
-// It reads the pre-cleaned views populated during diff generation, so
-// --ignore-paths and the unconditional-cleanup fields are already stripped;
-// the renderer performs no cleanup of its own.
-func (r *StructuredDiffRenderer) buildDiffDetail(diff *dt.ResourceDiff) map[string]any {
-	detail := make(map[string]any)
-
-	switch diff.DiffType {
-	case dt.DiffTypeAdded:
-		if diff.Desired.Clean != nil {
-			detail[dt.DiffKeySpec] = diff.Desired.Clean.Object
-		}
-
-	case dt.DiffTypeRemoved:
-		if diff.Current.Clean != nil {
-			detail[dt.DiffKeySpec] = diff.Current.Clean.Object
-		}
-
-	case dt.DiffTypeEqual:
-		// Equal diffs have no detail to show
-
-	case dt.DiffTypeModified:
-		if diff.Current.Clean != nil && diff.Desired.Clean != nil {
-			detail[dt.DiffKeyOld] = diff.Current.Clean.Object
-			detail[dt.DiffKeyNew] = diff.Desired.Clean.Object
-		}
-	}
-
-	return detail
-}
-
-// compareStrings provides a simple string comparison for sorting.
-func compareStrings(a, b string) int {
-	if a < b {
-		return -1
-	}
-
-	if a > b {
-		return 1
-	}
-
-	return 0
+// diffSortFunc is the canonical ordering for structured change lists: primarily
+// by the human-meaningful Kind/Name (matching the human renderer's getKindName
+// sort), with the full apiVersion/kind/namespace/name key as a stable
+// tiebreaker so same-kind/same-name resources in different namespaces still
+// sort deterministically.
+func diffSortFunc(a, b *dt.ResourceDiff) int {
+	return cmp.Or(
+		cmp.Compare(a.Gvk.Kind, b.Gvk.Kind),
+		cmp.Compare(a.ResourceName, b.ResourceName),
+		cmp.Compare(a.GetDiffKey(), b.GetDiffKey()),
+	)
 }
 
 // resourceDiffToChangeDetail converts a ResourceDiff to a ChangeDetail for
@@ -388,46 +383,62 @@ func resourceDiffToChangeDetail(diff *dt.ResourceDiff) *ChangeDetail {
 	return change
 }
 
-// buildDownstreamChanges builds DownstreamChanges from a map of ResourceDiffs.
+// buildXRGroups converts the processor's per-input-XR groups into the xrs[]
+// structured view, preserving input order. Each entry gets its identity, a
+// derived status, and (for changed XRs) its own summary and changes; errored
+// XRs carry their error.
+func buildXRGroups(groups []dt.XRDiffGroup) []xrDiffWire {
+	out := make([]xrDiffWire, 0, len(groups))
+
+	for _, g := range groups {
+		// Project to exactly apiVersion/kind/name/namespace. We use
+		// ObjectReference as the type (so consumers can unmarshal "xr" into the
+		// platform-standard struct), but deliberately omit its other fields:
+		// fieldPath is meaningless for an XR; uid is unstable across
+		// delete/recreate and would mislead consumers tracking an XR across runs
+		// (stable identity is kind/namespace/name); and resourceVersion, if ever
+		// wanted, is a property of the diff run (belongs once at top level), not
+		// per-XR identity.
+		entry := xrDiffWire{
+			XR: corev1.ObjectReference{
+				APIVersion: g.XR.APIVersion,
+				Kind:       g.XR.Kind,
+				Name:       g.XR.Name,
+				Namespace:  g.XR.Namespace,
+			},
+			Changes: []ChangeDetail{},
+		}
+
+		switch {
+		case g.Err != nil:
+			entry.Status = XRStatusError
+			entry.Errors = []dt.OutputError{*g.Err}
+		default:
+			// buildDownstreamChanges returns nil when there are no non-equal
+			// diffs, which is exactly the "unchanged" case.
+			if changes := buildDownstreamChanges(g.Diffs); changes != nil {
+				entry.Status = XRStatusChanged
+				entry.Summary = changes.Summary
+				entry.Changes = changes.Changes
+			} else {
+				entry.Status = XRStatusUnchanged
+			}
+		}
+
+		out = append(out, entry)
+	}
+
+	return out
+}
+
+// buildDownstreamChanges builds DownstreamChanges from a map of ResourceDiffs,
+// returning nil when there are no non-equal changes (the "unchanged" case its
+// callers rely on to derive status).
 func buildDownstreamChanges(diffs map[string]*dt.ResourceDiff) *DownstreamChanges {
-	if len(diffs) == 0 {
+	summary, changes := buildChangeSet(diffs)
+	if len(changes) == 0 {
 		return nil
 	}
 
-	changes := &DownstreamChanges{
-		Summary: Summary{},
-		Changes: make([]ChangeDetail, 0),
-	}
-
-	// Sort by key for deterministic output order
-	sortedKeys := slices.Sorted(maps.Keys(diffs))
-	for _, key := range sortedKeys {
-		diff := diffs[key]
-
-		// Skip equal diffs
-		if diff.DiffType == dt.DiffTypeEqual {
-			continue
-		}
-
-		// Update summary counts
-		switch diff.DiffType {
-		case dt.DiffTypeAdded:
-			changes.Summary.Added++
-		case dt.DiffTypeModified:
-			changes.Summary.Modified++
-		case dt.DiffTypeRemoved:
-			changes.Summary.Removed++
-		case dt.DiffTypeEqual:
-			// Equal diffs already filtered above, this case satisfies exhaustive lint check
-		}
-
-		changes.Changes = append(changes.Changes, *resourceDiffToChangeDetail(diff))
-	}
-
-	// Return nil if no non-equal changes
-	if len(changes.Changes) == 0 {
-		return nil
-	}
-
-	return changes
+	return &DownstreamChanges{Summary: summary, Changes: changes}
 }

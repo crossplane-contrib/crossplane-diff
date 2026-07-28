@@ -57,9 +57,19 @@ classDiagram
 
     class StructuredDiffOutput {
         +Summary Summary
+        +Changes []ChangeDetail (deprecated)
+        +Errors []OutputError
+        +Xrs []xrDiffWire
+    }
+
+    class xrDiffWire {
+        +XR ObjectReference
+        +Status XRStatus
+        +Summary Summary
         +Changes []ChangeDetail
         +Errors []OutputError
     }
+
 
     class Summary {
         +Added int
@@ -181,6 +191,11 @@ classDiagram
     StructuredDiffOutput --> Summary
     StructuredDiffOutput --> ChangeDetail
     StructuredDiffOutput --> OutputError
+    StructuredDiffOutput --> xrDiffWire
+    xrDiffWire --> Summary
+    xrDiffWire --> ChangeDetail
+    xrDiffWire --> XRStatus
+    xrDiffWire --> OutputError
     CompDiffOutput --> CompositionDiff
     CompDiffOutput --> OutputError
     CompositionDiff --> AffectedResourcesSummary
