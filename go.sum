@@ -51,8 +51,8 @@ github.com/crossplane/cli/v2 v2.5.0-rc.0.0.20260626181113-86f5f7a0c4bf h1:iDRjmH
 github.com/crossplane/cli/v2 v2.5.0-rc.0.0.20260626181113-86f5f7a0c4bf/go.mod h1:GWNXbWM0hWwgyPE3LMFwwvtwIAiF8+YkXg56m+w3Ie0=
 github.com/crossplane/crossplane-runtime/v2 v2.4.0-rc.1 h1:wO+3nsWSaTnyGGB7fFJT9m/f2yWZhY2Ghbdx2fFvMNQ=
 github.com/crossplane/crossplane-runtime/v2 v2.4.0-rc.1/go.mod h1:uI7jXSPOjkpWuIUbSGSwyu0Ma5tkp5u7kI+9Muj0A/E=
-github.com/crossplane/crossplane/apis/v2 v2.4.0-rc.0 h1:4PBahj+tnK9RwSZm1bYGvOkHOU+1CSHjJF2PoPzBMD0=
-github.com/crossplane/crossplane/apis/v2 v2.4.0-rc.0/go.mod h1:xaQozPfGYv6ut6yZP8maDQm7ZTynHAGUffecZ5hqmhg=
+github.com/crossplane/crossplane/apis/v2 v2.4.0-rc.1 h1:bM4vqU0Z28eoQvspseKK3GcDItpJ/KiyVvxRX3iQkJc=
+github.com/crossplane/crossplane/apis/v2 v2.4.0-rc.1/go.mod h1:Ev+FjQqTTWJWoaXi63uKER215kDjTo8PghDCT0JapZs=
 github.com/crossplane/crossplane/v2 v2.3.4 h1:fqYKqtyQjMnodjyKOJUeupf8SSzjLrTWGUrS+aR2z+E=
 github.com/crossplane/crossplane/v2 v2.3.4/go.mod h1:hX3cxGlbZ9f0ZehYJhtk5JBh+xVJ1FBxMxYBP0tJwDQ=
 github.com/crossplane/function-sdk-go v0.7.1 h1:BEM2b7nAr8rJYc9tjwnoMfVVy1veCA/juD8APYCVLi0=
