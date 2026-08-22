@@ -323,7 +323,7 @@ envtest-setup:
 
 # kubectl-setup is used by other targets to setup kubectl.
 kubectl-setup:
-  ARG KUBECTL_VERSION=v1.36.3
+  ARG KUBECTL_VERSION=v1.36.4
   ARG NATIVEPLATFORM
   ARG TARGETOS
   ARG TARGETARCH
