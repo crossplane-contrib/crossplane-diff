@@ -8,7 +8,7 @@ require (
 	github.com/alecthomas/kong v1.16.1
 	github.com/crossplane/cli/v2 v2.5.0-rc.0.0.20260626181113-86f5f7a0c4bf
 	github.com/crossplane/crossplane-runtime/v2 v2.4.0
-	github.com/crossplane/crossplane/apis/v2 v2.4.0-rc.1
+	github.com/crossplane/crossplane/apis/v2 v2.4.0
 	github.com/crossplane/crossplane/v2 v2.3.4
 	github.com/docker/docker v28.5.2+incompatible
 	github.com/google/go-cmp v0.7.0
