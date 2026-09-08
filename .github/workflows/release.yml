@@ -1,0 +1,73 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_run:
+    workflows: ["Tag"]
+    types:
+      - completed
+
+env:
+  # Common versions
+  EARTHLY_VERSION: '0.8.16'
+
+  # Force Earthly to use color output
+  FORCE_COLOR: "1"
+
+jobs:
+  release:
+    runs-on: ubuntu-24.04
+    # Only run if triggered by tag push OR if tag workflow succeeded
+    if: github.event_name == 'push' || github.event.workflow_run.conclusion == 'success'
+    permissions:
+      contents: write  # Required for creating releases
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          fetch-depth: 0
+
+      - name: Setup Earthly
+        uses: earthly/actions-setup@43211c7a0eae5344d6d79fb4aaf209c8f8866203 # v1.0.13
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          version: ${{ env.EARTHLY_VERSION }}
+
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract Version from Tag
+        id: version
+        run: |
+          if [ "${{ github.event_name }}" == "push" ]; then
+            # Direct tag push - use GITHUB_REF
+            VERSION=${GITHUB_REF#refs/tags/}
+          else
+            # Workflow run trigger - find the most recent tag
+            VERSION=$(git describe --tags --abbrev=0)
+          fi
+          echo "VERSION=$VERSION" >> $GITHUB_OUTPUT
+          echo "Extracted version: $VERSION"
+
+      - name: Build Release Artifacts
+        run: |
+          earthly --strict --remote-cache ghcr.io/crossplane-contrib/crossplane-diff/earthly-cache:release +multiplatform-build \
+            --CROSSPLANE_DIFF_VERSION=${{ steps.version.outputs.VERSION }} \
+            --RELEASE_ARTIFACTS=true
+
+      - name: Create Release
+        uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3
+        with:
+          tag_name: ${{ steps.version.outputs.VERSION }}
+          files: _output/release/*
+          draft: false
+          prerelease: ${{ contains(steps.version.outputs.VERSION, 'rc') || contains(steps.version.outputs.VERSION, 'beta') || contains(steps.version.outputs.VERSION, 'alpha') }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

@@ -1,0 +1,52 @@
+name: Build Artifacts
+
+# Reusable workflow for building multiplatform CLI binaries.
+# Called from ci.yml and build-on-label.yml
+
+on:
+  workflow_call:
+    inputs:
+      earthly-version:
+        description: 'Earthly version to use'
+        required: false
+        type: string
+        default: '0.8.16'
+
+env:
+  FORCE_COLOR: "1"
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          fetch-depth: 0
+
+      - name: Setup Earthly
+        uses: earthly/actions-setup@43211c7a0eae5344d6d79fb4aaf209c8f8866203 # v1.0.13
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          version: ${{ inputs.earthly-version }}
+
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Configure Earthly Cache
+        if: github.ref == 'refs/heads/main'
+        run: echo "EARTHLY_MAX_REMOTE_CACHE=true" >> $GITHUB_ENV
+
+      - name: Build CLI Binaries
+        run: earthly --strict --remote-cache ghcr.io/crossplane-contrib/crossplane-diff/earthly-cache:build-artifacts +multiplatform-build --RELEASE_ARTIFACTS=true
+
+      - name: Upload Artifacts to GitHub
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: crossplane-diff-binaries
+          path: _output/release/*
