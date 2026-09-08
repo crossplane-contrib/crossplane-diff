@@ -56,7 +56,10 @@ linters:
     # Warns about struct instantiations that don't specify every field. Could be
     # useful in theory to catch fields that are accidentally omitted. Seems like
     # it would have many more false positives than useful catches, though.
+    # Renamed to exhaustruct_v5 in golangci-lint v2.13.0; both names are listed
+    # so this stays disabled whichever name the pinned version recognises.
     - exhaustruct
+    - exhaustruct_v5
 
     # Warns about TODO comments. The rationale being they should be issues
     # instead. We're okay with using TODO to track minor cleanups for next time
