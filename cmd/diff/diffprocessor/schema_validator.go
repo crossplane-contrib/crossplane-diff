@@ -34,17 +34,19 @@ type SchemaValidator interface {
 
 // DefaultSchemaValidator implements SchemaValidator interface.
 type DefaultSchemaValidator struct {
-	defClient    xp.DefinitionClient
-	schemaClient k8.SchemaClient
-	logger       logging.Logger
+	defClient      xp.DefinitionClient
+	schemaClient   k8.SchemaClient
+	resourceClient k8.ResourceClient
+	logger         logging.Logger
 }
 
 // NewSchemaValidator creates a new DefaultSchemaValidator.
-func NewSchemaValidator(sClient k8.SchemaClient, dClient xp.DefinitionClient, logger logging.Logger) SchemaValidator {
+func NewSchemaValidator(sClient k8.SchemaClient, rClient k8.ResourceClient, dClient xp.DefinitionClient, logger logging.Logger) SchemaValidator {
 	return &DefaultSchemaValidator{
-		defClient:    dClient,
-		schemaClient: sClient,
-		logger:       logger,
+		defClient:      dClient,
+		schemaClient:   sClient,
+		resourceClient: rClient,
+		logger:         logger,
 	}
 }
 
@@ -120,11 +122,13 @@ func (v *DefaultSchemaValidator) ValidateResources(ctx context.Context, xr *un.U
 		return err
 	}
 
+	schemaResources := v.resourcesRequiringCRDSchema(ctx, resources)
+
 	// SchemaValidate is the structured-result API: it returns a
 	// *ValidationResult that callers inspect directly.
-	v.logger.Debug("Performing schema validation", "resourceCount", len(resources))
+	v.logger.Debug("Performing schema validation", "resourceCount", len(schemaResources), "skippedResourceCount", len(resources)-len(schemaResources))
 
-	result, err := pkgvalidate.SchemaValidate(ctx, resources, v.schemaClient.GetAllCRDs())
+	result, err := pkgvalidate.SchemaValidate(ctx, schemaResources, v.schemaClient.GetAllCRDs())
 	if err != nil {
 		// SchemaValidate's error return is reserved for setup
 		// failures (e.g. a CRD that can't be compiled into a
@@ -159,6 +163,23 @@ func (v *DefaultSchemaValidator) ValidateResources(ctx context.Context, xr *un.U
 	v.logger.Debug("Resources validated successfully")
 
 	return nil
+}
+
+func (v *DefaultSchemaValidator) resourcesRequiringCRDSchema(ctx context.Context, resources []*un.Unstructured) []*un.Unstructured {
+	filtered := make([]*un.Unstructured, 0, len(resources))
+
+	for _, resource := range resources {
+		gvk := resource.GroupVersionKind()
+		if v.schemaClient.IsCRDRequired(ctx, gvk) {
+			filtered = append(filtered, resource)
+			continue
+		}
+
+		v.logger.Debug("Skipping schema validation for built-in resource type",
+			"gvk", gvk.String())
+	}
+
+	return filtered
 }
 
 // EnsureComposedResourceCRDs checks if we have all the CRDs needed for the cpd resources
@@ -210,7 +231,23 @@ func (v *DefaultSchemaValidator) EnsureComposedResourceCRDs(ctx context.Context,
 func (v *DefaultSchemaValidator) getResourceScope(ctx context.Context, gvk schema.GroupVersionKind) (string, error) {
 	v.logger.Debug("Getting resource scope", "gvk", gvk.String())
 
-	// Get the typed CRD directly
+	if v.resourceClient != nil {
+		isNamespaced, err := v.resourceClient.IsNamespacedResource(ctx, gvk)
+		if err == nil {
+			if isNamespaced {
+				v.logger.Debug("Retrieved scope from discovery", "gvk", gvk.String(), "scope", string(extv1.NamespaceScoped))
+				return string(extv1.NamespaceScoped), nil
+			}
+
+			v.logger.Debug("Retrieved scope from discovery", "gvk", gvk.String(), "scope", string(extv1.ClusterScoped))
+			return string(extv1.ClusterScoped), nil
+		}
+
+		v.logger.Debug("Failed to get resource scope from discovery; falling back to CRD lookup", "gvk", gvk.String(), "error", err)
+	}
+
+	// Fallback for tests and any stale discovery path: custom resources also
+	// expose their scope through the CRD.
 	crd, err := v.schemaClient.GetCRD(ctx, gvk)
 	if err != nil {
 		v.logger.Debug("Failed to get CRD for scope lookup", "gvk", gvk.String(), "error", err)
