@@ -72,7 +72,7 @@ func TestMain(m *testing.M) {
 		panic(err)
 	}
 
-	imageRepo := strings.Split(environment.GetCrossplaneImage(), ":")[0]
+	imageRepo, _, _ := strings.Cut(environment.GetCrossplaneImage(), ":")
 	imageTag := strings.Split(environment.GetCrossplaneImage(), ":")[1]
 
 	versionedHelmChartDir := fmt.Sprintf(helmChartDir, imageTag)
