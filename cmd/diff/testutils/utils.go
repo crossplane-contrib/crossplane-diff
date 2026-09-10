@@ -4,6 +4,7 @@ import (
 	stdlog "log"
 	"regexp"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/go-logr/logr/testr"
@@ -103,6 +104,79 @@ func TestLogger(t *testing.T, verbose bool) logging.Logger {
 	}
 
 	return logging.NewLogrLogger(testr.NewWithOptions(t, testr.Options{Verbosity: verbosity}))
+}
+
+// AdvisoryCapturingLogger wraps a logging.Logger and records the messages passed to Info, so a test
+// can assert that a call site raises a user-facing advisory rather than mere tracing.
+//
+// Info is the codebase's advisory level: the CLI wraps the injected logger so every Info becomes a
+// stderr WARNING line and a structured warnings[] entry. Emitters deliberately know nothing about
+// that wrapper, so tests for them assert the contract they actually have — "this calls Info, not
+// Debug" — instead of coupling to the wrapper. That also lets packages the wrapper's own package
+// imports (the clients) assert their advisories without an import cycle.
+type AdvisoryCapturingLogger struct {
+	wrapped logging.Logger
+
+	mu       sync.Mutex
+	advisory []string
+}
+
+// NewAdvisoryCapturingLogger returns a logger that forwards to a standard test logger while recording
+// Info messages for assertion.
+func NewAdvisoryCapturingLogger(t *testing.T) *AdvisoryCapturingLogger {
+	t.Helper()
+
+	return &AdvisoryCapturingLogger{wrapped: TestLogger(t, false)}
+}
+
+// Info records msg as an advisory and forwards to the wrapped logger.
+func (l *AdvisoryCapturingLogger) Info(msg string, keysAndValues ...any) {
+	l.mu.Lock()
+	l.advisory = append(l.advisory, msg)
+	l.mu.Unlock()
+
+	l.wrapped.Info(msg, keysAndValues...)
+}
+
+// Debug forwards to the wrapped logger without recording: tracing is not an advisory.
+func (l *AdvisoryCapturingLogger) Debug(msg string, keysAndValues ...any) {
+	l.wrapped.Debug(msg, keysAndValues...)
+}
+
+// WithValues returns a derived logger that records into the same place, so an advisory raised through
+// a derived logger is still captured.
+func (l *AdvisoryCapturingLogger) WithValues(keysAndValues ...any) logging.Logger {
+	return &advisoryChild{parent: l, wrapped: l.wrapped.WithValues(keysAndValues...)}
+}
+
+// Advisories returns the Info messages recorded so far, in call order.
+func (l *AdvisoryCapturingLogger) Advisories() []string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	return append([]string{}, l.advisory...)
+}
+
+// advisoryChild is a WithValues-derived logger that records into its parent.
+type advisoryChild struct {
+	parent  *AdvisoryCapturingLogger
+	wrapped logging.Logger
+}
+
+func (l *advisoryChild) Info(msg string, keysAndValues ...any) {
+	l.parent.mu.Lock()
+	l.parent.advisory = append(l.parent.advisory, msg)
+	l.parent.mu.Unlock()
+
+	l.wrapped.Info(msg, keysAndValues...)
+}
+
+func (l *advisoryChild) Debug(msg string, keysAndValues ...any) {
+	l.wrapped.Debug(msg, keysAndValues...)
+}
+
+func (l *advisoryChild) WithValues(keysAndValues ...any) logging.Logger {
+	return &advisoryChild{parent: l.parent, wrapped: l.wrapped.WithValues(keysAndValues...)}
 }
 
 // CreateFakeDiscoveryClient is a helper function to create a fake discovery client for testing.
