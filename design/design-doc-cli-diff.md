@@ -255,6 +255,10 @@ The `comp` subcommand has its own set of integration tests:
   diffed composition's labels is surfaced as `filtered` with reason `revision_selector_mismatch`, and that
   `--include-manual` does not re-include it (it would not select the resulting revision). The predicate honours both
   `matchLabels` and `matchExpressions` and both v1/v2 field paths.
+- **Unchanged-Composition Skipping**: Verifies that a composition identical to its in-cluster version skips impact
+  analysis (marked `ImpactAnalysisSkipped`, exit code 0 even when the fixtures would otherwise report a downstream
+  delta), that `--analyze-unchanged` evaluates the composites anyway, and that a difference confined to an
+  `--ignore-paths` path still counts as changed so the analysis is not silently skipped.
 - **Deletion Handling**: Verifies that an XR carrying a `metadata.deletionTimestamp` is excluded from impact analysis
   with reason `deleting` (counted via `FilteredByDeletion`, and surfaced as a `filtered` impact entry in `--resource`
   mode), that `--include-manual` does not re-include it, and that an explicitly-null `deletionTimestamp` (how
@@ -499,6 +503,8 @@ The `ProcessorConfig` structure provides configuration options:
 - `MaxNestedDepth`: Recursion limit for nested-XR diff (`--max-nested-depth`).
 - `MaxRenderIterations`: Cap on the requirements-discovery loop (`--max-iterations`).
 - `IncludeManual`: For `comp`, also consider XRs whose composition update policy is `Manual`.
+- `AnalyzeUnchanged`: For `comp`, run impact analysis even for a composition identical to its in-cluster version
+  (skipped by default; see §6.2 step 3a).
 - `EventualState`: Synthesize composed-resource readiness between render iterations to model the steady state of
   multi-stage compositions (`--eventual-state`).
 - `IgnorePaths`: Field paths to suppress from diffs (e.g., status fields known to be reconciler-set).
@@ -566,7 +572,20 @@ type CompDiffProcessor interface {
    gets). A defensive reader there would add an unreachable error path threaded through three functions. The timestamp is
    normalized to UTC/RFC3339 for display, since `metav1.Time`'s default rendering is machine-local.
 3. **Diff the composition itself.** Compute a top-level diff between the proposed composition and the cluster's current
-   version, surfaced as `CompositionDiff`.
+   version, surfaced as `CompositionDiff`. `calculateCompositionDiff` returns a `compositionComparison` carrying both the
+   diff to display (nil when equal) and whether the composition changed *at all* — the two differ only under
+   `--ignore-paths`, and only the latter is allowed to gate step 3a.
+
+   3a. **Skip impact analysis for an unchanged composition.** Applying a composition identical to its in-cluster version
+   creates no new CompositionRevision, so no XR adopts anything: any downstream delta computed here would be caused by
+   something other than this composition (drift, convergence lag, or a modeling artifact of the tool), and the tool
+   cannot tell those apart. Reporting them would attribute cluster state to a change that does not exist, and would also
+   return `ExitCodeDiffDetected` for a composition the user did not change. So the per-XR work — one function render per
+   XR, the dominant cost of `comp` — is skipped, `CompositionDiff.ImpactAnalysisSkipped` is set so the renderer and
+   structured output can distinguish "not evaluated" from "no affected XRs", and `--analyze-unchanged` opts back in for
+   the pre-edit convergence-baseline workflow. Gating on the *displayed* diff instead would mean masking a
+   render-relevant path via `--ignore-paths` silently skips the analysis for a composition that genuinely changes the
+   rendered output; hence the `changed` field. See issue #453.
 4. **Diff each XR.** Delegate to the `xrProc` `DiffProcessor` via `DiffSingleResource`, supplying a
    `CompositionProvider` that returns the proposed composition for the affected XR's GVK and the cluster's composition
    otherwise (so nested XRs that use a different composition are diffed against their unchanged composition).
@@ -877,8 +896,10 @@ contract:
   composition) plus optional top-level `Errors []OutputError` for failures that couldn't be attributed to a single
   composition.
 - `CompositionDiff` — per-composition entry: `Name`, optional `Error`, optional `CompositionDiff *ResourceDiff` (the
-  composition's own diff against its in-cluster version), `AffectedResources AffectedResourcesSummary`, and
-  `ImpactAnalysis []XRImpact`.
+  composition's own diff against its in-cluster version), `AffectedResources AffectedResourcesSummary`,
+  `ImpactAnalysis []XRImpact`, and `ImpactAnalysisSkipped` (the composites were deliberately not evaluated because the
+  composition is unchanged; serialized as `impactAnalysisSkipped` so consumers can distinguish an empty
+  `impactAnalysis` that means "not evaluated" from one that means "none found").
 - `AffectedResourcesSummary` — counts across the impact analysis: `Total`, `WithChanges`, `Unchanged`, `WithErrors`,
   and three optional filter counters: `FilteredByPolicy` (XRs dropped because of a `Manual`
   `compositionUpdatePolicy`), `FilteredBySelector` (XRs dropped because their `compositionRevisionSelector` does not
@@ -998,7 +1019,9 @@ The client layer provides interfaces to interact with Kubernetes and Crossplane 
       `--include-manual`); or an Automatic XR whose `compositionRevisionSelector` does not match the diffed
       composition's labels (always, since it would not select the resulting revision). Dropped XRs carry a
       `FilterReason` (`deleting` / `manual_policy` / `revision_selector_mismatch`).
-    - Calculate the composition's own diff against the cluster's current version.
+    - Calculate the composition's own diff against the cluster's current version. If the composition is unchanged
+      (evaluated before `--ignore-paths` masking), stop here for this composition and mark `ImpactAnalysisSkipped`:
+      applying it creates no new CompositionRevision, so nothing would adopt it. `--analyze-unchanged` continues anyway.
     - For each remaining XR, run the XR diff workflow above, using a `CompositionProvider` that returns the proposed
       composition for the affected XR's GVK and the cluster's composition for any nested XRs of a different kind.
 4. Aggregate per-XR results into a `CompDiffOutput` (composition diff + `XRImpact` list +
@@ -1090,6 +1113,10 @@ crossplane-diff comp updated-composition.yaml --resource production/my-xr --reso
 
 # Also include XRs whose update policy is Manual
 crossplane-diff comp updated-composition.yaml --include-manual
+
+# Evaluate affected composites even for a composition identical to the cluster's (skipped by
+# default, since applying it creates no new CompositionRevision)
+crossplane-diff comp unchanged-composition.yaml --analyze-unchanged
 ```
 
 Note that the `xr` subcommand has no `--namespace` flag: namespaced XRs carry their own namespace in YAML, and that

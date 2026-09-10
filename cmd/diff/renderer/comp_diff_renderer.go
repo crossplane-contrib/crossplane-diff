@@ -89,6 +89,16 @@ func (r *DefaultCompDiffRenderer) RenderCompDiff(output *CompDiffOutput) error {
 			continue
 		}
 
+		// The affected-XR and impact-analysis sections would both be empty and misleading for a
+		// composition whose XRs were deliberately not evaluated; say so once instead.
+		if comp.ImpactAnalysisSkipped {
+			if _, err := fmt.Fprint(stdout, "Impact analysis skipped: applying this composition creates no new CompositionRevision, so no composite resource would change as a result. Pass --analyze-unchanged to evaluate them anyway.\n\n"); err != nil {
+				return errors.Wrap(err, "cannot write impact analysis skipped message")
+			}
+
+			continue
+		}
+
 		// Render affected XRs list with status indicators
 		if err := r.renderAffectedResourcesList(&comp); err != nil {
 			return err
@@ -484,9 +494,10 @@ func (r *StructuredCompDiffRenderer) buildStructuredCompOutput(output *CompDiffO
 
 	for _, comp := range output.Compositions {
 		jsonComp := compositionDiffWire{
-			Name:              comp.Name,
-			AffectedResources: comp.AffectedResources,
-			ImpactAnalysis:    make([]xrImpactWire, 0, len(comp.ImpactAnalysis)),
+			Name:                  comp.Name,
+			AffectedResources:     comp.AffectedResources,
+			ImpactAnalysis:        make([]xrImpactWire, 0, len(comp.ImpactAnalysis)),
+			ImpactAnalysisSkipped: comp.ImpactAnalysisSkipped,
 		}
 
 		// Include per-composition error if present
