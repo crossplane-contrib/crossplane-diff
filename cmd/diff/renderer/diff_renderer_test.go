@@ -321,7 +321,7 @@ func TestDefaultDiffRenderer_RenderDiffs(t *testing.T) {
 			renderer := NewDiffRenderer(logger, opts)
 
 			// Call the method under test
-			err := renderer.RenderDiffs(tt.groups, nil)
+			err := renderer.RenderDiffs(tt.groups, nil, nil)
 			if err != nil {
 				t.Fatalf("RenderDiffs() failed with error: %v", err)
 			}
@@ -390,7 +390,7 @@ func TestDefaultDiffRenderer_RenderDiffs_WithErrors(t *testing.T) {
 
 			renderer := NewDiffRenderer(logger, opts)
 
-			err := renderer.RenderDiffs(identitylessGroups(map[string]*dt.ResourceDiff{}), tt.errs)
+			err := renderer.RenderDiffs(identitylessGroups(map[string]*dt.ResourceDiff{}), tt.errs, nil)
 			if err != nil {
 				t.Fatalf("RenderDiffs() failed with error: %v", err)
 			}

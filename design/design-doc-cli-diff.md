@@ -505,6 +505,8 @@ The `ProcessorConfig` structure provides configuration options:
 - `IncludeManual`: For `comp`, also consider XRs whose composition update policy is `Manual`.
 - `AnalyzeUnchanged`: For `comp`, run impact analysis even for a composition identical to its in-cluster version
   (skipped by default; see §6.2 step 3a).
+- `Warnings`: The `*WarningLogger` whose collected advisories are included in structured output. Nil is valid and means
+  warnings reach stderr but not structured output.
 - `EventualState`: Synthesize composed-resource readiness between render iterations to model the steady state of
   multi-stage compositions (`--eventual-state`).
 - `IgnorePaths`: Field paths to suppress from diffs (e.g., status fields known to be reconciler-set).
@@ -917,6 +919,21 @@ contract:
   re-includes only `manual_policy`; the other two XRs genuinely would not select the resulting revision.
 - `DownstreamChanges` — the serialized wrapper for an XR's downstream diffs, used inside `xrImpactWire`: a `Summary`
   plus a `[]ChangeDetail`.
+- `OutputWarning` — non-fatal advisory envelope, carried on both XR and comp diff outputs as
+  `warnings[]`. Carries a `Message` plus an optional `Context map[string]string` holding the log
+  key/value pairs from the emitting call site, so machine consumers read individual values instead of
+  parsing prose. It has no `ResourceID` counterpart to `OutputError`'s: warnings originate below the
+  point where the user-supplied input that led there is known, so anchoring information lives in
+  `Context` under whatever key the call site used. `FormatWarning` renders the stderr line, sorting
+  context keys so output is byte-stable across runs.
+
+  Warnings follow the same dual-emission contract as errors — stderr for humans, structured output for
+  machines — with two deliberate differences: they never affect the exit code (a consumer gating on
+  failure reads `errors[]`), and the stderr half is written when the warning is *raised* rather than at
+  render time. Emitting at render time would lose any warning raised during a run that fails before
+  rendering, and would report warnings out of chronological order with the work that produced them.
+  `DiffRenderer.RenderDiffs` therefore takes warnings for structured output only; the human renderer
+  ignores the parameter.
 - `OutputError` — error envelope used by both XR and comp diff outputs. Carries:
     - `ResourceID`: which user-supplied input the diff was processing (one entry per batched run)
     - `Message`: human-readable error string
@@ -935,6 +952,40 @@ batched input, while `ValidationFailures` enumerates every resource (the input i
 that failed validation under that input. They overlap on Kind+Name when the input itself is among the failing
 resources — that's deliberate, so consumers iterating `ValidationFailures` never miss an XR-level rejection.
 `ValidationFailures` is `nil` for non-validation paths (scope check, tool errors, IO errors).
+
+### 6.8.1 WarningLogger — the advisory channel
+
+`WarningLogger` (in `diffprocessor`) is a `logging.Logger` decorator that treats every `Info` call as a
+user-facing warning: it writes the stderr line immediately and collects an `OutputWarning` for
+structured output. `Debug` calls pass through to the wrapped logger untouched.
+
+It rides on the logger rather than on a dedicated sink parameter because a warning must be raisable
+wherever it is discovered — a client, the resource manager, the render loop — and `logging.Logger` is
+the only cross-cutting dependency already threaded to all of those. Every component factory in
+`ProcessorConfig.ComponentFactories` takes its collaborators plus exactly one `Logger`, so a parallel
+"warning sink" parameter would mean churning every constructor, every factory signature, and every
+`With*Factory` option for no semantic gain.
+
+There is no `Warn` level to reach for, and none is missing. `logging.Logger` has exactly two levels by
+design — its package doc states that Crossplane "desires a simpler API with only two levels ... Info
+and Debug" — and it defines `Info` as "messages that Crossplane operators are very likely to be
+concerned with when running Crossplane", against `Debug`'s "when debugging Crossplane". Treating
+`Info` as the advisory level is therefore the interface's documented meaning, not a local convention;
+what `WarningLogger` adds is somewhere for those messages to actually go, on both the human and the
+machine path. The three routine `Info` sites were demoted to `Debug` to bring the codebase in line
+with that contract rather than to establish a new one.
+
+The practical consequence: **a new `logger.Info` call anywhere in the codebase is user-visible
+output.** New tracing must use `Debug`, and a reviewer should treat an added `Info` as a UX change.
+
+The label shown to a human is `WARNING`, not `INFO`, deliberately: an operator reading
+`INFO: applying this diff will assume ownership` would under-weight it. The upstream *level* and the
+word presented to a user answer different questions.
+
+The CLI wraps the logger at *both* binding sites (`main()` and `verboseFlag.BeforeApply`). The
+`--verbose` flag rebinds the logger, so wrapping only in `main()` would silently drop the channel at
+exactly the verbosity where a user is asking for more output. `Info` is deliberately not forwarded to
+the wrapped logger, so a `--verbose` run does not print each warning twice in two formats.
 
 ### 6.9 Kubernetes and Crossplane Clients
 
@@ -1521,7 +1572,8 @@ cmd/
 │   ├── cmd_utils.go               # Shared CommonCmdFields → ProcessorOption helpers
 │   ├── app_context.go             # AppContext: cluster client initialization
 │   ├── diffprocessor/             # DiffProcessor, CompDiffProcessor, calculator, validator,
-│   │                              #   resource manager, requirements provider, function provider
+│   │                              #   resource manager, requirements provider, function provider,
+│   │                              #   WarningLogger (advisory channel)
 │   ├── client/
 │   │   ├── kubernetes/            # ApplyClient, ResourceClient, SchemaClient, TypeConverter
 │   │   └── crossplane/            # Composition*, Definition, Environment, Function,

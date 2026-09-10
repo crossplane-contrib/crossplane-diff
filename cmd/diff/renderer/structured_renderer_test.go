@@ -206,7 +206,7 @@ func TestStructuredDiffRenderer_RenderDiffs(t *testing.T) {
 
 				renderer := NewStructuredDiffRenderer(logger, opts)
 
-				err := renderer.RenderDiffs(identitylessGroups(fixture.diffs), fixture.errs)
+				err := renderer.RenderDiffs(identitylessGroups(fixture.diffs), fixture.errs, nil)
 				if err != nil {
 					t.Fatalf("RenderDiffs() failed: %v", err)
 				}
@@ -309,7 +309,7 @@ func TestStructuredDiffRenderer_GroupsByXR(t *testing.T) {
 	opts.Stderr = &bytes.Buffer{}
 
 	r := NewStructuredDiffRenderer(logger, opts)
-	if err := r.RenderDiffs(groups, unionErrs); err != nil {
+	if err := r.RenderDiffs(groups, unionErrs, nil); err != nil {
 		t.Fatalf("RenderDiffs() failed: %v", err)
 	}
 
@@ -391,7 +391,7 @@ func TestStructuredDiffRenderer_RenderDiffs_ErrorsToStderr(t *testing.T) {
 
 			renderer := NewStructuredDiffRenderer(logger, opts)
 
-			err := renderer.RenderDiffs(identitylessGroups(map[string]*dt.ResourceDiff{}), errs)
+			err := renderer.RenderDiffs(identitylessGroups(map[string]*dt.ResourceDiff{}), errs, nil)
 			if err != nil {
 				t.Fatalf("RenderDiffs() failed: %v", err)
 			}
@@ -614,7 +614,7 @@ func TestStructuredDiffRenderer_RespectsIgnorePaths(t *testing.T) {
 				renderOpts.Stderr = &bytes.Buffer{}
 
 				r := NewStructuredDiffRenderer(logger, renderOpts)
-				if err := r.RenderDiffs(identitylessGroups(map[string]*dt.ResourceDiff{"r1": rd}), nil); err != nil {
+				if err := r.RenderDiffs(identitylessGroups(map[string]*dt.ResourceDiff{"r1": rd}), nil, nil); err != nil {
 					t.Fatalf("RenderDiffs() failed: %v", err)
 				}
 

@@ -32,7 +32,13 @@ type DiffRenderer interface {
 	// Diff output goes to DiffOptions.Stdout, errors go to DiffOptions.Stderr.
 	// The errs parameter contains the union of resource processing errors to
 	// include in output (the top-level/global error list).
-	RenderDiffs(groups []dt.XRDiffGroup, errs []dt.OutputError) error
+	//
+	// The warnings parameter carries non-fatal advisories for structured output only. Unlike errors,
+	// warnings have ALREADY been written to stderr, at the moment they were raised (see
+	// diffprocessor.WarningLogger) — emitting them at render time instead would lose any warning
+	// raised during a run that fails before rendering, and would report them out of chronological
+	// order with the work that produced them. The human renderer therefore ignores this parameter.
+	RenderDiffs(groups []dt.XRDiffGroup, errs []dt.OutputError, warnings []dt.OutputWarning) error
 }
 
 // DefaultDiffRenderer implements the DiffRenderer interface.
@@ -197,7 +203,9 @@ func identitylessGroups(diffs map[string]*dt.ResourceDiff) []dt.XRDiffGroup {
 // when there is more than one such group. Identity-less groups (the
 // composition renderer's reuse) render as a single flat block, preserving the
 // pre-grouping behavior.
-func (r *DefaultDiffRenderer) RenderDiffs(groups []dt.XRDiffGroup, errs []dt.OutputError) error {
+// The warnings parameter is intentionally unused: warnings reach humans via stderr when they are
+// raised, not at render time. See the DiffRenderer interface comment.
+func (r *DefaultDiffRenderer) RenderDiffs(groups []dt.XRDiffGroup, errs []dt.OutputError, _ []dt.OutputWarning) error {
 	r.logger.Debug("Rendering diffs to output",
 		"groupCount", len(groups),
 		"errorCount", len(errs),

@@ -59,6 +59,7 @@ classDiagram
         +Summary Summary
         +Changes []ChangeDetail (deprecated)
         +Errors []OutputError
+        +Warnings []OutputWarning
         +Xrs []xrDiffWire
     }
 
@@ -89,6 +90,7 @@ classDiagram
     class CompDiffOutput {
         +Compositions []CompositionDiff
         +Errors []OutputError
+        +Warnings []OutputWarning
     }
 
     class CompositionDiff {
@@ -137,6 +139,12 @@ classDiagram
     class DownstreamChanges {
         +Summary Summary
         +Changes []ChangeDetail
+    }
+
+    class OutputWarning {
+        +Message string
+        +Context map[string]string
+        +FormatWarning() string
     }
 
     class OutputError {
@@ -201,6 +209,8 @@ classDiagram
     xrDiffWire --> OutputError
     CompDiffOutput --> CompositionDiff
     CompDiffOutput --> OutputError
+    CompDiffOutput --> OutputWarning
+    StructuredDiffOutput --> OutputWarning
     CompositionDiff --> AffectedResourcesSummary
     CompositionDiff --> XRImpact
     CompositionDiff --> ResourceDiff
