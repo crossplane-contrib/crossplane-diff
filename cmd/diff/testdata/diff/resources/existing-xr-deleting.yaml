@@ -1,0 +1,11 @@
+apiVersion: ns.diff.example.org/v1alpha1
+kind: XNopResource
+metadata:
+  name: test-resource
+  namespace: default
+  # The finalizer keeps the object around after a delete is issued, so envtest (which runs no
+  # controllers) leaves it with metadata.deletionTimestamp set — a resource mid-deletion.
+  finalizers:
+  - composite.apiextensions.crossplane.io
+spec:
+  coolField: "existing-value"

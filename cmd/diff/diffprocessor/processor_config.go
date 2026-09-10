@@ -36,6 +36,13 @@ type ProcessorConfig struct {
 	// output always includes full compositionChanges.
 	MinimizeComposition bool
 
+	// Warnings is the source of non-fatal advisories to include in structured output. It is the same
+	// *WarningLogger that Logger is set to when the CLI wires one up; keeping a typed handle avoids
+	// type-asserting the Logger back to its concrete type at drain time. Nil is valid and means no
+	// warnings are collected — the human-visible stderr line is emitted by the WarningLogger itself,
+	// so leaving this unset only affects structured output.
+	Warnings *WarningLogger
+
 	// AnalyzeUnchanged forces impact analysis for a composition that is identical to its
 	// in-cluster version. By default such a composition is reported as unchanged and its
 	// affected XRs are not evaluated at all: applying it creates no new CompositionRevision,
@@ -161,6 +168,14 @@ func WithMaxNestedDepth(depth int) ProcessorOption {
 func WithIncludeManual(includeManual bool) ProcessorOption {
 	return func(config *ProcessorConfig) {
 		config.IncludeManual = includeManual
+	}
+}
+
+// WithWarnings sets the collector whose warnings are included in structured output. Pass the same
+// *WarningLogger that was supplied to WithLogger.
+func WithWarnings(warnings *WarningLogger) ProcessorOption {
+	return func(config *ProcessorConfig) {
+		config.Warnings = warnings
 	}
 }
 

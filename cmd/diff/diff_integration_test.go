@@ -50,7 +50,8 @@ type IntegrationTestCase struct {
 	expectedOutput             string
 	expectedError              bool
 	expectedErrorContains      string
-	expectedExitCode           int // Expected exit code (0=success, 1=tool error, 2=schema validation, 3=diff detected)
+	expectedStderrContains     []string // substrings that must appear on stderr (warnings, error lines)
+	expectedExitCode           int      // Expected exit code (0=success, 1=tool error, 2=schema validation, 3=diff detected)
 	noColor                    bool
 	namespace                  string        // For composition tests (optional)
 	xrdAPIVersion              XrdAPIVersion // For XR tests (optional)
@@ -309,7 +310,10 @@ func runIntegrationTest(t *testing.T, testType DiffTestType, tt IntegrationTestC
 		cmd = &XRCmd{}
 	}
 
+	// Wrap the logger the way main() does, so the warning channel is exercised: Info calls land on
+	// stderr AND in structured output, rather than being silently dropped by the test logger.
 	logger := tu.TestLogger(t, true)
+	warnings := dp.NewWarningLogger(logger, &stderr)
 	exitCode := &ExitCode{}
 
 	// Create AppContext from the test environment's config
@@ -323,7 +327,8 @@ func runIntegrationTest(t *testing.T, testType DiffTestType, tt IntegrationTestC
 		kong.Writers(&stdout, &stderr),
 		kong.Bind(appCtx),
 		kong.Bind(exitCode),
-		kong.BindTo(logger, (*logging.Logger)(nil)),
+		kong.Bind(warnings),
+		kong.BindTo(warnings, (*logging.Logger)(nil)),
 	)
 	if err != nil {
 		t.Fatalf("failed to create kong parser: %v", err)
@@ -339,6 +344,14 @@ func runIntegrationTest(t *testing.T, testType DiffTestType, tt IntegrationTestC
 	// Check exit code matches expected
 	if exitCode.Code != tt.expectedExitCode {
 		t.Errorf("expected exit code %d, got %d", tt.expectedExitCode, exitCode.Code)
+	}
+
+	// Assert stderr expectations before any of the early returns below, so they apply in every
+	// output mode (human-readable, JSON, and expected-error cases alike).
+	for _, want := range tt.expectedStderrContains {
+		if !strings.Contains(stderr.String(), want) {
+			t.Errorf("expected stderr to contain %q, got:\n%s", want, stderr.String())
+		}
 	}
 
 	if tt.expectedError && err == nil {
@@ -639,6 +652,39 @@ Summary: 2 modified`,
 				WithModifiedResource("XNopResource", "test-resource", "default").
 				WithFieldChange("spec.coolField", "existing-value", "modified-value").
 				And(),
+			expectedError:    false,
+			expectedExitCode: dp.ExitCodeDiffDetected,
+		},
+		// Issue #452, `xr` side, delivered through the warning channel added for #459. Unlike `comp`,
+		// which excludes deleting XRs from impact analysis, `xr` diffs exactly the resource the user
+		// named — so it still emits the diff and raises an advisory. This asserts BOTH halves of the
+		// dual emission: the stderr line for humans and the warnings[] entry for machines.
+		"DeletingXRWarnsButStillDiffs": {
+			reason:       "xr against an XR whose cluster copy is being deleted still emits the diff, plus a warning on stderr and in warnings[]",
+			outputFormat: "json",
+			setupFiles: []string{
+				"testdata/diff/resources/xrd.yaml",
+				"testdata/diff/resources/composition.yaml",
+				"testdata/diff/resources/composition-revision-default.yaml",
+				"testdata/diff/resources/functions.yaml",
+				"testdata/diff/resources/existing-xr-deleting.yaml",
+			},
+			deleteAfterSetup: []string{"testdata/diff/resources/existing-xr-deleting.yaml"},
+			inputFiles:       []string{"testdata/diff/modified-xr.yaml"},
+			expectedStructuredOutput: tu.ExpectDiff().
+				WithSummary(1, 1, 0).
+				WithAddedResource("XDownstreamResource", "test-resource", "default").
+				WithField("spec.forProvider.configData", "modified-value").
+				And().
+				WithModifiedResource("XNopResource", "test-resource", "default").
+				WithFieldChange("spec.coolField", "existing-value", "modified-value").
+				And().
+				WithWarning("being deleted in the cluster").
+				And(),
+			expectedStderrContains: []string{
+				"WARNING: The resource being diffed is being deleted in the cluster",
+				"resource=XNopResource/test-resource",
+			},
 			expectedError:    false,
 			expectedExitCode: dp.ExitCodeDiffDetected,
 		},

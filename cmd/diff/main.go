@@ -142,7 +142,13 @@ func (v verboseFlag) BeforeApply(ctx *kong.Context) error { //nolint:unparam // 
 	zapLogger := zap.New(zap.UseDevMode(true))
 	log.SetLogger(zapLogger)
 	logger := logging.NewLogrLogger(zapLogger)
-	ctx.BindTo(logger, (*logging.Logger)(nil))
+
+	// Re-wrap: this rebinding replaces the logger bound in main(), so without wrapping here --verbose
+	// would silently discard the warning channel — warnings would stop reaching stderr and structured
+	// output at exactly the verbosity where a user is trying to see more, not less.
+	warnings := dp.NewWarningLogger(logger, os.Stderr)
+	ctx.BindTo(warnings, (*logging.Logger)(nil))
+	ctx.Bind(warnings)
 
 	return nil
 }
@@ -174,7 +180,11 @@ type cli struct {
 func main() {
 	log.SetLogger(logr.Discard())
 
-	logger := logging.NewNopLogger()
+	// The base logger discards Debug tracing unless --verbose replaces it. Wrapping it in a
+	// WarningLogger is what makes non-fatal advisories visible at default verbosity: Info calls become
+	// stderr warnings and are collected for structured output, while Debug still goes nowhere. Both
+	// the *WarningLogger and the logging.Logger view of it are bound, so commands can request either.
+	warnings := dp.NewWarningLogger(logging.NewNopLogger(), os.Stderr)
 	exitCode := &ExitCode{Code: dp.ExitCodeSuccess} // Default to success
 
 	ctx := kong.Parse(&cli{},
@@ -182,7 +192,8 @@ func main() {
 		kong.Description("A command line tool for diffing  Crossplane resources."),
 		// Binding a variable to kong context makes it available to all commands
 		// at runtime.
-		kong.BindTo(logger, (*logging.Logger)(nil)),
+		kong.BindTo(warnings, (*logging.Logger)(nil)),
+		kong.Bind(warnings),
 		kong.Bind(exitCode), // Bind exit code state
 		// Providers are resolved lazily when dependencies are needed.
 		// kubecfg.Provide depends on kubecfg.Provider (bound in CommonCmdFields.BeforeApply)

@@ -466,7 +466,7 @@ func TestDefaultDiffProcessor_PerformDiff(t *testing.T) {
 				// The factory receives DiffOptions which contains Stdout where output should be written
 				WithDiffRendererFactory(func(_ logging.Logger, opts renderer.DiffOptions) renderer.DiffRenderer {
 					return &tu.MockDiffRenderer{
-						RenderDiffsFn: func(_ []dt.XRDiffGroup, _ []dt.OutputError) error {
+						RenderDiffsFn: func(_ []dt.XRDiffGroup, _ []dt.OutputError, _ []dt.OutputWarning) error {
 							// Write a simple summary to the output via opts.Stdout
 							w := opts.Stdout
 
@@ -713,6 +713,78 @@ func TestDefaultDiffProcessor_PerformDiff_StderrErrorOutput(t *testing.T) {
 
 	if !strings.Contains(stderrOutput, "composition not found") {
 		t.Errorf("Expected stderr to contain 'composition not found' error detail, got: %q", stderrOutput)
+	}
+}
+
+// TestDefaultDiffProcessor_warnIfDeleting covers the `xr`-side counterpart to comp's deleting-XR
+// exclusion (issue #452). `xr` diffs exactly the resource the user named, so a deleting cluster copy
+// is warned about rather than skipped. The warning travels through the WarningLogger channel, so this
+// asserts both halves of the dual emission: the stderr line and the collected structured warning.
+// Only top-level XRs are flagged, and an explicitly-null deletionTimestamp is not mistaken for a
+// deleting resource.
+func TestDefaultDiffProcessor_warnIfDeleting(t *testing.T) {
+	deleting := tu.NewResource("example.org/v1", "XR1", "my-xr").
+		WithDeletionTimestamp("2026-09-07T11:25:03Z").Build()
+
+	tests := map[string]struct {
+		existing     *un.Unstructured
+		parentXR     *cmp.Unstructured
+		wantStderr   string
+		wantWarnings []dt.OutputWarning
+	}{
+		"NotInCluster_NoWarning": {
+			existing: nil,
+		},
+		"NotDeleting_NoWarning": {
+			existing: tu.NewResource("example.org/v1", "XR1", "my-xr").Build(),
+		},
+		"NullDeletionTimestamp_NoWarning": {
+			existing: tu.NewResource("example.org/v1", "XR1", "my-xr").WithDeletionTimestamp(nil).Build(),
+		},
+		"Deleting_Warns": {
+			existing: deleting,
+			wantStderr: "WARNING: The resource being diffed is being deleted in the cluster; the diff compares against a resource that is going away " +
+				"(deletionTimestamp=2026-09-07T11:25:03Z, resource=XR1/my-xr)\n",
+			wantWarnings: []dt.OutputWarning{{
+				Message: "The resource being diffed is being deleted in the cluster; the diff compares against a resource that is going away",
+				Context: map[string]string{
+					"resource":          "XR1/my-xr",
+					"deletionTimestamp": "2026-09-07T11:25:03Z",
+				},
+			}},
+		},
+		// Composed resources of a live XR churn through deletion routinely; warning per nested XR
+		// would be noise, so only the top-level XR (parentXR == nil) is flagged.
+		"DeletingNestedXR_NoWarning": {
+			existing: deleting,
+			parentXR: cmp.New(),
+		},
+	}
+
+	for name, tt := range tests {
+		t.Run(name, func(t *testing.T) {
+			var stderrBuf bytes.Buffer
+
+			warnings := NewWarningLogger(tu.TestLogger(t, false), &stderrBuf)
+
+			processor := &DefaultDiffProcessor{
+				config: ProcessorConfig{
+					Stderr:   &stderrBuf,
+					Logger:   warnings,
+					Warnings: warnings,
+				},
+			}
+
+			processor.warnIfDeleting(tt.existing, tt.parentXR, "XR1/my-xr")
+
+			if diff := gcmp.Diff(tt.wantStderr, stderrBuf.String()); diff != "" {
+				t.Errorf("stderr mismatch (-want +got):\n%s", diff)
+			}
+
+			if diff := gcmp.Diff(tt.wantWarnings, processor.collectedWarnings()); diff != "" {
+				t.Errorf("collected warnings mismatch (-want +got):\n%s", diff)
+			}
+		})
 	}
 }
 

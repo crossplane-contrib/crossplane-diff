@@ -186,7 +186,8 @@ func (p *CachedFunctionProvider) Cleanup(ctx context.Context) error {
 		return nil
 	}
 
-	p.logger.Info("Cleaning up function containers", "count", len(p.containerNames))
+	// Debug, not Info: routine lifecycle. The failure case below is the part worth warning about.
+	p.logger.Debug("Cleaning up function containers", "count", len(p.containerNames))
 
 	// Create Docker client
 	cli, err := client.NewClientWithOpts(client.FromEnv, client.WithAPIVersionNegotiation())

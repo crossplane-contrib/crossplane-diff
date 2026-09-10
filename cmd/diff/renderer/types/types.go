@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"sort"
 	"strings"
 
 	"github.com/sergi/go-diff/diffmatchpatch"
@@ -334,4 +335,43 @@ func (e OutputError) FormatError() string {
 	}
 
 	return fmt.Sprintf("ERROR: %s: %s", resourceID, e.Message)
+}
+
+// OutputWarning is a non-fatal advisory: something the user should know that does not invalidate the
+// diff or stop the run. Warnings follow the same dual-emission contract as OutputError — written to
+// stderr for humans and included in structured output for machines — but deliberately do NOT affect
+// the exit code. A consumer gating on failure checks errors[], not warnings[].
+//
+// Context carries the log key/value pairs from the emitting call site (e.g. which composition, how
+// many credentials were fetched). It is a map rather than being flattened into Message so machine
+// consumers can read the individual values instead of parsing prose. Unlike OutputError there is no
+// ResourceID: warnings originate deep in the call stack, where the user-supplied input that led
+// there is not known, so the anchoring information lives in Context under whatever key the call
+// site used.
+type OutputWarning struct {
+	Message string            `json:"message"`
+	Context map[string]string `json:"context,omitempty"`
+}
+
+// FormatWarning renders the warning as a single human-readable stderr line, mirroring
+// OutputError.FormatError. Context pairs are appended in sorted key order so output is stable
+// across runs (Go map iteration is not).
+func (w OutputWarning) FormatWarning() string {
+	if len(w.Context) == 0 {
+		return fmt.Sprintf("WARNING: %s", w.Message)
+	}
+
+	keys := make([]string, 0, len(w.Context))
+	for k := range w.Context {
+		keys = append(keys, k)
+	}
+
+	sort.Strings(keys)
+
+	pairs := make([]string, 0, len(keys))
+	for _, k := range keys {
+		pairs = append(pairs, fmt.Sprintf("%s=%s", k, w.Context[k]))
+	}
+
+	return fmt.Sprintf("WARNING: %s (%s)", w.Message, strings.Join(pairs, ", "))
 }

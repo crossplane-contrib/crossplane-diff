@@ -68,8 +68,8 @@ Examples:
 // AfterApply implements kong's AfterApply method to bind command-specific dependencies.
 // AppContext is received via dependency injection - Kong resolves it through the provider chain:
 // ContextProvider (bound in CommonCmdFields.BeforeApply) -> provideRestConfig -> provideAppContext.
-func (c *XRCmd) AfterApply(ctx *kong.Context, log logging.Logger, appCtx *AppContext) error {
-	proc := makeDefaultXRProc(c, ctx, appCtx, log)
+func (c *XRCmd) AfterApply(ctx *kong.Context, log logging.Logger, warnings *dp.WarningLogger, appCtx *AppContext) error {
+	proc := makeDefaultXRProc(c, ctx, appCtx, log, warnings)
 
 	loader, err := makeDefaultXRLoader(c)
 	if err != nil {
@@ -82,10 +82,11 @@ func (c *XRCmd) AfterApply(ctx *kong.Context, log logging.Logger, appCtx *AppCon
 	return nil
 }
 
-func makeDefaultXRProc(c *XRCmd, kongCtx *kong.Context, appCtx *AppContext, log logging.Logger) dp.DiffProcessor {
+func makeDefaultXRProc(c *XRCmd, kongCtx *kong.Context, appCtx *AppContext, log logging.Logger, warnings *dp.WarningLogger) dp.DiffProcessor {
 	opts := defaultProcessorOptions(c.CommonCmdFields)
 	opts = append(opts,
 		dp.WithLogger(log),
+		dp.WithWarnings(warnings),
 		dp.WithStdout(kongCtx.Stdout),
 		dp.WithStderr(kongCtx.Stderr),
 	)
