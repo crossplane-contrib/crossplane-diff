@@ -159,10 +159,11 @@ func (m *DefaultResourceManager) checkCompositeOwnership(current *un.Unstructure
 
 	if labels := current.GetLabels(); labels != nil {
 		if owner, exists := labels[LabelComposite]; exists && owner != composite.GetName() {
-			// Log a warning if the resource is owned by a different composite
+			// Info is the advisory level per logging.Logger's own contract, so this reaches the user via
+			// stderr and structured output rather than being buried in --verbose tracing. See WarningLogger.
 			m.logger.Info(
 				// TODO:  should we fail by default here?  maybe require a --force flag to proceed?
-				"Warning: Resource already belongs to another composite.  Applying this diff will assume ownership!",
+				"Resource already belongs to another composite.  Applying this diff will assume ownership!",
 				"resource", fmt.Sprintf("%s/%s", current.GetKind(), current.GetName()),
 				"namespace", current.GetNamespace(),
 				"currentOwner", owner,

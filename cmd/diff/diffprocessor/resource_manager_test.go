@@ -1,6 +1,7 @@
 package diffprocessor
 
 import (
+	"bytes"
 	"context"
 	"sort"
 	"strings"
@@ -975,22 +976,54 @@ func TestDefaultResourceManager_checkCompositeOwnership(t *testing.T) {
 
 	for name, tt := range tests {
 		t.Run(name, func(t *testing.T) {
-			// Create a test logger that captures log output
-			var logCaptured bool
+			// The ownership notice is raised with logger.Info, which the WarningLogger turns into a
+			// user-facing warning. Wrapping the logger here is what makes wantLog assertable — before
+			// the warning channel existed this test could only check that the call did not panic.
+			var stderr bytes.Buffer
 
-			logger := tu.TestLogger(t, false)
+			warnings := NewWarningLogger(tu.TestLogger(t, false), &stderr)
 
-			// We can't easily intercept the logger, but we can test the function runs without error
 			rm := &DefaultResourceManager{
-				logger: logger,
+				logger: warnings,
 			}
 
-			// This should not panic or error
 			rm.checkCompositeOwnership(tt.current, tt.composite)
 
-			// The actual log checking would require a more sophisticated test logger
-			// For now, we're just ensuring the function handles all cases correctly
-			_ = logCaptured // Suppress unused variable warning
+			got := warnings.Warnings()
+
+			if !tt.wantLog {
+				if len(got) != 0 {
+					t.Errorf("expected no ownership warning, got %v", got)
+				}
+
+				return
+			}
+
+			if len(got) != 1 {
+				t.Fatalf("expected exactly one ownership warning, got %v", got)
+			}
+
+			// The message must name the consequence, not just the condition: a user who sees this needs
+			// to know that applying the diff takes the resource over.
+			if !strings.Contains(got[0].Message, "assume ownership") {
+				t.Errorf("warning should say applying assumes ownership, got %q", got[0].Message)
+			}
+
+			// The old and new owners are the load-bearing detail — without them a user cannot tell
+			// which composite they are about to take the resource from.
+			wantContext := map[string]string{
+				"resource":     "Resource/my-resource",
+				"namespace":    "",
+				"currentOwner": "other-xr",
+				"newOwner":     "my-xr",
+			}
+			if diff := gcmp.Diff(wantContext, got[0].Context); diff != "" {
+				t.Errorf("warning context mismatch (-want +got):\n%s", diff)
+			}
+
+			if !strings.Contains(stderr.String(), "WARNING: ") {
+				t.Errorf("expected the warning on stderr, got %q", stderr.String())
+			}
 		})
 	}
 }
