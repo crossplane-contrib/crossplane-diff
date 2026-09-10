@@ -96,7 +96,10 @@ Notes:
   Automatic update policy whose compositionRevisionSelector does not match the diffed
   composition's labels are surfaced with status "filtered" (reason
   "revision_selector_mismatch"); --include-manual does not re-include them, since they
-  would not select the resulting revision.
+  would not select the resulting revision. Composites that are being deleted are excluded
+  entirely (reason "deleting"): Crossplane tears their composed resources down rather than
+  composing them, so they never adopt the resulting revision. --include-manual does not
+  re-include these either.
 `
 }
 

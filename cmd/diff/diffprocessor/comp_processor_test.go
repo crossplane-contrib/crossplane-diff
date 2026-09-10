@@ -442,6 +442,60 @@ func TestDefaultCompDiffProcessor_partitionXRsByUpdatePolicy(t *testing.T) {
 			wantKept:      nil,
 			wantDropped:   nil,
 		},
+		// A deleting XR is on Crossplane's teardown path and will never adopt the resulting revision,
+		// so it is dropped regardless of policy or selector (issue #452).
+		"Deleting_Dropped": {
+			includeManual: false,
+			compLabels:    map[string]string{"version": "0.0.2"},
+			xrs: []*un.Unstructured{
+				tu.NewResource("example.org/v1", "XResource", "deleting-xr").WithNamespace("default").
+					WithNestedField("Automatic", "spec", "crossplane", "compositionUpdatePolicy").
+					WithDeletionTimestamp("2026-09-07T11:25:03Z").Build(),
+				tu.NewResource("example.org/v1", "XResource", "live-xr").WithNamespace("default").
+					WithNestedField("Automatic", "spec", "crossplane", "compositionUpdatePolicy").Build(),
+			},
+			wantKept:    []string{"live-xr"},
+			wantDropped: []droppedWant{{name: "deleting-xr", reason: renderer.FilterReasonDeleting}},
+		},
+		// Deletion is evaluated before the policy rules and is not rescued by --include-manual: a
+		// deleting Manual XR is reported as deleting, not as manual_policy.
+		"DeletingManualXR_DroppedAsDeletingEvenWithIncludeManual": {
+			includeManual: true,
+			compLabels:    map[string]string{"version": "0.0.2"},
+			xrs: []*un.Unstructured{
+				tu.NewResource("example.org/v1", "XResource", "deleting-manual").WithNamespace("default").
+					WithNestedField("Manual", "spec", "crossplane", "compositionUpdatePolicy").
+					WithDeletionTimestamp("2026-09-07T11:25:03Z").Build(),
+			},
+			wantKept:    nil,
+			wantDropped: []droppedWant{{name: "deleting-manual", reason: renderer.FilterReasonDeleting}},
+		},
+		// A matching compositionRevisionSelector does not rescue a deleting XR either.
+		"DeletingWithMatchingSelector_Dropped": {
+			includeManual: false,
+			compLabels:    map[string]string{"version": "0.0.2"},
+			xrs: []*un.Unstructured{
+				tu.NewResource("example.org/v1", "XResource", "deleting-match").WithNamespace("default").
+					WithNestedField("Automatic", "spec", "crossplane", "compositionUpdatePolicy").
+					WithCompositionRevisionSelector(xp.CrossplaneAPIExtGroupV2, map[string]string{"version": "0.0.2"}, nil).
+					WithDeletionTimestamp("2026-09-07T11:25:03Z").Build(),
+			},
+			wantKept:    nil,
+			wantDropped: []droppedWant{{name: "deleting-match", reason: renderer.FilterReasonDeleting}},
+		},
+		// An explicit null deletionTimestamp is how round-tripped Kubernetes YAML spells "unset";
+		// it must not be mistaken for a deleting XR.
+		"NullDeletionTimestamp_Kept": {
+			includeManual: false,
+			compLabels:    map[string]string{"version": "0.0.2"},
+			xrs: []*un.Unstructured{
+				tu.NewResource("example.org/v1", "XResource", "null-ts-xr").WithNamespace("default").
+					WithNestedField("Automatic", "spec", "crossplane", "compositionUpdatePolicy").
+					WithDeletionTimestamp(nil).Build(),
+			},
+			wantKept:    []string{"null-ts-xr"},
+			wantDropped: nil,
+		},
 		// Composition with no labels: an Automatic XR with a non-empty selector cannot match, so it
 		// is dropped as a selector mismatch.
 		"NoCompositionLabels_SelectorMismatch_Dropped": {

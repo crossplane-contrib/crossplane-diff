@@ -255,6 +255,10 @@ The `comp` subcommand has its own set of integration tests:
   diffed composition's labels is surfaced as `filtered` with reason `revision_selector_mismatch`, and that
   `--include-manual` does not re-include it (it would not select the resulting revision). The predicate honours both
   `matchLabels` and `matchExpressions` and both v1/v2 field paths.
+- **Deletion Handling**: Verifies that an XR carrying a `metadata.deletionTimestamp` is excluded from impact analysis
+  with reason `deleting` (counted via `FilteredByDeletion`, and surfaced as a `filtered` impact entry in `--resource`
+  mode), that `--include-manual` does not re-include it, and that an explicitly-null `deletionTimestamp` (how
+  round-tripped Kubernetes YAML spells "unset") is not mistaken for a deleting XR.
 - **Downstream Field Changes**: Asserts field-level old/new values on composed resources of affected XRs.
 
 ### 4.12 Nested XRs and Eventual State
@@ -540,12 +544,27 @@ type CompDiffProcessor interface {
    resolves to it. Optional filters: `--namespace` (scope to one namespace), `--resource` (limit to specific composite
    names, mutually exclusive with `--namespace`).
 2. **Partition by whether the XR would adopt the diffed composition.** `partitionXRsByUpdatePolicy` drops an XR when it
-   would not pick up the change: (a) `compositionUpdatePolicy: Manual` (pinned via `compositionRevisionRef`) unless
-   `--include-manual` is set — reason `manual_policy`; or (b) an Automatic XR whose `compositionRevisionSelector` does
-   not match the diffed composition's `metadata.labels` — reason `revision_selector_mismatch`. Because a
-   CompositionRevision inherits the Composition's labels, the edited composition file *is* the prediction of the new
-   revision, so this needs no extra cluster fetch. `--include-manual` governs only (a); selector-mismatched Automatic
-   XRs stay dropped regardless, since they genuinely would not select the resulting revision.
+   would not pick up the change. `classifyXR` holds the per-XR rules, evaluated in order: (a) the XR has a
+   `metadata.deletionTimestamp` — reason `deleting`; (b) `compositionUpdatePolicy: Manual` (pinned via
+   `compositionRevisionRef`) unless `--include-manual` is set — reason `manual_policy`; or (c) an Automatic XR whose
+   `compositionRevisionSelector` does not match the diffed composition's `metadata.labels` — reason
+   `revision_selector_mismatch`. Because a CompositionRevision inherits the Composition's labels, the edited composition
+   file *is* the prediction of the new revision, so (c) needs no extra cluster fetch. `--include-manual` governs only
+   (b); (a) and (c) stay dropped regardless, since those XRs genuinely would not select the resulting revision.
+
+   Deletion is checked first because it supersedes the policy rules entirely: Crossplane's composite reconciler takes its
+   deletion path for such an XR, tearing composed resources down rather than composing them. Rendering it therefore
+   yields no composed resources, so any impact analysis for it would be meaningless — and, before this exclusion existed,
+   could fail outright and abort the whole run (issue #452).
+
+   Note this reads `metadata.deletionTimestamp` with the standard `unstructured` accessor, unlike
+   `compositionUpdatePolicy` and `compositionRevisionSelector`, which use bespoke readers that hard-error on a
+   present-but-wrong-typed value. The difference is deliberate: those two are **spec** fields, user-authored and only as
+   well-formed as the XRD's schema requires, so a malformed value is reachable and must not be silently defaulted.
+   `deletionTimestamp` is apiserver-owned core metadata — not settable on create, always serialized as RFC3339 or absent
+   — and both call sites receive only apiserver-sourced objects (`FindComposites` listings and `FetchCurrentObject`
+   gets). A defensive reader there would add an unreachable error path threaded through three functions. The timestamp is
+   normalized to UTC/RFC3339 for display, since `metav1.Time`'s default rendering is machine-local.
 3. **Diff the composition itself.** Compute a top-level diff between the proposed composition and the cluster's current
    version, surfaced as `CompositionDiff`.
 4. **Diff each XR.** Delegate to the `xrProc` `DiffProcessor` via `DiffSingleResource`, supplying a
@@ -861,10 +880,10 @@ contract:
   composition's own diff against its in-cluster version), `AffectedResources AffectedResourcesSummary`, and
   `ImpactAnalysis []XRImpact`.
 - `AffectedResourcesSummary` — counts across the impact analysis: `Total`, `WithChanges`, `Unchanged`, `WithErrors`,
-  and two optional filter counters: `FilteredByPolicy` (XRs dropped because of a `Manual`
-  `compositionUpdatePolicy`) and `FilteredBySelector` (XRs dropped because their `compositionRevisionSelector` does not
-  match the diffed composition's labels). Split by reason so the breakdown survives even in default-discovery mode,
-  where individual XR impacts are not surfaced.
+  and three optional filter counters: `FilteredByPolicy` (XRs dropped because of a `Manual`
+  `compositionUpdatePolicy`), `FilteredBySelector` (XRs dropped because their `compositionRevisionSelector` does not
+  match the diffed composition's labels), and `FilteredByDeletion` (XRs dropped because they are being deleted). Split
+  by reason so the breakdown survives even in default-discovery mode, where individual XR impacts are not surfaced.
 - `XRImpact` — per-XR entry inside `ImpactAnalysis`: embeds `corev1.ObjectReference` (apiVersion/kind/name/namespace),
   carries a `Status`, a `FilterReason` (meaningful only when `Status == "filtered"`), an optional human-readable
   `FilterDetail`, an optional `Error`, and an optional `Diffs map[string]*ResourceDiff` of downstream changes.
@@ -872,9 +891,9 @@ contract:
   from its *cause*, which is carried separately in `FilterReason` so the reason set can grow without expanding the
   status enum.
 - `FilterReason` — enumeration explaining an `XRStatusFiltered`: `"manual_policy"` (Manual update policy;
-  `--include-manual` re-includes) and `"revision_selector_mismatch"` (`compositionRevisionSelector` does not match the
-  diffed composition's labels; `--include-manual` does *not* re-include, since the XR would not select the resulting
-  revision).
+  `--include-manual` re-includes), `"revision_selector_mismatch"` (`compositionRevisionSelector` does not match the
+  diffed composition's labels), and `"deleting"` (the XR has a `metadata.deletionTimestamp`). `--include-manual`
+  re-includes only `manual_policy`; the other two XRs genuinely would not select the resulting revision.
 - `DownstreamChanges` — the serialized wrapper for an XR's downstream diffs, used inside `xrImpactWire`: a `Summary`
   plus a `[]ChangeDetail`.
 - `OutputError` — error envelope used by both XR and comp diff outputs. Carries:
@@ -974,10 +993,11 @@ The client layer provides interfaces to interact with Kubernetes and Crossplane 
       filters: `--namespace`, `--resource [namespace/]name` (mutually exclusive). When `--resource` is supplied, a
       preflight pass ensures every named ref is relevant to at least one input composition; otherwise the call fails
       before any rendering happens.
-    - Drop XRs that would not adopt the change: `compositionUpdatePolicy: Manual` (unless `--include-manual`), or an
-      Automatic XR whose `compositionRevisionSelector` does not match the diffed composition's labels (always, since it
-      would not select the resulting revision). Dropped XRs carry a `FilterReason` (`manual_policy` /
-      `revision_selector_mismatch`).
+    - Drop XRs that would not adopt the change: any XR with a `metadata.deletionTimestamp` (always — Crossplane is
+      tearing it down, so it will never adopt the resulting revision); `compositionUpdatePolicy: Manual` (unless
+      `--include-manual`); or an Automatic XR whose `compositionRevisionSelector` does not match the diffed
+      composition's labels (always, since it would not select the resulting revision). Dropped XRs carry a
+      `FilterReason` (`deleting` / `manual_policy` / `revision_selector_mismatch`).
     - Calculate the composition's own diff against the cluster's current version.
     - For each remaining XR, run the XR diff workflow above, using a `CompositionProvider` that returns the proposed
       composition for the affected XR's GVK and the cluster's composition for any nested XRs of a different kind.

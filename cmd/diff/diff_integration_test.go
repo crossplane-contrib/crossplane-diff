@@ -44,6 +44,7 @@ const (
 type IntegrationTestCase struct {
 	reason                     string // Description of what this test validates
 	setupFiles                 []string
+	deleteAfterSetup           []string                        // Files whose resources are deleted after setup; with a finalizer this leaves them Terminating
 	crossplaneManagedResources []HierarchicalOwnershipRelation // Resources applied via SSA with Crossplane field manager
 	inputFiles                 []string                        // Input files to diff (XR YAML files or Composition YAML files)
 	expectedOutput             string
@@ -210,6 +211,13 @@ func runIntegrationTest(t *testing.T, testType DiffTestType, tt IntegrationTestC
 		if err != nil {
 			t.Fatalf("failed to setup Crossplane-managed resources: %v", err)
 		}
+	}
+
+	// Issue a delete for resources that should be observed mid-deletion. The manifests must
+	// carry a finalizer so envtest (which runs no controllers) leaves the object in place with
+	// metadata.deletionTimestamp set, reproducing a real "Terminating" resource.
+	if err := deleteResourcesFromFiles(ctx, k8sClient, tt.deleteAfterSetup); err != nil {
+		t.Fatalf("failed to delete resources: %v", err)
 	}
 
 	// Set up the test files
@@ -2149,6 +2157,78 @@ Summary: 2 modified`,
 			expectedError:    false,
 			expectedExitCode: dp.ExitCodeDiffDetected,
 			noColor:          true,
+		},
+		// Issue #452: an XR with a deletionTimestamp is on Crossplane's teardown path and will never
+		// adopt the diffed composition's revision. Rendering it yields no composed resources (the
+		// composite reconciler takes its deletion path), so including it produces a meaningless
+		// impact analysis. It must be excluded and counted, leaving only the live XR evaluated.
+		"CompositionDiffExcludesDeletingXRs": {
+			reason: "A deleting XR is excluded from impact analysis and counted as filteredByDeletion; the live XR is still evaluated",
+			setupFiles: []string{
+				"testdata/comp/resources/xrd.yaml",
+				"testdata/comp/resources/original-composition.yaml",
+				"testdata/comp/resources/functions.yaml",
+			},
+			crossplaneManagedResources: []HierarchicalOwnershipRelation{
+				{
+					OwnerFile: "testdata/comp/resources/existing-xr-1.yaml",
+					OwnedFiles: map[string]*HierarchicalOwnershipRelation{
+						"testdata/comp/resources/existing-downstream-1.yaml": nil,
+					},
+				},
+				{
+					OwnerFile: "testdata/comp/resources/existing-xr-deleting.yaml",
+					OwnedFiles: map[string]*HierarchicalOwnershipRelation{
+						"testdata/comp/resources/existing-downstream-deleting.yaml": nil,
+					},
+				},
+			},
+			deleteAfterSetup: []string{"testdata/comp/resources/existing-xr-deleting.yaml"},
+			inputFiles:       []string{"testdata/comp/updated-composition.yaml"},
+			namespace:        "default",
+			outputFormat:     "json",
+			expectedExitCode: dp.ExitCodeDiffDetected, // the composition itself changed
+			// Total counts both discovered XRs; only the live one is evaluated (1 with changes), and
+			// the deleting one is reported via filteredByDeletion. In default-discovery mode filtered
+			// XRs are counted but not surfaced as impact entries, so only test-resource appears.
+			expectedStructuredCompOutput: tu.ExpectCompDiff().
+				WithComposition("xnopresources.diff.example.org").
+				WithCompositionModified().
+				WithAffectedResources(2, 1, 0, 0).
+				WithFilteredByDeletion(1).
+				WithXRImpact("XNopResource", "test-resource", "default", "changed").
+				AndComp().And(),
+		},
+		// Issue #452, --resource mode: filtered XRs are surfaced explicitly there, so a user who names
+		// a deleting composite is told why it was skipped rather than getting silence.
+		"ResourceFilterSurfacesDeletingXR": {
+			reason: "--resource matching a deleting composite surfaces it as filtered with reason deleting",
+			setupFiles: []string{
+				"testdata/comp/resources/xrd.yaml",
+				"testdata/comp/resources/original-composition.yaml",
+				"testdata/comp/resources/composition-revision-v1.yaml",
+				"testdata/comp/resources/functions.yaml",
+			},
+			crossplaneManagedResources: []HierarchicalOwnershipRelation{
+				{
+					OwnerFile: "testdata/comp/resources/existing-xr-deleting.yaml",
+					OwnedFiles: map[string]*HierarchicalOwnershipRelation{
+						"testdata/comp/resources/existing-downstream-deleting.yaml": nil,
+					},
+				},
+			},
+			deleteAfterSetup: []string{"testdata/comp/resources/existing-xr-deleting.yaml"},
+			inputFiles:       []string{"testdata/comp/updated-composition.yaml"},
+			resources:        []string{"default/deleting-resource"},
+			outputFormat:     "json",
+			expectedExitCode: dp.ExitCodeDiffDetected, // the composition itself changed
+			expectedStructuredCompOutput: tu.ExpectCompDiff().
+				WithComposition("xnopresources.diff.example.org").
+				WithCompositionModified().
+				WithFilteredByDeletion(1).
+				WithXRImpact("XNopResource", "deleting-resource", "default", "filtered").
+				WithFilterReason("deleting").
+				AndComp().And(),
 		},
 		"CompositionDiffIgnorePaths": {
 			reason: "Validates that ArgoCD annotations are ignored in composition diffs",

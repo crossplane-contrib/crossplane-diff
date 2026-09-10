@@ -110,8 +110,9 @@ crossplane-diff comp updated-composition.yaml --resource=default/my-claim
 crossplane-diff comp updated-composition.yaml --resource=default/xr-1,default/xr-2
 # Note: --resource cannot be combined with --namespace. Composites that would not adopt the diffed
 # composition are surfaced with status "filtered" and a "filterReason": Manual update policy
-# ("manual_policy") unless --include-manual is passed, or a compositionRevisionSelector that does
-# not match the composition's labels ("revision_selector_mismatch").
+# ("manual_policy") unless --include-manual is passed, a compositionRevisionSelector that does
+# not match the composition's labels ("revision_selector_mismatch"), or the composite being
+# deleted ("deleting").
 
 # Include XRs with Manual update policy (pinned revisions).
 # Note: --include-manual only affects Manual-policy XRs. An Automatic XR whose
@@ -244,9 +245,10 @@ Flags:
                                (because they would not adopt the diffed composition) are
                                reported in the impact analysis with status "filtered" and a
                                "filterReason": "manual_policy" (use --include-manual to
-                               evaluate them instead) or "revision_selector_mismatch" (their
+                               evaluate them instead), "revision_selector_mismatch" (their
                                compositionRevisionSelector does not match the composition's
-                               labels; --include-manual does not re-include these).
+                               labels), or "deleting" (the composite is being deleted).
+                               --include-manual does not re-include the latter two.
       --crossplane-version=VERSION
                                Pin the crossplane render version; the docker engine
                                pulls xpkg.crossplane.io/crossplane/crossplane:<version>.
@@ -589,11 +591,12 @@ single-XR invocation renders flat, exactly as before.
         "diff": { "old": { ... }, "new": { ... } }
       },
       "affectedResources": {
-        "total": 5,
+        "total": 6,
         "withChanges": 2,
         "unchanged": 1,
         "withErrors": 1,
-        "filteredBySelector": 1
+        "filteredBySelector": 1,
+        "filteredByDeletion": 1
       },
       "impactAnalysis": [
         {
@@ -626,6 +629,14 @@ single-XR invocation renders flat, exactly as before.
           "status": "filtered",
           "filterReason": "revision_selector_mismatch",
           "filterDetail": "compositionRevisionSelector {version: 0.0.1} does not match composition labels {version: 0.0.2}"
+        },
+        {
+          "apiVersion": "example.org/v1",
+          "kind": "XBucket",
+          "name": "bucket-5",
+          "status": "filtered",
+          "filterReason": "deleting",
+          "filterDetail": "deletionTimestamp: 2026-09-07T11:25:03Z"
         }
       ]
     }

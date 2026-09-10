@@ -120,6 +120,7 @@ classDiagram
         <<enumeration>>
         FilterReasonManualPolicy
         FilterReasonRevisionSelectorMismatch
+        FilterReasonDeleting
     }
 
     class AffectedResourcesSummary {
@@ -129,6 +130,7 @@ classDiagram
         +WithErrors int
         +FilteredByPolicy int
         +FilteredBySelector int
+        +FilteredByDeletion int
     }
 
     class DownstreamChanges {
