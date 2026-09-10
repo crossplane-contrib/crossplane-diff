@@ -152,33 +152,49 @@ func TestDefaultCompDiffProcessor_DiffComposition(t *testing.T) {
 		WithNamespace("default").
 		Build()
 
+	// changedComp is the input composition for cases that need impact analysis to actually run: it
+	// carries a label testComp (the cluster copy) lacks, so the composition compares as changed.
+	changedComp := func() *un.Unstructured {
+		return tu.NewComposition("test-composition").
+			WithCompositeTypeRef("example.org/v1", "XResource").
+			WithPipelineMode().
+			WithLabels(map[string]string{"version": "0.0.2"}).
+			BuildAsUnstructured()
+	}
+
+	// unchangedComp is byte-identical to testComp, so the composition compares as equal.
+	unchangedComp := func() *un.Unstructured {
+		return tu.NewComposition("test-composition").
+			WithCompositeTypeRef("example.org/v1", "XResource").
+			WithPipelineMode().
+			BuildAsUnstructured()
+	}
+
+	singleXRMocks := func() xp.Clients {
+		return xp.Clients{
+			Composition: tu.NewMockCompositionClient().
+				WithSuccessfulCompositionFetch(testComp).
+				WithResourcesForComposition("test-composition", "default", []*un.Unstructured{testXR}).
+				Build(),
+			Definition:   tu.NewMockDefinitionClient().Build(),
+			Environment:  tu.NewMockEnvironmentClient().Build(),
+			Function:     tu.NewMockFunctionClient().Build(),
+			ResourceTree: tu.NewMockResourceTreeClient().Build(),
+		}
+	}
+
 	tests := map[string]struct {
-		compositions []*un.Unstructured
-		namespace    string
-		setupMocks   func() xp.Clients
-		verifyOutput func(t *testing.T, output string)
-		wantErr      bool
+		compositions     []*un.Unstructured
+		namespace        string
+		analyzeUnchanged bool
+		setupMocks       func() xp.Clients
+		verifyOutput     func(t *testing.T, output string)
+		wantErr          bool
 	}{
 		"SuccessfulDiff": {
-			namespace: "default",
-			compositions: []*un.Unstructured{
-				tu.NewComposition("test-composition").
-					WithCompositeTypeRef("example.org/v1", "XResource").
-					WithPipelineMode().
-					BuildAsUnstructured(),
-			},
-			setupMocks: func() xp.Clients {
-				return xp.Clients{
-					Composition: tu.NewMockCompositionClient().
-						WithSuccessfulCompositionFetch(testComp).
-						WithResourcesForComposition("test-composition", "default", []*un.Unstructured{testXR}).
-						Build(),
-					Definition:   tu.NewMockDefinitionClient().Build(),
-					Environment:  tu.NewMockEnvironmentClient().Build(),
-					Function:     tu.NewMockFunctionClient().Build(),
-					ResourceTree: tu.NewMockResourceTreeClient().Build(),
-				}
-			},
+			namespace:    "default",
+			compositions: []*un.Unstructured{changedComp()},
+			setupMocks:   singleXRMocks,
 			verifyOutput: func(t *testing.T, output string) {
 				t.Helper()
 				// Should contain composition changes section
@@ -188,6 +204,60 @@ func TestDefaultCompDiffProcessor_DiffComposition(t *testing.T) {
 				// Should contain affected XRs section
 				if !strings.Contains(output, "=== Affected Composite Resources ===") {
 					t.Errorf("Expected output to contain affected XRs section")
+				}
+			},
+			wantErr: false,
+		},
+		// Issue #453: an unchanged composition creates no new CompositionRevision, so its XRs are not
+		// evaluated at all and the two impact sections are replaced by an explicit skip note.
+		"UnchangedCompositionSkipsImpactAnalysis": {
+			namespace:    "default",
+			compositions: []*un.Unstructured{unchangedComp()},
+			setupMocks:   singleXRMocks,
+			verifyOutput: func(t *testing.T, output string) {
+				t.Helper()
+
+				if !strings.Contains(output, "No changes detected in composition test-composition") {
+					t.Errorf("Expected output to report the composition as unchanged, got:\n%s", output)
+				}
+
+				if !strings.Contains(output, "Impact analysis skipped") {
+					t.Errorf("Expected output to contain the impact-analysis skip note, got:\n%s", output)
+				}
+
+				if !strings.Contains(output, "--analyze-unchanged") {
+					t.Errorf("Expected the skip note to name --analyze-unchanged, got:\n%s", output)
+				}
+
+				if strings.Contains(output, "=== Affected Composite Resources ===") {
+					t.Errorf("Expected no affected-resources section for a skipped composition, got:\n%s", output)
+				}
+
+				if strings.Contains(output, "=== Impact Analysis ===") {
+					t.Errorf("Expected no impact-analysis section for a skipped composition, got:\n%s", output)
+				}
+			},
+			wantErr: false,
+		},
+		// --analyze-unchanged opts back into the analysis (the pre-edit convergence-baseline workflow).
+		"UnchangedCompositionWithAnalyzeUnchanged": {
+			namespace:        "default",
+			compositions:     []*un.Unstructured{unchangedComp()},
+			analyzeUnchanged: true,
+			setupMocks:       singleXRMocks,
+			verifyOutput: func(t *testing.T, output string) {
+				t.Helper()
+
+				if !strings.Contains(output, "No changes detected in composition test-composition") {
+					t.Errorf("Expected output to report the composition as unchanged, got:\n%s", output)
+				}
+
+				if strings.Contains(output, "Impact analysis skipped") {
+					t.Errorf("Expected no skip note with --analyze-unchanged, got:\n%s", output)
+				}
+
+				if !strings.Contains(output, "=== Affected Composite Resources ===") {
+					t.Errorf("Expected the affected-resources section with --analyze-unchanged, got:\n%s", output)
 				}
 			},
 			wantErr: false,
@@ -270,11 +340,12 @@ func TestDefaultCompDiffProcessor_DiffComposition(t *testing.T) {
 			var stdout bytes.Buffer
 
 			config := ProcessorConfig{
-				Colorize: false,
-				Compact:  false,
-				Logger:   logger,
-				Stdout:   &stdout,         // Set stdout in config so renderers can access it
-				Stderr:   &bytes.Buffer{}, // Discard stderr for tests
+				Colorize:         false,
+				Compact:          false,
+				AnalyzeUnchanged: tt.analyzeUnchanged,
+				Logger:           logger,
+				Stdout:           &stdout,         // Set stdout in config so renderers can access it
+				Stderr:           &bytes.Buffer{}, // Discard stderr for tests
 				RenderFunc: func(_ context.Context, _ logging.Logger, in RenderInputs) (render.CompositionOutputs, error) {
 					return render.CompositionOutputs{
 						CompositeResource: in.CompositeResource,
@@ -306,6 +377,85 @@ func TestDefaultCompDiffProcessor_DiffComposition(t *testing.T) {
 
 			if tt.verifyOutput != nil {
 				tt.verifyOutput(t, stdout.String())
+			}
+		})
+	}
+}
+
+// TestDefaultCompDiffProcessor_calculateCompositionDiff pins the split between the diff the user is
+// shown and whether the composition changed at all (issue #453).
+//
+// The two come apart only under --ignore-paths. Gating impact analysis on the *displayed* diff would
+// mean that masking a path which is load-bearing for rendering silently skips the analysis for a
+// composition that genuinely changes the rendered output — so `changed` must ignore the mask.
+func TestDefaultCompDiffProcessor_calculateCompositionDiff(t *testing.T) {
+	ctx := t.Context()
+
+	compWithLabels := func(labels map[string]string) *un.Unstructured {
+		return tu.NewComposition("test-composition").
+			WithCompositeTypeRef("example.org/v1", "XResource").
+			WithPipelineMode().
+			WithLabels(labels).
+			BuildAsUnstructured()
+	}
+
+	clusterComp := tu.NewComposition("test-composition").
+		WithCompositeTypeRef("example.org/v1", "XResource").
+		WithPipelineMode().
+		WithLabels(map[string]string{"version": "0.0.1"}).
+		Build()
+
+	type want struct {
+		hasDiff bool
+		changed bool
+	}
+
+	tests := map[string]struct {
+		input       *un.Unstructured
+		ignorePaths []string
+		want        want
+	}{
+		"Identical_NoIgnorePaths": {
+			input: compWithLabels(map[string]string{"version": "0.0.1"}),
+			want:  want{hasDiff: false, changed: false},
+		},
+		"Different_NoIgnorePaths": {
+			input: compWithLabels(map[string]string{"version": "0.0.2"}),
+			want:  want{hasDiff: true, changed: true},
+		},
+		"Identical_WithIgnorePaths": {
+			input:       compWithLabels(map[string]string{"version": "0.0.1"}),
+			ignorePaths: []string{"metadata.labels[version]"},
+			want:        want{hasDiff: false, changed: false},
+		},
+		// The only difference is masked: nothing to show the user, but the composition DID change, so
+		// impact analysis must still run.
+		"DifferenceMaskedByIgnorePaths_StillChanged": {
+			input:       compWithLabels(map[string]string{"version": "0.0.2"}),
+			ignorePaths: []string{"metadata.labels[version]"},
+			want:        want{hasDiff: false, changed: true},
+		},
+	}
+
+	for name, tt := range tests {
+		t.Run(name, func(t *testing.T) {
+			processor := &DefaultCompDiffProcessor{
+				compositionClient: tu.NewMockCompositionClient().
+					WithSuccessfulCompositionFetch(clusterComp).
+					Build(),
+				config: ProcessorConfig{
+					Logger:      tu.TestLogger(t, false),
+					IgnorePaths: tt.ignorePaths,
+				},
+			}
+
+			got, err := processor.calculateCompositionDiff(ctx, tt.input)
+			if err != nil {
+				t.Fatalf("calculateCompositionDiff() unexpected error: %v", err)
+			}
+
+			if diff := gcmp.Diff(tt.want, want{hasDiff: got.diff != nil, changed: got.changed}, gcmp.AllowUnexported(want{})); diff != "" {
+				t.Errorf("calculateCompositionDiff() mismatch (-want +got):\n%s", diff)
 			}
 		})
 	}
@@ -841,11 +991,15 @@ func TestDefaultCompDiffProcessor_DiffComposition_StderrErrorOutput(t *testing.T
 		WithStderr(&stderrBuf), // Use WithStderr to inject test buffer
 	)
 
-	// Run the diff - should succeed but report XR errors
+	// Run the diff - should succeed but report XR errors.
+	//
+	// The input composition must differ from the cluster's (hence the label): impact analysis is
+	// skipped for an unchanged composition, which would make the XR failure under test unreachable.
 	_, err := processor.DiffComposition(ctx, []*un.Unstructured{
 		tu.NewComposition("test-composition").
 			WithCompositeTypeRef("example.org/v1", "XResource").
 			WithPipelineMode().
+			WithLabels(map[string]string{"version": "0.0.2"}).
 			BuildAsUnstructured(),
 	}, "default", nil)
 

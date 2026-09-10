@@ -39,10 +39,11 @@ type CompCmd struct {
 	Files []string `arg:"" help:"YAML files containing updated Composition(s)." optional:""`
 
 	// Configuration options
-	Namespace           string   `default:""                                                                                                                                          help:"Namespace to find XRs (empty = all namespaces)."                                                                                                                             name:"namespace"            short:"n"`
-	IncludeManual       bool     `default:"false"                                                                                                                                     help:"Include XRs with Manual update policy (default: only Automatic policy XRs)"                                                                                                  name:"include-manual"`
-	MinimizeComposition bool     `default:"false"                                                                                                                                     help:"Collapse each changed composition to a single marker line (human-readable output only; JSON/YAML keeps full detail; errors and no-change compositions still print in full)." name:"minimize-composition"`
+	Namespace           string   `default:""                                                                                                                                          help:"Namespace to find XRs (empty = all namespaces)."                                                                                                                                                           name:"namespace"            short:"n"`
+	IncludeManual       bool     `default:"false"                                                                                                                                     help:"Include XRs with Manual update policy (default: only Automatic policy XRs)"                                                                                                                                name:"include-manual"`
+	MinimizeComposition bool     `default:"false"                                                                                                                                     help:"Collapse each changed composition to a single marker line (human-readable output only; JSON/YAML keeps full detail; errors and no-change compositions still print in full)."                               name:"minimize-composition"`
 	Resources           []string `help:"Limit impact analysis to specific composites in [namespace/]name format. Repeatable or comma-separated. Mutually exclusive with --namespace." name:"resource"`
+	AnalyzeUnchanged    bool     `default:"false"                                                                                                                                     help:"Run impact analysis even for compositions identical to their in-cluster version (skipped by default, since applying them creates no new CompositionRevision). Useful for a pre-edit convergence baseline." name:"analyze-unchanged"`
 }
 
 // validateFlags returns an error if mutually exclusive flags are set together.
@@ -85,6 +86,10 @@ Examples:
   # Show eventual state with function-sequencer (all stages, not just first).
   crossplane-diff comp updated-composition.yaml --eventual-state
 
+  # Evaluate affected composites even for a composition identical to the cluster's
+  # (skipped by default). Useful as a "is my cluster converged?" baseline before editing.
+  crossplane-diff comp unchanged-composition.yaml --analyze-unchanged
+
   # Limit impact analysis to specific composites (by [namespace/]name)
   crossplane-diff comp updated-composition.yaml --resource=default/my-claim
   crossplane-diff comp updated-composition.yaml --resource=default/xr-1,default/xr-2
@@ -100,6 +105,12 @@ Notes:
   entirely (reason "deleting"): Crossplane tears their composed resources down rather than
   composing them, so they never adopt the resulting revision. --include-manual does not
   re-include these either.
+
+  A composition identical to its in-cluster version is reported as unchanged and its composites
+  are not evaluated: applying it creates no new CompositionRevision, so nothing would adopt it.
+  Any downstream delta found in that situation is caused by something other than the composition
+  (drift, convergence lag, or a modeling artifact of this tool), and cannot be told apart from
+  a real impact — so it is not reported as one. Pass --analyze-unchanged to evaluate anyway.
 `
 }
 
@@ -131,6 +142,7 @@ func makeDefaultCompProc(c *CompCmd, kongCtx *kong.Context, appCtx *AppContext, 
 		dp.WithLogger(log),
 		dp.WithIncludeManual(c.IncludeManual),
 		dp.WithMinimizeComposition(c.MinimizeComposition),
+		dp.WithAnalyzeUnchanged(c.AnalyzeUnchanged),
 		dp.WithStdout(kongCtx.Stdout),
 		dp.WithStderr(kongCtx.Stderr),
 	)

@@ -370,12 +370,29 @@ func (p *DefaultCompDiffProcessor) processSingleComposition(ctx context.Context,
 	}
 
 	// First, calculate the composition diff itself
-	compDiff, err := p.calculateCompositionDiff(ctx, newComp)
+	comparison, err := p.calculateCompositionDiff(ctx, newComp)
 	if err != nil {
 		return nil, errors.Wrap(err, "cannot calculate composition diff")
 	}
 
-	result.CompositionDiff = compDiff
+	result.CompositionDiff = comparison.diff
+
+	// Applying a composition that is identical to its in-cluster version creates no new
+	// CompositionRevision, so no XR adopts anything it hasn't already adopted. Any downstream delta
+	// we could compute here is therefore caused by something other than this composition — drift,
+	// convergence lag, or a modeling artifact of this tool — and we cannot tell those apart, so
+	// reporting them as this composition's "impact" would attribute cluster state to a change that
+	// does not exist. Skip the (expensive: one function render per XR) analysis unless the user
+	// opted in via --analyze-unchanged. See issue #453.
+	if !comparison.changed && !p.config.AnalyzeUnchanged {
+		p.config.Logger.Debug("Skipping impact analysis for unchanged composition",
+			"composition", newComp.GetName(),
+			"affectedXRCount", len(affectedXRs))
+
+		result.ImpactAnalysisSkipped = true
+
+		return result, nil
+	}
 
 	p.config.Logger.Debug("Processing affected XRs", "composition", newComp.GetName(), "count", len(affectedXRs), "surfaceFiltered", surfaceFiltered)
 
@@ -549,9 +566,21 @@ func (p *DefaultCompDiffProcessor) collectXRDiffs(ctx context.Context, xrs []*un
 	return results
 }
 
+// compositionComparison is the result of comparing a proposed composition against its in-cluster
+// version.
+//
+// The two fields come apart when --ignore-paths masks the only difference: `diff` is what the user
+// is shown (nil when the compositions are equal after masking), while `changed` records whether the
+// composition differs at all. Impact analysis gates on `changed`, never on `diff` — masking a path
+// that is load-bearing for rendering (anything under spec.pipeline[].input, say) would otherwise
+// silently skip the analysis for a composition that genuinely changes the rendered output.
+type compositionComparison struct {
+	diff    *dt.ResourceDiff
+	changed bool
+}
+
 // calculateCompositionDiff calculates the diff between the cluster composition and the file composition.
-// Returns the ResourceDiff (nil if no changes) and any error.
-func (p *DefaultCompDiffProcessor) calculateCompositionDiff(ctx context.Context, newComp *un.Unstructured) (*dt.ResourceDiff, error) {
+func (p *DefaultCompDiffProcessor) calculateCompositionDiff(ctx context.Context, newComp *un.Unstructured) (compositionComparison, error) {
 	p.config.Logger.Debug("Calculating composition diff", "composition", newComp.GetName())
 
 	var originalCompUnstructured *un.Unstructured
@@ -568,7 +597,7 @@ func (p *DefaultCompDiffProcessor) calculateCompositionDiff(ctx context.Context,
 		// Convert original composition to unstructured for comparison
 		unstructuredObj, err := runtime.DefaultUnstructuredConverter.ToUnstructured(originalComp)
 		if err != nil {
-			return nil, errors.Wrap(err, "cannot convert original composition to unstructured")
+			return compositionComparison{}, errors.Wrap(err, "cannot convert original composition to unstructured")
 		}
 
 		originalCompUnstructured = &un.Unstructured{Object: unstructuredObj}
@@ -601,21 +630,39 @@ func (p *DefaultCompDiffProcessor) calculateCompositionDiff(ctx context.Context,
 
 	compDiff, err := renderer.GenerateDiffWithOptions(ctx, originalCompUnstructured, newCompUnstructured, p.config.Logger, diffOptions)
 	if err != nil {
-		return nil, errors.Wrap(err, "cannot calculate composition diff")
+		return compositionComparison{}, errors.Wrap(err, "cannot calculate composition diff")
 	}
 
 	p.config.Logger.Debug("Calculated composition diff",
 		"composition", newComp.GetName(),
-		"hasChanges", compDiff != nil,
+		"hasChanges", compDiff.DiffType != dt.DiffTypeEqual,
 		"isNewComposition", originalCompUnstructured == nil)
 
-	// Return nil if no changes
-	if compDiff.DiffType == dt.DiffTypeEqual {
-		p.config.Logger.Info("No changes detected in composition", "composition", newComp.GetName())
-		return nil, nil
+	if compDiff.DiffType != dt.DiffTypeEqual {
+		return compositionComparison{diff: compDiff, changed: true}, nil
 	}
 
-	return compDiff, nil
+	// Equal after masking. Whether the composition is *actually* unchanged depends on whether any
+	// paths were masked at all; re-compare without them when they could be hiding something. The
+	// extra comparison is local (no API calls) and only runs when --ignore-paths is in play.
+	changed := false
+
+	if len(p.config.IgnorePaths) > 0 {
+		diffOptions.IgnorePaths = nil
+
+		unmasked, err := renderer.GenerateDiffWithOptions(ctx, originalCompUnstructured, newCompUnstructured, p.config.Logger, diffOptions)
+		if err != nil {
+			return compositionComparison{}, errors.Wrap(err, "cannot calculate composition diff ignoring --ignore-paths")
+		}
+
+		changed = unmasked.DiffType != dt.DiffTypeEqual
+	}
+
+	p.config.Logger.Info("No changes detected in composition",
+		"composition", newComp.GetName(),
+		"changedInIgnoredPathsOnly", changed)
+
+	return compositionComparison{diff: nil, changed: changed}, nil
 }
 
 // predictedRevisionLabels returns the label set the CompositionRevision resulting from this
