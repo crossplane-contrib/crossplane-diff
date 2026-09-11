@@ -1511,6 +1511,15 @@ func (b *ResourceBuilder) WithUID(uid string) *ResourceBuilder {
 	return b
 }
 
+// WithDeletionTimestamp sets metadata.deletionTimestamp to the supplied raw value, marking the
+// resource as being deleted. The value is set verbatim, and typed any rather than string, so tests can
+// pass an explicit nil — which is how round-tripped Kubernetes YAML spells "unset" for timestamp
+// fields, and therefore a case worth asserting is not mistaken for a deleting resource.
+func (b *ResourceBuilder) WithDeletionTimestamp(timestamp any) *ResourceBuilder {
+	un.SetNestedField(b.resource.Object, timestamp, "metadata", "deletionTimestamp") //nolint:errcheck // test builder; a bad value is the point of some cases.
+	return b
+}
+
 // WithCompositeOwner sets up the resource as a cpd resource with the given composite owner.
 func (b *ResourceBuilder) WithCompositeOwner(owner string) *ResourceBuilder {
 	// Add standard Crossplane labels and annotations for a cpd resource

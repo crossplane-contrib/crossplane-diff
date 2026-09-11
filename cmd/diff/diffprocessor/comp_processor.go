@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"maps"
 	"os"
+	"time"
 
 	xp "github.com/crossplane-contrib/crossplane-diff/cmd/diff/client/crossplane"
 	"github.com/crossplane-contrib/crossplane-diff/cmd/diff/ref"
@@ -384,15 +385,16 @@ func (p *DefaultCompDiffProcessor) processSingleComposition(ctx context.Context,
 		return nil, err
 	}
 
-	filteredByPolicy, filteredBySelector := countFilterReasons(droppedXRs)
+	counts := countFilterReasons(droppedXRs)
 
-	p.config.Logger.Debug("Filtered XRs by update policy and revision selector",
+	p.config.Logger.Debug("Filtered XRs by deletion state, update policy, and revision selector",
 		"composition", newComp.GetName(),
 		"originalCount", len(affectedXRs),
 		"keptCount", len(keptXRs),
 		"droppedCount", len(droppedXRs),
-		"filteredByPolicy", filteredByPolicy,
-		"filteredBySelector", filteredBySelector,
+		"filteredByPolicy", counts.byPolicy,
+		"filteredBySelector", counts.bySelector,
+		"filteredByDeletion", counts.byDeletion,
 		"includeManual", p.config.IncludeManual)
 
 	// In --resource mode (surfaceFiltered=true), surface filtered composites in the impact
@@ -417,8 +419,7 @@ func (p *DefaultCompDiffProcessor) processSingleComposition(ctx context.Context,
 	if len(keptXRs) == 0 {
 		// All XRs were filtered.
 		result.AffectedResources.Total = len(affectedXRs)
-		result.AffectedResources.FilteredByPolicy = filteredByPolicy
-		result.AffectedResources.FilteredBySelector = filteredBySelector
+		counts.applyTo(&result.AffectedResources)
 
 		return result, nil
 	}
@@ -434,8 +435,7 @@ func (p *DefaultCompDiffProcessor) processSingleComposition(ctx context.Context,
 	result.ImpactAnalysis = append(result.ImpactAnalysis, keptImpacts...)
 	// keptSummary.Total counts only kept; widen to include filtered so totals stay consistent.
 	keptSummary.Total = len(affectedXRs)
-	keptSummary.FilteredByPolicy = filteredByPolicy
-	keptSummary.FilteredBySelector = filteredBySelector
+	counts.applyTo(&keptSummary)
 	result.AffectedResources = keptSummary
 
 	return result, nil
@@ -644,8 +644,9 @@ type filteredXR struct {
 }
 
 // partitionXRsByUpdatePolicy splits XRs into a kept set and a dropped set, based on whether each XR
-// would adopt the CompositionRevision resulting from newComp. See classifyXR for the per-XR rules.
-// A malformed compositionRevisionSelector is a hard error (accuracy over guessing).
+// would adopt the CompositionRevision resulting from newComp. See classifyXR for the per-XR rules,
+// which also cover exclusions unrelated to update policy (e.g. XRs being deleted). A malformed
+// compositionRevisionSelector is a hard error (accuracy over guessing).
 func (p *DefaultCompDiffProcessor) partitionXRsByUpdatePolicy(xrs []*un.Unstructured, newComp *un.Unstructured) (kept []*un.Unstructured, dropped []filteredXR, err error) {
 	// The selector is matched against the label set the new revision would carry (composition labels
 	// plus the stamped crossplane.io/composition-name), while mismatch messages display the user's
@@ -677,6 +678,8 @@ func (p *DefaultCompDiffProcessor) partitionXRsByUpdatePolicy(xrs []*un.Unstruct
 // metadata.labels (used for the user-facing mismatch detail).
 //
 // Rules:
+//   - Being deleted (metadata.deletionTimestamp set): dropped (reason deleting). Checked first,
+//     and NOT overridden by IncludeManual, because deletion supersedes the policy rules entirely.
 //   - Manual compositionUpdatePolicy: dropped (reason manual_policy) — pinned via
 //     compositionRevisionRef — unless IncludeManual is set.
 //   - Automatic policy with a compositionRevisionSelector that does not match: dropped (reason
@@ -684,6 +687,29 @@ func (p *DefaultCompDiffProcessor) partitionXRsByUpdatePolicy(xrs []*un.Unstruct
 //     not select the resulting revision.
 //   - Automatic policy with no selector, or a matching selector: kept.
 func (p *DefaultCompDiffProcessor) classifyXR(xr *un.Unstructured, targetLabels, compLabels map[string]string) (*filteredXR, error) {
+	// An XR with a deletionTimestamp is on Crossplane's teardown path: the composite reconciler
+	// deletes its composed resources instead of composing them. It will never adopt the revision
+	// this composition would produce, and rendering it yields no composed resources to diff — so
+	// including it produces a meaningless (or outright failing) impact analysis. See issue #452.
+	//
+	// The timestamp is normalized to UTC/RFC3339 for display: the accessor returns a metav1.Time whose
+	// default rendering is machine-local, which would make the surfaced detail differ between runs on
+	// differently-configured machines.
+	if deletedAt := xr.GetDeletionTimestamp(); deletedAt != nil {
+		stamp := deletedAt.UTC().Format(time.RFC3339)
+
+		p.config.Logger.Debug("Excluding XR that is being deleted",
+			"xr", xr.GetName(),
+			"kind", xr.GetKind(),
+			"deletionTimestamp", stamp)
+
+		return &filteredXR{
+			xr:     xr,
+			reason: renderer.FilterReasonDeleting,
+			detail: fmt.Sprintf("deletionTimestamp: %s", stamp),
+		}, nil
+	}
+
 	policy, err := xp.XRUpdatePolicy(xr.Object, xr.GetAPIVersion())
 	if err != nil {
 		return nil, errors.Wrapf(err, "cannot read compositionUpdatePolicy for XR %q", xr.GetName())
@@ -718,18 +744,38 @@ func (p *DefaultCompDiffProcessor) classifyXR(xr *un.Unstructured, targetLabels,
 	return nil, nil
 }
 
+// filterCounts tallies dropped XRs by filter reason. A struct rather than a growing list of
+// positional return values, so adding a reason cannot silently transpose a caller's arguments.
+type filterCounts struct {
+	byPolicy   int
+	bySelector int
+	byDeletion int
+}
+
 // countFilterReasons tallies dropped XRs by filter reason for the affected-resources summary.
-func countFilterReasons(dropped []filteredXR) (filteredByPolicy, filteredBySelector int) {
+func countFilterReasons(dropped []filteredXR) filterCounts {
+	var counts filterCounts
+
 	for _, d := range dropped {
 		switch d.reason {
 		case renderer.FilterReasonManualPolicy:
-			filteredByPolicy++
+			counts.byPolicy++
 		case renderer.FilterReasonRevisionSelectorMismatch:
-			filteredBySelector++
+			counts.bySelector++
+		case renderer.FilterReasonDeleting:
+			counts.byDeletion++
 		}
 	}
 
-	return filteredByPolicy, filteredBySelector
+	return counts
+}
+
+// applyTo writes the per-reason tallies onto a summary. Centralized so every code path that builds
+// an AffectedResourcesSummary reports the same set of reasons.
+func (c filterCounts) applyTo(summary *renderer.AffectedResourcesSummary) {
+	summary.FilteredByPolicy = c.byPolicy
+	summary.FilteredBySelector = c.bySelector
+	summary.FilteredByDeletion = c.byDeletion
 }
 
 // buildImpactAnalysis builds the impact analysis and summary from XR results.

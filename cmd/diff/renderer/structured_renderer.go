@@ -58,6 +58,11 @@ const (
 	// compositionUpdatePolicy with a compositionRevisionSelector that does not match the labels of
 	// the composition change being diffed. Such XRs would not select the resulting revision.
 	FilterReasonRevisionSelectorMismatch FilterReason = "revision_selector_mismatch"
+	// FilterReasonDeleting indicates the XR was excluded because it has a metadata.deletionTimestamp.
+	// Crossplane's composite reconciler takes its deletion path for such an XR — it tears down
+	// composed resources rather than composing them — so the XR will never adopt the resulting
+	// revision, and rendering it produces no composed resources to diff against.
+	FilterReasonDeleting FilterReason = "deleting"
 )
 
 // OutputError is an alias for dt.OutputError for convenience.
@@ -185,6 +190,10 @@ type AffectedResourcesSummary struct {
 	// FilteredByPolicy so the breakdown is visible even in default-discovery mode, where individual
 	// XR impacts are not surfaced.
 	FilteredBySelector int `json:"filteredBySelector,omitempty"`
+	// FilteredByDeletion counts XRs excluded because they are being deleted
+	// (FilterReasonDeleting). Kept separate from the other filter counters for the same reason:
+	// the breakdown stays visible in default-discovery mode.
+	FilteredByDeletion int `json:"filteredByDeletion,omitempty"`
 }
 
 // XRImpact represents the impact analysis for a single XR (internal).

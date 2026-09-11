@@ -211,13 +211,11 @@ func (r *DefaultCompDiffRenderer) renderAffectedResourcesList(comp *CompositionD
 
 	if len(comp.ImpactAnalysis) == 0 {
 		// No XRs surfaced. Either none were found, or all matched-by-name XRs were filtered out
-		// (by Manual policy and/or revision-selector mismatch); report the breakdown if so.
-		byPolicy := comp.AffectedResources.FilteredByPolicy
-		bySelector := comp.AffectedResources.FilteredBySelector
-
+		// (by Manual policy, revision-selector mismatch, and/or being deleted); report the
+		// breakdown if so.
 		switch {
-		case byPolicy > 0 || bySelector > 0:
-			if _, err := fmt.Fprintf(stdout, "%s\n", allFilteredMessage(comp.Name, byPolicy, bySelector)); err != nil {
+		case totalFiltered(comp.AffectedResources) > 0:
+			if _, err := fmt.Fprintf(stdout, "%s\n", allFilteredMessage(comp.Name, comp.AffectedResources)); err != nil {
 				return errors.Wrap(err, "cannot write filtered XRs message")
 			}
 		default:
@@ -286,23 +284,50 @@ func (r *DefaultCompDiffRenderer) renderImpactAnalysis(comp *CompositionDiff) er
 	return nil
 }
 
+// totalFiltered sums the per-reason filter counters. Kept in one place so adding a reason cannot
+// leave a caller silently ignoring it.
+func totalFiltered(summary AffectedResourcesSummary) int {
+	return summary.FilteredByPolicy + summary.FilteredBySelector + summary.FilteredByDeletion
+}
+
 // allFilteredMessage builds the default-discovery summary line for the case where every
 // matched-by-name XR was filtered out, breaking the total down by reason so users understand why
-// nothing is shown and how to see more.
-func allFilteredMessage(compName string, byPolicy, bySelector int) string {
-	total := byPolicy + bySelector
+// nothing is shown and how to see more. Single-reason cases get bespoke prose that names the
+// remedy; mixed reasons fall through to an enumerated breakdown. Only called when at least one
+// XR was filtered.
+func allFilteredMessage(compName string, summary AffectedResourcesSummary) string {
+	byPolicy, bySelector, byDeletion := summary.FilteredByPolicy, summary.FilteredBySelector, summary.FilteredByDeletion
+	total := totalFiltered(summary)
 
 	switch {
-	case byPolicy > 0 && bySelector > 0:
-		return fmt.Sprintf("All %d XR(s) using composition %s were filtered: %d with Manual update policy (use --include-manual to see them), %d with a compositionRevisionSelector that does not match the composition's labels",
-			total, compName, byPolicy, bySelector)
-	case bySelector > 0:
-		return fmt.Sprintf("All %d XR(s) using composition %s have a compositionRevisionSelector that does not match the composition's labels, so they would not adopt this revision",
-			total, compName)
-	default:
+	case bySelector == 0 && byDeletion == 0:
 		return fmt.Sprintf("All %d XR(s) using composition %s have Manual update policy (use --include-manual to see them)",
 			total, compName)
+	case byPolicy == 0 && byDeletion == 0:
+		return fmt.Sprintf("All %d XR(s) using composition %s have a compositionRevisionSelector that does not match the composition's labels, so they would not adopt this revision",
+			total, compName)
+	case byPolicy == 0 && bySelector == 0:
+		return fmt.Sprintf("All %d XR(s) using composition %s are being deleted, so they would not adopt this revision",
+			total, compName)
 	}
+
+	clauses := make([]string, 0, 3)
+
+	for _, c := range []struct {
+		count int
+		text  string
+	}{
+		{byPolicy, "with Manual update policy (use --include-manual to see them)"},
+		{bySelector, "with a compositionRevisionSelector that does not match the composition's labels"},
+		{byDeletion, "being deleted"},
+	} {
+		if c.count > 0 {
+			clauses = append(clauses, fmt.Sprintf("%d %s", c.count, c.text))
+		}
+	}
+
+	return fmt.Sprintf("All %d XR(s) using composition %s were filtered: %s",
+		total, compName, strings.Join(clauses, ", "))
 }
 
 // filteredSuffix returns the human-readable explanation appended to a filtered XR line, chosen by
@@ -318,6 +343,12 @@ func filteredSuffix(impact XRImpact) string {
 		}
 
 		return " — filtered: revision selector mismatch"
+	case FilterReasonDeleting:
+		if impact.FilterDetail != "" {
+			return fmt.Sprintf(" — filtered: being deleted (%s)", impact.FilterDetail)
+		}
+
+		return " — filtered: being deleted"
 	default:
 		return " — filtered"
 	}

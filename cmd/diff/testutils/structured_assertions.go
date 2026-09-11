@@ -998,6 +998,7 @@ type AffectedResourcesSummary struct {
 	WithErrors         int `json:"withErrors"`
 	FilteredByPolicy   int `json:"filteredByPolicy,omitempty"`
 	FilteredBySelector int `json:"filteredBySelector,omitempty"`
+	FilteredByDeletion int `json:"filteredByDeletion,omitempty"`
 }
 
 // XRImpactWire mirrors xrImpactWire from the renderer.
@@ -1045,13 +1046,14 @@ func (e *ExpectedCompDiff) compExpectation() *ExpectedCompDiff { return e }
 
 // CompositionExpectation defines expectations for a single composition in the diff.
 type CompositionExpectation struct {
-	parent              *ExpectedCompDiff
-	name                string
-	affectedTotal       *int
-	affectedWithChanges *int
-	affectedUnchanged   *int
-	affectedWithErrors  *int
-	xrImpacts           []*XRImpactExpectation
+	parent                     *ExpectedCompDiff
+	name                       string
+	affectedTotal              *int
+	affectedWithChanges        *int
+	affectedUnchanged          *int
+	affectedWithErrors         *int
+	affectedFilteredByDeletion *int
+	xrImpacts                  []*XRImpactExpectation
 	// Composition changes expectations
 	compositionChangeType   string            // "modified" - composition changes are always modifications
 	compositionFieldChanges map[string][2]any // For modified: field path -> [old, new]
@@ -1067,7 +1069,7 @@ type XRImpactExpectation struct {
 	namespace           string
 	anyNameAllowed      bool
 	status              string // "changed", "unchanged", "error", "filtered"
-	filterReason        string // "manual_policy", "revision_selector_mismatch"; only checked when set
+	filterReason        string // "manual_policy", "revision_selector_mismatch", "deleting"; only checked when set
 	downstreamSummary   *expectedSummary
 	downstreamResources []*DownstreamResourceExpectation
 }
@@ -1099,6 +1101,15 @@ func (c *CompositionExpectation) WithAffectedResources(total, withChanges, uncha
 	c.affectedWithChanges = &withChanges
 	c.affectedUnchanged = &unchanged
 	c.affectedWithErrors = &withErrors
+
+	return c
+}
+
+// WithFilteredByDeletion asserts the number of XRs excluded from impact analysis because they are
+// being deleted (AffectedResourcesSummary.FilteredByDeletion). A single-purpose setter rather than a
+// positional counterpart to WithAffectedResources, so a caller cannot transpose filter counters.
+func (c *CompositionExpectation) WithFilteredByDeletion(count int) *CompositionExpectation {
+	c.affectedFilteredByDeletion = &count
 
 	return c
 }
@@ -1144,8 +1155,8 @@ func (x *XRImpactExpectation) WithAnyName() *XRImpactExpectation {
 	return x
 }
 
-// WithFilterReason pins the expected FilterReason on a filtered XR impact (e.g. "manual_policy" or
-// "revision_selector_mismatch"). Only asserted when set.
+// WithFilterReason pins the expected FilterReason on a filtered XR impact (e.g. "manual_policy",
+// "revision_selector_mismatch", or "deleting"). Only asserted when set.
 func (x *XRImpactExpectation) WithFilterReason(reason string) *XRImpactExpectation {
 	x.filterReason = reason
 	return x
@@ -1307,6 +1318,11 @@ func AssertStructuredCompDiff(t *testing.T, jsonOutput string, e CompDiffExpecta
 		if expectComp.affectedWithErrors != nil && found.AffectedResources.WithErrors != *expectComp.affectedWithErrors {
 			t.Errorf("Composition %s: AffectedResources.WithErrors: expected %d, got %d",
 				expectComp.name, *expectComp.affectedWithErrors, found.AffectedResources.WithErrors)
+		}
+
+		if expectComp.affectedFilteredByDeletion != nil && found.AffectedResources.FilteredByDeletion != *expectComp.affectedFilteredByDeletion {
+			t.Errorf("Composition %s: AffectedResources.FilteredByDeletion: expected %d, got %d",
+				expectComp.name, *expectComp.affectedFilteredByDeletion, found.AffectedResources.FilteredByDeletion)
 		}
 
 		// Check composition changes

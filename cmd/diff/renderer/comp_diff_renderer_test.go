@@ -9,6 +9,7 @@ import (
 
 	dt "github.com/crossplane-contrib/crossplane-diff/cmd/diff/renderer/types"
 	tu "github.com/crossplane-contrib/crossplane-diff/cmd/diff/testutils"
+	gcmp "github.com/google/go-cmp/cmp"
 	corev1 "k8s.io/api/core/v1"
 	un "k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -689,7 +690,7 @@ func TestXRStatusFiltered_JSON(t *testing.T) {
 	output := &CompDiffOutput{
 		Compositions: []CompositionDiff{{
 			Name:              "test-comp",
-			AffectedResources: AffectedResourcesSummary{Total: 2, FilteredByPolicy: 1, FilteredBySelector: 1},
+			AffectedResources: AffectedResourcesSummary{Total: 3, FilteredByPolicy: 1, FilteredBySelector: 1, FilteredByDeletion: 1},
 			ImpactAnalysis: []XRImpact{
 				{
 					ObjectReference: corev1.ObjectReference{APIVersion: "example.org/v1", Kind: "XR", Name: "manual-xr", Namespace: "ns"},
@@ -701,6 +702,12 @@ func TestXRStatusFiltered_JSON(t *testing.T) {
 					Status:          XRStatusFiltered,
 					FilterReason:    FilterReasonRevisionSelectorMismatch,
 					FilterDetail:    "compositionRevisionSelector {version: 0.0.1} does not match composition labels {version: 0.0.2}",
+				},
+				{
+					ObjectReference: corev1.ObjectReference{APIVersion: "example.org/v1", Kind: "XR", Name: "deleting-xr", Namespace: "ns"},
+					Status:          XRStatusFiltered,
+					FilterReason:    FilterReasonDeleting,
+					FilterDetail:    "deletionTimestamp: 2026-09-07T11:25:03Z",
 				},
 			},
 		}},
@@ -725,8 +732,8 @@ func TestXRStatusFiltered_JSON(t *testing.T) {
 		t.Fatalf("unmarshal: %v", err)
 	}
 
-	if len(parsed.Compositions) != 1 || len(parsed.Compositions[0].ImpactAnalysis) != 2 {
-		t.Fatalf("expected 1 composition with 2 impacts, got %+v", parsed)
+	if len(parsed.Compositions) != 1 || len(parsed.Compositions[0].ImpactAnalysis) != 3 {
+		t.Fatalf("expected 1 composition with 3 impacts, got %+v", parsed)
 	}
 
 	// No impact should carry the removed "filtered_by_policy" status value.
@@ -757,15 +764,27 @@ func TestXRStatusFiltered_JSON(t *testing.T) {
 		t.Errorf("selector-xr expected a filterDetail hint, got empty")
 	}
 
+	if got, want := string(byName["deleting-xr"].FilterReason), "deleting"; got != want {
+		t.Errorf("deleting-xr filterReason: got %q, want %q", got, want)
+	}
+
+	if got, want := byName["deleting-xr"].FilterDetail, "deletionTimestamp: 2026-09-07T11:25:03Z"; got != want {
+		t.Errorf("deleting-xr filterDetail: got %q, want %q", got, want)
+	}
+
 	if got := parsed.Compositions[0].AffectedResources.FilteredBySelector; got != 1 {
 		t.Errorf("filteredBySelector: got %d, want 1", got)
+	}
+
+	if got := parsed.Compositions[0].AffectedResources.FilteredByDeletion; got != 1 {
+		t.Errorf("filteredByDeletion: got %d, want 1", got)
 	}
 }
 
 func TestXRStatusFiltered_TextRenderer(t *testing.T) {
 	comp := CompositionDiff{
 		Name:              "test-comp",
-		AffectedResources: AffectedResourcesSummary{Total: 2, FilteredByPolicy: 1, FilteredBySelector: 1},
+		AffectedResources: AffectedResourcesSummary{Total: 3, FilteredByPolicy: 1, FilteredBySelector: 1, FilteredByDeletion: 1},
 		ImpactAnalysis: []XRImpact{
 			{
 				ObjectReference: corev1.ObjectReference{APIVersion: "example.org/v1", Kind: "XR", Name: "manual-xr", Namespace: "ns"},
@@ -777,6 +796,12 @@ func TestXRStatusFiltered_TextRenderer(t *testing.T) {
 				Status:          XRStatusFiltered,
 				FilterReason:    FilterReasonRevisionSelectorMismatch,
 				FilterDetail:    "compositionRevisionSelector {version: 0.0.1} does not match composition labels {version: 0.0.2}",
+			},
+			{
+				ObjectReference: corev1.ObjectReference{APIVersion: "example.org/v1", Kind: "XR", Name: "deleting-xr", Namespace: "ns"},
+				Status:          XRStatusFiltered,
+				FilterReason:    FilterReasonDeleting,
+				FilterDetail:    "deletionTimestamp: 2026-09-07T11:25:03Z",
 			},
 		},
 	}
@@ -802,6 +827,64 @@ func TestXRStatusFiltered_TextRenderer(t *testing.T) {
 	if !strings.Contains(got, "does not match composition labels") {
 		t.Errorf("expected the selector-mismatch fix hint in output, got %q", got)
 	}
+
+	// Deletion exclusion must say so and surface the timestamp, which is the diagnostic signal for
+	// an XR that has been stuck terminating.
+	if !strings.Contains(got, "being deleted") {
+		t.Errorf("expected 'being deleted' verbiage for a deleting XR, got %q", got)
+	}
+
+	if !strings.Contains(got, "deletionTimestamp: 2026-09-07T11:25:03Z") {
+		t.Errorf("expected the deletionTimestamp detail in output, got %q", got)
+	}
+}
+
+// Test_allFilteredMessage covers the default-discovery "everything was filtered" line. Each
+// single-reason case gets bespoke prose that names the remedy; mixed reasons enumerate the
+// breakdown. The total must always be the sum of the per-reason counters, so a newly added reason
+// cannot silently go unreported.
+func Test_allFilteredMessage(t *testing.T) {
+	tests := map[string]struct {
+		summary AffectedResourcesSummary
+		want    string
+	}{
+		"PolicyOnly": {
+			summary: AffectedResourcesSummary{FilteredByPolicy: 2},
+			want:    "All 2 XR(s) using composition test-comp have Manual update policy (use --include-manual to see them)",
+		},
+		"SelectorOnly": {
+			summary: AffectedResourcesSummary{FilteredBySelector: 3},
+			want:    "All 3 XR(s) using composition test-comp have a compositionRevisionSelector that does not match the composition's labels, so they would not adopt this revision",
+		},
+		"DeletionOnly": {
+			summary: AffectedResourcesSummary{FilteredByDeletion: 1},
+			want:    "All 1 XR(s) using composition test-comp are being deleted, so they would not adopt this revision",
+		},
+		"PolicyAndSelector": {
+			summary: AffectedResourcesSummary{FilteredByPolicy: 1, FilteredBySelector: 2},
+			want:    "All 3 XR(s) using composition test-comp were filtered: 1 with Manual update policy (use --include-manual to see them), 2 with a compositionRevisionSelector that does not match the composition's labels",
+		},
+		"PolicyAndDeletion": {
+			summary: AffectedResourcesSummary{FilteredByPolicy: 1, FilteredByDeletion: 1},
+			want:    "All 2 XR(s) using composition test-comp were filtered: 1 with Manual update policy (use --include-manual to see them), 1 being deleted",
+		},
+		"SelectorAndDeletion": {
+			summary: AffectedResourcesSummary{FilteredBySelector: 1, FilteredByDeletion: 2},
+			want:    "All 3 XR(s) using composition test-comp were filtered: 1 with a compositionRevisionSelector that does not match the composition's labels, 2 being deleted",
+		},
+		"AllThreeReasons": {
+			summary: AffectedResourcesSummary{FilteredByPolicy: 1, FilteredBySelector: 2, FilteredByDeletion: 3},
+			want:    "All 6 XR(s) using composition test-comp were filtered: 1 with Manual update policy (use --include-manual to see them), 2 with a compositionRevisionSelector that does not match the composition's labels, 3 being deleted",
+		},
+	}
+
+	for name, tt := range tests {
+		t.Run(name, func(t *testing.T) {
+			if diff := gcmp.Diff(tt.want, allFilteredMessage("test-comp", tt.summary)); diff != "" {
+				t.Errorf("allFilteredMessage() mismatch (-want +got):\n%s", diff)
+			}
+		})
+	}
 }
 
 func TestCompositionDiff_HasChanges_FilteredOnly(t *testing.T) {
@@ -809,6 +892,7 @@ func TestCompositionDiff_HasChanges_FilteredOnly(t *testing.T) {
 		ImpactAnalysis: []XRImpact{
 			{Status: XRStatusFiltered, FilterReason: FilterReasonManualPolicy},
 			{Status: XRStatusFiltered, FilterReason: FilterReasonRevisionSelectorMismatch},
+			{Status: XRStatusFiltered, FilterReason: FilterReasonDeleting},
 		},
 	}
 	if c.HasChanges() {
