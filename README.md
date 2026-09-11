@@ -86,6 +86,45 @@ crossplane-diff xr xr.yaml \
 crossplane-diff xr xr.yaml --eventual-state
 ```
 
+If the XR's counterpart in the cluster is being deleted (it has a `metadata.deletionTimestamp`),
+`xr` still emits the diff — you asked about that specific resource — but raises a warning noting that
+the comparison is against a resource that is going away. `comp` takes the opposite approach and
+excludes such composites from impact analysis entirely, since a deleting composite can never adopt
+the composition change being diffed.
+
+### Warnings
+
+Some conditions are worth telling you about without invalidating the diff or stopping the run. These
+are written to stderr as `WARNING:` lines, and — in `--output json`/`yaml` — also carried in a
+top-level `warnings[]` array so CI tooling can read them:
+
+```
+WARNING: Resource already belongs to another composite. Applying this diff will assume ownership! (currentOwner=other-xr, newOwner=my-xr, resource=Bucket/my-bucket)
+```
+
+```json
+{
+  "warnings": [
+    {
+      "message": "Some function credential secrets could not be fetched from cluster",
+      "context": {
+        "composition": "xbuckets.example.org",
+        "attempted": "2",
+        "fetched": "1",
+        "hint": "Use --function-credentials to provide secrets that don't exist on cluster"
+      }
+    }
+  ]
+}
+```
+
+Warnings deliberately do **not** affect the exit code — gate CI on `errors[]`, not `warnings[]`. They
+are emitted when raised rather than at the end of the run, so a warning is still reported if a later
+step fails, and appears in step with the work that produced it. Today they cover: a composed resource
+that belongs to a different composite (applying would take ownership), a nested XR whose composition
+could not be found (it will compose nothing), function credentials that could not be fetched (the
+render may not reflect reality), leftover function containers, and the deleting-XR case above.
+
 ### Composition Diff - Analyze Impact of Composition Changes
 
 The `comp` command analyzes how composition changes affect all Composite Resources (both XRs and Claims) that use the composition. The tool automatically discovers and displays impacts on both direct XRs and any Claims that reference them.
@@ -665,6 +704,9 @@ The structured output includes:
   identical to its in-cluster version, its composites are not evaluated and the entry carries
   `"impactAnalysisSkipped": true` alongside an empty `impactAnalysis` — so a consumer can tell "not evaluated" from "no
   affected composites found". Pass `--analyze-unchanged` to evaluate them anyway.
+- **Warnings**: A top-level `warnings` array of non-fatal advisories, each with a `message` and an optional `context` map of
+  the key/value pairs from the emitting call site. Distinct from `errors` and with no effect on the exit code; see
+  [Warnings](#warnings) above.
 - **Errors**: A top-level `errors` array of `OutputError` objects (see [Validation Errors](#validation-errors) below for the schema and an example), plus per-XR `error` fields in `impactAnalysis` for composition diffs
 
 ### Validation Errors

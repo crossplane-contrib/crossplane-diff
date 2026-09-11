@@ -152,7 +152,7 @@ func (r *DefaultCompDiffRenderer) renderCompositionChanges(comp *CompositionDiff
 	// Identity-less group: the human renderer renders it as a flat, header-less
 	// block, preserving comp's output. Comp provides its own XR grouping via
 	// impact analysis one level up.
-	if err := r.diffRenderer.RenderDiffs(identitylessGroups(diffs), nil); err != nil {
+	if err := r.diffRenderer.RenderDiffs(identitylessGroups(diffs), nil, nil); err != nil {
 		return errors.Wrap(err, "cannot render composition diff")
 	}
 
@@ -281,7 +281,7 @@ func (r *DefaultCompDiffRenderer) renderImpactAnalysis(comp *CompositionDiff) er
 	// Identity-less group: rendered flat (no per-XR header); comp groups via
 	// impact analysis one level up.
 	if len(allDiffs) > 0 {
-		if err := r.diffRenderer.RenderDiffs(identitylessGroups(allDiffs), nil); err != nil {
+		if err := r.diffRenderer.RenderDiffs(identitylessGroups(allDiffs), nil, nil); err != nil {
 			r.logger.Debug("Failed to render diffs", "error", err)
 			return errors.Wrap(err, "failed to render diffs")
 		}
@@ -490,6 +490,7 @@ func (r *StructuredCompDiffRenderer) buildStructuredCompOutput(output *CompDiffO
 	result := &compDiffWire{
 		Compositions: make([]compositionDiffWire, 0, len(output.Compositions)),
 		Errors:       output.Errors,
+		Warnings:     output.Warnings,
 	}
 
 	for _, comp := range output.Compositions {

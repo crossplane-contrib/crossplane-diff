@@ -92,6 +92,12 @@ type StructuredDiffOutput struct {
 	// per input in input order. This is the recommended view; the flat Changes
 	// field above is deprecated.
 	Xrs []xrDiffWire `json:"xrs"`
+
+	// Warnings is the list of non-fatal advisories raised during the run — things worth knowing that
+	// did not invalidate the diff. Unlike Errors they do NOT affect the exit code, so a consumer
+	// gating on failure should read Errors. Warnings are not grouped per input XR because they
+	// originate deep in the call stack, below the point where the owning input is known.
+	Warnings []dt.OutputWarning `json:"warnings,omitempty"`
 }
 
 // xrDiffWire is the per-input-XR entry in StructuredDiffOutput.Xrs. It carries
@@ -149,6 +155,11 @@ type ChangeDetail struct {
 type CompDiffOutput struct {
 	Compositions []CompositionDiff
 	Errors       []dt.OutputError // top-level errors (e.g., XRs that failed impact analysis)
+	// Warnings are non-fatal advisories raised during the run. Like the xr command's, they do not
+	// affect the exit code and are not attributed to a single composition — they are raised below the
+	// point where the owning composition is known. They have already been written to stderr when
+	// raised; this field carries them into structured output.
+	Warnings []dt.OutputWarning
 }
 
 // CompositionDiff represents the diff result for a single composition (internal).
@@ -224,6 +235,7 @@ type XRImpact struct {
 type compDiffWire struct {
 	Compositions []compositionDiffWire `json:"compositions"`
 	Errors       []dt.OutputError      `json:"errors,omitempty"`
+	Warnings     []dt.OutputWarning    `json:"warnings,omitempty"`
 }
 
 type compositionDiffWire struct {
@@ -273,16 +285,18 @@ func NewStructuredDiffRenderer(logger logging.Logger, opts DiffOptions) DiffRend
 // changes[]/summary (merged across all groups) for backward compatibility, and
 // the per-input-XR xrs[] grouping. The top-level errors[] is the union passed
 // by the caller.
-func (r *StructuredDiffRenderer) RenderDiffs(groups []dt.XRDiffGroup, errs []dt.OutputError) error {
+func (r *StructuredDiffRenderer) RenderDiffs(groups []dt.XRDiffGroup, errs []dt.OutputError, warnings []dt.OutputWarning) error {
 	r.logger.Debug("Rendering diffs in structured format",
 		"format", r.opts.Format,
 		"groupCount", len(groups),
-		"errorCount", len(errs))
+		"errorCount", len(errs),
+		"warningCount", len(warnings))
 
 	// Flat, deprecated view: merge all groups' diffs.
 	summary, changes := buildChangeSet(flattenGroups(groups))
 	output := StructuredDiffOutput{Summary: summary, Changes: changes}
 	output.Errors = errs
+	output.Warnings = warnings
 
 	// Grouped view: one entry per input XR, in input order.
 	output.Xrs = buildXRGroups(groups)
@@ -316,7 +330,8 @@ func (r *StructuredDiffRenderer) RenderDiffs(groups []dt.XRDiffGroup, errs []dt.
 		return errors.Wrap(err, "failed to write newline")
 	}
 
-	// Write errors to stderr for human visibility (they're also included in the structured output)
+	// Write errors to stderr for human visibility (they're also included in the structured output).
+	// Warnings are deliberately not written here: they already went to stderr when they were raised.
 	for _, e := range errs {
 		if _, err := fmt.Fprintln(r.opts.Stderr, e.FormatError()); err != nil {
 			return errors.Wrap(err, "failed to write error to stderr")

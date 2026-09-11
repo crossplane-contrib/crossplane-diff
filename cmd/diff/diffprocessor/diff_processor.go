@@ -234,8 +234,9 @@ func (p *DefaultDiffProcessor) PerformDiff(ctx context.Context, resources []*un.
 
 		diffs, err := p.DiffSingleResource(ctx, res, compositionProvider)
 		if err != nil {
-			// Log at Info level so errors are visible without -v 4
-			p.config.Logger.Info("Failed to process resource",
+			// Debug, not Info: this failure is already surfaced as an OutputError, which goes to
+			// stderr and into structured output. Raising it as a warning too would double-report it.
+			p.config.Logger.Debug("Failed to process resource",
 				"resource", resourceID,
 				"namespace", res.GetNamespace(),
 				"error", err)
@@ -262,7 +263,7 @@ func (p *DefaultDiffProcessor) PerformDiff(ctx context.Context, resources []*un.
 
 	// Always render (even if only errors exist) to ensure valid structured output
 	// The renderer will include errors in the structured output and write them to stderr
-	err := p.diffRenderer.RenderDiffs(groups, outputErrors)
+	err := p.diffRenderer.RenderDiffs(groups, outputErrors, p.collectedWarnings())
 	if err != nil {
 		p.config.Logger.Debug("Failed to render diffs", "error", err)
 		errs = append(errs, errors.Wrap(err, "failed to render diffs"))
@@ -362,6 +363,8 @@ func (p *DefaultDiffProcessor) diffSingleResourceInternal(ctx context.Context, r
 			"resource", resourceID,
 			"error", err)
 	}
+
+	p.warnIfDeleting(existingXRFromCluster, parentXR, resourceID)
 
 	// If the input was a Claim, resolve the backing XR and fetch its observed resources.
 	// If successful, we'll render from the backing XR (with merged Claim spec) instead of
@@ -527,6 +530,36 @@ func (p *DefaultDiffProcessor) diffSingleResourceInternal(ctx context.Context, r
 // We must use the cluster XR (not the input XR) because the XRM client uses spec.resourceRefs
 // to find children. The input XR doesn't have resourceRefs, but the cluster XR does.
 // This ensures that function-sequencer and other functions that check observed resources work correctly.
+// warnIfDeleting raises a warning when the cluster copy of a top-level XR is being deleted.
+//
+// Unlike `comp`, which excludes deleting XRs from impact analysis entirely (they can never adopt the
+// diffed composition's revision — see classifyXR), `xr` diffs exactly the resource the user named,
+// so suppressing it would leave them with no output at all. Instead we still show the diff and flag
+// that it is being compared against a resource that is going away.
+//
+// Only top-level XRs are flagged (parentXR == nil); composed resources of a live XR churn through
+// deletion routinely, and warning on each would be noise. In practice this only fires for `xr`, since
+// `comp` filters deleting XRs before they reach this path.
+func (p *DefaultDiffProcessor) warnIfDeleting(existingXRFromCluster *un.Unstructured, parentXR *cmp.Unstructured, resourceID string) {
+	if existingXRFromCluster == nil || parentXR != nil {
+		return
+	}
+
+	deletedAt := existingXRFromCluster.GetDeletionTimestamp()
+	if deletedAt == nil {
+		return
+	}
+
+	// Info, not Debug: this is a user-facing advisory, so it goes through the warning channel — to
+	// stderr now and into structured output at render time. See WarningLogger.
+	//
+	// Normalized to UTC/RFC3339 because metav1.Time renders machine-local by default, which would make
+	// the advisory's text differ between runs on differently-configured machines.
+	p.config.Logger.Info("The resource being diffed is being deleted in the cluster; the diff compares against a resource that is going away",
+		"resource", resourceID,
+		"deletionTimestamp", deletedAt.UTC().Format(time.RFC3339))
+}
+
 func (p *DefaultDiffProcessor) fetchObservedResourcesFromClusterXR(ctx context.Context, existingXRFromCluster *un.Unstructured, resourceID string) []cpd.Unstructured {
 	clusterXR := cmp.New()
 	if err := runtime.DefaultUnstructuredConverter.FromUnstructured(existingXRFromCluster.Object, clusterXR); err != nil {

@@ -17,10 +17,18 @@ import (
 // StructuredDiffOutput mirrors renderer.StructuredDiffOutput to avoid import cycles.
 // These types are used only for test assertions.
 type StructuredDiffOutput struct {
-	Summary Summary        `json:"summary"`
-	Changes []ChangeDetail `json:"changes"`
-	Errors  []OutputError  `json:"errors,omitempty"`
-	Xrs     []XRDiffWire   `json:"xrs"`
+	Summary  Summary         `json:"summary"`
+	Changes  []ChangeDetail  `json:"changes"`
+	Errors   []OutputError   `json:"errors,omitempty"`
+	Warnings []OutputWarning `json:"warnings,omitempty"`
+	Xrs      []XRDiffWire    `json:"xrs"`
+}
+
+// OutputWarning mirrors renderer/types.OutputWarning: a non-fatal advisory carried in structured
+// output alongside (but distinct from) errors.
+type OutputWarning struct {
+	Message string            `json:"message"`
+	Context map[string]string `json:"context,omitempty"`
 }
 
 // XRDiffWire mirrors the renderer's per-input-XR wire entry (xrDiffWire) in the
@@ -63,8 +71,20 @@ type ExpectedDiff struct {
 	summary   *expectedSummary
 	resources []*ResourceExpectation
 	errors    []*ErrorExpectation
+	warnings  []*WarningExpectation
 	xrs       []*XRExpectation
 }
+
+// WarningExpectation describes one expected entry in warnings[]. Matched by message substring rather
+// than exact equality, since warning prose is not a stable contract; context keys are asserted
+// exactly, because those ARE what a machine consumer reads.
+type WarningExpectation struct {
+	parent          *ExpectedDiff
+	messageContains string
+	context         map[string]string
+}
+
+func (w *WarningExpectation) expectation() *ExpectedDiff { return w.parent }
 
 func (e *ExpectedDiff) expectation() *ExpectedDiff { return e }
 
@@ -191,6 +211,27 @@ type FieldErrorExpectation struct {
 }
 
 func (f *FieldErrorExpectation) expectation() *ExpectedDiff { return f.parent.parent.parent }
+
+// WithWarning asserts that structured output carries a warning whose message contains the supplied
+// substring. Chain WithWarningContext to pin the machine-readable context pairs.
+func (e *ExpectedDiff) WithWarning(messageContains string) *WarningExpectation {
+	w := &WarningExpectation{
+		parent:          e,
+		messageContains: messageContains,
+	}
+	e.warnings = append(e.warnings, w)
+
+	return w
+}
+
+// WithWarningContext pins the expected context key/value pairs on the warning under construction.
+func (w *WarningExpectation) WithWarningContext(context map[string]string) *WarningExpectation {
+	w.context = context
+	return w
+}
+
+// And returns to the parent builder.
+func (w *WarningExpectation) And() *ExpectedDiff { return w.parent }
 
 // WithError attaches an expectation for an entry in the structured
 // errors[] payload, matched by resourceID. Use the returned
@@ -546,8 +587,39 @@ func AssertStructuredDiff(t *testing.T, jsonOutput string, e DiffExpectation) {
 		t.Errorf("Expected %d errors in structured output, got %d", len(expected.errors), len(output.Errors))
 	}
 
+	// Check each warning expectation against output.Warnings.
+	for _, want := range expected.warnings {
+		assertWarningExpectation(t, output.Warnings, want)
+	}
+
 	// Check each xrs[] entry expectation.
 	assertXRExpectations(t, output.Xrs, expected.xrs)
+}
+
+// assertWarningExpectation finds a warning whose message contains want's substring and, when the
+// expectation pins one, compares its context map exactly.
+func assertWarningExpectation(t *testing.T, got []OutputWarning, want *WarningExpectation) {
+	t.Helper()
+
+	for _, w := range got {
+		if !strings.Contains(w.Message, want.messageContains) {
+			continue
+		}
+
+		if want.context != nil && !reflect.DeepEqual(want.context, w.Context) {
+			t.Errorf("warning %q context mismatch: expected %v, got %v",
+				want.messageContains, want.context, w.Context)
+		}
+
+		return
+	}
+
+	messages := make([]string, 0, len(got))
+	for _, w := range got {
+		messages = append(messages, w.Message)
+	}
+
+	t.Errorf("expected a warning containing %q in structured output; got %v", want.messageContains, messages)
 }
 
 // assertResourceExpectations validates a set of ResourceExpectations against a
