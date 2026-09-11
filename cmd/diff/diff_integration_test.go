@@ -61,6 +61,7 @@ type IntegrationTestCase struct {
 	resources                  []string      // For composition tests: --resource values; each entry passed as one --resource flag
 	resourcesCSV               string        // For composition tests: alternative single --resource=a,b style invocation
 	includeManual              bool          // For composition tests: pass --include-manual flag
+	analyzeUnchanged           bool          // For composition tests: pass --analyze-unchanged flag
 	skip                       bool
 	skipReason                 string
 	// JSON output support: set outputFormat to "json" to use structured assertions.
@@ -290,6 +291,10 @@ func runIntegrationTest(t *testing.T, testType DiffTestType, tt IntegrationTestC
 
 		if tt.includeManual {
 			args = append(args, "--include-manual")
+		}
+
+		if tt.analyzeUnchanged {
+			args = append(args, "--analyze-unchanged")
 		}
 	}
 
@@ -2242,6 +2247,9 @@ Summary: 2 modified`,
 			},
 			inputFiles: []string{"testdata/comp/composition-no-changes.yaml"},
 			namespace:  "default",
+			// The composition is unchanged, so impact analysis would be skipped by default (issue
+			// #453). This case is about XR/downstream-level ignore paths, so it opts back in.
+			analyzeUnchanged: true,
 			ignorePaths: []string{
 				"metadata.annotations[argocd.argoproj.io/tracking-id]",
 				"metadata.labels[argocd.argoproj.io/instance]",
@@ -2264,6 +2272,66 @@ All composite resources are up-to-date. No downstream resource changes detected.
 `,
 			expectedError: false,
 			noColor:       true,
+		},
+		// Issue #453: applying an unchanged composition creates no new CompositionRevision, so no XR
+		// adopts anything and the affected-XR / impact-analysis sections are replaced by a skip note.
+		//
+		// These fixtures are deliberately ones that DO produce a downstream delta when evaluated (see
+		// UnchangedCompositionAnalyzeUnchangedEvaluatesXRs, which asserts exactly that against the same
+		// setup). So this case proves two things at once: the skip suppresses a report that would
+		// otherwise be emitted, and the exit code is 0 rather than the 3 that report would have caused
+		// — a delta not attributable to any composition change must not gate a CI pipeline.
+		"UnchangedCompositionSkipsImpactAnalysis": {
+			reason: "An unchanged composition skips impact analysis entirely and says so",
+			setupFiles: []string{
+				"testdata/comp/resources/xrd.yaml",
+				"testdata/comp/resources/original-composition.yaml",
+				"testdata/comp/resources/functions.yaml",
+				"testdata/comp/resources/existing-xr-1.yaml",
+				"testdata/comp/resources/existing-downstream-1.yaml",
+			},
+			inputFiles: []string{"testdata/comp/composition-no-changes.yaml"},
+			namespace:  "default",
+			expectedOutput: `
+=== Composition Changes ===
+
+No changes detected in composition xnopresources.diff.example.org
+
+Impact analysis skipped: applying this composition creates no new CompositionRevision, so no composite resource would change as a result. Pass --analyze-unchanged to evaluate them anyway.
+
+`,
+			expectedError: false,
+			// No composition change and no evaluated XRs, so nothing was detected.
+			expectedExitCode: dp.ExitCodeSuccess,
+			noColor:          true,
+		},
+		// The same setup with --analyze-unchanged evaluates the XRs after all (the pre-edit
+		// convergence-baseline workflow). Note what it reports: a downstream modification even though
+		// the composition is byte-identical to the cluster's. That delta is not caused by this
+		// composition — it is exactly the class of finding the default skip keeps out of the "impact of
+		// your composition change" report, and why opting in is explicit.
+		"UnchangedCompositionAnalyzeUnchangedEvaluatesXRs": {
+			reason: "--analyze-unchanged evaluates affected XRs even though the composition is unchanged, surfacing deltas not caused by it",
+			setupFiles: []string{
+				"testdata/comp/resources/xrd.yaml",
+				"testdata/comp/resources/original-composition.yaml",
+				"testdata/comp/resources/functions.yaml",
+				"testdata/comp/resources/existing-xr-1.yaml",
+				"testdata/comp/resources/existing-downstream-1.yaml",
+			},
+			inputFiles:       []string{"testdata/comp/composition-no-changes.yaml"},
+			namespace:        "default",
+			analyzeUnchanged: true,
+			outputFormat:     "json",
+			expectedExitCode: dp.ExitCodeDiffDetected,
+			expectedStructuredCompOutput: tu.ExpectCompDiff().
+				WithComposition("xnopresources.diff.example.org").
+				WithAffectedResources(1, 1, 0, 0).
+				WithXRImpact("XNopResource", "test-resource", "default", "changed").
+				WithDownstreamSummary(0, 1, 0).
+				WithDownstreamResource("modified", "XDownstreamResource", "test-resource", "default").
+				AndXR().
+				AndComp().And(),
 		},
 		"CompositionDiffCustomNamespace": {
 			reason: "Validates composition diff with custom namespace",
@@ -2363,8 +2431,12 @@ Summary: 1 modified`,
 			expectedExitCode: dp.ExitCodeDiffDetected,
 			noColor:          true,
 		},
+		// Note the second input composition (xnopresources-v2.diff.example.org) is byte-identical to its
+		// in-cluster version, so this case doubles as the mixed changed/unchanged scenario: the changed
+		// composition reports its impact while the unchanged one is skipped per-composition (issue
+		// #453). It is not a broken fixture.
 		"MultipleCompositionDiffImpact": {
-			reason: "Validates multiple composition diff shows impact on existing XRs",
+			reason: "Validates multiple compositions in one invocation: the changed one reports impact on existing XRs, the unchanged one is skipped",
 			// Set up existing XRs that use both compositions
 			setupFiles: []string{
 				"testdata/comp/resources/xrd.yaml",
@@ -2483,7 +2555,8 @@ Summary: 2 modified
 
 No changes detected in composition xnopresources-v2.diff.example.org
 
-No XRs found using composition xnopresources-v2.diff.example.org`,
+Impact analysis skipped: applying this composition creates no new CompositionRevision, so no composite resource would change as a result. Pass --analyze-unchanged to evaluate them anyway.
+`,
 			expectedError:    false,
 			expectedExitCode: dp.ExitCodeDiffDetected,
 			noColor:          true,

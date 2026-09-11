@@ -36,6 +36,15 @@ type ProcessorConfig struct {
 	// output always includes full compositionChanges.
 	MinimizeComposition bool
 
+	// AnalyzeUnchanged forces impact analysis for a composition that is identical to its
+	// in-cluster version. By default such a composition is reported as unchanged and its
+	// affected XRs are not evaluated at all: applying it creates no new CompositionRevision,
+	// so no XR adopts anything, and any downstream delta found would be caused by something
+	// other than the composition (drift, convergence lag, or a modeling artifact of this tool)
+	// while being presented as this composition's impact. Set this to opt into that analysis —
+	// e.g. to establish a "is my cluster converged?" baseline before editing a composition.
+	AnalyzeUnchanged bool
+
 	// EventualState enables iterative simulation to show eventual state after all reconciliation
 	// cycles complete. Useful with function-sequencer which hides later stage resources.
 	EventualState bool
@@ -152,6 +161,14 @@ func WithMaxNestedDepth(depth int) ProcessorOption {
 func WithIncludeManual(includeManual bool) ProcessorOption {
 	return func(config *ProcessorConfig) {
 		config.IncludeManual = includeManual
+	}
+}
+
+// WithAnalyzeUnchanged sets whether to run impact analysis for compositions that are identical to
+// their in-cluster version (skipped by default; see ProcessorConfig.AnalyzeUnchanged).
+func WithAnalyzeUnchanged(analyzeUnchanged bool) ProcessorOption {
+	return func(config *ProcessorConfig) {
+		config.AnalyzeUnchanged = analyzeUnchanged
 	}
 }
 

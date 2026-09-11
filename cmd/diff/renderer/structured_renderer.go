@@ -159,6 +159,11 @@ type CompositionDiff struct {
 	CompositionDiff   *dt.ResourceDiff // the actual composition diff (nil if unchanged)
 	AffectedResources AffectedResourcesSummary
 	ImpactAnalysis    []XRImpact
+	// ImpactAnalysisSkipped records that the affected XRs were deliberately not evaluated because
+	// the composition is identical to its in-cluster version. Distinguishes "we did not look" from
+	// "we looked and found no affected XRs", which are otherwise indistinguishable from an empty
+	// ImpactAnalysis. Set unless --analyze-unchanged is passed.
+	ImpactAnalysisSkipped bool
 }
 
 // HasChanges returns true if this composition diff has any changes.
@@ -227,6 +232,9 @@ type compositionDiffWire struct {
 	CompositionChanges *ChangeDetail            `json:"compositionChanges,omitempty"`
 	AffectedResources  AffectedResourcesSummary `json:"affectedResources"`
 	ImpactAnalysis     []xrImpactWire           `json:"impactAnalysis"`
+	// ImpactAnalysisSkipped tells consumers the empty impactAnalysis means "not evaluated"
+	// (composition unchanged) rather than "no affected XRs found".
+	ImpactAnalysisSkipped bool `json:"impactAnalysisSkipped,omitempty"`
 }
 
 type xrImpactWire struct {
