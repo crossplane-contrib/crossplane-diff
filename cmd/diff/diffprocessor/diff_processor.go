@@ -24,6 +24,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	un "k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 
 	"github.com/crossplane/crossplane-runtime/v2/pkg/errors"
 	"github.com/crossplane/crossplane-runtime/v2/pkg/logging"
@@ -71,6 +72,7 @@ type DefaultDiffProcessor struct {
 	credentialClient     xp.CredentialClient
 	defClient            xp.DefinitionClient
 	schemaClient         k8.SchemaClient
+	resourceClient       k8.ResourceClient
 	resourceManager      ResourceManager
 	config               ProcessorConfig
 	functionProvider     FunctionProvider
@@ -117,7 +119,7 @@ func NewDiffProcessor(k8cs k8.Clients, xpcs xp.Clients, opts ...ProcessorOption)
 
 	// Create components using factories
 	resourceManager := config.Factories.ResourceManager(k8cs.Resource, xpcs.Definition, xpcs.ResourceTree, config.Logger)
-	schemaValidator := config.Factories.SchemaValidator(k8cs.Schema, xpcs.Definition, config.Logger)
+	schemaValidator := config.Factories.SchemaValidator(k8cs.Schema, k8cs.Resource, xpcs.Definition, config.Logger)
 	requirementsProvider := config.Factories.RequirementsProvider(k8cs.Resource, xpcs.Environment, config.Logger)
 	diffCalculator := config.Factories.DiffCalculator(k8cs.Apply, xpcs.ResourceTree, resourceManager, config.Logger, diffOpts)
 	diffRenderer := config.Factories.DiffRenderer(config.Logger, diffOpts)
@@ -132,6 +134,7 @@ func NewDiffProcessor(k8cs k8.Clients, xpcs xp.Clients, opts ...ProcessorOption)
 		credentialClient:     xpcs.Credential,
 		defClient:            xpcs.Definition,
 		schemaClient:         k8cs.Schema,
+		resourceClient:       k8cs.Resource,
 		resourceManager:      resourceManager,
 		config:               config,
 		functionProvider:     functionProvider,
@@ -1473,17 +1476,15 @@ func (p *DefaultDiffProcessor) removeNamespacesFromClusterScopedResources(ctx co
 			resourceID = fmt.Sprintf("%s/%s*", resource.GetKind(), resource.GetGenerateName())
 		}
 
-		// Check if resource is cluster-scoped
-		// We must be able to determine scope to proceed - if we can't get the CRD,
-		// validation will fail anyway, so fail fast with a clear error message.
+		// Check if resource is cluster-scoped. Prefer discovery because built-in
+		// Kubernetes resources like Secret and Namespace do not have CRDs.
 		gvk := resource.GroupVersionKind()
-
-		crd, err := p.schemaClient.GetCRD(ctx, gvk)
+		isNamespaced, err := p.isNamespacedResource(ctx, gvk)
 		if err != nil {
-			return errors.Wrapf(err, "cannot determine scope for resource %s (GVK %s): CRD not found", resourceID, gvk.String())
+			return errors.Wrapf(err, "cannot determine scope for resource %s (GVK %s)", resourceID, gvk.String())
 		}
 
-		if crd.Spec.Scope == "Cluster" {
+		if !isNamespaced {
 			p.config.Logger.Debug("Removing namespace from cluster-scoped resource",
 				"resource", resourceID,
 				"gvk", gvk.String(),
@@ -1496,6 +1497,28 @@ func (p *DefaultDiffProcessor) removeNamespacesFromClusterScopedResources(ctx co
 	}
 
 	return nil
+}
+
+func (p *DefaultDiffProcessor) isNamespacedResource(ctx context.Context, gvk schema.GroupVersionKind) (bool, error) {
+	if p.resourceClient != nil {
+		isNamespaced, err := p.resourceClient.IsNamespacedResource(ctx, gvk)
+		if err == nil {
+			return isNamespaced, nil
+		}
+
+		p.config.Logger.Debug("Failed to get resource scope from discovery; falling back to CRD lookup", "gvk", gvk.String(), "error", err)
+	}
+
+	if p.schemaClient == nil {
+		return false, errors.Errorf("resource client and schema client are not configured")
+	}
+
+	crd, err := p.schemaClient.GetCRD(ctx, gvk)
+	if err != nil {
+		return false, errors.Wrapf(err, "cannot get CRD for %s to determine scope", gvk.String())
+	}
+
+	return crd.Spec.Scope != "Cluster", nil
 }
 
 // getCompositeResourceXRD checks if a resource is a Composite Resource (XR) by looking it up in XRDs.

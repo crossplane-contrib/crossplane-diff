@@ -64,6 +64,61 @@ func (m *mockResourceManagerForSpecMerge) FetchObservedResources(_ context.Conte
 	return nil, nil
 }
 
+func TestDefaultDiffProcessor_RemoveNamespacesFromClusterScopedResourcesUsesDiscovery(t *testing.T) {
+	secretGVK := schema.GroupVersionKind{Version: "v1", Kind: "Secret"}
+	namespaceGVK := schema.GroupVersionKind{Version: "v1", Kind: "Namespace"}
+
+	resourceClient := tu.NewMockResourceClient().
+		WithIsNamespacedResource(func(_ context.Context, gvk schema.GroupVersionKind) (bool, error) {
+			switch gvk {
+			case secretGVK:
+				return true, nil
+			case namespaceGVK:
+				return false, nil
+			default:
+				return false, errors.Errorf("unexpected scope lookup for %s", gvk.String())
+			}
+		}).
+		Build()
+
+	schemaClient := tu.NewMockSchemaClient().
+		WithGetCRD(func(_ context.Context, gvk schema.GroupVersionKind) (*extv1.CustomResourceDefinition, error) {
+			t.Fatalf("GetCRD should not be called for %s when discovery resolves scope", gvk.String())
+			return nil, nil
+		}).
+		Build()
+
+	processor := &DefaultDiffProcessor{
+		resourceClient: resourceClient,
+		schemaClient:   schemaClient,
+		config: ProcessorConfig{
+			Logger: tu.TestLogger(t, false),
+		},
+	}
+
+	secret := tu.NewResource("v1", "Secret", "creds").
+		InNamespace("default").
+		BuildUComposed()
+	namespace := tu.NewResource("v1", "Namespace", "generated").
+		InNamespace("default").
+		BuildUComposed()
+
+	resources := []cpd.Unstructured{*secret, *namespace}
+	if err := processor.removeNamespacesFromClusterScopedResources(t.Context(), resources); err != nil {
+		t.Fatalf("removeNamespacesFromClusterScopedResources() unexpected error: %v", err)
+	}
+
+	gotSecret := &un.Unstructured{Object: resources[0].UnstructuredContent()}
+	if got := gotSecret.GetNamespace(); got != "default" {
+		t.Errorf("Secret namespace = %q, want default", got)
+	}
+
+	gotNamespace := &un.Unstructured{Object: resources[1].UnstructuredContent()}
+	if got := gotNamespace.GetNamespace(); got != "" {
+		t.Errorf("Namespace namespace = %q, want empty", got)
+	}
+}
+
 // testProcessorOptions returns sensible default options for tests.
 // Tests can append additional options or override these as needed.
 //
@@ -415,7 +470,7 @@ func TestDefaultDiffProcessor_PerformDiff(t *testing.T) {
 					}, nil
 				}),
 				// Override the schema validator factory to use a simple validator
-				WithSchemaValidatorFactory(func(k8.SchemaClient, xp.DefinitionClient, logging.Logger) SchemaValidator {
+				WithSchemaValidatorFactory(func(k8.SchemaClient, k8.ResourceClient, xp.DefinitionClient, logging.Logger) SchemaValidator {
 					return &tu.MockSchemaValidator{
 						ValidateResourcesFn: func(context.Context, *un.Unstructured, []cpd.Unstructured) error {
 							return nil
@@ -582,7 +637,7 @@ func TestDefaultDiffProcessor_PerformDiff(t *testing.T) {
 					}, nil
 				}),
 				// Override with a validator that fails
-				WithSchemaValidatorFactory(func(_ k8.SchemaClient, _ xp.DefinitionClient, _ logging.Logger) SchemaValidator {
+				WithSchemaValidatorFactory(func(_ k8.SchemaClient, _ k8.ResourceClient, _ xp.DefinitionClient, _ logging.Logger) SchemaValidator {
 					return &tu.MockSchemaValidator{
 						ValidateResourcesFn: func(context.Context, *un.Unstructured, []cpd.Unstructured) error {
 							return errors.New("validation error")
@@ -2209,7 +2264,7 @@ func TestDefaultDiffProcessor_ProcessNestedXRs(t *testing.T) {
 			// Create processor with behavior defaults + custom options
 			baseOpts := testProcessorOptions(t)
 			customOpts := []ProcessorOption{
-				WithSchemaValidatorFactory(func(k8.SchemaClient, xp.DefinitionClient, logging.Logger) SchemaValidator {
+				WithSchemaValidatorFactory(func(k8.SchemaClient, k8.ResourceClient, xp.DefinitionClient, logging.Logger) SchemaValidator {
 					return &tu.MockSchemaValidator{
 						ValidateResourcesFn: func(context.Context, *un.Unstructured, []cpd.Unstructured) error {
 							return nil
@@ -2604,7 +2659,7 @@ func TestDefaultDiffProcessor_DiffSingleResource_WithObservedResources(t *testin
 						ComposedResources: []cpd.Unstructured{},
 					}, nil
 				}),
-				WithSchemaValidatorFactory(func(k8.SchemaClient, xp.DefinitionClient, logging.Logger) SchemaValidator {
+				WithSchemaValidatorFactory(func(k8.SchemaClient, k8.ResourceClient, xp.DefinitionClient, logging.Logger) SchemaValidator {
 					return &tu.MockSchemaValidator{
 						ValidateResourcesFn: func(context.Context, *un.Unstructured, []cpd.Unstructured) error {
 							return nil
