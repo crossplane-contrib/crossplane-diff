@@ -1342,6 +1342,28 @@ func (c *CompositionExpectation) And() *ExpectedCompDiff {
 	return c.parent
 }
 
+// AndComposition starts an expectation for another composition, from anywhere in the current
+// composition's chain. It exists because the only climb a caller genuinely needs is the one back to
+// the root to add a sibling — every other And()/AndXR()/AndComp() is avoidable, since the assert
+// functions accept any builder level. Spelling the sibling case as one intention-named call keeps a
+// multi-composition expectation readable instead of ending each composition with a run of climbs
+// whose purpose is not obvious from reading them.
+func (d *DownstreamResourceExpectation) AndComposition(name string) *CompositionExpectation {
+	return d.compExpectation().WithComposition(name)
+}
+
+// AndComposition starts an expectation for another composition. See
+// DownstreamResourceExpectation.AndComposition.
+func (x *XRImpactExpectation) AndComposition(name string) *CompositionExpectation {
+	return x.compExpectation().WithComposition(name)
+}
+
+// AndComposition starts an expectation for another composition. See
+// DownstreamResourceExpectation.AndComposition.
+func (c *CompositionExpectation) AndComposition(name string) *CompositionExpectation {
+	return c.compExpectation().WithComposition(name)
+}
+
 // AssertStructuredCompDiff compares actual JSON output against expected.
 // Accepts CompDiffExpectation interface so callers don't need to call And()/AndXR()/AndComp().
 //
