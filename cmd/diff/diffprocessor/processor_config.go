@@ -99,7 +99,7 @@ type ComponentFactories struct {
 	ResourceManager func(client k8.ResourceClient, defClient xp.DefinitionClient, treeClient xp.ResourceTreeClient, logger logging.Logger) ResourceManager
 
 	// SchemaValidator creates a SchemaValidator
-	SchemaValidator func(schema k8.SchemaClient, def xp.DefinitionClient, logger logging.Logger) SchemaValidator
+	SchemaValidator func(schema k8.SchemaClient, resource k8.ResourceClient, def xp.DefinitionClient, logger logging.Logger) SchemaValidator
 
 	// DiffCalculator creates a DiffCalculator
 	DiffCalculator func(apply k8.ApplyClient, tree xp.ResourceTreeClient, resourceManager ResourceManager, logger logging.Logger, diffOptions renderer.DiffOptions) DiffCalculator
@@ -267,7 +267,7 @@ func WithResourceManagerFactory(factory func(k8.ResourceClient, xp.DefinitionCli
 }
 
 // WithSchemaValidatorFactory sets the SchemaValidator factory function.
-func WithSchemaValidatorFactory(factory func(k8.SchemaClient, xp.DefinitionClient, logging.Logger) SchemaValidator) ProcessorOption {
+func WithSchemaValidatorFactory(factory func(k8.SchemaClient, k8.ResourceClient, xp.DefinitionClient, logging.Logger) SchemaValidator) ProcessorOption {
 	return func(config *ProcessorConfig) {
 		config.Factories.SchemaValidator = factory
 	}

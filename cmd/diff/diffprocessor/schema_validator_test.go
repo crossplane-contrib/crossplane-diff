@@ -159,7 +159,7 @@ func TestDefaultSchemaValidator_ValidateResources(t *testing.T) {
 			logger := tu.TestLogger(t, false)
 
 			// Create the schema validator
-			validator := NewSchemaValidator(schemaClient, defClient, logger)
+			validator := NewSchemaValidator(schemaClient, tu.NewMockResourceClient().Build(), defClient, logger)
 
 			// CRDs are now provided via mock SchemaClient
 
@@ -185,6 +185,65 @@ func TestDefaultSchemaValidator_ValidateResources(t *testing.T) {
 				t.Errorf("ValidateResources() unexpected error: %v", err)
 			}
 		})
+	}
+}
+
+func TestDefaultSchemaValidator_ValidateResourcesSkipsBuiltInResourcesForSchemaValidation(t *testing.T) {
+	ctx := t.Context()
+
+	xrGVK := schema.GroupVersionKind{Group: testExampleOrg, Version: "v1", Kind: "XR"}
+	composedGVK := schema.GroupVersionKind{Group: testCpdOrg, Version: "v1", Kind: "testComposedResource"}
+	secretGVK := schema.GroupVersionKind{Version: "v1", Kind: "Secret"}
+
+	xr := tu.NewResource(testExampleOrg+"/v1", "XR", "test-xr").
+		InNamespace("default").
+		WithSpecField("field", "value").
+		Build()
+	composedResource := tu.NewResource(testCpdOrg+"/v1", "testComposedResource", "resource1").
+		InNamespace("default").
+		WithCompositeOwner("test-xr").
+		WithCompositionResourceName("resource1").
+		WithSpecField("field", "value").
+		BuildUComposed()
+	secret := tu.NewResource("v1", "Secret", "creds").
+		InNamespace("default").
+		BuildUComposed()
+
+	xrCRD := makeCRD("xrs."+testExampleOrg, "XR", testExampleOrg, "v1")
+	composedCRD := makeCRD("testComposedResources."+testCpdOrg, "testComposedResource", testCpdOrg, "v1")
+
+	schemaClient := tu.NewMockSchemaClient().
+		WithGetCRD(func(_ context.Context, gvk schema.GroupVersionKind) (*extv1.CustomResourceDefinition, error) {
+			switch gvk {
+			case xrGVK:
+				return xrCRD, nil
+			case composedGVK:
+				return composedCRD, nil
+			case secretGVK:
+				t.Fatalf("GetCRD should not be called for built-in %s", gvk.String())
+				return nil, nil
+			default:
+				return nil, errors.Errorf("CRD not configured for %s", gvk.String())
+			}
+		}).
+		WithResourcesRequiringCRDs(xrGVK, composedGVK).
+		WithCachingBehavior().
+		Build()
+
+	resourceClient := tu.NewMockResourceClient().
+		WithIsNamespacedResource(func(_ context.Context, gvk schema.GroupVersionKind) (bool, error) {
+			switch gvk {
+			case xrGVK, composedGVK, secretGVK:
+				return true, nil
+			default:
+				return false, errors.Errorf("unexpected scope lookup for %s", gvk.String())
+			}
+		}).
+		Build()
+
+	validator := NewSchemaValidator(schemaClient, resourceClient, tu.NewMockDefinitionClient().Build(), tu.TestLogger(t, false))
+	if err := validator.ValidateResources(ctx, xr, []cpd.Unstructured{*composedResource, *secret}); err != nil {
+		t.Fatalf("ValidateResources() unexpected error: %v", err)
 	}
 }
 
@@ -254,7 +313,7 @@ func TestDefaultSchemaValidator_EnsureComposedResourceCRDs(t *testing.T) {
 			logger := tu.TestLogger(t, false)
 
 			// Create the schema validator - CRDs provided via mock SchemaClient
-			validator := NewSchemaValidator(schemaClient, tu.NewMockDefinitionClient().Build(), logger)
+			validator := NewSchemaValidator(schemaClient, tu.NewMockResourceClient().Build(), tu.NewMockDefinitionClient().Build(), logger)
 
 			// Call the function under test
 			_ = validator.(*DefaultSchemaValidator).EnsureComposedResourceCRDs(ctx, tt.resources)
@@ -326,7 +385,7 @@ func TestDefaultSchemaValidator_LoadCRDs(t *testing.T) {
 			logger := tu.TestLogger(t, false)
 
 			// Create the schema validator with caching behavior
-			validator := NewSchemaValidator(tu.NewMockSchemaClient().WithCachingBehavior().Build(), defClient, logger)
+			validator := NewSchemaValidator(tu.NewMockSchemaClient().WithCachingBehavior().Build(), tu.NewMockResourceClient().Build(), defClient, logger)
 
 			// Call the function under test
 			err := validator.(*DefaultSchemaValidator).LoadCRDs(ctx)
@@ -459,7 +518,7 @@ func TestDefaultSchemaValidator_ValidateResources_AppliesDefaults(t *testing.T) 
 	defClient := tu.NewMockDefinitionClient().Build()
 	logger := tu.TestLogger(t, false)
 
-	validator := NewSchemaValidator(schemaClient, defClient, logger)
+	validator := NewSchemaValidator(schemaClient, tu.NewMockResourceClient().Build(), defClient, logger)
 
 	// Verify compositionRevisionRef exists before validation
 	crossplane, found, _ := un.NestedMap(managedResource.Object, "spec", "crossplane")
@@ -937,7 +996,7 @@ func TestDefaultSchemaValidator_ValidateScopeConstraints(t *testing.T) {
 			logger := tu.TestLogger(t, false)
 
 			// Create the schema validator - CRDs provided via mock SchemaClient
-			validator := NewSchemaValidator(schemaClient, tu.NewMockDefinitionClient().Build(), logger)
+			validator := NewSchemaValidator(schemaClient, tu.NewMockResourceClient().Build(), tu.NewMockDefinitionClient().Build(), logger)
 
 			// Call the function under test
 			err := validator.ValidateScopeConstraints(ctx, tt.resource, tt.expectedNamespace, tt.isClaimRoot)
@@ -961,5 +1020,49 @@ func TestDefaultSchemaValidator_ValidateScopeConstraints(t *testing.T) {
 				t.Errorf("ValidateScopeConstraints() unexpected error: %v", err)
 			}
 		})
+	}
+}
+
+func TestDefaultSchemaValidator_ValidateScopeConstraintsBuiltInResourcesUseDiscovery(t *testing.T) {
+	secretGVK := schema.GroupVersionKind{Version: "v1", Kind: "Secret"}
+	namespaceGVK := schema.GroupVersionKind{Version: "v1", Kind: "Namespace"}
+
+	resourceClient := tu.NewMockResourceClient().
+		WithIsNamespacedResource(func(_ context.Context, gvk schema.GroupVersionKind) (bool, error) {
+			switch gvk {
+			case secretGVK:
+				return true, nil
+			case namespaceGVK:
+				return false, nil
+			default:
+				return false, errors.Errorf("unexpected scope lookup for %s", gvk.String())
+			}
+		}).
+		Build()
+
+	schemaClient := tu.NewMockSchemaClient().
+		WithGetCRD(func(_ context.Context, gvk schema.GroupVersionKind) (*extv1.CustomResourceDefinition, error) {
+			t.Fatalf("GetCRD should not be called for %s when discovery resolves scope", gvk.String())
+			return nil, nil
+		}).
+		Build()
+
+	validator := NewSchemaValidator(schemaClient, resourceClient, tu.NewMockDefinitionClient().Build(), tu.TestLogger(t, false))
+
+	secret := tu.NewResource("v1", "Secret", "creds").
+		InNamespace("default").
+		Build()
+	if err := validator.ValidateScopeConstraints(t.Context(), secret, "default", false); err != nil {
+		t.Fatalf("ValidateScopeConstraints() for Secret unexpected error: %v", err)
+	}
+
+	namespace := tu.NewResource("v1", "Namespace", "generated").Build()
+	err := validator.ValidateScopeConstraints(t.Context(), namespace, "default", false)
+	if err == nil {
+		t.Fatalf("ValidateScopeConstraints() for Namespace expected error, got nil")
+	}
+
+	if !strings.Contains(err.Error(), "namespaced XR cannot own cluster-scoped managed resource") {
+		t.Fatalf("ValidateScopeConstraints() error %q does not contain expected ownership message", err.Error())
 	}
 }
