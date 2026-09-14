@@ -270,20 +270,27 @@ func TestDefaultCompDiffProcessor_DiffComposition(t *testing.T) {
 			},
 			wantErr: true,
 		},
+		// Aggregation across compositions: one section per input, each with its own affected XRs.
+		// Both inputs must genuinely differ from their cluster copies (hence the labels) and must have
+		// affected XRs — otherwise the skip added for issue #453 short-circuits before the per-XR work,
+		// and the case would silently stop covering aggregation while still rendering two headers.
+		// The end-to-end variant is TestCompDiffIntegration/MultipleChangedCompositionsBothReportImpact.
 		"MultipleCompositions": {
 			namespace: "default",
 			compositions: []*un.Unstructured{
 				tu.NewComposition("test-composition-1").
 					WithCompositeTypeRef("example.org/v1", "XResource").
 					WithPipelineMode().
+					WithLabels(map[string]string{"version": "0.0.2"}).
 					BuildAsUnstructured(),
 				tu.NewComposition("test-composition-2").
 					WithCompositeTypeRef("example.org/v1", "XResource").
 					WithPipelineMode().
+					WithLabels(map[string]string{"version": "0.0.2"}).
 					BuildAsUnstructured(),
 			},
 			setupMocks: func() xp.Clients {
-				// Create test compositions for the multi-composition test
+				// Cluster copies carry no labels, so both inputs compare as changed.
 				testComp1 := tu.NewComposition("test-composition-1").
 					WithCompositeTypeRef("example.org/v1", "XResource").
 					WithPipelineMode().
@@ -294,11 +301,14 @@ func TestDefaultCompDiffProcessor_DiffComposition(t *testing.T) {
 					WithPipelineMode().
 					Build()
 
+				xr1 := tu.NewResource("example.org/v1", "XResource", "xr-one").WithNamespace("default").Build()
+				xr2 := tu.NewResource("example.org/v1", "XResource", "xr-two").WithNamespace("default").Build()
+
 				return xp.Clients{
 					Composition: tu.NewMockCompositionClient().
 						WithSuccessfulCompositionFetches([]*apiextensionsv1.Composition{testComp1, testComp2}).
-						WithResourcesForComposition("test-composition-1", "default", []*un.Unstructured{}).
-						WithResourcesForComposition("test-composition-2", "default", []*un.Unstructured{}).
+						WithResourcesForComposition("test-composition-1", "default", []*un.Unstructured{xr1}).
+						WithResourcesForComposition("test-composition-2", "default", []*un.Unstructured{xr2}).
 						Build(),
 					Definition:   tu.NewMockDefinitionClient().Build(),
 					Environment:  tu.NewMockEnvironmentClient().Build(),
@@ -316,6 +326,20 @@ func TestDefaultCompDiffProcessor_DiffComposition(t *testing.T) {
 				// Should contain separator between compositions
 				if !strings.Contains(output, strings.Repeat("=", 80)) {
 					t.Errorf("Expected output to contain composition separator")
+				}
+
+				// Each composition's own affected XR must be evaluated and surfaced. Without this the
+				// case passes even when the aggregation loop only processes the first composition, since
+				// the section headers above are printed regardless.
+				for _, want := range []string{"XResource/xr-one", "XResource/xr-two"} {
+					if !strings.Contains(output, want) {
+						t.Errorf("Expected %s in the affected-resources output, got:\n%s", want, output)
+					}
+				}
+
+				// Neither composition changed → skipped would be wrong here; both must be analyzed.
+				if strings.Contains(output, "Impact analysis skipped") {
+					t.Errorf("Both compositions changed, so neither should be skipped, got:\n%s", output)
 				}
 			},
 			wantErr: false,

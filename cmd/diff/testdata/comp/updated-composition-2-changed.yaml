@@ -1,0 +1,36 @@
+# A genuinely-changed version of original-composition-2.yaml (configData prefix and resourceTier
+# differ). Distinct from updated-composition-2.yaml, which is byte-identical to the original and is
+# used for the mixed changed/unchanged case.
+apiVersion: apiextensions.crossplane.io/v1
+kind: Composition
+metadata:
+  name: xnopresources-v2.diff.example.org
+spec:
+  compositeTypeRef:
+    apiVersion: ns.diff.example.org/v1alpha1
+    kind: XNopResource
+  mode: Pipeline
+  pipeline:
+    - step: generate-resources
+      functionRef:
+        name: function-go-templating
+      input:
+        apiVersion: template.fn.crossplane.io/v1beta1
+        kind: GoTemplate
+        source: Inline
+        inline:
+          template: |
+            apiVersion: ns.nop.example.org/v1alpha1
+            kind: XDownstreamResource
+            metadata:
+              name: {{ .observed.composite.resource.metadata.name }}
+              namespace: {{ .observed.composite.resource.metadata.namespace }}
+              annotations:
+                gotemplating.fn.crossplane.io/composition-resource-name: nop-resource-v2
+            spec:
+              forProvider:
+                configData: v2-changed-{{ .observed.composite.resource.spec.coolField }}
+                resourceTier: premium-plus
+    - step: automatically-detect-ready-composed-resources
+      functionRef:
+        name: function-auto-ready

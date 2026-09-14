@@ -2431,6 +2431,58 @@ Summary: 1 modified`,
 			expectedExitCode: dp.ExitCodeDiffDetected,
 			noColor:          true,
 		},
+		// Two compositions that BOTH genuinely change, each with its own affected XR. This is the
+		// aggregation case: one CompositionDiff entry per input, each carrying its own impact analysis,
+		// with hasDiffs ORed across them. MultipleCompositionDiffImpact below covers the mixed
+		// changed/unchanged variant; before this case existed, nothing covered two compositions that
+		// both report impacts — the second composition there has no affected XR at all.
+		"MultipleChangedCompositionsBothReportImpact": {
+			reason: "Two changed compositions each report their own affected XR's downstream changes",
+			setupFiles: []string{
+				"testdata/comp/resources/xrd.yaml",
+				"testdata/comp/resources/original-composition.yaml",
+				"testdata/comp/resources/original-composition-2.yaml",
+				"testdata/comp/resources/functions.yaml",
+				// XR using composition 1
+				"testdata/comp/resources/existing-xr-1.yaml",
+				"testdata/comp/resources/existing-downstream-1.yaml",
+				// XR using composition 2
+				"testdata/comp/resources/existing-xr-v2.yaml",
+				"testdata/comp/resources/existing-downstream-v2.yaml",
+			},
+			inputFiles: []string{
+				"testdata/comp/updated-composition.yaml",
+				"testdata/comp/updated-composition-2-changed.yaml",
+			},
+			namespace:        "default",
+			outputFormat:     "json",
+			expectedExitCode: dp.ExitCodeDiffDetected,
+			expectedStructuredCompOutput: tu.ExpectCompDiff().
+				WithComposition("xnopresources.diff.example.org").
+				WithCompositionModified().
+				WithAffectedResources(1, 1, 0, 0).
+				WithXRImpact("XNopResource", "test-resource", "default", "changed").
+				WithDownstreamSummary(0, 1, 0).
+				WithDownstreamResource("modified", "XDownstreamResource", "test-resource", "default").
+				WithFieldChange("spec.forProvider.configData", "existing-value", "updated-existing-value").
+				WithFieldChange("spec.forProvider.resourceTier", "basic", "premium").
+				// Climb back to the root to start a second composition; the builder has no
+				// sibling-composition method. (AssertStructuredCompDiff itself accepts any builder level,
+				// so these climbs are avoidable in principle — see the tracking issue for the cleanup.)
+				AndXR().
+				AndComp().
+				And().
+				WithComposition("xnopresources-v2.diff.example.org").
+				WithCompositionModified().
+				WithAffectedResources(1, 1, 0, 0).
+				WithXRImpact("XNopResource", "v2-resource", "default", "changed").
+				WithDownstreamSummary(0, 1, 0).
+				WithDownstreamResource("modified", "XDownstreamResource", "v2-resource", "default").
+				WithFieldChange("spec.forProvider.configData", "v2-updated-v2-existing-value", "v2-changed-v2-existing-value").
+				WithFieldChange("spec.forProvider.resourceTier", "enterprise", "premium-plus").
+				AndXR().
+				AndComp().And(),
+		},
 		// Note the second input composition (xnopresources-v2.diff.example.org) is byte-identical to its
 		// in-cluster version, so this case doubles as the mixed changed/unchanged scenario: the changed
 		// composition reports its impact while the unchanged one is skipped per-composition (issue

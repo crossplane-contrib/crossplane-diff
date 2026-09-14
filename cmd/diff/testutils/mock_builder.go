@@ -650,6 +650,13 @@ func (b *MockTypeConverterBuilder) Build() *MockTypeConverter {
 // MockCompositionClientBuilder helps build crossplane.CompositionClient mocks.
 type MockCompositionClientBuilder struct {
 	mock *MockCompositionClient
+
+	// composites accumulates the per-composition XR sets registered by
+	// WithResourcesForComposition, keyed by "<compositionName>/<namespace>". It exists so repeated
+	// calls compose instead of overwriting each other: a multi-composition test needs a different XR
+	// set per composition, and silently keeping only the last registration made the earlier
+	// compositions look net-new (empty affected set) rather than failing the test.
+	composites map[string][]*un.Unstructured
 }
 
 // NewMockCompositionClient creates a new MockCompositionClientBuilder.
@@ -752,12 +759,19 @@ func (b *MockCompositionClientBuilder) WithFindComposites(fn func(context.Contex
 // for a given composition name and namespace. Refs-mode calls return an explicit error identifying this
 // helper as default-discovery only — use WithFindComposites directly if you need to mock both modes.
 func (b *MockCompositionClientBuilder) WithResourcesForComposition(compositionName, namespace string, resources []*un.Unstructured) *MockCompositionClientBuilder {
+	if b.composites == nil {
+		b.composites = map[string][]*un.Unstructured{}
+	}
+
+	b.composites[compositionName+"/"+namespace] = resources
+
+	// The closure reads the map at call time, so registrations added after this one are visible too.
 	return b.WithFindComposites(func(_ context.Context, comp *un.Unstructured, opts dtypes.FindCompositesOptions) ([]*un.Unstructured, error) {
 		if len(opts.Refs) > 0 {
 			return nil, errors.New("WithResourcesForComposition only handles default-discovery (empty Refs)")
 		}
 
-		if comp.GetName() == compositionName && opts.Namespace == namespace {
+		if resources, ok := b.composites[comp.GetName()+"/"+opts.Namespace]; ok {
 			return resources, nil
 		}
 

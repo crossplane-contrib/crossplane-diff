@@ -1,0 +1,15 @@
+# What original-composition-2.yaml currently renders for existing-xr-v2, so the diff against the
+# changed composition shows only the fields that composition actually changed.
+apiVersion: ns.nop.example.org/v1alpha1
+kind: XDownstreamResource
+metadata:
+  name: v2-resource
+  namespace: default
+  annotations:
+    gotemplating.fn.crossplane.io/composition-resource-name: nop-resource-v2
+  labels:
+    crossplane.io/composite: v2-resource
+spec:
+  forProvider:
+    configData: v2-updated-v2-existing-value
+    resourceTier: enterprise
