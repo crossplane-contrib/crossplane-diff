@@ -1,0 +1,12 @@
+# An XR that uses the SECOND composition (xnopresources-v2), so a multi-composition run can have
+# affected XRs under both compositions rather than only the first.
+apiVersion: ns.diff.example.org/v1alpha1
+kind: XNopResource
+metadata:
+  name: v2-resource
+  namespace: default
+spec:
+  coolField: v2-existing-value
+  crossplane:
+    compositionRef:
+      name: xnopresources-v2.diff.example.org

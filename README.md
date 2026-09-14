@@ -122,6 +122,13 @@ crossplane-diff comp updated-composition.yaml --resource=default/xr-1,default/xr
 # comp again — the composition file's labels are the authoritative prediction of the new revision.
 crossplane-diff comp updated-composition.yaml --include-manual
 
+# Evaluate affected composites even when the composition is identical to the cluster's.
+# By default that analysis is skipped: applying an unchanged composition creates no new
+# CompositionRevision, so nothing would adopt it, and any downstream delta found would be caused
+# by something else (drift, convergence lag, or a modeling artifact of this tool) while being
+# presented as this composition's impact. Opt in for a pre-edit "is my cluster converged?" baseline.
+crossplane-diff comp unchanged-composition.yaml --analyze-unchanged
+
 # Collapse each changed composition to a single change-marker line (human output only;
 # JSON/YAML keeps full detail), keeping the affected XRs and their downstream diffs
 crossplane-diff comp updated-composition.yaml --minimize-composition
@@ -249,6 +256,12 @@ Flags:
                                compositionRevisionSelector does not match the composition's
                                labels), or "deleting" (the composite is being deleted).
                                --include-manual does not re-include the latter two.
+      --analyze-unchanged      Run impact analysis even for compositions identical to their
+                               in-cluster version. Skipped by default, because applying such a
+                               composition creates no new CompositionRevision and so changes
+                               nothing; the empty impactAnalysis is then marked with
+                               "impactAnalysisSkipped": true in structured output. Useful for a
+                               pre-edit convergence baseline.
       --crossplane-version=VERSION
                                Pin the crossplane render version; the docker engine
                                pulls xpkg.crossplane.io/crossplane/crossplane:<version>.
@@ -648,7 +661,10 @@ The structured output includes:
 - **Change types**: each entry's `type` field carries the word form — one of `"added"`, `"modified"`, or `"removed"`. (Unchanged resources are filtered out of structured output and never appear in `changes[]`. The `+` / `~` / `-` symbols appear only in the human-readable diff format described above.)
 - **Full resource details**: apiVersion, kind, name, namespace
 - **Diff content**: for modifications, `diff.old` and `diff.new` carry the full current/desired resource objects (apiVersion/kind/metadata/spec/status, etc.) — not just the diffing subset. For additions/removals, the full resource object lives under `diff.spec` (the JSON key is literally `spec` but the value is the entire resource, not its spec subtree).
-- **Impact analysis** (comp only): which XRs are affected by composition changes and their status
+- **Impact analysis** (comp only): which XRs are affected by composition changes and their status. When a composition is
+  identical to its in-cluster version, its composites are not evaluated and the entry carries
+  `"impactAnalysisSkipped": true` alongside an empty `impactAnalysis` — so a consumer can tell "not evaluated" from "no
+  affected composites found". Pass `--analyze-unchanged` to evaluate them anyway.
 - **Errors**: A top-level `errors` array of `OutputError` objects (see [Validation Errors](#validation-errors) below for the schema and an example), plus per-XR `error` fields in `impactAnalysis` for composition diffs
 
 ### Validation Errors
