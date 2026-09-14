@@ -17,6 +17,7 @@ limitations under the License.
 package main
 
 import (
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -56,9 +57,15 @@ func parseArgs(t *testing.T, args ...string) (*cli, error) {
 
 	c := &cli{}
 
+	// Wrap the logger the way main() does. AfterApply on the concrete commands needs the
+	// *dp.WarningLogger binding, and binding the same instance for both keeps this parse path
+	// identical to the real one.
+	warnings := dp.NewWarningLogger(logging.NewNopLogger(), io.Discard)
+
 	parser, err := kong.New(c,
 		kong.Name("crossplane-diff"),
-		kong.BindTo(logging.NewNopLogger(), (*logging.Logger)(nil)),
+		kong.BindTo(warnings, (*logging.Logger)(nil)),
+		kong.Bind(warnings),
 		// AfterApply on the concrete commands needs an *AppContext binding; a
 		// zero value is sufficient because processor construction at parse time
 		// is in-memory (no cluster connection until Run).

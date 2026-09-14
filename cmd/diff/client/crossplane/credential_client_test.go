@@ -1,6 +1,7 @@
 package crossplane
 
 import (
+	"strings"
 	"testing"
 
 	tu "github.com/crossplane-contrib/crossplane-diff/cmd/diff/testutils"
@@ -43,6 +44,11 @@ func TestDefaultCredentialClient_FetchCompositionCredentials(t *testing.T) {
 		composition  *apiextensionsv1.Composition
 		mockResource tu.MockResourceClient
 		wantSecrets  []corev1.Secret
+		// wantAdvisory asserts whether a user-facing advisory is raised (via logger.Info, which the
+		// CLI surfaces as a WARNING line and a structured warnings[] entry). It must fire exactly when
+		// some credentials could not be fetched: the render then proceeds without them, so the diff may
+		// not reflect what the cluster would produce, and a silent success would hide that.
+		wantAdvisory bool
 	}{
 		"NonPipelineMode": {
 			reason: "Should return nil for non-pipeline compositions",
@@ -101,7 +107,8 @@ func TestDefaultCredentialClient_FetchCompositionCredentials(t *testing.T) {
 			mockResource: *tu.NewMockResourceClient().
 				WithResourceNotFound().
 				Build(),
-			wantSecrets: nil,
+			wantSecrets:  nil,
+			wantAdvisory: true,
 		},
 		"MixedFetchResults": {
 			reason: "Should return only successfully fetched credentials",
@@ -117,7 +124,8 @@ func TestDefaultCredentialClient_FetchCompositionCredentials(t *testing.T) {
 			mockResource: *tu.NewMockResourceClient().
 				WithResourcesExist(secret1Builder.Build()).
 				Build(),
-			wantSecrets: []corev1.Secret{secret1},
+			wantSecrets:  []corev1.Secret{secret1},
+			wantAdvisory: true,
 		},
 		"MultipleCredentialsInSameStep": {
 			reason: "Should fetch multiple credentials from the same pipeline step",
@@ -137,12 +145,16 @@ func TestDefaultCredentialClient_FetchCompositionCredentials(t *testing.T) {
 
 	for name, tt := range tests {
 		t.Run(name, func(t *testing.T) {
+			logger := tu.NewAdvisoryCapturingLogger(t)
+
 			c := &DefaultCredentialClient{
 				resourceClient: &tt.mockResource,
-				logger:         tu.TestLogger(t, false),
+				logger:         logger,
 			}
 
 			got := c.FetchCompositionCredentials(ctx, tt.composition)
+
+			assertCredentialAdvisory(t, tt.reason, logger.Advisories(), tt.wantAdvisory)
 
 			// Compare counts first
 			if len(got) != len(tt.wantSecrets) {
@@ -173,4 +185,26 @@ func TestDefaultCredentialClient_FetchCompositionCredentials(t *testing.T) {
 			}
 		})
 	}
+}
+
+// assertCredentialAdvisory checks whether the shortfall advisory was raised, and that it names the
+// escape hatch — a user who sees it needs to know --function-credentials exists.
+func assertCredentialAdvisory(t *testing.T, reason string, advisories []string, want bool) {
+	t.Helper()
+
+	if !want {
+		if len(advisories) != 0 {
+			t.Errorf("\n%s\nexpected no advisory, got %v", reason, advisories)
+		}
+
+		return
+	}
+
+	for _, a := range advisories {
+		if strings.Contains(a, "could not be fetched") {
+			return
+		}
+	}
+
+	t.Errorf("\n%s\nexpected an advisory about credentials that could not be fetched, got %v", reason, advisories)
 }

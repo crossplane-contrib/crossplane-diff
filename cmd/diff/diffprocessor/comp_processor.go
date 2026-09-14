@@ -271,6 +271,10 @@ func (p *DefaultCompDiffProcessor) DiffComposition(ctx context.Context, composit
 		}
 	}
 
+	// Attach any advisories raised during the run. They have already reached stderr when raised; this
+	// carries them into structured output.
+	output.Warnings = p.collectedWarnings()
+
 	// Always render output (even if all compositions failed) to ensure valid structured output
 	// The renderer will include errors in the structured output and write them to stderr
 	if err := p.compDiffRenderer.RenderCompDiff(output); err != nil {
@@ -658,7 +662,9 @@ func (p *DefaultCompDiffProcessor) calculateCompositionDiff(ctx context.Context,
 		changed = unmasked.DiffType != dt.DiffTypeEqual
 	}
 
-	p.config.Logger.Info("No changes detected in composition",
+	// Debug, not Info: the renderer already prints "No changes detected in composition <name>" to
+	// stdout, so raising this as a user-facing warning would duplicate it.
+	p.config.Logger.Debug("No changes detected in composition",
 		"composition", newComp.GetName(),
 		"changedInIgnoredPathsOnly", changed)
 
