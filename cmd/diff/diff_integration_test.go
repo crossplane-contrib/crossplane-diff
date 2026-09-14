@@ -68,9 +68,14 @@ type IntegrationTestCase struct {
 	// JSON output support: set outputFormat to "json" to use structured assertions.
 	// For XR tests, populate expectedStructuredOutput. For CompositionDiffTest tests,
 	// populate expectedStructuredCompOutput. Only one should be set per test case.
-	outputFormat                 string               // "json" or "" (default=visual diff)
-	expectedStructuredOutput     *tu.ExpectedDiff     // for XR JSON output assertions
-	expectedStructuredCompOutput *tu.ExpectedCompDiff // for comp JSON output assertions
+	outputFormat string // "json" or "" (default=visual diff)
+	// Typed as the assertion interfaces rather than the concrete root builders. The assert functions
+	// have accepted any builder level since those interfaces were introduced, specifically so a chain
+	// need not climb back to the root — but concrete field types here made that unreachable, which is
+	// why every case in this file used to end with a trailing And()/AndXR()/AndComp(). A chain can now
+	// simply end where it ends.
+	expectedStructuredOutput     tu.DiffExpectation     // for XR JSON output assertions
+	expectedStructuredCompOutput tu.CompDiffExpectation // for comp JSON output assertions
 }
 
 type XrdAPIVersion int
@@ -490,8 +495,7 @@ func TestDiffIntegration(t *testing.T) {
 				WithField("spec.forProvider.configData", "new-value").
 				And().
 				WithAddedResource("XNopResource", "test-resource", "default").
-				WithField("spec.coolField", "new-value").
-				And(),
+				WithField("spec.coolField", "new-value"),
 			expectedError:    false,
 			expectedExitCode: dp.ExitCodeDiffDetected,
 		},
@@ -628,8 +632,7 @@ Summary: 2 modified`,
 				WithFieldChange("spec.forProvider.configData", "new-value", "modified-value").
 				And().
 				WithModifiedResource("XNopResource", "test-resource", "default").
-				WithFieldChange("spec.coolField", "new-value", "modified-value").
-				And(),
+				WithFieldChange("spec.coolField", "new-value", "modified-value"),
 			expectedError:    false,
 			expectedExitCode: dp.ExitCodeDiffDetected,
 		},
@@ -650,8 +653,7 @@ Summary: 2 modified`,
 				WithField("spec.forProvider.configData", "modified-value").
 				And().
 				WithModifiedResource("XNopResource", "test-resource", "default").
-				WithFieldChange("spec.coolField", "existing-value", "modified-value").
-				And(),
+				WithFieldChange("spec.coolField", "existing-value", "modified-value"),
 			expectedError:    false,
 			expectedExitCode: dp.ExitCodeDiffDetected,
 		},
@@ -679,8 +681,7 @@ Summary: 2 modified`,
 				WithModifiedResource("XNopResource", "test-resource", "default").
 				WithFieldChange("spec.coolField", "existing-value", "modified-value").
 				And().
-				WithWarning("being deleted in the cluster").
-				And(),
+				WithWarning("being deleted in the cluster"),
 			expectedStderrContains: []string{
 				"WARNING: The resource being diffed is being deleted in the cluster",
 				"resource=XNopResource/test-resource",
@@ -707,8 +708,7 @@ Summary: 2 modified`,
 				WithFieldChange("spec.forProvider.configData", "existing-config-value", "modified-config-value").
 				And().
 				WithModifiedResource("XEnvResource", "test-env-resource", "").
-				WithFieldChange("spec.configKey", "existing-config-value", "modified-config-value").
-				And(),
+				WithFieldChange("spec.configKey", "existing-config-value", "modified-config-value"),
 			expectedError:    false,
 			expectedExitCode: dp.ExitCodeDiffDetected,
 		},
@@ -735,8 +735,7 @@ Summary: 2 modified`,
 				And().
 				WithModifiedResource("XNopResource", "test-resource", "default").
 				WithFieldChange("spec.coolField", "existing-value", "modified-with-external-dep").
-				WithFieldChange("spec.environment", "staging", "testing").
-				And(),
+				WithFieldChange("spec.environment", "staging", "testing"),
 			expectedError:    false,
 			expectedExitCode: dp.ExitCodeDiffDetected,
 		},
@@ -767,8 +766,7 @@ Summary: 2 modified`,
 				And().
 				WithModifiedResource("XNopResource", "test-resource", "default").
 				WithFieldChange("spec.coolField", "existing-value", "modified-with-external-dep").
-				WithFieldChange("spec.environment", "staging", "testing").
-				And(),
+				WithFieldChange("spec.environment", "staging", "testing"),
 			expectedError:    false,
 			expectedExitCode: dp.ExitCodeDiffDetected,
 		},
@@ -804,8 +802,7 @@ Summary: 2 modified`,
 				And().
 				WithAddedResource("XNopResource", "test-resource", "default").
 				WithField("spec.coolField", "new-value").
-				WithField("spec.environment", "crossns").
-				And(),
+				WithField("spec.environment", "crossns"),
 			expectedError:    false,
 			expectedExitCode: dp.ExitCodeDiffDetected,
 		},
@@ -833,8 +830,7 @@ Summary: 2 modified`,
 				WithField("spec.forProvider.roleName", "static-role").
 				And().
 				WithAddedResource("XNopResource", "test-resource", "default").
-				WithField("spec.coolField", "new-value").
-				And(),
+				WithField("spec.coolField", "new-value"),
 			expectedError:    false,
 			expectedExitCode: dp.ExitCodeDiffDetected,
 		},
@@ -928,8 +924,7 @@ Summary: 2 modified`,
 				And().
 				WithModifiedResource("XNopResource", "test-cross-ns-resource", "default").
 				WithFieldChange("spec.coolField", "existing-cross-ns-value", "modified-cross-ns-value").
-				WithFieldChange("spec.environment", "staging", "production").
-				And(),
+				WithFieldChange("spec.environment", "staging", "production"),
 			expectedError:    false,
 			expectedExitCode: dp.ExitCodeDiffDetected,
 		},
@@ -1089,8 +1084,7 @@ Summary: 2 modified, 2 removed`,
 				WithField("spec.forProvider.configData", "existing-value").
 				And().
 				WithRemovedResource("XDownstreamResource", "resource-to-be-removed-child", "default").
-				WithField("spec.forProvider.configData", "child-value").
-				And(),
+				WithField("spec.forProvider.configData", "child-value"),
 			expectedError:    false,
 			expectedExitCode: dp.ExitCodeDiffDetected,
 		},
@@ -1130,8 +1124,7 @@ Summary: 2 modified, 2 removed`,
 				WithField("spec.forProvider.configData", "child-value").
 				And().
 				WithModifiedResource("XNopResource", "test-resource", "default").
-				WithFieldChange("spec.coolField", "existing-value", "modified-value").
-				And(),
+				WithFieldChange("spec.coolField", "existing-value", "modified-value"),
 			expectedError:    false,
 			expectedExitCode: dp.ExitCodeDiffDetected,
 		},
@@ -1171,8 +1164,7 @@ Summary: 2 modified, 2 removed`,
 				WithField("spec.forProvider.configData", "child-value").
 				And().
 				WithModifiedResource("XNopResource", "test-resource", "").
-				WithFieldChange("spec.coolField", "existing-value", "modified-value").
-				And(),
+				WithFieldChange("spec.coolField", "existing-value", "modified-value"),
 			expectedError:    false,
 			expectedExitCode: dp.ExitCodeDiffDetected,
 		},
@@ -1202,8 +1194,7 @@ Summary: 2 modified, 2 removed`,
 				WithFieldChange("spec.forProvider.configData", "existing-value", "new-value").
 				And().
 				WithModifiedResource("XNopResource", "test-resource", "default").
-				WithFieldChange("spec.coolField", "existing-value", "new-value").
-				And(),
+				WithFieldChange("spec.coolField", "existing-value", "new-value"),
 			expectedError:    false,
 			expectedExitCode: dp.ExitCodeDiffDetected,
 		},
@@ -1225,8 +1216,7 @@ Summary: 2 modified, 2 removed`,
 				And().
 				WithAddedResource("XNopResource", "", "default").
 				WithNamePattern(`generated-xr-\(generated\)`).
-				WithField("spec.coolField", "new-value").
-				And(),
+				WithField("spec.coolField", "new-value"),
 			expectedError:    false,
 			expectedExitCode: dp.ExitCodeDiffDetected,
 		},
@@ -1255,8 +1245,7 @@ Summary: 2 modified, 2 removed`,
 				WithField("spec.coolField", "new-value").
 				And().
 				WithModifiedResource("XDownstreamResource", "test-resource", "default").
-				WithFieldChange("spec.forProvider.configData", "existing-value", "new-value").
-				And(),
+				WithFieldChange("spec.forProvider.configData", "existing-value", "new-value"),
 			expectedError:    false,
 			expectedExitCode: dp.ExitCodeDiffDetected,
 		},
@@ -1288,8 +1277,7 @@ Summary: 2 modified, 2 removed`,
 				WithField("spec.coolField", "first-value").
 				And().
 				WithModifiedResource("XNopResource", "test-resource", "default").
-				WithFieldChange("spec.coolField", "existing-value", "modified-value").
-				And(),
+				WithFieldChange("spec.coolField", "existing-value", "modified-value"),
 			expectedError:    false,
 			expectedExitCode: dp.ExitCodeDiffDetected,
 		},
@@ -1314,8 +1302,7 @@ Summary: 2 modified, 2 removed`,
 				WithField("spec.forProvider.resourceTier", "production").
 				And().
 				WithAddedResource("XNopResource", "test-resource", "default").
-				WithField("spec.coolField", "test-value").
-				And(),
+				WithField("spec.coolField", "test-value"),
 			expectedError:    false,
 			expectedExitCode: dp.ExitCodeDiffDetected,
 		},
@@ -1340,8 +1327,7 @@ Summary: 2 modified, 2 removed`,
 				WithField("spec.forProvider.resourceTier", "staging").
 				And().
 				WithAddedResource("XNopResource", "test-resource", "default").
-				WithField("spec.coolField", "test-value").
-				And(),
+				WithField("spec.coolField", "test-value"),
 			expectedError:    false,
 			expectedExitCode: dp.ExitCodeDiffDetected,
 		},
@@ -1415,8 +1401,7 @@ Summary: 2 modified, 2 removed`,
 				WithField("spec.coolField", "new-value").
 				And().
 				WithAddedResource("XDownstreamResource", "test-claim", "").
-				WithField("spec.forProvider.configData", "new-value").
-				And(),
+				WithField("spec.forProvider.configData", "new-value"),
 			expectedError:    false,
 			expectedExitCode: dp.ExitCodeDiffDetected,
 		},
@@ -1437,8 +1422,7 @@ Summary: 2 modified, 2 removed`,
 				WithField("spec.coolField", "new-value").
 				And().
 				WithAddedResource("XDownstreamResource", "test-claim", "").
-				WithField("spec.forProvider.configData", "existing-namespace/test-claim").
-				And(),
+				WithField("spec.forProvider.configData", "existing-namespace/test-claim"),
 			expectedError:    false,
 			expectedExitCode: dp.ExitCodeDiffDetected,
 		},
@@ -1463,8 +1447,7 @@ Summary: 2 modified, 2 removed`,
 				WithFieldChange("spec.coolField", "existing-value", "modified-value").
 				And().
 				WithModifiedResource("XDownstreamResource", "test-claim-82crv", "").
-				WithFieldChange("spec.forProvider.configData", "existing-value", "modified-value").
-				And(),
+				WithFieldChange("spec.forProvider.configData", "existing-value", "modified-value"),
 			expectedError:    false,
 			expectedExitCode: dp.ExitCodeDiffDetected,
 		},
@@ -1481,8 +1464,7 @@ Summary: 2 modified, 2 removed`,
 				WithSummary(1, 0, 0).
 				WithAddedResource("XTestDefaultResource", "test-resource-with-defaults", "default").
 				WithField("spec.region", "us-east-1").
-				WithField("spec.size", "large").
-				And(),
+				WithField("spec.size", "large"),
 			expectedError:    false,
 			expectedExitCode: dp.ExitCodeDiffDetected,
 		},
@@ -1499,8 +1481,7 @@ Summary: 2 modified, 2 removed`,
 				WithSummary(1, 0, 0).
 				WithAddedResource("XTestDefaultResource", "test-resource-with-overrides", "default").
 				WithField("spec.region", "us-west-2").
-				WithField("spec.size", "xlarge").
-				And(),
+				WithField("spec.size", "xlarge"),
 			expectedError:    false,
 			expectedExitCode: dp.ExitCodeDiffDetected,
 		},
@@ -1551,8 +1532,7 @@ Summary: 2 modified, 2 removed`,
 				WithField("spec.forProvider.configData", "parent-value").
 				And().
 				WithAddedResource("XParentResource", "test-parent", "default").
-				WithField("spec.parentField", "parent-value").
-				And(),
+				WithField("spec.parentField", "parent-value"),
 			expectedError:    false,
 			expectedExitCode: dp.ExitCodeDiffDetected,
 		},
@@ -1586,8 +1566,7 @@ Summary: 2 modified, 2 removed`,
 				WithFieldChange("spec.forProvider.configData", "existing-value", "modified-value").
 				And().
 				WithModifiedResource("XParentResource", "test-parent", "default").
-				WithFieldChange("spec.parentField", "existing-value", "modified-value").
-				And(),
+				WithFieldChange("spec.parentField", "existing-value", "modified-value"),
 			expectedError:    false,
 			expectedExitCode: dp.ExitCodeDiffDetected,
 		},
@@ -1611,8 +1590,7 @@ Summary: 2 modified, 2 removed`,
 				WithFieldChange("spec.forProvider.configData", "v1-existing-value", "v1-modified-value").
 				And().
 				WithModifiedResource("XNopResource", "test-manual-v1", "default").
-				WithFieldChange("spec.coolField", "existing-value", "modified-value").
-				And(),
+				WithFieldChange("spec.coolField", "existing-value", "modified-value"),
 			expectedError:    false,
 			expectedExitCode: dp.ExitCodeDiffDetected,
 		},
@@ -1635,8 +1613,7 @@ Summary: 2 modified, 2 removed`,
 				WithFieldChange("spec.forProvider.configData", "v1-existing-value", "v2-modified-value").
 				And().
 				WithModifiedResource("XNopResource", "test-automatic", "default").
-				WithFieldChange("spec.coolField", "existing-value", "modified-value").
-				And(),
+				WithFieldChange("spec.coolField", "existing-value", "modified-value"),
 			expectedError:    false,
 			expectedExitCode: dp.ExitCodeDiffDetected,
 		},
@@ -1664,8 +1641,7 @@ Summary: 2 modified, 2 removed`,
 				WithFieldChange("spec.forProvider.configData", "stable-existing-value", "stable-modified-value").
 				And().
 				WithModifiedResource("XNopResource", "test-selector", "default").
-				WithFieldChange("spec.coolField", "existing-value", "modified-value").
-				And(),
+				WithFieldChange("spec.coolField", "existing-value", "modified-value"),
 			expectedError:    false,
 			expectedExitCode: dp.ExitCodeDiffDetected,
 		},
@@ -1705,8 +1681,7 @@ Summary: 2 modified, 2 removed`,
 				WithFieldChange("spec.forProvider.configData", "v1-existing-value", "v2-modified-value").
 				And().
 				WithModifiedResource("XNopResource", "test-manual-v1", "default").
-				WithFieldChange("spec.coolField", "existing-value", "modified-value").
-				And(),
+				WithFieldChange("spec.coolField", "existing-value", "modified-value"),
 			expectedError:    false,
 			expectedExitCode: dp.ExitCodeDiffDetected,
 		},
@@ -1737,8 +1712,7 @@ Summary: 2 modified, 2 removed`,
 				WithSummary(0, 2, 0).
 				WithModifiedResource("XApiMigrateResource", "test-api-version-xr-api-resource", "default").
 				And().
-				WithModifiedResource("XNopResource", "test-api-version-xr", "default").
-				And(),
+				WithModifiedResource("XNopResource", "test-api-version-xr", "default"),
 			expectedError:    false,
 			expectedExitCode: dp.ExitCodeDiffDetected,
 		},
@@ -1761,8 +1735,7 @@ Summary: 2 modified, 2 removed`,
 				WithFieldChange("spec.forProvider.configData", "v1-existing-value", "v2-modified-value").
 				And().
 				WithModifiedResource("XNopResource", "test-manual-v1", "default").
-				WithFieldChange("spec.coolField", "existing-value", "modified-value").
-				And(),
+				WithFieldChange("spec.coolField", "existing-value", "modified-value"),
 			expectedError:    false,
 			expectedExitCode: dp.ExitCodeDiffDetected,
 		},
@@ -1783,8 +1756,7 @@ Summary: 2 modified, 2 removed`,
 				WithField("spec.forProvider.configData", "v2-new-value").
 				And().
 				WithAddedResource("XNopResource", "test-manual-no-ref", "default").
-				WithField("spec.coolField", "new-value").
-				And(),
+				WithField("spec.coolField", "new-value"),
 			expectedError:    false,
 			expectedExitCode: dp.ExitCodeDiffDetected,
 		},
@@ -1809,8 +1781,7 @@ Summary: 2 modified, 2 removed`,
 				WithFieldChange("spec.forProvider.configData", "v1-existing-value", "v2-modified-value").
 				And().
 				WithModifiedResource("XNopResource", "test-legacy-manual-v1", "").
-				WithFieldChange("spec.coolField", "existing-value", "modified-value").
-				And(),
+				WithFieldChange("spec.coolField", "existing-value", "modified-value"),
 			expectedError:    false,
 			expectedExitCode: dp.ExitCodeDiffDetected,
 		},
@@ -1833,8 +1804,7 @@ Summary: 2 modified, 2 removed`,
 				WithFieldChange("spec.forProvider.configData", "existing-value", "modified-value").
 				And().
 				WithModifiedResource("XNopResource", "test-v2xrd-v1paths", "default").
-				WithFieldChange("spec.coolField", "existing-value", "modified-value").
-				And(),
+				WithFieldChange("spec.coolField", "existing-value", "modified-value"),
 			expectedError:    false,
 			expectedExitCode: dp.ExitCodeDiffDetected,
 		},
@@ -1883,8 +1853,7 @@ Summary: 2 modified, 2 removed`,
 				WithFieldChange("spec.parentField", "existing-parent-value", "modified-parent-value").
 				And().
 				WithModifiedResource("XChildNopClaim", "existing-parent-claim-82crv-child", "").
-				WithFieldChange("spec.childField", "existing-parent-value", "modified-parent-value").
-				And(),
+				WithFieldChange("spec.childField", "existing-parent-value", "modified-parent-value"),
 			xrdAPIVersion:    V1, // Use V1 style resourceRefs since XRDs have claims
 			expectedError:    false,
 			expectedExitCode: dp.ExitCodeDiffDetected,
@@ -1906,8 +1875,7 @@ Summary: 2 modified, 2 removed`,
 				WithField("spec.forProvider.configData", "test-value-creds").
 				And().
 				WithAddedResource("XNopResource", "test-resource-with-creds", "default").
-				WithField("spec.coolField", "test-value-creds").
-				And(),
+				WithField("spec.coolField", "test-value-creds"),
 			expectedError: false,
 		},
 		"FunctionCredentialsFromCLI": {
@@ -1929,8 +1897,7 @@ Summary: 2 modified, 2 removed`,
 				WithField("spec.forProvider.configData", "test-value-creds").
 				And().
 				WithAddedResource("XNopResource", "test-resource-with-creds", "default").
-				WithField("spec.coolField", "test-value-creds").
-				And(),
+				WithField("spec.coolField", "test-value-creds"),
 			expectedError: false,
 		},
 		// Paired sequencer gating tests — the fixture sequencer-gating-composition.yaml
@@ -1958,8 +1925,7 @@ Summary: 2 modified, 2 removed`,
 				WithField("spec.coolField", "test-value").
 				And().
 				WithAddedResource("XDownstreamResource", "0-stage0-resource", "default").
-				WithField("spec.forProvider.configData", "test-value").
-				And(),
+				WithField("spec.forProvider.configData", "test-value"),
 			expectedError: false,
 		},
 		"SequencerGatedStageAppearsWithEventualState": {
@@ -1985,8 +1951,7 @@ Summary: 2 modified, 2 removed`,
 				WithField("spec.forProvider.configData", "test-value").
 				And().
 				WithAddedResource("XDownstreamResource", "1-stage1-resource", "default").
-				WithField("spec.forProvider.configData", "test-value").
-				And(),
+				WithField("spec.forProvider.configData", "test-value"),
 			expectedError: false,
 		},
 		// Paired composition-driven gating tests — the fixture conditional-gating-composition.yaml
@@ -2013,8 +1978,7 @@ Summary: 2 modified, 2 removed`,
 				WithField("spec.coolField", "test-value").
 				And().
 				WithAddedResource("XDownstreamResource", "0-stage0-resource", "default").
-				WithField("spec.forProvider.configData", "test-value").
-				And(),
+				WithField("spec.forProvider.configData", "test-value"),
 			expectedError: false,
 		},
 		"ConditionalGatedStageAppearsWithEventualState": {
@@ -2040,8 +2004,7 @@ Summary: 2 modified, 2 removed`,
 				WithField("spec.forProvider.configData", "test-value").
 				And().
 				WithAddedResource("XDownstreamResource", "1-stage1-resource", "default").
-				WithField("spec.forProvider.configData", "test-value").
-				And(),
+				WithField("spec.forProvider.configData", "test-value"),
 			expectedError: false,
 		},
 		"EventualStateWithSequencerAndEnvironmentConfigs": {
@@ -2075,8 +2038,7 @@ Summary: 2 modified, 2 removed`,
 				WithField("spec.forProvider.resourceTier", "staging"). // From environment config
 				And().
 				WithAddedResource("XNopResource", "sequencer-envconfig-test", "default").
-				WithField("spec.coolField", "test-value").
-				And(),
+				WithField("spec.coolField", "test-value"),
 			expectedError: false,
 		},
 	}
@@ -2247,8 +2209,7 @@ Summary: 2 modified`,
 				WithCompositionModified().
 				WithAffectedResources(2, 1, 0, 0).
 				WithFilteredByDeletion(1).
-				WithXRImpact("XNopResource", "test-resource", "default", "changed").
-				AndComp().And(),
+				WithXRImpact("XNopResource", "test-resource", "default", "changed"),
 		},
 		// Issue #452, --resource mode: filtered XRs are surfaced explicitly there, so a user who names
 		// a deleting composite is told why it was skipped rather than getting silence.
@@ -2278,8 +2239,7 @@ Summary: 2 modified`,
 				WithCompositionModified().
 				WithFilteredByDeletion(1).
 				WithXRImpact("XNopResource", "deleting-resource", "default", "filtered").
-				WithFilterReason("deleting").
-				AndComp().And(),
+				WithFilterReason("deleting"),
 		},
 		"CompositionDiffIgnorePaths": {
 			reason: "Validates that ArgoCD annotations are ignored in composition diffs",
@@ -2375,9 +2335,7 @@ Impact analysis skipped: applying this composition creates no new CompositionRev
 				WithAffectedResources(1, 1, 0, 0).
 				WithXRImpact("XNopResource", "test-resource", "default", "changed").
 				WithDownstreamSummary(0, 1, 0).
-				WithDownstreamResource("modified", "XDownstreamResource", "test-resource", "default").
-				AndXR().
-				AndComp().And(),
+				WithDownstreamResource("modified", "XDownstreamResource", "test-resource", "default"),
 		},
 		"CompositionDiffCustomNamespace": {
 			reason: "Validates composition diff with custom namespace",
@@ -2512,22 +2470,14 @@ Summary: 1 modified`,
 				WithDownstreamResource("modified", "XDownstreamResource", "test-resource", "default").
 				WithFieldChange("spec.forProvider.configData", "existing-value", "updated-existing-value").
 				WithFieldChange("spec.forProvider.resourceTier", "basic", "premium").
-				// Climb back to the root to start a second composition; the builder has no
-				// sibling-composition method. (AssertStructuredCompDiff itself accepts any builder level,
-				// so these climbs are avoidable in principle — see the tracking issue for the cleanup.)
-				AndXR().
-				AndComp().
-				And().
-				WithComposition("xnopresources-v2.diff.example.org").
+				AndComposition("xnopresources-v2.diff.example.org").
 				WithCompositionModified().
 				WithAffectedResources(1, 1, 0, 0).
 				WithXRImpact("XNopResource", "v2-resource", "default", "changed").
 				WithDownstreamSummary(0, 1, 0).
 				WithDownstreamResource("modified", "XDownstreamResource", "v2-resource", "default").
 				WithFieldChange("spec.forProvider.configData", "v2-updated-v2-existing-value", "v2-changed-v2-existing-value").
-				WithFieldChange("spec.forProvider.resourceTier", "enterprise", "premium-plus").
-				AndXR().
-				AndComp().And(),
+				WithFieldChange("spec.forProvider.resourceTier", "enterprise", "premium-plus"),
 		},
 		// Note the second input composition (xnopresources-v2.diff.example.org) is byte-identical to its
 		// in-cluster version, so this case doubles as the mixed changed/unchanged scenario: the changed
@@ -3629,8 +3579,7 @@ Summary: 2 modified`,
 				WithXRImpact("XNopResource", "sequencer-gating-test", "default", "changed").
 				WithDownstreamSummary(1, 0, 0).
 				WithDownstreamResource("added", "XDownstreamResource", "0-stage0-resource", "default").
-				WithField("spec.forProvider.configData", "updated-existing-value").
-				AndXR().AndComp().And(),
+				WithField("spec.forProvider.configData", "updated-existing-value"),
 			expectedError: false,
 		},
 		"CompSequencerGatedStageAppearsWithEventualState": {
@@ -3658,8 +3607,7 @@ Summary: 2 modified`,
 				WithField("spec.forProvider.configData", "updated-existing-value").
 				AndXR().
 				WithDownstreamResource("added", "XDownstreamResource", "1-stage1-resource", "default").
-				WithField("spec.forProvider.configData", "updated-existing-value").
-				AndXR().AndComp().And(),
+				WithField("spec.forProvider.configData", "updated-existing-value"),
 			expectedError: false,
 		},
 		// Paired comp composition-driven gating tests — gating encoded in go-templating,
@@ -3685,8 +3633,7 @@ Summary: 2 modified`,
 				WithXRImpact("XNopResource", "conditional-gating-test", "default", "changed").
 				WithDownstreamSummary(1, 0, 0).
 				WithDownstreamResource("added", "XDownstreamResource", "0-stage0-resource", "default").
-				WithField("spec.forProvider.configData", "updated-existing-value").
-				AndXR().AndComp().And(),
+				WithField("spec.forProvider.configData", "updated-existing-value"),
 			expectedError: false,
 		},
 		"CompConditionalGatedStageAppearsWithEventualState": {
@@ -3713,8 +3660,7 @@ Summary: 2 modified`,
 				WithField("spec.forProvider.configData", "updated-existing-value").
 				AndXR().
 				WithDownstreamResource("added", "XDownstreamResource", "1-stage1-resource", "default").
-				WithField("spec.forProvider.configData", "updated-existing-value").
-				AndXR().AndComp().And(),
+				WithField("spec.forProvider.configData", "updated-existing-value"),
 			expectedError: false,
 		},
 		// --resource flag tests (issue #321)
@@ -3738,8 +3684,7 @@ Summary: 2 modified`,
 				WithComposition("xnopresources.diff.example.org").
 				WithCompositionModified().
 				WithAffectedResources(1, 1, 0, 0).
-				WithXRImpact("XNopResource", "test-resource", "default", "changed").
-				AndComp().And(),
+				WithXRImpact("XNopResource", "test-resource", "default", "changed"),
 		},
 		"ResourceFilterCommaSeparated": {
 			reason: "--resource accepts comma-separated values via kong's auto-parsing",
@@ -3763,8 +3708,7 @@ Summary: 2 modified`,
 				WithAffectedResources(2, 2, 0, 0).
 				WithXRImpact("XNopResource", "test-resource", "default", "changed").
 				AndComp().
-				WithXRImpact("XNopResource", "another-resource", "default", "changed").
-				AndComp().And(),
+				WithXRImpact("XNopResource", "another-resource", "default", "changed"),
 		},
 		"ResourceFilterUnmatched_FailsBeforeRendering": {
 			reason: "--resource naming a non-existent composite fails fast with an error before any rendering",
@@ -3800,8 +3744,7 @@ Summary: 2 modified`,
 				WithComposition("xnopresources.diff.example.org").
 				WithCompositionModified().
 				WithXRImpact("XNopResource", "manual-resource", "default", "filtered").
-				WithFilterReason("manual_policy").
-				AndComp().And(),
+				WithFilterReason("manual_policy"),
 		},
 		"ResourceFilterRespectsManualPolicy_WithIncludeManual": {
 			reason: "--include-manual evaluates the Manual-policy composite normally instead of marking it filtered",
@@ -3821,8 +3764,7 @@ Summary: 2 modified`,
 			expectedStructuredCompOutput: tu.ExpectCompDiff().
 				WithComposition("xnopresources.diff.example.org").
 				WithCompositionModified().
-				WithXRImpact("XNopResource", "manual-resource", "default", "changed").
-				AndComp().And(),
+				WithXRImpact("XNopResource", "manual-resource", "default", "changed"),
 		},
 		// Issue #388 (Bug A): an Automatic-policy XR whose compositionRevisionSelector does not match
 		// the edited composition's labels would not adopt the resulting revision, so it must be
@@ -3844,8 +3786,7 @@ Summary: 2 modified`,
 				WithComposition("xnopresources.diff.example.org").
 				WithCompositionModified().
 				WithXRImpact("XNopResource", "selector-mismatch-resource", "default", "filtered").
-				WithFilterReason("revision_selector_mismatch").
-				AndComp().And(),
+				WithFilterReason("revision_selector_mismatch"),
 			// Note: that --include-manual does NOT rescue a selector-mismatched Automatic XR is
 			// proven at the unit level (TestDefaultCompDiffProcessor_partitionXRsByUpdatePolicy /
 			// IncludeManualTrue_StillDropsSelectorMismatchedAutomaticXRs). A second slow
@@ -3869,8 +3810,7 @@ Summary: 2 modified`,
 			expectedStructuredCompOutput: tu.ExpectCompDiff().
 				WithComposition("xnopresources.diff.example.org").
 				WithCompositionModified().
-				WithXRImpact("XNopResource", "selector-match-resource", "default", "changed").
-				AndComp().And(),
+				WithXRImpact("XNopResource", "selector-match-resource", "default", "changed"),
 		},
 	}
 
