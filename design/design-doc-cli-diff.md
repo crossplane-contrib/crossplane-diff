@@ -260,7 +260,10 @@ The `comp` subcommand has its own set of integration tests:
   delta), that `--analyze-unchanged` evaluates the composites anyway, that a difference confined to an
   `--ignore-paths` path still counts as changed so the analysis is not silently skipped, and — the converse — that a
   cluster-only `kubectl.kubernetes.io/last-applied-configuration` annotation does *not* count as changed, whether or not
-  the caller also masks it explicitly.
+  the caller also masks it explicitly. The last of those is covered at both levels: as a comparison verdict in
+  `TestDefaultCompDiffProcessor_calculateCompositionDiff`, and end-to-end through the real CLI wiring in
+  `TestCompDiffIntegration/UnchangedCompositionAppliedWithKubectlSkipsImpactAnalysis`, which is what pins
+  `defaultProcessorOptions` not folding the annotation into `--ignore-paths` (see §6.8).
 - **Deletion Handling**: Verifies that an XR carrying a `metadata.deletionTimestamp` is excluded from impact analysis
   with reason `deleting` (counted via `FilteredByDeletion`, and surfaced as a `filtered` impact entry in `--resource`
   mode), that `--include-manual` does not re-include it, and that an explicitly-null `deletionTimestamp` (how
