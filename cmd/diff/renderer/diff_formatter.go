@@ -602,12 +602,31 @@ func cleanupForDiff(obj *un.Unstructured, logger logging.Logger, ignorePaths []s
 	// Track all modifications for a single consolidated log message
 	var modifications []string
 
-	// Remove ignored paths (includes both defaults and user-specified)
-	for _, path := range ignorePaths {
-		if removeNestedPath(obj.Object, path) {
-			modifications = append(modifications, fmt.Sprintf("ignored path: %s", path))
+	// alwaysIgnoredPaths are stripped regardless of the caller's ignorePaths. They record how an
+	// object was applied rather than what it contains, so a difference in one is never a difference
+	// in the object.
+	//
+	// This is deliberately unconditional rather than a default prepended to IgnorePaths at the CLI
+	// layer. Callers need IgnorePaths to mean exactly "masks the user asked for": comp-diff decides
+	// whether a composition changed at all by re-running the comparison with the user's masks
+	// removed (see compositionComparison), and a tooling artifact surviving into that comparison
+	// would make every kubectl-applied composition look changed.
+	alwaysIgnoredPaths := []string{
+		"metadata.annotations[kubectl.kubernetes.io/last-applied-configuration]",
+	}
+
+	// Remove always-ignored paths, then the caller's. Duplicates between the two are harmless:
+	// removeNestedPath is a no-op once the path is gone.
+	stripPaths := func(paths []string) {
+		for _, path := range paths {
+			if removeNestedPath(obj.Object, path) {
+				modifications = append(modifications, fmt.Sprintf("ignored path: %s", path))
+			}
 		}
 	}
+
+	stripPaths(alwaysIgnoredPaths)
+	stripPaths(ignorePaths)
 
 	// Remove server-side fields and metadata that we don't want to diff
 	metadata, found, _ := un.NestedMap(obj.Object, "metadata")
