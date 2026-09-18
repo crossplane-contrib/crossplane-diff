@@ -586,9 +586,10 @@ type CompDiffProcessor interface {
    play — the extra comparison is local, no API calls). The renderer's unconditional cleanup still applies to that second
    comparison, which is what keeps a merely re-applied composition from reading as changed; see §6.8.
 
-   3a. **Skip impact analysis for an unchanged composition.** Applying a composition identical to its in-cluster version
-   creates no new CompositionRevision, so no XR adopts anything: any downstream delta computed here would be caused by
-   something other than this composition (drift, convergence lag, or a modeling artifact of the tool), and the tool
+   3a. **Skip impact analysis for an unchanged composition.** Any CompositionRevision produced by a composition identical
+   to its in-cluster version carries the same spec, so no XR renders anything differently: any downstream delta computed
+   here would be caused by something other than this composition (drift, convergence lag, or a modeling artifact of the
+   tool), and the tool
    cannot tell those apart. Reporting them would attribute cluster state to a change that does not exist, and would also
    return `ExitCodeDiffDetected` for a composition the user did not change. So the per-XR work — one function render per
    XR, the dominant cost of `comp` — is skipped, `CompositionDiff.ImpactAnalysisSkipped` is set so the renderer and
@@ -596,6 +597,22 @@ type CompDiffProcessor interface {
    the pre-edit convergence-baseline workflow. Gating on the *displayed* diff instead would mean masking a
    render-relevant path via `--ignore-paths` silently skips the analysis for a composition that genuinely changes the
    rendered output; hence the `changed` field. See issue #453.
+
+   Note what the skip does **not** claim. Crossplane's `Composition.Hash()`
+   (`apis/apiextensions/v1/composition_hash.go`) hashes labels *and* annotations as well as spec, and the revision
+   controller creates a revision whenever no existing one's `crossplane.io/composition-hash` label matches. So a
+   composition whose metadata differs — most commonly the first client-side `kubectl apply` over an object created by
+   SSA, Helm or a controller, which *adds* `last-applied-configuration` — does get a new CompositionRevision despite an
+   untouched spec. What makes the skip safe is not that no revision is created, but that
+   `NewCompositionRevisionSpec` copies the spec verbatim, so the revision renders identically. Automatic XRs will
+   re-point `compositionRevisionRef` at it; the tool does not model that, and does not need to, because the rendered
+   output is unchanged. This is why the user-facing wording asserts spec identity rather than revision mechanics.
+
+   The same hashing has a consequence that *is* load-bearing: revisions inherit the composition's `metadata.labels`
+   (`NewCompositionRevision` copies them), and an XR's `compositionRevisionSelector` matches against those labels. A
+   label-only edit can therefore change which revision an XR selects, which is a real downstream effect from a
+   spec-untouched composition. That case is handled by the same `changed` field — because it is computed unmasked, a
+   label change hidden behind `--ignore-paths` still runs the analysis.
 4. **Diff each XR.** Delegate to the `xrProc` `DiffProcessor` via `DiffSingleResource`, supplying a
    `CompositionProvider` that returns the proposed composition for the affected XR's GVK and the cluster's composition
    otherwise (so nested XRs that use a different composition are diffed against their unchanged composition).
@@ -1088,7 +1105,8 @@ The client layer provides interfaces to interact with Kubernetes and Crossplane 
       `FilterReason` (`deleting` / `manual_policy` / `revision_selector_mismatch`).
     - Calculate the composition's own diff against the cluster's current version. If the composition is unchanged
       (evaluated before `--ignore-paths` masking), stop here for this composition and mark `ImpactAnalysisSkipped`:
-      applying it creates no new CompositionRevision, so nothing would adopt it. `--analyze-unchanged` continues anyway.
+      any revision it produced would carry the same spec, so nothing would render differently.
+      `--analyze-unchanged` continues anyway.
     - For each remaining XR, run the XR diff workflow above, using a `CompositionProvider` that returns the proposed
       composition for the affected XR's GVK and the cluster's composition for any nested XRs of a different kind.
 4. Aggregate per-XR results into a `CompDiffOutput` (composition diff + `XRImpact` list +
@@ -1182,7 +1200,7 @@ crossplane-diff comp updated-composition.yaml --resource production/my-xr --reso
 crossplane-diff comp updated-composition.yaml --include-manual
 
 # Evaluate affected composites even for a composition identical to the cluster's (skipped by
-# default, since applying it creates no new CompositionRevision)
+# default, since it would render nothing differently)
 crossplane-diff comp unchanged-composition.yaml --analyze-unchanged
 ```
 

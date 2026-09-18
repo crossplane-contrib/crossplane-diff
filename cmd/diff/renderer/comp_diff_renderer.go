@@ -92,7 +92,7 @@ func (r *DefaultCompDiffRenderer) RenderCompDiff(output *CompDiffOutput) error {
 		// The affected-XR and impact-analysis sections would both be empty and misleading for a
 		// composition whose XRs were deliberately not evaluated; say so once instead.
 		if comp.ImpactAnalysisSkipped {
-			if _, err := fmt.Fprint(stdout, "Impact analysis skipped: applying this composition creates no new CompositionRevision, so no composite resource would change as a result. Pass --analyze-unchanged to evaluate them anyway.\n\n"); err != nil {
+			if _, err := fmt.Fprint(stdout, "Impact analysis skipped: this composition is identical to the cluster's, so no composite resource would render differently as a result. Pass --analyze-unchanged to evaluate them anyway.\n\n"); err != nil {
 				return errors.Wrap(err, "cannot write impact analysis skipped message")
 			}
 

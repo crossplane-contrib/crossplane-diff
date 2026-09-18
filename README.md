@@ -296,11 +296,11 @@ Flags:
                                labels), or "deleting" (the composite is being deleted).
                                --include-manual does not re-include the latter two.
       --analyze-unchanged      Run impact analysis even for compositions identical to their
-                               in-cluster version. Skipped by default, because applying such a
-                               composition creates no new CompositionRevision and so changes
-                               nothing; the empty impactAnalysis is then marked with
-                               "impactAnalysisSkipped": true in structured output. Useful for a
-                               pre-edit convergence baseline.
+                               in-cluster version. Skipped by default, because any
+                               CompositionRevision such a composition produced would carry the
+                               same spec and so render nothing differently; the empty
+                               impactAnalysis is then marked with "impactAnalysisSkipped": true
+                               in structured output. Useful for a pre-edit convergence baseline.
       --crossplane-version=VERSION
                                Pin the crossplane render version; the docker engine
                                pulls xpkg.crossplane.io/crossplane/crossplane:<version>.

@@ -2279,8 +2279,8 @@ All composite resources are up-to-date. No downstream resource changes detected.
 			expectedError: false,
 			noColor:       true,
 		},
-		// Issue #453: applying an unchanged composition creates no new CompositionRevision, so no XR
-		// adopts anything and the affected-XR / impact-analysis sections are replaced by a skip note.
+		// Issue #453: any revision an unchanged composition produced would carry the same spec, so no XR
+		// renders differently and the affected-XR / impact-analysis sections are replaced by a skip note.
 		//
 		// These fixtures are deliberately ones that DO produce a downstream delta when evaluated (see
 		// UnchangedCompositionAnalyzeUnchangedEvaluatesXRs, which asserts exactly that against the same
@@ -2303,7 +2303,7 @@ All composite resources are up-to-date. No downstream resource changes detected.
 
 No changes detected in composition xnopresources.diff.example.org
 
-Impact analysis skipped: applying this composition creates no new CompositionRevision, so no composite resource would change as a result. Pass --analyze-unchanged to evaluate them anyway.
+Impact analysis skipped: this composition is identical to the cluster's, so no composite resource would render differently as a result. Pass --analyze-unchanged to evaluate them anyway.
 
 `,
 			expectedError: false,
@@ -2338,7 +2338,7 @@ Impact analysis skipped: applying this composition creates no new CompositionRev
 
 No changes detected in composition xnopresources.diff.example.org
 
-Impact analysis skipped: applying this composition creates no new CompositionRevision, so no composite resource would change as a result. Pass --analyze-unchanged to evaluate them anyway.
+Impact analysis skipped: this composition is identical to the cluster's, so no composite resource would render differently as a result. Pass --analyze-unchanged to evaluate them anyway.
 
 `,
 			expectedError:    false,
@@ -2637,7 +2637,7 @@ Summary: 2 modified
 
 No changes detected in composition xnopresources-v2.diff.example.org
 
-Impact analysis skipped: applying this composition creates no new CompositionRevision, so no composite resource would change as a result. Pass --analyze-unchanged to evaluate them anyway.
+Impact analysis skipped: this composition is identical to the cluster's, so no composite resource would render differently as a result. Pass --analyze-unchanged to evaluate them anyway.
 `,
 			expectedError:    false,
 			expectedExitCode: dp.ExitCodeDiffDetected,
