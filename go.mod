@@ -1,6 +1,6 @@
 module github.com/crossplane-contrib/crossplane-diff
 
-go 1.26.2
+go 1.26.7
 
 require (
 	dario.cat/mergo v1.0.2
@@ -9,7 +9,7 @@ require (
 	github.com/crossplane/cli/v2 v2.5.0
 	github.com/crossplane/crossplane-runtime/v2 v2.4.0
 	github.com/crossplane/crossplane/apis/v2 v2.4.1
-	github.com/crossplane/crossplane/v2 v2.4.0
+	github.com/crossplane/crossplane/v2 v2.4.1
 	github.com/docker/docker v28.5.2+incompatible
 	github.com/google/go-cmp v0.7.0
 	github.com/google/go-containerregistry v0.22.1
