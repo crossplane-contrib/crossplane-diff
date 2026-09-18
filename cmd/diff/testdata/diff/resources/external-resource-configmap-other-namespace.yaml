@@ -1,3 +1,4 @@
+
 # Reproduction fixture for crossplane-contrib/crossplane-diff#376.
 #
 # A ConfigMap matched by a matchLabels ExtraResources selector (no namespace)
