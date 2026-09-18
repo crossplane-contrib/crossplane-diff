@@ -257,8 +257,10 @@ The `comp` subcommand has its own set of integration tests:
   `matchLabels` and `matchExpressions` and both v1/v2 field paths.
 - **Unchanged-Composition Skipping**: Verifies that a composition identical to its in-cluster version skips impact
   analysis (marked `ImpactAnalysisSkipped`, exit code 0 even when the fixtures would otherwise report a downstream
-  delta), that `--analyze-unchanged` evaluates the composites anyway, and that a difference confined to an
-  `--ignore-paths` path still counts as changed so the analysis is not silently skipped.
+  delta), that `--analyze-unchanged` evaluates the composites anyway, that a difference confined to an
+  `--ignore-paths` path still counts as changed so the analysis is not silently skipped, and — the converse — that a
+  cluster-only `kubectl.kubernetes.io/last-applied-configuration` annotation does *not* count as changed, whether or not
+  the caller also masks it explicitly.
 - **Deletion Handling**: Verifies that an XR carrying a `metadata.deletionTimestamp` is excluded from impact analysis
   with reason `deleting` (counted via `FilteredByDeletion`, and surfaced as a `filtered` impact entry in `--resource`
   mode), that `--include-manual` does not re-include it, and that an explicitly-null `deletionTimestamp` (how
@@ -576,7 +578,10 @@ type CompDiffProcessor interface {
 3. **Diff the composition itself.** Compute a top-level diff between the proposed composition and the cluster's current
    version, surfaced as `CompositionDiff`. `calculateCompositionDiff` returns a `compositionComparison` carrying both the
    diff to display (nil when equal) and whether the composition changed *at all* — the two differ only under
-   `--ignore-paths`, and only the latter is allowed to gate step 3a.
+   `--ignore-paths`, and only the latter is allowed to gate step 3a. `changed` is computed by re-running the comparison
+   with the user's masks removed (only when the masked comparison came back equal, and only when `--ignore-paths` is in
+   play — the extra comparison is local, no API calls). The renderer's unconditional cleanup still applies to that second
+   comparison, which is what keeps a merely re-applied composition from reading as changed; see §6.8.
 
    3a. **Skip impact analysis for an unchanged composition.** Applying a composition identical to its in-cluster version
    creates no new CompositionRevision, so no XR adopts anything: any downstream delta computed here would be caused by
@@ -843,7 +848,15 @@ JSON tags), so the field naming is consistent across formats.
 
 `--ignore-paths` and the built-in server-side / non-diff-relevant field cleanup (`managedFields`, `resourceVersion`,
 `uid`, `generation`, `creationTimestamp`, `selfLink`, `ownerReferences`, `spec.resourceRefs`,
-`spec.crossplane.resourceRefs`, `status`) apply uniformly across output formats. Cleanup happens during diff
+`spec.crossplane.resourceRefs`, `status`, and the annotation
+`metadata.annotations[kubectl.kubernetes.io/last-applied-configuration]`) apply uniformly across output formats.
+
+That last annotation is stripped **unconditionally** by the renderer (`alwaysIgnoredPaths`) rather than prepended to
+`IgnorePaths` at the CLI layer, so that `IgnorePaths` means exactly "masks the user asked for". `comp` relies on that
+distinction: it decides whether a composition changed at all by re-running the comparison with the user's masks removed
+(see §7 step 3), and a record of *how* the composition was applied surviving into that comparison would make every
+`kubectl apply`-ed composition look edited — defeating the unchanged-composition skip for the most common deployment
+path. Cleanup happens during diff
 generation (`GenerateDiffWithOptions`), not in the renderers, and each object is cleaned at most once: the results are
 stored on the `ResourceDiff` as `ResourceViews{Raw, Clean}`. `Raw` is the original object (load-bearing for removal
 detection and existing-XR reconstruction); `Clean` is the post-cleanup object. `Clean` is populated only for non-equal

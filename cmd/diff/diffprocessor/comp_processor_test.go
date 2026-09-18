@@ -423,21 +423,18 @@ func TestDefaultCompDiffProcessor_calculateCompositionDiff(t *testing.T) {
 			BuildAsUnstructured()
 	}
 
-	clusterComp := tu.NewComposition("test-composition").
-		WithCompositeTypeRef("example.org/v1", "XResource").
-		WithPipelineMode().
-		WithLabels(map[string]string{"version": "0.0.1"}).
-		Build()
-
 	type want struct {
 		hasDiff bool
 		changed bool
 	}
 
 	tests := map[string]struct {
-		input       *un.Unstructured
-		ignorePaths []string
-		want        want
+		input *un.Unstructured
+		// clusterAnnotations are annotations present only on the in-cluster copy, modelling what
+		// a deploy tool stamps on apply.
+		clusterAnnotations map[string]string
+		ignorePaths        []string
+		want               want
 	}{
 		"Identical_NoIgnorePaths": {
 			input: compWithLabels(map[string]string{"version": "0.0.1"}),
@@ -459,10 +456,41 @@ func TestDefaultCompDiffProcessor_calculateCompositionDiff(t *testing.T) {
 			ignorePaths: []string{"metadata.labels[version]"},
 			want:        want{hasDiff: false, changed: true},
 		},
+		// The cluster copy carries the annotation kubectl stamps on apply; the file copy never does.
+		// That annotation is an artifact of how the composition was applied, not a change to it, so
+		// it must not read as `changed` — otherwise every kubectl-applied composition looks changed
+		// and the (expensive) impact analysis #453 set out to skip runs anyway. The user-supplied
+		// mask here is unrelated and only serves to put --ignore-paths in play.
+		"LastAppliedConfigurationOnly_NotChanged": {
+			input: compWithLabels(map[string]string{"version": "0.0.1"}),
+			clusterAnnotations: map[string]string{
+				"kubectl.kubernetes.io/last-applied-configuration": `{"apiVersion":"apiextensions.crossplane.io/v1","kind":"Composition"}`,
+			},
+			ignorePaths: []string{"metadata.labels[unrelated]"},
+			want:        want{hasDiff: false, changed: false},
+		},
+		// Same as above, but with the caller explicitly masking the annotation — the shape the CLI
+		// used to assemble. Masking it must not change the verdict: the annotation is stripped
+		// unconditionally either way.
+		"LastAppliedConfigurationExplicitlyMasked_NotChanged": {
+			input: compWithLabels(map[string]string{"version": "0.0.1"}),
+			clusterAnnotations: map[string]string{
+				"kubectl.kubernetes.io/last-applied-configuration": `{"apiVersion":"apiextensions.crossplane.io/v1","kind":"Composition"}`,
+			},
+			ignorePaths: []string{"metadata.annotations[kubectl.kubernetes.io/last-applied-configuration]"},
+			want:        want{hasDiff: false, changed: false},
+		},
 	}
 
 	for name, tt := range tests {
 		t.Run(name, func(t *testing.T) {
+			clusterComp := tu.NewComposition("test-composition").
+				WithCompositeTypeRef("example.org/v1", "XResource").
+				WithPipelineMode().
+				WithLabels(map[string]string{"version": "0.0.1"}).
+				WithAnnotations(tt.clusterAnnotations).
+				Build()
+
 			processor := &DefaultCompDiffProcessor{
 				compositionClient: tu.NewMockCompositionClient().
 					WithSuccessfulCompositionFetch(clusterComp).
