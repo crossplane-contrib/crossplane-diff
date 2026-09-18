@@ -208,8 +208,8 @@ func TestDefaultCompDiffProcessor_DiffComposition(t *testing.T) {
 			},
 			wantErr: false,
 		},
-		// Issue #453: an unchanged composition creates no new CompositionRevision, so its XRs are not
-		// evaluated at all and the two impact sections are replaced by an explicit skip note.
+		// Issue #453: any revision an unchanged composition produced would carry the same spec, so its
+		// XRs are not evaluated at all and the two impact sections are replaced by an explicit skip note.
 		"UnchangedCompositionSkipsImpactAnalysis": {
 			namespace:    "default",
 			compositions: []*un.Unstructured{unchangedComp()},

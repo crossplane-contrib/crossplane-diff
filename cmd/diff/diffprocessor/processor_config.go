@@ -45,11 +45,17 @@ type ProcessorConfig struct {
 
 	// AnalyzeUnchanged forces impact analysis for a composition that is identical to its
 	// in-cluster version. By default such a composition is reported as unchanged and its
-	// affected XRs are not evaluated at all: applying it creates no new CompositionRevision,
-	// so no XR adopts anything, and any downstream delta found would be caused by something
-	// other than the composition (drift, convergence lag, or a modeling artifact of this tool)
-	// while being presented as this composition's impact. Set this to opt into that analysis —
-	// e.g. to establish a "is my cluster converged?" baseline before editing a composition.
+	// affected XRs are not evaluated at all: any CompositionRevision it produced would carry
+	// the same spec, so no XR would render differently, and any downstream delta found would be
+	// caused by something other than the composition (drift, convergence lag, or a modeling
+	// artifact of this tool) while being presented as this composition's impact. Set this to opt
+	// into that analysis — e.g. to establish a "is my cluster converged?" baseline before
+	// editing a composition.
+	//
+	// Note the wording: Crossplane's Composition.Hash() covers labels and annotations as well as
+	// spec, so a composition whose metadata differs does get a new CompositionRevision even
+	// though its spec is untouched. What makes the skip safe is that the revision would carry an
+	// identical spec and so render identically — not that no revision is created.
 	AnalyzeUnchanged bool
 
 	// EventualState enables iterative simulation to show eventual state after all reconciliation

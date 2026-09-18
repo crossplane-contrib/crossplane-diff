@@ -39,11 +39,11 @@ type CompCmd struct {
 	Files []string `arg:"" help:"YAML files containing updated Composition(s)." optional:""`
 
 	// Configuration options
-	Namespace           string   `default:""                                                                                                                                          help:"Namespace to find XRs (empty = all namespaces)."                                                                                                                                                           name:"namespace"            short:"n"`
-	IncludeManual       bool     `default:"false"                                                                                                                                     help:"Include XRs with Manual update policy (default: only Automatic policy XRs)"                                                                                                                                name:"include-manual"`
-	MinimizeComposition bool     `default:"false"                                                                                                                                     help:"Collapse each changed composition to a single marker line (human-readable output only; JSON/YAML keeps full detail; errors and no-change compositions still print in full)."                               name:"minimize-composition"`
+	Namespace           string   `default:""                                                                                                                                          help:"Namespace to find XRs (empty = all namespaces)."                                                                                                                                                name:"namespace"            short:"n"`
+	IncludeManual       bool     `default:"false"                                                                                                                                     help:"Include XRs with Manual update policy (default: only Automatic policy XRs)"                                                                                                                     name:"include-manual"`
+	MinimizeComposition bool     `default:"false"                                                                                                                                     help:"Collapse each changed composition to a single marker line (human-readable output only; JSON/YAML keeps full detail; errors and no-change compositions still print in full)."                    name:"minimize-composition"`
 	Resources           []string `help:"Limit impact analysis to specific composites in [namespace/]name format. Repeatable or comma-separated. Mutually exclusive with --namespace." name:"resource"`
-	AnalyzeUnchanged    bool     `default:"false"                                                                                                                                     help:"Run impact analysis even for compositions identical to their in-cluster version (skipped by default, since applying them creates no new CompositionRevision). Useful for a pre-edit convergence baseline." name:"analyze-unchanged"`
+	AnalyzeUnchanged    bool     `default:"false"                                                                                                                                     help:"Run impact analysis even for compositions identical to their in-cluster version (skipped by default, since they would render nothing differently). Useful for a pre-edit convergence baseline." name:"analyze-unchanged"`
 }
 
 // validateFlags returns an error if mutually exclusive flags are set together.
@@ -107,10 +107,11 @@ Notes:
   re-include these either.
 
   A composition identical to its in-cluster version is reported as unchanged and its composites
-  are not evaluated: applying it creates no new CompositionRevision, so nothing would adopt it.
-  Any downstream delta found in that situation is caused by something other than the composition
-  (drift, convergence lag, or a modeling artifact of this tool), and cannot be told apart from
-  a real impact — so it is not reported as one. Pass --analyze-unchanged to evaluate anyway.
+  are not evaluated: any CompositionRevision it produced would carry the same spec, so nothing
+  would render differently. Any downstream delta found in that situation is caused by something
+  other than the composition (drift, convergence lag, or a modeling artifact of this tool), and
+  cannot be told apart from a real impact — so it is not reported as one. Pass
+  --analyze-unchanged to evaluate anyway.
 `
 }
 
