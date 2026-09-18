@@ -2311,6 +2311,40 @@ Impact analysis skipped: applying this composition creates no new CompositionRev
 			expectedExitCode: dp.ExitCodeSuccess,
 			noColor:          true,
 		},
+		// Issue #467: the same skip, for a cluster composition that was applied with a client-side
+		// `kubectl apply` and so carries kubectl.kubernetes.io/last-applied-configuration. The file
+		// being diffed never carries that annotation, so the composition comparison sees a difference
+		// the user did not make. It must not read as an edit — otherwise the skip above never fires
+		// for the most common way compositions actually reach a cluster, and the delta these fixtures
+		// produce comes back as exit code 3.
+		//
+		// Unlike the unit coverage in TestDefaultCompDiffProcessor_calculateCompositionDiff, this runs
+		// the real CLI wiring: it proves defaultProcessorOptions does not fold the annotation into
+		// --ignore-paths (which would make "the user masked something" indistinguishable from "we
+		// always ignore something") and that the renderer strips it regardless.
+		"UnchangedCompositionAppliedWithKubectlSkipsImpactAnalysis": {
+			reason: "A composition applied with kubectl is still recognized as unchanged, despite the last-applied-configuration annotation only its cluster copy carries",
+			setupFiles: []string{
+				"testdata/comp/resources/xrd.yaml",
+				"testdata/comp/resources/original-composition-kubectl-applied.yaml",
+				"testdata/comp/resources/functions.yaml",
+				"testdata/comp/resources/existing-xr-1.yaml",
+				"testdata/comp/resources/existing-downstream-1.yaml",
+			},
+			inputFiles: []string{"testdata/comp/composition-no-changes.yaml"},
+			namespace:  "default",
+			expectedOutput: `
+=== Composition Changes ===
+
+No changes detected in composition xnopresources.diff.example.org
+
+Impact analysis skipped: applying this composition creates no new CompositionRevision, so no composite resource would change as a result. Pass --analyze-unchanged to evaluate them anyway.
+
+`,
+			expectedError:    false,
+			expectedExitCode: dp.ExitCodeSuccess,
+			noColor:          true,
+		},
 		// The same setup with --analyze-unchanged evaluates the XRs after all (the pre-edit
 		// convergence-baseline workflow). Note what it reports: a downstream modification even though
 		// the composition is byte-identical to the cluster's. That delta is not caused by this
