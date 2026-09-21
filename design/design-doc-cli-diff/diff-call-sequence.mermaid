@@ -58,7 +58,8 @@ sequenceDiagram
 
             DP->>DP: removeNamespacesFromClusterScopedResources(...)
             opt Nested XRs present
-                DP->>DP: Recurse via diffSingleResourceInternal (subject to --max-nested-depth)
+                DP->>DP: ProcessNestedXRs(..., depth+1)
+                DP->>DP: Recurse via diffSingleResourceInternal (err if depth > --max-nested-depth)
             end
             DP->>Validator: ValidateResources / ValidateScopeConstraints
             Validator-->>DP: ok / err
