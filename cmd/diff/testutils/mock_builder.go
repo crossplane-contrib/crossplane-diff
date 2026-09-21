@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/crossplane-contrib/crossplane-diff/cmd/diff/renderer/types"
 	dtypes "github.com/crossplane-contrib/crossplane-diff/cmd/diff/types"
@@ -169,19 +170,29 @@ func (b *MockResourceClientBuilder) WithGetResourcesByLabel(fn func(context.Cont
 // WithResourcesFoundByLabel sets GetResourcesByLabel to return resources for a specific label value.
 // This method is stateful - multiple calls accumulate mappings for different label values.
 // The label parameter specifies which label key to match on (e.g., "crossplane.io/composition-name").
-func (b *MockResourceClientBuilder) WithResourcesFoundByLabel(resources []*un.Unstructured, label, value string) *MockResourceClientBuilder {
+//
+// An optional expectNamespace pins the lookup namespace: when supplied, the
+// resources are returned only if GetResourcesByLabel is called with that exact
+// namespace. Pass metav1.NamespaceAll to require a cluster-wide (all-namespaces)
+// lookup, as for matchLabels ExtraResources
+// (crossplane-contrib/crossplane-diff#376) — a regression that scopes the lookup
+// to a specific namespace then yields zero results. When omitted, the namespace
+// is not considered and only the label value is matched.
+func (b *MockResourceClientBuilder) WithResourcesFoundByLabel(resources []*un.Unstructured, label, value string, expectNamespace ...string) *MockResourceClientBuilder {
+	matches := func(namespace string, selector metav1.LabelSelector) bool {
+		labelValue, exists := selector.MatchLabels[label]
+		if !exists || labelValue != value {
+			return false
+		}
+
+		return len(expectNamespace) == 0 || namespace == expectNamespace[0]
+	}
+
 	// If we don't have an existing GetResourcesByLabel function, create a new one
 	if b.mock.GetResourcesByLabelFn == nil {
-		// Create a map to store resources by label value
-		resourcesByValue := make(map[string][]*un.Unstructured)
-		resourcesByValue[value] = resources
-
-		return b.WithGetResourcesByLabel(func(_ context.Context, _ schema.GroupVersionKind, _ string, selector metav1.LabelSelector) ([]*un.Unstructured, error) {
-			// Check if the selector matches our expected label
-			if labelValue, exists := selector.MatchLabels[label]; exists {
-				if res, found := resourcesByValue[labelValue]; found {
-					return res, nil
-				}
+		return b.WithGetResourcesByLabel(func(_ context.Context, _ schema.GroupVersionKind, namespace string, selector metav1.LabelSelector) ([]*un.Unstructured, error) {
+			if matches(namespace, selector) {
+				return resources, nil
 			}
 
 			return []*un.Unstructured{}, nil
@@ -193,8 +204,7 @@ func (b *MockResourceClientBuilder) WithResourcesFoundByLabel(resources []*un.Un
 	originalFn := b.mock.GetResourcesByLabelFn
 
 	return b.WithGetResourcesByLabel(func(ctx context.Context, gvk schema.GroupVersionKind, namespace string, selector metav1.LabelSelector) ([]*un.Unstructured, error) {
-		// Check if the selector matches our new label/value pair
-		if labelValue, exists := selector.MatchLabels[label]; exists && labelValue == value {
+		if matches(namespace, selector) {
 			return resources, nil
 		}
 
@@ -640,6 +650,13 @@ func (b *MockTypeConverterBuilder) Build() *MockTypeConverter {
 // MockCompositionClientBuilder helps build crossplane.CompositionClient mocks.
 type MockCompositionClientBuilder struct {
 	mock *MockCompositionClient
+
+	// composites accumulates the per-composition XR sets registered by
+	// WithResourcesForComposition, keyed by "<compositionName>/<namespace>". It exists so repeated
+	// calls compose instead of overwriting each other: a multi-composition test needs a different XR
+	// set per composition, and silently keeping only the last registration made the earlier
+	// compositions look net-new (empty affected set) rather than failing the test.
+	composites map[string][]*un.Unstructured
 }
 
 // NewMockCompositionClient creates a new MockCompositionClientBuilder.
@@ -742,12 +759,19 @@ func (b *MockCompositionClientBuilder) WithFindComposites(fn func(context.Contex
 // for a given composition name and namespace. Refs-mode calls return an explicit error identifying this
 // helper as default-discovery only — use WithFindComposites directly if you need to mock both modes.
 func (b *MockCompositionClientBuilder) WithResourcesForComposition(compositionName, namespace string, resources []*un.Unstructured) *MockCompositionClientBuilder {
+	if b.composites == nil {
+		b.composites = map[string][]*un.Unstructured{}
+	}
+
+	b.composites[compositionName+"/"+namespace] = resources
+
+	// The closure reads the map at call time, so registrations added after this one are visible too.
 	return b.WithFindComposites(func(_ context.Context, comp *un.Unstructured, opts dtypes.FindCompositesOptions) ([]*un.Unstructured, error) {
 		if len(opts.Refs) > 0 {
 			return nil, errors.New("WithResourcesForComposition only handles default-discovery (empty Refs)")
 		}
 
-		if comp.GetName() == compositionName && opts.Namespace == namespace {
+		if resources, ok := b.composites[comp.GetName()+"/"+opts.Namespace]; ok {
 			return resources, nil
 		}
 
@@ -1471,6 +1495,45 @@ func (b *ResourceBuilder) WithOwnerReference(kind, name, apiVersion, uid string)
 	return b
 }
 
+// WithControllerReference adds a controller owner reference (Controller=true,
+// BlockOwnerDeletion=true) to the resource. This mirrors how Crossplane sets
+// the controlling XR on a composed resource, so tests that exercise
+// controller-ref-based logic (e.g. observed-resource scoping in
+// FetchObservedResources) can build realistic fixtures.
+func (b *ResourceBuilder) WithControllerReference(kind, name, apiVersion, uid string) *ResourceBuilder {
+	ownerRefs := b.resource.GetOwnerReferences()
+
+	controller := true
+	newOwnerRef := metav1.OwnerReference{
+		APIVersion:         apiVersion,
+		Kind:               kind,
+		Name:               name,
+		UID:                k8stypes.UID(uid),
+		Controller:         &controller,
+		BlockOwnerDeletion: &controller,
+	}
+
+	ownerRefs = append(ownerRefs, newOwnerRef)
+	b.resource.SetOwnerReferences(ownerRefs)
+
+	return b
+}
+
+// WithUID sets the resource's metadata.uid.
+func (b *ResourceBuilder) WithUID(uid string) *ResourceBuilder {
+	b.resource.SetUID(k8stypes.UID(uid))
+	return b
+}
+
+// WithDeletionTimestamp sets metadata.deletionTimestamp to the supplied raw value, marking the
+// resource as being deleted. The value is set verbatim, and typed any rather than string, so tests can
+// pass an explicit nil — which is how round-tripped Kubernetes YAML spells "unset" for timestamp
+// fields, and therefore a case worth asserting is not mistaken for a deleting resource.
+func (b *ResourceBuilder) WithDeletionTimestamp(timestamp any) *ResourceBuilder {
+	un.SetNestedField(b.resource.Object, timestamp, "metadata", "deletionTimestamp") //nolint:errcheck // test builder; a bad value is the point of some cases.
+	return b
+}
+
 // WithCompositeOwner sets up the resource as a cpd resource with the given composite owner.
 func (b *ResourceBuilder) WithCompositeOwner(owner string) *ResourceBuilder {
 	// Add standard Crossplane labels and annotations for a cpd resource
@@ -1511,6 +1574,44 @@ func (b *ResourceBuilder) WithNestedField(value any, fields ...string) *Resource
 	return b
 }
 
+// WithCompositionRevisionSelector sets spec[.crossplane].compositionRevisionSelector on the
+// resource. Pass CrossplaneAPIExtGroupV2 ("apiextensions.crossplane.io/v2") to use the v2 path
+// (spec.crossplane.compositionRevisionSelector) or CrossplaneAPIExtGroupV1 for the legacy v1 path
+// (spec.compositionRevisionSelector). matchLabels and matchExpressions are omitted when nil, so a
+// selector with only expressions (or only labels) can be built. matchExpressions entries use the
+// standard LabelSelectorRequirement shape: {"key": string, "operator": string, "values": []any}.
+func (b *ResourceBuilder) WithCompositionRevisionSelector(apiGroup string, matchLabels map[string]string, matchExpressions []map[string]any) *ResourceBuilder {
+	selector := map[string]any{}
+
+	if matchLabels != nil {
+		ml := make(map[string]any, len(matchLabels))
+		for k, v := range matchLabels {
+			ml[k] = v
+		}
+
+		selector["matchLabels"] = ml
+	}
+
+	if matchExpressions != nil {
+		exprs := make([]any, len(matchExpressions))
+		for i, e := range matchExpressions {
+			exprs[i] = e
+		}
+
+		selector["matchExpressions"] = exprs
+	}
+
+	// v2 XRs nest crossplane spec fields under spec.crossplane; v1 keeps them under spec.
+	path := []string{"spec", "compositionRevisionSelector"}
+	if apiGroup != "apiextensions.crossplane.io/v1" {
+		path = []string{"spec", "crossplane", "compositionRevisionSelector"}
+	}
+
+	_ = un.SetNestedField(b.resource.Object, selector, path...)
+
+	return b
+}
+
 // WithFieldManagers sets the managed fields on the resource using the provided manager names.
 func (b *ResourceBuilder) WithFieldManagers(managers ...string) *ResourceBuilder {
 	entries := make([]metav1.ManagedFieldsEntry, len(managers))
@@ -1519,6 +1620,20 @@ func (b *ResourceBuilder) WithFieldManagers(managers ...string) *ResourceBuilder
 	}
 
 	b.resource.SetManagedFields(entries)
+
+	return b
+}
+
+// WithServerMetadata stamps the server-populated identity and versioning
+// metadata fields (resourceVersion, uid, generation, creationTimestamp) that
+// Kubernetes adds to a persisted object. Values are deterministic placeholders
+// so tests remain stable. Use this to construct a resource that looks like it
+// was fetched from the cluster (e.g. to verify diff cleanup strips these).
+func (b *ResourceBuilder) WithServerMetadata() *ResourceBuilder {
+	b.resource.SetResourceVersion("12345")
+	b.resource.SetUID(k8stypes.UID("00000000-0000-0000-0000-000000000000"))
+	b.resource.SetGeneration(1)
+	b.resource.SetCreationTimestamp(metav1.NewTime(time.Unix(0, 0).UTC()))
 
 	return b
 }
@@ -1860,6 +1975,21 @@ func (b *CompositionBuilder) WithCompositeTypeRef(apiVersion, kind string) *Comp
 		Kind:       kind,
 	}
 
+	return b
+}
+
+// WithLabels sets metadata.labels on the composition. CompositionRevisions inherit these labels, so
+// they drive compositionRevisionSelector matching in comp-diff tests.
+func (b *CompositionBuilder) WithLabels(labels map[string]string) *CompositionBuilder {
+	b.composition.SetLabels(labels)
+	return b
+}
+
+// WithAnnotations sets metadata.annotations on the composition. Useful for modelling the
+// tooling-applied annotations a cluster copy carries but a file copy does not (notably
+// kubectl.kubernetes.io/last-applied-configuration).
+func (b *CompositionBuilder) WithAnnotations(annotations map[string]string) *CompositionBuilder {
+	b.composition.SetAnnotations(annotations)
 	return b
 }
 

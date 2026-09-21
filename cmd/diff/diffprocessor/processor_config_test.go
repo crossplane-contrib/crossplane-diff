@@ -208,6 +208,48 @@ func TestWithOptions(t *testing.T) {
 	}
 }
 
+// TestWithCrossplaneRenderOverrides verifies that the render-backend selector
+// options set the corresponding ProcessorConfig fields, so they thread through
+// to render.EngineFlags when the default engine-backed RenderFn is built.
+func TestWithCrossplaneRenderOverrides(t *testing.T) {
+	tests := map[string]struct {
+		option ProcessorOption
+		want   ProcessorConfig
+	}{
+		"WithCrossplaneVersion": {
+			option: WithCrossplaneVersion("v2.4.0"),
+			want:   ProcessorConfig{CrossplaneVersion: "v2.4.0"},
+		},
+		"WithCrossplaneImage": {
+			option: WithCrossplaneImage("example.com/mirror/crossplane:v2.3.4"),
+			want:   ProcessorConfig{CrossplaneImage: "example.com/mirror/crossplane:v2.3.4"},
+		},
+		"WithCrossplaneRenderBinary": {
+			option: WithCrossplaneRenderBinary("/usr/local/bin/crossplane"),
+			want:   ProcessorConfig{CrossplaneRenderBinary: "/usr/local/bin/crossplane"},
+		},
+	}
+
+	for name, tt := range tests {
+		t.Run(name, func(t *testing.T) {
+			var config ProcessorConfig
+			tt.option(&config)
+
+			if diff := gcmp.Diff(tt.want.CrossplaneVersion, config.CrossplaneVersion); diff != "" {
+				t.Errorf("CrossplaneVersion mismatch (-want +got):\n%s", diff)
+			}
+
+			if diff := gcmp.Diff(tt.want.CrossplaneImage, config.CrossplaneImage); diff != "" {
+				t.Errorf("CrossplaneImage mismatch (-want +got):\n%s", diff)
+			}
+
+			if diff := gcmp.Diff(tt.want.CrossplaneRenderBinary, config.CrossplaneRenderBinary); diff != "" {
+				t.Errorf("CrossplaneRenderBinary mismatch (-want +got):\n%s", diff)
+			}
+		})
+	}
+}
+
 // TestWithStdoutStderr verifies that WithStdout and WithStderr set the
 // corresponding writers on the ProcessorConfig.
 func TestWithStdoutStderr(t *testing.T) {

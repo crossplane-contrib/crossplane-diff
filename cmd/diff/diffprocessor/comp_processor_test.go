@@ -30,6 +30,7 @@ import (
 	"github.com/crossplane-contrib/crossplane-diff/cmd/diff/types"
 	"github.com/crossplane/cli/v2/cmd/crossplane/render"
 	gcmp "github.com/google/go-cmp/cmp"
+	"github.com/google/go-cmp/cmp/cmpopts"
 	un "k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	k8stypes "k8s.io/apimachinery/pkg/types"
 
@@ -151,33 +152,49 @@ func TestDefaultCompDiffProcessor_DiffComposition(t *testing.T) {
 		WithNamespace("default").
 		Build()
 
+	// changedComp is the input composition for cases that need impact analysis to actually run: it
+	// carries a label testComp (the cluster copy) lacks, so the composition compares as changed.
+	changedComp := func() *un.Unstructured {
+		return tu.NewComposition("test-composition").
+			WithCompositeTypeRef("example.org/v1", "XResource").
+			WithPipelineMode().
+			WithLabels(map[string]string{"version": "0.0.2"}).
+			BuildAsUnstructured()
+	}
+
+	// unchangedComp is byte-identical to testComp, so the composition compares as equal.
+	unchangedComp := func() *un.Unstructured {
+		return tu.NewComposition("test-composition").
+			WithCompositeTypeRef("example.org/v1", "XResource").
+			WithPipelineMode().
+			BuildAsUnstructured()
+	}
+
+	singleXRMocks := func() xp.Clients {
+		return xp.Clients{
+			Composition: tu.NewMockCompositionClient().
+				WithSuccessfulCompositionFetch(testComp).
+				WithResourcesForComposition("test-composition", "default", []*un.Unstructured{testXR}).
+				Build(),
+			Definition:   tu.NewMockDefinitionClient().Build(),
+			Environment:  tu.NewMockEnvironmentClient().Build(),
+			Function:     tu.NewMockFunctionClient().Build(),
+			ResourceTree: tu.NewMockResourceTreeClient().Build(),
+		}
+	}
+
 	tests := map[string]struct {
 		compositions []*un.Unstructured
 		namespace    string
+		analyzeOn    AnalyzeOn
 		setupMocks   func() xp.Clients
 		verifyOutput func(t *testing.T, output string)
 		wantErr      bool
 	}{
 		"SuccessfulDiff": {
-			namespace: "default",
-			compositions: []*un.Unstructured{
-				tu.NewComposition("test-composition").
-					WithCompositeTypeRef("example.org/v1", "XResource").
-					WithPipelineMode().
-					BuildAsUnstructured(),
-			},
-			setupMocks: func() xp.Clients {
-				return xp.Clients{
-					Composition: tu.NewMockCompositionClient().
-						WithSuccessfulCompositionFetch(testComp).
-						WithResourcesForComposition("test-composition", "default", []*un.Unstructured{testXR}).
-						Build(),
-					Definition:   tu.NewMockDefinitionClient().Build(),
-					Environment:  tu.NewMockEnvironmentClient().Build(),
-					Function:     tu.NewMockFunctionClient().Build(),
-					ResourceTree: tu.NewMockResourceTreeClient().Build(),
-				}
-			},
+			namespace:    "default",
+			compositions: []*un.Unstructured{changedComp()},
+			setupMocks:   singleXRMocks,
 			verifyOutput: func(t *testing.T, output string) {
 				t.Helper()
 				// Should contain composition changes section
@@ -191,6 +208,67 @@ func TestDefaultCompDiffProcessor_DiffComposition(t *testing.T) {
 			},
 			wantErr: false,
 		},
+		// Issue #453: any revision an unchanged composition produced would carry the same spec, so its
+		// XRs are not evaluated at all and the two impact sections are replaced by an explicit skip note.
+		"UnchangedCompositionSkipsImpactAnalysis": {
+			namespace:    "default",
+			compositions: []*un.Unstructured{unchangedComp()},
+			setupMocks:   singleXRMocks,
+			verifyOutput: func(t *testing.T, output string) {
+				t.Helper()
+
+				if !strings.Contains(output, "No changes detected in composition test-composition") {
+					t.Errorf("Expected output to report the composition as unchanged, got:\n%s", output)
+				}
+
+				if !strings.Contains(output, "Impact analysis skipped") {
+					t.Errorf("Expected output to contain the impact-analysis skip note, got:\n%s", output)
+				}
+
+				if !strings.Contains(output, "--analyze-on=always") {
+					t.Errorf("Expected the skip note to name the flag that opts back in, got:\n%s", output)
+				}
+
+				// The distinction the two skip messages must preserve: an identical composition creates
+				// no revision, so this message may claim nothing could change. The metadata-only skip
+				// may not.
+				if !strings.Contains(output, "creates no new CompositionRevision") {
+					t.Errorf("Expected the identical-composition skip note to say no revision is created, got:\n%s", output)
+				}
+
+				if strings.Contains(output, "=== Affected Composite Resources ===") {
+					t.Errorf("Expected no affected-resources section for a skipped composition, got:\n%s", output)
+				}
+
+				if strings.Contains(output, "=== Impact Analysis ===") {
+					t.Errorf("Expected no impact-analysis section for a skipped composition, got:\n%s", output)
+				}
+			},
+			wantErr: false,
+		},
+		// --analyze-unchanged opts back into the analysis (the pre-edit convergence-baseline workflow).
+		"UnchangedCompositionWithAnalyzeUnchanged": {
+			namespace:    "default",
+			compositions: []*un.Unstructured{unchangedComp()},
+			analyzeOn:    AnalyzeOnAlways,
+			setupMocks:   singleXRMocks,
+			verifyOutput: func(t *testing.T, output string) {
+				t.Helper()
+
+				if !strings.Contains(output, "No changes detected in composition test-composition") {
+					t.Errorf("Expected output to report the composition as unchanged, got:\n%s", output)
+				}
+
+				if strings.Contains(output, "Impact analysis skipped") {
+					t.Errorf("Expected no skip note with --analyze-unchanged, got:\n%s", output)
+				}
+
+				if !strings.Contains(output, "=== Affected Composite Resources ===") {
+					t.Errorf("Expected the affected-resources section with --analyze-unchanged, got:\n%s", output)
+				}
+			},
+			wantErr: false,
+		},
 		"NoCompositions": {
 			namespace:    "default",
 			compositions: []*un.Unstructured{},
@@ -199,20 +277,27 @@ func TestDefaultCompDiffProcessor_DiffComposition(t *testing.T) {
 			},
 			wantErr: true,
 		},
+		// Aggregation across compositions: one section per input, each with its own affected XRs.
+		// Both inputs must genuinely differ from their cluster copies (hence the labels) and must have
+		// affected XRs — otherwise the skip added for issue #453 short-circuits before the per-XR work,
+		// and the case would silently stop covering aggregation while still rendering two headers.
+		// The end-to-end variant is TestCompDiffIntegration/MultipleChangedCompositionsBothReportImpact.
 		"MultipleCompositions": {
 			namespace: "default",
 			compositions: []*un.Unstructured{
 				tu.NewComposition("test-composition-1").
 					WithCompositeTypeRef("example.org/v1", "XResource").
 					WithPipelineMode().
+					WithLabels(map[string]string{"version": "0.0.2"}).
 					BuildAsUnstructured(),
 				tu.NewComposition("test-composition-2").
 					WithCompositeTypeRef("example.org/v1", "XResource").
 					WithPipelineMode().
+					WithLabels(map[string]string{"version": "0.0.2"}).
 					BuildAsUnstructured(),
 			},
 			setupMocks: func() xp.Clients {
-				// Create test compositions for the multi-composition test
+				// Cluster copies carry no labels, so both inputs compare as changed.
 				testComp1 := tu.NewComposition("test-composition-1").
 					WithCompositeTypeRef("example.org/v1", "XResource").
 					WithPipelineMode().
@@ -223,11 +308,14 @@ func TestDefaultCompDiffProcessor_DiffComposition(t *testing.T) {
 					WithPipelineMode().
 					Build()
 
+				xr1 := tu.NewResource("example.org/v1", "XResource", "xr-one").WithNamespace("default").Build()
+				xr2 := tu.NewResource("example.org/v1", "XResource", "xr-two").WithNamespace("default").Build()
+
 				return xp.Clients{
 					Composition: tu.NewMockCompositionClient().
 						WithSuccessfulCompositionFetches([]*apiextensionsv1.Composition{testComp1, testComp2}).
-						WithResourcesForComposition("test-composition-1", "default", []*un.Unstructured{}).
-						WithResourcesForComposition("test-composition-2", "default", []*un.Unstructured{}).
+						WithResourcesForComposition("test-composition-1", "default", []*un.Unstructured{xr1}).
+						WithResourcesForComposition("test-composition-2", "default", []*un.Unstructured{xr2}).
 						Build(),
 					Definition:   tu.NewMockDefinitionClient().Build(),
 					Environment:  tu.NewMockEnvironmentClient().Build(),
@@ -245,6 +333,20 @@ func TestDefaultCompDiffProcessor_DiffComposition(t *testing.T) {
 				// Should contain separator between compositions
 				if !strings.Contains(output, strings.Repeat("=", 80)) {
 					t.Errorf("Expected output to contain composition separator")
+				}
+
+				// Each composition's own affected XR must be evaluated and surfaced. Without this the
+				// case passes even when the aggregation loop only processes the first composition, since
+				// the section headers above are printed regardless.
+				for _, want := range []string{"XResource/xr-one", "XResource/xr-two"} {
+					if !strings.Contains(output, want) {
+						t.Errorf("Expected %s in the affected-resources output, got:\n%s", want, output)
+					}
+				}
+
+				// Neither composition changed → skipped would be wrong here; both must be analyzed.
+				if strings.Contains(output, "Impact analysis skipped") {
+					t.Errorf("Both compositions changed, so neither should be skipped, got:\n%s", output)
 				}
 			},
 			wantErr: false,
@@ -269,11 +371,12 @@ func TestDefaultCompDiffProcessor_DiffComposition(t *testing.T) {
 			var stdout bytes.Buffer
 
 			config := ProcessorConfig{
-				Colorize: false,
-				Compact:  false,
-				Logger:   logger,
-				Stdout:   &stdout,         // Set stdout in config so renderers can access it
-				Stderr:   &bytes.Buffer{}, // Discard stderr for tests
+				Colorize:  false,
+				Compact:   false,
+				AnalyzeOn: tt.analyzeOn,
+				Logger:    logger,
+				Stdout:    &stdout,         // Set stdout in config so renderers can access it
+				Stderr:    &bytes.Buffer{}, // Discard stderr for tests
 				RenderFunc: func(_ context.Context, _ logging.Logger, in RenderInputs) (render.CompositionOutputs, error) {
 					return render.CompositionOutputs{
 						CompositeResource: in.CompositeResource,
@@ -310,111 +413,383 @@ func TestDefaultCompDiffProcessor_DiffComposition(t *testing.T) {
 	}
 }
 
-func TestDefaultCompDiffProcessor_filterXRsByUpdatePolicy(t *testing.T) {
+// TestDefaultCompDiffProcessor_calculateCompositionDiff pins the split between the diff the user is
+// shown and whether the composition changed at all (issue #453).
+//
+// The two come apart only under --ignore-paths. Gating impact analysis on the *displayed* diff would
+// mean that masking a path which is load-bearing for rendering silently skips the analysis for a
+// composition that genuinely changes the rendered output — so `changed` must ignore the mask.
+func TestDefaultCompDiffProcessor_calculateCompositionDiff(t *testing.T) {
+	ctx := t.Context()
+
+	compWithLabels := func(labels map[string]string) *un.Unstructured {
+		return tu.NewComposition("test-composition").
+			WithCompositeTypeRef("example.org/v1", "XResource").
+			WithPipelineMode().
+			WithLabels(labels).
+			BuildAsUnstructured()
+	}
+
+	type want struct {
+		hasDiff bool
+		scope   ChangeScope
+	}
+
+	tests := map[string]struct {
+		input *un.Unstructured
+		// clusterAnnotations are annotations present only on the in-cluster copy, modelling what
+		// a deploy tool stamps on apply.
+		clusterAnnotations map[string]string
+		ignorePaths        []string
+		want               want
+	}{
+		"Identical_NoIgnorePaths": {
+			input: compWithLabels(map[string]string{"version": "0.0.1"}),
+			want:  want{hasDiff: false, scope: ChangeScopeNone},
+		},
+		"Different_NoIgnorePaths": {
+			input: compWithLabels(map[string]string{"version": "0.0.2"}),
+			want:  want{hasDiff: true, scope: ChangeScopeMetadata},
+		},
+		"Identical_WithIgnorePaths": {
+			input:       compWithLabels(map[string]string{"version": "0.0.1"}),
+			ignorePaths: []string{"metadata.labels[version]"},
+			want:        want{hasDiff: false, scope: ChangeScopeNone},
+		},
+		// The only difference is masked: nothing to show the user, but the composition DID change, so
+		// impact analysis must still run.
+		"DifferenceMaskedByIgnorePaths_StillChanged": {
+			input:       compWithLabels(map[string]string{"version": "0.0.2"}),
+			ignorePaths: []string{"metadata.labels[version]"},
+			want:        want{hasDiff: false, scope: ChangeScopeMetadata},
+		},
+		// The cluster copy carries the annotation a client-side kubectl apply stamps; the file copy
+		// never does. It is suppressed from the rendered diff because showing a multi-KB serialization
+		// of the object is useless — but Crossplane's Composition.Hash() covers annotations, so
+		// applying this does create a new CompositionRevision that composites re-point to. A
+		// readability suppression must not decide that away: changed is true, and the composites get
+		// evaluated.
+		"LastAppliedConfigurationOnly_Changed": {
+			input: compWithLabels(map[string]string{"version": "0.0.1"}),
+			clusterAnnotations: map[string]string{
+				"kubectl.kubernetes.io/last-applied-configuration": `{"apiVersion":"apiextensions.crossplane.io/v1","kind":"Composition"}`,
+			},
+			want: want{hasDiff: false, scope: ChangeScopeMetadata},
+		},
+		// Same, with the user explicitly masking the annotation. --ignore-paths is a display
+		// preference, so it does not change the verdict either — same reason a load-bearing
+		// spec.pipeline[].input mask does not (see DifferenceMaskedByIgnorePaths_StillChanged).
+		"LastAppliedConfigurationExplicitlyMasked_StillChanged": {
+			input: compWithLabels(map[string]string{"version": "0.0.1"}),
+			clusterAnnotations: map[string]string{
+				"kubectl.kubernetes.io/last-applied-configuration": `{"apiVersion":"apiextensions.crossplane.io/v1","kind":"Composition"}`,
+			},
+			ignorePaths: []string{"metadata.annotations[kubectl.kubernetes.io/last-applied-configuration]"},
+			want:        want{hasDiff: false, scope: ChangeScopeMetadata},
+		},
+		// A spec difference, which --analyze-on=spec-change is the only setting to distinguish. Every
+		// other case in this table changes metadata only.
+		"SpecDifference_ScopeIsSpec": {
+			input: tu.NewComposition("test-composition").
+				WithCompositeTypeRef("example.org/v1", "XResource").
+				WithPipelineMode().
+				WithLabels(map[string]string{"version": "0.0.1"}).
+				WithPipelineStep("step-a", "function-a", nil).
+				BuildAsUnstructured(),
+			want: want{hasDiff: true, scope: ChangeScopeSpec},
+		},
+		// A spec difference masked from display is still a spec change: --ignore-paths must not be able
+		// to downgrade the scope, or --analyze-on=spec-change would skip a composition that genuinely
+		// renders differently.
+		"SpecDifferenceMasked_ScopeStillSpec": {
+			input: tu.NewComposition("test-composition").
+				WithCompositeTypeRef("example.org/v1", "XResource").
+				WithPipelineMode().
+				WithLabels(map[string]string{"version": "0.0.1"}).
+				WithPipelineStep("step-a", "function-a", nil).
+				BuildAsUnstructured(),
+			ignorePaths: []string{"spec.pipeline"},
+			want:        want{hasDiff: false, scope: ChangeScopeSpec},
+		},
+	}
+
+	for name, tt := range tests {
+		t.Run(name, func(t *testing.T) {
+			clusterComp := tu.NewComposition("test-composition").
+				WithCompositeTypeRef("example.org/v1", "XResource").
+				WithPipelineMode().
+				WithLabels(map[string]string{"version": "0.0.1"}).
+				WithAnnotations(tt.clusterAnnotations).
+				Build()
+
+			processor := &DefaultCompDiffProcessor{
+				compositionClient: tu.NewMockCompositionClient().
+					WithSuccessfulCompositionFetch(clusterComp).
+					Build(),
+				config: ProcessorConfig{
+					Logger:      tu.TestLogger(t, false),
+					IgnorePaths: tt.ignorePaths,
+				},
+			}
+
+			got, err := processor.calculateCompositionDiff(ctx, tt.input)
+			if err != nil {
+				t.Fatalf("calculateCompositionDiff() unexpected error: %v", err)
+			}
+
+			if diff := gcmp.Diff(tt.want, want{hasDiff: got.diff != nil, scope: got.scope}, gcmp.AllowUnexported(want{})); diff != "" {
+				t.Errorf("calculateCompositionDiff() mismatch (-want +got):\n%s", diff)
+			}
+		})
+	}
+}
+
+// TestChangeScope_triggersAnalysis pins the --analyze-on decision table (issue #472). The values are
+// ordered, so the matrix should be monotonic: anything spec-change analyses, any-change also
+// analyses, and always analyses everything.
+func TestChangeScope_triggersAnalysis(t *testing.T) {
+	type want struct {
+		specChange bool
+		anyChange  bool
+		always     bool
+		// unset is the zero-value AnalyzeOn, which callers constructing a ProcessorConfig directly
+		// will hit; it must behave as the CLI default rather than analysing nothing.
+		unset bool
+	}
+
+	tests := map[string]struct {
+		scope ChangeScope
+		want  want
+	}{
+		"None": {
+			scope: ChangeScopeNone,
+			want:  want{specChange: false, anyChange: false, always: true, unset: false},
+		},
+		// The case the whole flag exists for: a new CompositionRevision is created, but the user may
+		// not want to pay a render per composite to find out whether it propagates.
+		"Metadata": {
+			scope: ChangeScopeMetadata,
+			want:  want{specChange: false, anyChange: true, always: true, unset: true},
+		},
+		"Spec": {
+			scope: ChangeScopeSpec,
+			want:  want{specChange: true, anyChange: true, always: true, unset: true},
+		},
+	}
+
+	for name, tt := range tests {
+		t.Run(name, func(t *testing.T) {
+			got := want{
+				specChange: tt.scope.triggersAnalysis(AnalyzeOnSpecChange),
+				anyChange:  tt.scope.triggersAnalysis(AnalyzeOnAnyChange),
+				always:     tt.scope.triggersAnalysis(AnalyzeOnAlways),
+				unset:      tt.scope.triggersAnalysis(""),
+			}
+
+			if diff := gcmp.Diff(tt.want, got, gcmp.AllowUnexported(want{})); diff != "" {
+				t.Errorf("triggersAnalysis() mismatch (-want +got):\n%s", diff)
+			}
+		})
+	}
+}
+
+func TestDefaultCompDiffProcessor_partitionXRsByUpdatePolicy(t *testing.T) {
+	// compLabels are the labels of the edited composition being diffed (which the resulting
+	// CompositionRevision would inherit). An Automatic XR's compositionRevisionSelector is evaluated
+	// against these to decide whether the XR would adopt the new revision.
+	type droppedWant struct {
+		name   string
+		reason renderer.FilterReason
+	}
+
 	tests := map[string]struct {
 		includeManual bool
+		compName      string // defaults to "test-comp" when empty
+		compLabels    map[string]string
 		xrs           []*un.Unstructured
-		want          []*un.Unstructured
+		wantKept      []string
+		wantDropped   []droppedWant
+		wantErr       bool
 	}{
-		"IncludeManualTrue_ReturnsAllXRs": {
+		// AC2.5 (Manual side): --include-manual keeps Manual XRs...
+		"IncludeManualTrue_KeepsManualXRs": {
 			includeManual: true,
+			compLabels:    map[string]string{"version": "0.0.2"},
 			xrs: []*un.Unstructured{
-				tu.NewResource("example.org/v1", "XResource", "manual-xr").
-					WithNamespace("default").
-					WithNestedField("Manual", "spec", "crossplane", "compositionUpdatePolicy").
-					Build(),
-				tu.NewResource("example.org/v1", "XResource", "auto-xr").
-					WithNamespace("default").
-					WithNestedField("Automatic", "spec", "crossplane", "compositionUpdatePolicy").
-					Build(),
+				tu.NewResource("example.org/v1", "XResource", "manual-xr").WithNamespace("default").
+					WithNestedField("Manual", "spec", "crossplane", "compositionUpdatePolicy").Build(),
+				tu.NewResource("example.org/v1", "XResource", "auto-xr").WithNamespace("default").
+					WithNestedField("Automatic", "spec", "crossplane", "compositionUpdatePolicy").Build(),
 			},
-			want: []*un.Unstructured{
-				tu.NewResource("example.org/v1", "XResource", "manual-xr").
-					WithNamespace("default").
-					WithNestedField("Manual", "spec", "crossplane", "compositionUpdatePolicy").
-					Build(),
-				tu.NewResource("example.org/v1", "XResource", "auto-xr").
-					WithNamespace("default").
+			wantKept:    []string{"manual-xr", "auto-xr"},
+			wantDropped: nil,
+		},
+		// AC2.5 (selector side): ...but --include-manual does NOT re-include selector-mismatched
+		// Automatic XRs — they would never adopt the new revision.
+		"IncludeManualTrue_StillDropsSelectorMismatchedAutomaticXRs": {
+			includeManual: true,
+			compLabels:    map[string]string{"version": "0.0.2"},
+			xrs: []*un.Unstructured{
+				tu.NewResource("example.org/v1", "XResource", "manual-xr").WithNamespace("default").
+					WithNestedField("Manual", "spec", "crossplane", "compositionUpdatePolicy").Build(),
+				tu.NewResource("example.org/v1", "XResource", "auto-mismatch").WithNamespace("default").
 					WithNestedField("Automatic", "spec", "crossplane", "compositionUpdatePolicy").
-					Build(),
+					WithCompositionRevisionSelector(xp.CrossplaneAPIExtGroupV2, map[string]string{"version": "0.0.1"}, nil).Build(),
 			},
+			wantKept:    []string{"manual-xr"},
+			wantDropped: []droppedWant{{name: "auto-mismatch", reason: renderer.FilterReasonRevisionSelectorMismatch}},
 		},
 		"IncludeManualFalse_FiltersManualXRs": {
 			includeManual: false,
+			compLabels:    map[string]string{"version": "0.0.2"},
 			xrs: []*un.Unstructured{
-				tu.NewResource("example.org/v1", "XResource", "manual-xr").
-					WithNamespace("default").
-					WithNestedField("Manual", "spec", "crossplane", "compositionUpdatePolicy").
-					Build(),
-				tu.NewResource("example.org/v1", "XResource", "auto-xr").
-					WithNamespace("default").
-					WithNestedField("Automatic", "spec", "crossplane", "compositionUpdatePolicy").
-					Build(),
+				tu.NewResource("example.org/v1", "XResource", "manual-xr").WithNamespace("default").
+					WithNestedField("Manual", "spec", "crossplane", "compositionUpdatePolicy").Build(),
+				tu.NewResource("example.org/v1", "XResource", "auto-xr").WithNamespace("default").
+					WithNestedField("Automatic", "spec", "crossplane", "compositionUpdatePolicy").Build(),
 			},
-			want: []*un.Unstructured{
-				tu.NewResource("example.org/v1", "XResource", "auto-xr").
-					WithNamespace("default").
-					WithNestedField("Automatic", "spec", "crossplane", "compositionUpdatePolicy").
-					Build(),
-			},
+			wantKept:    []string{"auto-xr"},
+			wantDropped: []droppedWant{{name: "manual-xr", reason: renderer.FilterReasonManualPolicy}},
 		},
-		"IncludeManualFalse_AllManualXRs_ReturnsEmpty": {
+		// AC2.1: Automatic XR whose selector does not match the composition labels is dropped.
+		"AutomaticSelectorMismatch_Dropped": {
 			includeManual: false,
+			compLabels:    map[string]string{"version": "0.0.2"},
 			xrs: []*un.Unstructured{
-				tu.NewResource("example.org/v1", "XResource", "manual-xr-1").
-					WithNamespace("default").
-					WithNestedField("Manual", "spec", "crossplane", "compositionUpdatePolicy").
-					Build(),
-				tu.NewResource("example.org/v1", "XResource", "manual-xr-2").
-					WithNamespace("default").
-					WithNestedField("Manual", "spec", "crossplane", "compositionUpdatePolicy").
-					Build(),
+				tu.NewResource("example.org/v1", "XResource", "selector-old").WithNamespace("default").
+					WithNestedField("Automatic", "spec", "crossplane", "compositionUpdatePolicy").
+					WithCompositionRevisionSelector(xp.CrossplaneAPIExtGroupV2, map[string]string{"version": "0.0.1"}, nil).Build(),
 			},
-			want: []*un.Unstructured{},
+			wantKept:    nil,
+			wantDropped: []droppedWant{{name: "selector-old", reason: renderer.FilterReasonRevisionSelectorMismatch}},
 		},
-		"IncludeManualFalse_AllAutomaticXRs_ReturnsAll": {
+		// AC2.2: Automatic XR whose selector matches the composition labels is kept.
+		"AutomaticSelectorMatch_Kept": {
 			includeManual: false,
+			compLabels:    map[string]string{"version": "0.0.2"},
 			xrs: []*un.Unstructured{
-				tu.NewResource("example.org/v1", "XResource", "auto-xr-1").
-					WithNamespace("default").
+				tu.NewResource("example.org/v1", "XResource", "selector-new").WithNamespace("default").
 					WithNestedField("Automatic", "spec", "crossplane", "compositionUpdatePolicy").
-					Build(),
-				tu.NewResource("example.org/v1", "XResource", "auto-xr-2").
-					WithNamespace("default").
-					Build(), // No policy specified, defaults to Automatic
+					WithCompositionRevisionSelector(xp.CrossplaneAPIExtGroupV2, map[string]string{"version": "0.0.2"}, nil).Build(),
 			},
-			want: []*un.Unstructured{
-				tu.NewResource("example.org/v1", "XResource", "auto-xr-1").
-					WithNamespace("default").
-					WithNestedField("Automatic", "spec", "crossplane", "compositionUpdatePolicy").
-					Build(),
-				tu.NewResource("example.org/v1", "XResource", "auto-xr-2").
-					WithNamespace("default").
-					Build(),
-			},
+			wantKept:    []string{"selector-new"},
+			wantDropped: nil,
 		},
-		"IncludeManualFalse_EmptyList_ReturnsEmpty": {
+		// A selector that keys on crossplane.io/composition-name (via Exists) matches because the
+		// composition's predicted revision labels include that stamped label (added by
+		// predictedRevisionLabels from the composition's name). Guards that augmentation.
+		"AutomaticSelectorOnCompositionName_Kept": {
 			includeManual: false,
+			compName:      "xnopresources.example.org",
+			compLabels:    map[string]string{"version": "0.0.2"},
+			xrs: []*un.Unstructured{
+				tu.NewResource("example.org/v1", "XResource", "name-selector").WithNamespace("default").
+					WithNestedField("Automatic", "spec", "crossplane", "compositionUpdatePolicy").
+					WithCompositionRevisionSelector(xp.CrossplaneAPIExtGroupV2, nil, []map[string]any{
+						{"key": xp.LabelCompositionName, "operator": "Exists"},
+					}).Build(),
+			},
+			wantKept:    []string{"name-selector"},
+			wantDropped: nil,
+		},
+		// AC2.3: Automatic XR with no selector is kept (unchanged from prior behavior).
+		"AutomaticNoSelector_Kept": {
+			includeManual: false,
+			compLabels:    map[string]string{"version": "0.0.2"},
+			xrs: []*un.Unstructured{
+				tu.NewResource("example.org/v1", "XResource", "no-selector").WithNamespace("default").
+					WithNestedField("Automatic", "spec", "crossplane", "compositionUpdatePolicy").Build(),
+				tu.NewResource("example.org/v1", "XResource", "default-policy").WithNamespace("default").Build(),
+			},
+			wantKept:    []string{"no-selector", "default-policy"},
+			wantDropped: nil,
+		},
+		// AC2.4: Manual XR with a matching selector is still dropped by policy (reason manual_policy),
+		// not rescued by the selector match.
+		"ManualWithMatchingSelector_DroppedByPolicy": {
+			includeManual: false,
+			compLabels:    map[string]string{"version": "0.0.2"},
+			xrs: []*un.Unstructured{
+				tu.NewResource("example.org/v1", "XResource", "manual-match").WithNamespace("default").
+					WithNestedField("Manual", "spec", "crossplane", "compositionUpdatePolicy").
+					WithCompositionRevisionSelector(xp.CrossplaneAPIExtGroupV2, map[string]string{"version": "0.0.2"}, nil).Build(),
+			},
+			wantKept:    nil,
+			wantDropped: []droppedWant{{name: "manual-match", reason: renderer.FilterReasonManualPolicy}},
+		},
+		"EmptyList_ReturnsEmpty": {
+			includeManual: false,
+			compLabels:    map[string]string{"version": "0.0.2"},
 			xrs:           []*un.Unstructured{},
-			want:          []*un.Unstructured{},
+			wantKept:      nil,
+			wantDropped:   nil,
 		},
-		"IncludeManualFalse_V1PathManualXR_FiltersCorrectly": {
+		// A deleting XR is on Crossplane's teardown path and will never adopt the resulting revision,
+		// so it is dropped regardless of policy or selector (issue #452).
+		"Deleting_Dropped": {
 			includeManual: false,
+			compLabels:    map[string]string{"version": "0.0.2"},
 			xrs: []*un.Unstructured{
-				tu.NewResource("example.org/v1", "XResource", "legacy-manual-xr").
-					WithNestedField("Manual", "spec", "compositionUpdatePolicy").
-					Build(),
-				tu.NewResource("example.org/v1", "XResource", "auto-xr").
-					WithNamespace("default").
+				tu.NewResource("example.org/v1", "XResource", "deleting-xr").WithNamespace("default").
 					WithNestedField("Automatic", "spec", "crossplane", "compositionUpdatePolicy").
-					Build(),
+					WithDeletionTimestamp("2026-09-07T11:25:03Z").Build(),
+				tu.NewResource("example.org/v1", "XResource", "live-xr").WithNamespace("default").
+					WithNestedField("Automatic", "spec", "crossplane", "compositionUpdatePolicy").Build(),
 			},
-			want: []*un.Unstructured{
-				tu.NewResource("example.org/v1", "XResource", "auto-xr").
-					WithNamespace("default").
+			wantKept:    []string{"live-xr"},
+			wantDropped: []droppedWant{{name: "deleting-xr", reason: renderer.FilterReasonDeleting}},
+		},
+		// Deletion is evaluated before the policy rules and is not rescued by --include-manual: a
+		// deleting Manual XR is reported as deleting, not as manual_policy.
+		"DeletingManualXR_DroppedAsDeletingEvenWithIncludeManual": {
+			includeManual: true,
+			compLabels:    map[string]string{"version": "0.0.2"},
+			xrs: []*un.Unstructured{
+				tu.NewResource("example.org/v1", "XResource", "deleting-manual").WithNamespace("default").
+					WithNestedField("Manual", "spec", "crossplane", "compositionUpdatePolicy").
+					WithDeletionTimestamp("2026-09-07T11:25:03Z").Build(),
+			},
+			wantKept:    nil,
+			wantDropped: []droppedWant{{name: "deleting-manual", reason: renderer.FilterReasonDeleting}},
+		},
+		// A matching compositionRevisionSelector does not rescue a deleting XR either.
+		"DeletingWithMatchingSelector_Dropped": {
+			includeManual: false,
+			compLabels:    map[string]string{"version": "0.0.2"},
+			xrs: []*un.Unstructured{
+				tu.NewResource("example.org/v1", "XResource", "deleting-match").WithNamespace("default").
 					WithNestedField("Automatic", "spec", "crossplane", "compositionUpdatePolicy").
-					Build(),
+					WithCompositionRevisionSelector(xp.CrossplaneAPIExtGroupV2, map[string]string{"version": "0.0.2"}, nil).
+					WithDeletionTimestamp("2026-09-07T11:25:03Z").Build(),
 			},
+			wantKept:    nil,
+			wantDropped: []droppedWant{{name: "deleting-match", reason: renderer.FilterReasonDeleting}},
+		},
+		// An explicit null deletionTimestamp is how round-tripped Kubernetes YAML spells "unset";
+		// it must not be mistaken for a deleting XR.
+		"NullDeletionTimestamp_Kept": {
+			includeManual: false,
+			compLabels:    map[string]string{"version": "0.0.2"},
+			xrs: []*un.Unstructured{
+				tu.NewResource("example.org/v1", "XResource", "null-ts-xr").WithNamespace("default").
+					WithNestedField("Automatic", "spec", "crossplane", "compositionUpdatePolicy").
+					WithDeletionTimestamp(nil).Build(),
+			},
+			wantKept:    []string{"null-ts-xr"},
+			wantDropped: nil,
+		},
+		// Composition with no labels: an Automatic XR with a non-empty selector cannot match, so it
+		// is dropped as a selector mismatch.
+		"NoCompositionLabels_SelectorMismatch_Dropped": {
+			includeManual: false,
+			compLabels:    nil,
+			xrs: []*un.Unstructured{
+				tu.NewResource("example.org/v1", "XResource", "selector-xr").WithNamespace("default").
+					WithNestedField("Automatic", "spec", "crossplane", "compositionUpdatePolicy").
+					WithCompositionRevisionSelector(xp.CrossplaneAPIExtGroupV2, map[string]string{"version": "0.0.2"}, nil).Build(),
+			},
+			wantKept:    nil,
+			wantDropped: []droppedWant{{name: "selector-xr", reason: renderer.FilterReasonRevisionSelectorMismatch}},
 		},
 	}
 
@@ -427,31 +802,80 @@ func TestDefaultCompDiffProcessor_filterXRsByUpdatePolicy(t *testing.T) {
 				},
 			}
 
-			got, _ := processor.partitionXRsByUpdatePolicy(tt.xrs)
-
-			if len(got) != len(tt.want) {
-				t.Errorf("partitionXRsByUpdatePolicy() returned %d kept XRs, want %d", len(got), len(tt.want))
+			compName := tt.compName
+			if compName == "" {
+				compName = "test-comp"
 			}
 
-			// Compare XR names to verify correct filtering
-			gotNames := make([]string, len(got))
-			for i, xr := range got {
-				gotNames[i] = xr.GetName()
+			newComp := tu.NewComposition(compName).
+				WithCompositeTypeRef("example.org/v1", "XResource").
+				WithLabels(tt.compLabels).
+				BuildAsUnstructured()
+
+			kept, dropped, err := processor.partitionXRsByUpdatePolicy(tt.xrs, newComp)
+
+			if tt.wantErr {
+				if err == nil {
+					t.Fatalf("partitionXRsByUpdatePolicy() expected error, got nil")
+				}
+
+				return
 			}
 
-			wantNames := make([]string, len(tt.want))
-			for i, xr := range tt.want {
-				wantNames[i] = xr.GetName()
+			if err != nil {
+				t.Fatalf("partitionXRsByUpdatePolicy() unexpected error: %v", err)
 			}
 
-			if diff := gcmp.Diff(wantNames, gotNames); diff != "" {
-				t.Errorf("filterXRsByUpdatePolicy() XR names mismatch (-want +got):\n%s", diff)
+			gotKept := make([]string, len(kept))
+			for i, xr := range kept {
+				gotKept[i] = xr.GetName()
+			}
+
+			if diff := gcmp.Diff(tt.wantKept, gotKept, cmpopts.EquateEmpty()); diff != "" {
+				t.Errorf("kept XR names mismatch (-want +got):\n%s", diff)
+			}
+
+			gotDropped := make([]droppedWant, len(dropped))
+			for i, d := range dropped {
+				gotDropped[i] = droppedWant{name: d.xr.GetName(), reason: d.reason}
+			}
+
+			if diff := gcmp.Diff(tt.wantDropped, gotDropped, cmpopts.EquateEmpty(), gcmp.AllowUnexported(droppedWant{})); diff != "" {
+				t.Errorf("dropped XRs mismatch (-want +got):\n%s", diff)
 			}
 		})
 	}
 }
 
-func TestDefaultCompDiffProcessor_getCompositionUpdatePolicy(t *testing.T) {
+// TestPredictedRevisionLabels verifies the label set used to evaluate an XR's
+// compositionRevisionSelector mirrors what a real CompositionRevision would carry: the composition's
+// own labels plus crossplane.io/composition-name. The source composition must not be mutated.
+func TestPredictedRevisionLabels(t *testing.T) {
+	newComp := tu.NewComposition("xnopresources.example.org").
+		WithCompositeTypeRef("example.org/v1", "XR").
+		WithLabels(map[string]string{"version": "0.0.2"}).
+		BuildAsUnstructured()
+
+	got := predictedRevisionLabels(newComp)
+
+	want := map[string]string{
+		"version":               "0.0.2",
+		xp.LabelCompositionName: "xnopresources.example.org",
+	}
+
+	if diff := gcmp.Diff(want, got); diff != "" {
+		t.Errorf("predictedRevisionLabels() mismatch (-want +got):\n%s", diff)
+	}
+
+	// The source composition's own labels must be untouched (no composition-name injected).
+	if _, injected := newComp.GetLabels()[xp.LabelCompositionName]; injected {
+		t.Errorf("predictedRevisionLabels mutated the source composition's labels")
+	}
+}
+
+// TestXRUpdatePolicy exercises the shared xp.XRUpdatePolicy reader (v2/v1 path precedence and the
+// Automatic default) through the diffprocessor package that depends on it.
+func TestXRUpdatePolicy(t *testing.T) {
 	tests := map[string]struct {
 		xr   *un.Unstructured
 		want string
@@ -501,16 +925,13 @@ func TestDefaultCompDiffProcessor_getCompositionUpdatePolicy(t *testing.T) {
 
 	for name, tt := range tests {
 		t.Run(name, func(t *testing.T) {
-			processor := &DefaultCompDiffProcessor{
-				config: ProcessorConfig{
-					Logger: tu.TestLogger(t, false),
-				},
+			got, err := xp.XRUpdatePolicy(tt.xr.Object, tt.xr.GetAPIVersion())
+			if err != nil {
+				t.Fatalf("XRUpdatePolicy() unexpected error: %v", err)
 			}
 
-			got := processor.getCompositionUpdatePolicy(tt.xr)
-
 			if got != tt.want {
-				t.Errorf("getCompositionUpdatePolicy() = %v, want %v", got, tt.want)
+				t.Errorf("XRUpdatePolicy() = %v, want %v", got, tt.want)
 			}
 		})
 	}
@@ -702,11 +1123,15 @@ func TestDefaultCompDiffProcessor_DiffComposition_StderrErrorOutput(t *testing.T
 		WithStderr(&stderrBuf), // Use WithStderr to inject test buffer
 	)
 
-	// Run the diff - should succeed but report XR errors
+	// Run the diff - should succeed but report XR errors.
+	//
+	// The input composition must differ from the cluster's (hence the label): impact analysis is
+	// skipped for an unchanged composition, which would make the XR failure under test unreachable.
 	_, err := processor.DiffComposition(ctx, []*un.Unstructured{
 		tu.NewComposition("test-composition").
 			WithCompositeTypeRef("example.org/v1", "XResource").
 			WithPipelineMode().
+			WithLabels(map[string]string{"version": "0.0.2"}).
 			BuildAsUnstructured(),
 	}, "default", nil)
 
@@ -856,18 +1281,20 @@ func TestDefaultCompDiffProcessor_DiffComposition_ResourceMode(t *testing.T) {
 	})
 
 	// SurfaceFilteredControlsImpactAnalysis: when surfaceFiltered=true (resource mode),
-	// Manual-policy XRs are surfaced as XRStatusFilteredByPolicy impacts; when false
+	// Manual-policy XRs are surfaced as XRStatusFiltered impacts (reason manual_policy); when false
 	// (default-discovery), they're counted in the summary but absent from ImpactAnalysis.
 	t.Run("SurfaceFilteredControlsImpactAnalysis", func(t *testing.T) {
 		surfaceTests := map[string]struct {
 			surfaceFiltered bool
 			wantImpactCount int
-			wantStatus      renderer.XRStatus // empty when wantImpactCount == 0
+			wantStatus      renderer.XRStatus     // empty when wantImpactCount == 0
+			wantReason      renderer.FilterReason // empty when wantImpactCount == 0
 		}{
 			"ResourceMode_SurfacesFilteredXRs": {
 				surfaceFiltered: true,
 				wantImpactCount: 1,
-				wantStatus:      renderer.XRStatusFilteredByPolicy,
+				wantStatus:      renderer.XRStatusFiltered,
+				wantReason:      renderer.FilterReasonManualPolicy,
 			},
 			"DefaultDiscovery_OmitsFilteredFromImpactAnalysis": {
 				surfaceFiltered: false,
@@ -896,6 +1323,10 @@ func TestDefaultCompDiffProcessor_DiffComposition_ResourceMode(t *testing.T) {
 					t.Errorf("ImpactAnalysis[0].Status: got %q, want %q", got.ImpactAnalysis[0].Status, tt.wantStatus)
 				}
 
+				if tt.wantImpactCount > 0 && got.ImpactAnalysis[0].FilterReason != tt.wantReason {
+					t.Errorf("ImpactAnalysis[0].FilterReason: got %q, want %q", got.ImpactAnalysis[0].FilterReason, tt.wantReason)
+				}
+
 				if got.AffectedResources.FilteredByPolicy != 1 {
 					t.Errorf("FilteredByPolicy: got %d, want 1", got.AffectedResources.FilteredByPolicy)
 				}
@@ -904,6 +1335,65 @@ func TestDefaultCompDiffProcessor_DiffComposition_ResourceMode(t *testing.T) {
 					t.Errorf("Total: got %d, want 1", got.AffectedResources.Total)
 				}
 			})
+		}
+	})
+
+	// RevisionSelectorMismatchSurfacedWithReasonAndCounts: an Automatic XR whose
+	// compositionRevisionSelector does not match the diffed composition's labels is surfaced as
+	// filtered with reason revision_selector_mismatch (and a detail hint), and counted in
+	// FilteredBySelector rather than FilteredByPolicy. (T3 / AC2.6, AC2.7, AC4.6)
+	t.Run("RevisionSelectorMismatchSurfacedWithReasonAndCounts", func(t *testing.T) {
+		labeledComp := tu.NewComposition("test-comp").
+			WithCompositeTypeRef("example.org/v1", "XR").
+			WithPipelineMode().
+			WithLabels(map[string]string{"version": "0.0.2"}).
+			BuildAsUnstructured()
+
+		selectorMismatchXR := tu.NewResource("example.org/v1", "XR", "selector-xr").
+			InNamespace("ns").
+			WithSpecField("compositionRef", map[string]any{"name": "test-comp"}).
+			WithSpecField("crossplane", map[string]any{"compositionUpdatePolicy": "Automatic"}).
+			WithCompositionRevisionSelector(xp.CrossplaneAPIExtGroupV2, map[string]string{"version": "0.0.1"}, nil).
+			Build()
+
+		client := tu.NewMockCompositionClient().
+			WithSuccessfulCompositionFetch(&apiextensionsv1.Composition{}).
+			Build()
+
+		proc, _ := newCompProcessorForTest(t, client, false /* IncludeManual */)
+
+		got, err := proc.processSingleComposition(t.Context(), labeledComp, []*un.Unstructured{selectorMismatchXR}, true /* surfaceFiltered */)
+		if err != nil {
+			t.Fatalf("processSingleComposition: %v", err)
+		}
+
+		if len(got.ImpactAnalysis) != 1 {
+			t.Fatalf("ImpactAnalysis: got %d entries, want 1 (%+v)", len(got.ImpactAnalysis), got.ImpactAnalysis)
+		}
+
+		impact := got.ImpactAnalysis[0]
+		if impact.Status != renderer.XRStatusFiltered {
+			t.Errorf("Status: got %q, want %q", impact.Status, renderer.XRStatusFiltered)
+		}
+
+		if impact.FilterReason != renderer.FilterReasonRevisionSelectorMismatch {
+			t.Errorf("FilterReason: got %q, want %q", impact.FilterReason, renderer.FilterReasonRevisionSelectorMismatch)
+		}
+
+		if !strings.Contains(impact.FilterDetail, "does not match composition labels") {
+			t.Errorf("FilterDetail: got %q, want it to explain the mismatch", impact.FilterDetail)
+		}
+
+		if got.AffectedResources.FilteredBySelector != 1 {
+			t.Errorf("FilteredBySelector: got %d, want 1", got.AffectedResources.FilteredBySelector)
+		}
+
+		if got.AffectedResources.FilteredByPolicy != 0 {
+			t.Errorf("FilteredByPolicy: got %d, want 0", got.AffectedResources.FilteredByPolicy)
+		}
+
+		if got.AffectedResources.Total != 1 {
+			t.Errorf("Total: got %d, want 1", got.AffectedResources.Total)
 		}
 	})
 }

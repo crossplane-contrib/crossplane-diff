@@ -3,7 +3,7 @@ VERSION --try --raw-output 0.8
 
 PROJECT crossplane-contrib/crossplane-diff
 
-ARG --global GO_VERSION=1.26.4
+ARG --global GO_VERSION=1.27.1
 
 fetch-crossplane-clusters:
   BUILD +fetch-crossplane-cluster \
@@ -296,7 +296,7 @@ go-test:
 
 # go-lint lints Go code.
 go-lint:
-  ARG GOLANGCI_LINT_VERSION=v2.12.2
+  ARG GOLANGCI_LINT_VERSION=v2.13.2
   FROM +go-modules
   # This cache is private because golangci-lint doesn't support concurrent runs.
   CACHE --id go-lint --sharing private /root/.cache/golangci-lint
@@ -323,21 +323,21 @@ envtest-setup:
 
 # kubectl-setup is used by other targets to setup kubectl.
 kubectl-setup:
-  ARG KUBECTL_VERSION=v1.36.2
+  ARG KUBECTL_VERSION=v1.37.0
   ARG NATIVEPLATFORM
   ARG TARGETOS
   ARG TARGETARCH
-  FROM --platform=${NATIVEPLATFORM} curlimages/curl:8.21.0
+  FROM --platform=${NATIVEPLATFORM} curlimages/curl:8.22.0
   RUN curl -fsSL https://dl.k8s.io/${KUBECTL_VERSION}/kubernetes-client-${TARGETOS}-${TARGETARCH}.tar.gz|tar zx
   SAVE ARTIFACT kubernetes/client/bin/kubectl
 
 # kind-setup is used by other targets to setup kind.
 kind-setup:
-  ARG KIND_VERSION=v0.32.0
+  ARG KIND_VERSION=v0.33.0
   ARG NATIVEPLATFORM
   ARG TARGETOS
   ARG TARGETARCH
-  FROM --platform=${NATIVEPLATFORM} curlimages/curl:8.21.0
+  FROM --platform=${NATIVEPLATFORM} curlimages/curl:8.22.0
   RUN curl -fsSLo kind https://github.com/kubernetes-sigs/kind/releases/download/${KIND_VERSION}/kind-${TARGETOS}-${TARGETARCH}&&chmod +x kind
   SAVE ARTIFACT kind
 
@@ -347,7 +347,7 @@ gotestsum-setup:
   ARG NATIVEPLATFORM
   ARG TARGETOS
   ARG TARGETARCH
-  FROM --platform=${NATIVEPLATFORM} curlimages/curl:8.21.0
+  FROM --platform=${NATIVEPLATFORM} curlimages/curl:8.22.0
   RUN curl -fsSL https://github.com/gotestyourself/gotestsum/releases/download/v${GOTESTSUM_VERSION}/gotestsum_${GOTESTSUM_VERSION}_${TARGETOS}_${TARGETARCH}.tar.gz|tar zx>gotestsum
   SAVE ARTIFACT gotestsum
 
@@ -357,7 +357,7 @@ helm-docs-setup:
   ARG NATIVEPLATFORM
   ARG TARGETOS
   ARG TARGETARCH
-  FROM --platform=${NATIVEPLATFORM} curlimages/curl:8.21.0
+  FROM --platform=${NATIVEPLATFORM} curlimages/curl:8.22.0
   IF [ "${TARGETARCH}" = "amd64" ]
     LET ARCH=x86_64
   ELSE
@@ -368,11 +368,11 @@ helm-docs-setup:
 
 # helm-setup is used by other targets to setup helm.
 helm-setup:
-  ARG HELM_VERSION=v4.2.2
+  ARG HELM_VERSION=v4.3.0
   ARG NATIVEPLATFORM
   ARG TARGETOS
   ARG TARGETARCH
-  FROM --platform=${NATIVEPLATFORM} curlimages/curl:8.21.0
+  FROM --platform=${NATIVEPLATFORM} curlimages/curl:8.22.0
   RUN curl -fsSL https://get.helm.sh/helm-${HELM_VERSION}-${TARGETOS}-${TARGETARCH}.tar.gz|tar zx --strip-components=1
   SAVE ARTIFACT helm
 
@@ -403,8 +403,8 @@ ci-artifacts:
 
 # ci-codeql-setup sets up CodeQL for the ci-codeql target.
 ci-codeql-setup:
-  ARG CODEQL_VERSION=2.25.6
-  FROM curlimages/curl:8.21.0
+  ARG CODEQL_VERSION=2.27.0
+  FROM curlimages/curl:8.22.0
   RUN curl -fsSL https://github.com/github/codeql-action/releases/download/codeql-bundle-v${CODEQL_VERSION}/codeql-bundle-linux64.tar.gz|tar zx
   SAVE ARTIFACT codeql
 
@@ -461,7 +461,7 @@ ci-push-build-artifacts:
   ARG ARTIFACTS_DIR=_output
   ARG BUCKET_RELEASES=crossplane.releases
   ARG AWS_DEFAULT_REGION
-  FROM amazon/aws-cli:2.35.12
+  FROM amazon/aws-cli:2.36.49
   COPY --dir ${ARTIFACTS_DIR} artifacts
   RUN --push --secret=AWS_ACCESS_KEY_ID --secret=AWS_SECRET_ACCESS_KEY aws s3 sync --delete --only-show-errors artifacts s3://${BUCKET_RELEASES}/build/${BUILD_DIR}/${CROSSPLANE_VERSION}
 
@@ -477,7 +477,7 @@ ci-promote-build-artifacts:
   ARG BUCKET_CHARTS=crossplane.charts
   ARG PRERELEASE=false
   ARG AWS_DEFAULT_REGION
-  FROM amazon/aws-cli:2.35.12
+  FROM amazon/aws-cli:2.36.49
   RUN --secret=AWS_ACCESS_KEY_ID --secret=AWS_SECRET_ACCESS_KEY aws s3 sync --only-show-errors s3://${BUCKET_RELEASES}/build/${BUILD_DIR}/${CROSSPLANE_VERSION}/charts repo
   RUN --push --secret=AWS_ACCESS_KEY_ID --secret=AWS_SECRET_ACCESS_KEY aws s3 sync --delete --only-show-errors s3://${BUCKET_RELEASES}/build/${BUILD_DIR}/${CROSSPLANE_VERSION} s3://${BUCKET_RELEASES}/${CHANNEL}/${CROSSPLANE_VERSION}
   IF [ "${PRERELEASE}" = "false" ]

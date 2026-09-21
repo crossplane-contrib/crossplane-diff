@@ -258,7 +258,7 @@ func (c *DefaultDiffCalculator) CalculateNonRemovalDiffs(ctx context.Context, xr
 	}
 
 	// Always store the XR diff, even when DiffTypeEqual.
-	// We need xrDiff.Current for removal detection downstream, regardless of whether the XR itself changed.
+	// We need xrDiff.Current.Raw for removal detection downstream, regardless of whether the XR itself changed.
 	key := xrDiff.GetDiffKey()
 	diffs[key] = xrDiff
 
@@ -288,7 +288,7 @@ func (c *DefaultDiffCalculator) CalculateNonRemovalDiffs(ctx context.Context, xr
 			continue
 		}
 
-		// For new XRs (xrDiff.Current is nil) fall back to the input XR as the
+		// For new XRs (xrDiff.Current.Raw is nil) fall back to the input XR as the
 		// composite parent so UpdateOwnerRefs can assign a placeholder UID to
 		// composed resources' owner references. Without this, dry-run apply on
 		// an existing composed resource fails with
@@ -297,7 +297,7 @@ func (c *DefaultDiffCalculator) CalculateNonRemovalDiffs(ctx context.Context, xr
 		//
 		// Skip for generateName-only XRs: they get a synthetic display name like
 		// "foo(generated)" that is invalid as a label selector value.
-		composite := xrDiff.Current
+		composite := xrDiff.Current.Raw
 		if composite == nil && xr.GetName() != "" && xr.GetGenerateName() == "" {
 			composite = xr.GetUnstructured()
 		}

@@ -44,21 +44,18 @@ func initializeAppContext(timeout time.Duration, appCtx *AppContext, log logging
 // defaultProcessorOptions returns the standard default options used by both XR and composition processors.
 // This is the single source of truth for behavior defaults in the CLI layer.
 func defaultProcessorOptions(fields CommonCmdFields) []dp.ProcessorOption {
-	// Default ignored paths - always filtered from diffs
-	// Preallocate with capacity for default + user-specified paths
-	allIgnorePaths := make([]string, 0, 1+len(fields.IgnorePaths))
-	allIgnorePaths = append(allIgnorePaths, "metadata.annotations[kubectl.kubernetes.io/last-applied-configuration]")
-
-	// Combine default paths with user-specified ones
-	allIgnorePaths = append(allIgnorePaths, fields.IgnorePaths...)
-
+	// IgnorePaths carries only what the user asked to mask. The paths that are always filtered
+	// (kubectl's last-applied-configuration) are stripped unconditionally by the renderer instead —
+	// see renderer.alwaysIgnoredPaths. Prepending them here would make "the user passed
+	// --ignore-paths" indistinguishable from "we always ignore something", which comp-diff relies on
+	// to tell an edited composition from a merely re-applied one.
 	opts := []dp.ProcessorOption{
 		dp.WithColorize(!fields.NoColor),
 		dp.WithCompact(fields.Compact),
 		dp.WithMaxNestedDepth(fields.MaxNestedDepth),
 		dp.WithMaxRenderIterations(fields.MaxIterations),
 		dp.WithEventualState(fields.EventualState),
-		dp.WithIgnorePaths(allIgnorePaths),
+		dp.WithIgnorePaths(fields.IgnorePaths),
 	}
 
 	// Add output format option
@@ -94,6 +91,14 @@ func defaultProcessorOptions(fields CommonCmdFields) []dp.ProcessorOption {
 
 	if fields.CrossplaneRenderBinary != "" {
 		opts = append(opts, dp.WithCrossplaneRenderBinary(fields.CrossplaneRenderBinary))
+	}
+
+	if fields.CrossplaneVersion != "" {
+		opts = append(opts, dp.WithCrossplaneVersion(fields.CrossplaneVersion))
+	}
+
+	if fields.CrossplaneImage != "" {
+		opts = append(opts, dp.WithCrossplaneImage(fields.CrossplaneImage))
 	}
 
 	return opts

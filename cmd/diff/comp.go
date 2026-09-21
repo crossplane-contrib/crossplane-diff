@@ -39,9 +39,14 @@ type CompCmd struct {
 	Files []string `arg:"" help:"YAML files containing updated Composition(s)." optional:""`
 
 	// Configuration options
-	Namespace     string   `default:""                                                                                                                                          help:"Namespace to find XRs (empty = all namespaces)."                            name:"namespace"      short:"n"`
-	IncludeManual bool     `default:"false"                                                                                                                                     help:"Include XRs with Manual update policy (default: only Automatic policy XRs)" name:"include-manual"`
-	Resources     []string `help:"Limit impact analysis to specific composites in [namespace/]name format. Repeatable or comma-separated. Mutually exclusive with --namespace." name:"resource"`
+	Namespace           string   `default:""                                                                                                                                          help:"Namespace to find XRs (empty = all namespaces)."                                                                                                                             name:"namespace"                                                                                                                                                                                                                                                                                                                                                                          short:"n"`
+	IncludeManual       bool     `default:"false"                                                                                                                                     help:"Include XRs with Manual update policy (default: only Automatic policy XRs)"                                                                                                  name:"include-manual"`
+	MinimizeComposition bool     `default:"false"                                                                                                                                     help:"Collapse each changed composition to a single marker line (human-readable output only; JSON/YAML keeps full detail; errors and no-change compositions still print in full)." name:"minimize-composition"`
+	Resources           []string `help:"Limit impact analysis to specific composites in [namespace/]name format. Repeatable or comma-separated. Mutually exclusive with --namespace." name:"resource"`
+	AnalyzeOn           string   `default:""                                                                                                                                          enum:",spec-change,any-change,always"                                                                                                                                              help:"Smallest composition change that triggers per-composite impact analysis. \"spec-change\": only when the composition spec changes. \"any-change\": also when only its metadata changes, which still creates a new CompositionRevision that composites re-point to. \"always\": even when the composition is identical, for a pre-edit convergence baseline. Defaults to any-change." name:"analyze-on"`
+	// AnalyzeUnchanged is the pre-#472 way to ask for --analyze-on=always, kept so existing
+	// invocations and CI pipelines keep working.
+	AnalyzeUnchanged bool `default:"false" help:"Deprecated: use --analyze-on=always instead." name:"analyze-unchanged"`
 }
 
 // validateFlags returns an error if mutually exclusive flags are set together.
@@ -50,7 +55,25 @@ func (c *CompCmd) validateFlags() error {
 		return errors.New("--namespace and --resource are mutually exclusive; use --resource=[namespace/]name to scope by name")
 	}
 
+	// Two flags asking for the same setting, disagreeing. Silently preferring one would give the user
+	// analysis they did not ask for, or withhold analysis they did. AnalyzeOn defaults to empty
+	// rather than to its effective value precisely so "not passed" stays distinguishable here.
+	if c.AnalyzeUnchanged && c.AnalyzeOn != "" && c.AnalyzeOn != string(dp.AnalyzeOnAlways) {
+		return errors.Errorf("--analyze-unchanged is equivalent to --analyze-on=always and cannot be combined with --analyze-on=%s; pass only --analyze-on", c.AnalyzeOn)
+	}
+
 	return nil
+}
+
+// analyzeOn resolves the effective setting, honouring the deprecated --analyze-unchanged flag.
+// validateFlags has already rejected the case where the two disagree. An empty result leaves the
+// processor default (any-change) in place.
+func (c *CompCmd) analyzeOn() dp.AnalyzeOn {
+	if c.AnalyzeUnchanged {
+		return dp.AnalyzeOnAlways
+	}
+
+	return dp.AnalyzeOn(c.AnalyzeOn)
 }
 
 // Help returns help instructions for the composition diff command.
@@ -77,8 +100,20 @@ Examples:
   # Include XRs with Manual update policy (pinned revisions)
   crossplane-diff comp updated-composition.yaml --include-manual
 
+  # Collapse each changed composition to a single change-marker line (human output only;
+  # JSON/YAML keeps full detail), keeping the affected XRs and downstream diffs
+  crossplane-diff comp updated-composition.yaml --minimize-composition
+
   # Show eventual state with function-sequencer (all stages, not just first).
   crossplane-diff comp updated-composition.yaml --eventual-state
+
+  # Evaluate affected composites even for a composition identical to the cluster's
+  # (skipped by default). Useful as a "is my cluster converged?" baseline before editing.
+  crossplane-diff comp unchanged-composition.yaml --analyze-on=always
+
+  # Only evaluate composites when the composition's spec changes, skipping the render-per-composite
+  # cost for metadata-only edits. Note those still create a new CompositionRevision.
+  crossplane-diff comp updated-composition.yaml --analyze-on=spec-change
 
   # Limit impact analysis to specific composites (by [namespace/]name)
   crossplane-diff comp updated-composition.yaml --resource=default/my-claim
@@ -86,20 +121,40 @@ Examples:
 
 Notes:
   --resource cannot be combined with --namespace.
-  Composites with Manual update policy are surfaced as "filtered_by_policy"
-  unless --include-manual is also passed.
+  Composites with Manual update policy are surfaced with status "filtered"
+  (reason "manual_policy") unless --include-manual is also passed. Composites with an
+  Automatic update policy whose compositionRevisionSelector does not match the diffed
+  composition's labels are surfaced with status "filtered" (reason
+  "revision_selector_mismatch"); --include-manual does not re-include them, since they
+  would not select the resulting revision. Composites that are being deleted are excluded
+  entirely (reason "deleting"): Crossplane tears their composed resources down rather than
+  composing them, so they never adopt the resulting revision. --include-manual does not
+  re-include these either.
+
+  A composition identical to its in-cluster version is reported as unchanged and its composites
+  are not evaluated: applying it creates no new CompositionRevision, so nothing could adopt
+  anything. Any downstream delta found in that situation is caused by something other than the
+  composition (drift, convergence lag, or a modeling artifact of this tool), and cannot be told
+  apart from a real impact — so it is not reported as one. Pass --analyze-on=always to evaluate
+  anyway.
+
+  "Identical" means identical in everything Crossplane hashes into a composition's identity —
+  labels and annotations as well as spec. A composition differing only in metadata does get a new
+  CompositionRevision, which composites re-point to, so it is evaluated by default. Use
+  --analyze-on=spec-change to skip that evaluation; revisionImpact in JSON/YAML output still
+  reports the revision either way.
 `
 }
 
 // AfterApply implements kong's AfterApply method to bind command-specific dependencies.
 // AppContext is received via dependency injection - Kong resolves it through the provider chain:
 // ContextProvider (bound in CommonCmdFields.BeforeApply) -> provideRestConfig -> provideAppContext.
-func (c *CompCmd) AfterApply(ctx *kong.Context, log logging.Logger, appCtx *AppContext) error {
+func (c *CompCmd) AfterApply(ctx *kong.Context, log logging.Logger, warnings *dp.WarningLogger, appCtx *AppContext) error {
 	if err := c.validateFlags(); err != nil {
 		return err
 	}
 
-	proc := makeDefaultCompProc(c, ctx, appCtx, log)
+	proc := makeDefaultCompProc(c, ctx, appCtx, log, warnings)
 
 	loader, err := ld.NewCompositeLoader(c.Files)
 	if err != nil {
@@ -112,12 +167,15 @@ func (c *CompCmd) AfterApply(ctx *kong.Context, log logging.Logger, appCtx *AppC
 	return nil
 }
 
-func makeDefaultCompProc(c *CompCmd, kongCtx *kong.Context, appCtx *AppContext, log logging.Logger) dp.CompDiffProcessor {
+func makeDefaultCompProc(c *CompCmd, kongCtx *kong.Context, appCtx *AppContext, log logging.Logger, warnings *dp.WarningLogger) dp.CompDiffProcessor {
 	// Both processors share the same options since they're part of the same command
 	opts := defaultProcessorOptions(c.CommonCmdFields)
 	opts = append(opts,
 		dp.WithLogger(log),
+		dp.WithWarnings(warnings),
 		dp.WithIncludeManual(c.IncludeManual),
+		dp.WithMinimizeComposition(c.MinimizeComposition),
+		dp.WithAnalyzeOn(c.analyzeOn()),
 		dp.WithStdout(kongCtx.Stdout),
 		dp.WithStderr(kongCtx.Stderr),
 	)

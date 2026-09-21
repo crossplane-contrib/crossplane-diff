@@ -107,10 +107,31 @@ type CommonCmdFields struct {
 	EventualState            bool                `default:"false"                                                                                   help:"Show eventual state after all reconciliation cycles complete (useful with function-sequencer)."                                                        name:"eventual-state"`
 	MaxRecvMessageSize       int                 `env:"CROSSPLANE_DIFF_MAX_RECV_MESSAGE_SIZE"                                                       help:"Max gRPC message size (MB) for render function containers (4MB if undefined)."                                                                         name:"max-recv-message-size"`
 
+	// CrossplaneVersion / CrossplaneImage / CrossplaneRenderBinary select the
+	// crossplane render backend. They are mutually exclusive (kong "xor"
+	// group; upstream render.EngineFlags enforces the same). When none is set,
+	// the docker engine pulls xpkg.crossplane.io/crossplane/crossplane:stable.
+	CrossplaneVersion string `help:"Pin the crossplane render version (e.g. v2.3.4); the docker engine pulls xpkg.crossplane.io/crossplane/crossplane:<version>. Minimum v2.3.4." name:"crossplane-version" placeholder:"VERSION" xor:"crossplane-render-backend"`
+	CrossplaneImage   string `help:"Override the full crossplane render image reference (e.g. for a private mirror)."                                                             name:"crossplane-image"   placeholder:"IMAGE"   xor:"crossplane-render-backend"`
+
 	// CrossplaneRenderBinary is a hidden test-only override that points the
 	// render engine at a local `crossplane` binary. Production users leave
 	// this unset and the docker engine handles rendering.
-	CrossplaneRenderBinary string `help:"(test only) Path to a local crossplane binary used by the render engine instead of the docker image." hidden:"" name:"crossplane-render-binary"`
+	CrossplaneRenderBinary string `help:"(test only) Path to a local crossplane binary used by the render engine instead of the docker image." hidden:"" name:"crossplane-render-binary" xor:"crossplane-render-backend"`
+}
+
+// Validate enforces the minimum supported crossplane render version when a
+// version is explicitly pinned via --crossplane-version. kong invokes this
+// during Parse (before Run), so an unsupported pin fails fast, before any
+// cluster connection or render. --crossplane-image is not checked: a full
+// image reference carries no comparable version. See
+// diffprocessor.MinCrossplaneRenderVersion / crossplane-diff#399.
+func (c *CommonCmdFields) Validate() error {
+	if c.CrossplaneVersion == "" {
+		return nil
+	}
+
+	return dp.ValidateMinRenderVersion(c.CrossplaneVersion)
 }
 
 // GetKubeContext implements ContextProvider.
@@ -122,7 +143,13 @@ func (v verboseFlag) BeforeApply(ctx *kong.Context) error { //nolint:unparam // 
 	zapLogger := zap.New(zap.UseDevMode(true))
 	log.SetLogger(zapLogger)
 	logger := logging.NewLogrLogger(zapLogger)
-	ctx.BindTo(logger, (*logging.Logger)(nil))
+
+	// Re-wrap: this rebinding replaces the logger bound in main(), so without wrapping here --verbose
+	// would silently discard the warning channel — warnings would stop reaching stderr and structured
+	// output at exactly the verbosity where a user is trying to see more, not less.
+	warnings := dp.NewWarningLogger(logger, os.Stderr)
+	ctx.BindTo(warnings, (*logging.Logger)(nil))
+	ctx.Bind(warnings)
 
 	return nil
 }
@@ -154,7 +181,11 @@ type cli struct {
 func main() {
 	log.SetLogger(logr.Discard())
 
-	logger := logging.NewNopLogger()
+	// The base logger discards Debug tracing unless --verbose replaces it. Wrapping it in a
+	// WarningLogger is what makes non-fatal advisories visible at default verbosity: Info calls become
+	// stderr warnings and are collected for structured output, while Debug still goes nowhere. Both
+	// the *WarningLogger and the logging.Logger view of it are bound, so commands can request either.
+	warnings := dp.NewWarningLogger(logging.NewNopLogger(), os.Stderr)
 	exitCode := &ExitCode{Code: dp.ExitCodeSuccess} // Default to success
 
 	ctx := kong.Parse(&cli{},
@@ -162,7 +193,8 @@ func main() {
 		kong.Description("A command line tool for diffing  Crossplane resources."),
 		// Binding a variable to kong context makes it available to all commands
 		// at runtime.
-		kong.BindTo(logger, (*logging.Logger)(nil)),
+		kong.BindTo(warnings, (*logging.Logger)(nil)),
+		kong.Bind(warnings),
 		kong.Bind(exitCode), // Bind exit code state
 		// Providers are resolved lazily when dependencies are needed.
 		// kubecfg.Provide depends on kubecfg.Provider (bound in CommonCmdFields.BeforeApply)

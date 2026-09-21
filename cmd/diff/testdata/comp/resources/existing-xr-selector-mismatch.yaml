@@ -1,0 +1,14 @@
+apiVersion: ns.diff.example.org/v1alpha1
+kind: XNopResource
+metadata:
+  name: selector-mismatch-resource
+  namespace: default
+spec:
+  coolField: selector-existing-value
+  crossplane:
+    compositionRef:
+      name: xnopresources.diff.example.org
+    compositionUpdatePolicy: Automatic
+    compositionRevisionSelector:
+      matchLabels:
+        version: 0.0.1

@@ -13,6 +13,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	un "k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	k8stypes "k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/uuid"
 
 	"github.com/crossplane/crossplane-runtime/v2/pkg/errors"
@@ -158,10 +159,11 @@ func (m *DefaultResourceManager) checkCompositeOwnership(current *un.Unstructure
 
 	if labels := current.GetLabels(); labels != nil {
 		if owner, exists := labels[LabelComposite]; exists && owner != composite.GetName() {
-			// Log a warning if the resource is owned by a different composite
+			// Info is the advisory level per logging.Logger's own contract, so this reaches the user via
+			// stderr and structured output rather than being buried in --verbose tracing. See WarningLogger.
 			m.logger.Info(
 				// TODO:  should we fail by default here?  maybe require a --force flag to proceed?
-				"Warning: Resource already belongs to another composite.  Applying this diff will assume ownership!",
+				"Resource already belongs to another composite.  Applying this diff will assume ownership!",
 				"resource", fmt.Sprintf("%s/%s", current.GetKind(), current.GetName()),
 				"namespace", current.GetNamespace(),
 				"currentOwner", owner,
@@ -612,8 +614,8 @@ func (m *DefaultResourceManager) FetchObservedResources(ctx context.Context, xr 
 		return nil, errors.Wrap(err, "cannot get resource tree")
 	}
 
-	// Extract composed resources from the tree
-	observed := extractComposedResourcesFromTree(tree)
+	// Extract composed resources from the tree, scoped to those this XR controls.
+	observed := extractComposedResourcesFromTree(tree, xr.GetUID())
 
 	m.logger.Debug("Fetched observed composed resources",
 		"xr", xr.GetName(),
@@ -622,10 +624,22 @@ func (m *DefaultResourceManager) FetchObservedResources(ctx context.Context, xr 
 	return observed, nil
 }
 
-// extractComposedResourcesFromTree recursively extracts all composed resources from a resource tree.
+// extractComposedResourcesFromTree recursively extracts composed resources from a resource tree.
 // It returns a flat slice of composed resources, suitable for RenderInputs.ObservedResources.
-// Only includes resources with the crossplane.io/composition-resource-name annotation.
-func extractComposedResourcesFromTree(tree *resource.Resource) []cpd.Unstructured {
+//
+// Only resources controlled by the XR being rendered are returned:
+//   - the resource must carry the crossplane.io/composition-resource-name annotation
+//     (this filters out the root XR and non-composed resources), AND
+//   - it must either have no controller owner reference, or have one whose UID matches
+//     xrUID (the UID of the XR this observed set is being assembled for).
+//
+// The second condition matters for nested XRs: the tree walk descends into a nested XR's
+// own children (grandchildren of the top XR), but those are controlled by the nested XR,
+// not the top XR. The crossplane render binary (>= v2.3.4) rejects observed resources whose
+// controller-ref UID does not match the XR being rendered ("has a controller ref but is not
+// controlled by the XR"), so each render level must only receive the resources it controls.
+// Nested XRs are rendered separately (with their own observed set) during recursive processing.
+func extractComposedResourcesFromTree(tree *resource.Resource, xrUID k8stypes.UID) []cpd.Unstructured {
 	var resources []cpd.Unstructured
 
 	// Recursively collect composed resources from the tree
@@ -635,10 +649,15 @@ func extractComposedResourcesFromTree(tree *resource.Resource) []cpd.Unstructure
 		// Only include resources that have the composition-resource-name annotation
 		// (this filters out the root XR and non-composed resources)
 		if _, hasAnno := node.Unstructured.GetAnnotations()["crossplane.io/composition-resource-name"]; hasAnno {
-			// Convert to cpd.Unstructured (composed resource)
-			resources = append(resources, cpd.Unstructured{
-				Unstructured: node.Unstructured,
-			})
+			// Only include resources controlled by this XR (or uncontrolled). A resource
+			// controlled by a *different* owner (e.g. a nested XR's own composed resource)
+			// is not part of this XR's observed set and would be rejected by the render
+			// binary's controller-ref validation.
+			if c := metav1.GetControllerOf(&node.Unstructured); c == nil || xrUID == "" || c.UID == xrUID {
+				resources = append(resources, cpd.Unstructured{
+					Unstructured: node.Unstructured,
+				})
+			}
 		}
 
 		// Recursively process children

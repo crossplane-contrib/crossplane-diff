@@ -5,9 +5,11 @@
     'helpers:pinGitHubActionDigests',
     ':semanticCommits',
   ],
-  // We only want renovate to rebase PRs when they have conflicts, default
-  // "auto" mode is not required.
-  rebaseWhen: 'conflicted',
+  // Keep PRs rebased onto the base branch. Our required status checks use a
+  // strict (up-to-date) policy, so a PR that has fallen behind main cannot
+  // automerge until it is rebased; "behind-base-branch" keeps them current so
+  // automerge stays unblocked.
+  rebaseWhen: 'behind-base-branch',
   // The maximum number of PRs to be created in parallel
   prConcurrentLimit: 5,
   // The branches renovate should target
@@ -24,6 +26,10 @@
     'gomodTidy',
     'gomodUpdateImportPaths'
   ],
+  // Wait 2 days after a release is published before opening an update PR. This
+  // gives the ecosystem time to surface broken releases before we pick them up,
+  // and is the gate that makes unattended automerge (below) safe.
+  minimumReleaseAge: '2 days',
   // All PRs should have a label
   labels: [
     'automated',
@@ -244,6 +250,42 @@
         'golang-version',
       ],
       groupName: 'golang version',
+    },
+    {
+      // Automerge all dependency updates once they pass CI. Our required status
+      // checks (unit-tests, e2e-tests) are the safety gate: a failing update
+      // will never merge. Combined with minimumReleaseAge above, this waits 2
+      // days for a release to settle, then merges unattended if green.
+      // platformAutomerge (Renovate's default) uses GitHub's native auto-merge,
+      // so the PR merges only after the branch-protection ruleset is satisfied.
+      description: 'Automerge updates that pass CI',
+      matchUpdateTypes: [
+        'major',
+        'minor',
+        'patch',
+        'digest',
+        'pin',
+        'pinDigest',
+        'lockFileMaintenance',
+        'bump',
+        'rollback',
+      ],
+      automerge: true,
+      // The main ruleset only permits squash merges.
+      automergeStrategy: 'squash',
+    },
+    {
+      // Exclude E2E test manifests from automerge. These pin the Crossplane
+      // versions the E2E matrix tests against; changing them shifts what we
+      // test, so they warrant human review even when CI is green.
+      description: 'Do not automerge E2E manifest (Crossplane version) updates',
+      matchManagers: [
+        'crossplane',
+      ],
+      matchFileNames: [
+        'test/e2e/**',
+      ],
+      automerge: false,
     },
   ],
 }

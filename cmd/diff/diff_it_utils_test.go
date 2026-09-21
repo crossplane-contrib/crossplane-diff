@@ -318,6 +318,27 @@ func applyResourcesFromFiles(ctx context.Context, c client.Client, paths []strin
 	return createResources(ctx, c, allResources)
 }
 
+// deleteResourcesFromFiles issues a delete for every resource in the supplied files. Resources
+// carrying a finalizer survive the call with metadata.deletionTimestamp set, which is how tests
+// observe a resource mid-deletion under envtest (no controllers run to clear the finalizer).
+func deleteResourcesFromFiles(ctx context.Context, c client.Client, paths []string) error {
+	for _, path := range paths {
+		resources, err := readResourcesFromFile(path)
+		if err != nil {
+			return fmt.Errorf("failed to read resources from %s: %w", path, err)
+		}
+
+		for _, resource := range resources {
+			if err := c.Delete(ctx, resource.DeepCopy()); err != nil {
+				return fmt.Errorf("failed to delete resource %s/%s: %w",
+					resource.GetNamespace(), resource.GetName(), err)
+			}
+		}
+	}
+
+	return nil
+}
+
 // readResourcesFromFile reads YAML resources from a file.
 func readResourcesFromFile(path string) ([]*un.Unstructured, error) {
 	data, err := os.ReadFile(path)

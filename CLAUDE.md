@@ -278,6 +278,27 @@ When using structured output (`--output json` or `--output yaml`):
 - Mock external dependencies using `testutils/mock_builder.go`
 - Integration tests use `envtest` for realistic cluster interactions
 
+**Neither Test Suite Reproduces What a Real Client Adds**
+
+No fixture in either suite carries the fields a real client writes, because of how each applies manifests:
+
+- Integration tests (`applyResourcesFromFiles` → `createResources`) use `c.Create` with the fixture verbatim.
+- E2E tests (`funcs.ApplyResources` → `ApplyHandler`) use `client.Apply` with a `FieldOwner`, i.e. **server-side**
+  apply, which deliberately omits `kubectl.kubernetes.io/last-applied-configuration`.
+
+So a bug that only manifests when a field is present that *only* a client-side `kubectl apply` (or Argo, Flux, …) would
+add is invisible to both suites by default. Issue #467 is the worked example: `comp` mishandled every kubectl-applied
+composition, and the whole test suite was green.
+
+The fix is cheap, so reach for it whenever a code path's behaviour depends on client-written metadata: **declare the
+field in the setup fixture**. Fixtures are applied as written, so a fixture can carry anything a real client would,
+without shelling out to `kubectl`. What a real client uniquely does is *produce* the field — reproducing the bug never
+requires that. See `cmd/diff/testdata/comp/resources/original-composition-kubectl-applied.yaml` and
+`TestCompDiffIntegration/UnchangedCompositionAppliedWithKubectlSkipsImpactAnalysis`.
+
+Prefer an integration test for this (seconds, and it exercises the real CLI wiring) over an e2e — e2e's SSA gives it the
+same blind spot, so it would need the same hand-placed fixture field at minutes-scale for no extra coverage.
+
 **Working with ANSI Escape Codes in Test Expectations**
 
 E2E test expectation files (`.ansi` files) contain actual ANSI escape sequences as binary data. These are extremely fragile when editing with shell tools.
@@ -454,6 +475,13 @@ A few project-wide conventions apply to every change you submit to this reposito
   render as strike-through if copied literally. Issues filed via `gh issue create` must use the matching template
   under `.github/ISSUE_TEMPLATE/` (`bug_report.md` or `feature_request.md`); pass it via `--template bug_report.md`
   and fill in every section.
+- **Triage across commands, not just the one the issue names**. Bugs are usually filed against the single command the
+  reporter hit (`comp` or `xr`), but the two commands often share underlying logic (composition/revision resolution,
+  update-policy handling, schema validation, requirements resolution). Before scoping a fix, check whether the same
+  root cause also affects the *other* command's code path, and decide deliberately whether to fix both or file a
+  follow-up for the mirror case. Example: issue #388 was filed against `comp` (affected-XR filtering ignored
+  `compositionRevisionSelector`), but the same omission also made `xr` resolve the wrong CompositionRevision — one
+  root cause, two commands.
 
 ## Related Documentation
 

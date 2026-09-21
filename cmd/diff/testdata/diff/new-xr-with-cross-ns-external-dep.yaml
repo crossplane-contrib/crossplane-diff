@@ -1,0 +1,11 @@
+apiVersion: ns.diff.example.org/v1alpha1
+kind: XNopResource
+metadata:
+  name: test-resource
+  namespace: default
+spec:
+  coolField: "new-value"
+  # Matches the ConfigMap in "other-namespace" (labelled environment: crossns).
+  # The go-templating matchLabels ExtraResources selector omits the namespace,
+  # so resolving it requires an all-namespaces lookup (issue #376).
+  environment: crossns

@@ -44,12 +44,14 @@ const (
 type IntegrationTestCase struct {
 	reason                     string // Description of what this test validates
 	setupFiles                 []string
+	deleteAfterSetup           []string                        // Files whose resources are deleted after setup; with a finalizer this leaves them Terminating
 	crossplaneManagedResources []HierarchicalOwnershipRelation // Resources applied via SSA with Crossplane field manager
 	inputFiles                 []string                        // Input files to diff (XR YAML files or Composition YAML files)
 	expectedOutput             string
 	expectedError              bool
 	expectedErrorContains      string
-	expectedExitCode           int // Expected exit code (0=success, 1=tool error, 2=schema validation, 3=diff detected)
+	expectedStderrContains     []string // substrings that must appear on stderr (warnings, error lines)
+	expectedExitCode           int      // Expected exit code (0=success, 1=tool error, 2=schema validation, 3=diff detected)
 	noColor                    bool
 	namespace                  string        // For composition tests (optional)
 	xrdAPIVersion              XrdAPIVersion // For XR tests (optional)
@@ -60,14 +62,21 @@ type IntegrationTestCase struct {
 	resources                  []string      // For composition tests: --resource values; each entry passed as one --resource flag
 	resourcesCSV               string        // For composition tests: alternative single --resource=a,b style invocation
 	includeManual              bool          // For composition tests: pass --include-manual flag
+	analyzeUnchanged           bool          // For composition tests: pass the deprecated --analyze-unchanged flag
+	analyzeOn                  string        // For composition tests: pass --analyze-on=<value> (empty = rely on the default)
 	skip                       bool
 	skipReason                 string
 	// JSON output support: set outputFormat to "json" to use structured assertions.
 	// For XR tests, populate expectedStructuredOutput. For CompositionDiffTest tests,
 	// populate expectedStructuredCompOutput. Only one should be set per test case.
-	outputFormat                 string               // "json" or "" (default=visual diff)
-	expectedStructuredOutput     *tu.ExpectedDiff     // for XR JSON output assertions
-	expectedStructuredCompOutput *tu.ExpectedCompDiff // for comp JSON output assertions
+	outputFormat string // "json" or "" (default=visual diff)
+	// Typed as the assertion interfaces rather than the concrete root builders. The assert functions
+	// have accepted any builder level since those interfaces were introduced, specifically so a chain
+	// need not climb back to the root — but concrete field types here made that unreachable, which is
+	// why every case in this file used to end with a trailing And()/AndXR()/AndComp(). A chain can now
+	// simply end where it ends.
+	expectedStructuredOutput     tu.DiffExpectation     // for XR JSON output assertions
+	expectedStructuredCompOutput tu.CompDiffExpectation // for comp JSON output assertions
 }
 
 type XrdAPIVersion int
@@ -212,6 +221,13 @@ func runIntegrationTest(t *testing.T, testType DiffTestType, tt IntegrationTestC
 		}
 	}
 
+	// Issue a delete for resources that should be observed mid-deletion. The manifests must
+	// carry a finalizer so envtest (which runs no controllers) leaves the object in place with
+	// metadata.deletionTimestamp set, reproducing a real "Terminating" resource.
+	if err := deleteResourcesFromFiles(ctx, k8sClient, tt.deleteAfterSetup); err != nil {
+		t.Fatalf("failed to delete resources: %v", err)
+	}
+
 	// Set up the test files
 	testFiles := make([]string, 0, len(tt.inputFiles))
 
@@ -283,6 +299,14 @@ func runIntegrationTest(t *testing.T, testType DiffTestType, tt IntegrationTestC
 		if tt.includeManual {
 			args = append(args, "--include-manual")
 		}
+
+		if tt.analyzeUnchanged {
+			args = append(args, "--analyze-unchanged")
+		}
+
+		if tt.analyzeOn != "" {
+			args = append(args, "--analyze-on="+tt.analyzeOn)
+		}
 	}
 
 	// Add files as positional arguments
@@ -296,7 +320,10 @@ func runIntegrationTest(t *testing.T, testType DiffTestType, tt IntegrationTestC
 		cmd = &XRCmd{}
 	}
 
+	// Wrap the logger the way main() does, so the warning channel is exercised: Info calls land on
+	// stderr AND in structured output, rather than being silently dropped by the test logger.
 	logger := tu.TestLogger(t, true)
+	warnings := dp.NewWarningLogger(logger, &stderr)
 	exitCode := &ExitCode{}
 
 	// Create AppContext from the test environment's config
@@ -310,7 +337,8 @@ func runIntegrationTest(t *testing.T, testType DiffTestType, tt IntegrationTestC
 		kong.Writers(&stdout, &stderr),
 		kong.Bind(appCtx),
 		kong.Bind(exitCode),
-		kong.BindTo(logger, (*logging.Logger)(nil)),
+		kong.Bind(warnings),
+		kong.BindTo(warnings, (*logging.Logger)(nil)),
 	)
 	if err != nil {
 		t.Fatalf("failed to create kong parser: %v", err)
@@ -326,6 +354,14 @@ func runIntegrationTest(t *testing.T, testType DiffTestType, tt IntegrationTestC
 	// Check exit code matches expected
 	if exitCode.Code != tt.expectedExitCode {
 		t.Errorf("expected exit code %d, got %d", tt.expectedExitCode, exitCode.Code)
+	}
+
+	// Assert stderr expectations before any of the early returns below, so they apply in every
+	// output mode (human-readable, JSON, and expected-error cases alike).
+	for _, want := range tt.expectedStderrContains {
+		if !strings.Contains(stderr.String(), want) {
+			t.Errorf("expected stderr to contain %q, got:\n%s", want, stderr.String())
+		}
 	}
 
 	if tt.expectedError && err == nil {
@@ -464,8 +500,44 @@ func TestDiffIntegration(t *testing.T) {
 				WithField("spec.forProvider.configData", "new-value").
 				And().
 				WithAddedResource("XNopResource", "test-resource", "default").
-				WithField("spec.coolField", "new-value").
-				And(),
+				WithField("spec.coolField", "new-value"),
+			expectedError:    false,
+			expectedExitCode: dp.ExitCodeDiffDetected,
+		},
+		"MultipleXRsGroupedByInputXR": {
+			reason:       "Two input XRs in one invocation are grouped per input XR in the xrs[] structured view",
+			outputFormat: "json",
+			inputFiles: []string{
+				"testdata/diff/new-xr.yaml",
+				"testdata/diff/new-xr-second.yaml",
+			},
+			setupFiles: []string{
+				"testdata/diff/resources/xrd.yaml",
+				"testdata/diff/resources/composition.yaml",
+				"testdata/diff/resources/functions.yaml",
+			},
+			expectedStructuredOutput: tu.ExpectDiff().
+				// Aggregate flat view still reports the merged total (2 adds per XR).
+				WithSummary(4, 0, 0).
+				// Grouped view: one XR(...) sub-expression per input XR, each with
+				// its own changed tree.
+				WithXRs(
+					tu.XR("XNopResource", "test-resource", "default").
+						Status("changed").
+						Summary(2, 0, 0).
+						Change("added", "XNopResource", "test-resource", "default").
+						WithField("spec.coolField", "new-value").
+						Change("added", "XDownstreamResource", "test-resource", "default").
+						WithField("spec.forProvider.configData", "new-value"),
+					tu.XR("XNopResource", "second-resource", "default").
+						Status("changed").
+						Summary(2, 0, 0).
+						Change("added", "XNopResource", "second-resource", "default").
+						WithField("spec.coolField", "second-value").
+						Change("added", "XDownstreamResource", "second-resource", "default").
+						WithField("spec.forProvider.configData", "second-value"),
+				).
+				Build(),
 			expectedError:    false,
 			expectedExitCode: dp.ExitCodeDiffDetected,
 		},
@@ -535,6 +607,40 @@ Summary: 2 modified`,
 			expectedStructuredOutput: tu.ExpectDiff().WithSummary(0, 0, 0),
 			expectedError:            false,
 		},
+		"IgnorePathsMixedChanges": {
+			// Regression test: when a resource has BOTH ignored path changes
+			// AND non-ignored spec changes, the summary must count the
+			// resource as modified once and the emitted diff bodies must not
+			// leak the ignored paths. The renderer-level unit test
+			// TestStructuredDiffRenderer_RespectsIgnorePaths asserts the
+			// absence of ignored fields in diff.old / diff.new; this test
+			// pins the summary counts and the visible non-ignored changes
+			// through the full CLI stack.
+			reason: "Ignores ArgoCD annotations/labels while still reporting a non-ignored spec change",
+			setupFiles: []string{
+				"testdata/diff/resources/xrd.yaml",
+				"testdata/diff/resources/composition.yaml",
+				"testdata/diff/resources/composition-revision-default.yaml",
+				"testdata/diff/resources/functions.yaml",
+				"testdata/diff/resources/existing-downstream-resource-with-argocd.yaml",
+				"testdata/diff/resources/existing-xr-with-argocd.yaml",
+			},
+			inputFiles: []string{"testdata/diff/xr-with-argocd-mixed-changes.yaml"},
+			ignorePaths: []string{
+				"metadata.annotations[argocd.argoproj.io/tracking-id]",
+				"metadata.labels[argocd.argoproj.io/instance]",
+			},
+			outputFormat: "json",
+			expectedStructuredOutput: tu.ExpectDiff().
+				WithSummary(0, 2, 0).
+				WithModifiedResource("XDownstreamResource", "test-resource", "default").
+				WithFieldChange("spec.forProvider.configData", "new-value", "modified-value").
+				And().
+				WithModifiedResource("XNopResource", "test-resource", "default").
+				WithFieldChange("spec.coolField", "new-value", "modified-value"),
+			expectedError:    false,
+			expectedExitCode: dp.ExitCodeDiffDetected,
+		},
 		"ModifiedXRCreatesDownstream": {
 			reason:       "Shows diff when modified XR creates new downstream resource",
 			outputFormat: "json",
@@ -552,8 +658,39 @@ Summary: 2 modified`,
 				WithField("spec.forProvider.configData", "modified-value").
 				And().
 				WithModifiedResource("XNopResource", "test-resource", "default").
+				WithFieldChange("spec.coolField", "existing-value", "modified-value"),
+			expectedError:    false,
+			expectedExitCode: dp.ExitCodeDiffDetected,
+		},
+		// Issue #452, `xr` side, delivered through the warning channel added for #459. Unlike `comp`,
+		// which excludes deleting XRs from impact analysis, `xr` diffs exactly the resource the user
+		// named — so it still emits the diff and raises an advisory. This asserts BOTH halves of the
+		// dual emission: the stderr line for humans and the warnings[] entry for machines.
+		"DeletingXRWarnsButStillDiffs": {
+			reason:       "xr against an XR whose cluster copy is being deleted still emits the diff, plus a warning on stderr and in warnings[]",
+			outputFormat: "json",
+			setupFiles: []string{
+				"testdata/diff/resources/xrd.yaml",
+				"testdata/diff/resources/composition.yaml",
+				"testdata/diff/resources/composition-revision-default.yaml",
+				"testdata/diff/resources/functions.yaml",
+				"testdata/diff/resources/existing-xr-deleting.yaml",
+			},
+			deleteAfterSetup: []string{"testdata/diff/resources/existing-xr-deleting.yaml"},
+			inputFiles:       []string{"testdata/diff/modified-xr.yaml"},
+			expectedStructuredOutput: tu.ExpectDiff().
+				WithSummary(1, 1, 0).
+				WithAddedResource("XDownstreamResource", "test-resource", "default").
+				WithField("spec.forProvider.configData", "modified-value").
+				And().
+				WithModifiedResource("XNopResource", "test-resource", "default").
 				WithFieldChange("spec.coolField", "existing-value", "modified-value").
-				And(),
+				And().
+				WithWarning("being deleted in the cluster"),
+			expectedStderrContains: []string{
+				"WARNING: The resource being diffed is being deleted in the cluster",
+				"resource=XNopResource/test-resource",
+			},
 			expectedError:    false,
 			expectedExitCode: dp.ExitCodeDiffDetected,
 		},
@@ -576,8 +713,7 @@ Summary: 2 modified`,
 				WithFieldChange("spec.forProvider.configData", "existing-config-value", "modified-config-value").
 				And().
 				WithModifiedResource("XEnvResource", "test-env-resource", "").
-				WithFieldChange("spec.configKey", "existing-config-value", "modified-config-value").
-				And(),
+				WithFieldChange("spec.configKey", "existing-config-value", "modified-config-value"),
 			expectedError:    false,
 			expectedExitCode: dp.ExitCodeDiffDetected,
 		},
@@ -604,13 +740,19 @@ Summary: 2 modified`,
 				And().
 				WithModifiedResource("XNopResource", "test-resource", "default").
 				WithFieldChange("spec.coolField", "existing-value", "modified-with-external-dep").
-				WithFieldChange("spec.environment", "staging", "testing").
-				And(),
+				WithFieldChange("spec.environment", "staging", "testing"),
 			expectedError:    false,
 			expectedExitCode: dp.ExitCodeDiffDetected,
 		},
-		"TemplatedExtraResources": {
-			reason:       "Validates diff with templated ExtraResources embedded in go-templating function",
+		// Same-namespace case: the matchLabels ExtraResources selector omits the
+		// namespace, and the matched ConfigMap lives in "default" — the SAME
+		// namespace as the XR. This passed even before the #376 fix, because the
+		// old resolveNamespace defaulted an empty selector namespace to the XR
+		// namespace, which happened to be where the ConfigMap was. See
+		// "TemplatedExtraResourcesCrossNamespace" for the cross-namespace case
+		// that requires the all-namespaces lookup.
+		"TemplatedExtraResourcesSameNamespace": {
+			reason:       "Validates diff with templated ExtraResources (matchLabels, no namespace) resolving a resource in the XR's own namespace",
 			outputFormat: "json",
 			setupFiles: []string{
 				"testdata/diff/resources/xrd.yaml",
@@ -629,8 +771,43 @@ Summary: 2 modified`,
 				And().
 				WithModifiedResource("XNopResource", "test-resource", "default").
 				WithFieldChange("spec.coolField", "existing-value", "modified-with-external-dep").
-				WithFieldChange("spec.environment", "staging", "testing").
-				And(),
+				WithFieldChange("spec.environment", "staging", "testing"),
+			expectedError:    false,
+			expectedExitCode: dp.ExitCodeDiffDetected,
+		},
+		// Reproduction for crossplane-contrib/crossplane-diff#376: a matchLabels
+		// ExtraResources selector that omits the namespace is a cluster-wide
+		// (all-namespaces) lookup in Crossplane (internal/xfn/required_resources.go
+		// lists with client.InNamespace(rs.GetNamespace()); empty = all
+		// namespaces). Here the matched ConfigMap lives in "other-namespace" while
+		// the XR is in "default". Pre-fix, resolveNamespace defaulted the empty
+		// selector namespace to the XR namespace ("default"), so the dynamic
+		// client listed only "default", found nothing, and the go-templating
+		// requirement came back empty — the downstream XDownstreamResource would
+		// not render at all (or a real template reading the value would fatal with
+		// ValueError). Post-fix the lookup spans all namespaces, finds the
+		// ConfigMap, and the downstream renders with roleName derived from it.
+		"TemplatedExtraResourcesCrossNamespace": {
+			reason:       "matchLabels ExtraResources (no namespace) must resolve a resource in a DIFFERENT namespace than the XR via an all-namespaces lookup (issue #376)",
+			outputFormat: "json",
+			setupFiles: []string{
+				"testdata/diff/resources/xrd.yaml",
+				"testdata/diff/resources/functions.yaml",
+				"testdata/diff/resources/external-resource-configmap-other-namespace.yaml",
+				"testdata/diff/resources/external-res-gotpl-composition.yaml",
+			},
+			inputFiles: []string{"testdata/diff/new-xr-with-cross-ns-external-dep.yaml"},
+			expectedStructuredOutput: tu.ExpectDiff().
+				WithSummary(2, 0, 0).
+				WithAddedResource("XDownstreamResource", "test-resource", "default").
+				WithField("spec.forProvider.configData", "new-value").
+				// roleName is templated from the matched ConfigMap's name, proving
+				// the cross-namespace resource was resolved.
+				WithField("spec.forProvider.roleName", "templated-external-resource-crossns").
+				And().
+				WithAddedResource("XNopResource", "test-resource", "default").
+				WithField("spec.coolField", "new-value").
+				WithField("spec.environment", "crossns"),
 			expectedError:    false,
 			expectedExitCode: dp.ExitCodeDiffDetected,
 		},
@@ -658,8 +835,7 @@ Summary: 2 modified`,
 				WithField("spec.forProvider.roleName", "static-role").
 				And().
 				WithAddedResource("XNopResource", "test-resource", "default").
-				WithField("spec.coolField", "new-value").
-				And(),
+				WithField("spec.coolField", "new-value"),
 			expectedError:    false,
 			expectedExitCode: dp.ExitCodeDiffDetected,
 		},
@@ -753,8 +929,7 @@ Summary: 2 modified`,
 				And().
 				WithModifiedResource("XNopResource", "test-cross-ns-resource", "default").
 				WithFieldChange("spec.coolField", "existing-cross-ns-value", "modified-cross-ns-value").
-				WithFieldChange("spec.environment", "staging", "production").
-				And(),
+				WithFieldChange("spec.environment", "staging", "production"),
 			expectedError:    false,
 			expectedExitCode: dp.ExitCodeDiffDetected,
 		},
@@ -914,8 +1089,7 @@ Summary: 2 modified, 2 removed`,
 				WithField("spec.forProvider.configData", "existing-value").
 				And().
 				WithRemovedResource("XDownstreamResource", "resource-to-be-removed-child", "default").
-				WithField("spec.forProvider.configData", "child-value").
-				And(),
+				WithField("spec.forProvider.configData", "child-value"),
 			expectedError:    false,
 			expectedExitCode: dp.ExitCodeDiffDetected,
 		},
@@ -955,8 +1129,7 @@ Summary: 2 modified, 2 removed`,
 				WithField("spec.forProvider.configData", "child-value").
 				And().
 				WithModifiedResource("XNopResource", "test-resource", "default").
-				WithFieldChange("spec.coolField", "existing-value", "modified-value").
-				And(),
+				WithFieldChange("spec.coolField", "existing-value", "modified-value"),
 			expectedError:    false,
 			expectedExitCode: dp.ExitCodeDiffDetected,
 		},
@@ -996,8 +1169,7 @@ Summary: 2 modified, 2 removed`,
 				WithField("spec.forProvider.configData", "child-value").
 				And().
 				WithModifiedResource("XNopResource", "test-resource", "").
-				WithFieldChange("spec.coolField", "existing-value", "modified-value").
-				And(),
+				WithFieldChange("spec.coolField", "existing-value", "modified-value"),
 			expectedError:    false,
 			expectedExitCode: dp.ExitCodeDiffDetected,
 		},
@@ -1027,8 +1199,7 @@ Summary: 2 modified, 2 removed`,
 				WithFieldChange("spec.forProvider.configData", "existing-value", "new-value").
 				And().
 				WithModifiedResource("XNopResource", "test-resource", "default").
-				WithFieldChange("spec.coolField", "existing-value", "new-value").
-				And(),
+				WithFieldChange("spec.coolField", "existing-value", "new-value"),
 			expectedError:    false,
 			expectedExitCode: dp.ExitCodeDiffDetected,
 		},
@@ -1050,8 +1221,7 @@ Summary: 2 modified, 2 removed`,
 				And().
 				WithAddedResource("XNopResource", "", "default").
 				WithNamePattern(`generated-xr-\(generated\)`).
-				WithField("spec.coolField", "new-value").
-				And(),
+				WithField("spec.coolField", "new-value"),
 			expectedError:    false,
 			expectedExitCode: dp.ExitCodeDiffDetected,
 		},
@@ -1080,8 +1250,7 @@ Summary: 2 modified, 2 removed`,
 				WithField("spec.coolField", "new-value").
 				And().
 				WithModifiedResource("XDownstreamResource", "test-resource", "default").
-				WithFieldChange("spec.forProvider.configData", "existing-value", "new-value").
-				And(),
+				WithFieldChange("spec.forProvider.configData", "existing-value", "new-value"),
 			expectedError:    false,
 			expectedExitCode: dp.ExitCodeDiffDetected,
 		},
@@ -1113,8 +1282,7 @@ Summary: 2 modified, 2 removed`,
 				WithField("spec.coolField", "first-value").
 				And().
 				WithModifiedResource("XNopResource", "test-resource", "default").
-				WithFieldChange("spec.coolField", "existing-value", "modified-value").
-				And(),
+				WithFieldChange("spec.coolField", "existing-value", "modified-value"),
 			expectedError:    false,
 			expectedExitCode: dp.ExitCodeDiffDetected,
 		},
@@ -1139,8 +1307,7 @@ Summary: 2 modified, 2 removed`,
 				WithField("spec.forProvider.resourceTier", "production").
 				And().
 				WithAddedResource("XNopResource", "test-resource", "default").
-				WithField("spec.coolField", "test-value").
-				And(),
+				WithField("spec.coolField", "test-value"),
 			expectedError:    false,
 			expectedExitCode: dp.ExitCodeDiffDetected,
 		},
@@ -1165,8 +1332,7 @@ Summary: 2 modified, 2 removed`,
 				WithField("spec.forProvider.resourceTier", "staging").
 				And().
 				WithAddedResource("XNopResource", "test-resource", "default").
-				WithField("spec.coolField", "test-value").
-				And(),
+				WithField("spec.coolField", "test-value"),
 			expectedError:    false,
 			expectedExitCode: dp.ExitCodeDiffDetected,
 		},
@@ -1240,8 +1406,7 @@ Summary: 2 modified, 2 removed`,
 				WithField("spec.coolField", "new-value").
 				And().
 				WithAddedResource("XDownstreamResource", "test-claim", "").
-				WithField("spec.forProvider.configData", "new-value").
-				And(),
+				WithField("spec.forProvider.configData", "new-value"),
 			expectedError:    false,
 			expectedExitCode: dp.ExitCodeDiffDetected,
 		},
@@ -1262,8 +1427,7 @@ Summary: 2 modified, 2 removed`,
 				WithField("spec.coolField", "new-value").
 				And().
 				WithAddedResource("XDownstreamResource", "test-claim", "").
-				WithField("spec.forProvider.configData", "existing-namespace/test-claim").
-				And(),
+				WithField("spec.forProvider.configData", "existing-namespace/test-claim"),
 			expectedError:    false,
 			expectedExitCode: dp.ExitCodeDiffDetected,
 		},
@@ -1288,8 +1452,7 @@ Summary: 2 modified, 2 removed`,
 				WithFieldChange("spec.coolField", "existing-value", "modified-value").
 				And().
 				WithModifiedResource("XDownstreamResource", "test-claim-82crv", "").
-				WithFieldChange("spec.forProvider.configData", "existing-value", "modified-value").
-				And(),
+				WithFieldChange("spec.forProvider.configData", "existing-value", "modified-value"),
 			expectedError:    false,
 			expectedExitCode: dp.ExitCodeDiffDetected,
 		},
@@ -1306,8 +1469,7 @@ Summary: 2 modified, 2 removed`,
 				WithSummary(1, 0, 0).
 				WithAddedResource("XTestDefaultResource", "test-resource-with-defaults", "default").
 				WithField("spec.region", "us-east-1").
-				WithField("spec.size", "large").
-				And(),
+				WithField("spec.size", "large"),
 			expectedError:    false,
 			expectedExitCode: dp.ExitCodeDiffDetected,
 		},
@@ -1324,8 +1486,7 @@ Summary: 2 modified, 2 removed`,
 				WithSummary(1, 0, 0).
 				WithAddedResource("XTestDefaultResource", "test-resource-with-overrides", "default").
 				WithField("spec.region", "us-west-2").
-				WithField("spec.size", "xlarge").
-				And(),
+				WithField("spec.size", "xlarge"),
 			expectedError:    false,
 			expectedExitCode: dp.ExitCodeDiffDetected,
 		},
@@ -1376,8 +1537,7 @@ Summary: 2 modified, 2 removed`,
 				WithField("spec.forProvider.configData", "parent-value").
 				And().
 				WithAddedResource("XParentResource", "test-parent", "default").
-				WithField("spec.parentField", "parent-value").
-				And(),
+				WithField("spec.parentField", "parent-value"),
 			expectedError:    false,
 			expectedExitCode: dp.ExitCodeDiffDetected,
 		},
@@ -1411,8 +1571,7 @@ Summary: 2 modified, 2 removed`,
 				WithFieldChange("spec.forProvider.configData", "existing-value", "modified-value").
 				And().
 				WithModifiedResource("XParentResource", "test-parent", "default").
-				WithFieldChange("spec.parentField", "existing-value", "modified-value").
-				And(),
+				WithFieldChange("spec.parentField", "existing-value", "modified-value"),
 			expectedError:    false,
 			expectedExitCode: dp.ExitCodeDiffDetected,
 		},
@@ -1436,8 +1595,7 @@ Summary: 2 modified, 2 removed`,
 				WithFieldChange("spec.forProvider.configData", "v1-existing-value", "v1-modified-value").
 				And().
 				WithModifiedResource("XNopResource", "test-manual-v1", "default").
-				WithFieldChange("spec.coolField", "existing-value", "modified-value").
-				And(),
+				WithFieldChange("spec.coolField", "existing-value", "modified-value"),
 			expectedError:    false,
 			expectedExitCode: dp.ExitCodeDiffDetected,
 		},
@@ -1460,10 +1618,54 @@ Summary: 2 modified, 2 removed`,
 				WithFieldChange("spec.forProvider.configData", "v1-existing-value", "v2-modified-value").
 				And().
 				WithModifiedResource("XNopResource", "test-automatic", "default").
-				WithFieldChange("spec.coolField", "existing-value", "modified-value").
-				And(),
+				WithFieldChange("spec.coolField", "existing-value", "modified-value"),
 			expectedError:    false,
 			expectedExitCode: dp.ExitCodeDiffDetected,
+		},
+		"V2AutomaticPolicyRevisionSelectorPinsMatchingRevision": {
+			// Issue #388 (Bug B): under Automatic policy WITH a compositionRevisionSelector, the XR
+			// resolves to the latest revision MATCHING the selector, not the latest overall. Here the
+			// selector pins channel=stable (revision 1) even though channel=preview (revision 2) is
+			// newer — so the diff must render against the stable template (stable-*), not preview-*.
+			reason:       "Validates v2 Automatic XR with compositionRevisionSelector resolves to the selector-matching revision, not the newest overall",
+			outputFormat: "json",
+			setupFiles: []string{
+				"testdata/diff/resources/xrd.yaml",
+				"testdata/diff/resources/composition-revision-stable.yaml",  // revision 1, channel=stable
+				"testdata/diff/resources/composition-revision-preview.yaml", // revision 2, channel=preview (newest)
+				"testdata/diff/resources/composition-v2.yaml",               // current composition
+				"testdata/diff/resources/functions.yaml",
+				"testdata/diff/resources/existing-xr-selector-stable.yaml",
+				"testdata/diff/resources/existing-downstream-selector-stable.yaml",
+			},
+			inputFiles: []string{"testdata/diff/modified-xr-selector-stable.yaml"},
+			expectedStructuredOutput: tu.ExpectDiff().
+				WithSummary(0, 2, 0).
+				WithModifiedResource("XDownstreamResource", "test-selector", "default").
+				// stable-* (not preview-*) proves the selector, not "latest overall", chose the revision.
+				WithFieldChange("spec.forProvider.configData", "stable-existing-value", "stable-modified-value").
+				And().
+				WithModifiedResource("XNopResource", "test-selector", "default").
+				WithFieldChange("spec.coolField", "existing-value", "modified-value"),
+			expectedError:    false,
+			expectedExitCode: dp.ExitCodeDiffDetected,
+		},
+		"V2AutomaticPolicyRevisionSelectorNoMatchErrors": {
+			// The mirror of the above: a selector matching NO revision must fail the diff rather than
+			// silently rendering against a non-matching revision (accuracy over guessing).
+			reason:       "Validates v2 Automatic XR whose compositionRevisionSelector matches no revision fails the diff",
+			outputFormat: "json",
+			setupFiles: []string{
+				"testdata/diff/resources/xrd.yaml",
+				"testdata/diff/resources/composition-revision-stable.yaml",
+				"testdata/diff/resources/composition-revision-preview.yaml",
+				"testdata/diff/resources/composition-v2.yaml",
+				"testdata/diff/resources/functions.yaml",
+			},
+			inputFiles:            []string{"testdata/diff/modified-xr-selector-nomatch.yaml"},
+			expectedError:         true,
+			expectedErrorContains: "match selector",
+			expectedExitCode:      dp.ExitCodeToolError,
 		},
 		"V2ManualRevisionUpgradeDiff": {
 			reason:       "Validates v2 XR changing revision in Manual mode shows upgrade diff",
@@ -1484,8 +1686,7 @@ Summary: 2 modified, 2 removed`,
 				WithFieldChange("spec.forProvider.configData", "v1-existing-value", "v2-modified-value").
 				And().
 				WithModifiedResource("XNopResource", "test-manual-v1", "default").
-				WithFieldChange("spec.coolField", "existing-value", "modified-value").
-				And(),
+				WithFieldChange("spec.coolField", "existing-value", "modified-value"),
 			expectedError:    false,
 			expectedExitCode: dp.ExitCodeDiffDetected,
 		},
@@ -1516,8 +1717,7 @@ Summary: 2 modified, 2 removed`,
 				WithSummary(0, 2, 0).
 				WithModifiedResource("XApiMigrateResource", "test-api-version-xr-api-resource", "default").
 				And().
-				WithModifiedResource("XNopResource", "test-api-version-xr", "default").
-				And(),
+				WithModifiedResource("XNopResource", "test-api-version-xr", "default"),
 			expectedError:    false,
 			expectedExitCode: dp.ExitCodeDiffDetected,
 		},
@@ -1540,8 +1740,7 @@ Summary: 2 modified, 2 removed`,
 				WithFieldChange("spec.forProvider.configData", "v1-existing-value", "v2-modified-value").
 				And().
 				WithModifiedResource("XNopResource", "test-manual-v1", "default").
-				WithFieldChange("spec.coolField", "existing-value", "modified-value").
-				And(),
+				WithFieldChange("spec.coolField", "existing-value", "modified-value"),
 			expectedError:    false,
 			expectedExitCode: dp.ExitCodeDiffDetected,
 		},
@@ -1562,8 +1761,7 @@ Summary: 2 modified, 2 removed`,
 				WithField("spec.forProvider.configData", "v2-new-value").
 				And().
 				WithAddedResource("XNopResource", "test-manual-no-ref", "default").
-				WithField("spec.coolField", "new-value").
-				And(),
+				WithField("spec.coolField", "new-value"),
 			expectedError:    false,
 			expectedExitCode: dp.ExitCodeDiffDetected,
 		},
@@ -1588,8 +1786,7 @@ Summary: 2 modified, 2 removed`,
 				WithFieldChange("spec.forProvider.configData", "v1-existing-value", "v2-modified-value").
 				And().
 				WithModifiedResource("XNopResource", "test-legacy-manual-v1", "").
-				WithFieldChange("spec.coolField", "existing-value", "modified-value").
-				And(),
+				WithFieldChange("spec.coolField", "existing-value", "modified-value"),
 			expectedError:    false,
 			expectedExitCode: dp.ExitCodeDiffDetected,
 		},
@@ -1612,8 +1809,7 @@ Summary: 2 modified, 2 removed`,
 				WithFieldChange("spec.forProvider.configData", "existing-value", "modified-value").
 				And().
 				WithModifiedResource("XNopResource", "test-v2xrd-v1paths", "default").
-				WithFieldChange("spec.coolField", "existing-value", "modified-value").
-				And(),
+				WithFieldChange("spec.coolField", "existing-value", "modified-value"),
 			expectedError:    false,
 			expectedExitCode: dp.ExitCodeDiffDetected,
 		},
@@ -1662,8 +1858,7 @@ Summary: 2 modified, 2 removed`,
 				WithFieldChange("spec.parentField", "existing-parent-value", "modified-parent-value").
 				And().
 				WithModifiedResource("XChildNopClaim", "existing-parent-claim-82crv-child", "").
-				WithFieldChange("spec.childField", "existing-parent-value", "modified-parent-value").
-				And(),
+				WithFieldChange("spec.childField", "existing-parent-value", "modified-parent-value"),
 			xrdAPIVersion:    V1, // Use V1 style resourceRefs since XRDs have claims
 			expectedError:    false,
 			expectedExitCode: dp.ExitCodeDiffDetected,
@@ -1685,8 +1880,7 @@ Summary: 2 modified, 2 removed`,
 				WithField("spec.forProvider.configData", "test-value-creds").
 				And().
 				WithAddedResource("XNopResource", "test-resource-with-creds", "default").
-				WithField("spec.coolField", "test-value-creds").
-				And(),
+				WithField("spec.coolField", "test-value-creds"),
 			expectedError: false,
 		},
 		"FunctionCredentialsFromCLI": {
@@ -1708,8 +1902,7 @@ Summary: 2 modified, 2 removed`,
 				WithField("spec.forProvider.configData", "test-value-creds").
 				And().
 				WithAddedResource("XNopResource", "test-resource-with-creds", "default").
-				WithField("spec.coolField", "test-value-creds").
-				And(),
+				WithField("spec.coolField", "test-value-creds"),
 			expectedError: false,
 		},
 		// Paired sequencer gating tests — the fixture sequencer-gating-composition.yaml
@@ -1737,8 +1930,7 @@ Summary: 2 modified, 2 removed`,
 				WithField("spec.coolField", "test-value").
 				And().
 				WithAddedResource("XDownstreamResource", "0-stage0-resource", "default").
-				WithField("spec.forProvider.configData", "test-value").
-				And(),
+				WithField("spec.forProvider.configData", "test-value"),
 			expectedError: false,
 		},
 		"SequencerGatedStageAppearsWithEventualState": {
@@ -1764,8 +1956,7 @@ Summary: 2 modified, 2 removed`,
 				WithField("spec.forProvider.configData", "test-value").
 				And().
 				WithAddedResource("XDownstreamResource", "1-stage1-resource", "default").
-				WithField("spec.forProvider.configData", "test-value").
-				And(),
+				WithField("spec.forProvider.configData", "test-value"),
 			expectedError: false,
 		},
 		// Paired composition-driven gating tests — the fixture conditional-gating-composition.yaml
@@ -1792,8 +1983,7 @@ Summary: 2 modified, 2 removed`,
 				WithField("spec.coolField", "test-value").
 				And().
 				WithAddedResource("XDownstreamResource", "0-stage0-resource", "default").
-				WithField("spec.forProvider.configData", "test-value").
-				And(),
+				WithField("spec.forProvider.configData", "test-value"),
 			expectedError: false,
 		},
 		"ConditionalGatedStageAppearsWithEventualState": {
@@ -1819,8 +2009,7 @@ Summary: 2 modified, 2 removed`,
 				WithField("spec.forProvider.configData", "test-value").
 				And().
 				WithAddedResource("XDownstreamResource", "1-stage1-resource", "default").
-				WithField("spec.forProvider.configData", "test-value").
-				And(),
+				WithField("spec.forProvider.configData", "test-value"),
 			expectedError: false,
 		},
 		"EventualStateWithSequencerAndEnvironmentConfigs": {
@@ -1854,8 +2043,7 @@ Summary: 2 modified, 2 removed`,
 				WithField("spec.forProvider.resourceTier", "staging"). // From environment config
 				And().
 				WithAddedResource("XNopResource", "sequencer-envconfig-test", "default").
-				WithField("spec.coolField", "test-value").
-				And(),
+				WithField("spec.coolField", "test-value"),
 			expectedError: false,
 		},
 	}
@@ -1988,6 +2176,76 @@ Summary: 2 modified`,
 			expectedExitCode: dp.ExitCodeDiffDetected,
 			noColor:          true,
 		},
+		// Issue #452: an XR with a deletionTimestamp is on Crossplane's teardown path and will never
+		// adopt the diffed composition's revision. Rendering it yields no composed resources (the
+		// composite reconciler takes its deletion path), so including it produces a meaningless
+		// impact analysis. It must be excluded and counted, leaving only the live XR evaluated.
+		"CompositionDiffExcludesDeletingXRs": {
+			reason: "A deleting XR is excluded from impact analysis and counted as filteredByDeletion; the live XR is still evaluated",
+			setupFiles: []string{
+				"testdata/comp/resources/xrd.yaml",
+				"testdata/comp/resources/original-composition.yaml",
+				"testdata/comp/resources/functions.yaml",
+			},
+			crossplaneManagedResources: []HierarchicalOwnershipRelation{
+				{
+					OwnerFile: "testdata/comp/resources/existing-xr-1.yaml",
+					OwnedFiles: map[string]*HierarchicalOwnershipRelation{
+						"testdata/comp/resources/existing-downstream-1.yaml": nil,
+					},
+				},
+				{
+					OwnerFile: "testdata/comp/resources/existing-xr-deleting.yaml",
+					OwnedFiles: map[string]*HierarchicalOwnershipRelation{
+						"testdata/comp/resources/existing-downstream-deleting.yaml": nil,
+					},
+				},
+			},
+			deleteAfterSetup: []string{"testdata/comp/resources/existing-xr-deleting.yaml"},
+			inputFiles:       []string{"testdata/comp/updated-composition.yaml"},
+			namespace:        "default",
+			outputFormat:     "json",
+			expectedExitCode: dp.ExitCodeDiffDetected, // the composition itself changed
+			// Total counts both discovered XRs; only the live one is evaluated (1 with changes), and
+			// the deleting one is reported via filteredByDeletion. In default-discovery mode filtered
+			// XRs are counted but not surfaced as impact entries, so only test-resource appears.
+			expectedStructuredCompOutput: tu.ExpectCompDiff().
+				WithComposition("xnopresources.diff.example.org").
+				WithCompositionModified().
+				WithAffectedResources(2, 1, 0, 0).
+				WithFilteredByDeletion(1).
+				WithXRImpact("XNopResource", "test-resource", "default", "changed"),
+		},
+		// Issue #452, --resource mode: filtered XRs are surfaced explicitly there, so a user who names
+		// a deleting composite is told why it was skipped rather than getting silence.
+		"ResourceFilterSurfacesDeletingXR": {
+			reason: "--resource matching a deleting composite surfaces it as filtered with reason deleting",
+			setupFiles: []string{
+				"testdata/comp/resources/xrd.yaml",
+				"testdata/comp/resources/original-composition.yaml",
+				"testdata/comp/resources/composition-revision-v1.yaml",
+				"testdata/comp/resources/functions.yaml",
+			},
+			crossplaneManagedResources: []HierarchicalOwnershipRelation{
+				{
+					OwnerFile: "testdata/comp/resources/existing-xr-deleting.yaml",
+					OwnedFiles: map[string]*HierarchicalOwnershipRelation{
+						"testdata/comp/resources/existing-downstream-deleting.yaml": nil,
+					},
+				},
+			},
+			deleteAfterSetup: []string{"testdata/comp/resources/existing-xr-deleting.yaml"},
+			inputFiles:       []string{"testdata/comp/updated-composition.yaml"},
+			resources:        []string{"default/deleting-resource"},
+			outputFormat:     "json",
+			expectedExitCode: dp.ExitCodeDiffDetected, // the composition itself changed
+			expectedStructuredCompOutput: tu.ExpectCompDiff().
+				WithComposition("xnopresources.diff.example.org").
+				WithCompositionModified().
+				WithFilteredByDeletion(1).
+				WithXRImpact("XNopResource", "deleting-resource", "default", "filtered").
+				WithFilterReason("deleting"),
+		},
 		"CompositionDiffIgnorePaths": {
 			reason: "Validates that ArgoCD annotations are ignored in composition diffs",
 			setupFiles: []string{
@@ -2000,6 +2258,9 @@ Summary: 2 modified`,
 			},
 			inputFiles: []string{"testdata/comp/composition-no-changes.yaml"},
 			namespace:  "default",
+			// The composition is unchanged, so impact analysis would be skipped by default (issue
+			// #453). This case is about XR/downstream-level ignore paths, so it opts back in.
+			analyzeUnchanged: true,
 			ignorePaths: []string{
 				"metadata.annotations[argocd.argoproj.io/tracking-id]",
 				"metadata.labels[argocd.argoproj.io/instance]",
@@ -2022,6 +2283,125 @@ All composite resources are up-to-date. No downstream resource changes detected.
 `,
 			expectedError: false,
 			noColor:       true,
+		},
+		// Issue #453: any revision an unchanged composition produced would carry the same spec, so no XR
+		// renders differently and the affected-XR / impact-analysis sections are replaced by a skip note.
+		//
+		// These fixtures are deliberately ones that DO produce a downstream delta when evaluated (see
+		// UnchangedCompositionAnalyzeUnchangedEvaluatesXRs, which asserts exactly that against the same
+		// setup). So this case proves two things at once: the skip suppresses a report that would
+		// otherwise be emitted, and the exit code is 0 rather than the 3 that report would have caused
+		// — a delta not attributable to any composition change must not gate a CI pipeline.
+		"UnchangedCompositionSkipsImpactAnalysis": {
+			reason: "An unchanged composition skips impact analysis entirely and says so",
+			setupFiles: []string{
+				"testdata/comp/resources/xrd.yaml",
+				"testdata/comp/resources/original-composition.yaml",
+				"testdata/comp/resources/functions.yaml",
+				"testdata/comp/resources/existing-xr-1.yaml",
+				"testdata/comp/resources/existing-downstream-1.yaml",
+			},
+			inputFiles: []string{"testdata/comp/composition-no-changes.yaml"},
+			namespace:  "default",
+			expectedOutput: `
+=== Composition Changes ===
+
+No changes detected in composition xnopresources.diff.example.org
+
+Impact analysis skipped: this composition is identical to the cluster's, so applying it creates no new CompositionRevision and no composite resource could change as a result. Pass --analyze-on=always to evaluate them anyway.
+
+`,
+			expectedError: false,
+			// No composition change and no evaluated XRs, so nothing was detected.
+			expectedExitCode: dp.ExitCodeSuccess,
+			noColor:          true,
+		},
+		// Issue #467: the cluster composition was applied with a client-side `kubectl apply`, so it
+		// carries kubectl.kubernetes.io/last-applied-configuration; the file being diffed never does.
+		// That annotation is suppressed from the rendered diff — it is a multi-KB serialization of the
+		// object, useless to show — but Crossplane's Composition.Hash() covers annotations, so applying
+		// this DOES create a new CompositionRevision that composites re-point to, and whose name a
+		// template can read off the XR's compositionRevisionRef. A suppression made for readability
+		// must not decide that away, so the composites are evaluated. Contrast the sibling above, which
+		// is byte-identical and needs --analyze-unchanged to evaluate anything.
+		//
+		// This runs the real CLI wiring, which the unit coverage in
+		// TestDefaultCompDiffProcessor_calculateCompositionDiff cannot reach: it pins that
+		// defaultProcessorOptions does not fold the annotation into --ignore-paths, and that the
+		// display-only suppression does not leak into the change verdict.
+		//
+		// The downstream modification reported here is the same fixture artifact
+		// UnchangedCompositionAnalyzeUnchangedEvaluatesXRs documents, not an effect of the annotation.
+		"CompositionAppliedWithKubectlEvaluatesXRs": {
+			reason: "A composition differing only in kubectl's last-applied-configuration still counts as changed, because applying it creates a new CompositionRevision",
+			setupFiles: []string{
+				"testdata/comp/resources/xrd.yaml",
+				"testdata/comp/resources/original-composition-kubectl-applied.yaml",
+				"testdata/comp/resources/functions.yaml",
+				"testdata/comp/resources/existing-xr-1.yaml",
+				"testdata/comp/resources/existing-downstream-1.yaml",
+			},
+			inputFiles:       []string{"testdata/comp/composition-no-changes.yaml"},
+			namespace:        "default",
+			outputFormat:     "json",
+			expectedExitCode: dp.ExitCodeDiffDetected,
+			expectedStructuredCompOutput: tu.ExpectCompDiff().
+				WithComposition("xnopresources.diff.example.org").
+				WithAffectedResources(1, 1, 0, 0).
+				WithXRImpact("XNopResource", "test-resource", "default", "changed").
+				WithDownstreamSummary(0, 1, 0).
+				WithDownstreamResource("modified", "XDownstreamResource", "test-resource", "default"),
+		},
+		// Issue #472: the same metadata-only change, with the user opting out of paying a render per
+		// composite for it. The composites go unevaluated — but the mutative consequence is still
+		// reported, which is what keeps --analyze-on a cost knob rather than a correctness mode. So the
+		// skip is recorded, and revisionImpact says a CompositionRevision is created and one composite
+		// would adopt it. Exit code 0: nothing renders differently, and a GitOps loop re-applying the
+		// same manifests must not fail its gate forever.
+		"AnalyzeOnSpecChangeSkipsMetadataOnlyChange": {
+			reason: "--analyze-on=spec-change leaves a metadata-only change unevaluated, while still reporting that it creates a CompositionRevision",
+			setupFiles: []string{
+				"testdata/comp/resources/xrd.yaml",
+				"testdata/comp/resources/original-composition-kubectl-applied.yaml",
+				"testdata/comp/resources/functions.yaml",
+				"testdata/comp/resources/existing-xr-1.yaml",
+				"testdata/comp/resources/existing-downstream-1.yaml",
+			},
+			inputFiles:       []string{"testdata/comp/composition-no-changes.yaml"},
+			namespace:        "default",
+			analyzeOn:        "spec-change",
+			outputFormat:     "json",
+			expectedExitCode: dp.ExitCodeSuccess,
+			expectedStructuredCompOutput: tu.ExpectCompDiff().
+				WithComposition("xnopresources.diff.example.org").
+				WithImpactAnalysisSkipped().
+				WithRevisionImpact("metadata", true, 1),
+		},
+		// The same setup with --analyze-unchanged evaluates the XRs after all (the pre-edit
+		// convergence-baseline workflow). Note what it reports: a downstream modification even though
+		// the composition is byte-identical to the cluster's. That delta is not caused by this
+		// composition — it is exactly the class of finding the default skip keeps out of the "impact of
+		// your composition change" report, and why opting in is explicit.
+		"UnchangedCompositionAnalyzeUnchangedEvaluatesXRs": {
+			reason: "--analyze-unchanged evaluates affected XRs even though the composition is unchanged, surfacing deltas not caused by it",
+			setupFiles: []string{
+				"testdata/comp/resources/xrd.yaml",
+				"testdata/comp/resources/original-composition.yaml",
+				"testdata/comp/resources/functions.yaml",
+				"testdata/comp/resources/existing-xr-1.yaml",
+				"testdata/comp/resources/existing-downstream-1.yaml",
+			},
+			inputFiles:       []string{"testdata/comp/composition-no-changes.yaml"},
+			namespace:        "default",
+			analyzeUnchanged: true,
+			outputFormat:     "json",
+			expectedExitCode: dp.ExitCodeDiffDetected,
+			expectedStructuredCompOutput: tu.ExpectCompDiff().
+				WithComposition("xnopresources.diff.example.org").
+				WithAffectedResources(1, 1, 0, 0).
+				WithXRImpact("XNopResource", "test-resource", "default", "changed").
+				WithDownstreamSummary(0, 1, 0).
+				WithDownstreamResource("modified", "XDownstreamResource", "test-resource", "default"),
 		},
 		"CompositionDiffCustomNamespace": {
 			reason: "Validates composition diff with custom namespace",
@@ -2121,8 +2501,56 @@ Summary: 1 modified`,
 			expectedExitCode: dp.ExitCodeDiffDetected,
 			noColor:          true,
 		},
+		// Two compositions that BOTH genuinely change, each with its own affected XR. This is the
+		// aggregation case: one CompositionDiff entry per input, each carrying its own impact analysis,
+		// with hasDiffs ORed across them. MultipleCompositionDiffImpact below covers the mixed
+		// changed/unchanged variant; before this case existed, nothing covered two compositions that
+		// both report impacts — the second composition there has no affected XR at all.
+		"MultipleChangedCompositionsBothReportImpact": {
+			reason: "Two changed compositions each report their own affected XR's downstream changes",
+			setupFiles: []string{
+				"testdata/comp/resources/xrd.yaml",
+				"testdata/comp/resources/original-composition.yaml",
+				"testdata/comp/resources/original-composition-2.yaml",
+				"testdata/comp/resources/functions.yaml",
+				// XR using composition 1
+				"testdata/comp/resources/existing-xr-1.yaml",
+				"testdata/comp/resources/existing-downstream-1.yaml",
+				// XR using composition 2
+				"testdata/comp/resources/existing-xr-v2.yaml",
+				"testdata/comp/resources/existing-downstream-v2.yaml",
+			},
+			inputFiles: []string{
+				"testdata/comp/updated-composition.yaml",
+				"testdata/comp/updated-composition-2-changed.yaml",
+			},
+			namespace:        "default",
+			outputFormat:     "json",
+			expectedExitCode: dp.ExitCodeDiffDetected,
+			expectedStructuredCompOutput: tu.ExpectCompDiff().
+				WithComposition("xnopresources.diff.example.org").
+				WithCompositionModified().
+				WithAffectedResources(1, 1, 0, 0).
+				WithXRImpact("XNopResource", "test-resource", "default", "changed").
+				WithDownstreamSummary(0, 1, 0).
+				WithDownstreamResource("modified", "XDownstreamResource", "test-resource", "default").
+				WithFieldChange("spec.forProvider.configData", "existing-value", "updated-existing-value").
+				WithFieldChange("spec.forProvider.resourceTier", "basic", "premium").
+				AndComposition("xnopresources-v2.diff.example.org").
+				WithCompositionModified().
+				WithAffectedResources(1, 1, 0, 0).
+				WithXRImpact("XNopResource", "v2-resource", "default", "changed").
+				WithDownstreamSummary(0, 1, 0).
+				WithDownstreamResource("modified", "XDownstreamResource", "v2-resource", "default").
+				WithFieldChange("spec.forProvider.configData", "v2-updated-v2-existing-value", "v2-changed-v2-existing-value").
+				WithFieldChange("spec.forProvider.resourceTier", "enterprise", "premium-plus"),
+		},
+		// Note the second input composition (xnopresources-v2.diff.example.org) is byte-identical to its
+		// in-cluster version, so this case doubles as the mixed changed/unchanged scenario: the changed
+		// composition reports its impact while the unchanged one is skipped per-composition (issue
+		// #453). It is not a broken fixture.
 		"MultipleCompositionDiffImpact": {
-			reason: "Validates multiple composition diff shows impact on existing XRs",
+			reason: "Validates multiple compositions in one invocation: the changed one reports impact on existing XRs, the unchanged one is skipped",
 			// Set up existing XRs that use both compositions
 			setupFiles: []string{
 				"testdata/comp/resources/xrd.yaml",
@@ -2241,7 +2669,8 @@ Summary: 2 modified
 
 No changes detected in composition xnopresources-v2.diff.example.org
 
-No XRs found using composition xnopresources-v2.diff.example.org`,
+Impact analysis skipped: this composition is identical to the cluster's, so applying it creates no new CompositionRevision and no composite resource could change as a result. Pass --analyze-on=always to evaluate them anyway.
+`,
 			expectedError:    false,
 			expectedExitCode: dp.ExitCodeDiffDetected,
 			noColor:          true,
@@ -3216,8 +3645,7 @@ Summary: 2 modified`,
 				WithXRImpact("XNopResource", "sequencer-gating-test", "default", "changed").
 				WithDownstreamSummary(1, 0, 0).
 				WithDownstreamResource("added", "XDownstreamResource", "0-stage0-resource", "default").
-				WithField("spec.forProvider.configData", "updated-existing-value").
-				AndXR().AndComp().And(),
+				WithField("spec.forProvider.configData", "updated-existing-value"),
 			expectedError: false,
 		},
 		"CompSequencerGatedStageAppearsWithEventualState": {
@@ -3245,8 +3673,7 @@ Summary: 2 modified`,
 				WithField("spec.forProvider.configData", "updated-existing-value").
 				AndXR().
 				WithDownstreamResource("added", "XDownstreamResource", "1-stage1-resource", "default").
-				WithField("spec.forProvider.configData", "updated-existing-value").
-				AndXR().AndComp().And(),
+				WithField("spec.forProvider.configData", "updated-existing-value"),
 			expectedError: false,
 		},
 		// Paired comp composition-driven gating tests — gating encoded in go-templating,
@@ -3272,8 +3699,7 @@ Summary: 2 modified`,
 				WithXRImpact("XNopResource", "conditional-gating-test", "default", "changed").
 				WithDownstreamSummary(1, 0, 0).
 				WithDownstreamResource("added", "XDownstreamResource", "0-stage0-resource", "default").
-				WithField("spec.forProvider.configData", "updated-existing-value").
-				AndXR().AndComp().And(),
+				WithField("spec.forProvider.configData", "updated-existing-value"),
 			expectedError: false,
 		},
 		"CompConditionalGatedStageAppearsWithEventualState": {
@@ -3300,8 +3726,7 @@ Summary: 2 modified`,
 				WithField("spec.forProvider.configData", "updated-existing-value").
 				AndXR().
 				WithDownstreamResource("added", "XDownstreamResource", "1-stage1-resource", "default").
-				WithField("spec.forProvider.configData", "updated-existing-value").
-				AndXR().AndComp().And(),
+				WithField("spec.forProvider.configData", "updated-existing-value"),
 			expectedError: false,
 		},
 		// --resource flag tests (issue #321)
@@ -3325,8 +3750,7 @@ Summary: 2 modified`,
 				WithComposition("xnopresources.diff.example.org").
 				WithCompositionModified().
 				WithAffectedResources(1, 1, 0, 0).
-				WithXRImpact("XNopResource", "test-resource", "default", "changed").
-				AndComp().And(),
+				WithXRImpact("XNopResource", "test-resource", "default", "changed"),
 		},
 		"ResourceFilterCommaSeparated": {
 			reason: "--resource accepts comma-separated values via kong's auto-parsing",
@@ -3350,8 +3774,7 @@ Summary: 2 modified`,
 				WithAffectedResources(2, 2, 0, 0).
 				WithXRImpact("XNopResource", "test-resource", "default", "changed").
 				AndComp().
-				WithXRImpact("XNopResource", "another-resource", "default", "changed").
-				AndComp().And(),
+				WithXRImpact("XNopResource", "another-resource", "default", "changed"),
 		},
 		"ResourceFilterUnmatched_FailsBeforeRendering": {
 			reason: "--resource naming a non-existent composite fails fast with an error before any rendering",
@@ -3370,7 +3793,7 @@ Summary: 2 modified`,
 			expectedExitCode:      dp.ExitCodeToolError,
 		},
 		"ResourceFilterRespectsManualPolicy_WithoutIncludeManual": {
-			reason: "--resource matching a Manual-policy composite surfaces it as filtered_by_policy when --include-manual is unset",
+			reason: "--resource matching a Manual-policy composite surfaces it as filtered (reason manual_policy) when --include-manual is unset",
 			setupFiles: []string{
 				"testdata/comp/resources/xrd.yaml",
 				"testdata/comp/resources/original-composition.yaml",
@@ -3386,11 +3809,11 @@ Summary: 2 modified`,
 			expectedStructuredCompOutput: tu.ExpectCompDiff().
 				WithComposition("xnopresources.diff.example.org").
 				WithCompositionModified().
-				WithXRImpact("XNopResource", "manual-resource", "default", "filtered_by_policy").
-				AndComp().And(),
+				WithXRImpact("XNopResource", "manual-resource", "default", "filtered").
+				WithFilterReason("manual_policy"),
 		},
 		"ResourceFilterRespectsManualPolicy_WithIncludeManual": {
-			reason: "--include-manual evaluates the Manual-policy composite normally instead of marking it filtered_by_policy",
+			reason: "--include-manual evaluates the Manual-policy composite normally instead of marking it filtered",
 			setupFiles: []string{
 				"testdata/comp/resources/xrd.yaml",
 				"testdata/comp/resources/original-composition.yaml",
@@ -3407,8 +3830,53 @@ Summary: 2 modified`,
 			expectedStructuredCompOutput: tu.ExpectCompDiff().
 				WithComposition("xnopresources.diff.example.org").
 				WithCompositionModified().
-				WithXRImpact("XNopResource", "manual-resource", "default", "changed").
-				AndComp().And(),
+				WithXRImpact("XNopResource", "manual-resource", "default", "changed"),
+		},
+		// Issue #388 (Bug A): an Automatic-policy XR whose compositionRevisionSelector does not match
+		// the edited composition's labels would not adopt the resulting revision, so it must be
+		// surfaced as filtered (reason revision_selector_mismatch), NOT evaluated for changes.
+		"ResourceFilterRespectsRevisionSelectorMismatch": {
+			reason: "--resource matching an Automatic XR whose compositionRevisionSelector does not match the composition's labels surfaces it as filtered (reason revision_selector_mismatch)",
+			setupFiles: []string{
+				"testdata/comp/resources/xrd.yaml",
+				"testdata/comp/resources/original-composition.yaml",
+				"testdata/comp/resources/composition-revision-v1.yaml",
+				"testdata/comp/resources/functions.yaml",
+				"testdata/comp/resources/existing-xr-selector-mismatch.yaml",
+			},
+			inputFiles:       []string{"testdata/comp/updated-composition-labeled.yaml"},
+			resources:        []string{"default/selector-mismatch-resource"},
+			outputFormat:     "json",
+			expectedExitCode: dp.ExitCodeDiffDetected, // composition itself changed
+			expectedStructuredCompOutput: tu.ExpectCompDiff().
+				WithComposition("xnopresources.diff.example.org").
+				WithCompositionModified().
+				WithXRImpact("XNopResource", "selector-mismatch-resource", "default", "filtered").
+				WithFilterReason("revision_selector_mismatch"),
+			// Note: that --include-manual does NOT rescue a selector-mismatched Automatic XR is
+			// proven at the unit level (TestDefaultCompDiffProcessor_partitionXRsByUpdatePolicy /
+			// IncludeManualTrue_StillDropsSelectorMismatchedAutomaticXRs). A second slow
+			// docker-render integration case for that flag interaction would be redundant.
+		},
+		// Issue #388 (Bug A, positive): an Automatic XR whose compositionRevisionSelector DOES match
+		// the edited composition's labels is kept and evaluated for downstream changes (not filtered).
+		"ResourceFilterRespectsRevisionSelectorMatch": {
+			reason: "--resource matching an Automatic XR whose compositionRevisionSelector matches the composition's labels keeps it and reports downstream changes",
+			setupFiles: []string{
+				"testdata/comp/resources/xrd.yaml",
+				"testdata/comp/resources/original-composition.yaml",
+				"testdata/comp/resources/composition-revision-v1.yaml",
+				"testdata/comp/resources/functions.yaml",
+				"testdata/comp/resources/existing-xr-selector-match.yaml",
+			},
+			inputFiles:       []string{"testdata/comp/updated-composition-labeled.yaml"},
+			resources:        []string{"default/selector-match-resource"},
+			outputFormat:     "json",
+			expectedExitCode: dp.ExitCodeDiffDetected,
+			expectedStructuredCompOutput: tu.ExpectCompDiff().
+				WithComposition("xnopresources.diff.example.org").
+				WithCompositionModified().
+				WithXRImpact("XNopResource", "selector-match-resource", "default", "changed"),
 		},
 	}
 

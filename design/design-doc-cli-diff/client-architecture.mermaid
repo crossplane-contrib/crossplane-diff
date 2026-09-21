@@ -80,7 +80,7 @@ classDiagram
         +Initialize(ctx) error
         +GetCompositionRevision(ctx, name) (*CompositionRevision, error)
         +ListCompositionRevisions(ctx) ([]*CompositionRevision, error)
-        +GetLatestRevisionForComposition(ctx, compName) (*CompositionRevision, error)
+        +GetLatestRevisionForComposition(ctx, compName, selector) (*CompositionRevision, error)
         +GetCompositionFromRevision(rev) *Composition
     }
 

@@ -21,13 +21,25 @@ I have: <!--You MUST either [x] check or [ ] ~strike through~ every item.-->
 - [ ] Read and followed Crossplane's [contribution process].
 - [ ] Run `earthly -P +reviewable` to ensure this PR is ready for review.
 - [ ] Added or updated unit tests.
-- [ ] Added or updated e2e tests.
-- [ ] Documented this change as needed.
-- [ ] Followed the [API promotion workflow] if this PR introduces, removes, or promotes an API.
+- [ ] Added or updated integration or e2e tests.
+<!--
+Prefer integration tests (cmd/diff/*_integration_test.go,
+envtest + real functions, seconds/case) for crossplane-diff's
+own logic. Reserve e2e tests (test/e2e, minutes) for behavior
+only a live Crossplane controller reconcile can prove.
+-->
+- [ ] Updated documentation as needed (user-facing behavior in `README.md`; architecture in `design/design-doc-cli-diff.md` and its diagrams).
+<!--
+Update the README for anything a user would notice (flags,
+subcommands, exit codes, structured-output schema, rendered
+output). Update the design doc + mermaid diagrams for
+interface, client, renderer, workflow, or layout changes; see
+"Keeping Documentation in Sync" in CLAUDE.md for the trigger
+table. Strike through (~~...~~) if this change is not
+user-facing and touches no documented behavior.
+-->
 
 Need help with this checklist? See the [cheat sheet].
 
 [contribution process]: https://github.com/crossplane/crossplane/tree/main/contributing
-[docs tracking issue]: https://github.com/crossplane/docs/issues/new
 [cheat sheet]: https://github.com/crossplane/crossplane/tree/main/contributing#checklist-cheat-sheet
-[API promotion workflow]: https://github.com/crossplane/crossplane/blob/main/contributing/guide-api-promotion.md

@@ -1,0 +1,14 @@
+apiVersion: ns.diff.example.org/v1alpha1
+kind: XNopResource
+metadata:
+  name: test-selector
+  namespace: default
+spec:
+  crossplane:
+    compositionRef:
+      name: xnopresources.diff.example.org
+    compositionUpdatePolicy: Automatic
+    compositionRevisionSelector:
+      matchLabels:
+        channel: stable
+  coolField: existing-value

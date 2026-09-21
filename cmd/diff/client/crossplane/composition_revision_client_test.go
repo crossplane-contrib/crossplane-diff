@@ -2,6 +2,7 @@ package crossplane
 
 import (
 	"context"
+	"maps"
 	"strings"
 	"testing"
 
@@ -9,6 +10,7 @@ import (
 	"github.com/google/go-cmp/cmp"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	un "k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 
@@ -372,7 +374,7 @@ func TestDefaultCompositionRevisionClient_GetLatestRevisionForComposition(t *tes
 				c.revisionsByComposition = make(map[string][]*apiextensionsv1.CompositionRevision)
 			}
 
-			rev, err := c.GetLatestRevisionForComposition(ctx, tt.compositionName)
+			rev, err := c.GetLatestRevisionForComposition(ctx, tt.compositionName, nil)
 
 			if tt.expectError {
 				if err == nil {
@@ -400,6 +402,142 @@ func TestDefaultCompositionRevisionClient_GetLatestRevisionForComposition(t *tes
 			if diff := cmp.Diff(tt.expectRev.Spec.Revision, rev.Spec.Revision); diff != "" {
 				t.Errorf("\n%s\nGetLatestRevisionForComposition(...): -want revision number, +got revision number:\n%s",
 					tt.reason, diff)
+			}
+		})
+	}
+}
+
+// TestDefaultCompositionRevisionClient_GetLatestRevisionForComposition_Selector covers the
+// selector-aware revision selection used by the xr command (issue #388, Bug B): under Automatic
+// policy with a compositionRevisionSelector, Crossplane picks the newest revision whose (inherited)
+// labels match the selector — not the newest revision overall.
+func TestDefaultCompositionRevisionClient_GetLatestRevisionForComposition_Selector(t *testing.T) {
+	ctx := t.Context()
+
+	rev := func(name string, revision int64, extraLabels map[string]string) *apiextensionsv1.CompositionRevision {
+		lbls := map[string]string{LabelCompositionName: "chan-comp"}
+		maps.Copy(lbls, extraLabels)
+
+		return &apiextensionsv1.CompositionRevision{
+			ObjectMeta: metav1.ObjectMeta{Name: name, Labels: lbls},
+			Spec: apiextensionsv1.CompositionRevisionSpec{
+				Revision:         revision,
+				CompositeTypeRef: apiextensionsv1.TypeReference{APIVersion: "example.org/v1", Kind: "XR1"},
+			},
+		}
+	}
+
+	// active is revision 1 (channel=active); preview is revision 2 (channel=preview, newest overall).
+	active := rev("chan-comp-active", 1, map[string]string{"channel": "active"})
+	preview := rev("chan-comp-preview", 2, map[string]string{"channel": "preview"})
+	// Two revisions sharing a walking tag major=v1: v1old (rev 1), v1new (rev 3, newest matching).
+	v1old := rev("chan-comp-v1old", 1, map[string]string{"major": "v1"})
+	v1new := rev("chan-comp-v1new", 3, map[string]string{"major": "v1"})
+
+	toUnstructured := func(r *apiextensionsv1.CompositionRevision) *un.Unstructured {
+		u := &un.Unstructured{}
+		obj, _ := runtime.DefaultUnstructuredConverter.ToUnstructured(r)
+		u.SetUnstructuredContent(obj)
+		u.SetGroupVersionKind(schema.GroupVersionKind{Group: CrossplaneAPIExtGroup, Version: "v1", Kind: "CompositionRevision"})
+
+		return u
+	}
+
+	mustSelector := func(m map[string]string) labels.Selector {
+		s, err := metav1.LabelSelectorAsSelector(&metav1.LabelSelector{MatchLabels: m})
+		if err != nil {
+			t.Fatalf("building selector: %v", err)
+		}
+
+		return s
+	}
+
+	tests := map[string]struct {
+		reason       string
+		revisions    []*apiextensionsv1.CompositionRevision
+		selector     labels.Selector
+		expectName   string
+		expectError  bool
+		errorPattern string
+	}{
+		"SelectorPinsOlderActiveRevision": { // AC3.1
+			reason:     "selector channel=active resolves to the active revision, not the newest overall",
+			revisions:  []*apiextensionsv1.CompositionRevision{active, preview},
+			selector:   mustSelector(map[string]string{"channel": "active"}),
+			expectName: "chan-comp-active",
+		},
+		"SelectorSelectsPreviewRevision": { // AC3.2
+			reason:     "selector channel=preview resolves to the preview revision",
+			revisions:  []*apiextensionsv1.CompositionRevision{active, preview},
+			selector:   mustSelector(map[string]string{"channel": "preview"}),
+			expectName: "chan-comp-preview",
+		},
+		"WalkingTagSelectsNewestMatching": { // AC3.3
+			reason:     "selector major=v1 matches multiple revisions; newest matching wins",
+			revisions:  []*apiextensionsv1.CompositionRevision{v1old, v1new},
+			selector:   mustSelector(map[string]string{"major": "v1"}),
+			expectName: "chan-comp-v1new",
+		},
+		"EverythingSelectorSelectsNewestOverall": { // AC3.4
+			reason:     "labels.Everything() selects the newest revision overall",
+			revisions:  []*apiextensionsv1.CompositionRevision{active, preview},
+			selector:   labels.Everything(),
+			expectName: "chan-comp-preview",
+		},
+		"NilSelectorSelectsNewestOverall": { // AC3.4 (nil is the ergonomic "no restriction")
+			reason:     "a nil selector means no restriction and selects the newest revision overall",
+			revisions:  []*apiextensionsv1.CompositionRevision{active, preview},
+			selector:   nil,
+			expectName: "chan-comp-preview",
+		},
+		"NoRevisionMatchesSelector": { // AC3.5
+			reason:       "a selector matching no revision is a hard error",
+			revisions:    []*apiextensionsv1.CompositionRevision{active, preview},
+			selector:     mustSelector(map[string]string{"channel": "nonexistent"}),
+			expectError:  true,
+			errorPattern: "match selector",
+		},
+	}
+
+	for name, tt := range tests {
+		t.Run(name, func(t *testing.T) {
+			unRevs := make([]*un.Unstructured, len(tt.revisions))
+			for i, r := range tt.revisions {
+				unRevs[i] = toUnstructured(r)
+			}
+
+			mockResource := tu.NewMockResourceClient().
+				WithSuccessfulInitialize().
+				WithResourcesFoundByLabel(unRevs, LabelCompositionName, "chan-comp").
+				Build()
+
+			c := &DefaultCompositionRevisionClient{
+				resourceClient:         mockResource,
+				logger:                 tu.TestLogger(t, false),
+				revisions:              make(map[string]*apiextensionsv1.CompositionRevision),
+				revisionsByComposition: make(map[string][]*apiextensionsv1.CompositionRevision),
+			}
+
+			got, err := c.GetLatestRevisionForComposition(ctx, "chan-comp", tt.selector)
+
+			if tt.expectError {
+				if err == nil {
+					t.Fatalf("\n%s\nexpected error but got none", tt.reason)
+				}
+
+				if tt.errorPattern != "" && !strings.Contains(err.Error(), tt.errorPattern) {
+					t.Errorf("\n%s\nexpected error containing %q, got %q", tt.reason, tt.errorPattern, err.Error())
+				}
+
+				return
+			}
+
+			if err != nil {
+				t.Fatalf("\n%s\nunexpected error: %v", tt.reason, err)
+			}
+
+			if got.GetName() != tt.expectName {
+				t.Errorf("\n%s\ngot revision %q, want %q", tt.reason, got.GetName(), tt.expectName)
 			}
 		})
 	}

@@ -251,6 +251,35 @@ The `comp` subcommand has its own set of integration tests:
   match at least one input composition) is exercised.
 - **Update Policy Handling**: Verifies that `Manual` XRs are excluded by default and included with `--include-manual`,
   and that both v1 (`spec.compositionUpdatePolicy`) and v2 (`spec.crossplane.compositionUpdatePolicy`) are honoured.
+- **Revision Selector Handling**: Verifies that an Automatic XR whose `compositionRevisionSelector` does not match the
+  diffed composition's labels is surfaced as `filtered` with reason `revision_selector_mismatch`, and that
+  `--include-manual` does not re-include it (it would not select the resulting revision). The predicate honours both
+  `matchLabels` and `matchExpressions` and both v1/v2 field paths.
+- **Unchanged-Composition Skipping**: Verifies that a composition identical to its in-cluster version skips impact
+  analysis (marked `ImpactAnalysisSkipped`, exit code 0 even when the fixtures would otherwise report a downstream
+  delta), that `--analyze-on=always` (and its deprecated `--analyze-unchanged` equivalent) evaluates the composites anyway,
+  and that a difference confined to a masked field still counts as changed so the analysis is not silently skipped — for
+  both kinds of mask: the user's `--ignore-paths`, and the renderer's display-only suppressions (a cluster-only
+  `kubectl.kubernetes.io/last-applied-configuration` annotation). The display-only case is covered at both levels: as a
+  comparison verdict in `TestDefaultCompDiffProcessor_calculateCompositionDiff`, and end-to-end through the real CLI
+  wiring in `TestCompDiffIntegration/CompositionAppliedWithKubectlEvaluatesXRs`, which is what pins
+  `defaultProcessorOptions` not folding the annotation into `--ignore-paths` (see §6.8).
+- **Analysis-Trigger Threshold**: `TestChangeScope_triggersAnalysis` pins the `--analyze-on` decision table as a matrix
+  of scope against setting, asserting it stays monotonic (anything `spec-change` analyses, `any-change` also analyses,
+  `always` analyses everything) and that the zero-value `AnalyzeOn` — reachable by any caller constructing a
+  `ProcessorConfig` directly — behaves as the CLI default rather than analysing nothing.
+  `TestCompDiffIntegration/AnalyzeOnSpecChangeSkipsMetadataOnlyChange` covers the same threshold end-to-end: a
+  metadata-only change under `--analyze-on=spec-change` goes unevaluated, yet `revisionImpact` still reports
+  `changeScope: metadata`, `createsRevision: true` and the one composite that would adopt the revision, with exit code 0.
+  That pairing is what pins the flag as a cost knob rather than a correctness mode.
+- **Change-Scope Classification**: `TestDefaultCompDiffProcessor_calculateCompositionDiff` covers the `spec` scope
+  alongside its metadata cases — `SpecDifference_ScopeIsSpec` for a plain pipeline edit, and
+  `SpecDifferenceMasked_ScopeStillSpec` for the same edit hidden behind `--ignore-paths`, which must not be able to
+  downgrade the scope or `--analyze-on=spec-change` would skip a composition that genuinely renders differently.
+- **Deletion Handling**: Verifies that an XR carrying a `metadata.deletionTimestamp` is excluded from impact analysis
+  with reason `deleting` (counted via `FilteredByDeletion`, and surfaced as a `filtered` impact entry in `--resource`
+  mode), that `--include-manual` does not re-include it, and that an explicitly-null `deletionTimestamp` (how
+  round-tripped Kubernetes YAML spells "unset") is not mistaken for a deleting XR.
 - **Downstream Field Changes**: Asserts field-level old/new values on composed resources of affected XRs.
 
 ### 4.12 Nested XRs and Eventual State
@@ -491,6 +520,17 @@ The `ProcessorConfig` structure provides configuration options:
 - `MaxNestedDepth`: Recursion limit for nested-XR diff (`--max-nested-depth`).
 - `MaxRenderIterations`: Cap on the requirements-discovery loop (`--max-iterations`).
 - `IncludeManual`: For `comp`, also consider XRs whose composition update policy is `Manual`.
+- `AnalyzeOn`: For `comp`, the smallest composition change that triggers per-composite impact analysis — one of
+  `AnalyzeOnSpecChange`, `AnalyzeOnAnyChange` (the zero value, matching the `--analyze-on` default) or `AnalyzeOnAlways`
+  (see §6.2 step 3a). Evaluating a composite costs one function render, so this is a cost knob, never a correctness
+  mode: `RevisionImpact` is populated at every setting and composites left unevaluated are marked
+  `ImpactAnalysisSkipped`, so no consequence is suppressed — only the amount of work spent looking for a rendered effect
+  varies. The CLI's `--analyze-unchanged` is a deprecated way to ask for `AnalyzeOnAlways`; `CompCmd.analyzeOn` resolves
+  the two, and `validateFlags` hard-errors when they disagree. `--analyze-on` carries an *empty* kong default rather
+  than `any-change` so that "not passed" stays distinguishable from "passed explicitly" at that check — which is why
+  `--help` states the default in prose rather than showing it as a value.
+- `Warnings`: The `*WarningLogger` whose collected advisories are included in structured output. Nil is valid and means
+  warnings reach stderr but not structured output.
 - `EventualState`: Synthesize composed-resource readiness between render iterations to model the steady state of
   multi-stage compositions (`--eventual-state`).
 - `IgnorePaths`: Field paths to suppress from diffs (e.g., status fields known to be reconciler-set).
@@ -498,6 +538,10 @@ The `ProcessorConfig` structure provides configuration options:
 - `FunctionRegistryOverride`: Rewrites function image references to a mirror.
 - `CrossplaneRenderBinary`: Optional path to an external `crossplane render` binary (otherwise the in-process render
   package is used).
+- `CrossplaneVersion`: Optional pinned render version; the docker engine pulls `…/crossplane:<version>` instead of
+  `:stable`. Validated against `MinCrossplaneRenderVersion` (v2.3.4) at the CLI layer.
+- `CrossplaneImage`: Optional full render image reference (e.g. a private mirror). Mutually exclusive with
+  `CrossplaneVersion` and `CrossplaneRenderBinary`.
 - `Stdout`, `Stderr`: Output sinks (writers are no longer threaded through method calls).
 - `Logger`: Structured logger, propagated to all subcomponents.
 - `RenderFunc`: Renders a composition pipeline; defaults to the in-process engine.
@@ -531,10 +575,84 @@ type CompDiffProcessor interface {
 1. **Discover affected XRs.** For each input composition: list cluster XRs whose `compositionRef`/`compositionSelector`
    resolves to it. Optional filters: `--namespace` (scope to one namespace), `--resource` (limit to specific composite
    names, mutually exclusive with `--namespace`).
-2. **Partition by update policy.** XRs with `compositionUpdatePolicy: Manual` are dropped unless `--include-manual` is
-   set, since they would not be affected by a composition change anyway.
+2. **Partition by whether the XR would adopt the diffed composition.** `partitionXRsByUpdatePolicy` drops an XR when it
+   would not pick up the change. `classifyXR` holds the per-XR rules, evaluated in order: (a) the XR has a
+   `metadata.deletionTimestamp` — reason `deleting`; (b) `compositionUpdatePolicy: Manual` (pinned via
+   `compositionRevisionRef`) unless `--include-manual` is set — reason `manual_policy`; or (c) an Automatic XR whose
+   `compositionRevisionSelector` does not match the diffed composition's `metadata.labels` — reason
+   `revision_selector_mismatch`. Because a CompositionRevision inherits the Composition's labels, the edited composition
+   file *is* the prediction of the new revision, so (c) needs no extra cluster fetch. `--include-manual` governs only
+   (b); (a) and (c) stay dropped regardless, since those XRs genuinely would not select the resulting revision.
+
+   Deletion is checked first because it supersedes the policy rules entirely: Crossplane's composite reconciler takes its
+   deletion path for such an XR, tearing composed resources down rather than composing them. Rendering it therefore
+   yields no composed resources, so any impact analysis for it would be meaningless — and, before this exclusion existed,
+   could fail outright and abort the whole run (issue #452).
+
+   Note this reads `metadata.deletionTimestamp` with the standard `unstructured` accessor, unlike
+   `compositionUpdatePolicy` and `compositionRevisionSelector`, which use bespoke readers that hard-error on a
+   present-but-wrong-typed value. The difference is deliberate: those two are **spec** fields, user-authored and only as
+   well-formed as the XRD's schema requires, so a malformed value is reachable and must not be silently defaulted.
+   `deletionTimestamp` is apiserver-owned core metadata — not settable on create, always serialized as RFC3339 or absent
+   — and both call sites receive only apiserver-sourced objects (`FindComposites` listings and `FetchCurrentObject`
+   gets). A defensive reader there would add an unreachable error path threaded through three functions. The timestamp is
+   normalized to UTC/RFC3339 for display, since `metav1.Time`'s default rendering is machine-local.
 3. **Diff the composition itself.** Compute a top-level diff between the proposed composition and the cluster's current
-   version, surfaced as `CompositionDiff`.
+   version, surfaced as `CompositionDiff`. `calculateCompositionDiff` returns a `compositionComparison` carrying both the
+   diff to display (nil when equal) and a `ChangeScope` — `none`, `metadata` or `spec` — recording how much of the
+   composition differs *at all*. The two come apart whenever a mask hides the only difference, and only the scope is
+   allowed to gate step 3a. The scope is computed by re-running the comparison with every mask lifted (only when the
+   masked comparison came back equal — the extra comparison is local, no API calls): `--ignore-paths` cleared, and
+   `DiffOptions.ForVerdict` set so the renderer's display-only suppressions stop hiding fields too. Both kinds of mask
+   can hide a real difference, so neither may decide the verdict; see §6.8.2. `compositionChangeScope` then decides
+   whether the difference reaches the spec by comparing the two `spec` subtrees directly. A composition absent from the
+   cluster is `spec` by construction — there is no prior spec. When the displayed diff is empty but the scope is not
+   `none`, `CompositionDiff.MaskedChangesOnly` is set so the renderer does not announce the composition as unchanged.
+
+   3a. **Skip impact analysis for a change smaller than `--analyze-on`.** The per-XR work — one function render per XR,
+   the dominant cost of `comp` — is skipped when `ChangeScope.triggersAnalysis` says the difference is smaller than the
+   user asked to analyse, and `CompositionDiff.ImpactAnalysisSkipped` is set so the renderer and structured output can
+   distinguish "not evaluated" from "no affected XRs". At the default (`any-change`) that skips only a composition
+   identical in everything Crossplane hashes: any revision it produced would carry the same spec, so no XR renders
+   anything differently, and any downstream delta computed here would be caused by something other than this composition
+   (drift, convergence lag, or a modeling artifact of the tool), which the tool cannot tell apart. Reporting them would
+   attribute cluster state to a change that does not exist, and would also return `ExitCodeDiffDetected` for a
+   composition the user did not change. `always` opts back in for the pre-edit convergence-baseline workflow.
+   `spec-change` additionally skips a metadata-only difference. Gating on the *displayed* diff instead would mean masking
+   a render-relevant path via `--ignore-paths` silently skips the analysis for a composition that genuinely changes the
+   rendered output; hence the separate scope. See issues #453 and #472.
+
+   **The skip suppresses work, never a consequence.** Whatever the setting, `CompositionDiff.RevisionImpact` reports what
+   applying the composition does to CompositionRevisions — the scope, whether a revision is created, and how many
+   composites would adopt it — because that is a mutative consequence of the apply and is independent of whether anything
+   renders differently. This is what makes `--analyze-on` a cost knob rather than a correctness mode, and it is the reason
+   the flag is acceptable at all: the only thing that varies across settings is how much work is spent looking for a
+   rendered effect. It also means the two "skipped" messages the human renderer emits (`skippedMessage`) must stay
+   distinct. An identical composition creates no revision and so genuinely cannot affect anything; a metadata-only skip
+   under `spec-change` *does* create a revision and simply was not evaluated. Claiming the first guarantee for the second
+   case would assert something the tool never established.
+
+   **What counts as "identical" is Crossplane's definition, not ours.** `Composition.Hash()`
+   (`apis/apiextensions/v1/composition_hash.go`) hashes labels *and* annotations as well as spec, and the revision
+   controller creates a revision whenever no existing one's `crossplane.io/composition-hash` label matches. So a
+   composition differing only in metadata — most commonly the first client-side `kubectl apply` over an object created by
+   SSA, Helm or a controller, which *adds* `last-applied-configuration` — is **not** identical: it produces a new
+   CompositionRevision that Automatic composites re-point to. `ChangeScope` therefore mirrors `Hash()`'s scope: such a
+   difference is `metadata`, not `none`, and is analysed by default rather than skipped. `ChangeScopeNone` — the only
+   scope the default skips — fires only when nothing Crossplane hashes differs, in which case no revision is created and
+   nothing can adopt anything.
+
+   Deliberately *not* assumed: that a metadata-only difference renders identically. It usually will, since
+   `NewCompositionRevisionSpec` copies the spec verbatim — but the revision's identity is observable from a template.
+   Functions receive the whole XR (`AsState` → `xfn.AsStruct`), so a template reading
+   `.observed.composite.resource.spec.crossplane.compositionRevisionRef.name` propagates the revision name into a
+   composed resource, and that name is `<composition>-<hash[:7]>`. Revisions also inherit the composition's
+   `metadata.labels`, which an XR's `compositionRevisionSelector` matches against, so a label-only edit can change which
+   revision an XR selects. Predicting render-relevance from the shape of the change is therefore unsound; the render is
+   what decides, which is why the analysis runs by default. This is also precisely why `spec-change` is a user judgement
+   and not the default: choosing it asserts that none of the user's compositions can observe a revision's identity that
+   way. The tool cannot make that assertion on their behalf, but they can — and when they do, `RevisionImpact` still
+   records the revision the skipped analysis would have been about.
 4. **Diff each XR.** Delegate to the `xrProc` `DiffProcessor` via `DiffSingleResource`, supplying a
    `CompositionProvider` that returns the proposed composition for the affected XR's GVK and the cluster's composition
    otherwise (so nested XRs that use a different composition are diffed against their unchanged composition).
@@ -742,10 +860,11 @@ human-readable and a structured (JSON/YAML) implementation.
 ```go
 // DiffRenderer handles rendering XR diffs.
 type DiffRenderer interface {
-    // RenderDiffs writes per-resource diffs and any per-resource errors. The output writer is held
-    // by the renderer (configured at construction time), not passed in per call, so the same
-    // interface can serve human-readable and structured renderers without leaking io.Writer.
-    RenderDiffs(diffs map[string]*dt.ResourceDiff, errs []dt.OutputError) error
+    // RenderDiffs writes diffs grouped by input XR, plus the top-level (union) errors. The output
+    // writer is held by the renderer (configured at construction time), not passed in per call, so
+    // the same interface can serve human-readable and structured renderers without leaking
+    // io.Writer.
+    RenderDiffs(groups []dt.XRDiffGroup, errs []dt.OutputError) error
 }
 
 // CompDiffRenderer handles rendering composition diffs.
@@ -753,6 +872,14 @@ type CompDiffRenderer interface {
     RenderCompDiff(output *CompDiffOutput) error
 }
 ```
+
+`RenderDiffs` takes a slice of `dt.XRDiffGroup` rather than a flat diff map so both renderers can
+group output by the input XR that produced each change (see §6.8.3). Each group pairs one input
+XR/claim's identity with its diff tree (on success) or its pre-converted `*dt.OutputError` (on
+failure); the processor builds them in `PerformDiff`, one per input, in input order. The human
+renderer renders per-XR sections when more than one XR is present (a single XR, and the
+composition renderer's identity-less internal reuse, render as a flat block); the structured
+renderer emits both the deprecated flat `changes[]` and the grouped `xrs[]`.
 
 Implementations:
 
@@ -779,36 +906,125 @@ pipelines can parse them programmatically). The structured renderers always emit
 fails — by attaching errors to an `OutputError` field. `OutputError` uses JSON struct tags only (the YAML library reads
 JSON tags), so the field naming is consistent across formats.
 
+`--ignore-paths` and the built-in server-side / non-diff-relevant field cleanup (`managedFields`, `resourceVersion`,
+`uid`, `generation`, `creationTimestamp`, `selfLink`, `ownerReferences`, `spec.resourceRefs`,
+`spec.crossplane.resourceRefs`, `status`, and the annotation
+`metadata.annotations[kubectl.kubernetes.io/last-applied-configuration]`) apply uniformly across output formats.
+
+That last annotation is **display-only** suppression (`displayOnlyIgnoredPaths` in `cleanupForDiff`), handled by the
+renderer rather than prepended to `IgnorePaths` at the CLI layer, so that `IgnorePaths` means exactly "masks the user
+asked for". Showing it is useless — it is a multi-KB serialization of the object itself — but suppressing it from
+*display* must not suppress it from a change *verdict*: Crossplane hashes annotations into a composition's identity, so a
+difference here produces a new CompositionRevision (see §7 step 3a). `DiffOptions.ForVerdict` exists for exactly this —
+it keeps the display-only fields in the comparison, and comp's change verdict sets it alongside clearing `IgnorePaths`.
+The general rule: **a field hidden to keep output readable may never decide whether a change exists.** Cleanup happens
+during diff generation (`GenerateDiffWithOptions`), not in the renderers, and each object is cleaned at most once: the
+results are stored on the `ResourceDiff` as `ResourceViews{Raw, Clean}`. `Raw` is the original object (load-bearing for
+removal detection and existing-XR reconstruction); `Clean` is the post-cleanup object. `Clean` is populated only for
+non-equal diffs — the ones that will actually be rendered. Equal diffs render nothing, so they retain only `Raw` and
+leave `Clean` nil (and the raw-deep-equal fast path returns before running cleanup at all). The structured renderer is a
+pure formatter: it emits `Clean` into `changes[].diff.old`, `changes[].diff.new`, and `changes[].diff.spec` (and the
+identical fields under each `xrs[].changes[]`) and performs no cleanup of its own, so the machine-readable payload
+matches what the human diff shows. This matches the semantic-filter
+convention used by ArgoCD (`ignoreDifferences`) and Terraform (`ignore_changes`): ignore is applied once, before output,
+and is visible in classification, summary counts, and rendered bodies alike.
+
 #### 6.8.3 Structured output types
 
 The structured types are split across two files:
 
 - The top-level output types and their components live in `cmd/diff/renderer/structured_renderer.go` alongside the
   structured renderers themselves: `StructuredDiffOutput`, `Summary`, `ChangeDetail`, `CompDiffOutput`,
-  `CompositionDiff`, `XRImpact`, `XRStatus`, `AffectedResourcesSummary`, `DownstreamChanges`.
+  `CompositionDiff`, `RevisionImpact`, `XRImpact`, `XRStatus`, `AffectedResourcesSummary`, `DownstreamChanges`.
 - The error envelope and the validation-failure types live in `cmd/diff/renderer/types/`: `OutputError`,
   `ResourceValidationFailure`, `FieldValidationError`. These are separated because they're consumed by the
   human-readable renderer too, not just the structured ones.
+- `XRDiffGroup` also lives in `cmd/diff/renderer/types/`. It is the processor→renderer handoff type (input-XR
+  identity + its `Diffs map[string]*ResourceDiff` + a pre-converted `*OutputError`), not a wire type. It lives in the
+  leaf `types` package rather than alongside the `DiffRenderer` interface so `testutils` (which mocks `DiffRenderer`)
+  can reference it without importing `renderer`, which would close an import cycle through `renderer`'s in-package
+  tests. The pre-converted error (vs. a raw `error`) keeps the conversion — `NewOutputError`, which lives in
+  `diffprocessor` — out of the renderer, avoiding a renderer→diffprocessor dependency.
 
-All of these are part of the public output contract:
+The output contract is defined by the JSON/YAML field names (the struct tags), not the Go type identifiers: the
+serialized shaping types are unexported (`compDiffWire`, `compositionDiffWire`, `xrImpactWire`, `xrDiffWire`) and
+follow the same `…Wire` naming convention across `comp` and `xr`. The `…Wire` suffix marks them as the serialized
+(JSON/YAML) representation, distinct from the rich, exported internal types the processor builds (`CompDiffOutput`,
+`CompositionDiff`, `XRImpact`). `StructuredDiffOutput` and the field-level types it embeds (`Summary`, `ChangeDetail`,
+`OutputError`) remain exported, as they are shared and referenced directly. The fields below are the public output
+contract:
 
-- `StructuredDiffOutput` — XR diff JSON/YAML root: `Summary` (added/modified/removed counts), `Changes []ChangeDetail`
-  (one entry per non-equal resource, carrying type/apiVersion/kind/name/namespace and the old/new field map), optional
-  `Errors []OutputError`.
+- `StructuredDiffOutput` — XR diff JSON/YAML root: `Summary` (aggregate added/modified/removed counts across all input
+  XRs), `Changes []ChangeDetail` (flat list, one entry per non-equal resource across all XRs), optional
+  `Errors []OutputError` (union), and `Xrs` (per-input-XR grouping, JSON key `xrs`). **`Changes` is deprecated** in
+  favor of `Xrs` and will be removed in a future major release; `Summary` and `Errors` are retained.
+- `xrDiffWire` — one entry in the `xrs[]` array, per input XR/claim in input order: an `xr` identity object, a
+  `status` (`"changed"` / `"unchanged"` / `"error"` — the same `XRStatus` enum comp uses; `"filtered"` does not apply
+  to `xr`), its own `summary`, its own `changes[]`, and (for a failed XR) its own `errors[]`.
+  An errored XR's error also appears in the top-level union `errors[]`.
+- The `xr` field is a `corev1.ObjectReference` nested under the `xr` key (not inlined), carrying
+  `apiVersion`/`kind`/`name`/`namespace`. Reusing the platform-standard type lets consumers unmarshal `xr` straight
+  into an `ObjectReference`; its other fields (`uid`/`resourceVersion`/`fieldPath`) are `omitempty` and never populated
+  here, and the renderer projects to only the four identity fields, so they never appear in output. (`comp` also uses
+  `ObjectReference` but inlines it at the top of each `impactAnalysis` entry; converging the two — nested vs inlined —
+  is deferred to the next breaking `comp` change.)
 - `CompDiffOutput` — composition diff JSON/YAML root: `Compositions []CompositionDiff` (one entry per input
   composition) plus optional top-level `Errors []OutputError` for failures that couldn't be attributed to a single
   composition.
 - `CompositionDiff` — per-composition entry: `Name`, optional `Error`, optional `CompositionDiff *ResourceDiff` (the
-  composition's own diff against its in-cluster version), `AffectedResources AffectedResourcesSummary`, and
-  `ImpactAnalysis []XRImpact`.
+  composition's own diff against its in-cluster version), `AffectedResources AffectedResourcesSummary`,
+  `ImpactAnalysis []XRImpact`, `ImpactAnalysisSkipped` (the composites were deliberately not evaluated because the
+  change was smaller than `--analyze-on` asked to analyse; serialized as `impactAnalysisSkipped` so consumers can
+  distinguish an empty `impactAnalysis` that means "not evaluated" from one that means "none found"),
+  `MaskedChangesOnly` (`maskedChangesOnly`, omitted when false: the composition differs only in fields excluded from the
+  rendered diff, so an absent `compositionChanges` must not be read as "unchanged"), and `RevisionImpact`.
+- `RevisionImpact` — what applying a composition does to CompositionRevisions and the composites tracking them,
+  independent of whether anything renders differently: `ChangeScope` (`changeScope`, one of `"none"` / `"metadata"` /
+  `"spec"`), `CreatesRevision` (`createsRevision`), and `RepointedComposites` (`repointedComposites`, the composites that
+  would adopt the resulting revision — those not excluded by update policy, revision selector, or deletion). Serialized
+  **unconditionally**, including when `impactAnalysisSkipped` is true: that is the point of it, and it is what keeps
+  `--analyze-on` a cost knob rather than a correctness mode (§6.2 step 3a). Deliberately a typed per-composition field
+  rather than a warning — revision churn is a fact a CI consumer may want to gate on, and warnings are documented as
+  neither attributed to a composition nor intended for gating (§6.8.1), so a flat warning could not say which of several
+  diffed compositions creates a revision. Note `RepointedComposites` counts composites that *re-point*, which is not the
+  same as composites whose rendered output changes; re-pointing alone usually renders identically.
+- `CompositionDiff.HasChanges` — what drives `ExitCodeDiffDetected` for `comp`: a non-equal composition diff, or at least
+  one `XRImpact` with status `changed`. `RevisionImpact` is deliberately **excluded**. A composition whose only
+  difference is in masked fields creates a CompositionRevision but has nothing to show and nothing rendering
+  differently, and a GitOps loop re-applying the same manifests would otherwise fail its diff gate on every run. A
+  consumer that does want to gate on revision churn reads `revisionImpact.createsRevision` instead.
 - `AffectedResourcesSummary` — counts across the impact analysis: `Total`, `WithChanges`, `Unchanged`, `WithErrors`,
-  and optional `FilteredByPolicy` (XRs that matched a `--resource` selector but were dropped by the update-policy
-  filter).
+  and three optional filter counters: `FilteredByPolicy` (XRs dropped because of a `Manual`
+  `compositionUpdatePolicy`), `FilteredBySelector` (XRs dropped because their `compositionRevisionSelector` does not
+  match the diffed composition's labels), and `FilteredByDeletion` (XRs dropped because they are being deleted). Split
+  by reason so the breakdown survives even in default-discovery mode, where individual XR impacts are not surfaced.
 - `XRImpact` — per-XR entry inside `ImpactAnalysis`: embeds `corev1.ObjectReference` (apiVersion/kind/name/namespace),
-  carries a `Status`, an optional `Error`, and an optional `Diffs map[string]*ResourceDiff` of downstream changes.
-- `XRStatus` — enumeration: `"changed"`, `"unchanged"`, `"error"`, `"filtered_by_policy"`.
-- `DownstreamChanges` — the JSON-shape wrapper for an XR's downstream diffs, used inside `xrImpactJSON`: a `Summary`
+  carries a `Status`, a `FilterReason` (meaningful only when `Status == "filtered"`), an optional human-readable
+  `FilterDetail`, an optional `Error`, and an optional `Diffs map[string]*ResourceDiff` of downstream changes.
+- `XRStatus` — enumeration: `"changed"`, `"unchanged"`, `"error"`, `"filtered"`. The filtered *outcome* is divorced
+  from its *cause*, which is carried separately in `FilterReason` so the reason set can grow without expanding the
+  status enum.
+- `FilterReason` — enumeration explaining an `XRStatusFiltered`: `"manual_policy"` (Manual update policy;
+  `--include-manual` re-includes), `"revision_selector_mismatch"` (`compositionRevisionSelector` does not match the
+  diffed composition's labels), and `"deleting"` (the XR has a `metadata.deletionTimestamp`). `--include-manual`
+  re-includes only `manual_policy`; the other two XRs genuinely would not select the resulting revision.
+- `DownstreamChanges` — the serialized wrapper for an XR's downstream diffs, used inside `xrImpactWire`: a `Summary`
   plus a `[]ChangeDetail`.
+- `OutputWarning` — non-fatal advisory envelope, carried on both XR and comp diff outputs as
+  `warnings[]`. Carries a `Message` plus an optional `Context map[string]string` holding the log
+  key/value pairs from the emitting call site, so machine consumers read individual values instead of
+  parsing prose. It has no `ResourceID` counterpart to `OutputError`'s: warnings originate below the
+  point where the user-supplied input that led there is known, so anchoring information lives in
+  `Context` under whatever key the call site used. `FormatWarning` renders the stderr line, sorting
+  context keys so output is byte-stable across runs.
+
+  Warnings follow the same dual-emission contract as errors — stderr for humans, structured output for
+  machines — with two deliberate differences: they never affect the exit code (a consumer gating on
+  failure reads `errors[]`), and the stderr half is written when the warning is *raised* rather than at
+  render time. Emitting at render time would lose any warning raised during a run that fails before
+  rendering, and would report warnings out of chronological order with the work that produced them.
+  `DiffRenderer.RenderDiffs` therefore takes warnings for structured output only; the human renderer
+  ignores the parameter.
 - `OutputError` — error envelope used by both XR and comp diff outputs. Carries:
     - `ResourceID`: which user-supplied input the diff was processing (one entry per batched run)
     - `Message`: human-readable error string
@@ -827,6 +1043,40 @@ batched input, while `ValidationFailures` enumerates every resource (the input i
 that failed validation under that input. They overlap on Kind+Name when the input itself is among the failing
 resources — that's deliberate, so consumers iterating `ValidationFailures` never miss an XR-level rejection.
 `ValidationFailures` is `nil` for non-validation paths (scope check, tool errors, IO errors).
+
+### 6.8.1 WarningLogger — the advisory channel
+
+`WarningLogger` (in `diffprocessor`) is a `logging.Logger` decorator that treats every `Info` call as a
+user-facing warning: it writes the stderr line immediately and collects an `OutputWarning` for
+structured output. `Debug` calls pass through to the wrapped logger untouched.
+
+It rides on the logger rather than on a dedicated sink parameter because a warning must be raisable
+wherever it is discovered — a client, the resource manager, the render loop — and `logging.Logger` is
+the only cross-cutting dependency already threaded to all of those. Every component factory in
+`ProcessorConfig.ComponentFactories` takes its collaborators plus exactly one `Logger`, so a parallel
+"warning sink" parameter would mean churning every constructor, every factory signature, and every
+`With*Factory` option for no semantic gain.
+
+There is no `Warn` level to reach for, and none is missing. `logging.Logger` has exactly two levels by
+design — its package doc states that Crossplane "desires a simpler API with only two levels ... Info
+and Debug" — and it defines `Info` as "messages that Crossplane operators are very likely to be
+concerned with when running Crossplane", against `Debug`'s "when debugging Crossplane". Treating
+`Info` as the advisory level is therefore the interface's documented meaning, not a local convention;
+what `WarningLogger` adds is somewhere for those messages to actually go, on both the human and the
+machine path. The three routine `Info` sites were demoted to `Debug` to bring the codebase in line
+with that contract rather than to establish a new one.
+
+The practical consequence: **a new `logger.Info` call anywhere in the codebase is user-visible
+output.** New tracing must use `Debug`, and a reviewer should treat an added `Info` as a UX change.
+
+The label shown to a human is `WARNING`, not `INFO`, deliberately: an operator reading
+`INFO: applying this diff will assume ownership` would under-weight it. The upstream *level* and the
+word presented to a user answer different questions.
+
+The CLI wraps the logger at *both* binding sites (`main()` and `verboseFlag.BeforeApply`). The
+`--verbose` flag rebinds the logger, so wrapping only in `main()` would silently drop the channel at
+exactly the verbosity where a user is asking for more output. `Info` is deliberately not forwarded to
+the wrapped logger, so a `--verbose` run does not print each warning twice in two formats.
 
 ### 6.9 Kubernetes and Crossplane Clients
 
@@ -847,8 +1097,12 @@ The client layer provides interfaces to interact with Kubernetes and Crossplane 
 - `CompositionClient`: Finds and fetches Compositions. `DefaultCompositionClient` also constructs and owns a
   `CompositionRevisionClient` internally (it is not part of the injected `xp.Clients` bundle); callers don't wire a
   revision client directly.
-- `CompositionRevisionClient`: Fetches CompositionRevisions (groundwork for revision-aware diffing — see §10).
-  Accessed via `DefaultCompositionClient`, not directly from `AppContext`.
+- `CompositionRevisionClient`: Fetches CompositionRevisions and selects the effective revision for an XR. Under an
+  Automatic `compositionUpdatePolicy`, `DefaultCompositionClient.resolveCompositionFromRevisions` selects the latest
+  revision whose labels match the XR's `compositionRevisionSelector` via
+  `GetLatestRevisionForComposition(ctx, name, selector)` (a nil selector means latest overall). If the selector
+  matches no revision, the diff fails rather than silently rendering against a non-matching revision. Accessed via
+  `DefaultCompositionClient`, not directly from `AppContext`.
 - `DefinitionClient`: Fetches XRDs and resolves XR/claim relationships
 - `EnvironmentClient`: Fetches EnvironmentConfigs
 - `FunctionClient`: Fetches Function package definitions and per-composition pipelines
@@ -902,8 +1156,20 @@ The client layer provides interfaces to interact with Kubernetes and Crossplane 
       filters: `--namespace`, `--resource [namespace/]name` (mutually exclusive). When `--resource` is supplied, a
       preflight pass ensures every named ref is relevant to at least one input composition; otherwise the call fails
       before any rendering happens.
-    - Drop XRs with `compositionUpdatePolicy: Manual` unless `--include-manual` is set.
-    - Calculate the composition's own diff against the cluster's current version.
+    - Drop XRs that would not adopt the change: any XR with a `metadata.deletionTimestamp` (always — Crossplane is
+      tearing it down, so it will never adopt the resulting revision); `compositionUpdatePolicy: Manual` (unless
+      `--include-manual`); or an Automatic XR whose `compositionRevisionSelector` does not match the diffed
+      composition's labels (always, since it would not select the resulting revision). Dropped XRs carry a
+      `FilterReason` (`deleting` / `manual_policy` / `revision_selector_mismatch`).
+    - Calculate the composition's own diff against the cluster's current version, and classify how much of it differs as
+      a `ChangeScope` (`none` / `metadata` / `spec`), evaluated with every display mask lifted. Report the resulting
+      `RevisionImpact` — scope, whether a revision is created, how many composites would adopt it — which happens
+      regardless of what follows.
+    - If that scope is smaller than `--analyze-on` asked to analyse, stop here for this composition and mark
+      `ImpactAnalysisSkipped`. By default (`any-change`) that means only an identical composition: any revision it
+      produced would carry the same spec, so nothing would render differently. `--analyze-on=spec-change` also stops for
+      a metadata-only difference — which does create a revision, so the human-readable message says so rather than
+      claiming nothing could change. `--analyze-on=always` never stops here.
     - For each remaining XR, run the XR diff workflow above, using a `CompositionProvider` that returns the proposed
       composition for the affected XR's GVK and the cluster's composition for any nested XRs of a different kind.
 4. Aggregate per-XR results into a `CompDiffOutput` (composition diff + `XRImpact` list +
@@ -963,7 +1229,21 @@ crossplane-diff xr --max-nested-depth 3 xr.yaml
 
 # Show steady-state diff for compositions that need multiple reconciliation cycles
 crossplane-diff xr --eventual-state xr.yaml
+
+# Pin the crossplane render version (minimum v2.3.4) for reproducible diffs
+crossplane-diff xr --crossplane-version v2.3.4 xr.yaml
+
+# Render from a mirrored/air-gapped image reference instead of :stable
+crossplane-diff xr --crossplane-image my-registry.example.com/crossplane/crossplane:v2.4.0 xr.yaml
 ```
+
+The render backend is selected by three mutually-exclusive flags that thread through to upstream
+`render.EngineFlags`: `--crossplane-version` (pulls `…/crossplane:<version>`), `--crossplane-image` (full
+image ref), and the hidden test-only `--crossplane-render-binary` (local binary). When none is set the docker
+engine pulls `…/crossplane:stable`. `--crossplane-version` is validated against
+`diffprocessor.MinCrossplaneRenderVersion` (v2.3.4) at parse time via a kong `Validate` hook, failing fast
+before any cluster work; `--crossplane-image` is not floor-checked (a full reference carries no comparable
+version).
 
 `comp` examples:
 ```
@@ -981,6 +1261,16 @@ crossplane-diff comp updated-composition.yaml --resource production/my-xr --reso
 
 # Also include XRs whose update policy is Manual
 crossplane-diff comp updated-composition.yaml --include-manual
+
+# Evaluate affected composites even for a composition identical to the cluster's (skipped by
+# default, since it would render nothing differently)
+crossplane-diff comp unchanged-composition.yaml --analyze-on=always
+
+# Only evaluate composites when the composition's spec changes, skipping the render-per-composite
+# cost for a metadata-only edit (which still creates a CompositionRevision, reported either way
+# as revisionImpact). The deprecated --analyze-unchanged is equivalent to
+# --analyze-on=always; passing both with conflicting values is an error.
+crossplane-diff comp updated-composition.yaml --analyze-on=spec-change
 ```
 
 Note that the `xr` subcommand has no `--namespace` flag: namespaced XRs carry their own namespace in YAML, and that
@@ -1385,7 +1675,8 @@ cmd/
 │   ├── cmd_utils.go               # Shared CommonCmdFields → ProcessorOption helpers
 │   ├── app_context.go             # AppContext: cluster client initialization
 │   ├── diffprocessor/             # DiffProcessor, CompDiffProcessor, calculator, validator,
-│   │                              #   resource manager, requirements provider, function provider
+│   │                              #   resource manager, requirements provider, function provider,
+│   │                              #   WarningLogger (advisory channel)
 │   ├── client/
 │   │   ├── kubernetes/            # ApplyClient, ResourceClient, SchemaClient, TypeConverter
 │   │   └── crossplane/            # Composition*, Definition, Environment, Function,

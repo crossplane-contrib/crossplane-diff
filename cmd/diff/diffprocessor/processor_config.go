@@ -14,6 +14,62 @@ import (
 // DefaultMaxRenderIterations is the default maximum render iterations.
 const DefaultMaxRenderIterations = 20
 
+// AnalyzeOn names the smallest composition change that triggers per-composite impact analysis.
+// The values are ordered from least to most eager.
+type AnalyzeOn string
+
+const (
+	// AnalyzeOnSpecChange evaluates composites only when the composition's spec changes. The
+	// cheapest setting, and a deliberate user judgement: a metadata-only change still produces a new
+	// CompositionRevision, whose identity a composition template can observe through the XR's
+	// compositionRevisionRef, so choosing this asserts that none of your compositions do that.
+	AnalyzeOnSpecChange AnalyzeOn = "spec-change"
+
+	// AnalyzeOnAnyChange evaluates composites whenever anything Crossplane hashes into the
+	// composition's identity differs — labels and annotations as well as spec. The default, because
+	// whether a metadata-only change reaches rendered output can only be settled by rendering.
+	AnalyzeOnAnyChange AnalyzeOn = "any-change"
+
+	// AnalyzeOnAlways evaluates composites even when the composition is identical, which creates no
+	// revision and so cannot change anything. Useful as a pre-edit "is my cluster converged?"
+	// baseline; note that any delta it reports is by construction not caused by this composition.
+	AnalyzeOnAlways AnalyzeOn = "always"
+)
+
+// ChangeScope is how much of a composition differs from its in-cluster version, in terms of what
+// Crossplane hashes into the composition's identity (see Composition.Hash()).
+type ChangeScope string
+
+const (
+	// ChangeScopeNone means nothing Crossplane hashes differs. No CompositionRevision is created, so
+	// nothing can adopt anything.
+	ChangeScopeNone ChangeScope = "none"
+
+	// ChangeScopeMetadata means the labels or annotations differ but the spec does not. A new
+	// CompositionRevision is still created, carrying an identical spec.
+	ChangeScopeMetadata ChangeScope = "metadata"
+
+	// ChangeScopeSpec means the spec differs.
+	ChangeScopeSpec ChangeScope = "spec"
+)
+
+// triggersAnalysis reports whether a change of this scope should cause per-composite impact
+// analysis at the given setting.
+func (s ChangeScope) triggersAnalysis(on AnalyzeOn) bool {
+	switch on {
+	case AnalyzeOnAlways:
+		return true
+	case AnalyzeOnSpecChange:
+		return s == ChangeScopeSpec
+	case AnalyzeOnAnyChange, "":
+		return s != ChangeScopeNone
+	default:
+		// Unrecognized values are rejected by the CLI; fall back to the default rather than
+		// silently analysing nothing.
+		return s != ChangeScopeNone
+	}
+}
+
 // ProcessorConfig contains configuration for the DiffProcessor.
 type ProcessorConfig struct {
 	// Colorize determines whether to use colors in the diff output
@@ -30,6 +86,27 @@ type ProcessorConfig struct {
 
 	// IncludeManual determines whether to include XRs with Manual update policy in composition diffs
 	IncludeManual bool
+
+	// MinimizeComposition collapses composition changes to a single marker line per
+	// composition, omitting the full YAML diff body. Human renderer only; structured
+	// output always includes full compositionChanges.
+	MinimizeComposition bool
+
+	// Warnings is the source of non-fatal advisories to include in structured output. It is the same
+	// *WarningLogger that Logger is set to when the CLI wires one up; keeping a typed handle avoids
+	// type-asserting the Logger back to its concrete type at drain time. Nil is valid and means no
+	// warnings are collected — the human-visible stderr line is emitted by the WarningLogger itself,
+	// so leaving this unset only affects structured output.
+	Warnings *WarningLogger
+
+	// AnalyzeOn is the smallest composition change that triggers per-composite impact analysis.
+	// Evaluating a composite costs one function render, so this is a cost knob — it never suppresses
+	// a reported consequence. RevisionImpact is populated at every setting, and composites left
+	// unevaluated are marked ImpactAnalysisSkipped so "we did not look" stays distinguishable from
+	// "we looked and found nothing".
+	//
+	// Zero value means AnalyzeOnAnyChange, matching the CLI default.
+	AnalyzeOn AnalyzeOn
 
 	// EventualState enables iterative simulation to show eventual state after all reconciliation
 	// cycles complete. Useful with function-sequencer which hides later stage resources.
@@ -75,6 +152,20 @@ type ProcessorConfig struct {
 	// xpkg.crossplane.io/crossplane/crossplane:stable. Ignored when
 	// RenderFunc is set explicitly.
 	CrossplaneRenderBinary string
+
+	// CrossplaneVersion, when non-empty, causes the default engine-backed
+	// RenderFn's docker engine to pull
+	// xpkg.crossplane.io/crossplane/crossplane:<version> instead of :stable.
+	// Mutually exclusive with CrossplaneImage and CrossplaneRenderBinary.
+	// Ignored when RenderFunc is set explicitly.
+	CrossplaneVersion string
+
+	// CrossplaneImage, when non-empty, causes the default engine-backed
+	// RenderFn's docker engine to pull this full image reference instead of
+	// the default xpkg.crossplane.io/crossplane/crossplane:stable. Mutually
+	// exclusive with CrossplaneVersion and CrossplaneRenderBinary. Ignored
+	// when RenderFunc is set explicitly.
+	CrossplaneImage string
 
 	// Factories provide factory functions for creating components
 	Factories ComponentFactories
@@ -139,6 +230,31 @@ func WithMaxNestedDepth(depth int) ProcessorOption {
 func WithIncludeManual(includeManual bool) ProcessorOption {
 	return func(config *ProcessorConfig) {
 		config.IncludeManual = includeManual
+	}
+}
+
+// WithWarnings sets the collector whose warnings are included in structured output. Pass the same
+// *WarningLogger that was supplied to WithLogger.
+func WithWarnings(warnings *WarningLogger) ProcessorOption {
+	return func(config *ProcessorConfig) {
+		config.Warnings = warnings
+	}
+}
+
+// WithAnalyzeOn sets the smallest composition change that triggers per-composite impact analysis
+// (see ProcessorConfig.AnalyzeOn). An empty value leaves the default in place.
+func WithAnalyzeOn(analyzeOn AnalyzeOn) ProcessorOption {
+	return func(config *ProcessorConfig) {
+		if analyzeOn != "" {
+			config.AnalyzeOn = analyzeOn
+		}
+	}
+}
+
+// WithMinimizeComposition sets whether to collapse composition changes to a single marker line.
+func WithMinimizeComposition(minimize bool) ProcessorOption {
+	return func(config *ProcessorConfig) {
+		config.MinimizeComposition = minimize
 	}
 }
 
@@ -227,6 +343,26 @@ func WithCrossplaneRenderBinary(path string) ProcessorOption {
 	}
 }
 
+// WithCrossplaneVersion pins the crossplane render version the default
+// engine-backed RenderFn's docker engine pulls (…/crossplane:<version>).
+// See ProcessorConfig.CrossplaneVersion. Mutually exclusive with
+// WithCrossplaneImage and WithCrossplaneRenderBinary.
+func WithCrossplaneVersion(version string) ProcessorOption {
+	return func(config *ProcessorConfig) {
+		config.CrossplaneVersion = version
+	}
+}
+
+// WithCrossplaneImage pins the full crossplane render image reference the
+// default engine-backed RenderFn's docker engine pulls. See
+// ProcessorConfig.CrossplaneImage. Mutually exclusive with
+// WithCrossplaneVersion and WithCrossplaneRenderBinary.
+func WithCrossplaneImage(image string) ProcessorOption {
+	return func(config *ProcessorConfig) {
+		config.CrossplaneImage = image
+	}
+}
+
 // WithResourceManagerFactory sets the ResourceManager factory function.
 func WithResourceManagerFactory(factory func(k8.ResourceClient, xp.DefinitionClient, xp.ResourceTreeClient, logging.Logger) ResourceManager) ProcessorOption {
 	return func(config *ProcessorConfig) {
@@ -274,6 +410,7 @@ func (c *ProcessorConfig) GetDiffOptions() renderer.DiffOptions {
 	opts := renderer.DefaultDiffOptions()
 	opts.UseColors = c.Colorize
 	opts.Compact = c.Compact
+	opts.MinimizeComposition = c.MinimizeComposition
 
 	opts.IgnorePaths = c.IgnorePaths
 	if c.OutputFormat != "" {

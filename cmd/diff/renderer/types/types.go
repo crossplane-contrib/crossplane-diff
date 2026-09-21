@@ -5,12 +5,55 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"sort"
 	"strings"
 
 	"github.com/sergi/go-diff/diffmatchpatch"
+	corev1 "k8s.io/api/core/v1"
 	un "k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 )
+
+// XRDiffGroup pairs one input XR/claim with the diffs its render produced (or
+// the error that prevented them). It is built by the diff processor's
+// per-input loop and passed to the renderer so structured output can group by
+// input XR (see the xrs[] output field) and the human renderer can render
+// per-XR sections.
+//
+// XR carries the input XR/claim identity (apiVersion, kind, name, namespace).
+// It is left zero-valued for the composition renderer's internal reuse of the
+// human diff renderer, which has no single owning XR; the human renderer treats
+// an identity-less group as a flat, header-less block (preserving comp output).
+//
+// Err is a pre-converted *OutputError (not a raw error) because the conversion
+// (NewOutputError, which extracts typed validation failures) lives in the
+// diffprocessor package; having the renderer convert would require a
+// renderer -> diffprocessor import cycle. It is nil unless this XR failed.
+//
+// This type lives in the leaf types package (rather than the renderer package
+// alongside the DiffRenderer interface) so that testutils — which provides the
+// DiffRenderer mock — can reference it without importing renderer, which would
+// close an import cycle through renderer's in-package tests.
+type XRDiffGroup struct {
+	XR    corev1.ObjectReference
+	Diffs map[string]*ResourceDiff
+	Err   *OutputError
+}
+
+// ResourceViews holds the two representations of a single resource involved in
+// a diff: the Raw object (as rendered, or as fetched from the cluster) and the
+// Clean object (Raw after cleanupForDiff has stripped ignored paths and
+// server-side/non-diff-relevant fields).
+//
+// Raw is load-bearing beyond rendering (removal detection and XR
+// reconstruction in the diffprocessor). Clean is what structured output emits,
+// and is populated by diff generation only when there is something to render
+// (i.e. not for equal diffs). Either field may be nil: for an added resource
+// the current side is zero-valued, for a removed resource the desired side is.
+type ResourceViews struct {
+	Raw   *un.Unstructured
+	Clean *un.Unstructured
+}
 
 // ResourceDiff represents the diff for a specific resource.
 type ResourceDiff struct {
@@ -19,8 +62,8 @@ type ResourceDiff struct {
 	ResourceName string
 	DiffType     DiffType
 	LineDiffs    []diffmatchpatch.Diff
-	Current      *un.Unstructured // Optional, for reference
-	Desired      *un.Unstructured // Optional, for reference
+	Current      ResourceViews // the resource's current (cluster) state, raw + clean
+	Desired      ResourceViews // the resource's desired (rendered) state, raw + clean
 }
 
 // DiffType represents the type of diff (added, removed, modified).
@@ -292,4 +335,43 @@ func (e OutputError) FormatError() string {
 	}
 
 	return fmt.Sprintf("ERROR: %s: %s", resourceID, e.Message)
+}
+
+// OutputWarning is a non-fatal advisory: something the user should know that does not invalidate the
+// diff or stop the run. Warnings follow the same dual-emission contract as OutputError — written to
+// stderr for humans and included in structured output for machines — but deliberately do NOT affect
+// the exit code. A consumer gating on failure checks errors[], not warnings[].
+//
+// Context carries the log key/value pairs from the emitting call site (e.g. which composition, how
+// many credentials were fetched). It is a map rather than being flattened into Message so machine
+// consumers can read the individual values instead of parsing prose. Unlike OutputError there is no
+// ResourceID: warnings originate deep in the call stack, where the user-supplied input that led
+// there is not known, so the anchoring information lives in Context under whatever key the call
+// site used.
+type OutputWarning struct {
+	Message string            `json:"message"`
+	Context map[string]string `json:"context,omitempty"`
+}
+
+// FormatWarning renders the warning as a single human-readable stderr line, mirroring
+// OutputError.FormatError. Context pairs are appended in sorted key order so output is stable
+// across runs (Go map iteration is not).
+func (w OutputWarning) FormatWarning() string {
+	if len(w.Context) == 0 {
+		return fmt.Sprintf("WARNING: %s", w.Message)
+	}
+
+	keys := make([]string, 0, len(w.Context))
+	for k := range w.Context {
+		keys = append(keys, k)
+	}
+
+	sort.Strings(keys)
+
+	pairs := make([]string, 0, len(keys))
+	for _, k := range keys {
+		pairs = append(pairs, fmt.Sprintf("%s=%s", k, w.Context[k]))
+	}
+
+	return fmt.Sprintf("WARNING: %s (%s)", w.Message, strings.Join(pairs, ", "))
 }

@@ -44,11 +44,9 @@ const (
 	fieldCompositionSelector        = "compositionSelector"
 	fieldWriteConnectionSecretToRef = "writeConnectionSecretToRef"
 	fieldCompositionRevisionRef     = "compositionRevisionRef"
-	fieldCompositionUpdatePolicy    = "compositionUpdatePolicy"
 
 	// Composition update policy values, mirroring Crossplane's CompositionUpdatePolicy.
-	compositionUpdatePolicyManual    = "Manual"
-	compositionUpdatePolicyAutomatic = "Automatic"
+	compositionUpdatePolicyManual = "Manual"
 )
 
 // DiffProcessor interface for processing resources.
@@ -108,7 +106,7 @@ func NewDiffProcessor(k8cs k8.Clients, xpcs xp.Clients, opts ...ProcessorOption)
 	// function runtimes owned by the engine.
 	var defaultEngineFn *EngineRenderFn
 	if config.RenderFunc == nil {
-		defaultEngineFn = NewEngineRenderFn(config.Logger, config.CrossplaneRenderBinary)
+		defaultEngineFn = NewEngineRenderFn(config.Logger, config.CrossplaneRenderBinary, config.CrossplaneVersion, config.CrossplaneImage)
 		config.RenderFunc = defaultEngineFn.Render
 	}
 
@@ -217,10 +215,13 @@ func (p *DefaultDiffProcessor) PerformDiff(ctx context.Context, resources []*un.
 		return false, nil
 	}
 
-	// Collect all diffs across all resources
-	allDiffs := make(map[string]*dt.ResourceDiff)
+	// Build one diff group per input XR/claim, in input order, so the renderer
+	// can group structured output (xrs[]) and human output (per-XR sections) by
+	// the input that produced each change. See renderer/types.XRDiffGroup.
+	groups := make([]dt.XRDiffGroup, 0, len(resources))
 
-	// Collect errors for structured output
+	// Collect errors for the top-level/global (union) error list, preserved for
+	// back-compat alongside the per-group errors.
 	var outputErrors []dt.OutputError
 
 	var errs []error
@@ -228,10 +229,20 @@ func (p *DefaultDiffProcessor) PerformDiff(ctx context.Context, resources []*un.
 	for _, res := range resources {
 		resourceID := fmt.Sprintf("%s/%s", res.GetKind(), res.GetName())
 
+		group := dt.XRDiffGroup{
+			XR: corev1.ObjectReference{
+				APIVersion: res.GetAPIVersion(),
+				Kind:       res.GetKind(),
+				Name:       res.GetName(),
+				Namespace:  res.GetNamespace(),
+			},
+		}
+
 		diffs, err := p.DiffSingleResource(ctx, res, compositionProvider)
 		if err != nil {
-			// Log at Info level so errors are visible without -v 4
-			p.config.Logger.Info("Failed to process resource",
+			// Debug, not Info: this failure is already surfaced as an OutputError, which goes to
+			// stderr and into structured output. Raising it as a warning too would double-report it.
+			p.config.Logger.Debug("Failed to process resource",
 				"resource", resourceID,
 				"namespace", res.GetNamespace(),
 				"error", err)
@@ -241,16 +252,24 @@ func (p *DefaultDiffProcessor) PerformDiff(ctx context.Context, resources []*un.
 			// surfaces typed validation failures via
 			// OutputError.ValidationFailures when err wraps a
 			// SchemaValidationError that carries a structured Result.
-			outputErrors = append(outputErrors, NewOutputError(resourceID, err))
+			// The same converted error goes to both the top-level union
+			// (outputErrors) and the per-group entry so consumers of
+			// either view see it.
+			outErr := NewOutputError(resourceID, err)
+			outputErrors = append(outputErrors, outErr)
+			group.Err = &outErr
 		} else {
-			// Only merge diffs on success - we don't emit partial results for a single XR
-			maps.Copy(allDiffs, diffs)
+			// We don't emit partial results for a single XR: on success the
+			// whole diff tree is attached, on failure none of it.
+			group.Diffs = diffs
 		}
+
+		groups = append(groups, group)
 	}
 
 	// Always render (even if only errors exist) to ensure valid structured output
 	// The renderer will include errors in the structured output and write them to stderr
-	err := p.diffRenderer.RenderDiffs(allDiffs, outputErrors)
+	err := p.diffRenderer.RenderDiffs(groups, outputErrors, p.collectedWarnings())
 	if err != nil {
 		p.config.Logger.Debug("Failed to render diffs", "error", err)
 		errs = append(errs, errors.Wrap(err, "failed to render diffs"))
@@ -259,17 +278,21 @@ func (p *DefaultDiffProcessor) PerformDiff(ctx context.Context, resources []*un.
 	// Count only non-equal diffs as "having diffs".
 	// The diffs map may contain DiffTypeEqual entries (e.g., XR stored for removal detection).
 	hasDiffs := false
+	totalDiffs := 0
 
-	for _, diff := range allDiffs {
-		if diff.DiffType != dt.DiffTypeEqual {
-			hasDiffs = true
-			break
+	for _, group := range groups {
+		for _, diff := range group.Diffs {
+			totalDiffs++
+
+			if diff.DiffType != dt.DiffTypeEqual {
+				hasDiffs = true
+			}
 		}
 	}
 
 	p.config.Logger.Debug("Processing complete",
 		"resourceCount", len(resources),
-		"totalDiffs", len(allDiffs),
+		"totalDiffs", totalDiffs,
 		"hasDiffs", hasDiffs,
 		"errorCount", len(errs))
 
@@ -346,6 +369,8 @@ func (p *DefaultDiffProcessor) diffSingleResourceInternal(ctx context.Context, r
 			"resource", resourceID,
 			"error", err)
 	}
+
+	p.warnIfDeleting(existingXRFromCluster, parentXR, resourceID)
 
 	// If the input was a Claim, resolve the backing XR and fetch its observed resources.
 	// If successful, we'll render from the backing XR (with merged Claim spec) instead of
@@ -446,11 +471,11 @@ func (p *DefaultDiffProcessor) diffSingleResourceInternal(ctx context.Context, r
 	var existingXR *cmp.Unstructured
 
 	xrDiffKey := dt.MakeDiffKeyFromResource(&xr.Unstructured)
-	if xrDiff, ok := diffs[xrDiffKey]; ok && xrDiff.Current != nil {
+	if xrDiff, ok := diffs[xrDiffKey]; ok && xrDiff.Current.Raw != nil {
 		// Convert from unstructured.Unstructured to composite.Unstructured
 		existingXR = cmp.New()
 
-		err := runtime.DefaultUnstructuredConverter.FromUnstructured(xrDiff.Current.Object, existingXR)
+		err := runtime.DefaultUnstructuredConverter.FromUnstructured(xrDiff.Current.Raw.Object, existingXR)
 		if err != nil {
 			p.config.Logger.Debug("Failed to convert existing XR to composite unstructured",
 				"resource", resourceID,
@@ -505,6 +530,37 @@ func (p *DefaultDiffProcessor) diffSingleResourceInternal(ctx context.Context, r
 		"nestedDiffCount", len(nestedDiffs))
 
 	return diffs, renderedResources, nil
+}
+
+// warnIfDeleting raises a warning when the cluster copy of a top-level XR is being deleted.
+//
+// Unlike `comp`, which excludes deleting XRs from impact analysis entirely (they can never adopt the
+// diffed composition's revision — see classifyXR), `xr` diffs exactly the resource the user named,
+// so suppressing it would leave them with no output at all. Instead we still show the diff and flag
+// that it is being compared against a resource that is going away.
+//
+// Only top-level XRs are flagged (parentXR == nil); composed resources of a live XR churn through
+// deletion routinely, and warning on each would be noise. In practice this only fires for `xr`, since
+// `comp` filters deleting XRs before they reach this path.
+func (p *DefaultDiffProcessor) warnIfDeleting(existingXRFromCluster *un.Unstructured, parentXR *cmp.Unstructured, resourceID string) {
+	if existingXRFromCluster == nil || parentXR != nil {
+		return
+	}
+
+	deletedAt := existingXRFromCluster.GetDeletionTimestamp()
+	if deletedAt == nil {
+		return
+	}
+
+	// Info is the advisory level per logging.Logger's own contract ("messages that Crossplane
+	// operators are very likely to be concerned with"), so this reaches the user: stderr now, and
+	// structured output at render time. See WarningLogger.
+	//
+	// Normalized to UTC/RFC3339 because metav1.Time renders machine-local by default, which would make
+	// the advisory's text differ between runs on differently-configured machines.
+	p.config.Logger.Info("The resource being diffed is being deleted in the cluster; the diff compares against a resource that is going away",
+		"resource", resourceID,
+		"deletionTimestamp", deletedAt.UTC().Format(time.RFC3339))
 }
 
 // fetchObservedResourcesFromClusterXR fetches observed resources using the cluster XR.
@@ -690,7 +746,10 @@ func mergeClaimSpecIntoBackingXR(claim, xrForRendering *cmp.Unstructured, backin
 	}
 
 	// Build merged spec using field-filtered copying
-	mergedSpec := buildMergedSpec(claimSpecMap, xrSpecMap, xrForRendering)
+	mergedSpec, err := buildMergedSpec(claimSpecMap, xrSpecMap, xrForRendering)
+	if err != nil {
+		return err
+	}
 
 	if err := un.SetNestedField(xrForRendering.Object, mergedSpec, "spec"); err != nil {
 		return errors.Wrapf(err, "cannot set merged spec on backing XR %q", backingXRName)
@@ -705,7 +764,7 @@ func mergeClaimSpecIntoBackingXR(claim, xrForRendering *cmp.Unstructured, backin
 // - Crossplane-managed fields preserved from the XR (claimRef, resourceRefs)
 // - Optional fields from XR only if NOT provided in Claim
 // - compositionRevisionRef based on update policy.
-func buildMergedSpec(claimSpecMap, xrSpecMap map[string]any, xrForRendering *cmp.Unstructured) map[string]any {
+func buildMergedSpec(claimSpecMap, xrSpecMap map[string]any, xrForRendering *cmp.Unstructured) (map[string]any, error) {
 	// Start with the Claim's spec as the base (this ensures removed fields are gone)
 	mergedSpec := make(map[string]any)
 	maps.Copy(mergedSpec, claimSpecMap)
@@ -739,7 +798,11 @@ func buildMergedSpec(claimSpecMap, xrSpecMap map[string]any, xrForRendering *cmp
 	// With Automatic policy, Crossplane manages the revision, so we don't preserve it
 	// (allowing Crossplane to select the latest revision).
 	if _, existsInClaim := claimSpecMap[fieldCompositionRevisionRef]; !existsInClaim {
-		updatePolicy := getCompositionUpdatePolicy(xrForRendering)
+		updatePolicy, err := xp.XRUpdatePolicy(xrForRendering.Object, xrForRendering.GetAPIVersion())
+		if err != nil {
+			return nil, errors.Wrap(err, "cannot read compositionUpdatePolicy from backing XR")
+		}
+
 		if updatePolicy == compositionUpdatePolicyManual {
 			if val, exists := xrSpecMap[fieldCompositionRevisionRef]; exists {
 				mergedSpec[fieldCompositionRevisionRef] = val
@@ -747,7 +810,7 @@ func buildMergedSpec(claimSpecMap, xrSpecMap map[string]any, xrForRendering *cmp
 		}
 	}
 
-	return mergedSpec
+	return mergedSpec, nil
 }
 
 // synthesizeDummyBackingXRForNewClaim creates a synthetic backing XR for a new claim that doesn't
@@ -1620,24 +1683,4 @@ func mergeCredentials(cliCredentials, autoFetchedCredentials []corev1.Secret) []
 	}
 
 	return result
-}
-
-// getCompositionUpdatePolicy retrieves the compositionUpdatePolicy from an XR/Claim.
-// It checks both v2 (spec.crossplane.compositionUpdatePolicy) and v1 (spec.compositionUpdatePolicy) field paths.
-// Returns "Automatic" as the default if not found (matching Crossplane behavior).
-func getCompositionUpdatePolicy(xr *cmp.Unstructured) string {
-	// Try v2 path first: spec.crossplane.compositionUpdatePolicy
-	policy, found, err := un.NestedString(xr.Object, "spec", "crossplane", fieldCompositionUpdatePolicy)
-	if err == nil && found && policy != "" {
-		return policy
-	}
-
-	// Try v1 path: spec.compositionUpdatePolicy
-	policy, found, err = un.NestedString(xr.Object, "spec", fieldCompositionUpdatePolicy)
-	if err == nil && found && policy != "" {
-		return policy
-	}
-
-	// Default to Automatic if not found (matching Crossplane default behavior)
-	return compositionUpdatePolicyAutomatic
 }

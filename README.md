@@ -86,6 +86,45 @@ crossplane-diff xr xr.yaml \
 crossplane-diff xr xr.yaml --eventual-state
 ```
 
+If the XR's counterpart in the cluster is being deleted (it has a `metadata.deletionTimestamp`),
+`xr` still emits the diff — you asked about that specific resource — but raises a warning noting that
+the comparison is against a resource that is going away. `comp` takes the opposite approach and
+excludes such composites from impact analysis entirely, since a deleting composite can never adopt
+the composition change being diffed.
+
+### Warnings
+
+Some conditions are worth telling you about without invalidating the diff or stopping the run. These
+are written to stderr as `WARNING:` lines, and — in `--output json`/`yaml` — also carried in a
+top-level `warnings[]` array so CI tooling can read them:
+
+```
+WARNING: Resource already belongs to another composite. Applying this diff will assume ownership! (currentOwner=other-xr, newOwner=my-xr, resource=Bucket/my-bucket)
+```
+
+```json
+{
+  "warnings": [
+    {
+      "message": "Some function credential secrets could not be fetched from cluster",
+      "context": {
+        "composition": "xbuckets.example.org",
+        "attempted": "2",
+        "fetched": "1",
+        "hint": "Use --function-credentials to provide secrets that don't exist on cluster"
+      }
+    }
+  ]
+}
+```
+
+Warnings deliberately do **not** affect the exit code — gate CI on `errors[]`, not `warnings[]`. They
+are emitted when raised rather than at the end of the run, so a warning is still reported if a later
+step fails, and appears in step with the work that produced it. Today they cover: a composed resource
+that belongs to a different composite (applying would take ownership), a nested XR whose composition
+could not be found (it will compose nothing), function credentials that could not be fetched (the
+render may not reflect reality), leftover function containers, and the deleting-XR case above.
+
 ### Composition Diff - Analyze Impact of Composition Changes
 
 The `comp` command analyzes how composition changes affect all Composite Resources (both XRs and Claims) that use the composition. The tool automatically discovers and displays impacts on both direct XRs and any Claims that reference them.
@@ -108,11 +147,41 @@ crossplane-diff comp updated-composition.yaml -n production
 # Format is [namespace/]name; bare name means cluster-scoped (v1 XRs and v2 cluster-scoped XRs).
 crossplane-diff comp updated-composition.yaml --resource=default/my-claim
 crossplane-diff comp updated-composition.yaml --resource=default/xr-1,default/xr-2
-# Note: --resource cannot be combined with --namespace. Composites with Manual update policy
-# are surfaced with status "filtered_by_policy" unless --include-manual is also passed.
+# Note: --resource cannot be combined with --namespace. Composites that would not adopt the diffed
+# composition are surfaced with status "filtered" and a "filterReason": Manual update policy
+# ("manual_policy") unless --include-manual is passed, a compositionRevisionSelector that does
+# not match the composition's labels ("revision_selector_mismatch"), or the composite being
+# deleted ("deleting").
 
-# Include XRs with Manual update policy (pinned revisions)
+# Include XRs with Manual update policy (pinned revisions).
+# Note: --include-manual only affects Manual-policy XRs. An Automatic XR whose
+# compositionRevisionSelector does not match the composition's labels stays filtered even with this
+# flag, because it would not select the resulting revision. To preview against a different revision
+# label (e.g. a "preview" channel), edit the composition's labels in your CI runner (jq/yq) and run
+# comp again — the composition file's labels are the authoritative prediction of the new revision.
 crossplane-diff comp updated-composition.yaml --include-manual
+
+# Choose the smallest composition change that triggers per-composite impact analysis. The default is
+# any-change: the composites are evaluated whenever anything Crossplane hashes into the composition's
+# identity differs — labels and annotations as well as spec.
+#
+# Evaluate affected composites even when the composition is identical to the cluster's.
+# By default that analysis is skipped: applying an unchanged composition creates no new
+# CompositionRevision, so nothing would adopt it, and any downstream delta found would be caused
+# by something else (drift, convergence lag, or a modeling artifact of this tool) while being
+# presented as this composition's impact. Opt in for a pre-edit "is my cluster converged?" baseline.
+crossplane-diff comp unchanged-composition.yaml --analyze-on=always
+
+# Only evaluate composites when the composition's *spec* changes, skipping the render-per-composite
+# cost for a metadata-only edit. Note that such an edit still creates a new CompositionRevision that
+# Automatic composites re-point to, so this asserts none of your compositions can observe a revision's
+# identity (via the XR's compositionRevisionRef, or a compositionRevisionSelector matching revision
+# labels). Either way revisionImpact in JSON/YAML output reports the revision.
+crossplane-diff comp updated-composition.yaml --analyze-on=spec-change
+
+# Collapse each changed composition to a single change-marker line (human output only;
+# JSON/YAML keeps full detail), keeping the affected XRs and their downstream diffs
+crossplane-diff comp updated-composition.yaml --minimize-composition
 
 # Ignore specific fields in diffs (useful for filtering out metadata like ArgoCD annotations)
 crossplane-diff comp updated-composition.yaml \
@@ -166,8 +235,20 @@ Flags:
       --eventual-state         Show eventual state after all reconciliation cycles
                                complete. Useful with function-sequencer which hides
                                later stage resources until earlier stages become Ready.
+<<<<<<< HEAD
       --max-recv-message-size=INT  Max gRPC message size (MB) for render function
                                containers (4MB if undefined) ($CROSSPLANE_DIFF_MAX_RECV_MESSAGE_SIZE).
+=======
+      --crossplane-version=VERSION
+                               Pin the crossplane render version; the docker engine
+                               pulls xpkg.crossplane.io/crossplane/crossplane:<version>.
+                               Minimum v2.3.4 (older renders drop cluster-observed
+                               resources; see Prerequisites). Mutually exclusive with
+                               --crossplane-image.
+      --crossplane-image=IMAGE Override the full crossplane render image reference
+                               (e.g. for a private mirror). Mutually exclusive with
+                               --crossplane-version.
+>>>>>>> upstream/main
 ```
 
 **Note**: XR namespaces are read directly from the YAML files being diffed, not from command-line flags.
@@ -175,6 +256,9 @@ Flags:
 **Large composites**: `crossplane render` starts functions with the function-sdk-go default 4MB gRPC receive limit and does not apply the cluster's DeploymentRuntimeConfig. Very large XRs (many/large observed resources) can exceed this and fail with `ResourceExhausted: received message larger than max`. Set `--max-recv-message-size` (or `CROSSPLANE_DIFF_MAX_RECV_MESSAGE_SIZE`) to raise it; crossplane-diff injects the value as the `MAX_RECV_MESSAGE_SIZE` container env var. This only takes effect on functions whose image reads that variable.
 
 **Ignored Paths**: By default, `metadata.annotations[kubectl.kubernetes.io/last-applied-configuration]` is always ignored. Additional paths can be specified with `--ignore-paths`. This is useful for filtering out metadata added by tools like ArgoCD (e.g., tracking IDs, sync waves) that shouldn't affect diff results.
+**Render version**: When neither `--crossplane-version` nor `--crossplane-image` is set, rendering uses the floating `xpkg.crossplane.io/crossplane/crossplane:stable` tag. Pin `--crossplane-version` for reproducible diffs or to hold a known-good version; `--crossplane-image` targets a mirrored/air-gapped registry. Only `--crossplane-version` is floor-checked against the v2.3.4 minimum — a full image reference carries no comparable version.
+
+**Ignored Paths**: By default, `metadata.annotations[kubectl.kubernetes.io/last-applied-configuration]` is always hidden from the diff, since it is just a serialization of the object itself. Note that it is hidden from the *output* only: for `comp`, a composition differing solely in that annotation still counts as changed, because applying it creates a new CompositionRevision. Additional paths can be specified with `--ignore-paths`. This is useful for filtering out metadata added by tools like ArgoCD (e.g., tracking IDs, sync waves) that shouldn't affect diff results. The `--ignore-paths` flag applies uniformly across all output modes: the human diff, JSON, and YAML output all strip ignored fields, and summary counts are computed after ignore-filtering so a resource whose only changes are in ignored fields is not counted as modified.
 
 #### `comp` - Diff Composition Impact
 
@@ -199,6 +283,11 @@ Flags:
   -n, --namespace=""           Namespace to find Composites (empty = all namespaces).
       --include-manual         Include Composites with Manual update policy (default:
                                only Automatic policy Composites)
+      --minimize-composition   Collapse each changed composition to a single
+                               change-marker line instead of the full YAML diff.
+                               Affects human-readable output only; JSON/YAML keeps
+                               full detail. Errors and no-change compositions still
+                               print in full.
       --ignore-paths=STRING,... Paths to ignore in diffs. Supports simple paths
                                (e.g., 'metadata.annotations') and map key paths with
                                bracket notation (e.g., 'metadata.annotations[key]').
@@ -220,20 +309,56 @@ Flags:
                                [namespace/]name format. Repeatable or comma-separated.
                                Bare name means cluster-scoped. Mutually exclusive with
                                --namespace. Composites matched by --resource but excluded
-                               by the update-policy filter are reported in the impact
-                               analysis with status "filtered_by_policy" (use
-                               --include-manual to evaluate them instead).
+                               (because they would not adopt the diffed composition) are
+                               reported in the impact analysis with status "filtered" and a
+                               "filterReason": "manual_policy" (use --include-manual to
+                               evaluate them instead), "revision_selector_mismatch" (their
+                               compositionRevisionSelector does not match the composition's
+                               labels), or "deleting" (the composite is being deleted).
+                               --include-manual does not re-include the latter two.
+      --analyze-on=STRING      Smallest composition change that triggers per-composite impact
+                               analysis: "spec-change", "any-change", or "always". Defaults to
+                               "any-change", which evaluates the composites whenever anything
+                               Crossplane hashes into the composition's identity differs —
+                               labels and annotations as well as spec. "spec-change" skips the
+                               render-per-composite cost for a metadata-only edit, which still
+                               creates a new CompositionRevision that Automatic composites
+                               re-point to; choosing it asserts none of your compositions can
+                               observe a revision's identity. "always" also evaluates a
+                               composition identical to its in-cluster version, which creates no
+                               revision and so cannot change anything — useful for a pre-edit
+                               convergence baseline. This is a cost knob, not a correctness mode:
+                               "revisionImpact" is reported at every setting, and composites left
+                               unevaluated are marked with "impactAnalysisSkipped": true in
+                               structured output, so "we did not look" stays distinguishable from
+                               "we looked and found nothing".
+      --analyze-unchanged      Deprecated: equivalent to --analyze-on=always. Still
+                               honoured, but passing it together with a conflicting --analyze-on
+                               value is an error.
+      --crossplane-version=VERSION
+                               Pin the crossplane render version; the docker engine
+                               pulls xpkg.crossplane.io/crossplane/crossplane:<version>.
+                               Minimum v2.3.4 (older renders drop cluster-observed
+                               resources; see Prerequisites). Mutually exclusive with
+                               --crossplane-image.
+      --crossplane-image=IMAGE Override the full crossplane render image reference
+                               (e.g. for a private mirror). Mutually exclusive with
+                               --crossplane-version.
 ```
 
 **Note**: The `diff` subcommand is deprecated. Use `xr` instead.
 
-**Ignored Paths**: By default, `metadata.annotations[kubectl.kubernetes.io/last-applied-configuration]` is always ignored. Additional paths can be specified with `--ignore-paths`. This is useful for filtering out metadata added by tools like ArgoCD (e.g., tracking IDs, sync waves) that shouldn't affect diff results.
+**Ignored Paths**: By default, `metadata.annotations[kubectl.kubernetes.io/last-applied-configuration]` is always hidden from the diff, since it is just a serialization of the object itself. Note that it is hidden from the *output* only: for `comp`, a composition differing solely in that annotation still counts as changed, because applying it creates a new CompositionRevision. Additional paths can be specified with `--ignore-paths`. This is useful for filtering out metadata added by tools like ArgoCD (e.g., tracking IDs, sync waves) that shouldn't affect diff results. The `--ignore-paths` flag applies uniformly across all output modes: the human diff, JSON, and YAML output all strip ignored fields, and summary counts are computed after ignore-filtering so a resource whose only changes are in ignored fields is not counted as modified.
 
 ### Prerequisites
 
 - A running Kubernetes cluster with Crossplane installed
 - `kubectl` configured to access your cluster
 - Appropriate RBAC permissions (see [Required Permissions](#required-permissions))
+- A `crossplane` render image/binary of **v2.3.4 or newer** (the tool renders via
+  `xpkg.crossplane.io/crossplane/crossplane:stable` by default, which already satisfies this). Older
+  images silently drop cluster-observed composed resources from the render pipeline, which produces
+  incorrect diffs (e.g. missing removals). If a locally cached `:stable` image predates v2.3.4, re-pull it.
 
 ## How It Works
 
@@ -488,9 +613,54 @@ For CI/CD pipelines or programmatic processing, use `--output json` or `--output
       "name": "modified-resource",
       "diff": { "old": { ... }, "new": { ... } }
     }
+  ],
+  "xrs": [
+    {
+      "xr": { "apiVersion": "example.org/v1", "kind": "XNopResource", "name": "my-xr", "namespace": "default" },
+      "status": "changed",
+      "summary": { "added": 1, "modified": 1, "removed": 0 },
+      "changes": [
+        {
+          "type": "added",
+          "apiVersion": "nop.crossplane.io/v1alpha1",
+          "kind": "NopResource",
+          "name": "new-resource",
+          "diff": { "spec": { ... } }
+        },
+        {
+          "type": "modified",
+          "apiVersion": "nop.crossplane.io/v1alpha1",
+          "kind": "NopResource",
+          "name": "modified-resource",
+          "diff": { "old": { ... }, "new": { ... } }
+        }
+      ]
+    }
   ]
 }
 ```
+
+**Per-input-XR grouping (`xrs[]`).** When you diff more than one XR/claim in a
+single invocation, the flat `changes[]` list gives no indication of which input
+XR produced each change. The `xrs[]` array solves this: it carries one entry per
+input XR/claim (in input order), each with the input XR's identity, a `status`
+(`"changed"`, `"unchanged"`, or `"error"`), its own `summary`, its own
+`changes[]`, and — for a failed XR — its own `errors[]`. This is the
+authoritative grouping the tool already computes while rendering each XR's
+composed tree, so wrappers no longer need to invoke `xr` once per resource to
+get per-XR output. Unchanged XRs appear with `status: "unchanged"` and an empty
+`changes[]`; errored XRs appear with `status: "error"` and their error in the
+entry's `errors[]` (and also in the top-level `errors[]`).
+
+> **Deprecation:** the top-level flat `changes[]` is **deprecated** in favor of
+> `xrs[]` and will be removed in a future major release. The aggregate
+> `summary` and top-level `errors[]` remain. New consumers should read `xrs[]`;
+> existing consumers of `changes[]` keep working during the deprecation window.
+
+The human-readable (`diff`) output likewise groups by input XR when more than
+one is supplied: each XR gets a `=== Kind/name ===` section with its own diffs
+and summary, followed by an aggregate `Total: … across N XRs (…)` footer. A
+single-XR invocation renders flat, exactly as before.
 
 **Composition Diff JSON output** (`crossplane-diff comp composition.yaml -o json`):
 
@@ -506,11 +676,18 @@ For CI/CD pipelines or programmatic processing, use `--output json` or `--output
         "name": "xbuckets.example.org",
         "diff": { "old": { ... }, "new": { ... } }
       },
+      "revisionImpact": {
+        "changeScope": "spec",
+        "createsRevision": true,
+        "repointedComposites": 4
+      },
       "affectedResources": {
-        "total": 5,
+        "total": 6,
         "withChanges": 2,
-        "unchanged": 2,
-        "withErrors": 1
+        "unchanged": 1,
+        "withErrors": 1,
+        "filteredBySelector": 1,
+        "filteredByDeletion": 1
       },
       "impactAnalysis": [
         {
@@ -535,6 +712,22 @@ For CI/CD pipelines or programmatic processing, use `--output json` or `--output
           "name": "bucket-3",
           "status": "error",
           "error": "render failed: ..."
+        },
+        {
+          "apiVersion": "example.org/v1",
+          "kind": "XBucket",
+          "name": "bucket-4",
+          "status": "filtered",
+          "filterReason": "revision_selector_mismatch",
+          "filterDetail": "compositionRevisionSelector {version: 0.0.1} does not match composition labels {version: 0.0.2}"
+        },
+        {
+          "apiVersion": "example.org/v1",
+          "kind": "XBucket",
+          "name": "bucket-5",
+          "status": "filtered",
+          "filterReason": "deleting",
+          "filterDetail": "deletionTimestamp: 2026-09-07T11:25:03Z"
         }
       ]
     }
@@ -546,7 +739,26 @@ The structured output includes:
 - **Change types**: each entry's `type` field carries the word form — one of `"added"`, `"modified"`, or `"removed"`. (Unchanged resources are filtered out of structured output and never appear in `changes[]`. The `+` / `~` / `-` symbols appear only in the human-readable diff format described above.)
 - **Full resource details**: apiVersion, kind, name, namespace
 - **Diff content**: for modifications, `diff.old` and `diff.new` carry the full current/desired resource objects (apiVersion/kind/metadata/spec/status, etc.) — not just the diffing subset. For additions/removals, the full resource object lives under `diff.spec` (the JSON key is literally `spec` but the value is the entire resource, not its spec subtree).
-- **Impact analysis** (comp only): which XRs are affected by composition changes and their status
+- **Impact analysis** (comp only): which XRs are affected by composition changes and their status. When the composition
+  change is smaller than `--analyze-on` asked to analyse — by default, a composition identical to its in-cluster
+  version — its composites are not evaluated and the entry carries `"impactAnalysisSkipped": true` alongside an empty
+  `impactAnalysis`, so a consumer can tell "not evaluated" from "no affected composites found". Raise `--analyze-on` to
+  evaluate them anyway.
+- **Revision impact** (comp only): a `revisionImpact` object per composition, recording what applying it does to
+  CompositionRevisions regardless of whether anything renders differently. It carries `changeScope` (`"none"`,
+  `"metadata"` or `"spec"` — how much of the composition differs, in the terms Crossplane's `Composition.Hash()` uses,
+  which covers labels and annotations as well as spec), `createsRevision` (whether applying the composition produces a
+  new CompositionRevision), and `repointedComposites` (how many composites would adopt that revision and reconcile as a
+  result — those not excluded by update policy, revision selector, or deletion). It is **always present**, including
+  when `impactAnalysisSkipped` is true: that is the point of it, and it is what keeps `--analyze-on` a cost knob rather
+  than a correctness mode. Note that a composite re-pointing to a new revision is not the same as its rendered output
+  changing; re-pointing alone usually renders identically.
+- **Masked changes** (comp only): `"maskedChangesOnly": true` says an absent `compositionChanges` does *not* mean the
+  composition is unchanged — it differs only in fields excluded from the diff (your `--ignore-paths`, or the fields
+  suppressed for readability). Applying it still creates a new CompositionRevision, which `revisionImpact` reports.
+- **Warnings**: A top-level `warnings` array of non-fatal advisories, each with a `message` and an optional `context` map of
+  the key/value pairs from the emitting call site. Distinct from `errors` and with no effect on the exit code; see
+  [Warnings](#warnings) above.
 - **Errors**: A top-level `errors` array of `OutputError` objects (see [Validation Errors](#validation-errors) below for the schema and an example), plus per-XR `error` fields in `impactAnalysis` for composition diffs
 
 ### Validation Errors
@@ -669,6 +881,8 @@ case $? in
   3) echo "Changes detected - review required" ;;
 esac
 ```
+
+**Revision churn does not set exit code 3.** For `comp`, exit code 3 means something renders differently: the composition's own diff is non-empty, or at least one composite's downstream resources change. A composition that only creates a new CompositionRevision without either — one differing solely in fields excluded from the diff, reported as `"maskedChangesOnly": true` — exits 0, so a GitOps loop re-applying the same manifests doesn't fail its diff gate on every run. A pipeline that *does* want to gate on revision churn reads `revisionImpact.createsRevision` from the structured output.
 
 ## Guiding Principles
 

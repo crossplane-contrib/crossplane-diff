@@ -24,10 +24,8 @@ import (
 	"sync"
 
 	"github.com/crossplane/cli/v2/cmd/crossplane/render"
-	"github.com/google/uuid"
 	corev1 "k8s.io/api/core/v1"
 	kunstructured "k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
-	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/kube-openapi/pkg/spec3"
 
 	"github.com/crossplane/crossplane-runtime/v2/pkg/errors"
@@ -103,9 +101,16 @@ type EngineRenderFn struct {
 
 // NewEngineRenderFn constructs an EngineRenderFn.
 //
-// binaryPath threads through to render.EngineFlags.CrossplaneBinary, so when
-// non-empty the upstream localRenderEngine drives rendering against a local
-// `crossplane` binary; when empty the upstream dockerRenderEngine pulls
+// binaryPath, version, and image select the render backend via
+// render.EngineFlags (they are mutually exclusive upstream, grouped under the
+// "crossplane-selector" xor):
+//   - binaryPath (CrossplaneBinary): drives the upstream localRenderEngine
+//     against a local `crossplane` binary.
+//   - version (CrossplaneVersion): the docker engine pulls
+//     xpkg.crossplane.io/crossplane/crossplane:<version>.
+//   - image (CrossplaneImage): the docker engine pulls that full image ref.
+//
+// When all three are empty the docker engine pulls
 // xpkg.crossplane.io/crossplane/crossplane:stable. Both engines now capture
 // stderr into the returned error and honour exit code 3 (partial-output-on-
 // fatal — crossplane/crossplane#7455) per crossplane/cli#91, so we no longer
@@ -118,10 +123,12 @@ type EngineRenderFn struct {
 // annotates each fn at Setup time so its container joins it too — closing
 // both halves of the "crossplane-diff inside a container" case
 // (crossplane/cli#75). For the local engine the flag is a no-op.
-func NewEngineRenderFn(log logging.Logger, binaryPath string) *EngineRenderFn {
+func NewEngineRenderFn(log logging.Logger, binaryPath, version, image string) *EngineRenderFn {
 	return &EngineRenderFn{
 		engine: render.NewEngineFromFlags(&render.EngineFlags{
 			CrossplaneBinary:        binaryPath,
+			CrossplaneVersion:       version,
+			CrossplaneImage:         image,
 			CrossplaneDockerNetwork: os.Getenv(EnvDockerNetwork),
 		}, log),
 		log:           log,
@@ -207,7 +214,7 @@ func (e *EngineRenderFn) Render(ctx context.Context, log logging.Logger, in Rend
 		Composition:         in.Composition,
 		FunctionAddrs:       fnAddrs,
 		FunctionCredentials: in.FunctionCredentials,
-		ObservedResources:   alignObservedOwnerRefs(in.CompositeResource, in.ObservedResources),
+		ObservedResources:   in.ObservedResources,
 		RequiredResources:   in.RequiredResources,
 		RequiredSchemas:     in.RequiredSchemas,
 		XRD:                 in.XRD,
@@ -244,71 +251,6 @@ func (e *EngineRenderFn) Render(ctx context.Context, log logging.Logger, in Rend
 	}
 
 	return out, nil
-}
-
-// fakeXRUID mirrors the deterministic UID the binary assigns to the XR after
-// deserializing it. The binary at internal/render/composite/render.go (line 94
-// in v2.3.2) overwrites xr.UID with
-//
-//	uuid.NewSHA1(uuid.Nil, gvk + "\x00" + namespace + "\x00" + name)
-//
-// regardless of what UID we serialize on the wire. The composite reconciler's
-// ExistingComposedResourceObserver (composition_functions.go:824 in v2.3.2)
-// then drops any observed composed resource whose controller owner ref UID
-// doesn't match xr.UID. So observed resources fetched from the cluster — which
-// carry the real cluster XR UID on their owner refs — are silently filtered
-// out, and templates that look them up by composition-resource-name resolve
-// to <no value>, breaking dry-run apply.
-//
-// The formula is deterministic and a stable part of the binary's contract, so
-// replicating it here is fine: if upstream ever changes how the UID is
-// derived, TestDiffCompositionWithGetComposedResource (which exercised the
-// regression) will fail and we'll update the formula in lockstep.
-func fakeXRUID(xr *ucomposite.Unstructured) types.UID {
-	gvk := xr.GroupVersionKind()
-	return types.UID(uuid.NewSHA1(uuid.Nil, []byte(gvk.String()+"\x00"+xr.GetNamespace()+"\x00"+xr.GetName())).String())
-}
-
-// alignObservedOwnerRefs returns a slice of observed composed resources in
-// which any owner ref pointing to xr (matched by APIVersion+Kind+Name) has
-// its UID replaced with the binary's deterministic fake UID — see fakeXRUID
-// for why this is necessary. Inputs are deep-copied; callers' originals are
-// not mutated.
-func alignObservedOwnerRefs(xr *ucomposite.Unstructured, observed []composed.Unstructured) []composed.Unstructured {
-	if len(observed) == 0 {
-		return observed
-	}
-
-	fakeUID := fakeXRUID(xr)
-	apiVersion := xr.GetAPIVersion()
-	kind := xr.GetKind()
-	name := xr.GetName()
-
-	out := make([]composed.Unstructured, len(observed))
-
-	for i := range observed {
-		out[i] = *observed[i].DeepCopy()
-
-		refs := out[i].GetOwnerReferences()
-		changed := false
-
-		for j := range refs {
-			if refs[j].APIVersion != apiVersion || refs[j].Kind != kind || refs[j].Name != name {
-				continue
-			}
-
-			if refs[j].UID != fakeUID {
-				refs[j].UID = fakeUID
-				changed = true
-			}
-		}
-
-		if changed {
-			out[i].SetOwnerReferences(refs)
-		}
-	}
-
-	return out
 }
 
 // Cleanup stops every function runtime started across the engine's lifetime

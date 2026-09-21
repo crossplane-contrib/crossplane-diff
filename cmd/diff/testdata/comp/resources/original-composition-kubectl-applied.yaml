@@ -1,0 +1,40 @@
+apiVersion: apiextensions.crossplane.io/v1
+kind: Composition
+metadata:
+  name: xnopresources.diff.example.org
+  annotations:
+    # Content-identical to original-composition.yaml apart from this annotation, which is what a
+    # client-side `kubectl apply` stamps on the cluster copy. The file a user diffs never carries it,
+    # so this is the asymmetry the tool must not mistake for an edit. The value below is abridged —
+    # only its presence matters, never its content.
+    kubectl.kubernetes.io/last-applied-configuration: |
+      {"apiVersion":"apiextensions.crossplane.io/v1","kind":"Composition","metadata":{"name":"xnopresources.diff.example.org"},"spec":{"compositeTypeRef":{"apiVersion":"ns.diff.example.org/v1alpha1","kind":"XNopResource"},"mode":"Pipeline"}}
+spec:
+  compositeTypeRef:
+    apiVersion: ns.diff.example.org/v1alpha1
+    kind: XNopResource
+  mode: Pipeline
+  pipeline:
+    - step: generate-resources
+      functionRef:
+        name: function-go-templating
+      input:
+        apiVersion: template.fn.crossplane.io/v1beta1
+        kind: GoTemplate
+        source: Inline
+        inline:
+          template: |
+            apiVersion: ns.nop.example.org/v1alpha1
+            kind: XDownstreamResource
+            metadata:
+              name: {{ .observed.composite.resource.metadata.name }}
+              namespace: {{ .observed.composite.resource.metadata.namespace }}
+              annotations:
+                gotemplating.fn.crossplane.io/composition-resource-name: nop-resource
+            spec:
+              forProvider:
+                configData: {{ .observed.composite.resource.spec.coolField }}
+                resourceTier: basic
+    - step: automatically-detect-ready-composed-resources
+      functionRef:
+        name: function-auto-ready

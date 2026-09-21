@@ -188,33 +188,16 @@ func (c *DefaultCompositionClient) GetComposition(ctx context.Context, name stri
 }
 
 // getCompositionRevisionRef reads the compositionRevisionRef from an XR/Claim spec.
-// Returns the revision name and whether it was found.
+// Returns the revision name and whether it was found. A non-nil error means the field is malformed
+// (present but not a string/object), which is treated as a hard failure by the caller.
 // Checks both v2 (spec.crossplane.compositionRevisionRef) and v1 (spec.compositionRevisionRef) paths.
-func (c *DefaultCompositionClient) getCompositionRevisionRef(xrd, res *un.Unstructured) (string, bool) {
-	// Try all possible paths for compositionRevisionRef (v2 path first, then v1 fallback)
-	for _, path := range getCrossplaneRefPaths(xrd.GetAPIVersion(), "compositionRevisionRef", "name") {
-		revisionRefName, found, _ := un.NestedString(res.Object, path...)
-		if found && revisionRefName != "" {
-			return revisionRefName, true
-		}
+func (c *DefaultCompositionClient) getCompositionRevisionRef(xrd, res *un.Unstructured) (string, bool, error) {
+	name, found, err := nestedCrossplaneString(res.Object, xrd.GetAPIVersion(), "compositionRevisionRef", "name")
+	if err != nil {
+		return "", false, err
 	}
 
-	return "", false
-}
-
-// getCompositionUpdatePolicy reads the compositionUpdatePolicy from an XR/Claim.
-// Returns the policy value and whether it was found. Defaults to "Automatic" if not found.
-// Checks both v2 (spec.crossplane.compositionUpdatePolicy) and v1 (spec.compositionUpdatePolicy) paths.
-func (c *DefaultCompositionClient) getCompositionUpdatePolicy(xrd, res *un.Unstructured) string {
-	// Try all possible paths for compositionUpdatePolicy (v2 path first, then v1 fallback)
-	for _, path := range getCrossplaneRefPaths(xrd.GetAPIVersion(), "compositionUpdatePolicy") {
-		policy, found, _ := un.NestedString(res.Object, path...)
-		if found && policy != "" {
-			return policy
-		}
-	}
-
-	return "Automatic" // Default policy
+	return name, found && name != "", nil
 }
 
 // resolveCompositionFromRevisions determines which composition to use based on revision logic.
@@ -226,8 +209,15 @@ func (c *DefaultCompositionClient) resolveCompositionFromRevisions(
 	resourceID string,
 ) (*apiextensionsv1.Composition, error) {
 	// Check if there's a composition revision reference
-	revisionRefName, hasRevisionRef := c.getCompositionRevisionRef(xrd, res)
-	updatePolicy := c.getCompositionUpdatePolicy(xrd, res)
+	revisionRefName, hasRevisionRef, err := c.getCompositionRevisionRef(xrd, res)
+	if err != nil {
+		return nil, errors.Wrapf(err, "cannot read compositionRevisionRef for %s", resourceID)
+	}
+
+	updatePolicy, err := XRUpdatePolicy(res.Object, xrd.GetAPIVersion())
+	if err != nil {
+		return nil, errors.Wrapf(err, "cannot read compositionUpdatePolicy for %s", resourceID)
+	}
 
 	c.logger.Debug("Checking revision resolution",
 		"resource", resourceID,
@@ -236,9 +226,16 @@ func (c *DefaultCompositionClient) resolveCompositionFromRevisions(
 		"updatePolicy", updatePolicy)
 
 	switch {
-	case updatePolicy == "Automatic":
-		// Case 1: Automatic policy - always use latest revision (if available)
-		latest, err := c.revisionClient.GetLatestRevisionForComposition(ctx, compositionName)
+	case updatePolicy == updatePolicyAutomatic:
+		// Case 1: Automatic policy - use the latest revision that matches the XR's
+		// compositionRevisionSelector (a nil/Everything selector when there is none), mirroring
+		// Crossplane's revision selection.
+		selector, err := XRRevisionLabelSelector(res)
+		if err != nil {
+			return nil, errors.Wrapf(err, "cannot evaluate compositionRevisionSelector for %s", resourceID)
+		}
+
+		latest, err := c.revisionClient.GetLatestRevisionForComposition(ctx, compositionName, selector)
 		if err != nil {
 			// Check if this is a "no revisions found" case (new/unpublished composition)
 			if strings.Contains(err.Error(), "no composition revisions found") {
@@ -250,21 +247,23 @@ func (c *DefaultCompositionClient) resolveCompositionFromRevisions(
 				return nil, nil
 			}
 
-			// For other errors, fail the diff to ensure accuracy
+			// For other errors (including a selector that matches no revision), fail the diff to
+			// ensure accuracy rather than silently rendering against the wrong revision.
 			return nil, errors.Wrapf(err,
 				"cannot resolve latest composition revision for %s with Automatic update policy (composition: %s)",
 				resourceID, compositionName)
 		}
 
 		comp := c.revisionClient.GetCompositionFromRevision(latest)
-		c.logger.Debug("Using latest revision for Automatic policy",
+		c.logger.Debug("Using latest matching revision for Automatic policy",
 			"resource", resourceID,
 			"revisionName", latest.GetName(),
-			"revisionNumber", latest.Spec.Revision)
+			"revisionNumber", latest.Spec.Revision,
+			"selector", selector.String())
 
 		return comp, nil
 
-	case updatePolicy == "Manual" && hasRevisionRef:
+	case updatePolicy == updatePolicyManual && hasRevisionRef:
 		// Case 2: Manual policy with revision reference - use that specific revision
 		revision, err := c.revisionClient.GetCompositionRevision(ctx, revisionRefName)
 		if err != nil {
@@ -299,7 +298,7 @@ func (c *DefaultCompositionClient) resolveCompositionFromRevisions(
 			"resource", resourceID,
 			"compositionName", compositionName)
 
-		latest, err := c.revisionClient.GetLatestRevisionForComposition(ctx, compositionName)
+		latest, err := c.revisionClient.GetLatestRevisionForComposition(ctx, compositionName, nil)
 		if err != nil {
 			// Check if this is a "no revisions found" case (new/unpublished composition)
 			if strings.Contains(err.Error(), "no composition revisions found") {
@@ -524,6 +523,41 @@ func getCrossplaneRefPaths(apiVersion string, path ...string) [][]string {
 	}
 }
 
+// nestedCrossplaneValue reads a value of type T at the v2/v1 crossplane ref paths for the given
+// field (v2 preferred), returning the first found. accessor is the typed unstructured getter (e.g.
+// un.NestedString, un.NestedMap) and typeName names the expected type for the error message. A
+// non-nil error means the field exists at one of the paths but has the wrong type — callers must
+// treat that as a hard failure, not "not found", so a malformed value is never silently ignored.
+func nestedCrossplaneValue[T any](obj map[string]any, apiVersion, typeName string, accessor func(map[string]any, ...string) (T, bool, error), path ...string) (T, bool, error) {
+	for _, p := range getCrossplaneRefPaths(apiVersion, path...) {
+		v, found, err := accessor(obj, p...)
+		if err != nil {
+			var zero T
+			return zero, false, errors.Wrapf(err, "field %q is not %s", strings.Join(path, "."), typeName)
+		}
+
+		if found {
+			return v, true, nil
+		}
+	}
+
+	var zero T
+
+	return zero, false, nil
+}
+
+// nestedCrossplaneString reads a string at the v2/v1 crossplane ref paths for the given field.
+// See nestedCrossplaneValue for semantics.
+func nestedCrossplaneString(obj map[string]any, apiVersion string, path ...string) (string, bool, error) {
+	return nestedCrossplaneValue(obj, apiVersion, "a string", un.NestedString, path...)
+}
+
+// nestedCrossplaneMap reads a map at the v2/v1 crossplane ref paths for the given field.
+// See nestedCrossplaneValue for semantics.
+func nestedCrossplaneMap(obj map[string]any, apiVersion string, path ...string) (map[string]any, bool, error) {
+	return nestedCrossplaneValue(obj, apiVersion, "an object", un.NestedMap, path...)
+}
+
 // findByDirectReference attempts to find a composition directly referenced by name.
 // Checks both v2 (spec.crossplane.compositionRef) and v1 (spec.compositionRef) paths.
 func (c *DefaultCompositionClient) findByDirectReference(ctx context.Context, xrd, res *un.Unstructured, targetGVK schema.GroupVersionKind, resourceID string) (*apiextensionsv1.Composition, error) {
@@ -591,25 +625,15 @@ func (c *DefaultCompositionClient) findByDirectReference(ctx context.Context, xr
 // findByLabelSelector attempts to find compositions that match label selectors.
 // Checks both v2 (spec.crossplane.compositionSelector) and v1 (spec.compositionSelector) paths.
 func (c *DefaultCompositionClient) findByLabelSelector(ctx context.Context, xrd, res *un.Unstructured, targetGVK schema.GroupVersionKind, resourceID string) (*apiextensionsv1.Composition, error) {
-	// Try all possible paths for compositionSelector (v2 path first, then v1 fallback)
-	var (
-		matchLabels   map[string]any
-		selectorFound bool
-	)
-
-	for _, path := range getCrossplaneRefPaths(xrd.GetAPIVersion(), "compositionSelector", "matchLabels") {
-		labels, found, err := un.NestedMap(res.Object, path...)
-		if err == nil && found && len(labels) > 0 {
-			matchLabels = labels
-			selectorFound = true
-
-			c.logger.Debug("Found compositionSelector at path", "path", path)
-
-			break
-		}
+	// Read compositionSelector.matchLabels from the v2/v1 paths (v2 preferred).
+	matchLabels, selectorFound, err := nestedCrossplaneMap(res.Object, xrd.GetAPIVersion(), "compositionSelector", "matchLabels")
+	if err != nil {
+		return nil, errors.Wrapf(err, "cannot read compositionSelector for %s", resourceID)
 	}
 
 	if selectorFound && len(matchLabels) > 0 {
+		c.logger.Debug("Found compositionSelector", "resource", resourceID)
+
 		c.logger.Debug("Found composition selector",
 			"resource", resourceID,
 			"matchLabels", matchLabels)

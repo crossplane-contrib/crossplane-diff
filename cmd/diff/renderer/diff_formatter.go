@@ -56,6 +56,21 @@ type DiffOptions struct {
 	// Supports both simple paths (e.g., "metadata.annotations") and
 	// map key paths (e.g., "metadata.annotations[key.name/value]")
 	IgnorePaths []string
+
+	// ForVerdict marks a comparison whose result answers "did this object change?" rather than
+	// producing output a human reads. Such a comparison keeps the display-only fields *in* the
+	// objects being compared (see displayOnlyIgnoredPaths in cleanupForDiff), so a difference in one
+	// of them registers: a field hidden purely to keep the rendered diff readable must never decide
+	// whether a change exists.
+	//
+	// Callers should also clear IgnorePaths for such a comparison, for the same reason — the user's
+	// masks are a display preference too.
+	ForVerdict bool
+
+	// MinimizeComposition collapses composition changes to a single marker line
+	// per composition, omitting the full YAML diff body. Only consumed by the
+	// human-readable composition diff renderer; structured output is unaffected.
+	MinimizeComposition bool
 }
 
 // DefaultDiffOptions returns the default options with colors enabled.
@@ -301,34 +316,39 @@ func GenerateDiffWithOptions(_ context.Context, current, desired *un.Unstructure
 		return nil, errors.New("both current and desired cannot be nil")
 	}
 
-	// For modifications, check if objects are semantically equal
-	if diffType == t.DiffTypeModified {
-		// Check for deep equality first
-		if equality.Semantic.DeepEqual(current, desired) {
-			logger.Debug("Resources are semantically equal", "resource", resourceKey, "namespace", resourceNamespace)
-			return equalDiff(current, desired), nil
-		}
-
-		// Clean up both objects for comparison
-		currentClean := cleanupForDiff(current.DeepCopy(), logger.WithValues("resourceStage", "current", "before", current), options.IgnorePaths)
-		desiredClean := cleanupForDiff(desired.DeepCopy(), logger.WithValues("resourceStage", "desired", "before", desired), options.IgnorePaths)
-
-		// Check if the cleaned objects are equal
-		if equality.Semantic.DeepEqual(currentClean.Object, desiredClean.Object) {
-			logger.Debug("Resources are equal after cleanup (only metadata differences)", "resource", resourceKey, "namespace", resourceNamespace)
-			return equalDiff(current, desired), nil
-		}
-
-		logger.Debug("Resources are not equal after cleanup", "resource", resourceKey, "namespace", resourceNamespace)
+	// Fast path for modifications: if the raw objects are already deeply equal
+	// there is nothing to clean or diff.
+	if diffType == t.DiffTypeModified && equality.Semantic.DeepEqual(current, desired) {
+		logger.Debug("Resources are semantically equal", "resource", resourceKey, "namespace", resourceNamespace)
+		return equalDiff(current, desired), nil
 	}
 
-	// Convert to YAML for text diff
-	asString := func(obj *un.Unstructured) (string, error) {
-		if obj == nil {
+	// Clean each present object exactly once. The cleaned copies are reused for
+	// the cleaned-equality check, the YAML text diff, and are stored on the
+	// returned ResourceDiff for structured renderers to emit — so cleanup runs
+	// once per object rather than once per consumer.
+	var currentClean, desiredClean *un.Unstructured
+
+	if current != nil {
+		currentClean = cleanupForDiff(current.DeepCopy(), logger.WithValues("resourceStage", "current", "before", current), options.IgnorePaths, options.ForVerdict)
+	}
+
+	if desired != nil {
+		desiredClean = cleanupForDiff(desired.DeepCopy(), logger.WithValues("resourceStage", "desired", "before", desired), options.IgnorePaths, options.ForVerdict)
+	}
+
+	// For modifications, if the cleaned objects are equal the only differences
+	// were in ignored / server-side fields.
+	if diffType == t.DiffTypeModified && equality.Semantic.DeepEqual(currentClean.Object, desiredClean.Object) {
+		logger.Debug("Resources are equal after cleanup (only metadata differences)", "resource", resourceKey, "namespace", resourceNamespace)
+		return equalDiff(current, desired), nil
+	}
+
+	// Convert the already-cleaned objects to YAML for the text diff.
+	asString := func(clean *un.Unstructured) (string, error) {
+		if clean == nil {
 			return "", nil
 		}
-
-		clean := cleanupForDiff(obj.DeepCopy(), logger, options.IgnorePaths)
 
 		yaml, err := sigsyaml.Marshal(clean.Object)
 		if err != nil {
@@ -338,13 +358,13 @@ func GenerateDiffWithOptions(_ context.Context, current, desired *un.Unstructure
 		return string(yaml), nil
 	}
 
-	currentStr, err := asString(current)
+	currentStr, err := asString(currentClean)
 	if err != nil {
 		logger.Debug("Error marshaling current object to YAML", "error", err)
 		return nil, errors.Wrap(err, "cannot marshal current object to YAML")
 	}
 
-	desiredStr, err := asString(desired)
+	desiredStr, err := asString(desiredClean)
 	if err != nil {
 		logger.Debug("Error marshaling desired object to YAML", "error", err)
 		return nil, errors.Wrap(err, "cannot marshal desired object to YAML")
@@ -417,8 +437,8 @@ func GenerateDiffWithOptions(_ context.Context, current, desired *un.Unstructure
 		ResourceName: name,
 		DiffType:     diffType,
 		LineDiffs:    lineDiffs,
-		Current:      current,
-		Desired:      desired,
+		Current:      t.ResourceViews{Raw: current, Clean: currentClean},
+		Desired:      t.ResourceViews{Raw: desired, Clean: desiredClean},
 	}, nil
 }
 
@@ -455,8 +475,10 @@ func equalDiff(current *un.Unstructured, desired *un.Unstructured) *t.ResourceDi
 		ResourceName: current.GetName(),
 		DiffType:     t.DiffTypeEqual,
 		LineDiffs:    []diffmatchpatch.Diff{},
-		Current:      current,
-		Desired:      desired,
+		// Equal diffs render nothing, so only the Raw views are populated
+		// (kept for identity/reference); Clean is intentionally left nil.
+		Current: t.ResourceViews{Raw: current},
+		Desired: t.ResourceViews{Raw: desired},
 	}
 }
 
@@ -581,8 +603,10 @@ func removeNestedPath(obj map[string]any, path string) bool {
 	return false
 }
 
-// cleanupForDiff removes fields that shouldn't be included in the diff.
-func cleanupForDiff(obj *un.Unstructured, logger logging.Logger, ignorePaths []string) *un.Unstructured {
+// cleanupForDiff removes fields that shouldn't be included in the diff. When forVerdict is set the
+// display-only paths are left in the object, because the caller is asking whether the objects differ
+// rather than rendering them; see DiffOptions.ForVerdict.
+func cleanupForDiff(obj *un.Unstructured, logger logging.Logger, ignorePaths []string, forVerdict bool) *un.Unstructured {
 	resKind := obj.GetKind()
 	resName := obj.GetName()
 	resKey := fmt.Sprintf("%s/%s", resKind, resName)
@@ -590,12 +614,35 @@ func cleanupForDiff(obj *un.Unstructured, logger logging.Logger, ignorePaths []s
 	// Track all modifications for a single consolidated log message
 	var modifications []string
 
-	// Remove ignored paths (includes both defaults and user-specified)
-	for _, path := range ignorePaths {
-		if removeNestedPath(obj.Object, path) {
-			modifications = append(modifications, fmt.Sprintf("ignored path: %s", path))
+	// displayOnlyIgnoredPaths are suppressed from every rendered diff regardless of the caller's
+	// ignorePaths, because showing them is useless: last-applied-configuration is a multi-KB
+	// serialization of the object itself.
+	//
+	// They are suppressed from *display only*. Crossplane's Composition.Hash()
+	// (apis/apiextensions/v1/composition_hash.go) covers annotations as well as labels and spec, so a
+	// difference here does produce a new CompositionRevision — which composites re-point to, and
+	// which a composition template can observe via the XR's compositionRevisionRef. Letting a
+	// readability decision suppress that from a change verdict would elide a real, potentially
+	// render-affecting consequence, so verdict comparisons pass forVerdict and keep them.
+	displayOnlyIgnoredPaths := []string{
+		"metadata.annotations[kubectl.kubernetes.io/last-applied-configuration]",
+	}
+
+	// Remove display-only paths (unless this is a verdict), then the caller's. Duplicates between
+	// the two are harmless: removeNestedPath is a no-op once the path is gone.
+	stripPaths := func(paths []string) {
+		for _, path := range paths {
+			if removeNestedPath(obj.Object, path) {
+				modifications = append(modifications, fmt.Sprintf("ignored path: %s", path))
+			}
 		}
 	}
+
+	if !forVerdict {
+		stripPaths(displayOnlyIgnoredPaths)
+	}
+
+	stripPaths(ignorePaths)
 
 	// Remove server-side fields and metadata that we don't want to diff
 	metadata, found, _ := un.NestedMap(obj.Object, "metadata")
