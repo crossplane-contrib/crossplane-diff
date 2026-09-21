@@ -224,13 +224,13 @@ func (p *DefaultDiffProcessor) PerformDiff(ctx context.Context, resources []*un.
 	var errs []error
 
 	for _, res := range resources {
-		resourceID := fmt.Sprintf("%s/%s", res.GetKind(), res.GetName())
+		resourceID := fmt.Sprintf("%s/%s", res.GetKind(), xrIdentityName(res))
 
 		group := dt.XRDiffGroup{
 			XR: corev1.ObjectReference{
 				APIVersion: res.GetAPIVersion(),
 				Kind:       res.GetKind(),
-				Name:       res.GetName(),
+				Name:       xrIdentityName(res),
 				Namespace:  res.GetNamespace(),
 			},
 		}
@@ -262,6 +262,21 @@ func (p *DefaultDiffProcessor) PerformDiff(ctx context.Context, resources []*un.
 		}
 
 		groups = append(groups, group)
+	}
+
+	// A diff key carries no owning-XR component, so two input XRs that render
+	// the same resource collide: the flat changes[] view keeps only one of them,
+	// and applying both XRs would have them contend for that object, so no
+	// single result is correct for both inputs. Report it rather than emit a
+	// result that is wrong for at least one XR. Collected before rendering so it
+	// reaches errors[] and stderr like any other error; the render still happens
+	// so structured output stays valid.
+	for _, c := range dt.DetectDiffKeyCollisions(groups) {
+		err := errors.Errorf("cannot combine diffs: resource %q is produced by more than one input XR (%s); "+
+			"those XRs contend for the same object, so no single diff is correct for both — diff them separately",
+			c.Key, strings.Join(c.XRs, ", "))
+		errs = append(errs, err)
+		outputErrors = append(outputErrors, dt.OutputError{Message: err.Error()})
 	}
 
 	// Always render (even if only errors exist) to ensure valid structured output
@@ -1089,6 +1104,31 @@ func (p *DefaultDiffProcessor) ProcessNestedXRs(
 		"depth", depth)
 
 	return allDiffs, allRenderedResources, nil
+}
+
+// xrIdentityName returns the name an input XR's diffs should be attributed to.
+//
+// For an XR supplied with only metadata.generateName there is no name to
+// attribute to: SanitizeXR synthesizes one for rendering, but on a deep copy, so
+// the raw input's name stays empty. Left as-is the group identity is nameless —
+// and, since corev1.ObjectReference.Name is omitempty, absent from structured
+// output entirely, making two such XRs indistinguishable (issue #477).
+//
+// So mirror SanitizeXR's synthesis here and render it the way the diff formatter
+// renders that synthesized name, giving "<generateName>(generated)". That is the
+// name the same XR already carries in changes[], so the grouped and flat views
+// agree, and it avoids publishing a synthetic hash the user cannot predict.
+func xrIdentityName(res *un.Unstructured) string {
+	if name := res.GetName(); name != "" {
+		return name
+	}
+
+	gen := res.GetGenerateName()
+	if gen == "" {
+		return ""
+	}
+
+	return dt.GeneratedDisplayName(dt.SynthesizeGeneratedName(gen), gen)
 }
 
 // SanitizeXR makes an XR into a valid unstructured object that we can use in a dry-run apply.

@@ -252,6 +252,69 @@ func MakeDiffKeyFromResource(res *un.Unstructured) string {
 	return MakeDiffKey(res.GetAPIVersion(), res.GetKind(), res.GetNamespace(), res.GetName())
 }
 
+// DiffKeyCollision records a single resource diff key that more than one input
+// XR's group produced. Key is the colliding map key (the
+// apiVersion/kind/namespace/name form MakeDiffKey builds); XRs lists the
+// colliding groups' identities as "Kind/Name", in input order, with duplicates
+// preserved (two entries for the same identity means the same XR was supplied
+// twice).
+type DiffKeyCollision struct {
+	Key string
+	XRs []string
+}
+
+// DetectDiffKeyCollisions reports resource diff keys produced by more than one
+// input XR's group.
+//
+// A diff key carries no owning-XR component (see MakeDiffKey), so two input XRs
+// that render the same apiVersion/kind/namespace/name produce the same key. Any
+// view built by merging the groups into one map — the deprecated flat changes[]
+// — silently keeps whichever group is merged last and drops the other. Worse,
+// the collision means the two XRs contend for one cluster object, so neither
+// XR's diff is a truthful prediction of applying them together: whichever is
+// applied second wins. Callers therefore treat a collision as a hard error
+// rather than emitting a result that is wrong for at least one input.
+//
+// A key whose every colliding entry is DiffTypeEqual is deliberately NOT
+// reported. Equal diffs are excluded from every rendered view (changes[], the
+// summary, and the human output all skip them), so merging loses nothing
+// observable and there is nothing for the user to act on — failing the run
+// there would reject input whose output is provably correct either way.
+func DetectDiffKeyCollisions(groups []XRDiffGroup) []DiffKeyCollision {
+	owners := make(map[string][]string)
+	observable := make(map[string]bool)
+
+	for _, g := range groups {
+		id := fmt.Sprintf("%s/%s", g.XR.Kind, g.XR.Name)
+
+		for key, d := range g.Diffs {
+			owners[key] = append(owners[key], id)
+
+			// A nil entry is not expected; count it as observable so a
+			// malformed group errors loudly rather than being merged away.
+			if d == nil || d.DiffType != DiffTypeEqual {
+				observable[key] = true
+			}
+		}
+	}
+
+	collisions := make([]DiffKeyCollision, 0)
+
+	for key, xrs := range owners {
+		if len(xrs) > 1 && observable[key] {
+			collisions = append(collisions, DiffKeyCollision{Key: key, XRs: xrs})
+		}
+	}
+
+	// Map iteration order is not stable; sort so the reported errors (and the
+	// exit path that depends on them) are deterministic.
+	sort.Slice(collisions, func(i, j int) bool {
+		return collisions[i].Key < collisions[j].Key
+	})
+
+	return collisions
+}
+
 // OutputError represents an error in structured output.
 // Used consistently by both XR diff and comp diff for machine-readable error handling.
 // Note: Only JSON tags are used because sigs.k8s.io/yaml uses JSON tags for YAML serialization.

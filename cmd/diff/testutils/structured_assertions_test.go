@@ -621,17 +621,69 @@ func TestAssertStructuredDiff_GroupedByXR(t *testing.T) {
 		t.Errorf("grouped assertions unexpectedly failed on a matching payload")
 	}
 
-	// Negative path: a wrong status must be caught (guards against a no-op matcher).
+	// Negative path: a wrong status must be caught (guards against a no-op
+	// matcher). All three entries are listed so the only discrepancy is the
+	// status, not the entry count.
 	badT := &testing.T{}
 	AssertStructuredDiff(badT, jsonOutput,
 		ExpectDiff().
 			WithXRs(
 				XR("XBucket", "changed-xr", "default").
 					Status("unchanged"), // actual is "changed"
+				XR("XBucket", "unchanged-xr", "default"),
+				XR("XBucket", "broken-xr", "default"),
 			).
 			Build())
 
 	if !badT.Failed() {
 		t.Errorf("grouped assertions should have failed on a mismatched status")
+	}
+
+	// Negative path: an xrs[] entry the test did not ask for must be caught.
+	extraT := &testing.T{}
+	AssertStructuredDiff(extraT, jsonOutput,
+		ExpectDiff().
+			WithXRs(XR("XBucket", "changed-xr", "default")).
+			Build())
+
+	if !extraT.Failed() {
+		t.Errorf("grouped assertions should have failed on unexpected extra xrs[] entries")
+	}
+
+	// Negative path (issue #488): two expectations must not both be satisfied by
+	// the same entry, leaving another entry unchecked. The counts match here
+	// (2 expectations, 2 entries), so only consuming an entry on match catches
+	// it. Before that, a duplicated XR identity — the symptom of issue #477 —
+	// passed unnoticed.
+	twoEntries := `{
+		"summary": {"added": 0, "modified": 0, "removed": 0},
+		"changes": [],
+		"xrs": [
+			{
+				"xr": {"apiVersion": "example.org/v1", "kind": "XBucket", "name": "first-xr", "namespace": "default"},
+				"status": "unchanged",
+				"summary": {"added": 0, "modified": 0, "removed": 0},
+				"changes": []
+			},
+			{
+				"xr": {"apiVersion": "example.org/v1", "kind": "XBucket", "name": "second-xr", "namespace": "default"},
+				"status": "unchanged",
+				"summary": {"added": 0, "modified": 0, "removed": 0},
+				"changes": []
+			}
+		]
+	}`
+
+	dupeT := &testing.T{}
+	AssertStructuredDiff(dupeT, twoEntries,
+		ExpectDiff().
+			WithXRs(
+				XR("XBucket", "first-xr", "default").Status("unchanged"),
+				XR("XBucket", "first-xr", "default").Status("unchanged"),
+			).
+			Build())
+
+	if !dupeT.Failed() {
+		t.Errorf("grouped assertions should have failed when two expectations matched one xrs[] entry")
 	}
 }

@@ -801,8 +801,211 @@ func TestDefaultDiffProcessor_PerformDiff(t *testing.T) {
 // Note: PerformDiff's per-XR grouping structure is verified end-to-end (real
 // renderer, real JSON) by TestDiffIntegration/MultipleXRsGroupedByInputXR, and
 // the per-group xrs[] shape — including errored groups — by
-// TestStructuredDiffRenderer_GroupsByXR, so there is no separate unit test
-// asserting the intermediate []XRDiffGroup handoff.
+// TestStructuredDiffRenderer_GroupsByXR. The identity each group carries, and
+// the cross-XR key collision PerformDiff must refuse, are asserted on the
+// intermediate []XRDiffGroup handoff by TestDefaultDiffProcessor_PerformDiff_Groups.
+
+// TestDefaultDiffProcessor_PerformDiff_Groups asserts what PerformDiff hands the
+// renderer: the identity of each per-input-XR group (issue #477 — a
+// generateName-only XR must not be nameless) and its refusal to merge two input
+// XRs' diffs for the same resource key (issue #476).
+func TestDefaultDiffProcessor_PerformDiff_Groups(t *testing.T) {
+	ctx := t.Context()
+
+	composition := tu.NewComposition("test-comp").
+		WithCompositeTypeRef(testGroup+"/"+testAPIVersion, testKind).
+		WithPipelineMode().
+		WithPipelineStep("step1", "function-test", nil).
+		Build()
+
+	functions := []pkgv1.Function{{ObjectMeta: metav1.ObjectMeta{Name: "function-test"}}}
+
+	xrd := tu.NewXRD(testXRDName, testGroup, testKind).
+		WithPlural(testPlural).
+		WithSingular(testSingular).
+		BuildAsUnstructured()
+
+	// sharedKey is returned by the diff calculator for every input XR, so two
+	// inputs collide on it.
+	const sharedKey = "example.org/v1/Bucket/default/shared"
+
+	// sharedDiffs is the calculator's (XR-independent) result. The XR's own diff
+	// key is deliberately absent so removal detection stays out of the picture.
+	sharedDiffs := func(diffType dt.DiffType) map[string]*dt.ResourceDiff {
+		return map[string]*dt.ResourceDiff{
+			sharedKey: {
+				Gvk:          schema.GroupVersionKind{Group: "example.org", Version: "v1", Kind: "Bucket"},
+				Namespace:    "default",
+				ResourceName: "shared",
+				DiffType:     diffType,
+			},
+		}
+	}
+
+	// got is the whole handoff, asserted as one value: the group identities in
+	// input order, the global (union) error list the renderer was given, and the
+	// error PerformDiff returned.
+	type got struct {
+		XRs        []corev1.ObjectReference
+		GlobalErrs []string
+		Err        string
+	}
+
+	tests := map[string]struct {
+		resources []*un.Unstructured
+		diffType  dt.DiffType
+		want      got
+	}{
+		// Issue #477: the name used for rendering is synthesized from
+		// generateName inside SanitizeXR, so the identity must carry that
+		// effective name rather than the input's empty metadata.name.
+		"GenerateNameOnlyXR": {
+			resources: []*un.Unstructured{
+				tu.NewResource(testGroup+"/"+testAPIVersion, testKind, "").
+					WithGenerateName("gen-xr-").
+					WithSpecField("coolField", "value").
+					Build(),
+			},
+			diffType: dt.DiffTypeModified,
+			want: got{
+				XRs: []corev1.ObjectReference{
+					{APIVersion: testGroup + "/" + testAPIVersion, Kind: testKind, Name: "gen-xr-(generated)"},
+				},
+			},
+		},
+		// Issue #476: both XRs produce sharedKey, so the flat changes[] can only
+		// carry one of them and applying both would have them contend for the
+		// same object. Neither result is correct for both inputs, so the run
+		// fails — loudly, in errors[] as well as on the returned error.
+		"SameKeyFromTwoXRs": {
+			resources: []*un.Unstructured{
+				tu.NewResource(testGroup+"/"+testAPIVersion, testKind, "my-xr-1").
+					WithSpecField("coolField", "value-1").
+					Build(),
+				tu.NewResource(testGroup+"/"+testAPIVersion, testKind, "my-xr-2").
+					WithSpecField("coolField", "value-2").
+					Build(),
+			},
+			diffType: dt.DiffTypeModified,
+			want: got{
+				XRs: []corev1.ObjectReference{
+					{APIVersion: testGroup + "/" + testAPIVersion, Kind: testKind, Name: "my-xr-1"},
+					{APIVersion: testGroup + "/" + testAPIVersion, Kind: testKind, Name: "my-xr-2"},
+				},
+				GlobalErrs: []string{
+					`cannot combine diffs: resource "example.org/v1/Bucket/default/shared" is produced by more than one ` +
+						`input XR (XR1/my-xr-1, XR1/my-xr-2); those XRs contend for the same object, so no single diff ` +
+						`is correct for both — diff them separately`,
+				},
+				Err: `cannot combine diffs: resource "example.org/v1/Bucket/default/shared" is produced by more than one ` +
+					`input XR (XR1/my-xr-1, XR1/my-xr-2); those XRs contend for the same object, so no single diff ` +
+					`is correct for both — diff them separately`,
+			},
+		},
+		// A collision whose every entry is equal loses nothing observable (equal
+		// diffs are excluded from every rendered view), so it must NOT fail:
+		// rejecting it would reject input whose output is provably correct.
+		"SameEqualKeyFromTwoXRsTolerated": {
+			resources: []*un.Unstructured{
+				tu.NewResource(testGroup+"/"+testAPIVersion, testKind, "my-xr-1").
+					WithSpecField("coolField", "value-1").
+					Build(),
+				tu.NewResource(testGroup+"/"+testAPIVersion, testKind, "my-xr-2").
+					WithSpecField("coolField", "value-2").
+					Build(),
+			},
+			diffType: dt.DiffTypeEqual,
+			want: got{
+				XRs: []corev1.ObjectReference{
+					{APIVersion: testGroup + "/" + testAPIVersion, Kind: testKind, Name: "my-xr-1"},
+					{APIVersion: testGroup + "/" + testAPIVersion, Kind: testKind, Name: "my-xr-2"},
+				},
+			},
+		},
+	}
+
+	for name, tt := range tests {
+		t.Run(name, func(t *testing.T) {
+			k8sClients := k8.Clients{
+				Apply:    tu.NewMockApplyClient().WithSuccessfulDryRun().Build(),
+				Resource: tu.NewMockResourceClient().Build(),
+				Schema: tu.NewMockSchemaClient().
+					WithNoResourcesRequiringCRDs().
+					WithSuccessfulCRDByNameFetch(testCRDName, makeTestCRD(testCRDName, testKind, testGroup, testAPIVersion)).
+					Build(),
+				Type: tu.NewMockTypeConverter().Build(),
+			}
+			xpClients := xp.Clients{
+				Composition:  tu.NewMockCompositionClient().WithSuccessfulCompositionMatch(composition).Build(),
+				Credential:   &tu.MockCredentialClient{},
+				Definition:   tu.NewMockDefinitionClient().WithXRDForXR(xrd).Build(),
+				Environment:  tu.NewMockEnvironmentClient().WithNoEnvironmentConfigs().Build(),
+				Function:     tu.NewMockFunctionClient().WithSuccessfulFunctionsFetch(functions).Build(),
+				ResourceTree: tu.NewMockResourceTreeClient().WithEmptyResourceTree().Build(),
+			}
+
+			var (
+				gotGroups []dt.XRDiffGroup
+				gotErrs   []dt.OutputError
+			)
+
+			opts := append(testProcessorOptions(t),
+				WithSchemaValidatorFactory(func(k8.SchemaClient, k8.ResourceClient, xp.DefinitionClient, logging.Logger) SchemaValidator {
+					return &tu.MockSchemaValidator{
+						ValidateResourcesFn: func(context.Context, *un.Unstructured, []cpd.Unstructured) error {
+							return nil
+						},
+					}
+				}),
+				WithDiffCalculatorFactory(func(k8.ApplyClient, xp.ResourceTreeClient, ResourceManager, logging.Logger, renderer.DiffOptions) DiffCalculator {
+					return &tu.MockDiffCalculator{
+						CalculateNonRemovalDiffsFn: func(context.Context, *cmp.Unstructured, *un.Unstructured, render.CompositionOutputs) (map[string]*dt.ResourceDiff, map[string]bool, error) {
+							return sharedDiffs(tt.diffType), map[string]bool{sharedKey: true}, nil
+						},
+					}
+				}),
+				WithDiffRendererFactory(func(logging.Logger, renderer.DiffOptions) renderer.DiffRenderer {
+					return &tu.MockDiffRenderer{
+						RenderDiffsFn: func(groups []dt.XRDiffGroup, errs []dt.OutputError, _ []dt.OutputWarning) error {
+							gotGroups = groups
+							gotErrs = errs
+
+							return nil
+						},
+					}
+				}),
+			)
+
+			processor := NewDiffProcessor(k8sClients, xpClients, opts...)
+
+			_, err := processor.PerformDiff(ctx, tt.resources, func(ctx context.Context, res *un.Unstructured) (*apiextensionsv1.Composition, error) {
+				return xpClients.Composition.FindMatchingComposition(ctx, res)
+			})
+
+			result := got{}
+
+			for _, g := range gotGroups {
+				result.XRs = append(result.XRs, g.XR)
+
+				if g.Err != nil {
+					t.Errorf("group %s/%s carried an unexpected error: %s", g.XR.Kind, g.XR.Name, g.Err.Message)
+				}
+			}
+
+			for _, e := range gotErrs {
+				result.GlobalErrs = append(result.GlobalErrs, e.Message)
+			}
+
+			if err != nil {
+				result.Err = err.Error()
+			}
+
+			if diff := gcmp.Diff(tt.want, result); diff != "" {
+				t.Errorf("PerformDiff(...) group handoff: -want, +got:\n%s", diff)
+			}
+		})
+	}
+}
 
 // TestDefaultDiffProcessor_PerformDiff_StderrErrorOutput verifies that when
 // resource processing fails, detailed errors are written to stderr for human visibility.

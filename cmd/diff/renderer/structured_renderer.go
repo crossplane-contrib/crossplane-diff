@@ -365,14 +365,24 @@ func (r *StructuredDiffRenderer) RenderDiffs(groups []dt.XRDiffGroup, errs []dt.
 		"errorCount", len(errs),
 		"warningCount", len(warnings))
 
-	// Flat, deprecated view: merge all groups' diffs.
-	summary, changes := buildChangeSet(flattenGroups(groups))
-	output := StructuredDiffOutput{Summary: summary, Changes: changes}
+	// Flat, deprecated view: merge all groups' diffs. Only the change list comes
+	// from the merge; see the summary below.
+	_, changes := buildChangeSet(flattenGroups(groups))
+	output := StructuredDiffOutput{Changes: changes}
 	output.Errors = errs
 	output.Warnings = warnings
 
 	// Grouped view: one entry per input XR, in input order.
 	output.Xrs = buildXRGroups(groups)
+
+	// The aggregate summary is derived from the grouped view, not from the
+	// merged map, so it always equals the sum of xrs[] — which is what it is
+	// documented to be. Deriving it from the merge instead undercounts when two
+	// input XRs produce the same diff key, because the merge keeps only one of
+	// them, and the single document then contradicts itself (issue #476). Such
+	// input is rejected upstream (see types.DetectDiffKeyCollisions), but the
+	// two views must agree in every case that renders.
+	output.Summary = aggregateSummary(output.Xrs)
 
 	var (
 		data []byte
@@ -534,6 +544,21 @@ func buildXRGroups(groups []dt.XRDiffGroup) []xrDiffWire {
 	}
 
 	return out
+}
+
+// aggregateSummary sums the per-input-XR summaries into the top-level
+// summary. Unchanged and errored entries carry a zero summary, so this is the
+// change count across every input XR.
+func aggregateSummary(xrs []xrDiffWire) Summary {
+	var total Summary
+
+	for _, x := range xrs {
+		total.Added += x.Summary.Added
+		total.Modified += x.Summary.Modified
+		total.Removed += x.Summary.Removed
+	}
+
+	return total
 }
 
 // buildDownstreamChanges builds DownstreamChanges from a map of ResourceDiffs,

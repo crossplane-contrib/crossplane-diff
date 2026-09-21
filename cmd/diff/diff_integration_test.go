@@ -1247,9 +1247,39 @@ Summary: 2 modified, 2 removed`,
 				And().
 				WithAddedResource("XNopResource", "", "default").
 				WithNamePattern(`generated-xr-\(generated\)`).
-				WithField("spec.coolField", "new-value"),
+				WithField("spec.coolField", "new-value").
+				And().
+				// Issue #477: the grouped view must attribute these changes to a
+				// named XR. metadata.name is empty on the input, so the identity
+				// carries the effective (synthesized) name — the same one the
+				// changes above are keyed by.
+				WithXRs(
+					tu.XR("XNopResource", "generated-xr-(generated)", "default").
+						Status("changed").
+						Summary(2, 0, 0),
+				),
 			expectedError:    false,
 			expectedExitCode: dp.ExitCodeDiffDetected,
+		},
+		// Issue #476: the same XR supplied twice produces two groups with
+		// identical diff keys. The flat changes[] can hold only one of them, so
+		// the run must fail rather than silently emit a result that is wrong for
+		// one of the inputs. Format-independent: the two XRs contend for the same
+		// object regardless of how the diff is rendered.
+		"DuplicateInputXRsCollideOnDiffKeys": {
+			reason: "Two input XRs rendering the same resource key fail rather than silently dropping one diff",
+			setupFiles: []string{
+				"testdata/diff/resources/xrd.yaml",
+				"testdata/diff/resources/composition.yaml",
+				"testdata/diff/resources/functions.yaml",
+			},
+			inputFiles: []string{
+				"testdata/diff/new-xr.yaml",
+				"testdata/diff/new-xr.yaml",
+			},
+			expectedError:         true,
+			expectedErrorContains: "cannot combine diffs",
+			expectedExitCode:      dp.ExitCodeToolError,
 		},
 		// Reproduces the PR #294 scenario: a net-new XR is diffed while the
 		// composed resource it would manage already exists in the cluster

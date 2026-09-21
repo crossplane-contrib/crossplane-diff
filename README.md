@@ -680,6 +680,24 @@ entry's `errors[]` (and also in the top-level `errors[]`).
 > `summary` and top-level `errors[]` remain. New consumers should read `xrs[]`;
 > existing consumers of `changes[]` keep working during the deprecation window.
 
+The aggregate `summary` is always the sum of the per-XR `xrs[].summary` values,
+so the two views never disagree.
+
+**Two input XRs that render the same resource are rejected.** A change is
+identified by `apiVersion/kind/namespace/name`, which says nothing about which
+input XR produced it. If two of the XRs you supply render the same resource —
+a shared `Namespace`, a fixed-name policy object, the same XR passed twice, or
+two XRs sharing a `metadata.generateName` — they contend for one cluster object:
+whichever is applied second wins, so neither XR's diff predicts what you would
+actually get. Rather than emit a result that is wrong for one of the inputs,
+`xr` reports the collision in `errors[]` (and on stderr) and exits with the tool
+error code, in every output format. Diff those XRs in separate invocations. The
+structured document is still written, so the error is machine-readable.
+
+An XR supplied with only `metadata.generateName` has no name yet; it appears
+throughout the output — including its `xrs[]` identity and its human-readable
+section header — as `<generateName>(generated)`.
+
 The human-readable (`diff`) output likewise groups by input XR when more than
 one is supplied: each XR gets a `=== Kind/name ===` section with its own diffs
 and summary, followed by an aggregate `Total: … across N XRs (…)` footer. A
