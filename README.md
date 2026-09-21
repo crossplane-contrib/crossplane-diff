@@ -322,7 +322,7 @@ Flags:
                                unevaluated are marked with "impactAnalysisSkipped": true in
                                structured output, so "we did not look" stays distinguishable from
                                "we looked and found nothing".
-      --analyze-unchanged      Deprecated: the former spelling of --analyze-on=always. Still
+      --analyze-unchanged      Deprecated: equivalent to --analyze-on=always. Still
                                honoured, but passing it together with a conflicting --analyze-on
                                value is an error.
       --crossplane-version=VERSION

@@ -171,20 +171,11 @@ func (r *DefaultCompDiffRenderer) renderCompositionChanges(comp *CompositionDiff
 // the second case would claim a guarantee the tool did not establish.
 func skippedMessage(impact RevisionImpact) string {
 	if impact.CreatesRevision {
-		return fmt.Sprintf("Impact analysis skipped: --analyze-on=spec-change and this composition's spec is unchanged. Applying it still creates a new CompositionRevision that %s would adopt; whether that changes any rendered output was not evaluated. Pass --analyze-on=any-change to check.\n\n",
-			pluralComposites(impact.RepointedComposites))
+		return fmt.Sprintf("Impact analysis skipped: --analyze-on=spec-change and this composition's spec is unchanged. Applying it still creates a new CompositionRevision that %d composite%s would adopt; whether that changes any rendered output was not evaluated. Pass --analyze-on=any-change to check.\n\n",
+			impact.RepointedComposites, pluralize(impact.RepointedComposites))
 	}
 
 	return "Impact analysis skipped: this composition is identical to the cluster's, so applying it creates no new CompositionRevision and no composite resource could change as a result. Pass --analyze-on=always to evaluate them anyway.\n\n"
-}
-
-// pluralComposites renders a composite count for prose.
-func pluralComposites(n int) string {
-	if n == 1 {
-		return "1 composite"
-	}
-
-	return fmt.Sprintf("%d composites", n)
 }
 
 // writeNoDisplayableChanges reports a composition with no diff body to show. That covers two

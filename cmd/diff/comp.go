@@ -44,7 +44,7 @@ type CompCmd struct {
 	MinimizeComposition bool     `default:"false"                                                                                                                                     help:"Collapse each changed composition to a single marker line (human-readable output only; JSON/YAML keeps full detail; errors and no-change compositions still print in full)." name:"minimize-composition"`
 	Resources           []string `help:"Limit impact analysis to specific composites in [namespace/]name format. Repeatable or comma-separated. Mutually exclusive with --namespace." name:"resource"`
 	AnalyzeOn           string   `default:""                                                                                                                                          enum:",spec-change,any-change,always"                                                                                                                                              help:"Smallest composition change that triggers per-composite impact analysis. \"spec-change\": only when the composition spec changes. \"any-change\": also when only its metadata changes, which still creates a new CompositionRevision that composites re-point to. \"always\": even when the composition is identical, for a pre-edit convergence baseline. Defaults to any-change." name:"analyze-on"`
-	// AnalyzeUnchanged is the pre-#472 spelling of --analyze-on=always, kept so existing
+	// AnalyzeUnchanged is the pre-#472 way to ask for --analyze-on=always, kept so existing
 	// invocations and CI pipelines keep working.
 	AnalyzeUnchanged bool `default:"false" help:"Deprecated: use --analyze-on=always instead." name:"analyze-unchanged"`
 }
@@ -55,17 +55,17 @@ func (c *CompCmd) validateFlags() error {
 		return errors.New("--namespace and --resource are mutually exclusive; use --resource=[namespace/]name to scope by name")
 	}
 
-	// Both spellings of the same setting, disagreeing. Silently preferring one would give the user
+	// Two flags asking for the same setting, disagreeing. Silently preferring one would give the user
 	// analysis they did not ask for, or withhold analysis they did. AnalyzeOn defaults to empty
 	// rather than to its effective value precisely so "not passed" stays distinguishable here.
 	if c.AnalyzeUnchanged && c.AnalyzeOn != "" && c.AnalyzeOn != string(dp.AnalyzeOnAlways) {
-		return errors.Errorf("--analyze-unchanged is the deprecated spelling of --analyze-on=always and cannot be combined with --analyze-on=%s; pass only --analyze-on", c.AnalyzeOn)
+		return errors.Errorf("--analyze-unchanged is equivalent to --analyze-on=always and cannot be combined with --analyze-on=%s; pass only --analyze-on", c.AnalyzeOn)
 	}
 
 	return nil
 }
 
-// analyzeOn resolves the effective setting, honouring the deprecated --analyze-unchanged spelling.
+// analyzeOn resolves the effective setting, honouring the deprecated --analyze-unchanged flag.
 // validateFlags has already rejected the case where the two disagree. An empty result leaves the
 // processor default (any-change) in place.
 func (c *CompCmd) analyzeOn() dp.AnalyzeOn {

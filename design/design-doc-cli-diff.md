@@ -257,7 +257,7 @@ The `comp` subcommand has its own set of integration tests:
   `matchLabels` and `matchExpressions` and both v1/v2 field paths.
 - **Unchanged-Composition Skipping**: Verifies that a composition identical to its in-cluster version skips impact
   analysis (marked `ImpactAnalysisSkipped`, exit code 0 even when the fixtures would otherwise report a downstream
-  delta), that `--analyze-on=always` (and its deprecated `--analyze-unchanged` spelling) evaluates the composites anyway,
+  delta), that `--analyze-on=always` (and its deprecated `--analyze-unchanged` equivalent) evaluates the composites anyway,
   and that a difference confined to a masked field still counts as changed so the analysis is not silently skipped — for
   both kinds of mask: the user's `--ignore-paths`, and the renderer's display-only suppressions (a cluster-only
   `kubectl.kubernetes.io/last-applied-configuration` annotation). The display-only case is covered at both levels: as a
@@ -525,7 +525,7 @@ The `ProcessorConfig` structure provides configuration options:
   (see §6.2 step 3a). Evaluating a composite costs one function render, so this is a cost knob, never a correctness
   mode: `RevisionImpact` is populated at every setting and composites left unevaluated are marked
   `ImpactAnalysisSkipped`, so no consequence is suppressed — only the amount of work spent looking for a rendered effect
-  varies. The CLI's `--analyze-unchanged` is the deprecated spelling of `AnalyzeOnAlways`; `CompCmd.analyzeOn` resolves
+  varies. The CLI's `--analyze-unchanged` is a deprecated way to ask for `AnalyzeOnAlways`; `CompCmd.analyzeOn` resolves
   the two, and `validateFlags` hard-errors when they disagree. `--analyze-on` carries an *empty* kong default rather
   than `any-change` so that "not passed" stays distinguishable from "passed explicitly" at that check — which is why
   `--help` states the default in prose rather than showing it as a value.
@@ -1268,7 +1268,7 @@ crossplane-diff comp unchanged-composition.yaml --analyze-on=always
 
 # Only evaluate composites when the composition's spec changes, skipping the render-per-composite
 # cost for a metadata-only edit (which still creates a CompositionRevision, reported either way
-# as revisionImpact). The deprecated --analyze-unchanged is the former spelling of
+# as revisionImpact). The deprecated --analyze-unchanged is equivalent to
 # --analyze-on=always; passing both with conflicting values is an error.
 crossplane-diff comp updated-composition.yaml --analyze-on=spec-change
 ```
