@@ -235,10 +235,8 @@ Flags:
       --eventual-state         Show eventual state after all reconciliation cycles
                                complete. Useful with function-sequencer which hides
                                later stage resources until earlier stages become Ready.
-<<<<<<< HEAD
       --max-recv-message-size=INT  Max gRPC message size (MB) for render function
-                               containers (4MB if undefined) ($CROSSPLANE_DIFF_MAX_RECV_MESSAGE_SIZE).
-=======
+                               containers (4MB if undefined) ($MAX_RECV_MESSAGE_SIZE).
       --crossplane-version=VERSION
                                Pin the crossplane render version; the docker engine
                                pulls xpkg.crossplane.io/crossplane/crossplane:<version>.
@@ -248,12 +246,11 @@ Flags:
       --crossplane-image=IMAGE Override the full crossplane render image reference
                                (e.g. for a private mirror). Mutually exclusive with
                                --crossplane-version.
->>>>>>> upstream/main
 ```
 
 **Note**: XR namespaces are read directly from the YAML files being diffed, not from command-line flags.
 
-**Large composites**: `crossplane render` starts functions with the function-sdk-go default 4MB gRPC receive limit and does not apply the cluster's DeploymentRuntimeConfig. Very large XRs (many/large observed resources) can exceed this and fail with `ResourceExhausted: received message larger than max`. Set `--max-recv-message-size` (or `CROSSPLANE_DIFF_MAX_RECV_MESSAGE_SIZE`) to raise it; crossplane-diff injects the value as the `MAX_RECV_MESSAGE_SIZE` container env var. This only takes effect on functions whose image reads that variable.
+**Large composites**: `crossplane render` starts functions with the function-sdk-go default 4MB gRPC receive limit and does not apply the cluster's DeploymentRuntimeConfig. Very large XRs (many/large observed resources) can exceed this and fail with `ResourceExhausted: received message larger than max`. Set `--max-recv-message-size` (or `MAX_RECV_MESSAGE_SIZE`) to raise it; crossplane-diff injects the value as the `MAX_RECV_MESSAGE_SIZE` container env var. This only takes effect on functions whose image reads that variable.
 
 **Ignored Paths**: By default, `metadata.annotations[kubectl.kubernetes.io/last-applied-configuration]` is always ignored. Additional paths can be specified with `--ignore-paths`. This is useful for filtering out metadata added by tools like ArgoCD (e.g., tracking IDs, sync waves) that shouldn't affect diff results.
 **Render version**: When neither `--crossplane-version` nor `--crossplane-image` is set, rendering uses the floating `xpkg.crossplane.io/crossplane/crossplane:stable` tag. Pin `--crossplane-version` for reproducible diffs or to hold a known-good version; `--crossplane-image` targets a mirrored/air-gapped registry. Only `--crossplane-version` is floor-checked against the v2.3.4 minimum — a full image reference carries no comparable version.
@@ -304,7 +301,7 @@ Flags:
                                complete. Useful with function-sequencer which hides
                                later stage resources until earlier stages become Ready.
       --max-recv-message-size=INT  Max gRPC message size (MB) for render function
-                               containers (4MB if undefined) ($CROSSPLANE_DIFF_MAX_RECV_MESSAGE_SIZE).
+                               containers (4MB if undefined) ($MAX_RECV_MESSAGE_SIZE).
       --resource=STRING,...    Limit impact analysis to specific composites in
                                [namespace/]name format. Repeatable or comma-separated.
                                Bare name means cluster-scoped. Mutually exclusive with
