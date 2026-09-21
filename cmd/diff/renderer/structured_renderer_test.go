@@ -282,40 +282,19 @@ func TestStructuredDiffRenderer_GroupsByXR(t *testing.T) {
 		Gvk:          schema.GroupVersionKind{Group: "example.org", Version: "v1", Kind: "Bucket"},
 	}
 
-	groups := []dt.XRDiffGroup{
-		{
-			XR:    corev1.ObjectReference{APIVersion: "example.org/v1", Kind: "XBucket", Name: "changed-xr", Namespace: "default"},
-			Diffs: map[string]*dt.ResourceDiff{"changed": changed},
-		},
-		{
-			XR:    corev1.ObjectReference{APIVersion: "example.org/v1", Kind: "XBucket", Name: "unchanged-xr", Namespace: "default"},
-			Diffs: map[string]*dt.ResourceDiff{"equal": equalOnly},
-		},
-		{
-			XR:  corev1.ObjectReference{APIVersion: "example.org/v1", Kind: "XBucket", Name: "broken-xr", Namespace: "default"},
-			Err: &dt.OutputError{ResourceID: "XBucket/broken-xr", Message: "cannot get composition"},
-		},
-	}
-
-	unionErrs := []dt.OutputError{{ResourceID: "XBucket/broken-xr", Message: "cannot get composition"}}
-
-	logger := tu.TestLogger(t, false)
-
-	var buf bytes.Buffer
-
-	opts := DefaultDiffOptions()
-	opts.Format = OutputFormatJSON
-	opts.Stdout = &buf
-	opts.Stderr = &bytes.Buffer{}
-
-	r := NewStructuredDiffRenderer(logger, opts)
-	if err := r.RenderDiffs(groups, unionErrs, nil); err != nil {
-		t.Fatalf("RenderDiffs() failed: %v", err)
-	}
-
-	var output StructuredDiffOutput
-	if err := json.Unmarshal(buf.Bytes(), &output); err != nil {
-		t.Fatalf("Failed to parse JSON: %v\nOutput: %s", err, buf.String())
+	// Two XRs that both render Bucket/shared: same diff key, different desired
+	// state. See TestStructuredDiffRenderer_GroupsByXR/SameKeyFromTwoXRs.
+	sharedDiff := func(newRegion string) *dt.ResourceDiff {
+		return &dt.ResourceDiff{
+			DiffType:     dt.DiffTypeModified,
+			ResourceName: "shared",
+			Namespace:    "default",
+			Gvk:          schema.GroupVersionKind{Group: "example.org", Version: "v1", Kind: "Bucket"},
+			Current: dt.ResourceViews{Clean: tu.NewResource("example.org/v1", "Bucket", "shared").
+				WithSpec(map[string]any{"region": "us-east-1"}).Build()},
+			Desired: dt.ResourceViews{Clean: tu.NewResource("example.org/v1", "Bucket", "shared").
+				WithSpec(map[string]any{"region": newRegion}).Build()},
+		}
 	}
 
 	xrRef := func(name string) corev1.ObjectReference {
@@ -332,37 +311,133 @@ func TestStructuredDiffRenderer_GroupsByXR(t *testing.T) {
 			dt.DiffKeyNew: map[string]any{"apiVersion": "example.org/v1", "kind": "Bucket", "metadata": map[string]any{"name": "bucket-a"}, "spec": map[string]any{"region": "us-west-2"}},
 		},
 	}
+	sharedChange := func(newRegion string) ChangeDetail {
+		return ChangeDetail{
+			Type:       dt.DiffTypeWordModified,
+			APIVersion: "example.org/v1",
+			Kind:       "Bucket",
+			Name:       "shared",
+			Namespace:  "default",
+			Diff: map[string]any{
+				dt.DiffKeyOld: map[string]any{"apiVersion": "example.org/v1", "kind": "Bucket", "metadata": map[string]any{"name": "shared"}, "spec": map[string]any{"region": "us-east-1"}},
+				dt.DiffKeyNew: map[string]any{"apiVersion": "example.org/v1", "kind": "Bucket", "metadata": map[string]any{"name": "shared"}, "spec": map[string]any{"region": newRegion}},
+			},
+		}
+	}
 
-	// The whole output asserted as one value: flat back-compat view (aggregate
-	// summary + merged changes + union errors) plus the per-input-XR xrs[] view
-	// (changed / unchanged / errored, in input order).
-	want := StructuredDiffOutput{
-		Summary: Summary{Modified: 1},
-		Changes: []ChangeDetail{bucketChange},
-		Errors:  unionErrs,
-		Xrs: []xrDiffWire{
-			{
-				XR:      xrRef("changed-xr"),
-				Status:  XRStatusChanged,
+	unionErrs := []dt.OutputError{{ResourceID: "XBucket/broken-xr", Message: "cannot get composition"}}
+
+	cases := map[string]struct {
+		groups []dt.XRDiffGroup
+		errs   []dt.OutputError
+		// The whole output asserted as one value: flat back-compat view
+		// (aggregate summary + merged changes + union errors) plus the
+		// per-input-XR xrs[] view, in input order.
+		want StructuredDiffOutput
+	}{
+		"ChangedUnchangedAndErrored": {
+			groups: []dt.XRDiffGroup{
+				{
+					XR:    xrRef("changed-xr"),
+					Diffs: map[string]*dt.ResourceDiff{"changed": changed},
+				},
+				{
+					XR:    xrRef("unchanged-xr"),
+					Diffs: map[string]*dt.ResourceDiff{"equal": equalOnly},
+				},
+				{
+					XR:  xrRef("broken-xr"),
+					Err: &dt.OutputError{ResourceID: "XBucket/broken-xr", Message: "cannot get composition"},
+				},
+			},
+			errs: unionErrs,
+			want: StructuredDiffOutput{
 				Summary: Summary{Modified: 1},
 				Changes: []ChangeDetail{bucketChange},
+				Errors:  unionErrs,
+				Xrs: []xrDiffWire{
+					{
+						XR:      xrRef("changed-xr"),
+						Status:  XRStatusChanged,
+						Summary: Summary{Modified: 1},
+						Changes: []ChangeDetail{bucketChange},
+					},
+					{
+						XR:      xrRef("unchanged-xr"),
+						Status:  XRStatusUnchanged,
+						Changes: []ChangeDetail{},
+					},
+					{
+						XR:      xrRef("broken-xr"),
+						Status:  XRStatusError,
+						Changes: []ChangeDetail{},
+						Errors:  []dt.OutputError{{ResourceID: "XBucket/broken-xr", Message: "cannot get composition"}},
+					},
+				},
 			},
-			{
-				XR:      xrRef("unchanged-xr"),
-				Status:  XRStatusUnchanged,
-				Changes: []ChangeDetail{},
+		},
+		// Issue #476: two input XRs producing the same diff key. The flat
+		// changes[] can only carry one of them (whichever group merges last),
+		// but the aggregate summary must still agree with xrs[] — it is
+		// documented as the count across every input XR, so it counts inputs'
+		// changes, not surviving map keys. The lossy changes[] is pinned here
+		// deliberately: the processor turns this input into a hard error
+		// (see DetectDiffKeyCollisions), so no consumer reads it silently.
+		"SameKeyFromTwoXRs": {
+			groups: []dt.XRDiffGroup{
+				{
+					XR:    xrRef("app-a"),
+					Diffs: map[string]*dt.ResourceDiff{"example.org/v1/Bucket/default/shared": sharedDiff("us-west-2")},
+				},
+				{
+					XR:    xrRef("app-b"),
+					Diffs: map[string]*dt.ResourceDiff{"example.org/v1/Bucket/default/shared": sharedDiff("eu-west-1")},
+				},
 			},
-			{
-				XR:      xrRef("broken-xr"),
-				Status:  XRStatusError,
-				Changes: []ChangeDetail{},
-				Errors:  []dt.OutputError{{ResourceID: "XBucket/broken-xr", Message: "cannot get composition"}},
+			want: StructuredDiffOutput{
+				Summary: Summary{Modified: 2},
+				Changes: []ChangeDetail{sharedChange("eu-west-1")},
+				Xrs: []xrDiffWire{
+					{
+						XR:      xrRef("app-a"),
+						Status:  XRStatusChanged,
+						Summary: Summary{Modified: 1},
+						Changes: []ChangeDetail{sharedChange("us-west-2")},
+					},
+					{
+						XR:      xrRef("app-b"),
+						Status:  XRStatusChanged,
+						Summary: Summary{Modified: 1},
+						Changes: []ChangeDetail{sharedChange("eu-west-1")},
+					},
+				},
 			},
 		},
 	}
 
-	if diff := cmp.Diff(want, output); diff != "" {
-		t.Errorf("structured output mismatch (-want +got):\n%s", diff)
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			var buf bytes.Buffer
+
+			opts := DefaultDiffOptions()
+			opts.Format = OutputFormatJSON
+			opts.Stdout = &buf
+			opts.Stderr = &bytes.Buffer{}
+
+			r := NewStructuredDiffRenderer(tu.TestLogger(t, false), opts)
+			if err := r.RenderDiffs(tc.groups, tc.errs, nil); err != nil {
+				t.Fatalf("RenderDiffs() failed: %v", err)
+			}
+
+			var output StructuredDiffOutput
+			if err := json.Unmarshal(buf.Bytes(), &output); err != nil {
+				t.Fatalf("Failed to parse JSON: %v\nOutput: %s", err, buf.String())
+			}
+
+			if diff := cmp.Diff(tc.want, output); diff != "" {
+				t.Errorf("structured output mismatch (-want +got):\n%s", diff)
+			}
+		})
 	}
 }
 

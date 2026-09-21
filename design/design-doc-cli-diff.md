@@ -205,12 +205,16 @@ test cases cover:
 - **Resources with generateName**: Tests that resources using Kubernetes generateName pattern are correctly diffed by
   matching based on owner references rather than exact names.
 - **New XR with generateName**: Verifies that new XRs using generateName show the appropriate placeholder in the diff
-  output.
+  output, including as the `xrs[]` group identity and the human-readable section header (an XR with no
+  `metadata.name` must not produce a nameless group).
 
 ### 4.7 Multiple Resource Handling
 
 - **Multiple XRs**: Tests processing multiple input files containing different XRs, ensuring that all changes are
   correctly identified and summarized.
+- **Duplicate input XRs collide on diff keys**: Verifies that two input XRs rendering the same
+  `apiVersion/kind/namespace/name` fail the run (with the collision in `errors[]`) rather than silently dropping one
+  XR's diff from the merged flat view. See §6.8.3.
 
 ### 4.8 Composition Selection
 
@@ -1005,6 +1009,13 @@ The structured types are split across two files:
   can reference it without importing `renderer`, which would close an import cycle through `renderer`'s in-package
   tests. The pre-converted error (vs. a raw `error`) keeps the conversion — `NewOutputError`, which lives in
   `diffprocessor` — out of the renderer, avoiding a renderer→diffprocessor dependency.
+  The identity a group carries is the **effective** name — the one the render pipeline actually uses — not the raw
+  input's `metadata.name`. For an XR supplied with only `metadata.generateName` those differ: `SanitizeXR` synthesizes a
+  name, but on a deep copy, so the input stays nameless. `ObjectReference.Name` is `omitempty`, so a nameless identity
+  disappears from the wire entirely and two such XRs become indistinguishable. `PerformDiff` therefore resolves the
+  name through `xrIdentityName`, which mirrors that synthesis and renders it the way the diff formatter does
+  (`<generateName>(generated)`) — the same string the XR carries in `changes[]`, so the grouped and flat views agree,
+  and no unpredictable synthetic hash reaches output.
 
 The output contract is defined by the JSON/YAML field names (the struct tags), not the Go type identifiers: the
 serialized shaping types are unexported (`compDiffWire`, `compositionDiffWire`, `xrImpactWire`, `xrDiffWire`) and
@@ -1018,6 +1029,19 @@ contract:
   XRs), `Changes []ChangeDetail` (flat list, one entry per non-equal resource across all XRs), optional
   `Errors []OutputError` (union), and `Xrs` (per-input-XR grouping, JSON key `xrs`). **`Changes` is deprecated** in
   favor of `Xrs` and will be removed in a future major release; `Summary` and `Errors` are retained.
+  `Summary` is derived from `Xrs` (the field-wise sum of the per-XR summaries), not from the flat merge that produces
+  `Changes`. That is a correctness requirement, not a convenience: a diff key is
+  `apiVersion/kind/namespace/name` with no owning-XR component, so two input XRs that render the same resource
+  produce the same key, and the merge behind `Changes` keeps only one of them. Summing the groups keeps `Summary`
+  equal to what `Xrs` reports in every document that renders, which is what it is documented to mean.
+  Such input is also rejected outright: `PerformDiff` runs `types.DetectDiffKeyCollisions` over the groups before
+  rendering and, for any key produced by more than one group, adds a global `OutputError` and fails the run
+  (`ExitCodeToolError`). Two XRs claiming one object contend for it — whichever is applied second wins — so neither
+  XR's diff predicts the outcome, and emitting one anyway would be a possibly-incorrect partial result. The check is
+  format-independent (the contention is real regardless of how the diff is rendered) and, per the "always render"
+  contract above, the structured document is still emitted, carrying the error. A collision whose every entry is
+  `DiffTypeEqual` is deliberately **not** reported: equal diffs are excluded from every rendered view, so the merge
+  loses nothing observable and failing would reject input whose output is provably correct either way.
 - `xrDiffWire` — one entry in the `xrs[]` array, per input XR/claim in input order: an `xr` identity object, a
   `status` (`"changed"` / `"unchanged"` / `"error"` — the same `XRStatus` enum comp uses; `"filtered"` does not apply
   to `xr`), its own `summary`, its own `changes[]`, and (for a failed XR) its own `errors[]`.
