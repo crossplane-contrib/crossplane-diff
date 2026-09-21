@@ -21,10 +21,10 @@ import (
 	clixrgen "github.com/crossplane/cli/v2/cmd/crossplane/xr"
 	clixr "github.com/crossplane/cli/v2/pkg/xr"
 	corev1 "k8s.io/api/core/v1"
+	extv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	un "k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
-	"k8s.io/apimachinery/pkg/runtime/schema"
 
 	"github.com/crossplane/crossplane-runtime/v2/pkg/errors"
 	"github.com/crossplane/crossplane-runtime/v2/pkg/logging"
@@ -1513,12 +1513,13 @@ func (p *DefaultDiffProcessor) removeNamespacesFromClusterScopedResources(ctx co
 		// Check if resource is cluster-scoped. Prefer discovery because built-in
 		// Kubernetes resources like Secret and Namespace do not have CRDs.
 		gvk := resource.GroupVersionKind()
-		isNamespaced, err := p.isNamespacedResource(ctx, gvk)
+
+		scope, err := resolveResourceScope(ctx, p.resourceClient, p.schemaClient, p.config.Logger, gvk)
 		if err != nil {
 			return errors.Wrapf(err, "cannot determine scope for resource %s (GVK %s)", resourceID, gvk.String())
 		}
 
-		if !isNamespaced {
+		if scope == extv1.ClusterScoped {
 			p.config.Logger.Debug("Removing namespace from cluster-scoped resource",
 				"resource", resourceID,
 				"gvk", gvk.String(),
@@ -1531,28 +1532,6 @@ func (p *DefaultDiffProcessor) removeNamespacesFromClusterScopedResources(ctx co
 	}
 
 	return nil
-}
-
-func (p *DefaultDiffProcessor) isNamespacedResource(ctx context.Context, gvk schema.GroupVersionKind) (bool, error) {
-	if p.resourceClient != nil {
-		isNamespaced, err := p.resourceClient.IsNamespacedResource(ctx, gvk)
-		if err == nil {
-			return isNamespaced, nil
-		}
-
-		p.config.Logger.Debug("Failed to get resource scope from discovery; falling back to CRD lookup", "gvk", gvk.String(), "error", err)
-	}
-
-	if p.schemaClient == nil {
-		return false, errors.Errorf("resource client and schema client are not configured")
-	}
-
-	crd, err := p.schemaClient.GetCRD(ctx, gvk)
-	if err != nil {
-		return false, errors.Wrapf(err, "cannot get CRD for %s to determine scope", gvk.String())
-	}
-
-	return crd.Spec.Scope != "Cluster", nil
 }
 
 // getCompositeResourceXRD checks if a resource is a Composite Resource (XR) by looking it up in XRDs.

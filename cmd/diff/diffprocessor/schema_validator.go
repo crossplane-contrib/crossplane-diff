@@ -122,13 +122,17 @@ func (v *DefaultSchemaValidator) ValidateResources(ctx context.Context, xr *un.U
 		return err
 	}
 
-	schemaResources := v.resourcesRequiringCRDSchema(ctx, resources)
-
 	// SchemaValidate is the structured-result API: it returns a
 	// *ValidationResult that callers inspect directly.
-	v.logger.Debug("Performing schema validation", "resourceCount", len(schemaResources), "skippedResourceCount", len(resources)-len(schemaResources))
+	//
+	// Every resource is passed through, including built-in Kubernetes types
+	// that have no CRD. SchemaValidate validates those against its embedded
+	// Kubernetes scheme rather than reporting them as missing a schema, so
+	// filtering them out here would only discard real coverage — a
+	// ConfigMap with a misspelled field would validate clean.
+	v.logger.Debug("Performing schema validation", "resourceCount", len(resources))
 
-	result, err := pkgvalidate.SchemaValidate(ctx, schemaResources, v.schemaClient.GetAllCRDs())
+	result, err := pkgvalidate.SchemaValidate(ctx, resources, v.schemaClient.GetAllCRDs())
 	if err != nil {
 		// SchemaValidate's error return is reserved for setup
 		// failures (e.g. a CRD that can't be compiled into a
@@ -163,23 +167,6 @@ func (v *DefaultSchemaValidator) ValidateResources(ctx context.Context, xr *un.U
 	v.logger.Debug("Resources validated successfully")
 
 	return nil
-}
-
-func (v *DefaultSchemaValidator) resourcesRequiringCRDSchema(ctx context.Context, resources []*un.Unstructured) []*un.Unstructured {
-	filtered := make([]*un.Unstructured, 0, len(resources))
-
-	for _, resource := range resources {
-		gvk := resource.GroupVersionKind()
-		if v.schemaClient.IsCRDRequired(ctx, gvk) {
-			filtered = append(filtered, resource)
-			continue
-		}
-
-		v.logger.Debug("Skipping schema validation for built-in resource type",
-			"gvk", gvk.String())
-	}
-
-	return filtered
 }
 
 // EnsureComposedResourceCRDs checks if we have all the CRDs needed for the cpd resources
@@ -227,37 +214,43 @@ func (v *DefaultSchemaValidator) EnsureComposedResourceCRDs(ctx context.Context,
 	return nil
 }
 
-// getResourceScope returns the scope (Namespaced/Cluster) for a given GVK.
-func (v *DefaultSchemaValidator) getResourceScope(ctx context.Context, gvk schema.GroupVersionKind) (string, error) {
-	v.logger.Debug("Getting resource scope", "gvk", gvk.String())
+// resolveResourceScope reports whether gvk is namespaced or cluster-scoped.
+//
+// Discovery is consulted first because it knows every kind the API server
+// serves, including built-in types like Secret and Namespace that have no CRD
+// and so cannot be resolved from one. The CRD is the fallback for when
+// discovery can't answer but the kind is a custom resource whose CRD we can
+// still read.
+//
+// If neither source can answer, both failures are reported: discovery failing
+// for a reason unrelated to the kind — connectivity, RBAC — is worth
+// surfacing rather than leaving it hidden behind the CRD error it causes.
+func resolveResourceScope(ctx context.Context, rc k8.ResourceClient, sc k8.SchemaClient, logger logging.Logger, gvk schema.GroupVersionKind) (extv1.ResourceScope, error) {
+	logger.Debug("Getting resource scope", "gvk", gvk.String())
 
-	if v.resourceClient != nil {
-		isNamespaced, err := v.resourceClient.IsNamespacedResource(ctx, gvk)
-		if err == nil {
-			if isNamespaced {
-				v.logger.Debug("Retrieved scope from discovery", "gvk", gvk.String(), "scope", string(extv1.NamespaceScoped))
-				return string(extv1.NamespaceScoped), nil
-			}
-
-			v.logger.Debug("Retrieved scope from discovery", "gvk", gvk.String(), "scope", string(extv1.ClusterScoped))
-			return string(extv1.ClusterScoped), nil
+	isNamespaced, discoveryErr := rc.IsNamespacedResource(ctx, gvk)
+	if discoveryErr == nil {
+		scope := extv1.ClusterScoped
+		if isNamespaced {
+			scope = extv1.NamespaceScoped
 		}
 
-		v.logger.Debug("Failed to get resource scope from discovery; falling back to CRD lookup", "gvk", gvk.String(), "error", err)
+		logger.Debug("Retrieved scope from discovery", "gvk", gvk.String(), "scope", string(scope))
+
+		return scope, nil
 	}
 
-	// Fallback for tests and any stale discovery path: custom resources also
-	// expose their scope through the CRD.
-	crd, err := v.schemaClient.GetCRD(ctx, gvk)
+	logger.Debug("Failed to get resource scope from discovery; falling back to CRD lookup", "gvk", gvk.String(), "error", discoveryErr)
+
+	crd, err := sc.GetCRD(ctx, gvk)
 	if err != nil {
-		v.logger.Debug("Failed to get CRD for scope lookup", "gvk", gvk.String(), "error", err)
-		return "", errors.Wrapf(err, "cannot get CRD for %s to determine scope", gvk.String())
+		logger.Debug("Failed to get CRD for scope lookup", "gvk", gvk.String(), "error", err)
+		return "", errors.Wrapf(err, "cannot get CRD for %s to determine scope (discovery also failed: %v)", gvk.String(), discoveryErr)
 	}
 
-	scope := string(crd.Spec.Scope)
-	v.logger.Debug("Retrieved scope from CRD", "gvk", gvk.String(), "scope", scope)
+	logger.Debug("Retrieved scope from CRD", "gvk", gvk.String(), "scope", string(crd.Spec.Scope))
 
-	return scope, nil
+	return crd.Spec.Scope, nil
 }
 
 // ValidateScopeConstraints validates that a resource has the appropriate namespace for its scope
@@ -266,7 +259,7 @@ func (v *DefaultSchemaValidator) ValidateScopeConstraints(ctx context.Context, r
 	gvk := resource.GroupVersionKind()
 	resourceID := fmt.Sprintf("%s/%s", gvk.Kind, resource.GetName())
 
-	scope, err := v.getResourceScope(ctx, gvk)
+	scope, err := resolveResourceScope(ctx, v.resourceClient, v.schemaClient, v.logger, gvk)
 	if err != nil {
 		return errors.Wrapf(err, "cannot determine scope for %s", resourceID)
 	}
@@ -274,7 +267,7 @@ func (v *DefaultSchemaValidator) ValidateScopeConstraints(ctx context.Context, r
 	resourceNamespace := resource.GetNamespace()
 
 	switch scope {
-	case "Namespaced":
+	case extv1.NamespaceScoped:
 		if resourceNamespace == "" {
 			return errors.Errorf("namespaced resource %s must have a namespace", resourceID)
 		}
@@ -283,7 +276,7 @@ func (v *DefaultSchemaValidator) ValidateScopeConstraints(ctx context.Context, r
 			return errors.Errorf("namespaced resource %s has namespace %s but expected %s (cross-namespace references not supported)",
 				resourceID, resourceNamespace, expectedNamespace)
 		}
-	case "Cluster":
+	case extv1.ClusterScoped:
 		if resourceNamespace != "" {
 			return errors.Errorf("cluster-scoped resource %s cannot have a namespace", resourceID)
 		}
@@ -297,7 +290,7 @@ func (v *DefaultSchemaValidator) ValidateScopeConstraints(ctx context.Context, r
 				"resource", resourceID, "namespace", resourceNamespace, "claimNamespace", expectedNamespace)
 		}
 	default:
-		v.logger.Debug("Unknown resource scope", "resource", resourceID, "namespace", resourceNamespace, "scope", scope)
+		v.logger.Debug("Unknown resource scope", "resource", resourceID, "namespace", resourceNamespace, "scope", string(scope))
 	}
 
 	return nil

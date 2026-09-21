@@ -763,6 +763,9 @@ type SchemaValidator interface {
 }
 ```
 
+`NewSchemaValidator` takes a `k8.SchemaClient`, a `k8.ResourceClient`, an `xp.DefinitionClient` and a logger. The
+`ResourceClient` is there for scope resolution — see §6.5.2.
+
 The `DefaultSchemaValidator` handles:
 
 - Loading CRDs from the cluster on demand
@@ -784,6 +787,28 @@ Note that `SchemaValidate` deep-copies its inputs and does not mutate them. The 
 explicit. The processor calls `clixr.ApplyCRDDefaults` (renamed from the old `render.DefaultValues`) on the rendered
 tree before invoking `ValidateResources`, preserving the invariant that the diff calculator sees fully-defaulted
 resources.
+
+Every rendered resource is handed to `SchemaValidate`, including built-in Kubernetes types that have no CRD.
+`SchemaValidate` validates those against a scheme it embeds (`kubescheme` plus `apiextensions` and `apiregistration`)
+rather than reporting them as `ValidationStatusMissingSchema`, so excluding them would discard real coverage — a
+`ConfigMap` with a misspelled `data` key would validate clean. Only a kind that is neither a known built-in nor backed
+by a CRD reports a missing schema.
+
+#### 6.5.2 Determining resource scope
+
+Scope determination is shared by `ValidateScopeConstraints` and the XR processor's
+`removeNamespacesFromClusterScopedResources`, via the package-level `resolveResourceScope` helper. It returns an
+`extv1.ResourceScope` and consults two sources in order:
+
+1. **Discovery** (`ResourceClient.IsNamespacedResource`), which knows every kind the API server serves. This is the
+   primary source because built-in types like `Secret`, `ConfigMap` and `Namespace` have no CRD and so cannot be
+   resolved from one.
+2. **The CRD** (`SchemaClient.GetCRD`), as a fallback for when discovery cannot answer but the kind is a custom
+   resource whose CRD is still readable.
+
+If neither source can answer, the diff fails rather than guessing — and the error reports both failures, since
+discovery failing for a reason unrelated to the kind (connectivity, RBAC) is worth surfacing rather than leaving hidden
+behind the CRD error it causes. This mirrors how `RequirementsProvider` resolves scope for extra-resource selectors.
 
 ### 6.6 RequirementsProvider
 

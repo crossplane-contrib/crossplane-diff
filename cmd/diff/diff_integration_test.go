@@ -504,6 +504,32 @@ func TestDiffIntegration(t *testing.T) {
 			expectedError:    false,
 			expectedExitCode: dp.ExitCodeDiffDetected,
 		},
+		// A built-in Kubernetes type has no CRD, so this exercises the paths
+		// that would otherwise read scope and schema from one. Before scope
+		// came from discovery this failed outright, with "cannot determine
+		// scope for resource ConfigMap/... CRD not found".
+		"RendersBuiltInResourceWithoutCRD": {
+			reason:       "A composition rendering a built-in Kubernetes resource (no CRD) produces a diff for it",
+			outputFormat: "json",
+			inputFiles:   []string{"testdata/diff/new-xr.yaml"},
+			setupFiles: []string{
+				"testdata/diff/resources/xrd.yaml",
+				"testdata/diff/resources/composition-with-configmap.yaml",
+				"testdata/diff/resources/functions.yaml",
+			},
+			expectedStructuredOutput: tu.ExpectDiff().
+				WithSummary(3, 0, 0).
+				WithAddedResource("ConfigMap", "test-resource-config", "default").
+				WithField("data.configData", "new-value").
+				And().
+				WithAddedResource("XDownstreamResource", "test-resource", "default").
+				WithField("spec.forProvider.configData", "new-value").
+				And().
+				WithAddedResource("XNopResource", "test-resource", "default").
+				WithField("spec.coolField", "new-value"),
+			expectedError:    false,
+			expectedExitCode: dp.ExitCodeDiffDetected,
+		},
 		"MultipleXRsGroupedByInputXR": {
 			reason:       "Two input XRs in one invocation are grouped per input XR in the xrs[] structured view",
 			outputFormat: "json",

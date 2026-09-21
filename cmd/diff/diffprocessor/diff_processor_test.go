@@ -64,58 +64,155 @@ func (m *mockResourceManagerForSpecMerge) FetchObservedResources(_ context.Conte
 	return nil, nil
 }
 
-func TestDefaultDiffProcessor_RemoveNamespacesFromClusterScopedResourcesUsesDiscovery(t *testing.T) {
+func TestDefaultDiffProcessor_removeNamespacesFromClusterScopedResources(t *testing.T) {
 	secretGVK := schema.GroupVersionKind{Version: "v1", Kind: "Secret"}
 	namespaceGVK := schema.GroupVersionKind{Version: "v1", Kind: "Namespace"}
 
-	resourceClient := tu.NewMockResourceClient().
-		WithIsNamespacedResource(func(_ context.Context, gvk schema.GroupVersionKind) (bool, error) {
-			switch gvk {
-			case secretGVK:
-				return true, nil
-			case namespaceGVK:
-				return false, nil
-			default:
-				return false, errors.Errorf("unexpected scope lookup for %s", gvk.String())
-			}
-		}).
-		Build()
+	clusterCRD := makeCRD("clusterthings.example.org", "ClusterThing", "example.org", "v1")
+	clusterCRD.Spec.Scope = extv1.ClusterScoped
 
-	schemaClient := tu.NewMockSchemaClient().
-		WithGetCRD(func(_ context.Context, gvk schema.GroupVersionKind) (*extv1.CustomResourceDefinition, error) {
-			t.Fatalf("GetCRD should not be called for %s when discovery resolves scope", gvk.String())
-			return nil, nil
-		}).
-		Build()
+	// Built-in kinds have no CRD, so a GetCRD call means the discovery path
+	// was skipped. Cases relying on discovery use this to catch that.
+	noCRDs := func() *tu.MockSchemaClient {
+		return tu.NewMockSchemaClient().
+			WithGetCRD(func(_ context.Context, gvk schema.GroupVersionKind) (*extv1.CustomResourceDefinition, error) {
+				return nil, errors.Errorf("GetCRD should not be called for %s when discovery resolves scope", gvk.String())
+			}).
+			Build()
+	}
 
-	processor := &DefaultDiffProcessor{
-		resourceClient: resourceClient,
-		schemaClient:   schemaClient,
-		config: ProcessorConfig{
-			Logger: tu.TestLogger(t, false),
+	tests := map[string]struct {
+		reason        string
+		setupResource func() *tu.MockResourceClient
+		setupSchema   func() *tu.MockSchemaClient
+		resources     []cpd.Unstructured
+		wantNamespace []string
+		wantErr       bool
+		wantErrMsg    string
+	}{
+		"BuiltInNamespacedResourceKeepsNamespace": {
+			reason: "A namespaced built-in has no CRD; discovery reports it namespaced so its namespace is preserved.",
+			setupResource: func() *tu.MockResourceClient {
+				return tu.NewMockResourceClient().WithNamespacedResource(secretGVK).Build()
+			},
+			setupSchema: noCRDs,
+			resources: []cpd.Unstructured{
+				*tu.NewResource("v1", "Secret", "creds").InNamespace("default").BuildUComposed(),
+			},
+			wantNamespace: []string{"default"},
+		},
+		"BuiltInClusterScopedResourceLosesNamespace": {
+			reason: "A cluster-scoped built-in has no CRD; discovery reports it cluster-scoped so render's namespace is stripped.",
+			setupResource: func() *tu.MockResourceClient {
+				return tu.NewMockResourceClient().WithClusterScopedResource(namespaceGVK).Build()
+			},
+			setupSchema: noCRDs,
+			resources: []cpd.Unstructured{
+				*tu.NewResource("v1", "Namespace", "generated").InNamespace("default").BuildUComposed(),
+			},
+			wantNamespace: []string{""},
+		},
+		"MixedScopesResolveIndependently": {
+			reason: "Each resource's scope is resolved on its own; a cluster-scoped sibling does not affect a namespaced one.",
+			setupResource: func() *tu.MockResourceClient {
+				return tu.NewMockResourceClient().
+					WithNamespacedResource(secretGVK).
+					WithClusterScopedResource(namespaceGVK).
+					Build()
+			},
+			setupSchema: noCRDs,
+			resources: []cpd.Unstructured{
+				*tu.NewResource("v1", "Secret", "creds").InNamespace("default").BuildUComposed(),
+				*tu.NewResource("v1", "Namespace", "generated").InNamespace("default").BuildUComposed(),
+			},
+			wantNamespace: []string{"default", ""},
+		},
+		"FallsBackToCRDWhenDiscoveryFails": {
+			reason: "When discovery cannot resolve a custom kind, the CRD supplies the scope.",
+			setupResource: func() *tu.MockResourceClient {
+				// No scopes configured, so IsNamespacedResource errors.
+				return tu.NewMockResourceClient().Build()
+			},
+			setupSchema: func() *tu.MockSchemaClient {
+				return tu.NewMockSchemaClient().
+					WithFoundCRD("example.org", "ClusterThing", clusterCRD).
+					Build()
+			},
+			resources: []cpd.Unstructured{
+				*tu.NewResource("example.org/v1", "ClusterThing", "thing").InNamespace("default").BuildUComposed(),
+			},
+			wantNamespace: []string{""},
+		},
+		"ErrorsWhenNeitherDiscoveryNorCRDResolvesScope": {
+			reason: "Scope must be known to proceed; an unresolvable kind fails the diff rather than guessing.",
+			setupResource: func() *tu.MockResourceClient {
+				return tu.NewMockResourceClient().Build()
+			},
+			setupSchema: func() *tu.MockSchemaClient {
+				return tu.NewMockSchemaClient().
+					WithGetCRD(func(_ context.Context, _ schema.GroupVersionKind) (*extv1.CustomResourceDefinition, error) {
+						return nil, errors.New("CRD not found")
+					}).
+					Build()
+			},
+			resources: []cpd.Unstructured{
+				*tu.NewResource("example.org/v1", "ClusterThing", "thing").InNamespace("default").BuildUComposed(),
+			},
+			wantErr:    true,
+			wantErrMsg: "cannot determine scope for resource ClusterThing/thing",
+		},
+		"ResourceWithoutNamespaceIsSkipped": {
+			reason: "A resource render left unnamespaced needs no scope lookup at all.",
+			setupResource: func() *tu.MockResourceClient {
+				// Any scope lookup would error, proving none happened.
+				return tu.NewMockResourceClient().Build()
+			},
+			setupSchema: noCRDs,
+			resources: []cpd.Unstructured{
+				*tu.NewResource("example.org/v1", "ClusterThing", "thing").BuildUComposed(),
+			},
+			wantNamespace: []string{""},
 		},
 	}
 
-	secret := tu.NewResource("v1", "Secret", "creds").
-		InNamespace("default").
-		BuildUComposed()
-	namespace := tu.NewResource("v1", "Namespace", "generated").
-		InNamespace("default").
-		BuildUComposed()
+	for name, tt := range tests {
+		t.Run(name, func(t *testing.T) {
+			processor := &DefaultDiffProcessor{
+				resourceClient: tt.setupResource(),
+				schemaClient:   tt.setupSchema(),
+				config: ProcessorConfig{
+					Logger: tu.TestLogger(t, false),
+				},
+			}
 
-	resources := []cpd.Unstructured{*secret, *namespace}
-	if err := processor.removeNamespacesFromClusterScopedResources(t.Context(), resources); err != nil {
-		t.Fatalf("removeNamespacesFromClusterScopedResources() unexpected error: %v", err)
-	}
+			err := processor.removeNamespacesFromClusterScopedResources(t.Context(), tt.resources)
 
-	gotSecret := &un.Unstructured{Object: resources[0].UnstructuredContent()}
-	if got := gotSecret.GetNamespace(); got != "default" {
-		t.Errorf("Secret namespace = %q, want default", got)
-	}
+			if tt.wantErr {
+				if err == nil {
+					t.Fatalf("\n%s\nremoveNamespacesFromClusterScopedResources(): expected error but got none", tt.reason)
+				}
 
-	gotNamespace := &un.Unstructured{Object: resources[1].UnstructuredContent()}
-	if got := gotNamespace.GetNamespace(); got != "" {
-		t.Errorf("Namespace namespace = %q, want empty", got)
+				if tt.wantErrMsg != "" && !strings.Contains(err.Error(), tt.wantErrMsg) {
+					t.Errorf("\n%s\nremoveNamespacesFromClusterScopedResources(): error %q doesn't contain %q",
+						tt.reason, err.Error(), tt.wantErrMsg)
+				}
+
+				return
+			}
+
+			if err != nil {
+				t.Fatalf("\n%s\nremoveNamespacesFromClusterScopedResources(): unexpected error: %v", tt.reason, err)
+			}
+
+			got := make([]string, len(tt.resources))
+			for i := range tt.resources {
+				got[i] = (&un.Unstructured{Object: tt.resources[i].UnstructuredContent()}).GetNamespace()
+			}
+
+			if diff := gcmp.Diff(tt.wantNamespace, got); diff != "" {
+				t.Errorf("\n%s\nremoveNamespacesFromClusterScopedResources(): -want namespaces, +got:\n%s", tt.reason, diff)
+			}
+		})
 	}
 }
 
