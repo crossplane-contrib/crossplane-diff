@@ -415,11 +415,10 @@ func (p *DefaultDiffProcessor) diffSingleResourceInternal(ctx context.Context, r
 		return nil, nil, err
 	}
 
-	// Clean up namespaces from cluster-scoped resources
-	// Crossplane PR #6812 fixed issue #6782 by making render propagate namespaces from XR to all
-	// composed resources, but it doesn't check if resources are cluster-scoped. This cleanup
-	// removes namespaces from cluster-scoped resources. See removeNamespacesFromClusterScopedResources
-	// for details on the upstream fix needed.
+	// Render stamps the XR's namespace onto every composed resource of a
+	// namespaced XR. Production rejects a cluster-scoped one at that point, but
+	// render's scope check is a stub that cannot, so undo the stamp here. See
+	// removeNamespacesFromClusterScopedResources for why.
 	if err := p.removeNamespacesFromClusterScopedResources(ctx, desired.ComposedResources); err != nil {
 		p.config.Logger.Debug("Failed to clean up namespaces from cluster-scoped resources", "resource", resourceID, "error", err)
 		return nil, nil, errors.Wrap(err, "cannot clean up namespaces from cluster-scoped resources")
@@ -1466,36 +1465,42 @@ func mergeObservedResources(existing, newResources []cpd.Unstructured) []cpd.Uns
 
 // removeNamespacesFromClusterScopedResources removes namespaces from cluster-scoped resources.
 //
-// TEMPORARY WORKAROUND: This function exists because Crossplane's render command blindly propagates
-// namespaces from the XR to ALL composed resources without checking if they are cluster-scoped.
-// This was introduced in PR #6812 (https://github.com/crossplane/crossplane/pull/6812) which fixed
-// issue #6782 by adding namespace propagation to SetComposedResourceMetadata.
+// WORKAROUND for an upstream gap. A namespaced XR that composes a cluster-scoped
+// resource comes back from render with the XR's namespace stamped onto that
+// resource, which would otherwise show up as a spurious diff.
 //
-// UPSTREAM FIX NEEDED in github.com/crossplane/crossplane/v2:
-// File: cmd/crank/render/render.go
-// Function: SetComposedResourceMetadata (around line 445)
-// Issue: Lines 455-457 blindly set cd.SetNamespace(xr.GetNamespace()) without checking resource scope
+// Rendering runs through `crossplane internal render`, which builds the *same*
+// composer production uses (`composite.NewFunctionComposer`, from
+// crossplane's internal/render/composite). Two pieces of that shared path
+// matter here:
 //
-// Proposed Solution:
-// 1. Extend RenderInputs to accept XRDs (similar to how RequiredResources is passed)
-// 2. Pass XRDs through to SetComposedResourceMetadata (modify function signature)
-// 3. Look up the composed resource's GVK in the XRDs to determine if it's cluster-scoped
-// 4. Only call cd.SetNamespace(xr.GetNamespace()) if the resource is namespaced
+//   - `composite.RenderComposedResourceMetadata` propagates unconditionally:
+//     `if xr.GetNamespace() != "" { cd.SetNamespace(xr.GetNamespace()) }`.
+//   - `FunctionComposer.Compose` guards that separately — for a namespaced XR it
+//     calls `client.IsObjectNamespaced(cd)` and rejects a cluster-scoped composed
+//     resource outright (errFmtNamespacedXRClusterResource).
 //
-// Example fix in SetComposedResourceMetadata:
+// Production is therefore correct: the guard fires against a real API server.
+// Under render it cannot, because render's in-memory client
+// (crossplane's internal/render.InMemoryClient) implements
+// `IsObjectNamespaced` as an unconditional `return true, nil` — it has no
+// cluster to ask. Every composed resource looks namespaced, so nothing is
+// rejected and the namespace stamp stands.
 //
-//	if xr.GetNamespace() != "" {
-//	    // Look up cd's GVK in XRDs to check scope
-//	    if isNamespaced(cd.GetObjectKind().GroupVersionKind(), xrds) {
-//	        cd.SetNamespace(xr.GetNamespace())
-//	    }
-//	}
+// So the gap is not "render propagates namespaces blindly" — it's that render's
+// scope oracle is a stub, leaving an existing upstream guard inert. Fixing it
+// upstream needs a scope answer render can actually compute offline; the shape
+// of that (an injectable resolver vs. passing XRDs through RenderInputs) is an
+// upstream design decision, and `internal/render` is not importable from here
+// in any case. Note the stub's `true` default may well be deliberate for the
+// offline case.
 //
-// Once upstream is fixed, this function can be removed along with its call site at line 270.
+// We can answer it, because we do have a cluster: resolveResourceScope consults
+// the discovery API. Hence this post-pass, which reverses the stamp for
+// resources discovery reports as cluster-scoped.
 //
-// NOTE: render is an offline tool with no cluster access, so it needs XRDs passed explicitly.
-// ExtraResources/RequiredResources are only available to composition functions, not to the
-// core render logic, so a new mechanism is needed to pass schema information.
+// Remove this function and its call site in diffSingleResourceInternal once
+// render can determine scope itself.
 func (p *DefaultDiffProcessor) removeNamespacesFromClusterScopedResources(ctx context.Context, composedResources []cpd.Unstructured) error {
 	for i := range composedResources {
 		resource := &un.Unstructured{Object: composedResources[i].UnstructuredContent()}
