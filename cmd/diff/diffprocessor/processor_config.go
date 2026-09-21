@@ -14,6 +14,62 @@ import (
 // DefaultMaxRenderIterations is the default maximum render iterations.
 const DefaultMaxRenderIterations = 20
 
+// AnalyzeOn names the smallest composition change that triggers per-composite impact analysis.
+// The values are ordered from least to most eager.
+type AnalyzeOn string
+
+const (
+	// AnalyzeOnSpecChange evaluates composites only when the composition's spec changes. The
+	// cheapest setting, and a deliberate user judgement: a metadata-only change still produces a new
+	// CompositionRevision, whose identity a composition template can observe through the XR's
+	// compositionRevisionRef, so choosing this asserts that none of your compositions do that.
+	AnalyzeOnSpecChange AnalyzeOn = "spec-change"
+
+	// AnalyzeOnAnyChange evaluates composites whenever anything Crossplane hashes into the
+	// composition's identity differs — labels and annotations as well as spec. The default, because
+	// whether a metadata-only change reaches rendered output can only be settled by rendering.
+	AnalyzeOnAnyChange AnalyzeOn = "any-change"
+
+	// AnalyzeOnAlways evaluates composites even when the composition is identical, which creates no
+	// revision and so cannot change anything. Useful as a pre-edit "is my cluster converged?"
+	// baseline; note that any delta it reports is by construction not caused by this composition.
+	AnalyzeOnAlways AnalyzeOn = "always"
+)
+
+// ChangeScope is how much of a composition differs from its in-cluster version, in terms of what
+// Crossplane hashes into the composition's identity (see Composition.Hash()).
+type ChangeScope string
+
+const (
+	// ChangeScopeNone means nothing Crossplane hashes differs. No CompositionRevision is created, so
+	// nothing can adopt anything.
+	ChangeScopeNone ChangeScope = "none"
+
+	// ChangeScopeMetadata means the labels or annotations differ but the spec does not. A new
+	// CompositionRevision is still created, carrying an identical spec.
+	ChangeScopeMetadata ChangeScope = "metadata"
+
+	// ChangeScopeSpec means the spec differs.
+	ChangeScopeSpec ChangeScope = "spec"
+)
+
+// triggersAnalysis reports whether a change of this scope should cause per-composite impact
+// analysis at the given setting.
+func (s ChangeScope) triggersAnalysis(on AnalyzeOn) bool {
+	switch on {
+	case AnalyzeOnAlways:
+		return true
+	case AnalyzeOnSpecChange:
+		return s == ChangeScopeSpec
+	case AnalyzeOnAnyChange, "":
+		return s != ChangeScopeNone
+	default:
+		// Unrecognized values are rejected by the CLI; fall back to the default rather than
+		// silently analysing nothing.
+		return s != ChangeScopeNone
+	}
+}
+
 // ProcessorConfig contains configuration for the DiffProcessor.
 type ProcessorConfig struct {
 	// Colorize determines whether to use colors in the diff output
@@ -43,21 +99,14 @@ type ProcessorConfig struct {
 	// so leaving this unset only affects structured output.
 	Warnings *WarningLogger
 
-	// AnalyzeUnchanged forces impact analysis for a composition that is identical to its
-	// in-cluster version. By default such a composition is reported as unchanged and its
-	// affected XRs are not evaluated at all: any CompositionRevision it produced would carry
-	// the same spec, so no XR would render differently, and any downstream delta found would be
-	// caused by something other than the composition (drift, convergence lag, or a modeling
-	// artifact of this tool) while being presented as this composition's impact. Set this to opt
-	// into that analysis — e.g. to establish a "is my cluster converged?" baseline before
-	// editing a composition.
+	// AnalyzeOn is the smallest composition change that triggers per-composite impact analysis.
+	// Evaluating a composite costs one function render, so this is a cost knob — it never suppresses
+	// a reported consequence. RevisionImpact is populated at every setting, and composites left
+	// unevaluated are marked ImpactAnalysisSkipped so "we did not look" stays distinguishable from
+	// "we looked and found nothing".
 	//
-	// "Identical" here means identical in every field Crossplane hashes into a composition's
-	// identity — labels and annotations as well as spec (see Composition.Hash()). A composition
-	// differing only in metadata is NOT identical by that standard: it produces a new
-	// CompositionRevision that composites re-point to, so it is treated as changed and its
-	// composites are evaluated normally.
-	AnalyzeUnchanged bool
+	// Zero value means AnalyzeOnAnyChange, matching the CLI default.
+	AnalyzeOn AnalyzeOn
 
 	// EventualState enables iterative simulation to show eventual state after all reconciliation
 	// cycles complete. Useful with function-sequencer which hides later stage resources.
@@ -186,11 +235,13 @@ func WithWarnings(warnings *WarningLogger) ProcessorOption {
 	}
 }
 
-// WithAnalyzeUnchanged sets whether to run impact analysis for compositions that are identical to
-// their in-cluster version (skipped by default; see ProcessorConfig.AnalyzeUnchanged).
-func WithAnalyzeUnchanged(analyzeUnchanged bool) ProcessorOption {
+// WithAnalyzeOn sets the smallest composition change that triggers per-composite impact analysis
+// (see ProcessorConfig.AnalyzeOn). An empty value leaves the default in place.
+func WithAnalyzeOn(analyzeOn AnalyzeOn) ProcessorOption {
 	return func(config *ProcessorConfig) {
-		config.AnalyzeUnchanged = analyzeUnchanged
+		if analyzeOn != "" {
+			config.AnalyzeOn = analyzeOn
+		}
 	}
 }
 

@@ -161,12 +161,23 @@ crossplane-diff comp updated-composition.yaml --resource=default/xr-1,default/xr
 # comp again — the composition file's labels are the authoritative prediction of the new revision.
 crossplane-diff comp updated-composition.yaml --include-manual
 
+# Choose the smallest composition change that triggers per-composite impact analysis. The default is
+# any-change: the composites are evaluated whenever anything Crossplane hashes into the composition's
+# identity differs — labels and annotations as well as spec.
+#
 # Evaluate affected composites even when the composition is identical to the cluster's.
 # By default that analysis is skipped: applying an unchanged composition creates no new
 # CompositionRevision, so nothing would adopt it, and any downstream delta found would be caused
 # by something else (drift, convergence lag, or a modeling artifact of this tool) while being
 # presented as this composition's impact. Opt in for a pre-edit "is my cluster converged?" baseline.
-crossplane-diff comp unchanged-composition.yaml --analyze-unchanged
+crossplane-diff comp unchanged-composition.yaml --analyze-on=always
+
+# Only evaluate composites when the composition's *spec* changes, skipping the render-per-composite
+# cost for a metadata-only edit. Note that such an edit still creates a new CompositionRevision that
+# Automatic composites re-point to, so this asserts none of your compositions can observe a revision's
+# identity (via the XR's compositionRevisionRef, or a compositionRevisionSelector matching revision
+# labels). Either way revisionImpact in JSON/YAML output reports the revision.
+crossplane-diff comp updated-composition.yaml --analyze-on=spec-change
 
 # Collapse each changed composition to a single change-marker line (human output only;
 # JSON/YAML keeps full detail), keeping the affected XRs and their downstream diffs
@@ -295,12 +306,25 @@ Flags:
                                compositionRevisionSelector does not match the composition's
                                labels), or "deleting" (the composite is being deleted).
                                --include-manual does not re-include the latter two.
-      --analyze-unchanged      Run impact analysis even for compositions identical to their
-                               in-cluster version. Skipped by default, because any
-                               CompositionRevision such a composition produced would carry the
-                               same spec and so render nothing differently; the empty
-                               impactAnalysis is then marked with "impactAnalysisSkipped": true
-                               in structured output. Useful for a pre-edit convergence baseline.
+      --analyze-on=STRING      Smallest composition change that triggers per-composite impact
+                               analysis: "spec-change", "any-change", or "always". Defaults to
+                               "any-change", which evaluates the composites whenever anything
+                               Crossplane hashes into the composition's identity differs —
+                               labels and annotations as well as spec. "spec-change" skips the
+                               render-per-composite cost for a metadata-only edit, which still
+                               creates a new CompositionRevision that Automatic composites
+                               re-point to; choosing it asserts none of your compositions can
+                               observe a revision's identity. "always" also evaluates a
+                               composition identical to its in-cluster version, which creates no
+                               revision and so cannot change anything — useful for a pre-edit
+                               convergence baseline. This is a cost knob, not a correctness mode:
+                               "revisionImpact" is reported at every setting, and composites left
+                               unevaluated are marked with "impactAnalysisSkipped": true in
+                               structured output, so "we did not look" stays distinguishable from
+                               "we looked and found nothing".
+      --analyze-unchanged      Deprecated: the former spelling of --analyze-on=always. Still
+                               honoured, but passing it together with a conflicting --analyze-on
+                               value is an error.
       --crossplane-version=VERSION
                                Pin the crossplane render version; the docker engine
                                pulls xpkg.crossplane.io/crossplane/crossplane:<version>.
@@ -642,6 +666,11 @@ single-XR invocation renders flat, exactly as before.
         "name": "xbuckets.example.org",
         "diff": { "old": { ... }, "new": { ... } }
       },
+      "revisionImpact": {
+        "changeScope": "spec",
+        "createsRevision": true,
+        "repointedComposites": 4
+      },
       "affectedResources": {
         "total": 6,
         "withChanges": 2,
@@ -700,10 +729,23 @@ The structured output includes:
 - **Change types**: each entry's `type` field carries the word form — one of `"added"`, `"modified"`, or `"removed"`. (Unchanged resources are filtered out of structured output and never appear in `changes[]`. The `+` / `~` / `-` symbols appear only in the human-readable diff format described above.)
 - **Full resource details**: apiVersion, kind, name, namespace
 - **Diff content**: for modifications, `diff.old` and `diff.new` carry the full current/desired resource objects (apiVersion/kind/metadata/spec/status, etc.) — not just the diffing subset. For additions/removals, the full resource object lives under `diff.spec` (the JSON key is literally `spec` but the value is the entire resource, not its spec subtree).
-- **Impact analysis** (comp only): which XRs are affected by composition changes and their status. When a composition is
-  identical to its in-cluster version, its composites are not evaluated and the entry carries
-  `"impactAnalysisSkipped": true` alongside an empty `impactAnalysis` — so a consumer can tell "not evaluated" from "no
-  affected composites found". Pass `--analyze-unchanged` to evaluate them anyway.
+- **Impact analysis** (comp only): which XRs are affected by composition changes and their status. When the composition
+  change is smaller than `--analyze-on` asked to analyse — by default, a composition identical to its in-cluster
+  version — its composites are not evaluated and the entry carries `"impactAnalysisSkipped": true` alongside an empty
+  `impactAnalysis`, so a consumer can tell "not evaluated" from "no affected composites found". Raise `--analyze-on` to
+  evaluate them anyway.
+- **Revision impact** (comp only): a `revisionImpact` object per composition, recording what applying it does to
+  CompositionRevisions regardless of whether anything renders differently. It carries `changeScope` (`"none"`,
+  `"metadata"` or `"spec"` — how much of the composition differs, in the terms Crossplane's `Composition.Hash()` uses,
+  which covers labels and annotations as well as spec), `createsRevision` (whether applying the composition produces a
+  new CompositionRevision), and `repointedComposites` (how many composites would adopt that revision and reconcile as a
+  result — those not excluded by update policy, revision selector, or deletion). It is **always present**, including
+  when `impactAnalysisSkipped` is true: that is the point of it, and it is what keeps `--analyze-on` a cost knob rather
+  than a correctness mode. Note that a composite re-pointing to a new revision is not the same as its rendered output
+  changing; re-pointing alone usually renders identically.
+- **Masked changes** (comp only): `"maskedChangesOnly": true` says an absent `compositionChanges` does *not* mean the
+  composition is unchanged — it differs only in fields excluded from the diff (your `--ignore-paths`, or the fields
+  suppressed for readability). Applying it still creates a new CompositionRevision, which `revisionImpact` reports.
 - **Warnings**: A top-level `warnings` array of non-fatal advisories, each with a `message` and an optional `context` map of
   the key/value pairs from the emitting call site. Distinct from `errors` and with no effect on the exit code; see
   [Warnings](#warnings) above.
@@ -829,6 +871,8 @@ case $? in
   3) echo "Changes detected - review required" ;;
 esac
 ```
+
+**Revision churn does not set exit code 3.** For `comp`, exit code 3 means something renders differently: the composition's own diff is non-empty, or at least one composite's downstream resources change. A composition that only creates a new CompositionRevision without either — one differing solely in fields excluded from the diff, reported as `"maskedChangesOnly": true` — exits 0, so a GitOps loop re-applying the same manifests doesn't fail its diff gate on every run. A pipeline that *does* want to gate on revision churn reads `revisionImpact.createsRevision` from the structured output.
 
 ## Guiding Principles
 
