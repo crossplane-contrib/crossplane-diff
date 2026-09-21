@@ -93,7 +93,7 @@ func (r *DefaultCompDiffRenderer) RenderCompDiff(output *CompDiffOutput) error {
 		// The affected-XR and impact-analysis sections would both be empty and misleading for a
 		// composition whose XRs were deliberately not evaluated; say so once instead.
 		if comp.ImpactAnalysisSkipped {
-			if _, err := fmt.Fprint(stdout, "Impact analysis skipped: this composition is identical to the cluster's, so no composite resource would render differently as a result. Pass --analyze-unchanged to evaluate them anyway.\n\n"); err != nil {
+			if _, err := fmt.Fprint(stdout, skippedMessage(comp.RevisionImpact)); err != nil {
 				return errors.Wrap(err, "cannot write impact analysis skipped message")
 			}
 
@@ -162,6 +162,20 @@ func (r *DefaultCompDiffRenderer) renderCompositionChanges(comp *CompositionDiff
 	}
 
 	return nil
+}
+
+// skippedMessage explains why the composites were not evaluated, which depends on why the analysis
+// was skipped. The two reasons are not interchangeable: an identical composition creates no
+// CompositionRevision and so genuinely cannot affect anything, whereas a metadata-only change does
+// create one — the user simply asked not to pay for evaluating it. Reporting the first message for
+// the second case would claim a guarantee the tool did not establish.
+func skippedMessage(impact RevisionImpact) string {
+	if impact.CreatesRevision {
+		return fmt.Sprintf("Impact analysis skipped: --analyze-on=spec-change and this composition's spec is unchanged. Applying it still creates a new CompositionRevision that %d composite%s would adopt; whether that changes any rendered output was not evaluated. Pass --analyze-on=any-change to check.\n\n",
+			impact.RepointedComposites, pluralize(impact.RepointedComposites))
+	}
+
+	return "Impact analysis skipped: this composition is identical to the cluster's, so applying it creates no new CompositionRevision and no composite resource could change as a result. Pass --analyze-on=always to evaluate them anyway.\n\n"
 }
 
 // writeNoDisplayableChanges reports a composition with no diff body to show. That covers two
@@ -522,6 +536,7 @@ func (r *StructuredCompDiffRenderer) buildStructuredCompOutput(output *CompDiffO
 			ImpactAnalysis:        make([]xrImpactWire, 0, len(comp.ImpactAnalysis)),
 			ImpactAnalysisSkipped: comp.ImpactAnalysisSkipped,
 			MaskedChangesOnly:     comp.MaskedChangesOnly,
+			RevisionImpact:        comp.RevisionImpact,
 		}
 
 		// Include per-composition error if present

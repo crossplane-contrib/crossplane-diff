@@ -29,6 +29,7 @@ import (
 	dt "github.com/crossplane-contrib/crossplane-diff/cmd/diff/renderer/types"
 	dtypes "github.com/crossplane-contrib/crossplane-diff/cmd/diff/types"
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/equality"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	un "k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -380,18 +381,44 @@ func (p *DefaultCompDiffProcessor) processSingleComposition(ctx context.Context,
 	}
 
 	result.CompositionDiff = comparison.diff
-	result.MaskedChangesOnly = comparison.diff == nil && comparison.changed
+	result.MaskedChangesOnly = comparison.diff == nil && comparison.changed()
 
-	// Applying a composition that is identical to its in-cluster version creates no new
-	// CompositionRevision, so no XR adopts anything it hasn't already adopted. Any downstream delta
-	// we could compute here is therefore caused by something other than this composition — drift,
-	// convergence lag, or a modeling artifact of this tool — and we cannot tell those apart, so
-	// reporting them as this composition's "impact" would attribute cluster state to a change that
-	// does not exist. Skip the (expensive: one function render per XR) analysis unless the user
-	// opted in via --analyze-unchanged. See issue #453.
-	if !comparison.changed && !p.config.AnalyzeUnchanged {
-		p.config.Logger.Debug("Skipping impact analysis for unchanged composition",
+	// Report what applying this composition does to CompositionRevisions regardless of whether the
+	// composites are evaluated below. This is the mutative consequence of the apply, and it is
+	// independent of whether anything renders differently — so it is reported at every --analyze-on
+	// setting, and carried as a typed per-composition field rather than a warning, because a CI
+	// consumer may want to gate on it.
+	result.RevisionImpact = renderer.RevisionImpact{
+		ChangeScope:     string(comparison.scope),
+		CreatesRevision: comparison.changed(),
+	}
+
+	// Partition XRs by whether they would adopt the diffed composition's resulting revision. This is
+	// local (no renders), and both paths below need it: the composites that would adopt the new
+	// revision are exactly the ones that would re-point at it.
+	keptXRs, droppedXRs, err := p.partitionXRsByUpdatePolicy(affectedXRs, newComp)
+	if err != nil {
+		return nil, err
+	}
+
+	if comparison.changed() {
+		result.RevisionImpact.RepointedComposites = len(keptXRs)
+	}
+
+	// Skip the per-XR work — one function render per XR, the dominant cost of comp — when the change
+	// is smaller than the user asked to analyse.
+	//
+	// At the default (any-change) this skips only a composition identical in everything Crossplane
+	// hashes: no new CompositionRevision is created, so no XR adopts anything it hasn't already, and
+	// any downstream delta computed here would be caused by something else — drift, convergence lag,
+	// or a modeling artifact of this tool — which we cannot tell apart, so reporting it as this
+	// composition's "impact" would attribute cluster state to a change that does not exist.
+	// See issues #453 and #472.
+	if !comparison.scope.triggersAnalysis(p.config.AnalyzeOn) {
+		p.config.Logger.Debug("Skipping impact analysis",
 			"composition", newComp.GetName(),
+			"changeScope", string(comparison.scope),
+			"analyzeOn", string(p.config.AnalyzeOn),
 			"affectedXRCount", len(affectedXRs))
 
 		result.ImpactAnalysisSkipped = true
@@ -400,12 +427,6 @@ func (p *DefaultCompDiffProcessor) processSingleComposition(ctx context.Context,
 	}
 
 	p.config.Logger.Debug("Processing affected XRs", "composition", newComp.GetName(), "count", len(affectedXRs), "surfaceFiltered", surfaceFiltered)
-
-	// Partition XRs by whether they would adopt the diffed composition's resulting revision.
-	keptXRs, droppedXRs, err := p.partitionXRsByUpdatePolicy(affectedXRs, newComp)
-	if err != nil {
-		return nil, err
-	}
 
 	counts := countFilterReasons(droppedXRs)
 
@@ -584,10 +605,15 @@ func (p *DefaultCompDiffProcessor) collectXRDiffs(ctx context.Context, xrs []*un
 //   - the renderer's display-only suppressions, which cover fields Crossplane nonetheless hashes
 //     into a composition's identity, and so into whether a new CompositionRevision is created.
 //
-// `changed` is therefore computed with every mask lifted. See issue #453.
+// `scope` is therefore computed with every mask lifted. See issue #453.
 type compositionComparison struct {
-	diff    *dt.ResourceDiff
-	changed bool
+	diff  *dt.ResourceDiff
+	scope ChangeScope
+}
+
+// changed reports whether the composition differs at all in the fields Crossplane hashes.
+func (c compositionComparison) changed() bool {
+	return c.scope != ChangeScopeNone
 }
 
 // calculateCompositionDiff calculates the diff between the cluster composition and the file composition.
@@ -650,7 +676,10 @@ func (p *DefaultCompDiffProcessor) calculateCompositionDiff(ctx context.Context,
 		"isNewComposition", originalCompUnstructured == nil)
 
 	if compDiff.DiffType != dt.DiffTypeEqual {
-		return compositionComparison{diff: compDiff, changed: true}, nil
+		return compositionComparison{
+			diff:  compDiff,
+			scope: compositionChangeScope(originalCompUnstructured, newCompUnstructured, true),
+		}, nil
 	}
 
 	// Nothing to display. That is not the same as unchanged: both the user's --ignore-paths and the
@@ -670,13 +699,41 @@ func (p *DefaultCompDiffProcessor) calculateCompositionDiff(ctx context.Context,
 		return compositionComparison{}, errors.Wrap(err, "cannot calculate composition diff with masks lifted")
 	}
 
-	changed := unmasked.DiffType != dt.DiffTypeEqual
+	scope := compositionChangeScope(originalCompUnstructured, newCompUnstructured, unmasked.DiffType != dt.DiffTypeEqual)
 
 	p.config.Logger.Debug("No displayable changes in composition",
 		"composition", newComp.GetName(),
-		"changedInMaskedFieldsOnly", changed)
+		"changeScope", string(scope))
 
-	return compositionComparison{diff: nil, changed: changed}, nil
+	return compositionComparison{diff: nil, scope: scope}, nil
+}
+
+// compositionChangeScope classifies how much of a composition differs from its in-cluster version,
+// in the terms Crossplane uses to decide whether a new CompositionRevision is needed. `anyChange`
+// says whether the two differ at all with every display mask lifted; this function only has to
+// decide whether the difference reaches the spec.
+//
+// A nil original means the composition does not exist in the cluster yet, which is a spec change by
+// construction — there is no prior spec.
+func compositionChangeScope(original, proposed *un.Unstructured, anyChange bool) ChangeScope {
+	if original == nil {
+		return ChangeScopeSpec
+	}
+
+	if !anyChange {
+		return ChangeScopeNone
+	}
+
+	// NestedMap deep-copies, so the missing-spec case (nil) compares equal on both sides rather than
+	// tripping on one being an empty map and the other nil.
+	originalSpec, _, _ := un.NestedMap(original.Object, "spec")
+	proposedSpec, _, _ := un.NestedMap(proposed.Object, "spec")
+
+	if !equality.Semantic.DeepEqual(originalSpec, proposedSpec) {
+		return ChangeScopeSpec
+	}
+
+	return ChangeScopeMetadata
 }
 
 // predictedRevisionLabels returns the label set the CompositionRevision resulting from this

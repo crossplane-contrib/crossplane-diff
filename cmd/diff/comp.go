@@ -39,11 +39,14 @@ type CompCmd struct {
 	Files []string `arg:"" help:"YAML files containing updated Composition(s)." optional:""`
 
 	// Configuration options
-	Namespace           string   `default:""                                                                                                                                          help:"Namespace to find XRs (empty = all namespaces)."                                                                                                                                                name:"namespace"            short:"n"`
-	IncludeManual       bool     `default:"false"                                                                                                                                     help:"Include XRs with Manual update policy (default: only Automatic policy XRs)"                                                                                                                     name:"include-manual"`
-	MinimizeComposition bool     `default:"false"                                                                                                                                     help:"Collapse each changed composition to a single marker line (human-readable output only; JSON/YAML keeps full detail; errors and no-change compositions still print in full)."                    name:"minimize-composition"`
+	Namespace           string   `default:""                                                                                                                                          help:"Namespace to find XRs (empty = all namespaces)."                                                                                                                             name:"namespace"                                                                                                                                                                                                                                                                                                                                                                          short:"n"`
+	IncludeManual       bool     `default:"false"                                                                                                                                     help:"Include XRs with Manual update policy (default: only Automatic policy XRs)"                                                                                                  name:"include-manual"`
+	MinimizeComposition bool     `default:"false"                                                                                                                                     help:"Collapse each changed composition to a single marker line (human-readable output only; JSON/YAML keeps full detail; errors and no-change compositions still print in full)." name:"minimize-composition"`
 	Resources           []string `help:"Limit impact analysis to specific composites in [namespace/]name format. Repeatable or comma-separated. Mutually exclusive with --namespace." name:"resource"`
-	AnalyzeUnchanged    bool     `default:"false"                                                                                                                                     help:"Run impact analysis even for compositions identical to their in-cluster version (skipped by default, since they would render nothing differently). Useful for a pre-edit convergence baseline." name:"analyze-unchanged"`
+	AnalyzeOn           string   `default:""                                                                                                                                          enum:",spec-change,any-change,always"                                                                                                                                              help:"Smallest composition change that triggers per-composite impact analysis. \"spec-change\": only when the composition spec changes. \"any-change\": also when only its metadata changes, which still creates a new CompositionRevision that composites re-point to. \"always\": even when the composition is identical, for a pre-edit convergence baseline. Defaults to any-change." name:"analyze-on"`
+	// AnalyzeUnchanged is the pre-#472 way to ask for --analyze-on=always, kept so existing
+	// invocations and CI pipelines keep working.
+	AnalyzeUnchanged bool `default:"false" help:"Deprecated: use --analyze-on=always instead." name:"analyze-unchanged"`
 }
 
 // validateFlags returns an error if mutually exclusive flags are set together.
@@ -52,7 +55,25 @@ func (c *CompCmd) validateFlags() error {
 		return errors.New("--namespace and --resource are mutually exclusive; use --resource=[namespace/]name to scope by name")
 	}
 
+	// Two flags asking for the same setting, disagreeing. Silently preferring one would give the user
+	// analysis they did not ask for, or withhold analysis they did. AnalyzeOn defaults to empty
+	// rather than to its effective value precisely so "not passed" stays distinguishable here.
+	if c.AnalyzeUnchanged && c.AnalyzeOn != "" && c.AnalyzeOn != string(dp.AnalyzeOnAlways) {
+		return errors.Errorf("--analyze-unchanged is equivalent to --analyze-on=always and cannot be combined with --analyze-on=%s; pass only --analyze-on", c.AnalyzeOn)
+	}
+
 	return nil
+}
+
+// analyzeOn resolves the effective setting, honouring the deprecated --analyze-unchanged flag.
+// validateFlags has already rejected the case where the two disagree. An empty result leaves the
+// processor default (any-change) in place.
+func (c *CompCmd) analyzeOn() dp.AnalyzeOn {
+	if c.AnalyzeUnchanged {
+		return dp.AnalyzeOnAlways
+	}
+
+	return dp.AnalyzeOn(c.AnalyzeOn)
 }
 
 // Help returns help instructions for the composition diff command.
@@ -88,7 +109,11 @@ Examples:
 
   # Evaluate affected composites even for a composition identical to the cluster's
   # (skipped by default). Useful as a "is my cluster converged?" baseline before editing.
-  crossplane-diff comp unchanged-composition.yaml --analyze-unchanged
+  crossplane-diff comp unchanged-composition.yaml --analyze-on=always
+
+  # Only evaluate composites when the composition's spec changes, skipping the render-per-composite
+  # cost for metadata-only edits. Note those still create a new CompositionRevision.
+  crossplane-diff comp updated-composition.yaml --analyze-on=spec-change
 
   # Limit impact analysis to specific composites (by [namespace/]name)
   crossplane-diff comp updated-composition.yaml --resource=default/my-claim
@@ -107,11 +132,17 @@ Notes:
   re-include these either.
 
   A composition identical to its in-cluster version is reported as unchanged and its composites
-  are not evaluated: any CompositionRevision it produced would carry the same spec, so nothing
-  would render differently. Any downstream delta found in that situation is caused by something
-  other than the composition (drift, convergence lag, or a modeling artifact of this tool), and
-  cannot be told apart from a real impact — so it is not reported as one. Pass
-  --analyze-unchanged to evaluate anyway.
+  are not evaluated: applying it creates no new CompositionRevision, so nothing could adopt
+  anything. Any downstream delta found in that situation is caused by something other than the
+  composition (drift, convergence lag, or a modeling artifact of this tool), and cannot be told
+  apart from a real impact — so it is not reported as one. Pass --analyze-on=always to evaluate
+  anyway.
+
+  "Identical" means identical in everything Crossplane hashes into a composition's identity —
+  labels and annotations as well as spec. A composition differing only in metadata does get a new
+  CompositionRevision, which composites re-point to, so it is evaluated by default. Use
+  --analyze-on=spec-change to skip that evaluation; revisionImpact in JSON/YAML output still
+  reports the revision either way.
 `
 }
 
@@ -144,7 +175,7 @@ func makeDefaultCompProc(c *CompCmd, kongCtx *kong.Context, appCtx *AppContext, 
 		dp.WithWarnings(warnings),
 		dp.WithIncludeManual(c.IncludeManual),
 		dp.WithMinimizeComposition(c.MinimizeComposition),
-		dp.WithAnalyzeUnchanged(c.AnalyzeUnchanged),
+		dp.WithAnalyzeOn(c.analyzeOn()),
 		dp.WithStdout(kongCtx.Stdout),
 		dp.WithStderr(kongCtx.Stderr),
 	)

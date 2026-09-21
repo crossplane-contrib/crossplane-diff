@@ -62,7 +62,8 @@ type IntegrationTestCase struct {
 	resources                  []string      // For composition tests: --resource values; each entry passed as one --resource flag
 	resourcesCSV               string        // For composition tests: alternative single --resource=a,b style invocation
 	includeManual              bool          // For composition tests: pass --include-manual flag
-	analyzeUnchanged           bool          // For composition tests: pass --analyze-unchanged flag
+	analyzeUnchanged           bool          // For composition tests: pass the deprecated --analyze-unchanged flag
+	analyzeOn                  string        // For composition tests: pass --analyze-on=<value> (empty = rely on the default)
 	skip                       bool
 	skipReason                 string
 	// JSON output support: set outputFormat to "json" to use structured assertions.
@@ -301,6 +302,10 @@ func runIntegrationTest(t *testing.T, testType DiffTestType, tt IntegrationTestC
 
 		if tt.analyzeUnchanged {
 			args = append(args, "--analyze-unchanged")
+		}
+
+		if tt.analyzeOn != "" {
+			args = append(args, "--analyze-on="+tt.analyzeOn)
 		}
 	}
 
@@ -2303,7 +2308,7 @@ All composite resources are up-to-date. No downstream resource changes detected.
 
 No changes detected in composition xnopresources.diff.example.org
 
-Impact analysis skipped: this composition is identical to the cluster's, so no composite resource would render differently as a result. Pass --analyze-unchanged to evaluate them anyway.
+Impact analysis skipped: this composition is identical to the cluster's, so applying it creates no new CompositionRevision and no composite resource could change as a result. Pass --analyze-on=always to evaluate them anyway.
 
 `,
 			expectedError: false,
@@ -2346,6 +2351,31 @@ Impact analysis skipped: this composition is identical to the cluster's, so no c
 				WithXRImpact("XNopResource", "test-resource", "default", "changed").
 				WithDownstreamSummary(0, 1, 0).
 				WithDownstreamResource("modified", "XDownstreamResource", "test-resource", "default"),
+		},
+		// Issue #472: the same metadata-only change, with the user opting out of paying a render per
+		// composite for it. The composites go unevaluated — but the mutative consequence is still
+		// reported, which is what keeps --analyze-on a cost knob rather than a correctness mode. So the
+		// skip is recorded, and revisionImpact says a CompositionRevision is created and one composite
+		// would adopt it. Exit code 0: nothing renders differently, and a GitOps loop re-applying the
+		// same manifests must not fail its gate forever.
+		"AnalyzeOnSpecChangeSkipsMetadataOnlyChange": {
+			reason: "--analyze-on=spec-change leaves a metadata-only change unevaluated, while still reporting that it creates a CompositionRevision",
+			setupFiles: []string{
+				"testdata/comp/resources/xrd.yaml",
+				"testdata/comp/resources/original-composition-kubectl-applied.yaml",
+				"testdata/comp/resources/functions.yaml",
+				"testdata/comp/resources/existing-xr-1.yaml",
+				"testdata/comp/resources/existing-downstream-1.yaml",
+			},
+			inputFiles:       []string{"testdata/comp/composition-no-changes.yaml"},
+			namespace:        "default",
+			analyzeOn:        "spec-change",
+			outputFormat:     "json",
+			expectedExitCode: dp.ExitCodeSuccess,
+			expectedStructuredCompOutput: tu.ExpectCompDiff().
+				WithComposition("xnopresources.diff.example.org").
+				WithImpactAnalysisSkipped().
+				WithRevisionImpact("metadata", true, 1),
 		},
 		// The same setup with --analyze-unchanged evaluates the XRs after all (the pre-edit
 		// convergence-baseline workflow). Note what it reports: a downstream modification even though
@@ -2639,7 +2669,7 @@ Summary: 2 modified
 
 No changes detected in composition xnopresources-v2.diff.example.org
 
-Impact analysis skipped: this composition is identical to the cluster's, so no composite resource would render differently as a result. Pass --analyze-unchanged to evaluate them anyway.
+Impact analysis skipped: this composition is identical to the cluster's, so applying it creates no new CompositionRevision and no composite resource could change as a result. Pass --analyze-on=always to evaluate them anyway.
 `,
 			expectedError:    false,
 			expectedExitCode: dp.ExitCodeDiffDetected,

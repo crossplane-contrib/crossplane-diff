@@ -170,19 +170,56 @@ type CompositionDiff struct {
 	CompositionDiff   *dt.ResourceDiff // the actual composition diff (nil if unchanged)
 	AffectedResources AffectedResourcesSummary
 	ImpactAnalysis    []XRImpact
-	// ImpactAnalysisSkipped records that the affected XRs were deliberately not evaluated because
-	// the composition is identical to its in-cluster version. Distinguishes "we did not look" from
-	// "we looked and found no affected XRs", which are otherwise indistinguishable from an empty
-	// ImpactAnalysis. Set unless --analyze-unchanged is passed.
+	// ImpactAnalysisSkipped records that the affected XRs were deliberately not evaluated, because
+	// the composition changed by less than --analyze-on asked to analyse. Distinguishes "we did not
+	// look" from "we looked and found no affected XRs", which are otherwise indistinguishable from an
+	// empty ImpactAnalysis.
+	//
+	// Why the composites went unevaluated is not recoverable from this field alone — read
+	// RevisionImpact.ChangeScope alongside it. A "none" scope means no CompositionRevision is created
+	// and so nothing could have changed; anything else means a revision is created and simply was not
+	// evaluated.
 	ImpactAnalysisSkipped bool
 	// MaskedChangesOnly records that the composition differs from the cluster's only in fields
 	// excluded from the rendered diff — the user's --ignore-paths, or the renderer's display-only
 	// suppressions. CompositionDiff is nil in that case, but the composition did change, so the
 	// renderer must not report it as unchanged.
 	MaskedChangesOnly bool
+	// RevisionImpact is what applying this composition does to CompositionRevisions, independent of
+	// whether anything renders differently. Always populated, including when the composites were not
+	// evaluated.
+	RevisionImpact RevisionImpact
 }
 
-// HasChanges returns true if this composition diff has any changes.
+// RevisionImpact describes what applying a composition does to CompositionRevisions and the
+// composites tracking them, independent of whether any composed resource renders differently.
+//
+// This is deliberately a typed field rather than a warning. Revision churn is a per-composition
+// fact a CI consumer may want to gate on, and warnings are documented as neither attributed to a
+// composition nor intended for gating — so a flat warning could not say which of several diffed
+// compositions creates a revision.
+type RevisionImpact struct {
+	// ChangeScope is how much of the composition differs, in the terms Crossplane uses to decide
+	// whether a revision is needed: "none", "metadata" or "spec". Crossplane's Composition.Hash()
+	// covers labels and annotations as well as spec, so "metadata" still means a revision is created.
+	ChangeScope string `json:"changeScope"`
+	// CreatesRevision records whether applying this composition produces a new CompositionRevision.
+	CreatesRevision bool `json:"createsRevision"`
+	// RepointedComposites counts the composites that would adopt that revision and reconcile as a
+	// result — those not excluded by update policy, revision selector, or deletion. Note this counts
+	// composites that re-point, which is not the same as composites whose rendered output changes;
+	// re-pointing alone usually renders identically.
+	RepointedComposites int `json:"repointedComposites"`
+}
+
+// HasChanges returns true if this composition diff has any changes, which is what drives
+// ExitCodeDiffDetected.
+//
+// Deliberately excluded: RevisionImpact. A composition whose only difference is in masked fields
+// creates a CompositionRevision but has nothing to show and nothing rendering differently, and a
+// GitOps loop re-applying the same manifests would otherwise fail its diff gate on every run. A
+// consumer that does want to gate on revision churn reads revisionImpact.createsRevision from the
+// structured output.
 func (c *CompositionDiff) HasChanges() bool {
 	if c.CompositionDiff != nil && c.CompositionDiff.DiffType != dt.DiffTypeEqual {
 		return true
@@ -249,15 +286,17 @@ type compositionDiffWire struct {
 	CompositionChanges *ChangeDetail            `json:"compositionChanges,omitempty"`
 	AffectedResources  AffectedResourcesSummary `json:"affectedResources"`
 	ImpactAnalysis     []xrImpactWire           `json:"impactAnalysis"`
-	// ImpactAnalysisSkipped tells consumers the empty impactAnalysis means "not evaluated"
-	// (composition unchanged) rather than "no affected XRs found".
+	// ImpactAnalysisSkipped tells consumers the empty impactAnalysis means "not evaluated" rather
+	// than "no affected XRs found". Read revisionImpact.changeScope alongside it to tell "nothing
+	// could have changed" from "a revision is created but was not evaluated".
 	ImpactAnalysisSkipped bool `json:"impactAnalysisSkipped,omitempty"`
 	// MaskedChangesOnly tells consumers that an absent compositionChanges does not mean the
-	// composition is unchanged: it differs only in fields excluded from the diff, which still
-	// produces a new CompositionRevision. Carried as a field rather than a warning because it is a
-	// per-composition fact a CI consumer may want to gate on, and warnings are neither attributed to
-	// a composition nor intended for gating.
+	// composition is unchanged: it differs only in fields excluded from the diff.
 	MaskedChangesOnly bool `json:"maskedChangesOnly,omitempty"`
+	// RevisionImpact is what applying this composition does to CompositionRevisions, independent of
+	// whether anything renders differently. Always present, including when impactAnalysis was
+	// skipped — that is the point of it.
+	RevisionImpact RevisionImpact `json:"revisionImpact"`
 }
 
 type xrImpactWire struct {

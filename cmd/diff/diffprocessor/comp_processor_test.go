@@ -184,12 +184,12 @@ func TestDefaultCompDiffProcessor_DiffComposition(t *testing.T) {
 	}
 
 	tests := map[string]struct {
-		compositions     []*un.Unstructured
-		namespace        string
-		analyzeUnchanged bool
-		setupMocks       func() xp.Clients
-		verifyOutput     func(t *testing.T, output string)
-		wantErr          bool
+		compositions []*un.Unstructured
+		namespace    string
+		analyzeOn    AnalyzeOn
+		setupMocks   func() xp.Clients
+		verifyOutput func(t *testing.T, output string)
+		wantErr      bool
 	}{
 		"SuccessfulDiff": {
 			namespace:    "default",
@@ -225,8 +225,15 @@ func TestDefaultCompDiffProcessor_DiffComposition(t *testing.T) {
 					t.Errorf("Expected output to contain the impact-analysis skip note, got:\n%s", output)
 				}
 
-				if !strings.Contains(output, "--analyze-unchanged") {
-					t.Errorf("Expected the skip note to name --analyze-unchanged, got:\n%s", output)
+				if !strings.Contains(output, "--analyze-on=always") {
+					t.Errorf("Expected the skip note to name the flag that opts back in, got:\n%s", output)
+				}
+
+				// The distinction the two skip messages must preserve: an identical composition creates
+				// no revision, so this message may claim nothing could change. The metadata-only skip
+				// may not.
+				if !strings.Contains(output, "creates no new CompositionRevision") {
+					t.Errorf("Expected the identical-composition skip note to say no revision is created, got:\n%s", output)
 				}
 
 				if strings.Contains(output, "=== Affected Composite Resources ===") {
@@ -241,10 +248,10 @@ func TestDefaultCompDiffProcessor_DiffComposition(t *testing.T) {
 		},
 		// --analyze-unchanged opts back into the analysis (the pre-edit convergence-baseline workflow).
 		"UnchangedCompositionWithAnalyzeUnchanged": {
-			namespace:        "default",
-			compositions:     []*un.Unstructured{unchangedComp()},
-			analyzeUnchanged: true,
-			setupMocks:       singleXRMocks,
+			namespace:    "default",
+			compositions: []*un.Unstructured{unchangedComp()},
+			analyzeOn:    AnalyzeOnAlways,
+			setupMocks:   singleXRMocks,
 			verifyOutput: func(t *testing.T, output string) {
 				t.Helper()
 
@@ -364,12 +371,12 @@ func TestDefaultCompDiffProcessor_DiffComposition(t *testing.T) {
 			var stdout bytes.Buffer
 
 			config := ProcessorConfig{
-				Colorize:         false,
-				Compact:          false,
-				AnalyzeUnchanged: tt.analyzeUnchanged,
-				Logger:           logger,
-				Stdout:           &stdout,         // Set stdout in config so renderers can access it
-				Stderr:           &bytes.Buffer{}, // Discard stderr for tests
+				Colorize:  false,
+				Compact:   false,
+				AnalyzeOn: tt.analyzeOn,
+				Logger:    logger,
+				Stdout:    &stdout,         // Set stdout in config so renderers can access it
+				Stderr:    &bytes.Buffer{}, // Discard stderr for tests
 				RenderFunc: func(_ context.Context, _ logging.Logger, in RenderInputs) (render.CompositionOutputs, error) {
 					return render.CompositionOutputs{
 						CompositeResource: in.CompositeResource,
@@ -425,7 +432,7 @@ func TestDefaultCompDiffProcessor_calculateCompositionDiff(t *testing.T) {
 
 	type want struct {
 		hasDiff bool
-		changed bool
+		scope   ChangeScope
 	}
 
 	tests := map[string]struct {
@@ -438,23 +445,23 @@ func TestDefaultCompDiffProcessor_calculateCompositionDiff(t *testing.T) {
 	}{
 		"Identical_NoIgnorePaths": {
 			input: compWithLabels(map[string]string{"version": "0.0.1"}),
-			want:  want{hasDiff: false, changed: false},
+			want:  want{hasDiff: false, scope: ChangeScopeNone},
 		},
 		"Different_NoIgnorePaths": {
 			input: compWithLabels(map[string]string{"version": "0.0.2"}),
-			want:  want{hasDiff: true, changed: true},
+			want:  want{hasDiff: true, scope: ChangeScopeMetadata},
 		},
 		"Identical_WithIgnorePaths": {
 			input:       compWithLabels(map[string]string{"version": "0.0.1"}),
 			ignorePaths: []string{"metadata.labels[version]"},
-			want:        want{hasDiff: false, changed: false},
+			want:        want{hasDiff: false, scope: ChangeScopeNone},
 		},
 		// The only difference is masked: nothing to show the user, but the composition DID change, so
 		// impact analysis must still run.
 		"DifferenceMaskedByIgnorePaths_StillChanged": {
 			input:       compWithLabels(map[string]string{"version": "0.0.2"}),
 			ignorePaths: []string{"metadata.labels[version]"},
-			want:        want{hasDiff: false, changed: true},
+			want:        want{hasDiff: false, scope: ChangeScopeMetadata},
 		},
 		// The cluster copy carries the annotation a client-side kubectl apply stamps; the file copy
 		// never does. It is suppressed from the rendered diff because showing a multi-KB serialization
@@ -467,7 +474,7 @@ func TestDefaultCompDiffProcessor_calculateCompositionDiff(t *testing.T) {
 			clusterAnnotations: map[string]string{
 				"kubectl.kubernetes.io/last-applied-configuration": `{"apiVersion":"apiextensions.crossplane.io/v1","kind":"Composition"}`,
 			},
-			want: want{hasDiff: false, changed: true},
+			want: want{hasDiff: false, scope: ChangeScopeMetadata},
 		},
 		// Same, with the user explicitly masking the annotation. --ignore-paths is a display
 		// preference, so it does not change the verdict either — same reason a load-bearing
@@ -478,7 +485,31 @@ func TestDefaultCompDiffProcessor_calculateCompositionDiff(t *testing.T) {
 				"kubectl.kubernetes.io/last-applied-configuration": `{"apiVersion":"apiextensions.crossplane.io/v1","kind":"Composition"}`,
 			},
 			ignorePaths: []string{"metadata.annotations[kubectl.kubernetes.io/last-applied-configuration]"},
-			want:        want{hasDiff: false, changed: true},
+			want:        want{hasDiff: false, scope: ChangeScopeMetadata},
+		},
+		// A spec difference, which --analyze-on=spec-change is the only setting to distinguish. Every
+		// other case in this table changes metadata only.
+		"SpecDifference_ScopeIsSpec": {
+			input: tu.NewComposition("test-composition").
+				WithCompositeTypeRef("example.org/v1", "XResource").
+				WithPipelineMode().
+				WithLabels(map[string]string{"version": "0.0.1"}).
+				WithPipelineStep("step-a", "function-a", nil).
+				BuildAsUnstructured(),
+			want: want{hasDiff: true, scope: ChangeScopeSpec},
+		},
+		// A spec difference masked from display is still a spec change: --ignore-paths must not be able
+		// to downgrade the scope, or --analyze-on=spec-change would skip a composition that genuinely
+		// renders differently.
+		"SpecDifferenceMasked_ScopeStillSpec": {
+			input: tu.NewComposition("test-composition").
+				WithCompositeTypeRef("example.org/v1", "XResource").
+				WithPipelineMode().
+				WithLabels(map[string]string{"version": "0.0.1"}).
+				WithPipelineStep("step-a", "function-a", nil).
+				BuildAsUnstructured(),
+			ignorePaths: []string{"spec.pipeline"},
+			want:        want{hasDiff: false, scope: ChangeScopeSpec},
 		},
 	}
 
@@ -506,8 +537,57 @@ func TestDefaultCompDiffProcessor_calculateCompositionDiff(t *testing.T) {
 				t.Fatalf("calculateCompositionDiff() unexpected error: %v", err)
 			}
 
-			if diff := gcmp.Diff(tt.want, want{hasDiff: got.diff != nil, changed: got.changed}, gcmp.AllowUnexported(want{})); diff != "" {
+			if diff := gcmp.Diff(tt.want, want{hasDiff: got.diff != nil, scope: got.scope}, gcmp.AllowUnexported(want{})); diff != "" {
 				t.Errorf("calculateCompositionDiff() mismatch (-want +got):\n%s", diff)
+			}
+		})
+	}
+}
+
+// TestChangeScope_triggersAnalysis pins the --analyze-on decision table (issue #472). The values are
+// ordered, so the matrix should be monotonic: anything spec-change analyses, any-change also
+// analyses, and always analyses everything.
+func TestChangeScope_triggersAnalysis(t *testing.T) {
+	type want struct {
+		specChange bool
+		anyChange  bool
+		always     bool
+		// unset is the zero-value AnalyzeOn, which callers constructing a ProcessorConfig directly
+		// will hit; it must behave as the CLI default rather than analysing nothing.
+		unset bool
+	}
+
+	tests := map[string]struct {
+		scope ChangeScope
+		want  want
+	}{
+		"None": {
+			scope: ChangeScopeNone,
+			want:  want{specChange: false, anyChange: false, always: true, unset: false},
+		},
+		// The case the whole flag exists for: a new CompositionRevision is created, but the user may
+		// not want to pay a render per composite to find out whether it propagates.
+		"Metadata": {
+			scope: ChangeScopeMetadata,
+			want:  want{specChange: false, anyChange: true, always: true, unset: true},
+		},
+		"Spec": {
+			scope: ChangeScopeSpec,
+			want:  want{specChange: true, anyChange: true, always: true, unset: true},
+		},
+	}
+
+	for name, tt := range tests {
+		t.Run(name, func(t *testing.T) {
+			got := want{
+				specChange: tt.scope.triggersAnalysis(AnalyzeOnSpecChange),
+				anyChange:  tt.scope.triggersAnalysis(AnalyzeOnAnyChange),
+				always:     tt.scope.triggersAnalysis(AnalyzeOnAlways),
+				unset:      tt.scope.triggersAnalysis(""),
+			}
+
+			if diff := gcmp.Diff(tt.want, got, gcmp.AllowUnexported(want{})); diff != "" {
+				t.Errorf("triggersAnalysis() mismatch (-want +got):\n%s", diff)
 			}
 		})
 	}

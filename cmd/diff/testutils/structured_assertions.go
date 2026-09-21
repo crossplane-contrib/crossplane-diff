@@ -1060,6 +1060,19 @@ type CompositionDiffWire struct {
 	CompositionChanges *ChangeDetail            `json:"compositionChanges,omitempty"`
 	AffectedResources  AffectedResourcesSummary `json:"affectedResources"`
 	ImpactAnalysis     []XRImpactWire           `json:"impactAnalysis"`
+	// ImpactAnalysisSkipped distinguishes "not evaluated" from "no affected composites found".
+	ImpactAnalysisSkipped bool `json:"impactAnalysisSkipped,omitempty"`
+	// MaskedChangesOnly records that an absent compositionChanges does not mean unchanged.
+	MaskedChangesOnly bool `json:"maskedChangesOnly,omitempty"`
+	// RevisionImpact mirrors renderer.RevisionImpact.
+	RevisionImpact RevisionImpactWire `json:"revisionImpact"`
+}
+
+// RevisionImpactWire mirrors renderer.RevisionImpact.
+type RevisionImpactWire struct {
+	ChangeScope         string `json:"changeScope"`
+	CreatesRevision     bool   `json:"createsRevision"`
+	RepointedComposites int    `json:"repointedComposites"`
 }
 
 // AffectedResourcesSummary mirrors renderer.AffectedResourcesSummary.
@@ -1129,6 +1142,17 @@ type CompositionExpectation struct {
 	// Composition changes expectations
 	compositionChangeType   string            // "modified" - composition changes are always modifications
 	compositionFieldChanges map[string][2]any // For modified: field path -> [old, new]
+	// impactAnalysisSkipped, when set, asserts the composites were deliberately not evaluated.
+	impactAnalysisSkipped *bool
+	// revisionImpact, when set, asserts what applying the composition does to CompositionRevisions.
+	revisionImpact *expectedRevisionImpact
+}
+
+// expectedRevisionImpact is the expected revisionImpact object for a composition.
+type expectedRevisionImpact struct {
+	changeScope         string
+	createsRevision     bool
+	repointedComposites int
 }
 
 func (c *CompositionExpectation) compExpectation() *ExpectedCompDiff { return c.parent }
@@ -1182,6 +1206,28 @@ func (c *CompositionExpectation) WithAffectedResources(total, withChanges, uncha
 // positional counterpart to WithAffectedResources, so a caller cannot transpose filter counters.
 func (c *CompositionExpectation) WithFilteredByDeletion(count int) *CompositionExpectation {
 	c.affectedFilteredByDeletion = &count
+
+	return c
+}
+
+// WithImpactAnalysisSkipped asserts that the composites were deliberately not evaluated, which is
+// what distinguishes "we did not look" from "we looked and found no affected composites" — both of
+// which leave impactAnalysis empty.
+func (c *CompositionExpectation) WithImpactAnalysisSkipped() *CompositionExpectation {
+	skipped := true
+	c.impactAnalysisSkipped = &skipped
+
+	return c
+}
+
+// WithRevisionImpact asserts what applying the composition does to CompositionRevisions, independent
+// of whether anything renders differently. changeScope is "none", "metadata" or "spec".
+func (c *CompositionExpectation) WithRevisionImpact(changeScope string, createsRevision bool, repointedComposites int) *CompositionExpectation {
+	c.revisionImpact = &expectedRevisionImpact{
+		changeScope:         changeScope,
+		createsRevision:     createsRevision,
+		repointedComposites: repointedComposites,
+	}
 
 	return c
 }
@@ -1417,6 +1463,30 @@ func AssertStructuredCompDiff(t *testing.T, jsonOutput string, e CompDiffExpecta
 		if expectComp.affectedFilteredByDeletion != nil && found.AffectedResources.FilteredByDeletion != *expectComp.affectedFilteredByDeletion {
 			t.Errorf("Composition %s: AffectedResources.FilteredByDeletion: expected %d, got %d",
 				expectComp.name, *expectComp.affectedFilteredByDeletion, found.AffectedResources.FilteredByDeletion)
+		}
+
+		if expectComp.impactAnalysisSkipped != nil && found.ImpactAnalysisSkipped != *expectComp.impactAnalysisSkipped {
+			t.Errorf("Composition %s: ImpactAnalysisSkipped: expected %t, got %t",
+				expectComp.name, *expectComp.impactAnalysisSkipped, found.ImpactAnalysisSkipped)
+		}
+
+		if want := expectComp.revisionImpact; want != nil {
+			got := found.RevisionImpact
+
+			if got.ChangeScope != want.changeScope {
+				t.Errorf("Composition %s: RevisionImpact.ChangeScope: expected %q, got %q",
+					expectComp.name, want.changeScope, got.ChangeScope)
+			}
+
+			if got.CreatesRevision != want.createsRevision {
+				t.Errorf("Composition %s: RevisionImpact.CreatesRevision: expected %t, got %t",
+					expectComp.name, want.createsRevision, got.CreatesRevision)
+			}
+
+			if got.RepointedComposites != want.repointedComposites {
+				t.Errorf("Composition %s: RevisionImpact.RepointedComposites: expected %d, got %d",
+					expectComp.name, want.repointedComposites, got.RepointedComposites)
+			}
 		}
 
 		// Check composition changes

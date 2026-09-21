@@ -58,9 +58,10 @@ type DiffOptions struct {
 	IgnorePaths []string
 
 	// ForVerdict marks a comparison whose result answers "did this object change?" rather than
-	// producing output a human reads. It disables the display-only suppressions (see
-	// alwaysIgnoredPaths in cleanupForDiff): a field hidden purely to keep the rendered diff
-	// readable must never decide whether a change exists.
+	// producing output a human reads. Such a comparison keeps the display-only fields *in* the
+	// objects being compared (see displayOnlyIgnoredPaths in cleanupForDiff), so a difference in one
+	// of them registers: a field hidden purely to keep the rendered diff readable must never decide
+	// whether a change exists.
 	//
 	// Callers should also clear IgnorePaths for such a comparison, for the same reason — the user's
 	// masks are a display preference too.
@@ -603,7 +604,7 @@ func removeNestedPath(obj map[string]any, path string) bool {
 }
 
 // cleanupForDiff removes fields that shouldn't be included in the diff. When forVerdict is set the
-// display-only suppressions are retained, because the caller is asking whether the objects differ
+// display-only paths are left in the object, because the caller is asking whether the objects differ
 // rather than rendering them; see DiffOptions.ForVerdict.
 func cleanupForDiff(obj *un.Unstructured, logger logging.Logger, ignorePaths []string, forVerdict bool) *un.Unstructured {
 	resKind := obj.GetKind()
