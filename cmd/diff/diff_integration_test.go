@@ -2311,19 +2311,24 @@ Impact analysis skipped: this composition is identical to the cluster's, so no c
 			expectedExitCode: dp.ExitCodeSuccess,
 			noColor:          true,
 		},
-		// Issue #467: the same skip, for a cluster composition that was applied with a client-side
-		// `kubectl apply` and so carries kubectl.kubernetes.io/last-applied-configuration. The file
-		// being diffed never carries that annotation, so the composition comparison sees a difference
-		// the user did not make. It must not read as an edit — otherwise the skip above never fires
-		// for the most common way compositions actually reach a cluster, and the delta these fixtures
-		// produce comes back as exit code 3.
+		// Issue #467: the cluster composition was applied with a client-side `kubectl apply`, so it
+		// carries kubectl.kubernetes.io/last-applied-configuration; the file being diffed never does.
+		// That annotation is suppressed from the rendered diff — it is a multi-KB serialization of the
+		// object, useless to show — but Crossplane's Composition.Hash() covers annotations, so applying
+		// this DOES create a new CompositionRevision that composites re-point to, and whose name a
+		// template can read off the XR's compositionRevisionRef. A suppression made for readability
+		// must not decide that away, so the composites are evaluated. Contrast the sibling above, which
+		// is byte-identical and needs --analyze-unchanged to evaluate anything.
 		//
-		// Unlike the unit coverage in TestDefaultCompDiffProcessor_calculateCompositionDiff, this runs
-		// the real CLI wiring: it proves defaultProcessorOptions does not fold the annotation into
-		// --ignore-paths (which would make "the user masked something" indistinguishable from "we
-		// always ignore something") and that the renderer strips it regardless.
-		"UnchangedCompositionAppliedWithKubectlSkipsImpactAnalysis": {
-			reason: "A composition applied with kubectl is still recognized as unchanged, despite the last-applied-configuration annotation only its cluster copy carries",
+		// This runs the real CLI wiring, which the unit coverage in
+		// TestDefaultCompDiffProcessor_calculateCompositionDiff cannot reach: it pins that
+		// defaultProcessorOptions does not fold the annotation into --ignore-paths, and that the
+		// display-only suppression does not leak into the change verdict.
+		//
+		// The downstream modification reported here is the same fixture artifact
+		// UnchangedCompositionAnalyzeUnchangedEvaluatesXRs documents, not an effect of the annotation.
+		"CompositionAppliedWithKubectlEvaluatesXRs": {
+			reason: "A composition differing only in kubectl's last-applied-configuration still counts as changed, because applying it creates a new CompositionRevision",
 			setupFiles: []string{
 				"testdata/comp/resources/xrd.yaml",
 				"testdata/comp/resources/original-composition-kubectl-applied.yaml",
@@ -2331,19 +2336,16 @@ Impact analysis skipped: this composition is identical to the cluster's, so no c
 				"testdata/comp/resources/existing-xr-1.yaml",
 				"testdata/comp/resources/existing-downstream-1.yaml",
 			},
-			inputFiles: []string{"testdata/comp/composition-no-changes.yaml"},
-			namespace:  "default",
-			expectedOutput: `
-=== Composition Changes ===
-
-No changes detected in composition xnopresources.diff.example.org
-
-Impact analysis skipped: this composition is identical to the cluster's, so no composite resource would render differently as a result. Pass --analyze-unchanged to evaluate them anyway.
-
-`,
-			expectedError:    false,
-			expectedExitCode: dp.ExitCodeSuccess,
-			noColor:          true,
+			inputFiles:       []string{"testdata/comp/composition-no-changes.yaml"},
+			namespace:        "default",
+			outputFormat:     "json",
+			expectedExitCode: dp.ExitCodeDiffDetected,
+			expectedStructuredCompOutput: tu.ExpectCompDiff().
+				WithComposition("xnopresources.diff.example.org").
+				WithAffectedResources(1, 1, 0, 0).
+				WithXRImpact("XNopResource", "test-resource", "default", "changed").
+				WithDownstreamSummary(0, 1, 0).
+				WithDownstreamResource("modified", "XDownstreamResource", "test-resource", "default"),
 		},
 		// The same setup with --analyze-unchanged evaluates the XRs after all (the pre-edit
 		// convergence-baseline workflow). Note what it reports: a downstream modification even though

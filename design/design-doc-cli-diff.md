@@ -257,13 +257,13 @@ The `comp` subcommand has its own set of integration tests:
   `matchLabels` and `matchExpressions` and both v1/v2 field paths.
 - **Unchanged-Composition Skipping**: Verifies that a composition identical to its in-cluster version skips impact
   analysis (marked `ImpactAnalysisSkipped`, exit code 0 even when the fixtures would otherwise report a downstream
-  delta), that `--analyze-unchanged` evaluates the composites anyway, that a difference confined to an
-  `--ignore-paths` path still counts as changed so the analysis is not silently skipped, and — the converse — that a
-  cluster-only `kubectl.kubernetes.io/last-applied-configuration` annotation does *not* count as changed, whether or not
-  the caller also masks it explicitly. The last of those is covered at both levels: as a comparison verdict in
+  delta), that `--analyze-unchanged` evaluates the composites anyway, and that a difference confined to a masked field
+  still counts as changed so the analysis is not silently skipped — for both kinds of mask: the user's `--ignore-paths`,
+  and the renderer's display-only suppressions (a cluster-only `kubectl.kubernetes.io/last-applied-configuration`
+  annotation). The display-only case is covered at both levels: as a comparison verdict in
   `TestDefaultCompDiffProcessor_calculateCompositionDiff`, and end-to-end through the real CLI wiring in
-  `TestCompDiffIntegration/UnchangedCompositionAppliedWithKubectlSkipsImpactAnalysis`, which is what pins
-  `defaultProcessorOptions` not folding the annotation into `--ignore-paths` (see §6.8).
+  `TestCompDiffIntegration/CompositionAppliedWithKubectlEvaluatesXRs`, which is what pins `defaultProcessorOptions` not
+  folding the annotation into `--ignore-paths` (see §6.8).
 - **Deletion Handling**: Verifies that an XR carrying a `metadata.deletionTimestamp` is excluded from impact analysis
   with reason `deleting` (counted via `FilteredByDeletion`, and surfaced as a `filtered` impact entry in `--resource`
   mode), that `--include-manual` does not re-include it, and that an explicitly-null `deletionTimestamp` (how
@@ -598,21 +598,23 @@ type CompDiffProcessor interface {
    render-relevant path via `--ignore-paths` silently skips the analysis for a composition that genuinely changes the
    rendered output; hence the `changed` field. See issue #453.
 
-   Note what the skip does **not** claim. Crossplane's `Composition.Hash()`
+   **What counts as "identical" is Crossplane's definition, not ours.** `Composition.Hash()`
    (`apis/apiextensions/v1/composition_hash.go`) hashes labels *and* annotations as well as spec, and the revision
    controller creates a revision whenever no existing one's `crossplane.io/composition-hash` label matches. So a
-   composition whose metadata differs — most commonly the first client-side `kubectl apply` over an object created by
-   SSA, Helm or a controller, which *adds* `last-applied-configuration` — does get a new CompositionRevision despite an
-   untouched spec. What makes the skip safe is not that no revision is created, but that
-   `NewCompositionRevisionSpec` copies the spec verbatim, so the revision renders identically. Automatic XRs will
-   re-point `compositionRevisionRef` at it; the tool does not model that, and does not need to, because the rendered
-   output is unchanged. This is why the user-facing wording asserts spec identity rather than revision mechanics.
+   composition differing only in metadata — most commonly the first client-side `kubectl apply` over an object created by
+   SSA, Helm or a controller, which *adds* `last-applied-configuration` — is **not** identical: it produces a new
+   CompositionRevision that Automatic composites re-point to. `changed` therefore mirrors `Hash()`'s scope, and such a
+   composition is analysed rather than skipped. The skip fires only when nothing Crossplane hashes differs, in which case
+   no revision is created and nothing can adopt anything.
 
-   The same hashing has a consequence that *is* load-bearing: revisions inherit the composition's `metadata.labels`
-   (`NewCompositionRevision` copies them), and an XR's `compositionRevisionSelector` matches against those labels. A
-   label-only edit can therefore change which revision an XR selects, which is a real downstream effect from a
-   spec-untouched composition. That case is handled by the same `changed` field — because it is computed unmasked, a
-   label change hidden behind `--ignore-paths` still runs the analysis.
+   Deliberately *not* assumed: that a metadata-only difference renders identically. It usually will, since
+   `NewCompositionRevisionSpec` copies the spec verbatim — but the revision's identity is observable from a template.
+   Functions receive the whole XR (`AsState` → `xfn.AsStruct`), so a template reading
+   `.observed.composite.resource.spec.crossplane.compositionRevisionRef.name` propagates the revision name into a
+   composed resource, and that name is `<composition>-<hash[:7]>`. Revisions also inherit the composition's
+   `metadata.labels`, which an XR's `compositionRevisionSelector` matches against, so a label-only edit can change which
+   revision an XR selects. Predicting render-relevance from the shape of the change is therefore unsound; the render is
+   what decides, which is why the analysis runs.
 4. **Diff each XR.** Delegate to the `xrProc` `DiffProcessor` via `DiffSingleResource`, supplying a
    `CompositionProvider` that returns the proposed composition for the affected XR's GVK and the cluster's composition
    otherwise (so nested XRs that use a different composition are diffed against their unchanged composition).
@@ -871,12 +873,13 @@ JSON tags), so the field naming is consistent across formats.
 `spec.crossplane.resourceRefs`, `status`, and the annotation
 `metadata.annotations[kubectl.kubernetes.io/last-applied-configuration]`) apply uniformly across output formats.
 
-That last annotation is stripped **unconditionally** by the renderer (`alwaysIgnoredPaths`) rather than prepended to
-`IgnorePaths` at the CLI layer, so that `IgnorePaths` means exactly "masks the user asked for". `comp` relies on that
-distinction: it decides whether a composition changed at all by re-running the comparison with the user's masks removed
-(see §7 step 3), and a record of *how* the composition was applied surviving into that comparison would make every
-`kubectl apply`-ed composition look edited — defeating the unchanged-composition skip for the most common deployment
-path. Cleanup happens during diff
+That last annotation is **display-only** suppression (`displayOnlyIgnoredPaths` in `cleanupForDiff`), handled by the
+renderer rather than prepended to `IgnorePaths` at the CLI layer, so that `IgnorePaths` means exactly "masks the user
+asked for". Showing it is useless — it is a multi-KB serialization of the object itself — but suppressing it from
+*display* must not suppress it from a change *verdict*: Crossplane hashes annotations into a composition's identity, so a
+difference here produces a new CompositionRevision (see §7 step 3a). `DiffOptions.ForVerdict` exists for exactly this —
+it retains the display-only suppressions, and comp's change verdict sets it alongside clearing `IgnorePaths`. The
+general rule: **a field hidden to keep output readable may never decide whether a change exists.** Cleanup happens during diff
 generation (`GenerateDiffWithOptions`), not in the renderers, and each object is cleaned at most once: the results are
 stored on the `ResourceDiff` as `ResourceViews{Raw, Clean}`. `Raw` is the original object (load-bearing for removal
 detection and existing-XR reconstruction); `Clean` is the post-cleanup object. `Clean` is populated only for non-equal

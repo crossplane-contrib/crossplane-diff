@@ -456,29 +456,29 @@ func TestDefaultCompDiffProcessor_calculateCompositionDiff(t *testing.T) {
 			ignorePaths: []string{"metadata.labels[version]"},
 			want:        want{hasDiff: false, changed: true},
 		},
-		// The cluster copy carries the annotation kubectl stamps on apply; the file copy never does.
-		// That annotation is an artifact of how the composition was applied, not a change to it, so
-		// it must not read as `changed` — otherwise every kubectl-applied composition looks changed
-		// and the (expensive) impact analysis #453 set out to skip runs anyway. The user-supplied
-		// mask here is unrelated and only serves to put --ignore-paths in play.
-		"LastAppliedConfigurationOnly_NotChanged": {
+		// The cluster copy carries the annotation a client-side kubectl apply stamps; the file copy
+		// never does. It is suppressed from the rendered diff because showing a multi-KB serialization
+		// of the object is useless — but Crossplane's Composition.Hash() covers annotations, so
+		// applying this does create a new CompositionRevision that composites re-point to. A
+		// readability suppression must not decide that away: changed is true, and the composites get
+		// evaluated.
+		"LastAppliedConfigurationOnly_Changed": {
 			input: compWithLabels(map[string]string{"version": "0.0.1"}),
 			clusterAnnotations: map[string]string{
 				"kubectl.kubernetes.io/last-applied-configuration": `{"apiVersion":"apiextensions.crossplane.io/v1","kind":"Composition"}`,
 			},
-			ignorePaths: []string{"metadata.labels[unrelated]"},
-			want:        want{hasDiff: false, changed: false},
+			want: want{hasDiff: false, changed: true},
 		},
-		// Same as above, but with the caller explicitly masking the annotation — the shape the CLI
-		// used to assemble. Masking it must not change the verdict: the annotation is stripped
-		// unconditionally either way.
-		"LastAppliedConfigurationExplicitlyMasked_NotChanged": {
+		// Same, with the user explicitly masking the annotation. --ignore-paths is a display
+		// preference, so it does not change the verdict either — same reason a load-bearing
+		// spec.pipeline[].input mask does not (see DifferenceMaskedByIgnorePaths_StillChanged).
+		"LastAppliedConfigurationExplicitlyMasked_StillChanged": {
 			input: compWithLabels(map[string]string{"version": "0.0.1"}),
 			clusterAnnotations: map[string]string{
 				"kubectl.kubernetes.io/last-applied-configuration": `{"apiVersion":"apiextensions.crossplane.io/v1","kind":"Composition"}`,
 			},
 			ignorePaths: []string{"metadata.annotations[kubectl.kubernetes.io/last-applied-configuration]"},
-			want:        want{hasDiff: false, changed: false},
+			want:        want{hasDiff: false, changed: true},
 		},
 	}
 

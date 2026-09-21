@@ -287,8 +287,8 @@ No fixture in either suite carries the fields a real client writes, because of h
   apply, which deliberately omits `kubectl.kubernetes.io/last-applied-configuration`.
 
 So a bug that only manifests when a field is present that *only* a client-side `kubectl apply` (or Argo, Flux, …) would
-add is invisible to both suites by default. Issue #467 is the worked example: the unchanged-composition skip was inert
-for every kubectl-applied composition, and the whole test suite was green.
+add is invisible to both suites by default. Issue #467 is the worked example: `comp` mishandled every kubectl-applied
+composition, and the whole test suite was green.
 
 The fix is cheap, so reach for it whenever a code path's behaviour depends on client-written metadata: **declare the
 field in the setup fixture**. Fixtures are applied as written, so a fixture can carry anything a real client would,

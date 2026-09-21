@@ -175,6 +175,11 @@ type CompositionDiff struct {
 	// "we looked and found no affected XRs", which are otherwise indistinguishable from an empty
 	// ImpactAnalysis. Set unless --analyze-unchanged is passed.
 	ImpactAnalysisSkipped bool
+	// MaskedChangesOnly records that the composition differs from the cluster's only in fields
+	// excluded from the rendered diff — the user's --ignore-paths, or the renderer's display-only
+	// suppressions. CompositionDiff is nil in that case, but the composition did change, so the
+	// renderer must not report it as unchanged.
+	MaskedChangesOnly bool
 }
 
 // HasChanges returns true if this composition diff has any changes.
@@ -247,6 +252,12 @@ type compositionDiffWire struct {
 	// ImpactAnalysisSkipped tells consumers the empty impactAnalysis means "not evaluated"
 	// (composition unchanged) rather than "no affected XRs found".
 	ImpactAnalysisSkipped bool `json:"impactAnalysisSkipped,omitempty"`
+	// MaskedChangesOnly tells consumers that an absent compositionChanges does not mean the
+	// composition is unchanged: it differs only in fields excluded from the diff, which still
+	// produces a new CompositionRevision. Carried as a field rather than a warning because it is a
+	// per-composition fact a CI consumer may want to gate on, and warnings are neither attributed to
+	// a composition nor intended for gating.
+	MaskedChangesOnly bool `json:"maskedChangesOnly,omitempty"`
 }
 
 type xrImpactWire struct {

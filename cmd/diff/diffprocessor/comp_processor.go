@@ -380,6 +380,7 @@ func (p *DefaultCompDiffProcessor) processSingleComposition(ctx context.Context,
 	}
 
 	result.CompositionDiff = comparison.diff
+	result.MaskedChangesOnly = comparison.diff == nil && comparison.changed
 
 	// Applying a composition that is identical to its in-cluster version creates no new
 	// CompositionRevision, so no XR adopts anything it hasn't already adopted. Any downstream delta
@@ -573,11 +574,17 @@ func (p *DefaultCompDiffProcessor) collectXRDiffs(ctx context.Context, xrs []*un
 // compositionComparison is the result of comparing a proposed composition against its in-cluster
 // version.
 //
-// The two fields come apart when --ignore-paths masks the only difference: `diff` is what the user
-// is shown (nil when the compositions are equal after masking), while `changed` records whether the
-// composition differs at all. Impact analysis gates on `changed`, never on `diff` — masking a path
-// that is load-bearing for rendering (anything under spec.pipeline[].input, say) would otherwise
-// silently skip the analysis for a composition that genuinely changes the rendered output.
+// The two fields come apart whenever a mask hides the only difference: `diff` is what the user is
+// shown (nil when the compositions are equal after masking), while `changed` records whether the
+// composition differs at all. Impact analysis gates on `changed`, never on `diff`.
+//
+// Both kinds of mask can hide a real difference, so neither may gate the analysis:
+//   - the user's --ignore-paths, which could cover something load-bearing for rendering (anything
+//     under spec.pipeline[].input, say);
+//   - the renderer's display-only suppressions, which cover fields Crossplane nonetheless hashes
+//     into a composition's identity, and so into whether a new CompositionRevision is created.
+//
+// `changed` is therefore computed with every mask lifted. See issue #453.
 type compositionComparison struct {
 	diff    *dt.ResourceDiff
 	changed bool
@@ -646,27 +653,28 @@ func (p *DefaultCompDiffProcessor) calculateCompositionDiff(ctx context.Context,
 		return compositionComparison{diff: compDiff, changed: true}, nil
 	}
 
-	// Equal after masking. Whether the composition is *actually* unchanged depends on whether any
-	// paths were masked at all; re-compare without them when they could be hiding something. The
-	// extra comparison is local (no API calls) and only runs when --ignore-paths is in play.
-	changed := false
+	// Nothing to display. That is not the same as unchanged: both the user's --ignore-paths and the
+	// renderer's display-only suppressions could be hiding a real difference. Re-compare with every
+	// mask lifted (ForVerdict) to find out.
+	//
+	// The masks are display preferences; whether the composition changed is a fact about the object.
+	// Crossplane's own answer to that question is Composition.Hash(), which covers labels,
+	// annotations and spec — so a metadata-only difference genuinely produces a new
+	// CompositionRevision that composites re-point to, and that a template can observe through the
+	// XR's compositionRevisionRef. This comparison mirrors that scope. It is local (no API calls).
+	diffOptions.IgnorePaths = nil
+	diffOptions.ForVerdict = true
 
-	if len(p.config.IgnorePaths) > 0 {
-		diffOptions.IgnorePaths = nil
-
-		unmasked, err := renderer.GenerateDiffWithOptions(ctx, originalCompUnstructured, newCompUnstructured, p.config.Logger, diffOptions)
-		if err != nil {
-			return compositionComparison{}, errors.Wrap(err, "cannot calculate composition diff ignoring --ignore-paths")
-		}
-
-		changed = unmasked.DiffType != dt.DiffTypeEqual
+	unmasked, err := renderer.GenerateDiffWithOptions(ctx, originalCompUnstructured, newCompUnstructured, p.config.Logger, diffOptions)
+	if err != nil {
+		return compositionComparison{}, errors.Wrap(err, "cannot calculate composition diff with masks lifted")
 	}
 
-	// Debug, not Info: the renderer already prints "No changes detected in composition <name>" to
-	// stdout, so raising this as a user-facing warning would duplicate it.
-	p.config.Logger.Debug("No changes detected in composition",
+	changed := unmasked.DiffType != dt.DiffTypeEqual
+
+	p.config.Logger.Debug("No displayable changes in composition",
 		"composition", newComp.GetName(),
-		"changedInIgnoredPathsOnly", changed)
+		"changedInMaskedFieldsOnly", changed)
 
 	return compositionComparison{diff: nil, changed: changed}, nil
 }

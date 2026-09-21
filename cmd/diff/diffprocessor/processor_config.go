@@ -52,10 +52,11 @@ type ProcessorConfig struct {
 	// into that analysis — e.g. to establish a "is my cluster converged?" baseline before
 	// editing a composition.
 	//
-	// Note the wording: Crossplane's Composition.Hash() covers labels and annotations as well as
-	// spec, so a composition whose metadata differs does get a new CompositionRevision even
-	// though its spec is untouched. What makes the skip safe is that the revision would carry an
-	// identical spec and so render identically — not that no revision is created.
+	// "Identical" here means identical in every field Crossplane hashes into a composition's
+	// identity — labels and annotations as well as spec (see Composition.Hash()). A composition
+	// differing only in metadata is NOT identical by that standard: it produces a new
+	// CompositionRevision that composites re-point to, so it is treated as changed and its
+	// composites are evaluated normally.
 	AnalyzeUnchanged bool
 
 	// EventualState enables iterative simulation to show eventual state after all reconciliation
