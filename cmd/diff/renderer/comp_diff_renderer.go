@@ -91,10 +91,15 @@ func (r *DefaultCompDiffRenderer) RenderCompDiff(output *CompDiffOutput) error {
 		}
 
 		// The affected-XR and impact-analysis sections would both be empty and misleading for a
-		// composition whose XRs were deliberately not evaluated; say so once instead.
+		// composition whose XRs were deliberately not evaluated; say so once instead — then report the
+		// composites the tool did rule out locally, which no render was needed to establish.
 		if comp.ImpactAnalysisSkipped {
 			if _, err := fmt.Fprint(stdout, skippedMessage(comp.RevisionImpact)); err != nil {
 				return errors.Wrap(err, "cannot write impact analysis skipped message")
+			}
+
+			if err := r.renderFilteredUnderSkip(&comp); err != nil {
+				return err
 			}
 
 			continue
@@ -176,6 +181,55 @@ func skippedMessage(impact RevisionImpact) string {
 	}
 
 	return "Impact analysis skipped: this composition is identical to the cluster's, so applying it creates no new CompositionRevision and no composite resource could change as a result. Pass --analyze-on=always to evaluate them anyway.\n\n"
+}
+
+// renderFilteredUnderSkip reports the composites ruled out as not adopting the resulting revision, for
+// a composition whose impact analysis was skipped. Deciding that needs no render, so the skip must not
+// suppress it: --analyze-on governs how much work is done, never whether a real consequence is
+// reported (issue #478). What is withheld is the changed/unchanged/errored summary
+// renderAffectedResourcesList prints, which would be unearned here — those composites went
+// unevaluated.
+//
+// As elsewhere, --resource mode names each composite (the user asked about them by name, and their
+// FilterReason reached ImpactAnalysis) while default discovery reports the per-reason breakdown.
+func (r *DefaultCompDiffRenderer) renderFilteredUnderSkip(comp *CompositionDiff) error {
+	filtered := totalFiltered(comp.AffectedResources)
+	if filtered == 0 {
+		return nil
+	}
+
+	stdout := r.opts.Stdout
+
+	if _, err := fmt.Fprintf(stdout, "%d of %d XR(s) using composition %s would not adopt this revision: %s\n",
+		filtered, comp.AffectedResources.Total, comp.Name, filteredClauses(comp.AffectedResources)); err != nil {
+		return errors.Wrap(err, "cannot write filtered XRs summary")
+	}
+
+	if surfaced := filteredImpacts(comp.ImpactAnalysis); len(surfaced) > 0 {
+		if _, err := fmt.Fprint(stdout, r.buildXRStatusList(surfaced)); err != nil {
+			return errors.Wrap(err, "cannot write filtered XRs list")
+		}
+	}
+
+	if _, err := fmt.Fprintln(stdout); err != nil {
+		return errors.Wrap(err, "cannot write filtered XRs separator")
+	}
+
+	return nil
+}
+
+// filteredImpacts returns the entries that record a filtered composite. Only --resource mode surfaces
+// them individually, so an empty result means the caller should fall back to the per-reason counts.
+func filteredImpacts(impacts []XRImpact) []XRImpact {
+	surfaced := make([]XRImpact, 0, len(impacts))
+
+	for _, impact := range impacts {
+		if impact.Status == XRStatusFiltered {
+			surfaced = append(surfaced, impact)
+		}
+	}
+
+	return surfaced
 }
 
 // writeNoDisplayableChanges reports a composition with no diff body to show. That covers two
@@ -357,23 +411,31 @@ func allFilteredMessage(compName string, summary AffectedResourcesSummary) strin
 			total, compName)
 	}
 
+	return fmt.Sprintf("All %d XR(s) using composition %s were filtered: %s",
+		total, compName, filteredClauses(summary))
+}
+
+// filteredClauses enumerates the per-reason filter counters as a comma-separated breakdown (e.g.
+// "1 with Manual update policy (use --include-manual to see them), 2 being deleted"), omitting reasons
+// with no XRs. Shared by allFilteredMessage's mixed-reason case and renderFilteredUnderSkip so a newly
+// added reason is described identically in both.
+func filteredClauses(summary AffectedResourcesSummary) string {
 	clauses := make([]string, 0, 3)
 
 	for _, c := range []struct {
 		count int
 		text  string
 	}{
-		{byPolicy, "with Manual update policy (use --include-manual to see them)"},
-		{bySelector, "with a compositionRevisionSelector that does not match the composition's labels"},
-		{byDeletion, "being deleted"},
+		{summary.FilteredByPolicy, "with Manual update policy (use --include-manual to see them)"},
+		{summary.FilteredBySelector, "with a compositionRevisionSelector that does not match the composition's labels"},
+		{summary.FilteredByDeletion, "being deleted"},
 	} {
 		if c.count > 0 {
 			clauses = append(clauses, fmt.Sprintf("%d %s", c.count, c.text))
 		}
 	}
 
-	return fmt.Sprintf("All %d XR(s) using composition %s were filtered: %s",
-		total, compName, strings.Join(clauses, ", "))
+	return strings.Join(clauses, ", ")
 }
 
 // filteredSuffix returns the human-readable explanation appended to a filtered XR line, chosen by
@@ -536,7 +598,14 @@ func (r *StructuredCompDiffRenderer) buildStructuredCompOutput(output *CompDiffO
 			ImpactAnalysis:        make([]xrImpactWire, 0, len(comp.ImpactAnalysis)),
 			ImpactAnalysisSkipped: comp.ImpactAnalysisSkipped,
 			MaskedChangesOnly:     comp.MaskedChangesOnly,
-			RevisionImpact:        comp.RevisionImpact,
+		}
+
+		// Omit revisionImpact entirely when the comparison never completed, rather than serializing a
+		// zero value that would claim changeScope "" and createsRevision false. See
+		// RevisionImpact.determined and issue #479.
+		if comp.RevisionImpact.determined() {
+			revisionImpact := comp.RevisionImpact
+			jsonComp.RevisionImpact = &revisionImpact
 		}
 
 		// Include per-composition error if present

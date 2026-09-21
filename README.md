@@ -748,18 +748,32 @@ The structured output includes:
 - **Diff content**: for modifications, `diff.old` and `diff.new` carry the full current/desired resource objects (apiVersion/kind/metadata/spec/status, etc.) — not just the diffing subset. For additions/removals, the full resource object lives under `diff.spec` (the JSON key is literally `spec` but the value is the entire resource, not its spec subtree).
 - **Impact analysis** (comp only): which XRs are affected by composition changes and their status. When the composition
   change is smaller than `--analyze-on` asked to analyse — by default, a composition identical to its in-cluster
-  version — its composites are not evaluated and the entry carries `"impactAnalysisSkipped": true` alongside an empty
-  `impactAnalysis`, so a consumer can tell "not evaluated" from "no affected composites found". Raise `--analyze-on` to
-  evaluate them anyway.
+  version — its composites are not evaluated and the entry carries `"impactAnalysisSkipped": true`, so a consumer can
+  tell "not evaluated" from "no affected composites found". Raise `--analyze-on` to evaluate them anyway.
+
+  A skip withholds only the per-composite renders, and therefore only the changed/unchanged/errored verdict. Composites
+  excluded because they would not adopt the resulting revision (Manual update policy, a non-matching
+  `compositionRevisionSelector`, or being deleted) are identified without rendering anything, so they are still
+  reported: `affectedResources` keeps its `total` and its `filteredByPolicy` / `filteredBySelector` /
+  `filteredByDeletion` breakdown, and under `--resource` the named composites still appear in `impactAnalysis` as
+  `"status": "filtered"` entries with their `filterReason`. So `"impactAnalysisSkipped": true` does not imply
+  `impactAnalysis` is empty.
 - **Revision impact** (comp only): a `revisionImpact` object per composition, recording what applying it does to
   CompositionRevisions regardless of whether anything renders differently. It carries `changeScope` (`"none"`,
   `"metadata"` or `"spec"` — how much of the composition differs, in the terms Crossplane's `Composition.Hash()` uses,
   which covers labels and annotations as well as spec), `createsRevision` (whether applying the composition produces a
   new CompositionRevision), and `repointedComposites` (how many composites would adopt that revision and reconcile as a
-  result — those not excluded by update policy, revision selector, or deletion). It is **always present**, including
-  when `impactAnalysisSkipped` is true: that is the point of it, and it is what keeps `--analyze-on` a cost knob rather
-  than a correctness mode. Note that a composite re-pointing to a new revision is not the same as its rendered output
-  changing; re-pointing alone usually renders identically.
+  result). A composite is counted only if it genuinely re-points: it has an Automatic (or defaulted)
+  `compositionUpdatePolicy`, its `compositionRevisionSelector` (if any) selects the resulting revision, and it is not
+  being deleted. A Manual-policy composite is never counted, because it stays pinned by its `compositionRevisionRef` —
+  `--include-manual` keeps it in the analysis without making it adopt the new revision. Note too that a composite
+  re-pointing is not the same as its rendered output changing; re-pointing alone usually renders identically.
+
+  `revisionImpact` is present whenever the composition was compared, **including** when `impactAnalysisSkipped` is true:
+  that is the point of it, and it is what keeps `--analyze-on` a cost knob rather than a correctness mode. It is
+  **absent** for a composition that failed to process, whose `error` field says why — the comparison never completed, so
+  neither its scope nor whether it creates a revision was ever determined, and reporting `"changeScope": ""` with
+  `"createsRevision": false` would assert otherwise.
 - **Masked changes** (comp only): `"maskedChangesOnly": true` says an absent `compositionChanges` does *not* mean the
   composition is unchanged — it differs only in fields excluded from the diff (your `--ignore-paths`, or the fields
   suppressed for readability). Applying it still creates a new CompositionRevision, which `revisionImpact` reports.
