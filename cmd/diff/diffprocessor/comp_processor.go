@@ -159,6 +159,18 @@ func (p *DefaultCompDiffProcessor) Cleanup(ctx context.Context) error {
 	return p.xrProc.Cleanup(ctx)
 }
 
+// cleanupBeforeRender mirrors DefaultDiffProcessor.cleanupBeforeRender for the composition processor;
+// see that method for why teardown happens before output is emitted rather than only in the command's
+// deferred Cleanup.
+func (p *DefaultCompDiffProcessor) cleanupBeforeRender() {
+	ctx, cancel := context.WithTimeout(context.Background(), CleanupTimeout)
+	defer cancel()
+
+	if err := p.Cleanup(ctx); err != nil {
+		p.config.Logger.Debug("Failed to release processor resources before rendering", "error", err)
+	}
+}
+
 // DiffComposition processes composition changes and shows impact on existing XRs.
 // Returns (hasDiffs, error) where hasDiffs indicates if any differences were detected.
 func (p *DefaultCompDiffProcessor) DiffComposition(ctx context.Context, compositions []*un.Unstructured, namespace string, resources []k8stypes.NamespacedName) (bool, error) {
@@ -271,6 +283,13 @@ func (p *DefaultCompDiffProcessor) DiffComposition(ctx context.Context, composit
 			}
 		}
 	}
+
+	// Release resources before draining advisories, so one raised during teardown (leftover function
+	// containers) is collected rather than arriving after the renderer has already read the slice. See
+	// DefaultDiffProcessor.cleanupBeforeRender for why this does not live solely in the command's defer.
+	//
+	//nolint:contextcheck // Detaching from ctx is the point: see cleanupBeforeRender.
+	p.cleanupBeforeRender()
 
 	// Attach any advisories raised during the run. They have already reached stderr when raised; this
 	// carries them into structured output.

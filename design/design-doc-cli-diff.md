@@ -1103,6 +1103,33 @@ The CLI wraps the logger at *both* binding sites (`main()` and `verboseFlag.Befo
 exactly the verbosity where a user is asking for more output. `Info` is deliberately not forwarded to
 the wrapped logger, so a `--verbose` run does not print each warning twice in two formats.
 
+**Identity and deduplication.** The sink keeps one entry per distinct `(message, context)` pair; a
+byte-identical repeat is dropped from *both* channels. This is a property of the sink rather than of
+any one call site, because the duplication it prevents is structural: several warning sites sit inside
+loops the caller chose, and `resolveFunctionCredentials` in particular runs once per XR while the
+condition it reports (an unfetchable credential secret) is a property of the *composition*. Without
+dedup, one such secret on a composition affecting thirty XRs yields thirty identical stderr lines and
+thirty identical `warnings[]` entries. A repeat identical in message and context carries no information
+the user has not already been given, so collapsing it loses nothing; warnings that are legitimately
+per-occurrence keep firing because their context differs — `resource_manager.go`'s ownership-theft
+advisory names the composed resource, so each resource is its own entry. The rule this imposes on a new
+warning site is one it should follow anyway: **put what distinguishes one occurrence from another in the
+context**, since context is what a machine consumer reads. `warningKey` renders the message and each
+sorted context pair with `%q` so a value containing the separators cannot forge another warning's
+identity (`{"a": "b=c"}` and `{"a=b": "c"}` are distinct).
+
+**Draining late advisories.** A warning only reaches structured output if it is raised before the
+renderer reads the collected slice. Teardown is the awkward case: `FunctionProvider.Cleanup` can raise
+the leftover-container advisory, and it was invoked solely from the command layer's `defer`, which runs
+at command exit — after `PerformDiff`/`DiffComposition` have already serialized `warnings[]`. That made
+one advisory permanently stderr-only, contradicting this section's own contract. Both processors
+therefore release resources immediately *before* rendering (`cleanupBeforeRender`), on a detached
+context with `CleanupTimeout` so an already-cancelled command context cannot make teardown fail fast
+and report a container leak that is not real. The command's `defer` remains, and remains necessary: it
+covers the paths that return before any rendering happens (load failure, initialization failure,
+cancellation). `Cleanup` is idempotent, so running in both places is safe — the second call finds
+nothing to remove and raises nothing.
+
 ### 6.9 Kubernetes and Crossplane Clients
 
 The client layer provides interfaces to interact with Kubernetes and Crossplane resources.
@@ -1131,9 +1158,18 @@ The client layer provides interfaces to interact with Kubernetes and Crossplane 
 - `DefinitionClient`: Fetches XRDs and resolves XR/claim relationships
 - `EnvironmentClient`: Fetches EnvironmentConfigs
 - `FunctionClient`: Fetches Function package definitions and per-composition pipelines
-- `CredentialClient`: Resolves function image-pull credentials referenced by `--function-credentials`
-  (`FetchCompositionCredentials(ctx, comp) []corev1.Secret` — no error return; credential-fetch failures are logged
-  and treated as "no credentials available" for that composition).
+- `CredentialClient`: Fetches the Secrets a composition's pipeline steps reference as function credentials
+  (`FetchCompositionCredentials(ctx, comp) (types.CredentialFetchResult, error)`). The result separates the secrets
+  actually read from the cluster (`Secrets`) from the referenced secrets that do not exist (`Absent`, deduplicated:
+  one entry per secret, not per referencing step). A `NotFound` is recorded in `Absent` and the fetch continues, since
+  an absent secret may be injected at runtime or supplied via `--function-credentials`; **every other failure is
+  returned as an error**. A Forbidden, a transport failure or an undecodable payload means the credential may exist
+  and be relevant but could not be read, so rendering without it would emit a diff that silently does not reflect
+  what the cluster would do — an accuracy failure, not an advisory (§2 "Accuracy Above All Else"). The client raises
+  no advisory of its own: whether an absent secret is a problem depends on `ProcessorConfig.FunctionCredentials`,
+  which only `DefaultDiffProcessor.resolveFunctionCredentials` can see. `CredentialFetchResult` lives in
+  `cmd/diff/types` rather than the client package for the same reason as `FindCompositesOptions` — so mocks in
+  `cmd/diff/testutils` can implement the interface without an import cycle.
 - `ResourceTreeClient`: Walks parent/child resource relationships in the cluster
 
 ## 7. Key Workflows

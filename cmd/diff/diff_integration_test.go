@@ -326,8 +326,12 @@ func runIntegrationTest(t *testing.T, testType DiffTestType, tt IntegrationTestC
 	warnings := dp.NewWarningLogger(logger, &stderr)
 	exitCode := &ExitCode{}
 
-	// Create AppContext from the test environment's config
-	appCtx, err := NewAppContext(cfg, logger)
+	// Create AppContext from the test environment's config.
+	//
+	// The WRAPPER goes in, not the bare logger: AppContext is what builds the clients, so passing
+	// `logger` here left every client-originated advisory (the credential shortfall, for one) invisible
+	// to integration tests even though production binds the wrapper (main.go). Issue #488, item 5.
+	appCtx, err := NewAppContext(cfg, warnings)
 	if err != nil {
 		t.Fatalf("failed to create app context: %v", err)
 	}
@@ -1922,8 +1926,14 @@ Summary: 2 modified, 2 removed`,
 			// Credentials loaded from CLI flag file
 			functionCredentials: "testdata/diff/resources/credentials/cli-credentials.yaml",
 			expectedExitCode:    dp.ExitCodeDiffDetected,
+			// WithNoWarnings is the point of this case for issue #481: the secret the composition
+			// references is deliberately absent from the cluster and supplied by --function-credentials
+			// instead, so the shortfall advisory must NOT fire. It used to, because the advisory was
+			// raised inside the credential client, which runs before the CLI-supplied secrets are merged
+			// in — telling a user who had just solved the problem to go and solve it.
 			expectedStructuredOutput: tu.ExpectDiff().
 				WithSummary(2, 0, 0).
+				WithNoWarnings().
 				WithAddedResource("XDownstreamResource", "test-resource-with-creds", "default").
 				WithField("spec.forProvider.configData", "test-value-creds").
 				And().

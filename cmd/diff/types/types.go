@@ -20,6 +20,7 @@ package types
 import (
 	"context"
 
+	corev1 "k8s.io/api/core/v1"
 	un "k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	k8stypes "k8s.io/apimachinery/pkg/types"
 
@@ -41,4 +42,23 @@ type FindCompositesOptions struct {
 	// references the supplied composition. Refs that don't satisfy both are silently omitted; the
 	// caller derives "unmatched" from the diff between input refs and returned objects.
 	Refs []k8stypes.NamespacedName
+}
+
+// CredentialFetchResult reports the outcome of fetching a composition's function-credential secrets
+// from the cluster. Lives here for the same reason as FindCompositesOptions: so test mocks in
+// cmd/diff/testutils can implement CredentialClient without an import cycle.
+//
+// Absent secrets are reported rather than warned about at the point of discovery, because whether an
+// absent secret is a problem depends on something the client cannot see: the caller may have supplied
+// it via --function-credentials. Only the caller, after merging its own credentials in, can tell which
+// shortfalls actually remain.
+type CredentialFetchResult struct {
+	// Secrets are the credential secrets successfully read from the cluster, in pipeline order.
+	Secrets []corev1.Secret
+
+	// Absent identifies the credential secrets a pipeline step references that do not exist on the
+	// cluster, in pipeline order and deduplicated. A NotFound is the only fetch failure recorded here;
+	// every other failure is returned as an error, because it leaves the credential state unknown
+	// rather than known-empty.
+	Absent []k8stypes.NamespacedName
 }
