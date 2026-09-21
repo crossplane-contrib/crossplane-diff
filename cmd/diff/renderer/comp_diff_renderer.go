@@ -19,6 +19,7 @@ package renderer
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"strings"
 
 	dt "github.com/crossplane-contrib/crossplane-diff/cmd/diff/renderer/types"
@@ -92,7 +93,7 @@ func (r *DefaultCompDiffRenderer) RenderCompDiff(output *CompDiffOutput) error {
 		// The affected-XR and impact-analysis sections would both be empty and misleading for a
 		// composition whose XRs were deliberately not evaluated; say so once instead.
 		if comp.ImpactAnalysisSkipped {
-			if _, err := fmt.Fprint(stdout, "Impact analysis skipped: applying this composition creates no new CompositionRevision, so no composite resource would change as a result. Pass --analyze-unchanged to evaluate them anyway.\n\n"); err != nil {
+			if _, err := fmt.Fprint(stdout, "Impact analysis skipped: this composition is identical to the cluster's, so no composite resource would render differently as a result. Pass --analyze-unchanged to evaluate them anyway.\n\n"); err != nil {
 				return errors.Wrap(err, "cannot write impact analysis skipped message")
 			}
 
@@ -138,8 +139,8 @@ func (r *DefaultCompDiffRenderer) renderCompositionChanges(comp *CompositionDiff
 	}
 
 	if comp.CompositionDiff == nil || comp.CompositionDiff.DiffType == dt.DiffTypeEqual {
-		if _, err := fmt.Fprintf(stdout, "No changes detected in composition %s\n\n", comp.Name); err != nil {
-			return errors.Wrap(err, "cannot write no changes message")
+		if err := writeNoDisplayableChanges(stdout, comp); err != nil {
+			return err
 		}
 
 		return nil
@@ -158,6 +159,27 @@ func (r *DefaultCompDiffRenderer) renderCompositionChanges(comp *CompositionDiff
 
 	if _, err := fmt.Fprintf(stdout, "\n"); err != nil {
 		return errors.Wrap(err, "cannot write separator")
+	}
+
+	return nil
+}
+
+// writeNoDisplayableChanges reports a composition with no diff body to show. That covers two
+// different situations, and conflating them would misreport the second: the composition really is
+// identical, or it differs only in fields excluded from the diff. The latter is still a change —
+// applying it produces a new CompositionRevision that affected composites adopt — so it must not be
+// announced as "no changes".
+func writeNoDisplayableChanges(stdout io.Writer, comp *CompositionDiff) error {
+	if comp.MaskedChangesOnly {
+		if _, err := fmt.Fprintf(stdout, "Composition %s differs only in fields excluded from this diff (--ignore-paths, or fields suppressed for readability). That is still a change: applying it creates a new CompositionRevision.\n\n", comp.Name); err != nil {
+			return errors.Wrap(err, "cannot write masked-changes message")
+		}
+
+		return nil
+	}
+
+	if _, err := fmt.Fprintf(stdout, "No changes detected in composition %s\n\n", comp.Name); err != nil {
+		return errors.Wrap(err, "cannot write no changes message")
 	}
 
 	return nil
@@ -182,8 +204,8 @@ func (r *DefaultCompDiffRenderer) renderMinimizedCompositionChanges(comp *Compos
 	}
 
 	if comp.CompositionDiff == nil || comp.CompositionDiff.DiffType == dt.DiffTypeEqual {
-		if _, err := fmt.Fprintf(stdout, "No changes detected in composition %s\n\n", comp.Name); err != nil {
-			return errors.Wrap(err, "cannot write no changes message")
+		if err := writeNoDisplayableChanges(stdout, comp); err != nil {
+			return err
 		}
 
 		return nil
@@ -499,6 +521,7 @@ func (r *StructuredCompDiffRenderer) buildStructuredCompOutput(output *CompDiffO
 			AffectedResources:     comp.AffectedResources,
 			ImpactAnalysis:        make([]xrImpactWire, 0, len(comp.ImpactAnalysis)),
 			ImpactAnalysisSkipped: comp.ImpactAnalysisSkipped,
+			MaskedChangesOnly:     comp.MaskedChangesOnly,
 		}
 
 		// Include per-composition error if present

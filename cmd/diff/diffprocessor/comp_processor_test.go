@@ -208,8 +208,8 @@ func TestDefaultCompDiffProcessor_DiffComposition(t *testing.T) {
 			},
 			wantErr: false,
 		},
-		// Issue #453: an unchanged composition creates no new CompositionRevision, so its XRs are not
-		// evaluated at all and the two impact sections are replaced by an explicit skip note.
+		// Issue #453: any revision an unchanged composition produced would carry the same spec, so its
+		// XRs are not evaluated at all and the two impact sections are replaced by an explicit skip note.
 		"UnchangedCompositionSkipsImpactAnalysis": {
 			namespace:    "default",
 			compositions: []*un.Unstructured{unchangedComp()},
@@ -423,21 +423,18 @@ func TestDefaultCompDiffProcessor_calculateCompositionDiff(t *testing.T) {
 			BuildAsUnstructured()
 	}
 
-	clusterComp := tu.NewComposition("test-composition").
-		WithCompositeTypeRef("example.org/v1", "XResource").
-		WithPipelineMode().
-		WithLabels(map[string]string{"version": "0.0.1"}).
-		Build()
-
 	type want struct {
 		hasDiff bool
 		changed bool
 	}
 
 	tests := map[string]struct {
-		input       *un.Unstructured
-		ignorePaths []string
-		want        want
+		input *un.Unstructured
+		// clusterAnnotations are annotations present only on the in-cluster copy, modelling what
+		// a deploy tool stamps on apply.
+		clusterAnnotations map[string]string
+		ignorePaths        []string
+		want               want
 	}{
 		"Identical_NoIgnorePaths": {
 			input: compWithLabels(map[string]string{"version": "0.0.1"}),
@@ -459,10 +456,41 @@ func TestDefaultCompDiffProcessor_calculateCompositionDiff(t *testing.T) {
 			ignorePaths: []string{"metadata.labels[version]"},
 			want:        want{hasDiff: false, changed: true},
 		},
+		// The cluster copy carries the annotation a client-side kubectl apply stamps; the file copy
+		// never does. It is suppressed from the rendered diff because showing a multi-KB serialization
+		// of the object is useless — but Crossplane's Composition.Hash() covers annotations, so
+		// applying this does create a new CompositionRevision that composites re-point to. A
+		// readability suppression must not decide that away: changed is true, and the composites get
+		// evaluated.
+		"LastAppliedConfigurationOnly_Changed": {
+			input: compWithLabels(map[string]string{"version": "0.0.1"}),
+			clusterAnnotations: map[string]string{
+				"kubectl.kubernetes.io/last-applied-configuration": `{"apiVersion":"apiextensions.crossplane.io/v1","kind":"Composition"}`,
+			},
+			want: want{hasDiff: false, changed: true},
+		},
+		// Same, with the user explicitly masking the annotation. --ignore-paths is a display
+		// preference, so it does not change the verdict either — same reason a load-bearing
+		// spec.pipeline[].input mask does not (see DifferenceMaskedByIgnorePaths_StillChanged).
+		"LastAppliedConfigurationExplicitlyMasked_StillChanged": {
+			input: compWithLabels(map[string]string{"version": "0.0.1"}),
+			clusterAnnotations: map[string]string{
+				"kubectl.kubernetes.io/last-applied-configuration": `{"apiVersion":"apiextensions.crossplane.io/v1","kind":"Composition"}`,
+			},
+			ignorePaths: []string{"metadata.annotations[kubectl.kubernetes.io/last-applied-configuration]"},
+			want:        want{hasDiff: false, changed: true},
+		},
 	}
 
 	for name, tt := range tests {
 		t.Run(name, func(t *testing.T) {
+			clusterComp := tu.NewComposition("test-composition").
+				WithCompositeTypeRef("example.org/v1", "XResource").
+				WithPipelineMode().
+				WithLabels(map[string]string{"version": "0.0.1"}).
+				WithAnnotations(tt.clusterAnnotations).
+				Build()
+
 			processor := &DefaultCompDiffProcessor{
 				compositionClient: tu.NewMockCompositionClient().
 					WithSuccessfulCompositionFetch(clusterComp).

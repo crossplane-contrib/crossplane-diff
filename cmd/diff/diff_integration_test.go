@@ -2279,8 +2279,8 @@ All composite resources are up-to-date. No downstream resource changes detected.
 			expectedError: false,
 			noColor:       true,
 		},
-		// Issue #453: applying an unchanged composition creates no new CompositionRevision, so no XR
-		// adopts anything and the affected-XR / impact-analysis sections are replaced by a skip note.
+		// Issue #453: any revision an unchanged composition produced would carry the same spec, so no XR
+		// renders differently and the affected-XR / impact-analysis sections are replaced by a skip note.
 		//
 		// These fixtures are deliberately ones that DO produce a downstream delta when evaluated (see
 		// UnchangedCompositionAnalyzeUnchangedEvaluatesXRs, which asserts exactly that against the same
@@ -2303,13 +2303,49 @@ All composite resources are up-to-date. No downstream resource changes detected.
 
 No changes detected in composition xnopresources.diff.example.org
 
-Impact analysis skipped: applying this composition creates no new CompositionRevision, so no composite resource would change as a result. Pass --analyze-unchanged to evaluate them anyway.
+Impact analysis skipped: this composition is identical to the cluster's, so no composite resource would render differently as a result. Pass --analyze-unchanged to evaluate them anyway.
 
 `,
 			expectedError: false,
 			// No composition change and no evaluated XRs, so nothing was detected.
 			expectedExitCode: dp.ExitCodeSuccess,
 			noColor:          true,
+		},
+		// Issue #467: the cluster composition was applied with a client-side `kubectl apply`, so it
+		// carries kubectl.kubernetes.io/last-applied-configuration; the file being diffed never does.
+		// That annotation is suppressed from the rendered diff — it is a multi-KB serialization of the
+		// object, useless to show — but Crossplane's Composition.Hash() covers annotations, so applying
+		// this DOES create a new CompositionRevision that composites re-point to, and whose name a
+		// template can read off the XR's compositionRevisionRef. A suppression made for readability
+		// must not decide that away, so the composites are evaluated. Contrast the sibling above, which
+		// is byte-identical and needs --analyze-unchanged to evaluate anything.
+		//
+		// This runs the real CLI wiring, which the unit coverage in
+		// TestDefaultCompDiffProcessor_calculateCompositionDiff cannot reach: it pins that
+		// defaultProcessorOptions does not fold the annotation into --ignore-paths, and that the
+		// display-only suppression does not leak into the change verdict.
+		//
+		// The downstream modification reported here is the same fixture artifact
+		// UnchangedCompositionAnalyzeUnchangedEvaluatesXRs documents, not an effect of the annotation.
+		"CompositionAppliedWithKubectlEvaluatesXRs": {
+			reason: "A composition differing only in kubectl's last-applied-configuration still counts as changed, because applying it creates a new CompositionRevision",
+			setupFiles: []string{
+				"testdata/comp/resources/xrd.yaml",
+				"testdata/comp/resources/original-composition-kubectl-applied.yaml",
+				"testdata/comp/resources/functions.yaml",
+				"testdata/comp/resources/existing-xr-1.yaml",
+				"testdata/comp/resources/existing-downstream-1.yaml",
+			},
+			inputFiles:       []string{"testdata/comp/composition-no-changes.yaml"},
+			namespace:        "default",
+			outputFormat:     "json",
+			expectedExitCode: dp.ExitCodeDiffDetected,
+			expectedStructuredCompOutput: tu.ExpectCompDiff().
+				WithComposition("xnopresources.diff.example.org").
+				WithAffectedResources(1, 1, 0, 0).
+				WithXRImpact("XNopResource", "test-resource", "default", "changed").
+				WithDownstreamSummary(0, 1, 0).
+				WithDownstreamResource("modified", "XDownstreamResource", "test-resource", "default"),
 		},
 		// The same setup with --analyze-unchanged evaluates the XRs after all (the pre-edit
 		// convergence-baseline workflow). Note what it reports: a downstream modification even though
@@ -2603,7 +2639,7 @@ Summary: 2 modified
 
 No changes detected in composition xnopresources-v2.diff.example.org
 
-Impact analysis skipped: applying this composition creates no new CompositionRevision, so no composite resource would change as a result. Pass --analyze-unchanged to evaluate them anyway.
+Impact analysis skipped: this composition is identical to the cluster's, so no composite resource would render differently as a result. Pass --analyze-unchanged to evaluate them anyway.
 `,
 			expectedError:    false,
 			expectedExitCode: dp.ExitCodeDiffDetected,

@@ -57,6 +57,15 @@ type DiffOptions struct {
 	// map key paths (e.g., "metadata.annotations[key.name/value]")
 	IgnorePaths []string
 
+	// ForVerdict marks a comparison whose result answers "did this object change?" rather than
+	// producing output a human reads. It disables the display-only suppressions (see
+	// alwaysIgnoredPaths in cleanupForDiff): a field hidden purely to keep the rendered diff
+	// readable must never decide whether a change exists.
+	//
+	// Callers should also clear IgnorePaths for such a comparison, for the same reason — the user's
+	// masks are a display preference too.
+	ForVerdict bool
+
 	// MinimizeComposition collapses composition changes to a single marker line
 	// per composition, omitting the full YAML diff body. Only consumed by the
 	// human-readable composition diff renderer; structured output is unaffected.
@@ -320,11 +329,11 @@ func GenerateDiffWithOptions(_ context.Context, current, desired *un.Unstructure
 	var currentClean, desiredClean *un.Unstructured
 
 	if current != nil {
-		currentClean = cleanupForDiff(current.DeepCopy(), logger.WithValues("resourceStage", "current", "before", current), options.IgnorePaths)
+		currentClean = cleanupForDiff(current.DeepCopy(), logger.WithValues("resourceStage", "current", "before", current), options.IgnorePaths, options.ForVerdict)
 	}
 
 	if desired != nil {
-		desiredClean = cleanupForDiff(desired.DeepCopy(), logger.WithValues("resourceStage", "desired", "before", desired), options.IgnorePaths)
+		desiredClean = cleanupForDiff(desired.DeepCopy(), logger.WithValues("resourceStage", "desired", "before", desired), options.IgnorePaths, options.ForVerdict)
 	}
 
 	// For modifications, if the cleaned objects are equal the only differences
@@ -593,8 +602,10 @@ func removeNestedPath(obj map[string]any, path string) bool {
 	return false
 }
 
-// cleanupForDiff removes fields that shouldn't be included in the diff.
-func cleanupForDiff(obj *un.Unstructured, logger logging.Logger, ignorePaths []string) *un.Unstructured {
+// cleanupForDiff removes fields that shouldn't be included in the diff. When forVerdict is set the
+// display-only suppressions are retained, because the caller is asking whether the objects differ
+// rather than rendering them; see DiffOptions.ForVerdict.
+func cleanupForDiff(obj *un.Unstructured, logger logging.Logger, ignorePaths []string, forVerdict bool) *un.Unstructured {
 	resKind := obj.GetKind()
 	resName := obj.GetName()
 	resKey := fmt.Sprintf("%s/%s", resKind, resName)
@@ -602,12 +613,35 @@ func cleanupForDiff(obj *un.Unstructured, logger logging.Logger, ignorePaths []s
 	// Track all modifications for a single consolidated log message
 	var modifications []string
 
-	// Remove ignored paths (includes both defaults and user-specified)
-	for _, path := range ignorePaths {
-		if removeNestedPath(obj.Object, path) {
-			modifications = append(modifications, fmt.Sprintf("ignored path: %s", path))
+	// displayOnlyIgnoredPaths are suppressed from every rendered diff regardless of the caller's
+	// ignorePaths, because showing them is useless: last-applied-configuration is a multi-KB
+	// serialization of the object itself.
+	//
+	// They are suppressed from *display only*. Crossplane's Composition.Hash()
+	// (apis/apiextensions/v1/composition_hash.go) covers annotations as well as labels and spec, so a
+	// difference here does produce a new CompositionRevision — which composites re-point to, and
+	// which a composition template can observe via the XR's compositionRevisionRef. Letting a
+	// readability decision suppress that from a change verdict would elide a real, potentially
+	// render-affecting consequence, so verdict comparisons pass forVerdict and keep them.
+	displayOnlyIgnoredPaths := []string{
+		"metadata.annotations[kubectl.kubernetes.io/last-applied-configuration]",
+	}
+
+	// Remove display-only paths (unless this is a verdict), then the caller's. Duplicates between
+	// the two are harmless: removeNestedPath is a no-op once the path is gone.
+	stripPaths := func(paths []string) {
+		for _, path := range paths {
+			if removeNestedPath(obj.Object, path) {
+				modifications = append(modifications, fmt.Sprintf("ignored path: %s", path))
+			}
 		}
 	}
+
+	if !forVerdict {
+		stripPaths(displayOnlyIgnoredPaths)
+	}
+
+	stripPaths(ignorePaths)
 
 	// Remove server-side fields and metadata that we don't want to diff
 	metadata, found, _ := un.NestedMap(obj.Object, "metadata")

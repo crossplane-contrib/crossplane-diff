@@ -1985,6 +1985,14 @@ func (b *CompositionBuilder) WithLabels(labels map[string]string) *CompositionBu
 	return b
 }
 
+// WithAnnotations sets metadata.annotations on the composition. Useful for modelling the
+// tooling-applied annotations a cluster copy carries but a file copy does not (notably
+// kubectl.kubernetes.io/last-applied-configuration).
+func (b *CompositionBuilder) WithAnnotations(annotations map[string]string) *CompositionBuilder {
+	b.composition.SetAnnotations(annotations)
+	return b
+}
+
 // WithPipelineMode sets the composition mode to pipeline.
 func (b *CompositionBuilder) WithPipelineMode() *CompositionBuilder {
 	b.composition.Spec.Mode = xpextv1.CompositionModePipeline
