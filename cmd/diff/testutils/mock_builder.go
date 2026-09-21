@@ -40,6 +40,11 @@ import (
 // MockResourceClientBuilder helps build kubernetes.ResourceClient mocks.
 type MockResourceClientBuilder struct {
 	mock *MockResourceClient
+
+	// resourceScopes accumulates GVK -> namespaced across successive
+	// WithNamespacedResource / WithClusterScopedResource calls so the two
+	// can be combined on one builder.
+	resourceScopes map[schema.GroupVersionKind]bool
 }
 
 // NewMockResourceClient creates a new MockResourceClientBuilder.
@@ -226,31 +231,39 @@ func (b *MockResourceClientBuilder) WithIsNamespacedResource(fn func(context.Con
 }
 
 // WithNamespacedResource sets specific GVKs to be namespaced.
+//
+// Composes with WithClusterScopedResource: each call adds to the set of known
+// scopes rather than replacing it, so a single mock can describe a mix of
+// namespaced and cluster-scoped kinds. GVKs that no call has described still
+// return an error, keeping tests explicit about what they rely on.
 func (b *MockResourceClientBuilder) WithNamespacedResource(gvks ...schema.GroupVersionKind) *MockResourceClientBuilder {
-	namespacedGVKs := make(map[schema.GroupVersionKind]bool)
-	for _, gvk := range gvks {
-		namespacedGVKs[gvk] = true
-	}
-
-	return b.WithIsNamespacedResource(func(_ context.Context, gvk schema.GroupVersionKind) (bool, error) {
-		if isNamespaced, exists := namespacedGVKs[gvk]; exists {
-			return isNamespaced, nil
-		}
-		// Default to error for unconfigured resources to make tests explicit
-		return false, errors.Errorf("IsNamespacedResource not configured for %s in mock", gvk.String())
-	})
+	return b.withResourceScopes(gvks, true)
 }
 
 // WithClusterScopedResource sets specific GVKs to be cluster-scoped.
+//
+// Composes with WithNamespacedResource — see that method for details.
 func (b *MockResourceClientBuilder) WithClusterScopedResource(gvks ...schema.GroupVersionKind) *MockResourceClientBuilder {
-	clusterGVKs := make(map[schema.GroupVersionKind]bool)
-	for _, gvk := range gvks {
-		clusterGVKs[gvk] = true
+	return b.withResourceScopes(gvks, false)
+}
+
+// withResourceScopes records the scope of each GVK and installs a lookup that
+// consults the accumulated map. Successive calls share the map, which is what
+// lets the two exported helpers be combined.
+func (b *MockResourceClientBuilder) withResourceScopes(gvks []schema.GroupVersionKind, namespaced bool) *MockResourceClientBuilder {
+	if b.resourceScopes == nil {
+		b.resourceScopes = make(map[schema.GroupVersionKind]bool)
 	}
 
+	for _, gvk := range gvks {
+		b.resourceScopes[gvk] = namespaced
+	}
+
+	scopes := b.resourceScopes
+
 	return b.WithIsNamespacedResource(func(_ context.Context, gvk schema.GroupVersionKind) (bool, error) {
-		if _, exists := clusterGVKs[gvk]; exists {
-			return false, nil
+		if isNamespaced, exists := scopes[gvk]; exists {
+			return isNamespaced, nil
 		}
 		// Default to error for unconfigured resources to make tests explicit
 		return false, errors.Errorf("IsNamespacedResource not configured for %s in mock", gvk.String())

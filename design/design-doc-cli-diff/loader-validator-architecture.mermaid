@@ -43,10 +43,16 @@ classDiagram
     class DefaultSchemaValidator {
         -defClient DefinitionClient
         -schemaClient SchemaClient
+        -resourceClient ResourceClient
         -logger logging.Logger
         +ValidateResources(ctx, xr, composed) error
         +EnsureComposedResourceCRDs(ctx, resources) error
         +ValidateScopeConstraints(ctx, resource, ns, isClaimRoot) error
+    }
+
+    class ResolveResourceScope {
+        <<function>>
+        +resolveResourceScope(ctx, rc, sc, logger, gvk) (extv1.ResourceScope, error)
     }
 
     class SchemaValidate {
@@ -75,3 +81,4 @@ classDiagram
     DefaultSchemaValidator ..|> SchemaValidator
     DefaultSchemaValidator --> ApplyCRDDefaults
     DefaultSchemaValidator --> SchemaValidate
+    DefaultSchemaValidator --> ResolveResourceScope
