@@ -1192,6 +1192,10 @@ The client layer provides interfaces to interact with Kubernetes and Crossplane 
       plus the claim's annotations and `crossplane.io/claim-name` / `crossplane.io/claim-namespace` labels. Rendering
       then proceeds from the (real or synthesized) backing XR with merged Claim spec, producing composed resources with
       correct `crossplane.io/composite` labels.
+    - If the XR already exists in the cluster, `ResourceManager.FetchObservedResources` walks its resource tree to
+      assemble the observed set that render is given. A failure here is fatal: downstream an empty observed set is
+      indistinguishable from "this XR genuinely has no composed resources yet", so continuing would report every
+      existing composed resource as a creation. The claim path applies the same rule to a claim's backing XR.
     - It calls `RenderToStableState` (see §9.5.6.2), which iteratively renders the composition pipeline, resolves any
       `RequiredResources` selectors via the `RequirementsProvider`, and re-renders until the requirement set stabilises
       (or the eventual-state criterion is met under `--eventual-state`).

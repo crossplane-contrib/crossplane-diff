@@ -42,7 +42,7 @@ sequenceDiagram
             DP->>FnProv: GetFunctionsForComposition(comp)
             FnProv-->>DP: []Function
             DP->>ResMgr: FetchCurrentObject(ctx, xr) / FetchObservedResources(ctx, xr)
-            ResMgr-->>DP: existing XR + observed composed resources
+            ResMgr-->>DP: existing XR + observed composed resources (fetch failure is fatal)
 
             DP->>DP: RenderToStableState(ctx, xr, comp, fns, id, observed, eventualState)
             loop Until requirements stabilise (or steady state under --eventual-state)

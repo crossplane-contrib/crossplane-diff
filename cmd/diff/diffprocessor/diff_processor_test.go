@@ -713,7 +713,13 @@ func TestDefaultDiffProcessor_PerformDiff(t *testing.T) {
 					Function: tu.NewMockFunctionClient().
 						WithSuccessfulFunctionsFetch(functions).
 						Build(),
-					ResourceTree: tu.NewMockResourceTreeClient().Build(),
+					// resource1 exists in the cluster, so its observed resources
+					// are fetched before validation runs. That fetch has to
+					// succeed for this case to reach the validation failure it is
+					// actually about.
+					ResourceTree: tu.NewMockResourceTreeClient().
+						WithEmptyResourceTree().
+						Build(),
 				}
 
 				return k8sClients, xpClients
@@ -2892,7 +2898,7 @@ func TestDefaultDiffProcessor_DiffSingleResource_WithObservedResources(t *testin
 			verifyObservedPassed: true,
 			wantErr:              false,
 		},
-		"ContinuesWhenFetchObservedResourcesFails": {
+		"FailedObservedResourceFetchIsFatal": {
 			setupMocks: func() (k8.Clients, xp.Clients) {
 				// Create XRD
 				xrdUnstructured := tu.NewXRD("xrs.example.org", "example.org", "XR").
@@ -2962,10 +2968,107 @@ func TestDefaultDiffProcessor_DiffSingleResource_WithObservedResources(t *testin
 				return k8sClients, xpClients
 			},
 			wantObservedInRender: true,
-			wantObservedCount:    0, // Should pass empty list when fetch fails
+			wantObservedCount:    0,
 			verifyObservedPassed: true,
-			wantErr:              true,                       // Should return partial error so user knows removal detection failed
-			wantErrContain:       "cannot get resource tree", // The resource tree error is now surfaced
+			wantErr:              true,
+			// The observed-resource fetch is the first thing to touch the tree
+			// client, so it is what surfaces the failure.
+			wantErrContain: "cannot fetch observed resources for XR",
+		},
+		// A *transient* failure must be fatal too. Removal detection queries the
+		// resource tree a second time, so a failure confined to the observed
+		// fetch used to be swallowed entirely: the diff was computed as though
+		// the cluster held nothing, reporting every existing composed resource
+		// as an addition, with no error and no warning.
+		"TransientObservedResourceFetchFailureIsFatal": {
+			setupMocks: func() (k8.Clients, xp.Clients) {
+				resourceTree := &resource.Resource{
+					Unstructured: *xr,
+					Children: []*resource.Resource{
+						{Unstructured: *observedBucket},
+						{Unstructured: *observedUser},
+					},
+				}
+
+				xrdUnstructured := tu.NewXRD("xrs.example.org", "example.org", "XR").
+					WithPlural("xrs").
+					WithSingular("xr").
+					WithVersion("v1", true, true).
+					WithSchema(&extv1.JSONSchemaProps{
+						Type: "object",
+						Properties: map[string]extv1.JSONSchemaProps{
+							"spec":   {Type: "object"},
+							"status": {Type: "object"},
+						},
+					}).
+					BuildAsUnstructured()
+
+				xrCRD := tu.NewCRD("xrs.example.org", "example.org", "XR").
+					WithListKind("XRList").
+					WithPlural("xrs").
+					WithSingular("xr").
+					WithVersion("v1", true, true).
+					WithStandardSchema("field").
+					Build()
+
+				k8sClients := k8.Clients{
+					Apply: tu.NewMockApplyClient().
+						WithSuccessfulDryRun().
+						Build(),
+					Resource: tu.NewMockResourceClient().
+						WithResourcesExist(xr).
+						Build(),
+					Schema: tu.NewMockSchemaClient().
+						WithNoResourcesRequiringCRDs().
+						WithGetCRD(func(_ context.Context, gvk schema.GroupVersionKind) (*extv1.CustomResourceDefinition, error) {
+							if gvk.Group == "example.org" && gvk.Kind == "XR" {
+								return xrCRD, nil
+							}
+
+							return nil, errors.Errorf("CRD not found for %v", gvk)
+						}).
+						WithSuccessfulCRDByNameFetch("xrs.example.org", xrCRD).
+						Build(),
+					Type: tu.NewMockTypeConverter().Build(),
+				}
+
+				// Fail only the first tree lookup (the observed-resource fetch);
+				// every later one succeeds, as a transient API error would.
+				treeCalls := 0
+
+				xpClients := xp.Clients{
+					Composition: tu.NewMockCompositionClient().
+						WithSuccessfulCompositionMatch(composition).
+						Build(),
+					Credential: &tu.MockCredentialClient{},
+					Definition: tu.NewMockDefinitionClient().
+						WithXRDForXR(xrdUnstructured).
+						Build(),
+					Environment: tu.NewMockEnvironmentClient().
+						WithNoEnvironmentConfigs().
+						Build(),
+					Function: tu.NewMockFunctionClient().
+						WithSuccessfulFunctionsFetch(functions).
+						Build(),
+					ResourceTree: tu.NewMockResourceTreeClient().
+						WithGetResourceTree(func(_ context.Context, _ *un.Unstructured) (*resource.Resource, error) {
+							treeCalls++
+							if treeCalls == 1 {
+								return nil, errors.New("etcdserver: request timed out")
+							}
+
+							return resourceTree, nil
+						}).
+						Build(),
+				}
+
+				return k8sClients, xpClients
+			},
+			wantObservedInRender: true,
+			wantObservedCount:    0,
+			verifyObservedPassed: true,
+			wantErr:              true,
+			wantErrContain:       "cannot fetch observed resources for XR",
 		},
 	}
 

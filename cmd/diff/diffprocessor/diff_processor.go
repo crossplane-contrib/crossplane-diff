@@ -395,7 +395,10 @@ func (p *DefaultDiffProcessor) diffSingleResourceInternal(ctx context.Context, r
 	// Fetch observed resources for use in rendering (needed for getComposedResource template function)
 	// and for function-sequencer to know which resources already exist in the cluster)
 	if observedResources == nil && existingXRFromCluster != nil {
-		observedResources = p.fetchObservedResourcesFromClusterXR(ctx, existingXRFromCluster, resourceID)
+		observedResources, err = p.fetchObservedResourcesFromClusterXR(ctx, existingXRFromCluster, resourceID)
+		if err != nil {
+			return nil, nil, err
+		}
 	}
 
 	// Perform iterative rendering with requirements resolution.
@@ -566,26 +569,32 @@ func (p *DefaultDiffProcessor) warnIfDeleting(existingXRFromCluster *un.Unstruct
 // We must use the cluster XR (not the input XR) because the XRM client uses spec.resourceRefs
 // to find children. The input XR doesn't have resourceRefs, but the cluster XR does.
 // This ensures that function-sequencer and other functions that check observed resources work correctly.
-func (p *DefaultDiffProcessor) fetchObservedResourcesFromClusterXR(ctx context.Context, existingXRFromCluster *un.Unstructured, resourceID string) []cpd.Unstructured {
+//
+// A failure here is fatal. Downstream, an empty observed set is indistinguishable from "this XR
+// genuinely has no composed resources yet", so continuing with one would report every existing
+// composed resource as a creation — a silently wrong diff, which "Accuracy Above All Else"
+// forbids. resolveBackingXRForClaim already fails on exactly this condition for a Claim's backing
+// XR; the two paths must agree.
+func (p *DefaultDiffProcessor) fetchObservedResourcesFromClusterXR(ctx context.Context, existingXRFromCluster *un.Unstructured, resourceID string) ([]cpd.Unstructured, error) {
 	clusterXR := cmp.New()
 	if err := runtime.DefaultUnstructuredConverter.FromUnstructured(existingXRFromCluster.Object, clusterXR); err != nil {
 		p.config.Logger.Debug("Could not convert cluster XR for observed resources fetch",
 			"resource", resourceID,
 			"error", err)
 
-		return nil
+		return nil, errors.Wrapf(err, "cannot convert cluster XR %q to composite", existingXRFromCluster.GetName())
 	}
 
 	observedResources, err := p.resourceManager.FetchObservedResources(ctx, clusterXR)
 	if err != nil {
-		p.config.Logger.Debug("Could not fetch observed resources (continuing with empty list)",
+		p.config.Logger.Debug("Could not fetch observed resources",
 			"resource", resourceID,
 			"error", err)
 
-		return nil
+		return nil, errors.Wrapf(err, "cannot fetch observed resources for XR %q", existingXRFromCluster.GetName())
 	}
 
-	return observedResources
+	return observedResources, nil
 }
 
 // backingXRInfo holds information about a Claim's backing XR.
