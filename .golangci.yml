@@ -21,7 +21,10 @@ linters:
     # These linters add whitespace in an attempt to make code more readable.
     # This isn't a widely accepted Go best practice, and would be laborious to
     # apply to existing code.
+    # Renamed to wsl_v5 in golangci-lint v2.13.0; both names are listed so this
+    # stays disabled whichever name the pinned version recognises.
     - wsl
+    - wsl_v5
     - nlreturn
 
     # Warns about uses of fmt.Sprintf that are less performant than alternatives
