@@ -539,9 +539,12 @@ The `ProcessorConfig` structure provides configuration options:
 - `CrossplaneRenderBinary`: Optional path to an external `crossplane render` binary (otherwise the in-process render
   package is used).
 - `CrossplaneVersion`: Optional pinned render version; the docker engine pulls `…/crossplane:<version>` instead of
-  `:stable`. Validated against `MinCrossplaneRenderVersion` (v2.3.4) at the CLI layer.
+  `:stable`. Validated against `MinCrossplaneRenderVersion` (v2.3.4) at the CLI layer, and normalized to a
+  `v`-prefixed tag by `NormalizeRenderVersion` inside `NewEngineRenderFn` — validation accepts a bare `2.3.4`, but
+  upstream formats the value into the tag verbatim and publishes only `v`-prefixed tags.
 - `CrossplaneImage`: Optional full render image reference (e.g. a private mirror). Mutually exclusive with
-  `CrossplaneVersion` and `CrossplaneRenderBinary`.
+  `CrossplaneVersion` and `CrossplaneRenderBinary`. Floor-checked at the CLI layer whenever its tag parses as a
+  semantic version; a reference with no comparable version draws a warning instead (see §8.1).
 - `Stdout`, `Stderr`: Output sinks (writers are no longer threaded through method calls).
 - `Logger`: Structured logger, propagated to all subcomponents.
 - `RenderFunc`: Renders a composition pipeline; defaults to the in-process engine.
@@ -1259,16 +1262,31 @@ crossplane-diff xr --eventual-state xr.yaml
 crossplane-diff xr --crossplane-version v2.3.4 xr.yaml
 
 # Render from a mirrored/air-gapped image reference instead of :stable
+# (its tag is floor-checked too; a digest-pinned or floating-tag ref warns instead)
 crossplane-diff xr --crossplane-image my-registry.example.com/crossplane/crossplane:v2.4.0 xr.yaml
 ```
 
 The render backend is selected by three mutually-exclusive flags that thread through to upstream
 `render.EngineFlags`: `--crossplane-version` (pulls `…/crossplane:<version>`), `--crossplane-image` (full
 image ref), and the hidden test-only `--crossplane-render-binary` (local binary). When none is set the docker
-engine pulls `…/crossplane:stable`. `--crossplane-version` is validated against
-`diffprocessor.MinCrossplaneRenderVersion` (v2.3.4) at parse time via a kong `Validate` hook, failing fast
-before any cluster work; `--crossplane-image` is not floor-checked (a full reference carries no comparable
-version).
+engine pulls `…/crossplane:stable`.
+
+Both version-bearing flags are validated against `diffprocessor.MinCrossplaneRenderVersion` (v2.3.4) at parse
+time via a kong `Validate` hook, failing fast before any cluster work: `--crossplane-version` through
+`ValidateMinRenderVersion`, and `--crossplane-image` through `ValidateMinRenderImage`, which floor-checks the
+reference's tag whenever it parses as a semantic version. A reference whose version is not comparable — pinned
+by digest, tagged with a floating name, or carrying no tag — is accepted rather than refused, because that is
+the shape the mirrored and air-gapped registries the flag exists for actually take; those references instead
+raise `UncomparableRenderImageWarning` through the `WarningLogger`, emitted from `NewEngineRenderFn` so a
+programmatic `WithCrossplaneImage` caller gets the same advisory as a CLI user.
+
+`EngineRenderFn.RenderImage()` exposes the fully-resolved reference the engine will pull (mirroring upstream's
+unexported `crossplaneImageFromFlags`, since the upstream `Engine` interface has no accessor for it). That makes
+the pin assertable — without it, dropping the selector arguments entirely was undetectable — and it lets
+`staleRenderBackendHint` name the offending image: a backend predating the `crossplane internal render`
+subcommand fails with a bare `unexpected argument internal` kong usage error, so that error is *augmented*
+(never replaced) with a re-pull hint naming the resolved reference. This case matters disproportionately because
+upstream pulls the render image only when it is absent, so a locally cached `:stable` never refreshes.
 
 `comp` examples:
 ```

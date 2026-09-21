@@ -133,10 +133,52 @@ func TestRenderBackendFlags(t *testing.T) {
 			wantErr:     true,
 			errContains: "crossplane-image",
 		},
+		"VersionAndRenderBinaryMutuallyExclusive": {
+			args:        []string{"xr", "--crossplane-version", "v2.4.0", "--crossplane-render-binary", "/usr/local/bin/crossplane", "<file>"},
+			wantErr:     true,
+			errContains: "crossplane-render-binary",
+		},
+		"ImageAndRenderBinaryMutuallyExclusive": {
+			args:        []string{"xr", "--crossplane-image", "example.com/mirror/crossplane:v2.4.0", "--crossplane-render-binary", "/usr/local/bin/crossplane", "<file>"},
+			wantErr:     true,
+			errContains: "crossplane-render-binary",
+		},
 		"CompVersionBelowMinimumRejected": {
 			args:        []string{"comp", "--crossplane-version", "v2.0.0", "<file>"},
 			wantErr:     true,
 			errContains: dp.MinCrossplaneRenderVersion,
+		},
+		// The floor is not only for users who already thought about versions:
+		// an image reference whose tag is plainly comparable gets held to it
+		// too (crossplane-diff#480).
+		"ImageTagBelowMinimumRejected": {
+			args:        []string{"xr", "--crossplane-image", "internal-mirror/crossplane:v2.3.3", "<file>"},
+			wantErr:     true,
+			errContains: dp.MinCrossplaneRenderVersion,
+		},
+		"ImageTagFarBelowMinimumRejected": {
+			args:        []string{"xr", "--crossplane-image", "xpkg.crossplane.io/crossplane/crossplane:v1.20.12", "<file>"},
+			wantErr:     true,
+			errContains: dp.MinCrossplaneRenderVersion,
+		},
+		"CompImageTagBelowMinimumRejected": {
+			args:        []string{"comp", "--crossplane-image", "internal-mirror/crossplane:v2.3.3", "<file>"},
+			wantErr:     true,
+			errContains: dp.MinCrossplaneRenderVersion,
+		},
+		// A registry port is not a tag; the reference below carries no version.
+		"ImageWithRegistryPortAndNoTagAccepted": {
+			args: []string{"xr", "--crossplane-image", "localhost:5000/crossplane/crossplane", "<file>"},
+			check: func(t *testing.T, c *cli) {
+				t.Helper()
+
+				if got := c.XR.CrossplaneImage; got != "localhost:5000/crossplane/crossplane" {
+					t.Errorf("CrossplaneImage = %q, want the port-bearing mirror ref", got)
+				}
+			},
+		},
+		"DigestPinnedImageAccepted": {
+			args: []string{"xr", "--crossplane-image", "internal-mirror/crossplane@sha256:0000000000000000000000000000000000000000000000000000000000000000", "<file>"},
 		},
 	}
 

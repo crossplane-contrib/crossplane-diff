@@ -242,13 +242,17 @@ Flags:
                                resources; see Prerequisites). Mutually exclusive with
                                --crossplane-image.
       --crossplane-image=IMAGE Override the full crossplane render image reference
-                               (e.g. for a private mirror). Mutually exclusive with
+                               (e.g. for a private mirror). Held to the same v2.3.4
+                               minimum when its tag is a semantic version; a
+                               reference with no comparable version (a digest, a
+                               floating tag, no tag at all) is accepted with a
+                               warning. Mutually exclusive with
                                --crossplane-version.
 ```
 
 **Note**: XR namespaces are read directly from the YAML files being diffed, not from command-line flags.
 
-**Render version**: When neither `--crossplane-version` nor `--crossplane-image` is set, rendering uses the floating `xpkg.crossplane.io/crossplane/crossplane:stable` tag. Pin `--crossplane-version` for reproducible diffs or to hold a known-good version; `--crossplane-image` targets a mirrored/air-gapped registry. Only `--crossplane-version` is floor-checked against the v2.3.4 minimum — a full image reference carries no comparable version.
+**Render version**: When neither `--crossplane-version` nor `--crossplane-image` is set, rendering uses the floating `xpkg.crossplane.io/crossplane/crossplane:stable` tag. Pin `--crossplane-version` for reproducible diffs or to hold a known-good version; `--crossplane-image` targets a mirrored/air-gapped registry. Both are floor-checked against the v2.3.4 minimum as far as they can be: a pinned version always, and an image reference whenever its tag parses as a semantic version (so `…/crossplane:v2.3.3` is rejected). A reference that carries no comparable version — pinned by digest, tagged `stable` or `latest`, or with no tag at all — cannot be checked and is accepted with a warning rather than refused, since that is exactly the shape a private mirror or a digest pin takes. A bare `--crossplane-version 2.3.4` is accepted and normalized to the `v`-prefixed tag that upstream actually publishes.
 
 **Ignored Paths**: By default, `metadata.annotations[kubectl.kubernetes.io/last-applied-configuration]` is always hidden from the diff, since it is just a serialization of the object itself. Note that it is hidden from the *output* only: for `comp`, a composition differing solely in that annotation still counts as changed, because applying it creates a new CompositionRevision. Additional paths can be specified with `--ignore-paths`. This is useful for filtering out metadata added by tools like ArgoCD (e.g., tracking IDs, sync waves) that shouldn't affect diff results. The `--ignore-paths` flag applies uniformly across all output modes: the human diff, JSON, and YAML output all strip ignored fields, and summary counts are computed after ignore-filtering so a resource whose only changes are in ignored fields is not counted as modified.
 
@@ -332,7 +336,11 @@ Flags:
                                resources; see Prerequisites). Mutually exclusive with
                                --crossplane-image.
       --crossplane-image=IMAGE Override the full crossplane render image reference
-                               (e.g. for a private mirror). Mutually exclusive with
+                               (e.g. for a private mirror). Held to the same v2.3.4
+                               minimum when its tag is a semantic version; a
+                               reference with no comparable version (a digest, a
+                               floating tag, no tag at all) is accepted with a
+                               warning. Mutually exclusive with
                                --crossplane-version.
 ```
 
@@ -346,9 +354,18 @@ Flags:
 - `kubectl` configured to access your cluster
 - Appropriate RBAC permissions (see [Required Permissions](#required-permissions))
 - A `crossplane` render image/binary of **v2.3.4 or newer** (the tool renders via
-  `xpkg.crossplane.io/crossplane/crossplane:stable` by default, which already satisfies this). Older
-  images silently drop cluster-observed composed resources from the render pipeline, which produces
-  incorrect diffs (e.g. missing removals). If a locally cached `:stable` image predates v2.3.4, re-pull it.
+  `xpkg.crossplane.io/crossplane/crossplane:stable` by default, which satisfies this *when freshly
+  pulled* — see below). Older images silently drop cluster-observed composed resources from the
+  render pipeline. Because removal detection walks the live resource tree independently and marks
+  anything absent from the rendered set as removed, dropping observed resources produces
+  **spurious removals**: resources that exist and will keep existing are reported as going away.
+  An image older still — anything predating the `crossplane internal render` subcommand — fails
+  outright with `crossplane: error: unexpected argument internal`; `crossplane-diff` appends a
+  re-pull hint to that error.
+
+  A locally cached `:stable` does **not** refresh on its own: the render engine pulls the image only
+  when it is absent, so whatever was first pulled on a machine stays pinned there indefinitely. If
+  diffs show removals you cannot explain, run `docker pull xpkg.crossplane.io/crossplane/crossplane:stable`.
 
 ## How It Works
 
