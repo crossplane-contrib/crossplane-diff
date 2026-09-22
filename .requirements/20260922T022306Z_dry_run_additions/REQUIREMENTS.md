@@ -420,6 +420,21 @@ Note also that neither suite reproduces client-written metadata by default (ITs 
 e2e uses SSA with a `FieldOwner`). Not expected to matter here, but if any behaviour turns out to depend on
 such a field, declare it in the fixture rather than shelling out to `kubectl`.
 
+**envtest orphan hazard (operational, applies to every run in this plan).** envtest starts `kube-apiserver`
+and `etcd` as children of the Go test binary, and cleanup lives *only* in `testEnv.Stop()`. If the test
+binary dies by SIGKILL — `go test` timeout, harness kill, Ctrl-C, agent teardown — `Stop()` never runs, the
+children are reparented to launchd, and they survive indefinitely at ~121 MB per pair. `defer testEnv.Stop()`
+does **not** protect against this; SIGKILL is untrappable and Darwin has no `PR_SET_PDEATHSIG`. On
+2026-09-21 this had accumulated 404 orphans holding 25.82 GB. The leak is active — no guard is installed.
+
+This plan runs the integration suite many times, so: **never interrupt a running test** (the standing rule's
+mechanical consequence here is a permanent leak, not just wasted work), and check for orphans before and
+after a session with `ps -eo pid,ppid,command | grep io.kubebuilder.envtest/k8s/` filtered to `PPID == 1`
+(both conditions required — a looser match can kill a *live* run). Verified zero orphans at spec time.
+
+A pre-test reaper in the test bootstrap is the only mitigation that covers the SIGKILL case, but it is **out
+of scope for this issue** and should be filed separately rather than smuggled into this PR.
+
 ---
 
 ## 6. Implementation Plan (smallest sequential steps)
