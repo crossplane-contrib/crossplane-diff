@@ -304,14 +304,16 @@ func (p *DefaultDiffProcessor) PerformDiff(ctx context.Context, resources []*un.
 // The compositionProvider function is called to obtain the composition to use for rendering.
 // This is the public method for top-level XR diffing, which enables removal detection.
 func (p *DefaultDiffProcessor) DiffSingleResource(ctx context.Context, res *un.Unstructured, compositionProvider types.CompositionProvider) (map[string]*dt.ResourceDiff, error) {
-	diffs, _, err := p.diffSingleResourceInternal(ctx, res, compositionProvider, nil, true)
+	diffs, _, err := p.diffSingleResourceInternal(ctx, res, compositionProvider, nil, true, 0)
 	return diffs, err
 }
 
 // diffSingleResourceInternal is the internal implementation that allows control over removal detection.
 // parentXR should be nil for root XRs, and the parent XR for nested XRs.
 // detectRemovals should be true for top-level XRs and false for nested XRs (which don't own their composed resources).
-func (p *DefaultDiffProcessor) diffSingleResourceInternal(ctx context.Context, res *un.Unstructured, compositionProvider types.CompositionProvider, parentXR *cmp.Unstructured, detectRemovals bool) (map[string]*dt.ResourceDiff, map[string]bool, error) {
+// depth is the nesting depth of res itself: 0 for the XR the user named, 1 for an XR composed by it,
+// and so on. It must be threaded through the recursion for MaxNestedDepth to bound it at all.
+func (p *DefaultDiffProcessor) diffSingleResourceInternal(ctx context.Context, res *un.Unstructured, compositionProvider types.CompositionProvider, parentXR *cmp.Unstructured, detectRemovals bool, depth int) (map[string]*dt.ResourceDiff, map[string]bool, error) {
 	resourceID := fmt.Sprintf("%s/%s", res.GetKind(), res.GetName())
 	p.config.Logger.Debug("Processing resource", "resource", resourceID, "namespace", res.GetNamespace())
 
@@ -393,7 +395,10 @@ func (p *DefaultDiffProcessor) diffSingleResourceInternal(ctx context.Context, r
 	// Fetch observed resources for use in rendering (needed for getComposedResource template function)
 	// and for function-sequencer to know which resources already exist in the cluster)
 	if observedResources == nil && existingXRFromCluster != nil {
-		observedResources = p.fetchObservedResourcesFromClusterXR(ctx, existingXRFromCluster, resourceID)
+		observedResources, err = p.fetchObservedResourcesFromClusterXR(ctx, existingXRFromCluster, resourceID)
+		if err != nil {
+			return nil, nil, err
+		}
 	}
 
 	// Perform iterative rendering with requirements resolution.
@@ -480,7 +485,8 @@ func (p *DefaultDiffProcessor) diffSingleResourceInternal(ctx context.Context, r
 		}
 	}
 
-	nestedDiffs, nestedRenderedResources, err := p.ProcessNestedXRs(ctx, desired.ComposedResources, compositionProvider, resourceID, existingXR, observedResources, 1)
+	// Anything composed by this XR sits one level deeper than it does.
+	nestedDiffs, nestedRenderedResources, err := p.ProcessNestedXRs(ctx, desired.ComposedResources, compositionProvider, resourceID, existingXR, observedResources, depth+1)
 	if err != nil {
 		p.config.Logger.Debug("Error processing nested XRs", "resource", resourceID, "error", err)
 		return nil, nil, errors.Wrap(err, "cannot process nested XRs")
@@ -563,26 +569,32 @@ func (p *DefaultDiffProcessor) warnIfDeleting(existingXRFromCluster *un.Unstruct
 // We must use the cluster XR (not the input XR) because the XRM client uses spec.resourceRefs
 // to find children. The input XR doesn't have resourceRefs, but the cluster XR does.
 // This ensures that function-sequencer and other functions that check observed resources work correctly.
-func (p *DefaultDiffProcessor) fetchObservedResourcesFromClusterXR(ctx context.Context, existingXRFromCluster *un.Unstructured, resourceID string) []cpd.Unstructured {
+//
+// A failure here is fatal. Downstream, an empty observed set is indistinguishable from "this XR
+// genuinely has no composed resources yet", so continuing with one would report every existing
+// composed resource as a creation — a silently wrong diff, which "Accuracy Above All Else"
+// forbids. resolveBackingXRForClaim already fails on exactly this condition for a Claim's backing
+// XR; the two paths must agree.
+func (p *DefaultDiffProcessor) fetchObservedResourcesFromClusterXR(ctx context.Context, existingXRFromCluster *un.Unstructured, resourceID string) ([]cpd.Unstructured, error) {
 	clusterXR := cmp.New()
 	if err := runtime.DefaultUnstructuredConverter.FromUnstructured(existingXRFromCluster.Object, clusterXR); err != nil {
 		p.config.Logger.Debug("Could not convert cluster XR for observed resources fetch",
 			"resource", resourceID,
 			"error", err)
 
-		return nil
+		return nil, errors.Wrapf(err, "cannot convert cluster XR %q to composite", existingXRFromCluster.GetName())
 	}
 
 	observedResources, err := p.resourceManager.FetchObservedResources(ctx, clusterXR)
 	if err != nil {
-		p.config.Logger.Debug("Could not fetch observed resources (continuing with empty list)",
+		p.config.Logger.Debug("Could not fetch observed resources",
 			"resource", resourceID,
 			"error", err)
 
-		return nil
+		return nil, errors.Wrapf(err, "cannot fetch observed resources for XR %q", existingXRFromCluster.GetName())
 	}
 
-	return observedResources
+	return observedResources, nil
 }
 
 // backingXRInfo holds information about a Claim's backing XR.
@@ -936,6 +948,10 @@ func preserveNestedXRIdentity(nestedXR, existingNestedXR *un.Unstructured) {
 // its own composition pipeline to get the full tree of diffs. It preserves the identity
 // of existing nested XRs to ensure accurate diff calculation.
 // observedResources should contain the observed resources from the parent XR's resource tree.
+// depth is the nesting depth of composedResources themselves: 1 for the resources composed by the
+// XR the user named, 2 for their children, and so on. MaxNestedDepth is therefore the number of
+// levels of nesting permitted below the root, and descending past it is an error rather than a
+// silent truncation of the tree.
 func (p *DefaultDiffProcessor) ProcessNestedXRs(
 	ctx context.Context,
 	composedResources []cpd.Unstructured,
@@ -945,15 +961,6 @@ func (p *DefaultDiffProcessor) ProcessNestedXRs(
 	observedResources []cpd.Unstructured,
 	depth int,
 ) (map[string]*dt.ResourceDiff, map[string]bool, error) {
-	if depth > p.config.MaxNestedDepth {
-		p.config.Logger.Debug("Maximum nesting depth exceeded",
-			"parentResource", parentResourceID,
-			"depth", depth,
-			"maxDepth", p.config.MaxNestedDepth)
-
-		return nil, nil, errors.New("maximum nesting depth exceeded")
-	}
-
 	p.config.Logger.Debug("Processing nested XRs",
 		"parentResource", parentResourceID,
 		"composedResourceCount", len(composedResources),
@@ -975,6 +982,25 @@ func (p *DefaultDiffProcessor) ProcessNestedXRs(
 		}
 
 		nestedResourceID := fmt.Sprintf("%s/%s (nested depth %d)", nestedXR.GetKind(), nestedXR.GetName(), depth)
+
+		// Enforce the bound only once we know there is genuinely an XR to descend
+		// into. Checking on entry instead would reject a tree that is exactly
+		// MaxNestedDepth levels deep, because the deepest XR still reaches here
+		// (with an empty or all-managed composedResources) one level too far down.
+		//
+		// A composition cycle (XR-A composes XR-B composes XR-A) has no natural
+		// stopping point, so this is the only thing standing between it and an
+		// exhausted goroutine stack.
+		if depth > p.config.MaxNestedDepth {
+			p.config.Logger.Debug("Maximum nesting depth exceeded",
+				"parentResource", parentResourceID,
+				"nestedXR", nestedResourceID,
+				"depth", depth,
+				"maxDepth", p.config.MaxNestedDepth)
+
+			return nil, nil, errors.Errorf("maximum nesting depth exceeded: %s is nested %d levels deep, but --max-nested-depth is %d", nestedResourceID, depth, p.config.MaxNestedDepth)
+		}
+
 		p.config.Logger.Debug("Found nested XR, processing recursively",
 			"nestedXR", nestedResourceID,
 			"parentXR", parentResourceID,
@@ -1019,7 +1045,7 @@ func (p *DefaultDiffProcessor) ProcessNestedXRs(
 		// Pass parentXR so nested XR can have correct composite label
 		// Use detectRemovals=false for nested XRs since they don't own their composed resources
 		// (resources are owned by the top-level parent XR in Crossplane's ownership model)
-		nestedDiffs, nestedRenderedResources, err := p.diffSingleResourceInternal(ctx, nestedXR, compositionProvider, parentXR, false)
+		nestedDiffs, nestedRenderedResources, err := p.diffSingleResourceInternal(ctx, nestedXR, compositionProvider, parentXR, false, depth)
 		if err != nil {
 			// Check if the error is due to missing composition
 			// Note: It's valid to have an XRD in Crossplane without a composition attached to it.

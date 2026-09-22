@@ -1,0 +1,65 @@
+# Each composition composes the other kind, naming the child after its parent the way the nested
+# fixtures do, so every level of the cycle appends another "-child" to the name.
+apiVersion: apiextensions.crossplane.io/v1
+kind: Composition
+metadata:
+  name: xcycleas.cycle.example.org
+spec:
+  compositeTypeRef:
+    apiVersion: ns.cycle.example.org/v1alpha1
+    kind: XCycleA
+  mode: Pipeline
+  pipeline:
+    - step: generate-cycle-b
+      functionRef:
+        name: function-go-templating
+      input:
+        apiVersion: template.fn.crossplane.io/v1beta1
+        kind: GoTemplate
+        source: Inline
+        inline:
+          template: |
+            apiVersion: ns.cycle.example.org/v1alpha1
+            kind: XCycleB
+            metadata:
+              name: {{ .observed.composite.resource.metadata.name }}-child
+              namespace: {{ .observed.composite.resource.metadata.namespace }}
+              annotations:
+                gotemplating.fn.crossplane.io/composition-resource-name: cycle-b
+            spec:
+              cycleField: {{ .observed.composite.resource.spec.cycleField }}
+    - step: automatically-detect-ready-composed-resources
+      functionRef:
+        name: function-auto-ready
+---
+apiVersion: apiextensions.crossplane.io/v1
+kind: Composition
+metadata:
+  name: xcyclebs.cycle.example.org
+spec:
+  compositeTypeRef:
+    apiVersion: ns.cycle.example.org/v1alpha1
+    kind: XCycleB
+  mode: Pipeline
+  pipeline:
+    - step: generate-cycle-a
+      functionRef:
+        name: function-go-templating
+      input:
+        apiVersion: template.fn.crossplane.io/v1beta1
+        kind: GoTemplate
+        source: Inline
+        inline:
+          template: |
+            apiVersion: ns.cycle.example.org/v1alpha1
+            kind: XCycleA
+            metadata:
+              name: {{ .observed.composite.resource.metadata.name }}-child
+              namespace: {{ .observed.composite.resource.metadata.namespace }}
+              annotations:
+                gotemplating.fn.crossplane.io/composition-resource-name: cycle-a
+            spec:
+              cycleField: {{ .observed.composite.resource.spec.cycleField }}
+    - step: automatically-detect-ready-composed-resources
+      functionRef:
+        name: function-auto-ready

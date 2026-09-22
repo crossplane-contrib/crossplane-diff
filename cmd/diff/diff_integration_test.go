@@ -1567,6 +1567,27 @@ Summary: 2 modified, 2 removed`,
 			expectedError:    false,
 			expectedExitCode: dp.ExitCodeDiffDetected,
 		},
+		// Issue #485. The unit test for the depth guard uses a render stub that caps its own recursion,
+		// so it cannot show what a real cycle does across real renders: real templates, real names that
+		// grow at every level (76 characters by the time the guard fires), real schema validation and
+		// dry-run at each level. This drives the whole path. It fails at exactly one level past the
+		// default --max-nested-depth of 10, attributed to the XR the user named.
+		"CyclicCompositionStopsAtMaxNestedDepth": {
+			reason:       "A composition cycle (XCycleA -> XCycleB -> XCycleA ...) must stop at --max-nested-depth with a clear error, not recurse until the stack overflows (#485)",
+			outputFormat: "json",
+			setupFiles: []string{
+				"testdata/diff/resources/cycle/xrds.yaml",
+				"testdata/diff/resources/cycle/compositions.yaml",
+				"testdata/diff/resources/functions.yaml",
+			},
+			inputFiles:            []string{"testdata/diff/new-cycle-xr.yaml"},
+			expectedError:         true,
+			expectedErrorContains: "maximum nesting depth exceeded: XCycleB/test-cycle-child-child-child-child-child-child-child-child-child-child-child (nested depth 11) is nested 11 levels deep, but --max-nested-depth is 10",
+			expectedExitCode:      dp.ExitCodeToolError,
+			expectedStructuredOutput: tu.ExpectDiff().
+				WithError("XCycleA/test-cycle").
+				WithMessageContaining("maximum nesting depth exceeded"),
+		},
 		"ModifiedNestedXRPropagatesChanges": {
 			reason:       "Validates that modified nested XR propagates changes through child XR to downstream resources",
 			outputFormat: "json",
@@ -3486,6 +3507,31 @@ Summary: 1 modified`,
 			expectedError:    false,
 			expectedExitCode: dp.ExitCodeDiffDetected,
 			noColor:          true,
+		},
+		// Issue #485, comp's half. comp re-renders each discovered composite through DiffSingleResource,
+		// the same recursion xr uses, so one fix covers both — this pins that for comp rather than
+		// assuming it. comp's own error only counts the failures, so the assertion that matters is that
+		// the depth message reaches the failing composite's impact entry: without it, a user would be
+		// told something failed but not that the composition recurses into itself.
+		"CyclicCompositionStopsAtMaxNestedDepth": {
+			reason:       "comp shares xr's recursion path (it enters via DiffSingleResource), so a composition cycle must stop at --max-nested-depth here too, and say so on the failing composite (#485)",
+			outputFormat: "json",
+			setupFiles: []string{
+				"testdata/diff/resources/cycle/xrds.yaml",
+				"testdata/diff/resources/cycle/compositions.yaml",
+				"testdata/comp/resources/functions.yaml",
+				"testdata/comp/resources/cycle/existing-cycle-xr.yaml",
+			},
+			inputFiles:            []string{"testdata/comp/updated-cycle-composition.yaml"},
+			namespace:             "default",
+			expectedError:         true,
+			expectedErrorContains: "impact analysis failed for 1 XR(s)",
+			expectedExitCode:      dp.ExitCodeToolError,
+			expectedStructuredCompOutput: tu.ExpectCompDiff().
+				WithComposition("xcycleas.cycle.example.org").
+				WithAffectedResources(1, 0, 0, 1).
+				WithXRImpact("XCycleA", "test-cycle", "default", "error").
+				WithErrorContaining("maximum nesting depth exceeded"),
 		},
 		"NestedXRUsesOwnComposition": {
 			reason: "Validates that nested XRs use their own composition from the cluster, not the parent's CLI composition",

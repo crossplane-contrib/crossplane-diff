@@ -1,0 +1,12 @@
+# An existing XR on the XCycleA composition, which comp discovers and re-renders against the
+# updated composition. Its composition starts the XCycleA -> XCycleB -> XCycleA cycle.
+apiVersion: ns.cycle.example.org/v1alpha1
+kind: XCycleA
+metadata:
+  name: test-cycle
+  namespace: default
+spec:
+  cycleField: "cycle-value"
+  crossplane:
+    compositionRef:
+      name: xcycleas.cycle.example.org

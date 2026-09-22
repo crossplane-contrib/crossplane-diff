@@ -380,6 +380,22 @@ The tool performs the following steps:
 7. **Calculate diffs** by comparing rendered resources against current cluster state
 8. **Display formatted output** showing what would change
 
+### Nested XRs and `--max-nested-depth`
+
+When a composed resource is itself a Composite Resource, the tool recurses into it and diffs its own composed
+resources too, so a single `xr` or `comp` invocation shows the whole tree.
+
+`--max-nested-depth` (default `10`) bounds that recursion: it is the number of levels of nesting permitted
+*below* the Composite Resource you named. A composed XR one level deeper than the bound fails the diff with
+`maximum nesting depth exceeded` rather than silently truncating the tree — an incomplete tree would report
+the omitted resources as unchanged, which is worse than an error. Raise the flag if you legitimately nest
+more deeply than the default. A composition cycle (XR-A composes XR-B, which composes XR-A) has no natural
+stopping point, so this bound is what makes it terminate.
+
+> **Note:** up to and including v0.10.0 the depth counter was never incremented, so `--max-nested-depth` had
+> no effect and a cyclic composition recursed until the process ran out of stack. If you had lowered the flag
+> expecting it to limit descent, it now actually does.
+
 ## Function Credentials
 
 Some Crossplane functions require credentials to operate (e.g., `function-msgraph` for Microsoft Graph API access). These credentials are typically referenced in composition pipelines via `credentials[].secretRef`.

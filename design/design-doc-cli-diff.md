@@ -295,7 +295,13 @@ The `comp` subcommand has its own set of integration tests:
 
 - **Nested XR Recursion**: Tests that composed XRs are themselves diffed, with identity preserved across renders by
   fetching observed state.
-- **`--max-nested-depth`**: Verifies the recursion limit short-circuits cleanly.
+- **`--max-nested-depth`**: Verifies the recursion limit short-circuits cleanly — that a cyclic composition terminates
+  with a "maximum nesting depth exceeded" error instead of exhausting the stack, that `--max-nested-depth 1` refuses a
+  second level of nesting, and that it still accepts a tree exactly one level deep (the bound is inclusive). The unit
+  tests drive the guard with a render stub that caps its own recursion, so a regression fails an assertion rather than
+  the test binary; integration tests separately drive a real two-kind cycle (`XCycleA` → `XCycleB` → …) through real
+  renders for **both** `xr` and `comp`, since `comp` shares the recursion. For `comp`, whose top-level error only
+  counts failed composites, they assert the depth message reaches the failing composite's impact entry.
 - **Two-phase Diff**: Verifies that resources rendered only by nested XRs are not falsely flagged as removals.
 - **`--eventual-state`**: Tests multi-stage compositions (e.g., function-sequencer / `function-conditional`) whose
   full effect requires multiple reconciliation cycles.
@@ -526,7 +532,8 @@ The `ProcessorConfig` structure provides configuration options:
 
 - `Colorize`, `Compact`: Visual formatting toggles for the human-readable renderer.
 - `OutputFormat`: One of `diff`, `json`, `yaml`. Selects between the human-readable and structured renderers.
-- `MaxNestedDepth`: Recursion limit for nested-XR diff (`--max-nested-depth`).
+- `MaxNestedDepth`: Recursion limit for nested-XR diff (`--max-nested-depth`) — the number of levels of nesting
+  permitted below the XR the user named. Exceeding it fails the diff (see §7.1).
 - `MaxRenderIterations`: Cap on the requirements-discovery loop (`--max-iterations`).
 - `IncludeManual`: For `comp`, also consider XRs whose composition update policy is `Manual`.
 - `AnalyzeOn`: For `comp`, the smallest composition change that triggers per-composite impact analysis — one of
@@ -1189,11 +1196,20 @@ The client layer provides interfaces to interact with Kubernetes and Crossplane 
       plus the claim's annotations and `crossplane.io/claim-name` / `crossplane.io/claim-namespace` labels. Rendering
       then proceeds from the (real or synthesized) backing XR with merged Claim spec, producing composed resources with
       correct `crossplane.io/composite` labels.
+    - If the XR already exists in the cluster, `ResourceManager.FetchObservedResources` walks its resource tree to
+      assemble the observed set that render is given. A failure here is fatal: downstream an empty observed set is
+      indistinguishable from "this XR genuinely has no composed resources yet", so continuing would report every
+      existing composed resource as a creation. The claim path applies the same rule to a claim's backing XR.
     - It calls `RenderToStableState` (see §9.5.6.2), which iteratively renders the composition pipeline, resolves any
       `RequiredResources` selectors via the `RequirementsProvider`, and re-renders until the requirement set stabilises
       (or the eventual-state criterion is met under `--eventual-state`).
     - For any nested XRs in the rendered output, the `ResourceManager` fetches their observed state from the cluster to
-      preserve identity, then the processor recurses (subject to `--max-nested-depth`).
+      preserve identity, then the processor recurses (subject to `--max-nested-depth`). The current nesting depth is
+      threaded through `diffSingleResourceInternal` into `ProcessNestedXRs`, which is what makes the bound effective:
+      `--max-nested-depth N` permits N levels of nesting below the XR the user named, and a composed XR at level N+1 is
+      a hard error rather than a silently truncated subtree. The bound is checked only for composed resources that are
+      themselves XRs, so a tree exactly N levels deep is accepted. Without it a composition cycle (XR-A composes XR-B
+      composes XR-A) has no stopping condition at all.
     - The processor strips namespaces from cluster-scoped composed resources (workaround for upstream
       `SetComposedResourceMetadata` blindly setting namespaces; see §9.5.6.3).
     - The `SchemaValidator` validates the rendered resources and enforces scope constraints

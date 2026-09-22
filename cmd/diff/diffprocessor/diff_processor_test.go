@@ -713,7 +713,13 @@ func TestDefaultDiffProcessor_PerformDiff(t *testing.T) {
 					Function: tu.NewMockFunctionClient().
 						WithSuccessfulFunctionsFetch(functions).
 						Build(),
-					ResourceTree: tu.NewMockResourceTreeClient().Build(),
+					// resource1 exists in the cluster, so its observed resources
+					// are fetched before validation runs. That fetch has to
+					// succeed for this case to reach the validation failure it is
+					// actually about.
+					ResourceTree: tu.NewMockResourceTreeClient().
+						WithEmptyResourceTree().
+						Build(),
 				}
 
 				return k8sClients, xpClients
@@ -2097,8 +2103,119 @@ func TestDefaultDiffProcessor_ProcessNestedXRs(t *testing.T) {
 		}).
 		Build()
 
+	// Fixtures for the nesting-depth cases below. They form a composition cycle:
+	// an XChildResource composes an XCycleResource, which composes an
+	// XChildResource, and so on without end.
+	const cycleGroup = "nested.example.org"
+
+	cycleBXR := tu.NewResource(cycleGroup+"/v1alpha1", "XCycleResource", "test-cycle-b").
+		WithSpecField("childField", "cycle-value").
+		WithCompositionResourceName("cycle-xr").
+		Build()
+
+	cycleAGVK := schema.GroupVersionKind{Group: cycleGroup, Version: "v1alpha1", Kind: "XChildResource"}
+	cycleBGVK := schema.GroupVersionKind{Group: cycleGroup, Version: "v1alpha1", Kind: "XCycleResource"}
+
+	cycleAXRDUn := tu.NewXRD("xchildresources."+cycleGroup, cycleGroup, "XChildResource").
+		WithVersion("v1alpha1", true, true).
+		BuildAsUnstructured()
+	cycleBXRDUn := tu.NewXRD("xcycleresources."+cycleGroup, cycleGroup, "XCycleResource").
+		WithVersion("v1alpha1", true, true).
+		BuildAsUnstructured()
+
+	cycleACRD := tu.NewCRD("xchildresources."+cycleGroup, cycleGroup, "XChildResource").
+		WithListKind("XChildResourceList").
+		WithPlural("xchildresources").
+		WithSingular("xchildresource").
+		WithVersion("v1alpha1", true, true).
+		WithStandardSchema("childField").
+		Build()
+	cycleBCRD := tu.NewCRD("xcycleresources."+cycleGroup, cycleGroup, "XCycleResource").
+		WithListKind("XCycleResourceList").
+		WithPlural("xcycleresources").
+		WithSingular("xcycleresource").
+		WithVersion("v1alpha1", true, true).
+		WithStandardSchema("childField").
+		Build()
+
+	// cycleRenderFunc renders the cycle described above. renderCap breaks the
+	// cycle after that many renders so that a processor which fails to bound
+	// recursion reports a failed assertion instead of exhausting the goroutine
+	// stack and taking down the whole test binary. Passing a renderCap of 0
+	// yields a tree exactly one level deep (the XR renders no nested XR).
+	cycleRenderFunc := func(renderCap int) func(context.Context, logging.Logger, RenderInputs) (render.CompositionOutputs, error) {
+		renders := 0
+
+		return func(_ context.Context, _ logging.Logger, in RenderInputs) (render.CompositionOutputs, error) {
+			renders++
+			out := render.CompositionOutputs{CompositeResource: in.CompositeResource}
+
+			if renders > renderCap {
+				return out, nil
+			}
+
+			next := cycleBXR
+			if in.CompositeResource.GetKind() == cycleBGVK.Kind {
+				next = childXR
+			}
+
+			out.ComposedResources = []cpd.Unstructured{{Unstructured: *next}}
+
+			return out, nil
+		}
+	}
+
+	// cycleClients wires both XR kinds of the cycle so each is recognised as an
+	// XR and can have its XRD defaults applied.
+	cycleClients := func() (xp.Clients, k8.Clients) {
+		functions := []pkgv1.Function{
+			{ObjectMeta: metav1.ObjectMeta{Name: "function-go-templating"}},
+		}
+
+		xpClients := xp.Clients{
+			Composition: tu.NewMockCompositionClient().
+				WithComposition(childComposition).
+				Build(),
+			Credential: &tu.MockCredentialClient{},
+			Definition: tu.NewMockDefinitionClient().
+				WithXRDForGVK(cycleAGVK, cycleAXRDUn).
+				WithXRDForGVK(cycleBGVK, cycleBXRDUn).
+				Build(),
+			Environment: tu.NewMockEnvironmentClient().
+				WithNoEnvironmentConfigs().
+				Build(),
+			Function: tu.NewMockFunctionClient().
+				WithSuccessfulFunctionsFetch(functions).
+				Build(),
+			ResourceTree: tu.NewMockResourceTreeClient().Build(),
+		}
+
+		k8sClients := k8.Clients{
+			Apply:    tu.NewMockApplyClient().Build(),
+			Resource: tu.NewMockResourceClient().Build(),
+			Schema: tu.NewMockSchemaClient().
+				WithFoundCRD(cycleGroup, cycleAGVK.Kind, cycleACRD).
+				WithFoundCRD(cycleGroup, cycleBGVK.Kind, cycleBCRD).
+				WithGetCRDByName(func(name string) (*extv1.CustomResourceDefinition, error) {
+					switch name {
+					case cycleACRD.Name:
+						return cycleACRD, nil
+					case cycleBCRD.Name:
+						return cycleBCRD, nil
+					default:
+						return nil, errors.Errorf("CRD with name %s not found", name)
+					}
+				}).
+				Build(),
+			Type: tu.NewMockTypeConverter().Build(),
+		}
+
+		return xpClients, k8sClients
+	}
+
 	tests := map[string]struct {
 		setupMocks        func() (xp.Clients, k8.Clients)
+		extraOpts         []ProcessorOption
 		composedResources []cpd.Unstructured
 		parentResourceID  string
 		depth             int
@@ -2234,6 +2351,57 @@ func TestDefaultDiffProcessor_ProcessNestedXRs(t *testing.T) {
 			wantDiffCount:    0,
 			wantErr:          true,
 			wantErrContain:   "maximum nesting depth exceeded",
+		},
+		// A composition cycle must be bounded by MaxNestedDepth rather than by
+		// running out of nested XRs (which never happens). Regression test for
+		// the depth counter never being incremented across the recursive
+		// re-entry through diffSingleResourceInternal.
+		"CyclicCompositionTerminatesWithDepthError": {
+			setupMocks: cycleClients,
+			extraOpts: []ProcessorOption{
+				WithRenderFunc(cycleRenderFunc(64)),
+			},
+			composedResources: []cpd.Unstructured{
+				{Unstructured: *childXR},
+			},
+			parentResourceID: "XParentResource/test-parent",
+			depth:            1,
+			wantDiffCount:    0,
+			wantErr:          true,
+			wantErrContain:   "maximum nesting depth exceeded",
+		},
+		// --max-nested-depth N means "N levels of nesting below the root", so
+		// with N=1 a second level of nesting must be refused.
+		"MaxNestedDepthOneRefusesSecondLevel": {
+			setupMocks: cycleClients,
+			extraOpts: []ProcessorOption{
+				WithMaxNestedDepth(1),
+				WithRenderFunc(cycleRenderFunc(64)),
+			},
+			composedResources: []cpd.Unstructured{
+				{Unstructured: *childXR},
+			},
+			parentResourceID: "XParentResource/test-parent",
+			depth:            1,
+			wantDiffCount:    0,
+			wantErr:          true,
+			wantErrContain:   "maximum nesting depth exceeded",
+		},
+		// ...and the boundary is inclusive: N=1 must still process the first
+		// level of nesting without complaining that the bound was exceeded.
+		"MaxNestedDepthOneAllowsFirstLevel": {
+			setupMocks: cycleClients,
+			extraOpts: []ProcessorOption{
+				WithMaxNestedDepth(1),
+				WithRenderFunc(cycleRenderFunc(0)),
+			},
+			composedResources: []cpd.Unstructured{
+				{Unstructured: *childXR},
+			},
+			parentResourceID: "XParentResource/test-parent",
+			depth:            1,
+			wantDiffCount:    1,
+			wantErr:          false,
 		},
 		"MixedXRAndManagedResourcesProcessesOnlyXRs": {
 			setupMocks: func() (xp.Clients, k8.Clients) {
@@ -2461,6 +2629,7 @@ func TestDefaultDiffProcessor_ProcessNestedXRs(t *testing.T) {
 				}),
 			}
 			baseOpts = append(baseOpts, customOpts...)
+			baseOpts = append(baseOpts, tt.extraOpts...)
 			processor := NewDiffProcessor(k8sClients, xpClients, baseOpts...).(*DefaultDiffProcessor)
 
 			// Initialize if needed
@@ -2729,7 +2898,7 @@ func TestDefaultDiffProcessor_DiffSingleResource_WithObservedResources(t *testin
 			verifyObservedPassed: true,
 			wantErr:              false,
 		},
-		"ContinuesWhenFetchObservedResourcesFails": {
+		"FailedObservedResourceFetchIsFatal": {
 			setupMocks: func() (k8.Clients, xp.Clients) {
 				// Create XRD
 				xrdUnstructured := tu.NewXRD("xrs.example.org", "example.org", "XR").
@@ -2799,10 +2968,107 @@ func TestDefaultDiffProcessor_DiffSingleResource_WithObservedResources(t *testin
 				return k8sClients, xpClients
 			},
 			wantObservedInRender: true,
-			wantObservedCount:    0, // Should pass empty list when fetch fails
+			wantObservedCount:    0,
 			verifyObservedPassed: true,
-			wantErr:              true,                       // Should return partial error so user knows removal detection failed
-			wantErrContain:       "cannot get resource tree", // The resource tree error is now surfaced
+			wantErr:              true,
+			// The observed-resource fetch is the first thing to touch the tree
+			// client, so it is what surfaces the failure.
+			wantErrContain: "cannot fetch observed resources for XR",
+		},
+		// A *transient* failure must be fatal too. Removal detection queries the
+		// resource tree a second time, so a failure confined to the observed
+		// fetch used to be swallowed entirely: the diff was computed as though
+		// the cluster held nothing, reporting every existing composed resource
+		// as an addition, with no error and no warning.
+		"TransientObservedResourceFetchFailureIsFatal": {
+			setupMocks: func() (k8.Clients, xp.Clients) {
+				resourceTree := &resource.Resource{
+					Unstructured: *xr,
+					Children: []*resource.Resource{
+						{Unstructured: *observedBucket},
+						{Unstructured: *observedUser},
+					},
+				}
+
+				xrdUnstructured := tu.NewXRD("xrs.example.org", "example.org", "XR").
+					WithPlural("xrs").
+					WithSingular("xr").
+					WithVersion("v1", true, true).
+					WithSchema(&extv1.JSONSchemaProps{
+						Type: "object",
+						Properties: map[string]extv1.JSONSchemaProps{
+							"spec":   {Type: "object"},
+							"status": {Type: "object"},
+						},
+					}).
+					BuildAsUnstructured()
+
+				xrCRD := tu.NewCRD("xrs.example.org", "example.org", "XR").
+					WithListKind("XRList").
+					WithPlural("xrs").
+					WithSingular("xr").
+					WithVersion("v1", true, true).
+					WithStandardSchema("field").
+					Build()
+
+				k8sClients := k8.Clients{
+					Apply: tu.NewMockApplyClient().
+						WithSuccessfulDryRun().
+						Build(),
+					Resource: tu.NewMockResourceClient().
+						WithResourcesExist(xr).
+						Build(),
+					Schema: tu.NewMockSchemaClient().
+						WithNoResourcesRequiringCRDs().
+						WithGetCRD(func(_ context.Context, gvk schema.GroupVersionKind) (*extv1.CustomResourceDefinition, error) {
+							if gvk.Group == "example.org" && gvk.Kind == "XR" {
+								return xrCRD, nil
+							}
+
+							return nil, errors.Errorf("CRD not found for %v", gvk)
+						}).
+						WithSuccessfulCRDByNameFetch("xrs.example.org", xrCRD).
+						Build(),
+					Type: tu.NewMockTypeConverter().Build(),
+				}
+
+				// Fail only the first tree lookup (the observed-resource fetch);
+				// every later one succeeds, as a transient API error would.
+				treeCalls := 0
+
+				xpClients := xp.Clients{
+					Composition: tu.NewMockCompositionClient().
+						WithSuccessfulCompositionMatch(composition).
+						Build(),
+					Credential: &tu.MockCredentialClient{},
+					Definition: tu.NewMockDefinitionClient().
+						WithXRDForXR(xrdUnstructured).
+						Build(),
+					Environment: tu.NewMockEnvironmentClient().
+						WithNoEnvironmentConfigs().
+						Build(),
+					Function: tu.NewMockFunctionClient().
+						WithSuccessfulFunctionsFetch(functions).
+						Build(),
+					ResourceTree: tu.NewMockResourceTreeClient().
+						WithGetResourceTree(func(_ context.Context, _ *un.Unstructured) (*resource.Resource, error) {
+							treeCalls++
+							if treeCalls == 1 {
+								return nil, errors.New("etcdserver: request timed out")
+							}
+
+							return resourceTree, nil
+						}).
+						Build(),
+				}
+
+				return k8sClients, xpClients
+			},
+			wantObservedInRender: true,
+			wantObservedCount:    0,
+			verifyObservedPassed: true,
+			wantErr:              true,
+			wantErrContain:       "cannot fetch observed resources for XR",
 		},
 	}
 
