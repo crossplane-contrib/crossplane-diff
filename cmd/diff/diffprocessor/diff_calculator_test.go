@@ -390,6 +390,41 @@ func TestDefaultDiffCalculator_CalculateDiff(t *testing.T) {
 				Detail:     `Internal error occurred: failed calling webhook "policy.example.org": connection refused`,
 			},
 		},
+		"AdditionInMissingNamespaceDegrades": {
+			// Regression test for the e2e failure this classification originally caused
+			// (TestDiffConcurrentDirectory diffs 21 XRs into a namespace that is never created).
+			//
+			// A NotFound from a dry-run create is NamespaceLifecycle admission: the target namespace does
+			// not exist yet. That must degrade, not fail. A namespace and the resources inside it are
+			// routinely applied together, so the namespace's absence at diff time says nothing about
+			// whether the apply will succeed — which is exactly what separates it from a quota or webhook
+			// refusal, where the verdict describes the object and will still hold.
+			setupMocks: func(t *testing.T) (k8.ApplyClient, xp.ResourceTreeClient, ResourceManager) {
+				t.Helper()
+
+				applyClient := tu.NewMockApplyClient().
+					WithDryRunCreate(func(context.Context, *un.Unstructured) (*un.Unstructured, error) {
+						return nil, apierrors.NewNotFound(schema.GroupResource{Resource: "namespaces"}, "does-not-exist")
+					}).
+					Build()
+
+				resourceClient := tu.NewMockResourceClient().WithResourceNotFound().Build()
+				resourceManager := NewResourceManager(resourceClient, tu.NewMockDefinitionClient().Build(), tu.NewMockResourceTreeClient().Build(), tu.TestLogger(t, false))
+
+				return applyClient, tu.NewMockResourceTreeClient().Build(), resourceManager
+			},
+			composite: nil,
+			desired:   newResource,
+			wantDiff: &dt.ResourceDiff{
+				Gvk:          schema.GroupVersionKind{Kind: "TestResource", Group: "example.org", Version: "v1"},
+				ResourceName: "new-resource",
+				DiffType:     dt.DiffTypeAdded,
+			},
+			wantDryRun: &dt.DryRunInfo{
+				SkipReason: dt.DryRunSkipNamespaceNotFound,
+				Detail:     `namespaces "does-not-exist" not found`,
+			},
+		},
 		"AdditionAlreadyExistsFailsLoudly": {
 			// FetchCurrentObject said this resource does not exist and the apiserver says it does. The
 			// diff would rest on a false premise, so this must not degrade — and must not be reported as

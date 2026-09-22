@@ -477,12 +477,29 @@ func (c *DefaultDiffCalculator) dryRunCreateAddition(ctx context.Context, desire
 
 	case apierrors.IsForbidden(err):
 		// A 403 is ambiguous. It can mean we lack the create verb, in which case nothing was learned
-		// about the resource and we must degrade quietly. It can equally come from ResourceQuota, from
-		// NamespaceLifecycle when the target namespace does not exist, or from a validating webhook —
-		// all of which are real findings the user needs. Only the authorizer can tell the two apart,
-		// and deciding by pattern-matching the apiserver's message would rest that distinction on
-		// unversioned prose.
+		// about the resource and we must degrade quietly. It can equally come from ResourceQuota or
+		// from a validating webhook, which are real findings the user needs. Only the authorizer can
+		// tell the two apart, and deciding by pattern-matching the apiserver's message would rest that
+		// distinction on unversioned prose.
 		return c.resolveForbiddenCreate(ctx, desired, resourceID, err)
+
+	case apierrors.IsNotFound(err):
+		// The resource's target namespace does not exist yet. GVKToGVR has already resolved the
+		// resource itself, so in practice this is NamespaceLifecycle admission and nothing else.
+		//
+		// This is a degradation, NOT a finding, and the distinction is the whole point: a quota or
+		// webhook refusal describes the object and will still hold when the user applies, whereas a
+		// missing namespace is a precondition they are very often about to satisfy in the SAME apply —
+		// a Namespace and the resources inside it in one `kubectl apply -f ./manifests/` is routine.
+		// crossplane-diff cannot know whether the namespace is part of that apply, so refusing to diff
+		// would break a supported workflow to report something that may not be true by the time it
+		// matters. TestDiffConcurrentDirectory diffs 21 XRs into a namespace that is never created and
+		// is exactly this case.
+		c.warnOnce(desired, dt.DryRunSkipNamespaceNotFound,
+			"skipped apiserver verification of added resources: their namespace does not exist yet, so their diffs omit server-side defaulting and admission",
+			"gvk", desired.GroupVersionKind().String(), "namespace", desired.GetNamespace(), "cause", err.Error())
+
+		return desired, &dt.DryRunInfo{SkipReason: dt.DryRunSkipNamespaceNotFound, Detail: err.Error()}, nil
 
 	case apierrors.IsInvalid(err):
 		return nil, nil, NewAdmissionRejectionError(resourceID, desired, err)

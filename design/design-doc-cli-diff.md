@@ -803,13 +803,28 @@ whole purpose is removing one. It is now exit 2 on both paths.
 
 That path never *degrades*, though: see §3.4 item 6.
 
+A `NotFound` from a dry-run create is classified as a **degradation**, not a rejection, and the reasoning is worth
+recording because it is the one place where "the cluster refused this object" is the wrong reading. `GVKToGVR` has
+already resolved the resource, so in practice a `NotFound` here is `NamespaceLifecycle` admission reporting that the
+target namespace does not exist. A quota or webhook refusal describes the object and will still hold when the user
+applies; a missing namespace is a *precondition they are very often about to satisfy in the same apply* — a `Namespace`
+and the resources inside it in one `kubectl apply -f ./manifests/` is routine. crossplane-diff cannot know whether that
+`Namespace` is part of the apply being previewed, so reporting a finding would break a supported workflow over something
+that may well not be true by the time it matters. The resource degrades with
+`DryRunSkipNamespaceNotFound`, and a consumer that *does* want to treat bootstrap order as a failure can gate on that
+`skipReason`.
+
+This was found by the e2e suite rather than by design review: `TestDiffConcurrentDirectory` diffs 21 XRs into a
+namespace that is never created, and the first cut of this feature failed the whole run. It is now covered by
+`TestDiffIntegration/AdditionInMissingNamespaceDegradesRatherThanFailing` at integration speed, since envtest's
+apiserver enforces `NamespaceLifecycle`.
+
 #### 6.3.4 Why a `SelfSubjectAccessReview`, and why lazily
 
 `Forbidden` is overloaded. The apiserver returns 403 from the authorizer when RBAC denies the verb, and equally from
-`ResourceQuota`, from `NamespaceLifecycle` when the target namespace does not exist, and from any validating webhook
-that chooses that status. Only the first is an environment limitation to be degraded past; the other three are findings
-the user needs. Treating every 403 as "degrade" would silently swallow them, and reading the 403's *message* to tell
-them apart would rest a correctness decision on unversioned apiserver prose.
+`ResourceQuota` and from any validating webhook that chooses that status. Only the first is an environment limitation to
+be degraded past; the others are findings the user needs. Treating every 403 as "degrade" would silently swallow them,
+and reading the 403's *message* to tell them apart would rest a correctness decision on unversioned apiserver prose.
 
 So the tool asks the authorizer directly, through `AccessChecker.Can` (§6.9.1). `!allowed` means degrade (nothing was
 learned about the resource); `allowed` means the cluster looked at this object and refused it, which is reported. An
@@ -1159,7 +1174,7 @@ contract:
   plus a `[]ChangeDetail`.
 - `DryRunInfo` — optional `dryRun` object on a `ChangeDetail`, recording that this resource's desired state did **not**
   go through the apiserver, and why: `Performed` (`performed`), `SkipReason` (`skipReason`, one of `"disabled"` /
-  `"forbidden"` / `"webhookUnavailable"` — §6.3.3) and `Detail` (`detail`, the cluster's own explanation: the
+  `"forbidden"` / `"webhookUnavailable"` / `"namespaceNotFound"` — §6.3.3) and `Detail` (`detail`, the cluster's own explanation: the
   `SelfSubjectAccessReview`'s reason, or the apiserver's error message). `ChangeDetail` is the shared per-resource wire
   shape — `xr` reaches it via `Changes`/`xrs[].changes`, `comp` via `DownstreamChanges.Changes` — so one field covers
   both commands with no per-command plumbing.

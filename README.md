@@ -482,9 +482,12 @@ Unlike `patch`, this one **degrades per-resource rather than failing the run**. 
 |---------------------|-------|
 | `forbidden` | The authorizer says these credentials may not create this kind here. Nothing was learned about the resource; this is a property of the credentials, not a finding about the resource. |
 | `webhookUnavailable` | The apiserver could not complete the admission chain — classically an unreachable webhook with `failurePolicy: Fail`. `dryRun.detail` carries the apiserver's own message. |
+| `namespaceNotFound` | The resource's target namespace does not exist yet, so the apiserver would not admit it. |
 | `disabled` | You passed `--dry-run-on=existing`. No warning is raised: you asked for it. |
 
-If the cluster *rejects* an addition — a validating webhook, a `ValidatingAdmissionPolicy`, a `ResourceQuota`, a namespace that does not exist — that is a finding, not a degradation, and it is reported as one: exit code 2 with a typed `validationFailures[]` entry (see [Exit Codes](#exit-codes)).
+`namespaceNotFound` is a degradation rather than a finding on purpose. A Namespace and the resources inside it are routinely applied together, so the namespace being absent when you *diff* says nothing about whether the apply will succeed — `crossplane-diff` cannot know whether that Namespace is part of the same apply, and refusing to diff would break previewing a bootstrap. If you do want to treat it as a failure, gate on that `skipReason` value.
+
+If the cluster *rejects* an addition — a validating webhook, a `ValidatingAdmissionPolicy`, a `ResourceQuota` — that is a finding, not a degradation, and it is reported as one: exit code 2 with a typed `validationFailures[]` entry (see [Exit Codes](#exit-codes)). The difference is whether the verdict describes the object: a quota or policy refusal will still hold when you apply, whereas a missing namespace is a precondition you may be about to satisfy.
 
 A 403 alone cannot tell those two apart: the apiserver returns it both when RBAC denies the verb and when quota or a webhook refuses the object. Rather than pattern-match the apiserver's prose, the tool resolves the ambiguity with a `SelfSubjectAccessReview`, consulted only after a 403 has actually come back. `create` on `selfsubjectaccessreviews` is granted to `system:authenticated` by default through the built-in `system:basic-user` ClusterRole, so this normally needs no rule of its own.
 
@@ -791,7 +794,8 @@ The structured output includes:
   either: they are computed straight from cluster state and have no desired state to preview, so read absence as
   "nothing was skipped" rather than as a positive fidelity guarantee. The fields are `performed` (always `false` when the
   object is present — the redundancy keeps the emitted JSON self-describing), `skipReason` (one of `"disabled"`,
-  `"forbidden"`, `"webhookUnavailable"` — see [Required Permissions](#required-permissions) for what each means), and
+  `"forbidden"`, `"webhookUnavailable"`, `"namespaceNotFound"` — see [Required Permissions](#required-permissions) for what
+  each means), and
   `detail`, the cluster's own explanation (the `SelfSubjectAccessReview`'s reason, or the apiserver's error message).
   `dryRun` lives on the shared per-resource change shape, so it appears in `xr`'s `changes[]` and `xrs[].changes[]` and
   in `comp`'s `impactAnalysis[].downstreamChanges.changes[]` alike:
@@ -835,7 +839,7 @@ The structured output includes:
 
 ### Validation Errors
 
-When validation fails on the input XR or any rendered composed resource, `crossplane-diff` reports the failure in both human-readable and machine-readable form. Two things land here: local schema validation against the CRD/XRD, and the cluster's own refusal of a resource during the dry run (a validating webhook, a `ValidatingAdmissionPolicy`, a `ResourceQuota`, a namespace that does not exist). Both answer the same question — "will the cluster accept this?" — so they share the exit-code tier and the structured output field, and are told apart by `type` (see the `FieldValidationError` table below).
+When validation fails on the input XR or any rendered composed resource, `crossplane-diff` reports the failure in both human-readable and machine-readable form. Two things land here: local schema validation against the CRD/XRD, and the cluster's own refusal of a resource during the dry run (a validating webhook, a `ValidatingAdmissionPolicy`, a `ResourceQuota`). Both answer the same question — "will the cluster accept this?" — so they share the exit-code tier and the structured output field, and are told apart by `type` (see the `FieldValidationError` table below).
 
 Exit-code precedence (per `DetermineExitCode`): any error in the run beats diff detection, so a partially-failed run never returns exit code 3 even if some XRs produced diffs. Among errors, tool errors (exit code 1) beat validation errors (exit code 2). Exit code 2 therefore requires *every* error in the run to be a validation error. See the [Exit Codes](#exit-codes) table below.
 
@@ -925,7 +929,7 @@ The `OutputError` schema:
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `type` | string | `"schema"`, `"cel"`, `"unknownField"`, `"defaulting"`, or `"admission"`. The first four come from local validation against the CRD/XRD. `"admission"` means the *apiserver* refused the resource during the dry run — a validating webhook, a `ValidatingAdmissionPolicy`, a `ResourceQuota`, a missing namespace. It sits in the same field on purpose: to a consumer asking "why won't the cluster accept this?", it is the same kind of answer. |
+| `type` | string | `"schema"`, `"cel"`, `"unknownField"`, `"defaulting"`, or `"admission"`. The first four come from local validation against the CRD/XRD. `"admission"` means the *apiserver* refused the resource during the dry run — a validating webhook, a `ValidatingAdmissionPolicy`, a `ResourceQuota`. A *missing namespace* is deliberately NOT here: it degrades instead, because it is a precondition you may be about to satisfy rather than a verdict on the object (see `dryRun.skipReason: namespaceNotFound`). It sits in the same field on purpose: to a consumer asking "why won't the cluster accept this?", it is the same kind of answer. |
 | `field` | string, optional | JSONPath of the offending field, when locatable. Absent for `"admission"`: the apiserver reports one rejection, not a field list. |
 | `message` | string | Validator-emitted human-readable description; for k8s-derived schema errors this typically already embeds the field path and bad value. For `"admission"` it is the apiserver's rejection message verbatim. |
 | `value` | any, optional | The offending value as the validator saw it. Type-preserved (string, number, bool, struct). |
@@ -944,7 +948,7 @@ The tool returns different exit codes to indicate the result of the diff operati
 |-----------|---------|
 | 0 | Success - no differences detected |
 | 1 | Tool error - execution failed (e.g., cluster access issues, invalid input) |
-| 2 | Validation error - the cluster will not accept a resource: it failed local validation against its CRD/XRD schema, **or** the apiserver rejected it during the dry run (validating webhook, `ValidatingAdmissionPolicy`, `ResourceQuota`, missing namespace) |
+| 2 | Validation error - the cluster will not accept a resource: it failed local validation against its CRD/XRD schema, **or** the apiserver rejected it during the dry run (validating webhook, `ValidatingAdmissionPolicy`, `ResourceQuota`) |
 | 3 | Diff detected - differences were found between input and cluster state |
 
 Exit codes are ordered by severity. When processing multiple resources, the highest severity exit code is returned:

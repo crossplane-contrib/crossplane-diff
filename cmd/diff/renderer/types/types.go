@@ -93,6 +93,17 @@ const (
 	// The constant is named for the dominant cause; DryRunInfo.Detail always
 	// carries the apiserver's own message, so the specific cause is not lost.
 	DryRunSkipWebhookUnavailable DryRunSkipReason = "webhookUnavailable"
+
+	// DryRunSkipNamespaceNotFound means the resource's target namespace does not
+	// exist yet, so the apiserver refused to admit it.
+	//
+	// This is deliberately a skip rather than a reported rejection. A namespace
+	// and the resources inside it are commonly applied together, so its absence
+	// at diff time says nothing about whether the apply will succeed — unlike a
+	// quota or webhook refusal, which describes the object itself and will still
+	// hold. Consumers that want to treat a bootstrap-order problem as a failure
+	// can gate on this value specifically.
+	DryRunSkipNamespaceNotFound DryRunSkipReason = "namespaceNotFound"
 )
 
 // DryRunInfo records that a resource's desired state was NOT verified against

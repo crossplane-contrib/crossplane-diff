@@ -584,6 +584,36 @@ func TestDiffIntegration(t *testing.T) {
 			expectedError:    false,
 			expectedExitCode: dp.ExitCodeDiffDetected,
 		},
+		"AdditionInMissingNamespaceDegradesRatherThanFailing": {
+			// Regression test for the e2e failure the first cut of this feature caused
+			// (TestDiffConcurrentDirectory diffs 21 XRs into a namespace that is never created).
+			//
+			// NamespaceLifecycle admission refuses a dry-run create into a namespace that does not exist.
+			// That must degrade, not fail the run: a Namespace and its contents are routinely applied
+			// together, so the namespace's absence at diff time says nothing about whether the apply will
+			// succeed — which is what separates it from a quota or webhook refusal, where the verdict
+			// describes the object and will still hold.
+			//
+			// The exit code is the real assertion. Before the fix this was exit 1 with no diff at all.
+			reason:       "An addition whose namespace does not exist yet still produces a diff, marked as unverified",
+			outputFormat: "json",
+			inputFiles:   []string{"testdata/diff/new-xr-missing-namespace.yaml"},
+			setupFiles: []string{
+				"testdata/diff/resources/xrd.yaml",
+				"testdata/diff/resources/composition.yaml",
+				"testdata/diff/resources/functions.yaml",
+			},
+			expectedStructuredOutput: tu.ExpectDiff().
+				WithSummary(2, 0, 0).
+				WithAddedResource("XNopResource", "test-resource", "nonexistent-namespace").
+				WithField("spec.coolField", "new-value").
+				WithDryRunSkipped("namespaceNotFound", "nonexistent-namespace").
+				And().
+				WithAddedResource("XDownstreamResource", "test-resource", "nonexistent-namespace").
+				WithDryRunSkipped("namespaceNotFound", "nonexistent-namespace"),
+			expectedError:    false,
+			expectedExitCode: dp.ExitCodeDiffDetected,
+		},
 		"BuiltInResourceAdditionPicksUpApiserverDefaults": {
 			// The choice of a built-in type is what makes this test non-vacuous. applyCRDDefaults
 			// (schema_validator.go) already applies CRD-derived `default:` values to the XR and to every
