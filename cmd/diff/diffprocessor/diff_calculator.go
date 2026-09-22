@@ -10,6 +10,7 @@ import (
 	k8 "github.com/crossplane-contrib/crossplane-diff/cmd/diff/client/kubernetes"
 	"github.com/crossplane-contrib/crossplane-diff/cmd/diff/renderer"
 	dt "github.com/crossplane-contrib/crossplane-diff/cmd/diff/renderer/types"
+	dtypes "github.com/crossplane-contrib/crossplane-diff/cmd/diff/types"
 	"github.com/crossplane/cli/v2/cmd/crossplane/common/resource"
 	"github.com/crossplane/cli/v2/cmd/crossplane/render"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -439,12 +440,6 @@ func (c *DefaultDiffCalculator) CalculateRemovedResourceDiffs(ctx context.Contex
 	return removedDiffs, nil
 }
 
-// Kubernetes verbs we ask the authorizer about when a dry run comes back Forbidden.
-const (
-	verbCreate = "create"
-	verbPatch  = "patch"
-)
-
 // dryRunCreateAddition computes the post-apply form of a resource that does not yet exist, by
 // dry-run creating it.
 //
@@ -540,7 +535,7 @@ func (c *DefaultDiffCalculator) resolveForbiddenCreate(ctx context.Context, desi
 	// Can reports whether we MAY create, so a denial is !allowed. Reading this the wrong way round
 	// inverts the whole feature: an authorized user would silently lose fidelity, and an unauthorized
 	// one would be told the cluster rejected a resource it never saw.
-	allowed, reason, ssarErr := c.accessChecker.Can(ctx, desired.GroupVersionKind(), desired.GetNamespace(), verbCreate)
+	allowed, reason, ssarErr := c.accessChecker.Can(ctx, desired.GroupVersionKind(), desired.GetNamespace(), dtypes.VerbCreate)
 
 	switch {
 	case ssarErr != nil:
@@ -581,7 +576,7 @@ func (c *DefaultDiffCalculator) classifyApplyFailure(ctx context.Context, desire
 
 	case apierrors.IsForbidden(applyErr):
 		// As in resolveForbiddenCreate: Can reports whether we MAY patch, so a denial is !allowed.
-		allowed, reason, ssarErr := c.accessChecker.Can(ctx, desired.GroupVersionKind(), desired.GetNamespace(), verbPatch)
+		allowed, reason, ssarErr := c.accessChecker.Can(ctx, desired.GroupVersionKind(), desired.GetNamespace(), dtypes.VerbPatch)
 
 		switch {
 		case ssarErr != nil:

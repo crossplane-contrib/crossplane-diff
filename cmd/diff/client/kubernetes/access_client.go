@@ -6,6 +6,7 @@ import (
 	"sync"
 
 	"github.com/crossplane-contrib/crossplane-diff/cmd/diff/client/core"
+	dtypes "github.com/crossplane-contrib/crossplane-diff/cmd/diff/types"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	un "k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -40,12 +41,11 @@ func ssarGVR() schema.GroupVersionResource {
 type AccessChecker interface {
 	// Can reports whether the current credentials may perform verb on objects
 	// of the given GVK in the given namespace (empty namespace for
-	// cluster-scoped resources). verb is an API verb such as "create" or
-	// "patch" and must not be empty. When allowed is false, reason carries a
-	// human-readable explanation suitable for display. A non-nil error means
-	// the question could not be answered at all, which callers must treat as a
-	// tool error rather than as a denial.
-	Can(ctx context.Context, gvk schema.GroupVersionKind, namespace, verb string) (allowed bool, reason string, err error)
+	// cluster-scoped resources). verb must not be empty. When allowed is false,
+	// reason carries a human-readable explanation suitable for display. A
+	// non-nil error means the question could not be answered at all, which
+	// callers must treat as a tool error rather than as a denial.
+	Can(ctx context.Context, gvk schema.GroupVersionKind, namespace string, verb dtypes.Verb) (allowed bool, reason string, err error)
 }
 
 // accessCacheKey identifies a single authorization question. All three
@@ -58,7 +58,7 @@ type AccessChecker interface {
 type accessCacheKey struct {
 	gvr       schema.GroupVersionResource
 	namespace string
-	verb      string
+	verb      dtypes.Verb
 }
 
 // accessDecision is a memoized answer to one authorization question.
@@ -99,15 +99,7 @@ func NewAccessClient(clients *core.Clients, converter TypeConverter, logger logg
 
 // Can reports whether the current credentials may perform verb on objects of the
 // given GVK in the given namespace.
-func (c *DefaultAccessClient) Can(ctx context.Context, gvk schema.GroupVersionKind, namespace, verb string) (bool, string, error) {
-	// An empty verb would ask the apiserver about the verb "", which no rule
-	// grants, so it would come back denied and look like a legitimate RBAC
-	// limitation. Refuse it instead: silently degrading on a caller bug is the
-	// failure mode this client is built to avoid.
-	if verb == "" {
-		return false, "", errors.Errorf("cannot check permission for %s: no verb given", gvk.String())
-	}
-
+func (c *DefaultAccessClient) Can(ctx context.Context, gvk schema.GroupVersionKind, namespace string, verb dtypes.Verb) (bool, string, error) {
 	// SSAR's resourceAttributes are expressed in terms of the plural resource
 	// name, not the Kind, so the GVK must be resolved first. DefaultTypeConverter
 	// memoizes this itself, so a cache hit below costs no API call either.
@@ -143,7 +135,7 @@ func (c *DefaultAccessClient) Can(ctx context.Context, gvk schema.GroupVersionKi
 }
 
 // review issues one SelfSubjectAccessReview and interprets its status.
-func (c *DefaultAccessClient) review(ctx context.Context, gvr schema.GroupVersionResource, namespace, verb string) (accessDecision, error) {
+func (c *DefaultAccessClient) review(ctx context.Context, gvr schema.GroupVersionResource, namespace string, verb dtypes.Verb) (accessDecision, error) {
 	c.logger.Debug("Checking permission", "verb", verb, "resource", gvr.String(), "namespace", namespace)
 
 	target := describeTarget(gvr, namespace)
@@ -157,7 +149,12 @@ func (c *DefaultAccessClient) review(ctx context.Context, gvr schema.GroupVersio
 					"group":     gvr.Group,
 					"resource":  gvr.Resource,
 					"namespace": namespace,
-					"verb":      verb,
+					// string(verb), not verb: an Unstructured may only hold plain JSON
+					// scalars, and runtime.DeepCopyJSONValue panics ("cannot deep copy
+					// types.Verb") on a named string type. Do not drop the conversion —
+					// the panic only fires on paths that deep-copy the object, so it is
+					// easy to remove and not notice.
+					"verb": string(verb),
 				},
 			},
 		},

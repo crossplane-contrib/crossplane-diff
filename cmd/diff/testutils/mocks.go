@@ -533,7 +533,7 @@ func (m *MockApplyClient) DryRunCreate(ctx context.Context, obj *un.Unstructured
 
 // MockAccessChecker implements the kubernetes.AccessChecker interface.
 type MockAccessChecker struct {
-	CanFn func(ctx context.Context, gvk schema.GroupVersionKind, namespace, verb string) (bool, string, error)
+	CanFn func(ctx context.Context, gvk schema.GroupVersionKind, namespace string, verb types.Verb) (bool, string, error)
 }
 
 // Can implements kubernetes.AccessChecker.
@@ -543,7 +543,7 @@ type MockAccessChecker struct {
 // answer that routes such a 403 to the cluster-rejection path. So a test that wires a Forbidden
 // without saying anything about authorization gets the rejection behaviour rather than a confusing
 // "Can not implemented" failure from a collaborator it never meant to exercise.
-func (m *MockAccessChecker) Can(ctx context.Context, gvk schema.GroupVersionKind, namespace, verb string) (bool, string, error) {
+func (m *MockAccessChecker) Can(ctx context.Context, gvk schema.GroupVersionKind, namespace string, verb types.Verb) (bool, string, error) {
 	if m.CanFn != nil {
 		return m.CanFn(ctx, gvk, namespace, verb)
 	}

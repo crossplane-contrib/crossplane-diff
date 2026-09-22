@@ -10,6 +10,7 @@ import (
 	"github.com/crossplane-contrib/crossplane-diff/cmd/diff/renderer"
 	dt "github.com/crossplane-contrib/crossplane-diff/cmd/diff/renderer/types"
 	tu "github.com/crossplane-contrib/crossplane-diff/cmd/diff/testutils"
+	dtypes "github.com/crossplane-contrib/crossplane-diff/cmd/diff/types"
 	"github.com/crossplane/cli/v2/cmd/crossplane/render"
 	gcmp "github.com/google/go-cmp/cmp"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -612,7 +613,7 @@ func TestDefaultDiffCalculator_CalculateDiff(t *testing.T) {
 			},
 			composite:               nil,
 			desired:                 modifiedResource,
-			accessChecker:           tu.NewMockAccessChecker().WithDeniedVerb("patch", "no patch on testresources").Build(),
+			accessChecker:           tu.NewMockAccessChecker().WithDeniedVerb(dtypes.VerbPatch, "no patch on testresources").Build(),
 			wantErr:                 true,
 			wantSchemaValidationErr: false,
 			wantErrContains:         "requires the 'patch' verb",
