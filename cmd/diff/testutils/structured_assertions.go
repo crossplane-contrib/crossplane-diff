@@ -58,6 +58,16 @@ type ChangeDetail struct {
 	Name       string         `json:"name"`
 	Namespace  string         `json:"namespace,omitempty"`
 	Diff       map[string]any `json:"diff"`
+	DryRun     *DryRunInfo    `json:"dryRun,omitempty"`
+}
+
+// DryRunInfo mirrors dt.DryRunInfo. Absent (nil) means the resource's desired
+// state was verified against the apiserver; see WithDryRunSkipped /
+// WithDryRunPerformed.
+type DryRunInfo struct {
+	Performed  bool   `json:"performed"`
+	SkipReason string `json:"skipReason,omitempty"`
+	Detail     string `json:"detail,omitempty"`
 }
 
 // DiffExpectation is an interface that allows AssertStructuredDiff to accept
@@ -108,6 +118,15 @@ type ResourceExpectation struct {
 	fieldValuePatterns map[string]*regexp.Regexp // For pattern matching field values
 	specMatch          map[string]any            // For strict spec matching
 	anyNameAllowed     bool                      // If true, any name is accepted
+
+	// dryRunSkipReason, when non-empty, asserts the change carries a dryRun
+	// object with this skipReason. dryRunMustBePerformed asserts the opposite —
+	// that no dryRun object is present, i.e. the desired state went through the
+	// apiserver. The two are mutually exclusive; both unset asserts nothing,
+	// which keeps every pre-existing expectation valid.
+	dryRunSkipReason      string
+	dryRunDetailSubstring string
+	dryRunMustBePerformed bool
 }
 
 // expectation returns the root builder. Only meaningful for a flat top-level
@@ -356,6 +375,29 @@ func (r *ResourceExpectation) WithField(path string, value any) *ResourceExpecta
 // WithFieldChange asserts a field changed from old to new value (for modified resources).
 func (r *ResourceExpectation) WithFieldChange(path string, oldValue, newValue any) *ResourceExpectation {
 	r.fieldChanges[path] = [2]any{oldValue, newValue}
+	return r
+}
+
+// WithDryRunSkipped asserts this change reports that its desired state was NOT
+// verified against the apiserver, for the given reason (one of the
+// dt.DryRunSkipReason values: "disabled", "forbidden", "webhookUnavailable").
+//
+// Pass a detailSubstring to additionally require that the cluster's own
+// explanation was propagated rather than swallowed; pass "" to skip that check.
+func (r *ResourceExpectation) WithDryRunSkipped(reason, detailSubstring string) *ResourceExpectation {
+	r.dryRunSkipReason = reason
+	r.dryRunDetailSubstring = detailSubstring
+
+	return r
+}
+
+// WithDryRunPerformed asserts this change carries NO dryRun object, i.e. its
+// desired state did go through the apiserver. Worth asserting explicitly on the
+// happy path: without it, a regression that silently stopped dry-running
+// additions would only be caught by whichever field assertions happened to
+// depend on server-side defaulting.
+func (r *ResourceExpectation) WithDryRunPerformed() *ResourceExpectation {
+	r.dryRunMustBePerformed = true
 	return r
 }
 
@@ -652,12 +694,59 @@ func assertResourceExpectations(t *testing.T, scope string, changes []ChangeDeta
 	}
 }
 
+// assertDryRun validates a change's dryRun expectations: either that the
+// desired state was reported as NOT verified against the apiserver (with a
+// specific reason, and optionally that the cluster's own explanation survived),
+// or that no such report is present at all.
+func assertDryRun(t *testing.T, prefix string, found *ChangeDetail, expectRes *ResourceExpectation) {
+	t.Helper()
+
+	id := fmt.Sprintf("%s%s %s/%s", prefix, expectRes.changeType, expectRes.kind, expectRes.name)
+
+	if expectRes.dryRunMustBePerformed {
+		if found.DryRun != nil {
+			t.Errorf("%s: expected the desired state to have been dry-run against the apiserver, but it reports skipReason %q (detail: %q)",
+				id, found.DryRun.SkipReason, found.DryRun.Detail)
+		}
+
+		return
+	}
+
+	if expectRes.dryRunSkipReason == "" {
+		return
+	}
+
+	if found.DryRun == nil {
+		t.Errorf("%s: expected dryRun.skipReason %q, but no dryRun was reported (absence means the desired state went through the apiserver)",
+			id, expectRes.dryRunSkipReason)
+
+		return
+	}
+
+	if found.DryRun.SkipReason != expectRes.dryRunSkipReason {
+		t.Errorf("%s: dryRun.skipReason: expected %q, got %q",
+			id, expectRes.dryRunSkipReason, found.DryRun.SkipReason)
+	}
+
+	// Performed must be false whenever the object is present; see dt.DryRunInfo.
+	if found.DryRun.Performed {
+		t.Errorf("%s: dryRun.performed was true on a reported skip, which is contradictory", id)
+	}
+
+	if expectRes.dryRunDetailSubstring != "" && !strings.Contains(found.DryRun.Detail, expectRes.dryRunDetailSubstring) {
+		t.Errorf("%s: dryRun.detail %q does not contain %q — the cluster's own explanation must be propagated, not swallowed",
+			id, found.DryRun.Detail, expectRes.dryRunDetailSubstring)
+	}
+}
+
 // assertChangeFields validates the field-level expectations (exact values,
 // old/new changes, value patterns, and strict spec match) of a single matched
 // change. Split out of assertResourceExpectations to keep that function's
 // cognitive complexity in check.
 func assertChangeFields(t *testing.T, prefix string, found *ChangeDetail, expectRes *ResourceExpectation) {
 	t.Helper()
+
+	assertDryRun(t, prefix, found, expectRes)
 
 	// Validate field values for added/removed resources
 	for path, expectedValue := range expectRes.fieldValues {

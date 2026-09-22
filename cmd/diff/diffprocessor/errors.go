@@ -22,6 +22,7 @@ import (
 
 	dt "github.com/crossplane-contrib/crossplane-diff/cmd/diff/renderer/types"
 	pkgvalidate "github.com/crossplane/cli/v2/pkg/validate"
+	un "k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 )
 
 // Exit codes for crossplane-diff CLI.
@@ -50,11 +51,23 @@ const (
 // without a *pkgvalidate.ValidationResult in hand — for example
 // scope-validation errors raised after schema validation succeeded — so
 // the absence of structured detail is observable rather than fabricated.
+//
+// Failures is the same information for rejections that did not come from
+// pkg/validate at all — specifically, a resource the apiserver itself refused
+// during a dry-run (a validating admission webhook, a ResourceQuota, a missing
+// namespace). Those are the same kind of fact as a schema rejection ("the
+// cluster will not accept this resource"), just detected by the apiserver
+// instead of locally, so they belong in the same exit-code tier and the same
+// output field. They are carried separately rather than synthesised into a
+// pkgvalidate.ValidationResult because that would mean inventing a
+// FieldErrorType value upstream does not define; ResourceValidationFailure is
+// explicitly ours to populate (see its doc in renderer/types).
 type SchemaValidationError struct {
 	ResourceID string
 	Message    string
 	Err        error
 	Result     *pkgvalidate.ValidationResult
+	Failures   []dt.ResourceValidationFailure
 }
 
 // Error implements the error interface.
@@ -91,12 +104,33 @@ func (e *SchemaValidationError) WithResult(result *pkgvalidate.ValidationResult)
 	return e
 }
 
+// WithFailures attaches already-built per-resource failures for a rejection
+// that did not originate from pkg/validate — an apiserver dry-run refusal. It
+// is the sibling of WithResult; see the Failures field for why the two are
+// separate. Returns the receiver for fluent chaining.
+func (e *SchemaValidationError) WithFailures(failures []dt.ResourceValidationFailure) *SchemaValidationError {
+	e.Failures = failures
+	return e
+}
+
+// FieldErrorTypeAdmission is the FieldValidationError.Type for a rejection
+// issued by the apiserver's admission chain rather than by local schema
+// validation. It deliberately sits alongside upstream's "schema" / "cel" /
+// "unknownField" / "defaulting" values in the same field, because to a consumer
+// asking "why won't the cluster accept this?" it is the same kind of answer.
+const FieldErrorTypeAdmission = "admission"
+
 // NewOutputError builds a structured-output entry for err, tagged with
-// resourceID. When err contains a *SchemaValidationError that carries a
-// pkgvalidate.ValidationResult, the returned OutputError also exposes a
-// typed per-resource breakdown via ValidationFailures so machine
+// resourceID. When err contains a *SchemaValidationError that carries either a
+// pkgvalidate.ValidationResult or pre-built Failures, the returned OutputError
+// also exposes a typed per-resource breakdown via ValidationFailures so machine
 // consumers don't need to parse Message. Non-validation errors return
 // an OutputError with only ResourceID and Message populated.
+//
+// Explicit Failures win over Result. The two are never both set in practice —
+// one comes from pkg/validate, the other from an apiserver rejection — but
+// preferring the explicit list means a caller that sets it cannot have it
+// silently dropped.
 func NewOutputError(resourceID string, err error) dt.OutputError {
 	out := dt.OutputError{
 		ResourceID: resourceID,
@@ -104,11 +138,56 @@ func NewOutputError(resourceID string, err error) dt.OutputError {
 	}
 
 	var sve *SchemaValidationError
-	if errors.As(err, &sve) && sve.Result != nil {
-		out.ValidationFailures = validationFailuresFromResult(sve.Result)
+	if errors.As(err, &sve) {
+		switch {
+		case len(sve.Failures) > 0:
+			out.ValidationFailures = sve.Failures
+		case sve.Result != nil:
+			out.ValidationFailures = validationFailuresFromResult(sve.Result)
+		}
 	}
 
 	return out
+}
+
+// NewAdmissionRejectionError wraps an apiserver dry-run rejection of obj as a
+// SchemaValidationError, so it lands in the same exit-code tier and the same
+// structured-output field as a local schema rejection.
+//
+// This is used for BOTH new and existing resources on purpose. Before this
+// existed, a webhook rejection of an existing resource surfaced as a plain tool
+// error (exit 1) while the identical rejection of an addition would have been a
+// validation error (exit 2) — reporting the same cluster fact under two
+// different exit codes depending only on whether the resource happened to exist
+// already. See crossplane-diff#334.
+//
+// rejectedDesc describes the REJECTED resource (the calculator's per-resource
+// id, e.g. "Bucket/my-bucket"), not the input XR. It is folded into the message
+// because OutputError.ResourceID identifies the input the user supplied, which
+// for a composed resource is the XR — without this, a human would be told their
+// XR was rejected with no way to tell which composed resource the cluster
+// actually refused.
+//
+// The inner SchemaValidationError deliberately gets an empty ResourceID: its
+// Error() would otherwise prefix "schema validation error for <id>: ", which
+// both duplicates the id that OutputError.FormatError already prints and
+// mislabels an admission rejection as a schema problem.
+func NewAdmissionRejectionError(rejectedDesc string, obj *un.Unstructured, err error) *SchemaValidationError {
+	msg := fmt.Sprintf("the cluster rejected %s: %s", rejectedDesc, err.Error())
+
+	return NewSchemaValidationError("", msg, err).WithFailures([]dt.ResourceValidationFailure{{
+		APIVersion: obj.GetAPIVersion(),
+		Kind:       obj.GetKind(),
+		Name:       obj.GetName(),
+		Namespace:  obj.GetNamespace(),
+		// Reuse upstream's status vocabulary rather than a literal, so this row is
+		// indistinguishable in shape from one produced by validationFailuresFromResult.
+		Status: string(pkgvalidate.ValidationStatusInvalid),
+		Errors: []dt.FieldValidationError{{
+			Type:    FieldErrorTypeAdmission,
+			Message: err.Error(),
+		}},
+	}})
 }
 
 // validationFailuresFromResult maps a pkgvalidate.ValidationResult into

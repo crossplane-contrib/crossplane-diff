@@ -326,10 +326,22 @@ Note also that `diff_processor.go`'s existing `mergedXR.SetManagedFields(nil)` b
 in place. Leave it: it is harmless, and it guards the root-XR object before it reaches other consumers, not
 only the apply call.
 
-**R13 (claim path check).** Verify that the dummy backing XR synthesized for a new claim
-(`synthesizeDummyBackingXRForNewClaim`) is never passed to `CalculateDiff`, and therefore never dry-run
-created. The object diffed for a claim input is the claim itself, whose dry-run create is correct and
-valuable (claim CRD defaults). If the synthesized XR *does* reach `CalculateDiff`, it MUST be excluded.
+**R13 (claim path check) — VERIFIED, no work needed.** The dummy backing XR synthesized for a new claim
+(`synthesizeDummyBackingXRForNewClaim`) is **never** passed to `CalculateDiff`, so it is never dry-run
+created. `prepareXRForDiff` (`diff_processor.go:868-879`) returns `xr.GetUnstructured().DeepCopy()` — the
+original claim — whenever `backingXRResolution.xrForRendering != nil`, with the comment "we want to diff
+against the original Claim that the user provided - not the backing XR". That value becomes `xrUnstructured`
+→ `mergedXR` (`:438-442`) → `CalculateNonRemovalDiffs(ctx, mergedXR, …)` (`:454`). The backing XR is a
+*rendering* input only. No exclusion is required.
+
+The object dry-run created for a claim input is therefore the claim itself, which is correct and valuable
+(claim CRD defaults, claim-targeted webhooks).
+
+**Incidental finding that sharpens R4/R12.** `diff_processor.go:445-446` already does
+`mergedXR.SetManagedFields(nil)` *and* `mergedXR.SetResourceVersion("")` for the root XR — so both hazards R4
+addresses are already guarded on that one path, which is evidence they are real rather than theoretical.
+Composed resources and the nested-XR branch (`diff_calculator.go:244`) have no equivalent. `sanitizeForDryRun`
+closes exactly that hole, and the root-XR calls become redundant-but-harmless (keep them, per R12).
 
 **R14 (docs sync).** Per repo CLAUDE.md triggers:
 - README §RBAC (433–453) — rewrite: `create` now required for full fidelity; the degradation contract; the
@@ -406,8 +418,8 @@ understanding it would hide exactly the failure this feature could introduce.
 beyond the additive `dryRun` field. Any change traceable to the R4 strip widening is explained in the PR
 (most likely as a fixed latent `resourceVersion` conflict) rather than absorbed into an expectation update.
 
-**AC-R13.** Documented finding (in the PR) that the synthesized backing XR does or does not reach
-`CalculateDiff`, with an exclusion if it does.
+**AC-R13.** ✅ Satisfied at spec time — see R13. The finding (it does NOT reach `CalculateDiff`) is recorded
+and goes in the PR description. No code change.
 
 **AC-R14.** `grep -n "334" README.md` no longer presents the gap as permanent; `--dry-run-on` is documented;
 the exit-code table mentions cluster rejections; mermaid SVGs regenerated (`git status` shows the `.svg`

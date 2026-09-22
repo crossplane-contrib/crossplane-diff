@@ -64,6 +64,66 @@ type ResourceDiff struct {
 	LineDiffs    []diffmatchpatch.Diff
 	Current      ResourceViews // the resource's current (cluster) state, raw + clean
 	Desired      ResourceViews // the resource's desired (rendered) state, raw + clean
+
+	// DryRun is set ONLY when this resource's desired state did not go through
+	// the apiserver even though it could have — see DryRunInfo. Nil is the
+	// success case and the common case.
+	DryRun *DryRunInfo
+}
+
+// DryRunSkipReason explains why a resource's desired state was not round-tripped
+// through the apiserver.
+type DryRunSkipReason string
+
+const (
+	// DryRunSkipDisabled means the user selected --dry-run-on=existing, so
+	// additions are deliberately not sent to the apiserver.
+	DryRunSkipDisabled DryRunSkipReason = "disabled"
+
+	// DryRunSkipForbidden means a SelfSubjectAccessReview reported that we may
+	// not create this kind here, so the dry-run create was never attempted.
+	// Nothing was learned about the resource itself; this is a limitation of the
+	// credentials in use, not a finding about the resource.
+	DryRunSkipForbidden DryRunSkipReason = "forbidden"
+
+	// DryRunSkipWebhookUnavailable means the apiserver could not complete the
+	// admission chain — typically an unreachable admission webhook with
+	// failurePolicy: Fail, though the predicate is broader than that (any
+	// InternalError / ServiceUnavailable / Timeout from the dry-run create).
+	// The constant is named for the dominant cause; DryRunInfo.Detail always
+	// carries the apiserver's own message, so the specific cause is not lost.
+	DryRunSkipWebhookUnavailable DryRunSkipReason = "webhookUnavailable"
+)
+
+// DryRunInfo records that a resource's desired state was NOT verified against
+// the apiserver, and why. It exists so a consumer can tell a high-fidelity
+// addition diff (defaulting and mutating admission applied) from one that is
+// only what the render pipeline produced.
+//
+// It is emitted only in the degraded case. Absence therefore means the desired
+// state DID go through the apiserver — with one deliberate exception: removal
+// diffs never carry it, because they are produced by
+// CalculateRemovedResourceDiffs straight from cluster state and have no desired
+// state to preview at all. Read absence as "nothing was skipped", not as a
+// positive fidelity guarantee for a resource that was never a candidate.
+//
+// Warnings cover the same ground for humans, but cannot replace this: an
+// OutputWarning has no resource anchor, so it cannot tell a pipeline WHICH
+// additions were degraded.
+type DryRunInfo struct {
+	// Performed is always false when this struct is present, since the struct
+	// is emitted only when the dry-run did not happen. That redundancy is
+	// deliberate: it keeps the emitted JSON self-describing, so a consumer
+	// reading a dryRun object does not have to know that mere presence implies
+	// degradation, and it leaves room to emit the struct unconditionally later
+	// without a schema break.
+	Performed bool `json:"performed"`
+
+	SkipReason DryRunSkipReason `json:"skipReason,omitempty"`
+
+	// Detail is the underlying cause as reported by the cluster (the
+	// SelfSubjectAccessReview's reason, or the apiserver's error message).
+	Detail string `json:"detail,omitempty"`
 }
 
 // DiffType represents the type of diff (added, removed, modified).

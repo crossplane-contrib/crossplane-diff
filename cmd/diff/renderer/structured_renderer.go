@@ -141,6 +141,11 @@ func (s *Summary) increment(t dt.DiffType) {
 }
 
 // ChangeDetail represents a single resource change.
+//
+// This is the shared per-resource wire shape for both commands: the xr command
+// reaches it via xrDiffWire.Changes, the comp command via
+// DownstreamChanges.Changes. A field added here therefore surfaces in both
+// outputs without per-command plumbing.
 type ChangeDetail struct {
 	Type       string         `json:"type"`
 	APIVersion string         `json:"apiVersion"`
@@ -148,6 +153,11 @@ type ChangeDetail struct {
 	Name       string         `json:"name"`
 	Namespace  string         `json:"namespace,omitempty"`
 	Diff       map[string]any `json:"diff"`
+
+	// DryRun is present only when this resource's desired state was not
+	// verified against the apiserver. See dt.DryRunInfo for why absence is the
+	// success case and what it does not promise for removals.
+	DryRun *dt.DryRunInfo `json:"dryRun,omitempty"`
 }
 
 // CompDiffOutput is the top-level output for composition diffs (internal representation).
@@ -442,6 +452,9 @@ func resourceDiffToChangeDetail(diff *dt.ResourceDiff) *ChangeDetail {
 		Name:       diff.ResourceName,
 		Namespace:  diff.Namespace,
 		Diff:       make(map[string]any),
+		// Nil for every resource whose desired state reached the apiserver, which
+		// omitempty turns into an absent key — see dt.DryRunInfo.
+		DryRun: diff.DryRun,
 	}
 
 	switch diff.DiffType {
