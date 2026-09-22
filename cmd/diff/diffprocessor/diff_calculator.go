@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"maps"
+	"sync"
 
 	xp "github.com/crossplane-contrib/crossplane-diff/cmd/diff/client/crossplane"
 	k8 "github.com/crossplane-contrib/crossplane-diff/cmd/diff/client/kubernetes"
@@ -11,6 +12,7 @@ import (
 	dt "github.com/crossplane-contrib/crossplane-diff/cmd/diff/renderer/types"
 	"github.com/crossplane/cli/v2/cmd/crossplane/common/resource"
 	"github.com/crossplane/cli/v2/cmd/crossplane/render"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	un "k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 
 	"github.com/crossplane/crossplane-runtime/v2/pkg/errors"
@@ -42,9 +44,18 @@ type DiffCalculator interface {
 type DefaultDiffCalculator struct {
 	treeClient      xp.ResourceTreeClient
 	applyClient     k8.ApplyClient
+	accessChecker   k8.AccessChecker
 	resourceManager ResourceManager
 	logger          logging.Logger
 	diffOptions     renderer.DiffOptions
+	dryRunOn        DryRunOn
+
+	// warned deduplicates the user-facing warnings raised when a resource could not be verified
+	// against the apiserver. A composition rendering forty new resources of one kind should say so
+	// once, not forty times. Keyed by GVK + namespace + reason, and mutex-guarded because a single
+	// calculator instance is reused across every XR in a run.
+	warnedMu sync.Mutex
+	warned   map[string]bool
 }
 
 // SetDiffOptions updates the diff options used by the calculator.
@@ -53,13 +64,16 @@ func (c *DefaultDiffCalculator) SetDiffOptions(options renderer.DiffOptions) {
 }
 
 // NewDiffCalculator creates a new DefaultDiffCalculator.
-func NewDiffCalculator(apply k8.ApplyClient, tree xp.ResourceTreeClient, resourceManager ResourceManager, logger logging.Logger, diffOptions renderer.DiffOptions) DiffCalculator {
+func NewDiffCalculator(apply k8.ApplyClient, access k8.AccessChecker, tree xp.ResourceTreeClient, resourceManager ResourceManager, logger logging.Logger, diffOptions renderer.DiffOptions, dryRunOn DryRunOn) DiffCalculator {
 	return &DefaultDiffCalculator{
 		treeClient:      tree,
 		applyClient:     apply,
+		accessChecker:   access,
 		resourceManager: resourceManager,
 		logger:          logger,
 		diffOptions:     diffOptions,
+		dryRunOn:        dryRunOn,
+		warned:          make(map[string]bool),
 	}
 }
 
@@ -118,6 +132,10 @@ func (c *DefaultDiffCalculator) CalculateDiff(ctx context.Context, composite *un
 	// Determine what the resource would look like after application
 	wouldBeResult := desired
 
+	// dryRunInfo stays nil whenever the desired state did reach the apiserver, which is the success
+	// case and the common one. See dt.DryRunInfo.
+	var dryRunInfo *dt.DryRunInfo
+
 	if current != nil {
 		// Extract the Crossplane field owner from the existing object's managedFields.
 		// This ensures our dry-run apply uses the same field owner as Crossplane,
@@ -125,20 +143,7 @@ func (c *DefaultDiffCalculator) CalculateDiff(ctx context.Context, composite *un
 		// are owned by this manager but not present in the apply request).
 		fieldOwner := k8.GetComposedFieldOwner(current)
 
-		// Deep-copy before stripping ownerReferences so the rendered desired (used
-		// for downstream diff comparison) isn't mutated.
-		applyDesired := desired.DeepCopy()
-
-		// Strip ownerReferences too. SSA merges list items by UID and
-		// tracks per-field ownership: if we apply our rendered ownerRef
-		// (with our own field owner) and the cluster resource already has
-		// an ownerRef to the same parent managed by a different field
-		// owner, both survive the merge and the apiserver rejects the
-		// multi-controller state. Leaving ownerRefs out of the apply
-		// preserves whatever the cluster already has; for new resources
-		// (current == nil) we skip DryRunApply entirely so the rendered
-		// ownerRefs still surface in the diff output.
-		un.RemoveNestedField(applyDesired.Object, "metadata", "ownerReferences")
+		applyDesired := sanitizeForDryRun(desired)
 
 		// Perform a dry-run apply to get the result after we'd apply
 		c.logger.Debug("Performing dry-run apply",
@@ -150,10 +155,15 @@ func (c *DefaultDiffCalculator) CalculateDiff(ctx context.Context, composite *un
 		wouldBeResult, err = c.applyClient.DryRunApply(ctx, applyDesired, fieldOwner)
 		if err != nil {
 			c.logger.Debug("Dry-run apply failed", "resource", resourceID, "error", err)
-			return nil, errors.Wrap(err, "cannot dry-run apply desired object")
+			return nil, c.classifyApplyFailure(ctx, desired, resourceID, err)
 		}
 
 		c.logger.Debug("Dry-run apply succeeded", "resource", resourceID, "result", wouldBeResult)
+	} else {
+		wouldBeResult, dryRunInfo, err = c.dryRunCreateAddition(ctx, desired, resourceID)
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	// Generate diff with the configured options
@@ -161,6 +171,10 @@ func (c *DefaultDiffCalculator) CalculateDiff(ctx context.Context, composite *un
 	if err != nil {
 		c.logger.Debug("Failed to generate diff", "resource", resourceID, "error", err)
 		return nil, err
+	}
+
+	if diff != nil {
+		diff.DryRun = dryRunInfo
 	}
 
 	// Log the outcome
@@ -422,6 +436,241 @@ func (c *DefaultDiffCalculator) CalculateRemovedResourceDiffs(ctx context.Contex
 	c.logger.Debug("Found resources to be removed", "count", len(removedDiffs))
 
 	return removedDiffs, nil
+}
+
+// Kubernetes verbs we ask the authorizer about when a dry run comes back Forbidden.
+const (
+	verbCreate = "create"
+	verbPatch  = "patch"
+)
+
+// dryRunCreateAddition computes the post-apply form of a resource that does not yet exist, by
+// dry-run creating it.
+//
+// On success it returns the apiserver's view of the object, which is the whole point: server-side
+// defaulting and mutating admission are invisible to the render pipeline, and for a built-in type
+// they are invisible to the schema validator's applyCRDDefaults too, since that skips anything
+// without a CRD.
+//
+// When the dry run could not be performed it returns the rendered object unchanged plus a
+// DryRunInfo saying why, rather than failing: a missing permission or an unreachable webhook is a
+// property of the environment, not a finding about the resource, and an addition has a reasonable
+// lower-fidelity fallback. It returns an error only when the cluster actually refused the resource
+// (a real finding, routed to the schema-validation exit-code tier) or when something is wrong that
+// we must not paper over.
+func (c *DefaultDiffCalculator) dryRunCreateAddition(ctx context.Context, desired *un.Unstructured, resourceID string) (*un.Unstructured, *dt.DryRunInfo, error) {
+	if c.dryRunOn == DryRunOnExisting {
+		return desired, &dt.DryRunInfo{SkipReason: dt.DryRunSkipDisabled}, nil
+	}
+
+	createDesired := sanitizeForDryRun(desired)
+
+	c.logger.Debug("Performing dry-run create", "resource", resourceID, "desired", createDesired)
+
+	created, err := c.applyClient.DryRunCreate(ctx, createDesired)
+
+	switch {
+	case err == nil:
+		c.logger.Debug("Dry-run create succeeded", "resource", resourceID, "result", created)
+		return mergeDryRunCreateResult(desired, createDesired, created), nil, nil
+
+	case apierrors.IsForbidden(err):
+		// A 403 is ambiguous. It can mean we lack the create verb, in which case nothing was learned
+		// about the resource and we must degrade quietly. It can equally come from ResourceQuota, from
+		// NamespaceLifecycle when the target namespace does not exist, or from a validating webhook —
+		// all of which are real findings the user needs. Only the authorizer can tell the two apart,
+		// and deciding by pattern-matching the apiserver's message would rest that distinction on
+		// unversioned prose.
+		return c.resolveForbiddenCreate(ctx, desired, resourceID, err)
+
+	case apierrors.IsInvalid(err):
+		return nil, nil, NewAdmissionRejectionError(resourceID, desired, err)
+
+	case apierrors.IsAlreadyExists(err):
+		// We only get here because FetchCurrentObject reported no existing resource. Either its
+		// matching logic is wrong or something created the resource underneath us; either way the
+		// diff would be built on a false premise, so fail loudly instead of degrading.
+		return nil, nil, errors.Wrapf(err, "dry-run create of %s reports it already exists, but it was not found in the cluster", resourceID)
+
+	case apierrors.IsInternalError(err), apierrors.IsServiceUnavailable(err), apierrors.IsTimeout(err):
+		// The apiserver could not complete the admission chain — classically an unreachable webhook
+		// with failurePolicy: Fail. We cannot know what it would have done, so we must not present
+		// rendered output as though it were verified.
+		c.warnOnce(desired, dt.DryRunSkipWebhookUnavailable,
+			"skipped apiserver verification of added resources: the cluster could not complete admission",
+			"gvk", desired.GroupVersionKind().String(), "namespace", desired.GetNamespace(), "cause", err.Error())
+
+		return desired, &dt.DryRunInfo{SkipReason: dt.DryRunSkipWebhookUnavailable, Detail: err.Error()}, nil
+
+	default:
+		return nil, nil, errors.Wrapf(err, "cannot dry-run create %s", resourceID)
+	}
+}
+
+// resolveForbiddenCreate asks the authorizer whether a Forbidden from a dry-run create was an
+// authorization denial (degrade) or an admission/quota refusal (report).
+func (c *DefaultDiffCalculator) resolveForbiddenCreate(ctx context.Context, desired *un.Unstructured, resourceID string, createErr error) (*un.Unstructured, *dt.DryRunInfo, error) {
+	// Can reports whether we MAY create, so a denial is !allowed. Reading this the wrong way round
+	// inverts the whole feature: an authorized user would silently lose fidelity, and an unauthorized
+	// one would be told the cluster rejected a resource it never saw.
+	allowed, reason, ssarErr := c.accessChecker.Can(ctx, desired.GroupVersionKind(), desired.GetNamespace(), verbCreate)
+
+	switch {
+	case ssarErr != nil:
+		// We hold a 403 we cannot classify. Reporting it as a cluster rejection would assert a finding
+		// we have not established; swallowing it as a permission problem would hide one. Say we do not
+		// know.
+		return nil, nil, errors.Wrapf(createErr, "cannot dry-run create %s, and cannot determine whether that was an authorization denial (%v)", resourceID, ssarErr)
+
+	case !allowed:
+		c.warnOnce(desired, dt.DryRunSkipForbidden,
+			"skipped apiserver verification of added resources: not authorized to create them, so their diffs omit server-side defaulting and admission",
+			"gvk", desired.GroupVersionKind().String(), "namespace", desired.GetNamespace(), "reason", reason)
+
+		return desired, &dt.DryRunInfo{SkipReason: dt.DryRunSkipForbidden, Detail: reason}, nil
+
+	default:
+		// Authorized to create, yet refused: admission or quota. A real finding.
+		return nil, nil, NewAdmissionRejectionError(resourceID, desired, createErr)
+	}
+}
+
+// classifyApplyFailure turns a failed dry-run apply of an EXISTING resource into the right kind of
+// error. A cluster rejection is reported as such — the same fact, in the same exit-code tier, as a
+// rejection of an addition, rather than depending on whether the resource happened to exist already
+// (crossplane-diff#334).
+//
+// Unlike an addition this path never degrades. An existing resource's diff depends on the
+// apiserver's merge result for SSA field-removal detection, so one computed without it would be
+// wrong rather than merely less detailed — and crossplane-diff has always required the patch verb
+// (see the README's RBAC section).
+func (c *DefaultDiffCalculator) classifyApplyFailure(ctx context.Context, desired *un.Unstructured, resourceID string, applyErr error) error {
+	switch {
+	case apierrors.IsForbidden(applyErr):
+		// As in resolveForbiddenCreate: Can reports whether we MAY patch, so a denial is !allowed.
+		allowed, reason, ssarErr := c.accessChecker.Can(ctx, desired.GroupVersionKind(), desired.GetNamespace(), verbPatch)
+
+		switch {
+		case ssarErr != nil:
+			return errors.Wrapf(applyErr, "cannot dry-run apply desired object %s, and cannot determine whether that was an authorization denial (%v)", resourceID, ssarErr)
+		case !allowed:
+			return errors.Wrapf(applyErr, "not authorized to dry-run apply %s (%s); crossplane-diff requires the 'patch' verb on every GVK it diffs", resourceID, reason)
+		default:
+			return NewAdmissionRejectionError(resourceID, desired, applyErr)
+		}
+
+	case apierrors.IsInvalid(applyErr):
+		return NewAdmissionRejectionError(resourceID, desired, applyErr)
+
+	default:
+		return errors.Wrap(applyErr, "cannot dry-run apply desired object")
+	}
+}
+
+// mergeDryRunCreateResult combines the apiserver's view of a dry-run created object with the two
+// things that must come from our side instead.
+//
+// Identity, when we sent a generateName and no name: the apiserver runs names.Generator in
+// rest.BeforeCreate, ahead of the dry-run short-circuit at the storage layer, so it invents a random
+// name. Letting that through would make an addition's diff differ on every run. For a *named*
+// resource we keep the server's name, so a mutating webhook that rewrites a name still surfaces.
+//
+// Status, whenever the rendered object had one: composition pipelines are allowed to write their own
+// status, so a rendered status is authored content. The apiserver contributes nothing to status on
+// create (it is a subresource) and hands back an empty one, so taking the server's would delete the
+// user's output under the banner of fidelity.
+func mergeDryRunCreateResult(rendered, sent, created *un.Unstructured) *un.Unstructured {
+	out := created.DeepCopy()
+
+	if sent.GetGenerateName() != "" && sent.GetName() == "" {
+		out.SetName("")
+		out.SetGenerateName(sent.GetGenerateName())
+	}
+
+	if status, found, err := un.NestedFieldCopy(rendered.Object, "status"); err == nil && found {
+		_ = un.SetNestedField(out.Object, status, "status")
+	}
+
+	return out
+}
+
+// warnOnce raises a user-facing warning about a resource that could not be verified against the
+// apiserver, at most once per GVK + namespace + reason.
+//
+// c.logger is the CLI's *WarningLogger in production (ProcessorConfig.Warnings documents that it is
+// the same value Logger is set to), so Info both writes a line to stderr and collects the warning
+// for structured output. The typed DryRunInfo on the diff is the machine-readable half and is NOT
+// interchangeable with this: warnings carry no resource anchor, so they cannot tell a pipeline which
+// additions were degraded.
+func (c *DefaultDiffCalculator) warnOnce(obj *un.Unstructured, reason dt.DryRunSkipReason, msg string, keysAndValues ...any) {
+	key := fmt.Sprintf("%s|%s|%s", obj.GroupVersionKind(), obj.GetNamespace(), reason)
+
+	c.warnedMu.Lock()
+
+	// Tolerate a struct-literal construction (tests) that skipped NewDiffCalculator; writing to a nil
+	// map would panic.
+	if c.warned == nil {
+		c.warned = make(map[string]bool)
+	}
+
+	if c.warned[key] {
+		c.warnedMu.Unlock()
+		return
+	}
+
+	c.warned[key] = true
+	c.warnedMu.Unlock()
+
+	c.logger.Info(msg, keysAndValues...)
+}
+
+// dryRunStrippedMetadata are the metadata fields removed from any object before it is sent to the
+// apiserver for a dry run. All are either assigned by the server or rejected outright on input, so
+// sending them is never useful and is sometimes fatal.
+//
+// ownerReferences is in this list, and a note on why, because the code it replaces claimed the
+// opposite. The previous comment here justified stripping ownerRefs on the update path only, on the
+// grounds that "for new resources we skip DryRunApply entirely so the rendered ownerRefs still
+// surface in the diff output". They never surface: cleanupForDiff (renderer/diff_formatter.go)
+// removes metadata.ownerReferences unconditionally from both sides of every comparison, ungated by
+// forVerdict. So dropping them costs nothing in output, while keeping them risks two real failures —
+// an empty owner UID, which the apiserver rejects outright, and
+// OwnerReferencesPermissionEnforcement (enabled by default on OpenShift), which demands delete
+// permission on the owner. The SSA multi-controller hazard the original comment described is also
+// still avoided, since leaving ownerRefs out of an apply preserves whatever the cluster already has.
+//
+// managedFields matters for a different reason: client-go's dynamic Apply refuses any object that
+// has it populated ("cannot apply an object with managed fields already set"). diff_processor.go
+// guards the root XR against this, but the nested-XR branch below feeds render output straight
+// through with no such guard — the unexplained failure mode in crossplane-diff#452. Stripping here
+// closes it for every path at the one point where objects leave for the apiserver.
+//
+// resourceVersion is the same shape of problem: a stale value from a user's input file (very
+// plausible for anything exported with `kubectl get -o yaml`) makes the apiserver reject the request
+// on optimistic concurrency, and it is illegal on a create. diff_processor.go already clears it for
+// the root XR; composed resources had no equivalent.
+var dryRunStrippedMetadata = []string{
+	"resourceVersion",
+	"uid",
+	"creationTimestamp",
+	"generation",
+	"selfLink",
+	"managedFields",
+	"ownerReferences",
+}
+
+// sanitizeForDryRun returns a deep copy of obj with the server-owned metadata in
+// dryRunStrippedMetadata removed, ready to send to the apiserver for a dry run. The copy matters:
+// the caller's desired object is also what downstream diff comparison reads, so it must not be
+// mutated.
+func sanitizeForDryRun(obj *un.Unstructured) *un.Unstructured {
+	out := obj.DeepCopy()
+
+	for _, field := range dryRunStrippedMetadata {
+		un.RemoveNestedField(out.Object, "metadata", field)
+	}
+
+	return out
 }
 
 // preserveExistingResourceIdentity preserves the identity (name, generateName, labels) from an existing

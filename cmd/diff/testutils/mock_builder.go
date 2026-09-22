@@ -562,8 +562,88 @@ func (b *MockApplyClientBuilder) WithFailedDryRun(errMsg string) *MockApplyClien
 	})
 }
 
+// WithDryRunCreate sets the DryRunCreate behavior.
+func (b *MockApplyClientBuilder) WithDryRunCreate(fn func(context.Context, *un.Unstructured) (*un.Unstructured, error)) *MockApplyClientBuilder {
+	b.mock.DryRunCreateFn = fn
+	return b
+}
+
+// WithSuccessfulDryRunCreate sets DryRunCreate to return the input resource.
+func (b *MockApplyClientBuilder) WithSuccessfulDryRunCreate() *MockApplyClientBuilder {
+	return b.WithDryRunCreate(func(_ context.Context, obj *un.Unstructured) (*un.Unstructured, error) {
+		return obj, nil
+	})
+}
+
+// WithFailedDryRunCreate sets DryRunCreate to return an error.
+func (b *MockApplyClientBuilder) WithFailedDryRunCreate(errMsg string) *MockApplyClientBuilder {
+	return b.WithDryRunCreate(func(context.Context, *un.Unstructured) (*un.Unstructured, error) {
+		return nil, errors.New(errMsg)
+	})
+}
+
 // Build returns the built mock.
 func (b *MockApplyClientBuilder) Build() *MockApplyClient {
+	return b.mock
+}
+
+// MockAccessCheckerBuilder helps build kubernetes.AccessChecker mocks.
+type MockAccessCheckerBuilder struct {
+	mock *MockAccessChecker
+}
+
+// NewMockAccessChecker creates a new MockAccessCheckerBuilder. With no further calls the mock allows
+// everything — see MockAccessChecker.Can for why that is the right default.
+func NewMockAccessChecker() *MockAccessCheckerBuilder {
+	return &MockAccessCheckerBuilder{
+		mock: &MockAccessChecker{},
+	}
+}
+
+// WithCan sets the Can behavior.
+func (b *MockAccessCheckerBuilder) WithCan(fn func(context.Context, schema.GroupVersionKind, string, string) (bool, string, error)) *MockAccessCheckerBuilder {
+	b.mock.CanFn = fn
+	return b
+}
+
+// WithAllowed makes every authorization check succeed.
+func (b *MockAccessCheckerBuilder) WithAllowed() *MockAccessCheckerBuilder {
+	return b.WithCan(func(_ context.Context, _ schema.GroupVersionKind, _, _ string) (bool, string, error) {
+		return true, "", nil
+	})
+}
+
+// WithDenied makes every authorization check report that we are not permitted, with the given
+// reason. This is what turns a Forbidden dry-run into a graceful per-resource degradation rather
+// than a reported cluster rejection.
+func (b *MockAccessCheckerBuilder) WithDenied(reason string) *MockAccessCheckerBuilder {
+	return b.WithCan(func(_ context.Context, _ schema.GroupVersionKind, _, _ string) (bool, string, error) {
+		return false, reason, nil
+	})
+}
+
+// WithDeniedVerb denies only the named verb and allows everything else. A user holding patch but not
+// create is the exact configuration this feature exists to cope with, so it needs to be expressible.
+func (b *MockAccessCheckerBuilder) WithDeniedVerb(deniedVerb, reason string) *MockAccessCheckerBuilder {
+	return b.WithCan(func(_ context.Context, _ schema.GroupVersionKind, _, verb string) (bool, string, error) {
+		if verb == deniedVerb {
+			return false, reason, nil
+		}
+
+		return true, "", nil
+	})
+}
+
+// WithFailedCheck makes the authorization check itself fail, leaving a Forbidden dry-run
+// unclassifiable.
+func (b *MockAccessCheckerBuilder) WithFailedCheck(err error) *MockAccessCheckerBuilder {
+	return b.WithCan(func(_ context.Context, _ schema.GroupVersionKind, _, _ string) (bool, string, error) {
+		return false, "", err
+	})
+}
+
+// Build returns the built mock.
+func (b *MockAccessCheckerBuilder) Build() *MockAccessChecker {
 	return b.mock
 }
 

@@ -7,9 +7,12 @@ import (
 
 	tu "github.com/crossplane-contrib/crossplane-diff/cmd/diff/testutils"
 	"github.com/google/go-cmp/cmp"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	un "k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/util/validation/field"
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/dynamic/fake"
 	kt "k8s.io/client-go/testing"
@@ -231,6 +234,263 @@ func TestApplyClient_DryRunApply(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestApplyClient_DryRunCreate(t *testing.T) {
+	scheme := runtime.NewScheme()
+
+	// exampleGVR is what the mock converter resolves every GVK to.
+	exampleGVR := schema.GroupVersionResource{Group: "example.org", Version: "v1", Resource: "exampleresources"}
+
+	newConverter := func() TypeConverter {
+		return tu.NewMockTypeConverter().
+			WithGVKToGVR(func(_ context.Context, gvk schema.GroupVersionKind) (schema.GroupVersionResource, error) {
+				return schema.GroupVersionResource{
+					Group:    gvk.Group,
+					Version:  gvk.Version,
+					Resource: "exampleresources",
+				}, nil
+			}).Build()
+	}
+
+	type want struct {
+		result *un.Unstructured
+		// errContains is matched against the error string.
+		errContains string
+		// errPredicate, when set, MUST hold for the returned error. This is how
+		// we prove the wrapping preserves apierrors classification.
+		errPredicate func(error) bool
+		// action, when set, asserts on the create action the fake client recorded.
+		action func(*testing.T, kt.CreateActionImpl)
+	}
+
+	tests := map[string]struct {
+		reason string
+		obj    *un.Unstructured
+		// reaction is registered as a "create" reactor on exampleresources.
+		reaction func(kt.Action) (bool, runtime.Object, error)
+		// converter, when nil, resolves every GVK to exampleresources.
+		converter TypeConverter
+		want      want
+	}{
+		"SendsDryRunAllAndDefaultFieldManager": {
+			reason: "Should send dryRun=All and the default field manager on the create request",
+			obj: tu.NewResource("example.org/v1", "ExampleResource", "test-resource").
+				InNamespace("test-namespace").
+				WithSpecField("property", "new-value").
+				Build(),
+			reaction: func(action kt.Action) (bool, runtime.Object, error) {
+				// The reactor is only registered for create actions.
+				return true, action.(kt.CreateActionImpl).Object.DeepCopyObject(), nil
+			},
+			want: want{
+				result: tu.NewResource("example.org/v1", "ExampleResource", "test-resource").
+					InNamespace("test-namespace").
+					WithSpecField("property", "new-value").
+					Build(),
+				action: func(t *testing.T, action kt.CreateActionImpl) {
+					t.Helper()
+
+					if diff := cmp.Diff([]string{metav1.DryRunAll}, action.CreateOptions.DryRun); diff != "" {
+						t.Errorf("CreateOptions.DryRun: -want, +got:\n%s", diff)
+					}
+
+					if action.CreateOptions.FieldManager != FieldOwnerDefault {
+						t.Errorf("CreateOptions.FieldManager: want %q, got %q", FieldOwnerDefault, action.CreateOptions.FieldManager)
+					}
+
+					if action.Namespace != "test-namespace" {
+						t.Errorf("action namespace: want %q, got %q", "test-namespace", action.Namespace)
+					}
+				},
+			},
+		},
+		"GenerateNameOnlyResourceAccepted": {
+			reason: "Should accept an addition that carries only generateName, and send it unnamed",
+			obj: tu.NewResource("example.org/v1", "ExampleResource", "").
+				InNamespace("test-namespace").
+				WithGenerateName("test-resource-").
+				WithSpecField("property", "new-value").
+				Build(),
+			reaction: func(action kt.Action) (bool, runtime.Object, error) {
+				// The server would invent a name here; mirror that so we also
+				// prove the response is returned verbatim.
+				// The reactor is only registered for create actions.
+				result := action.(kt.CreateActionImpl).Object.DeepCopyObject().(*un.Unstructured)
+				result.SetName("test-resource-abc12")
+
+				return true, result, nil
+			},
+			want: want{
+				result: tu.NewResource("example.org/v1", "ExampleResource", "test-resource-abc12").
+					InNamespace("test-namespace").
+					WithGenerateName("test-resource-").
+					WithSpecField("property", "new-value").
+					Build(),
+				action: func(t *testing.T, action kt.CreateActionImpl) {
+					t.Helper()
+
+					sent, ok := action.Object.(*un.Unstructured)
+					if !ok {
+						t.Fatalf("create action object: want *unstructured.Unstructured, got %T", action.Object)
+					}
+
+					if sent.GetName() != "" {
+						t.Errorf("sent name: want empty, got %q", sent.GetName())
+					}
+
+					if sent.GetGenerateName() != "test-resource-" {
+						t.Errorf("sent generateName: want %q, got %q", "test-resource-", sent.GetGenerateName())
+					}
+
+					// A named path would have surfaced here; create must not use one.
+					if action.Name != "" {
+						t.Errorf("create action name: want empty, got %q", action.Name)
+					}
+				},
+			},
+		},
+		"ClusterScopedResourceCreated": {
+			reason: "Should create a cluster-scoped resource without a namespace",
+			obj: tu.NewResource("example.org/v1", "ExampleResource", "test-cluster-resource").
+				WithSpecField("property", "new-value").
+				Build(),
+			reaction: func(action kt.Action) (bool, runtime.Object, error) {
+				// The reactor is only registered for create actions.
+				return true, action.(kt.CreateActionImpl).Object.DeepCopyObject(), nil
+			},
+			want: want{
+				result: tu.NewResource("example.org/v1", "ExampleResource", "test-cluster-resource").
+					WithSpecField("property", "new-value").
+					Build(),
+				action: func(t *testing.T, action kt.CreateActionImpl) {
+					t.Helper()
+
+					if action.Namespace != "" {
+						t.Errorf("action namespace: want empty, got %q", action.Namespace)
+					}
+				},
+			},
+		},
+		"ForbiddenErrorStaysClassifiable": {
+			reason: "A Forbidden returned by the apiserver must still satisfy apierrors.IsForbidden after wrapping",
+			obj: tu.NewResource("example.org/v1", "ExampleResource", "test-resource").
+				InNamespace("test-namespace").
+				Build(),
+			reaction: func(kt.Action) (bool, runtime.Object, error) {
+				return true, nil, apierrors.NewForbidden(
+					exampleGVR.GroupResource(),
+					"test-resource",
+					errors.New("exceeded quota: compute-resources"),
+				)
+			},
+			want: want{
+				errContains:  "failed to dry-run create resource ExampleResource/test-resource",
+				errPredicate: apierrors.IsForbidden,
+			},
+		},
+		"InvalidErrorStaysClassifiable": {
+			reason: "An Invalid returned by the apiserver must still satisfy apierrors.IsInvalid after wrapping",
+			obj: tu.NewResource("example.org/v1", "ExampleResource", "").
+				InNamespace("test-namespace").
+				WithGenerateName("test-resource-").
+				Build(),
+			reaction: func(kt.Action) (bool, runtime.Object, error) {
+				return true, nil, apierrors.NewInvalid(
+					schema.GroupKind{Group: "example.org", Kind: "ExampleResource"},
+					"",
+					field.ErrorList{field.Required(field.NewPath("spec", "property"), "must be set")},
+				)
+			},
+			want: want{
+				// The identifier must not degenerate to "ExampleResource/" for a
+				// generateName-only object.
+				errContains:  "failed to dry-run create resource ExampleResource (generateName test-resource-)",
+				errPredicate: apierrors.IsInvalid,
+			},
+		},
+		"ConverterError": {
+			reason: "Should return error when GVK to GVR conversion fails",
+			obj: tu.NewResource("example.org/v1", "ExampleResource", "test-resource").
+				InNamespace("test-namespace").
+				Build(),
+			converter: tu.NewMockTypeConverter().
+				WithGVKToGVR(func(context.Context, schema.GroupVersionKind) (schema.GroupVersionResource, error) {
+					return schema.GroupVersionResource{}, errors.New("conversion error")
+				}).Build(),
+			want: want{
+				errContains: "cannot perform dry-run create for ExampleResource/test-resource",
+			},
+		},
+	}
+
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			dynamicClient := fake.NewSimpleDynamicClient(scheme)
+			if tc.reaction != nil {
+				dynamicClient.PrependReactor("create", exampleGVR.Resource, tc.reaction)
+			}
+
+			converter := tc.converter
+			if converter == nil {
+				converter = newConverter()
+			}
+
+			c := &DefaultApplyClient{
+				dynamicClient: dynamicClient,
+				typeConverter: converter,
+				logger:        tu.TestLogger(t, false),
+			}
+
+			got, err := c.DryRunCreate(t.Context(), tc.obj)
+
+			if tc.want.errContains != "" {
+				if err == nil {
+					t.Fatalf("\n%s\nDryRunCreate(...): expected error but got none", tc.reason)
+				}
+
+				if !strings.Contains(err.Error(), tc.want.errContains) {
+					t.Errorf("\n%s\nDryRunCreate(...): expected error containing %q, got %q",
+						tc.reason, tc.want.errContains, err.Error())
+				}
+
+				if tc.want.errPredicate != nil && !tc.want.errPredicate(err) {
+					t.Errorf("\n%s\nDryRunCreate(...): wrapped error lost its apierrors classification: %v",
+						tc.reason, err)
+				}
+
+				return
+			}
+
+			if err != nil {
+				t.Fatalf("\n%s\nDryRunCreate(...): unexpected error: %v", tc.reason, err)
+			}
+
+			if diff := cmp.Diff(tc.want.result, got); diff != "" {
+				t.Errorf("\n%s\nDryRunCreate(...): -want, +got:\n%s", tc.reason, diff)
+			}
+
+			if tc.want.action != nil {
+				createAction, ok := findCreateAction(dynamicClient.Actions())
+				if !ok {
+					t.Fatalf("\n%s\nDryRunCreate(...): no create action recorded", tc.reason)
+				}
+
+				tc.want.action(t, createAction)
+			}
+		})
+	}
+}
+
+// findCreateAction returns the first recorded create action, if any.
+func findCreateAction(actions []kt.Action) (kt.CreateActionImpl, bool) {
+	for _, a := range actions {
+		if create, ok := a.(kt.CreateActionImpl); ok && a.GetVerb() == "create" {
+			return create, true
+		}
+	}
+
+	return kt.CreateActionImpl{}, false
 }
 
 func TestGetComposedFieldOwner(t *testing.T) {
