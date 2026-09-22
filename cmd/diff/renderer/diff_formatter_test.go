@@ -11,6 +11,93 @@ import (
 	un "k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 )
 
+// TestGenerateDiffWithOptions_SeededRevisionRef pins both directions of the comp-scoped suppression
+// added for issue #474. comp seeds each re-pointing composite's compositionRevisionRef with the revision
+// the diffed composition would produce, so that value is tool-authored bookkeeping and is hidden; xr
+// never seeds, so a user's own hand-edited revision pin must still be shown. Getting this backwards
+// either spams N composites with one field each (and exits 3 on every revision-creating change), or
+// silently swallows a real user edit.
+func TestGenerateDiffWithOptions_SeededRevisionRef(t *testing.T) {
+	// Differ only in the revision ref, as a seeded composite does against its cluster copy.
+	refOnly := func(name string) *un.Unstructured {
+		return tu.NewResource("example.org/v1", "XResource", "test-xr").
+			WithSpecField("coolField", "same").
+			WithNestedField(map[string]any{"name": name}, "spec", "crossplane", "compositionRevisionRef").
+			Build()
+	}
+
+	current := refOnly("xr.example.org-aaaaaaa")
+	desired := refOnly("xr.example.org-bbbbbbb")
+
+	// Same ref change, but with a real spec change alongside it — the case that matters most, where a
+	// composed value derived from the revision name is what the suppression must not hide.
+	desiredWithRealChange := refOnly("xr.example.org-bbbbbbb")
+	_ = un.SetNestedField(desiredWithRealChange.Object, "changed", "spec", "coolField")
+
+	tests := map[string]struct {
+		desired  *un.Unstructured
+		options  DiffOptions
+		wantType types.DiffType
+		// wantRefInClean is whether the ref survives into the rendered (Clean) view. Only meaningful
+		// when wantType is not Equal, since equal diffs leave Clean nil by design.
+		wantRefInClean bool
+	}{
+		"NotSeeded_RefChangeIsShown": {
+			// The xr path. The user pinned this composite to a different revision themselves.
+			desired:        desired,
+			options:        DiffOptions{},
+			wantType:       types.DiffTypeModified,
+			wantRefInClean: true,
+		},
+		"Seeded_RefOnlyChangeIsSuppressed": {
+			// The comp path. revisionImpact reports the revision once per composition, so repeating it
+			// once per composite adds nothing — and would flip the composite to "changed".
+			desired:  desired,
+			options:  DiffOptions{SeededRevisionRef: true},
+			wantType: types.DiffTypeEqual,
+		},
+		"Seeded_DerivedChangeStillShows": {
+			// Not suppressed: a real difference alongside the seeded ref. This is the signal the seeding
+			// exists to surface, so the diff must survive even though the ref itself is hidden.
+			desired:        desiredWithRealChange,
+			options:        DiffOptions{SeededRevisionRef: true},
+			wantType:       types.DiffTypeModified,
+			wantRefInClean: false,
+		},
+		"Seeded_ForVerdictKeepsTheRef": {
+			// A verdict comparison never loses information to a display preference, so the ref is kept
+			// even though it would be stripped for rendering.
+			desired:        desired,
+			options:        DiffOptions{SeededRevisionRef: true, ForVerdict: true},
+			wantType:       types.DiffTypeModified,
+			wantRefInClean: true,
+		},
+	}
+
+	for name, tt := range tests {
+		t.Run(name, func(t *testing.T) {
+			got, err := GenerateDiffWithOptions(t.Context(), current, tt.desired, tu.TestLogger(t, false), tt.options)
+			if err != nil {
+				t.Fatalf("GenerateDiffWithOptions() unexpected error: %v", err)
+			}
+
+			if got.DiffType != tt.wantType {
+				t.Fatalf("GenerateDiffWithOptions() DiffType = %q, want %q", got.DiffType, tt.wantType)
+			}
+
+			if tt.wantType == types.DiffTypeEqual {
+				return
+			}
+
+			_, found, _ := un.NestedString(got.Desired.Clean.Object, "spec", "crossplane", "compositionRevisionRef", "name")
+			if found != tt.wantRefInClean {
+				t.Errorf("compositionRevisionRef present in Clean = %t, want %t; clean spec: %v",
+					found, tt.wantRefInClean, got.Desired.Clean.Object["spec"])
+			}
+		})
+	}
+}
+
 func TestGenerateDiffWithOptions(t *testing.T) {
 	// Create test resources for diffing
 	current := tu.NewResource("example.org/v1", "TestResource", "test-resource").
