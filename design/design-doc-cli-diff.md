@@ -152,6 +152,17 @@ For the current implementation, the following logical permissions are required:
     - Owner references
     - Resource relationships maintained by Crossplane
 
+6. **Dry-run write access on every GVK being diffed** (nothing is ever persisted, but the apiserver authorizes a dry
+   run exactly as it would the real request):
+    - `patch`, for the dry-run server-side apply against a resource that already exists. **Required, and does not
+      degrade**: the diff depends on the apiserver's merge result to detect field removals, so one computed without it
+      would be wrong rather than merely less detailed.
+    - `create`, for the dry-run create of an addition (`--dry-run-on=all`, the default). **Degrades per-resource**: an
+      addition has a usable lower-fidelity fallback (the rendered object), so a missing verb marks that resource and
+      warns rather than failing the run. See §6.3.
+    - `create` on `selfsubjectaccessreviews`, to disambiguate a 403 — granted to `system:authenticated` by default
+      through the built-in `system:basic-user` ClusterRole.
+
 These permissions are needed to accurately render resources, resolve requirements, validate against schemas, and
 identify resources that would be removed by changes. For the CI/CD and Composition Developer personas, these permission
 requirements are generally not problematic. For the End-User Developer persona, these extensive permissions may be
@@ -419,7 +430,7 @@ The infrastructure access layer that interfaces with Kubernetes and Crossplane.
 
 **Key Components:**
 
-- Kubernetes Clients: `ApplyClient`, `ResourceClient`, `SchemaClient`, `TypeConverter`
+- Kubernetes Clients: `AccessChecker`, `ApplyClient`, `ResourceClient`, `SchemaClient`, `TypeConverter`
 - Crossplane Clients (injected via `AppContext`): `CompositionClient`, `CredentialClient`, `DefinitionClient`,
   `EnvironmentClient`, `FunctionClient`, `ResourceTreeClient`. `CompositionRevisionClient` is not part of the injected
   bundle — `DefaultCompositionClient` constructs and owns one internally.
@@ -430,7 +441,8 @@ The infrastructure access layer that interfaces with Kubernetes and Crossplane.
 - Crossplane resource access
 - Resource conversion
 - Type handling
-- Server-side apply
+- Dry-run apply and dry-run create
+- Authorization checks
 
 #### 5.2.5 External Systems
 
@@ -529,6 +541,14 @@ The `ProcessorConfig` structure provides configuration options:
   the two, and `validateFlags` hard-errors when they disagree. `--analyze-on` carries an *empty* kong default rather
   than `any-change` so that "not passed" stays distinguishable from "passed explicitly" at that check — which is why
   `--help` states the default in prose rather than showing it as a value.
+- `DryRunOn`: Which resources are round-tripped through the apiserver to compute their post-apply form — one of
+  `DryRunOnExisting` or `DryRunOnAll` (the zero value, matching the `--dry-run-on` default; see §6.3). The same kind of
+  knob as `AnalyzeOn`: each round-trip costs an apiserver call and a permission, and every resource left un-verified is
+  marked with a `DryRunInfo` (§6.8.3), so "we did not check" stays distinguishable from "we checked and this is what the
+  cluster would store". Unlike `--analyze-on`, a plain kong `default:"all"` is correct here — degradation is uniform, so
+  no behaviour depends on telling a defaulted value from an explicitly-passed one. It is set from
+  `CommonCmdFields.DryRunOn`, which lives on the struct shared by `xr` and `comp`, so both subcommands get the flag;
+  `WithDryRunOn` ignores an empty value so the config default survives.
 - `Warnings`: The `*WarningLogger` whose collected advisories are included in structured output. Nil is valid and means
   warnings reach stderr but not structured output.
 - `EventualState`: Synthesize composed-resource readiness between render iterations to model the steady state of
@@ -698,9 +718,109 @@ output.
 The `DefaultDiffCalculator` handles:
 
 - Retrieving current resources from the cluster (via `ResourceManager`)
-- Performing dry-run applies to determine the would-be state
+- Round-tripping the desired state through the apiserver to determine the would-be state
 - Generating text-based diffs between current and desired
 - Identifying resources that would be removed
+
+```go
+func NewDiffCalculator(
+    apply k8.ApplyClient,
+    access k8.AccessChecker,
+    tree xp.ResourceTreeClient,
+    resourceManager ResourceManager,
+    logger logging.Logger,
+    diffOptions renderer.DiffOptions,
+    dryRunOn DryRunOn,
+) DiffCalculator
+```
+
+The `AccessChecker` and `DryRunOn` are constructor parameters rather than post-construction setters, so a calculator
+cannot exist in a state where it is about to reach the apiserver without knowing what it is permitted to do. The
+`ProcessorConfig.Factories.DiffCalculator` factory type carries the same signature.
+
+#### 6.3.2 Computing the would-be state
+
+Which request is issued depends on whether the resource exists, because they are different operations, not two modes of
+one:
+
+| Case | Request |
+|------|---------|
+| `current != nil` | Server-side apply, `dryRun=All`, under the field owner read from the existing object's `managedFields` (so the merge matches what Crossplane itself would produce). |
+| `current == nil`, `DryRunOnAll` | `Create` with `dryRun=All` and `FieldOwnerDefault`. |
+| `current == nil`, `DryRunOnExisting` | No request; the rendered object is used as-is and marked `DryRunSkipDisabled`. |
+
+Server-side apply cannot serve the addition path at all. `DryRunApply` issues a PUT-shaped request to a named path, and
+an addition relying on `metadata.generateName` has no name; SSA has no `generateName` equivalent. `Create` is also the
+narrower permission ask (`create` alone, versus `create` + `patch` for a *creating* SSA apply) and the semantically
+correct primitive for "plan before apply".
+
+Both paths send a payload prepared by a single `sanitizeForDryRun` helper, which deep-copies the object and drops
+`metadata.{resourceVersion,uid,creationTimestamp,generation,selfLink,managedFields,ownerReferences}`. All seven are
+either server-assigned or rejected on input, and all seven are stripped from display by `cleanupForDiff` regardless, so
+removing them costs nothing in output. Two of them fix real failures on the *existing* path as a side effect: a stale
+`resourceVersion` from a user's input file (plausible for anything exported with `kubectl get -o yaml`) makes the
+apiserver reject the request on optimistic concurrency, and client-go's dynamic `Apply` refuses outright any object with
+`managedFields` populated. `DefaultDiffProcessor` already guarded the root XR against both; the nested-XR branch and
+composed resources had no equivalent.
+
+Two fields are restored from our side after a successful dry-run create:
+
+- **Identity, when the request carried `generateName` and no `name`.** The apiserver runs `names.Generator` in
+  `rest.BeforeCreate`, ahead of the dry-run short-circuit at the storage layer, so it invents a random name that would
+  make the diff differ on every run. For a *named* resource the server's name is kept, so a mutating webhook that
+  rewrites a name still surfaces.
+- **`status`, whenever the rendered object had one.** Composition pipelines are allowed to write their own status, so a
+  rendered status is authored content. The apiserver contributes nothing to status on create (it is a subresource) and
+  returns it empty, so taking the server's value would delete the user's output under the banner of fidelity.
+
+#### 6.3.3 Degrade, report, or fail
+
+An addition that could not be verified falls back to the rendered object and carries a `DryRunInfo` saying why; the
+calculator also raises one warning per GVK + namespace + reason (mutex-guarded, since one calculator instance serves
+every XR in a run), so a composition rendering forty new resources of one kind says so once. A resource the cluster
+*refuses* is a finding, not a degradation, and becomes a `SchemaValidationError` via `NewAdmissionRejectionError` —
+exit code 2, with a `ResourceValidationFailure` whose single `FieldValidationError` has `Type: "admission"`. The
+classification is by status class only, never by message text:
+
+| Outcome of the dry-run create | Handling |
+|-------------------------------|----------|
+| `nil` | Merge as above; no `DryRunInfo`. |
+| `IsInvalid` (422) | Report: cluster rejection. |
+| `IsForbidden` (403) | Ambiguous — resolved by `AccessChecker`, below. |
+| `IsInternalError` / `IsServiceUnavailable` / `IsTimeout` | Degrade, `DryRunSkipWebhookUnavailable`. |
+| `IsAlreadyExists` (409) | Fail (exit 1). `FetchCurrentObject` reported no existing resource, so either its matching logic is wrong or something created the resource underneath us; the diff rests on a false premise either way. |
+| anything else | Fail (exit 1). |
+
+`DryRunSkipWebhookUnavailable` is named for its dominant cause but the predicate is broader: it means the apiserver could
+not complete the admission chain. `DryRunInfo.Detail` always carries the apiserver's own message, so the specific cause
+is never lost.
+
+The existing-resource path (`classifyApplyFailure`) uses the same rejection classification, and that is a deliberate
+behaviour change rather than a side effect. A validating-webhook rejection of an existing resource used to surface as a
+plain tool error (exit 1). Had only the addition path been given the new classification, the exit code for one cluster
+fact would have come to depend on whether the resource happened to exist already — a fresh asymmetry in the change whose
+whole purpose is removing one. It is now exit 2 on both paths.
+
+That path never *degrades*, though: see §3.4 item 6.
+
+#### 6.3.4 Why a `SelfSubjectAccessReview`, and why lazily
+
+`Forbidden` is overloaded. The apiserver returns 403 from the authorizer when RBAC denies the verb, and equally from
+`ResourceQuota`, from `NamespaceLifecycle` when the target namespace does not exist, and from any validating webhook
+that chooses that status. Only the first is an environment limitation to be degraded past; the other three are findings
+the user needs. Treating every 403 as "degrade" would silently swallow them, and reading the 403's *message* to tell
+them apart would rest a correctness decision on unversioned apiserver prose.
+
+So the tool asks the authorizer directly, through `AccessChecker.Can` (§6.9.1). `!allowed` means degrade (nothing was
+learned about the resource); `allowed` means the cluster looked at this object and refused it, which is reported. An
+`AccessChecker` error is neither: the tool holds a 403 it cannot classify, and says so as a plain error rather than
+asserting a finding it has not established or hiding one.
+
+Two properties make this affordable. The review is consulted **lazily** — only once a dry run has actually returned 403
+— so the happy path costs no extra calls at all. And answers are **memoized on `{gvr, namespace, verb}`**, so the
+unhappy path costs one review per distinct question rather than one per resource. The verb is part of the key because
+holding `patch` but not `create` on one GVK is precisely the configuration this feature exists to cope with; reusing one
+verb's answer for the other would invert the decision being made.
 
 ### 6.4 ResourceManager
 
@@ -964,6 +1084,8 @@ The structured types are split across two files:
 - The error envelope and the validation-failure types live in `cmd/diff/renderer/types/`: `OutputError`,
   `ResourceValidationFailure`, `FieldValidationError`. These are separated because they're consumed by the
   human-readable renderer too, not just the structured ones.
+- `DryRunInfo` and `DryRunSkipReason` also live in `cmd/diff/renderer/types/`, because they hang off `ResourceDiff` —
+  the processor→renderer type — and are copied onto the wire shape by the structured renderer.
 - `XRDiffGroup` also lives in `cmd/diff/renderer/types/`. It is the processor→renderer handoff type (input-XR
   identity + its `Diffs map[string]*ResourceDiff` + a pre-converted `*OutputError`), not a wire type. It lives in the
   leaf `types` package rather than alongside the `DiffRenderer` interface so `testutils` (which mocks `DiffRenderer`)
@@ -1035,6 +1157,23 @@ contract:
   re-includes only `manual_policy`; the other two XRs genuinely would not select the resulting revision.
 - `DownstreamChanges` — the serialized wrapper for an XR's downstream diffs, used inside `xrImpactWire`: a `Summary`
   plus a `[]ChangeDetail`.
+- `DryRunInfo` — optional `dryRun` object on a `ChangeDetail`, recording that this resource's desired state did **not**
+  go through the apiserver, and why: `Performed` (`performed`), `SkipReason` (`skipReason`, one of `"disabled"` /
+  `"forbidden"` / `"webhookUnavailable"` — §6.3.3) and `Detail` (`detail`, the cluster's own explanation: the
+  `SelfSubjectAccessReview`'s reason, or the apiserver's error message). `ChangeDetail` is the shared per-resource wire
+  shape — `xr` reaches it via `Changes`/`xrs[].changes`, `comp` via `DownstreamChanges.Changes` — so one field covers
+  both commands with no per-command plumbing.
+
+  Emitted as a **pointer with `omitempty`, only in the degraded case**: absence means the desired state did reach the
+  apiserver. One deliberate exception, documented on the type: removal diffs never carry it, because
+  `CalculateRemovedResourceDiffs` builds them straight from cluster state and there is no desired state to preview, so
+  absence reads as "nothing was skipped" rather than as a positive fidelity guarantee for a resource that was never a
+  candidate. `Performed` is therefore always `false` whenever the struct is present, which is redundancy on purpose: it
+  keeps the emitted JSON self-describing, so a consumer reading a `dryRun` object need not know that mere presence
+  implies degradation, and it leaves room to emit the struct unconditionally later without a schema break.
+
+  The warning raised alongside it (§6.3.3) is the human channel and does not replace this one: an `OutputWarning` has no
+  resource anchor, so it cannot tell a pipeline *which* additions were degraded.
 - `OutputWarning` — non-fatal advisory envelope, carried on both XR and comp diff outputs as
   `warnings[]`. Carries a `Message` plus an optional `Context map[string]string` holding the log
   key/value pairs from the emitting call site, so machine consumers read individual values instead of
@@ -1054,14 +1193,27 @@ contract:
     - `ResourceID`: which user-supplied input the diff was processing (one entry per batched run)
     - `Message`: human-readable error string
     - `ValidationFailures`: optional `[]ResourceValidationFailure`, populated when the error originated from schema
-      validation. Lets machine consumers inspect typed failures without parsing `Message`.
+      validation *or* from an apiserver dry-run rejection. Lets machine consumers inspect typed failures without
+      parsing `Message`. `SchemaValidationError` carries the two in separate fields — `Result` for a
+      `pkgvalidate.ValidationResult` from upstream's validator, `Failures` for rows we built ourselves — because
+      synthesising a `ValidationResult` for an admission rejection would mean inventing a `FieldErrorType` value
+      upstream does not define. `NewOutputError` prefers explicit `Failures` over `Result`; in practice only one is
+      ever set.
 - `ResourceValidationFailure` — per-resource view inside `ValidationFailures`. Mirrors upstream
   `pkg/validate.ResourceValidationResult` (apiVersion / kind / name / namespace / status), but is owned by
   `crossplane-diff` so the public JSON schema can evolve independently of upstream's. `Status` surfaces `"invalid"` and
   `"missingSchema"`; valid entries are filtered out so consumers iterating `ValidationFailures` see only failure rows.
 - `FieldValidationError` — single field-level error inside `ResourceValidationFailure.Errors`. Carries `Type`
-  (`"schema"` / `"cel"` / `"unknownField"` / `"defaulting"`), `Field` (JSONPath, when locatable), `Message`, and
-  `Value` (typed: string, number, bool, or struct).
+  (`"schema"` / `"cel"` / `"unknownField"` / `"defaulting"` / `"admission"`), `Field` (JSONPath, when locatable),
+  `Message`, and `Value` (typed: string, number, bool, or struct). The first four are upstream's values, produced by
+  local validation; `"admission"` (`diffprocessor.FieldErrorTypeAdmission`) is ours and means the apiserver refused the
+  resource during the dry run. It shares the field deliberately: to a consumer asking "why won't the cluster accept
+  this?" it is the same kind of answer, and the row's shape is indistinguishable from one
+  `validationFailuresFromResult` would have produced — including its `Status`, which reuses upstream's
+  `ValidationStatusInvalid` rather than a literal. An `"admission"` row has no `Field` or `Value`: the apiserver reports
+  one rejection, not a field list. It is likewise the only `Type` whose human-readable rendering carries no `[<type>]`
+  suffix, since that suffix is produced by the local validator's per-resource block formatter, which an admission
+  rejection never passes through.
 
 `ResourceID` and `ValidationFailures` are intentionally complementary: `ResourceID` anchors the failure to a specific
 batched input, while `ValidationFailures` enumerates every resource (the input itself plus any composed resources)
@@ -1112,7 +1264,27 @@ The client layer provides interfaces to interact with Kubernetes and Crossplane 
 
 #### 6.9.1 Kubernetes Clients
 
-- `ApplyClient`: Handles server-side dry-run apply
+- `ApplyClient`: Handles the two dry-run round-trips — `DryRunApply` (server-side apply under a given field owner, for a
+  resource that already exists) and `DryRunCreate` (`Create` with `dryRun=All` and `FieldOwnerDefault`, for an addition).
+  `DryRunCreate` takes no `fieldOwner`: a brand-new object has no `managedFields`, so `GetComposedFieldOwner` has nothing
+  to read. Its errors are wrapped with crossplane-runtime's `errors.Wrapf`, which implements `Unwrap` — load-bearing,
+  because callers discriminate outcomes with `apierrors.IsInvalid` / `IsForbidden` / `IsAlreadyExists` /
+  `IsInternalError` / `IsServiceUnavailable` / `IsTimeout`, all of which reach the apiserver's `APIStatus` through
+  `errors.As`.
+- `AccessChecker`: Answers `Can(ctx, gvk, namespace, verb) (allowed bool, reason string, err error)` by POSTing a
+  `SelfSubjectAccessReview` through the dynamic client (`authorization.k8s.io/v1`; no addition to `core.Clients`).
+  `SelfSubjectAccessReview` rather than `SubjectAccessReview` because `create` on `selfsubjectaccessreviews` is granted
+  to `system:authenticated` by default via the `system:basic-user` ClusterRole, so the check needs no permission of its
+  own; it also reflects the *whole* authorizer chain (RBAC, webhook, node), not only RBAC. `resourceAttributes` are
+  expressed in plural-resource terms, so the GVK is resolved through `TypeConverter` first (itself memoized). Answers are
+  memoized on `{gvr, namespace, verb}`; the mutex is released across the API call, so two goroutines racing a cold key
+  may both issue the review — benign, since they compute the same answer — which is preferred to holding a lock across
+  network I/O. Three failure modes are deliberately *not* read as denial-or-permission: an empty `verb` is a caller bug
+  and errors (asking about the verb `""` would come back denied and masquerade as a real RBAC limitation); a missing
+  `status.allowed` errors, since it is a required non-`omitempty` field of `SubjectAccessReviewStatus` and its absence
+  means no authorization answer was given at all; and a `status.evaluationError` forces `allowed = false` with the cause
+  folded into `reason`, because a wrongly-*allowed* answer converts an RBAC denial into a reported cluster rejection — a
+  false finding — whereas a wrongly-denied one only costs fidelity on one resource.
 - `ResourceClient`: Handles basic CRUD operations against the dynamic client
 - `SchemaClient`: Handles schema-related operations (fetching CRDs, scope detection)
 - `TypeConverter`: Handles GVK ↔ GVR resolution and resource-name lookup
@@ -1165,9 +1337,13 @@ The client layer provides interfaces to interact with Kubernetes and Crossplane 
       `SetComposedResourceMetadata` blindly setting namespaces; see §9.5.6.3).
     - The `SchemaValidator` validates the rendered resources and enforces scope constraints
       (`ValidateScopeConstraints`).
-    - `DiffCalculator.CalculateNonRemovalDiffs` computes per-resource diffs for the entire (possibly nested) tree.
+    - `DiffCalculator.CalculateNonRemovalDiffs` computes per-resource diffs for the entire (possibly nested) tree, each
+      against the apiserver's view of the desired state — a dry-run apply for a resource that already exists, a dry-run
+      create for an addition (§6.3.2). A resource the dry run could not reach falls back to rendered output and is
+      marked; one the cluster refuses fails the XR.
     - Once the whole tree has been processed, `DiffCalculator.CalculateRemovedResourceDiffs` identifies resources that
-      exist in the cluster under this XR but no longer appear in the rendered set.
+      exist in the cluster under this XR but no longer appear in the rendered set. These are built straight from cluster
+      state and never carry a `DryRunInfo` — there is no desired state to preview.
     - The `DiffRenderer` (human-readable or structured) formats and displays the result.
 5. `Cleanup` tears down any function containers / networks created during rendering. This is essential — without it,
    Docker resources leak for the lifetime of the process.
@@ -1255,6 +1431,11 @@ crossplane-diff xr --max-nested-depth 3 xr.yaml
 # Show steady-state diff for compositions that need multiple reconciliation cycles
 crossplane-diff xr --eventual-state xr.yaml
 
+# Only dry-run resources already in the cluster, so no 'create' permission is needed. Added
+# resources then show rendered output rather than what the apiserver would store, and say so
+# via dryRun.skipReason in structured output. Default is 'all'. Also on comp.
+crossplane-diff xr --dry-run-on=existing xr.yaml
+
 # Pin the crossplane render version (minimum v2.3.4) for reproducible diffs
 crossplane-diff xr --crossplane-version v2.3.4 xr.yaml
 
@@ -1297,6 +1478,9 @@ crossplane-diff comp unchanged-composition.yaml --analyze-on=always
 # --analyze-on=always; passing both with conflicting values is an error.
 crossplane-diff comp updated-composition.yaml --analyze-on=spec-change
 ```
+
+`--dry-run-on` is declared on `CommonCmdFields`, so it is available on both subcommands with one declaration
+(`default:"all" enum:"existing,all"`, so an invalid value fails at parse time).
 
 Note that the `xr` subcommand has no `--namespace` flag: namespaced XRs carry their own namespace in YAML, and that
 namespace flows through render, validation, dry-run apply, and requirement resolution. The `comp` subcommand's
@@ -1493,6 +1677,14 @@ This validation:
 Defaulting is explicit (via `clixr.ApplyCRDDefaults`) rather than fused with validation as it was under the old
 `validate.SchemaValidation` API. This decouples the two concerns: defaulting can fail independently and is reported as
 a `FieldErrorTypeDefaulting` entry in the structured result.
+
+**What local defaulting does and does not cover**, since it defines the boundary the §6.3.2 dry-run create exists to
+close. `applyCRDDefaults` runs over the XR *and every composed resource* before the diff calculator sees them —
+deliberately, so a composed resource does not reach diff calculation undefaulted and produce a spurious diff for a field
+the cluster's own defaulter would have populated. So CRD `default:` values have never been missing from an addition's
+diff. Per its own contract, what it skips is any resource for which `IsCRDRequired` is false or whose CRD cannot be
+found: **built-in Kubernetes types**. Their defaults, and mutating-admission output for any type, are only observable by
+sending the object to the apiserver — which is what §6.3.2 does.
 
 #### 9.5.3 Resource Rendering
 
@@ -1703,7 +1895,9 @@ cmd/
 │   │                              #   resource manager, requirements provider, function provider,
 │   │                              #   WarningLogger (advisory channel)
 │   ├── client/
-│   │   ├── kubernetes/            # ApplyClient, ResourceClient, SchemaClient, TypeConverter
+│   │   ├── kubernetes/            # apply_client.go (DryRunApply / DryRunCreate),
+│   │   │                          #   access_client.go (AccessChecker, SSAR-backed),
+│   │   │                          #   ResourceClient, SchemaClient, TypeConverter
 │   │   └── crossplane/            # Composition*, Definition, Environment, Function,
 │   │                              #   Credential, ResourceTree clients
 │   ├── renderer/                  # DiffRenderer, CompDiffRenderer, structured (JSON/YAML) renderers

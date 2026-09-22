@@ -68,8 +68,19 @@ sequenceDiagram
                 DiffCalc->>ResMgr: FetchCurrentObject
                 ResMgr->>K8sAPI: GET
                 K8sAPI-->>ResMgr: current
-                DiffCalc->>K8sAPI: DryRunApply(desired)
-                K8sAPI-->>DiffCalc: result
+                alt current != nil
+                    DiffCalc->>K8sAPI: DryRunApply(desired, fieldOwner)
+                    K8sAPI-->>DiffCalc: result
+                else addition, --dry-run-on=all
+                    DiffCalc->>K8sAPI: DryRunCreate(desired)
+                    K8sAPI-->>DiffCalc: result / Forbidden / Invalid
+                    opt Forbidden
+                        DiffCalc->>K8sAPI: SelfSubjectAccessReview (memoized)
+                        K8sAPI-->>DiffCalc: allowed? => degrade or report
+                    end
+                else addition, --dry-run-on=existing
+                    DiffCalc->>DiffCalc: use rendered desired, mark dryRun.skipReason=disabled
+                end
             end
             DiffCalc-->>DP: diffs + rendered keys
 
