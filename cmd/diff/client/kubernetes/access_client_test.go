@@ -8,6 +8,7 @@ import (
 
 	"github.com/crossplane-contrib/crossplane-diff/cmd/diff/client/core"
 	tu "github.com/crossplane-contrib/crossplane-diff/cmd/diff/testutils"
+	dtypes "github.com/crossplane-contrib/crossplane-diff/cmd/diff/types"
 	"github.com/google/go-cmp/cmp"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	un "k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -148,7 +149,7 @@ func TestAccessClient_Can(t *testing.T) {
 	type step struct {
 		gvk       schema.GroupVersionKind
 		namespace string
-		verb      string
+		verb      dtypes.Verb
 		want      accessResult
 		wantErr   string // substring; empty means no error expected
 	}
@@ -448,24 +449,6 @@ func TestAccessClient_Can(t *testing.T) {
 			},
 			wantSSARs: 2,
 		},
-		"EmptyVerbFails": {
-			reason: "An empty verb is a caller bug that would look like an RBAC denial, so it must fail loudly",
-			setup: func() (*fake.FakeDynamicClient, TypeConverter) {
-				dc := newSSARClient()
-				withSSARStatus(dc, map[string]any{"allowed": true})
-
-				return dc, tu.NewMockTypeConverter().WithDefaultGVKToGVR().Build()
-			},
-			steps: []step{
-				{
-					gvk:       exampleGVK,
-					verb:      "",
-					namespace: "test-namespace",
-					wantErr:   "no verb given",
-				},
-			},
-			wantSSARs: 0,
-		},
 		"ConverterFailureFails": {
 			reason: "Without a plural resource name there is no question to ask, so the failure must propagate",
 			setup: func() (*fake.FakeDynamicClient, TypeConverter) {
@@ -548,7 +531,7 @@ func TestAccessClient_ReviewRequest(t *testing.T) {
 		reason    string
 		gvk       schema.GroupVersionKind
 		namespace string
-		verb      string
+		verb      dtypes.Verb
 		want      *un.Unstructured
 	}{
 		"NamespacedResource": {

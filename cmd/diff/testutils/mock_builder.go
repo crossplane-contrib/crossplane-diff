@@ -601,14 +601,14 @@ func NewMockAccessChecker() *MockAccessCheckerBuilder {
 }
 
 // WithCan sets the Can behavior.
-func (b *MockAccessCheckerBuilder) WithCan(fn func(context.Context, schema.GroupVersionKind, string, string) (bool, string, error)) *MockAccessCheckerBuilder {
+func (b *MockAccessCheckerBuilder) WithCan(fn func(context.Context, schema.GroupVersionKind, string, dtypes.Verb) (bool, string, error)) *MockAccessCheckerBuilder {
 	b.mock.CanFn = fn
 	return b
 }
 
 // WithAllowed makes every authorization check succeed.
 func (b *MockAccessCheckerBuilder) WithAllowed() *MockAccessCheckerBuilder {
-	return b.WithCan(func(_ context.Context, _ schema.GroupVersionKind, _, _ string) (bool, string, error) {
+	return b.WithCan(func(_ context.Context, _ schema.GroupVersionKind, _ string, _ dtypes.Verb) (bool, string, error) {
 		return true, "", nil
 	})
 }
@@ -617,15 +617,15 @@ func (b *MockAccessCheckerBuilder) WithAllowed() *MockAccessCheckerBuilder {
 // reason. This is what turns a Forbidden dry-run into a graceful per-resource degradation rather
 // than a reported cluster rejection.
 func (b *MockAccessCheckerBuilder) WithDenied(reason string) *MockAccessCheckerBuilder {
-	return b.WithCan(func(_ context.Context, _ schema.GroupVersionKind, _, _ string) (bool, string, error) {
+	return b.WithCan(func(_ context.Context, _ schema.GroupVersionKind, _ string, _ dtypes.Verb) (bool, string, error) {
 		return false, reason, nil
 	})
 }
 
 // WithDeniedVerb denies only the named verb and allows everything else. A user holding patch but not
 // create is the exact configuration this feature exists to cope with, so it needs to be expressible.
-func (b *MockAccessCheckerBuilder) WithDeniedVerb(deniedVerb, reason string) *MockAccessCheckerBuilder {
-	return b.WithCan(func(_ context.Context, _ schema.GroupVersionKind, _, verb string) (bool, string, error) {
+func (b *MockAccessCheckerBuilder) WithDeniedVerb(deniedVerb dtypes.Verb, reason string) *MockAccessCheckerBuilder {
+	return b.WithCan(func(_ context.Context, _ schema.GroupVersionKind, _ string, verb dtypes.Verb) (bool, string, error) {
 		if verb == deniedVerb {
 			return false, reason, nil
 		}
@@ -637,7 +637,7 @@ func (b *MockAccessCheckerBuilder) WithDeniedVerb(deniedVerb, reason string) *Mo
 // WithFailedCheck makes the authorization check itself fail, leaving a Forbidden dry-run
 // unclassifiable.
 func (b *MockAccessCheckerBuilder) WithFailedCheck(err error) *MockAccessCheckerBuilder {
-	return b.WithCan(func(_ context.Context, _ schema.GroupVersionKind, _, _ string) (bool, string, error) {
+	return b.WithCan(func(_ context.Context, _ schema.GroupVersionKind, _ string, _ dtypes.Verb) (bool, string, error) {
 		return false, "", err
 	})
 }
