@@ -1,0 +1,43 @@
+# A metadata-only edit of resources/revision-templating-composition.yaml: one added label, identical
+# spec. Crossplane's Composition.Hash() covers labels, so applying this mints a new CompositionRevision
+# with a byte-identical spec — and because the template below reads the revision's own name, the
+# composed resource genuinely changes.
+#
+# Before issue #474 the tool rendered this composite with its *existing* compositionRevisionRef, saw no
+# downstream delta, and exited 0. The label is the only difference; everything else must stay identical
+# to the cluster copy or the test stops exercising the metadata-only path.
+apiVersion: apiextensions.crossplane.io/v1
+kind: Composition
+metadata:
+  name: xrevisionrefs.diff.example.org
+  labels:
+    channel: preview
+spec:
+  compositeTypeRef:
+    apiVersion: ns.diff.example.org/v1alpha1
+    kind: XNopResource
+  mode: Pipeline
+  pipeline:
+    - step: generate-resources
+      functionRef:
+        name: function-go-templating
+      input:
+        apiVersion: template.fn.crossplane.io/v1beta1
+        kind: GoTemplate
+        source: Inline
+        inline:
+          template: |
+            apiVersion: ns.nop.example.org/v1alpha1
+            kind: XDownstreamResource
+            metadata:
+              name: {{ .observed.composite.resource.metadata.name }}
+              namespace: {{ .observed.composite.resource.metadata.namespace }}
+              annotations:
+                gotemplating.fn.crossplane.io/composition-resource-name: nop-resource
+            spec:
+              forProvider:
+                configData: {{ .observed.composite.resource.spec.crossplane.compositionRevisionRef.name }}
+                resourceTier: basic
+    - step: automatically-detect-ready-composed-resources
+      functionRef:
+        name: function-auto-ready

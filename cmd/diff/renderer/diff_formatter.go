@@ -19,6 +19,15 @@ import (
 	"github.com/crossplane/crossplane-runtime/v2/pkg/logging"
 )
 
+// PathLastAppliedConfiguration is the ignore-path form of the annotation a client-side `kubectl
+// apply` stamps on the object it applies. Exported because two callers must name the same path and
+// must not drift apart: cleanupForDiff suppresses it from every rendered diff (see
+// displayOnlyIgnoredPaths), and comp's revision-name prediction has to ask whether it is the *only*
+// thing a composition differs by — in which case the resulting revision's identity is not
+// predictable, because the value kubectl writes depends on the user's apply mode rather than on the
+// file.
+const PathLastAppliedConfiguration = "metadata.annotations[kubectl.kubernetes.io/last-applied-configuration]"
+
 // DiffOptions holds configuration options for the diff output.
 type DiffOptions struct {
 	// Stdout is the writer for diff output (defaults to os.Stdout)
@@ -71,6 +80,24 @@ type DiffOptions struct {
 	// per composition, omitting the full YAML diff body. Only consumed by the
 	// human-readable composition diff renderer; structured output is unaffected.
 	MinimizeComposition bool
+
+	// SeededRevisionRef records that the compositionRevisionRef on the objects being diffed was
+	// written by this tool rather than read from the cluster — comp seeds each re-pointing composite
+	// with the name of the CompositionRevision the diffed composition would produce, so that a
+	// template reading that name renders the value it would really get. It is provenance, not a user
+	// preference: no flag sets it, and the xr command leaves it false so a user's own hand-edited
+	// revision pin is still shown.
+	//
+	// When set, the ref paths are stripped from the rendered diff. That looks like the anti-pattern
+	// ForVerdict exists to prevent, and is not: the fact being suppressed — that applying the
+	// composition creates a revision which N composites re-point to — is reported unconditionally and
+	// per-composition as RevisionImpact, so only its N-fold duplicate *presentation* is hidden. What
+	// is emphatically not suppressed is any *derived* change: a composed resource whose template
+	// propagates the revision name still shows a diff, and still flips its composite to "changed".
+	// Surfacing exactly those is the reason the seeding exists. Without the suppression, every
+	// revision-creating change would instead add one bookkeeping field per composite and exit 3 — the
+	// GitOps-gate problem issue #472's exit-code decision was made to avoid. See issue #474.
+	SeededRevisionRef bool
 }
 
 // DefaultDiffOptions returns the default options with colors enabled.
@@ -330,11 +357,11 @@ func GenerateDiffWithOptions(_ context.Context, current, desired *un.Unstructure
 	var currentClean, desiredClean *un.Unstructured
 
 	if current != nil {
-		currentClean = cleanupForDiff(current.DeepCopy(), logger.WithValues("resourceStage", "current", "before", current), options.IgnorePaths, options.ForVerdict)
+		currentClean = cleanupForDiff(current.DeepCopy(), logger.WithValues("resourceStage", "current", "before", current), options)
 	}
 
 	if desired != nil {
-		desiredClean = cleanupForDiff(desired.DeepCopy(), logger.WithValues("resourceStage", "desired", "before", desired), options.IgnorePaths, options.ForVerdict)
+		desiredClean = cleanupForDiff(desired.DeepCopy(), logger.WithValues("resourceStage", "desired", "before", desired), options)
 	}
 
 	// For modifications, if the cleaned objects are equal the only differences
@@ -603,10 +630,10 @@ func removeNestedPath(obj map[string]any, path string) bool {
 	return false
 }
 
-// cleanupForDiff removes fields that shouldn't be included in the diff. When forVerdict is set the
-// display-only paths are left in the object, because the caller is asking whether the objects differ
-// rather than rendering them; see DiffOptions.ForVerdict.
-func cleanupForDiff(obj *un.Unstructured, logger logging.Logger, ignorePaths []string, forVerdict bool) *un.Unstructured {
+// cleanupForDiff removes fields that shouldn't be included in the diff. When options.ForVerdict is
+// set the display-only paths are left in the object, because the caller is asking whether the objects
+// differ rather than rendering them; see DiffOptions.ForVerdict.
+func cleanupForDiff(obj *un.Unstructured, logger logging.Logger, options DiffOptions) *un.Unstructured {
 	resKind := obj.GetKind()
 	resName := obj.GetName()
 	resKey := fmt.Sprintf("%s/%s", resKind, resName)
@@ -625,7 +652,18 @@ func cleanupForDiff(obj *un.Unstructured, logger logging.Logger, ignorePaths []s
 	// readability decision suppress that from a change verdict would elide a real, potentially
 	// render-affecting consequence, so verdict comparisons pass forVerdict and keep them.
 	displayOnlyIgnoredPaths := []string{
-		"metadata.annotations[kubectl.kubernetes.io/last-applied-configuration]",
+		PathLastAppliedConfiguration,
+	}
+
+	// seededRevisionRefPaths are the v1 and v2 homes of a composite's compositionRevisionRef. They are
+	// display-only too, but conditionally so: they are suppressed only when this tool wrote the value
+	// (comp's revision seeding), never when it merely read one from the cluster. See
+	// DiffOptions.SeededRevisionRef for why hiding a tool-authored field is not the anti-pattern it
+	// resembles. Listing both paths unconditionally is safe — removeNestedPath is a no-op for a path
+	// the object does not have, and seeding only ever writes to the path the composite already used.
+	seededRevisionRefPaths := []string{
+		"spec.compositionRevisionRef",
+		"spec.crossplane.compositionRevisionRef",
 	}
 
 	// Remove display-only paths (unless this is a verdict), then the caller's. Duplicates between
@@ -638,11 +676,15 @@ func cleanupForDiff(obj *un.Unstructured, logger logging.Logger, ignorePaths []s
 		}
 	}
 
-	if !forVerdict {
+	if !options.ForVerdict {
 		stripPaths(displayOnlyIgnoredPaths)
+
+		if options.SeededRevisionRef {
+			stripPaths(seededRevisionRefPaths)
+		}
 	}
 
-	stripPaths(ignorePaths)
+	stripPaths(options.IgnorePaths)
 
 	// Remove server-side fields and metadata that we don't want to diff
 	metadata, found, _ := un.NestedMap(obj.Object, "metadata")

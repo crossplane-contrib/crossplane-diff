@@ -222,6 +222,24 @@ type RevisionImpact struct {
 	// Note this counts composites that re-point, which is not the same as composites whose rendered
 	// output changes; re-pointing alone usually renders identically.
 	RepointedComposites int `json:"repointedComposites"`
+	// PredictedRevisionName is what that revision would be called: "<composition>-<hash[:7]>", derived
+	// from Crossplane's own Composition.Hash(). When CreatesRevision is false it names the existing
+	// revision the composites already track, which is the same name by construction — an unchanged
+	// composition hashes to the same value.
+	//
+	// It is what makes a downstream change interpretable: a composed resource whose template reads the
+	// revision name shows a diff with no other visible cause, and this is the cause. The composites are
+	// rendered with this value seeded onto their compositionRevisionRef, so such a change is detected
+	// rather than assumed away.
+	//
+	// Absent with CreatesRevision true means the name could not be predicted, which happens when the
+	// composition differs from the cluster's only by kubectl's last-applied-configuration annotation:
+	// its post-apply value is a function of how the user applies rather than of the file, so the hash —
+	// and therefore the name — is unknowable. A warning says so, and nothing is seeded in that case, so
+	// a revision-observing change would go undetected. Note also that for a composition applied
+	// client-side *with* other edits the suffix is predicted from the file as supplied and so may differ
+	// from the eventual one; the change is still detected, its predicted value is just imprecise.
+	PredictedRevisionName string `json:"predictedRevisionName,omitempty"`
 }
 
 // determined reports whether the comparison that populates a RevisionImpact actually ran. ChangeScope
