@@ -49,13 +49,19 @@ classDiagram
         +MaxRenderIterations int
         +IncludeManual bool
         +EventualState bool
+        +AnalyzeOn AnalyzeOn
+        +MinimizeComposition bool
+        +SeededRevisionRef bool
         +IgnorePaths []string
         +FunctionCredentials []corev1.Secret
         +FunctionRegistryOverride string
         +CrossplaneRenderBinary string
+        +CrossplaneVersion string
+        +CrossplaneImage string
         +Stdout io.Writer
         +Stderr io.Writer
         +Logger logging.Logger
+        +Warnings *WarningLogger
         +RenderFunc RenderFn
         +Factories ComponentFactories
     }

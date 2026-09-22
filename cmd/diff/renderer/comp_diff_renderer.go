@@ -100,6 +100,12 @@ func (r *DefaultCompDiffRenderer) RenderCompDiff(output *CompDiffOutput) error {
 			continue
 		}
 
+		// Name the revision before the per-composite sections. A composed resource whose template reads
+		// the revision name shows a diff below with no other visible cause; this line is that cause.
+		if _, err := fmt.Fprint(stdout, revisionImpactMessage(comp.RevisionImpact)); err != nil {
+			return errors.Wrap(err, "cannot write revision impact message")
+		}
+
 		// Render affected XRs list with status indicators
 		if err := r.renderAffectedResourcesList(&comp); err != nil {
 			return err
@@ -176,6 +182,34 @@ func skippedMessage(impact RevisionImpact) string {
 	}
 
 	return "Impact analysis skipped: this composition is identical to the cluster's, so applying it creates no new CompositionRevision and no composite resource could change as a result. Pass --analyze-on=always to evaluate them anyway.\n\n"
+}
+
+// revisionImpactMessage reports the revision churn applying this composition causes, for the run where
+// the composites *were* evaluated. It is what keeps a downstream diff interpretable: with the
+// composites' own compositionRevisionRef suppressed from display, a composed resource whose template
+// reads the revision name would otherwise change with no visible cause. See issue #474.
+//
+// Deliberately does NOT name the revision, even though PredictedRevisionName is available here. The
+// name's suffix is a hash of the composition's content, so putting it in human output would make
+// otherwise-stable output churn on any composition edit — and it buys the reader nothing, because the
+// diff body already shows the value wherever it actually propagates. Consumers that want the name read
+// revisionImpact.predictedRevisionName from structured output, where a hash is not a readability
+// problem. For the same reason the unpredictable case is not distinguished here; the warning on stderr
+// says so, which is the right channel for "this could not be checked".
+//
+// Empty unless a revision is created AND some composite would adopt it: with nothing adopting it there
+// is no downstream diff to explain, and the sections around this one already report the composition as
+// new or changed.
+//
+// The skipped path does not use this: skippedMessage carries the same fact in its own sentence, so
+// emitting both would state it twice.
+func revisionImpactMessage(impact RevisionImpact) string {
+	if !impact.CreatesRevision || impact.RepointedComposites == 0 {
+		return ""
+	}
+
+	return fmt.Sprintf("Applying this composition creates a new CompositionRevision, which %d composite%s would adopt.\n\n",
+		impact.RepointedComposites, pluralize(impact.RepointedComposites))
 }
 
 // writeNoDisplayableChanges reports a composition with no diff body to show. That covers two

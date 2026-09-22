@@ -1070,9 +1070,10 @@ type CompositionDiffWire struct {
 
 // RevisionImpactWire mirrors renderer.RevisionImpact.
 type RevisionImpactWire struct {
-	ChangeScope         string `json:"changeScope"`
-	CreatesRevision     bool   `json:"createsRevision"`
-	RepointedComposites int    `json:"repointedComposites"`
+	ChangeScope           string `json:"changeScope"`
+	CreatesRevision       bool   `json:"createsRevision"`
+	RepointedComposites   int    `json:"repointedComposites"`
+	PredictedRevisionName string `json:"predictedRevisionName,omitempty"`
 }
 
 // AffectedResourcesSummary mirrors renderer.AffectedResourcesSummary.
@@ -1146,6 +1147,10 @@ type CompositionExpectation struct {
 	impactAnalysisSkipped *bool
 	// revisionImpact, when set, asserts what applying the composition does to CompositionRevisions.
 	revisionImpact *expectedRevisionImpact
+	// predictedRevisionName, when set, asserts revisionImpact.predictedRevisionName. Set independently
+	// of revisionImpact so a case can assert the name alone, and because the name is usually matched by
+	// pattern (its suffix is a content hash) while the rest are exact.
+	predictedRevisionName *expectedPredictedRevisionName
 }
 
 // expectedRevisionImpact is the expected revisionImpact object for a composition.
@@ -1153,6 +1158,17 @@ type expectedRevisionImpact struct {
 	changeScope         string
 	createsRevision     bool
 	repointedComposites int
+}
+
+// expectedPredictedRevisionName is the expected revisionImpact.predictedRevisionName. A pattern rather
+// than a literal because the name's suffix is the first 7 hex digits of the composition's hash, so
+// pinning it exactly would make every fixture edit a test failure. The derivation itself is pinned
+// exactly by the revisionIdentity unit test, which is where that belongs.
+//
+// An empty pattern asserts the field is absent, which is a meaningful outcome in its own right: the
+// name was not predictable.
+type expectedPredictedRevisionName struct {
+	pattern string
 }
 
 func (c *CompositionExpectation) compExpectation() *ExpectedCompDiff { return c.parent }
@@ -1228,6 +1244,23 @@ func (c *CompositionExpectation) WithRevisionImpact(changeScope string, createsR
 		createsRevision:     createsRevision,
 		repointedComposites: repointedComposites,
 	}
+
+	return c
+}
+
+// WithPredictedRevisionNamePattern asserts that revisionImpact.predictedRevisionName matches pattern
+// (an unanchored regexp unless the pattern anchors itself). Use for the usual case, where the name's
+// hash suffix is not worth pinning in an end-to-end test.
+func (c *CompositionExpectation) WithPredictedRevisionNamePattern(pattern string) *CompositionExpectation {
+	c.predictedRevisionName = &expectedPredictedRevisionName{pattern: pattern}
+
+	return c
+}
+
+// WithoutPredictedRevisionName asserts that revisionImpact carries no predictedRevisionName — i.e. the
+// revision's identity could not be predicted. Distinct from simply not asserting on the field.
+func (c *CompositionExpectation) WithoutPredictedRevisionName() *CompositionExpectation {
+	c.predictedRevisionName = &expectedPredictedRevisionName{pattern: ""}
 
 	return c
 }
@@ -1486,6 +1519,29 @@ func AssertStructuredCompDiff(t *testing.T, jsonOutput string, e CompDiffExpecta
 			if got.RepointedComposites != want.repointedComposites {
 				t.Errorf("Composition %s: RevisionImpact.RepointedComposites: expected %d, got %d",
 					expectComp.name, want.repointedComposites, got.RepointedComposites)
+			}
+		}
+
+		if want := expectComp.predictedRevisionName; want != nil {
+			got := found.RevisionImpact.PredictedRevisionName
+
+			switch want.pattern {
+			case "":
+				if got != "" {
+					t.Errorf("Composition %s: RevisionImpact.PredictedRevisionName: expected absent, got %q",
+						expectComp.name, got)
+				}
+			default:
+				matched, err := regexp.MatchString(want.pattern, got)
+
+				switch {
+				case err != nil:
+					t.Errorf("Composition %s: RevisionImpact.PredictedRevisionName: invalid pattern %q: %v",
+						expectComp.name, want.pattern, err)
+				case !matched:
+					t.Errorf("Composition %s: RevisionImpact.PredictedRevisionName: %q does not match pattern %q",
+						expectComp.name, got, want.pattern)
+				}
 			}
 		}
 

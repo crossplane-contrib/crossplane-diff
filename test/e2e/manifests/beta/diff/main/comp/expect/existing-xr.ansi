@@ -54,6 +54,8 @@
 
 Summary: 1 modified
 
+Applying this composition creates a new CompositionRevision, which 1 composite would adopt.
+
 === Affected Composite Resources ===
 
   ⚠ XCompDiffResource/test-comp-resource (cluster-scoped)

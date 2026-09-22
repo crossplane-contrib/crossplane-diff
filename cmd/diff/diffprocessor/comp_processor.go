@@ -383,6 +383,14 @@ func (p *DefaultCompDiffProcessor) processSingleComposition(ctx context.Context,
 	result.CompositionDiff = comparison.diff
 	result.MaskedChangesOnly = comparison.diff == nil && comparison.changed()
 
+	// Predict the identity of the revision this composition would produce. Needed twice below: to
+	// evaluate compositionRevisionSelectors against the label set the revision would carry, and to seed
+	// the composites so a template observing the revision name renders the value it would really get.
+	pred, err := predictRevision(newComp)
+	if err != nil {
+		return nil, err
+	}
+
 	// Report what applying this composition does to CompositionRevisions regardless of whether the
 	// composites are evaluated below. This is the mutative consequence of the apply, and it is
 	// independent of whether anything renders differently — so it is reported at every --analyze-on
@@ -393,16 +401,30 @@ func (p *DefaultCompDiffProcessor) processSingleComposition(ctx context.Context,
 		CreatesRevision: comparison.changed(),
 	}
 
+	if comparison.revisionNamePredictable {
+		result.RevisionImpact.PredictedRevisionName = pred.name
+	}
+
 	// Partition XRs by whether they would adopt the diffed composition's resulting revision. This is
 	// local (no renders), and both paths below need it: the composites that would adopt the new
 	// revision are exactly the ones that would re-point at it.
-	keptXRs, droppedXRs, err := p.partitionXRsByUpdatePolicy(affectedXRs, newComp)
+	keptXRs, droppedXRs, err := p.partitionXRsByUpdatePolicy(affectedXRs, newComp, pred)
+	if err != nil {
+		return nil, err
+	}
+
+	// Of the kept composites, the ones that actually re-point are those not pinned to a specific
+	// revision. A Manual-policy composite surfaced by --include-manual is evaluated but stays pinned via
+	// its compositionRevisionRef, so it adopts nothing — counting it as re-pointing would contradict
+	// this field's own definition, and seeding it would additionally change which revision renders for
+	// it (resolveCompositionFromRevisions honours a Manual composite's ref).
+	repointingXRs, err := p.repointingXRs(keptXRs)
 	if err != nil {
 		return nil, err
 	}
 
 	if comparison.changed() {
-		result.RevisionImpact.RepointedComposites = len(keptXRs)
+		result.RevisionImpact.RepointedComposites = len(repointingXRs)
 	}
 
 	// Skip the per-XR work — one function render per XR, the dominant cost of comp — when the change
@@ -467,10 +489,28 @@ func (p *DefaultCompDiffProcessor) processSingleComposition(ctx context.Context,
 		return result, nil
 	}
 
+	// Render the composites with the revision they would actually be pointing at. Without this the
+	// render sees each composite's *existing* compositionRevisionRef, so a composition template reading
+	// the revision name produces the stale one and a real change goes unreported. See issue #474.
+	//
+	// When the name is not predictable we render unseeded — the pre-#474 behaviour — and say so, rather
+	// than seed a guess. Seeding a name we invented would manufacture a downstream diff on a converged
+	// cluster for exactly the compositions this feature exists to serve.
+	renderInputs := keptXRs
+
+	switch {
+	case comparison.revisionNamePredictable:
+		renderInputs = seedRepointingXRs(keptXRs, repointingXRs, pred.name)
+	case comparison.changed():
+		p.config.Logger.Info(
+			"Could not predict the name of the CompositionRevision this composition would create, because it differs from the cluster's only by the annotation a client-side `kubectl apply` writes — whose post-apply value depends on how you apply, not on the file. Composites were rendered with their existing compositionRevisionRef, so if any of your composition templates read the revision name, a resulting change was not detected. Apply with `--server-side` (or via Argo/Flux) to make it predictable.",
+			"composition", newComp.GetName())
+	}
+
 	// Process kept XRs and collect diffs to determine which ones have changes
 	p.config.Logger.Debug("Processing XRs to collect diff information", "count", len(keptXRs))
 
-	xrResults := p.collectXRDiffs(ctx, keptXRs, newComp)
+	xrResults := p.collectXRDiffs(ctx, renderInputs, newComp)
 
 	// Build impact analysis and counts from results for the kept set, then merge in any
 	// already-appended filtered entries.
@@ -606,9 +646,30 @@ func (p *DefaultCompDiffProcessor) collectXRDiffs(ctx context.Context, xrs []*un
 //     into a composition's identity, and so into whether a new CompositionRevision is created.
 //
 // `scope` is therefore computed with every mask lifted. See issue #453.
+//
+// `revisionNamePredictable` is separate from both, and answers a third question: can we say what the
+// resulting CompositionRevision will be *called*? See the field comment.
 type compositionComparison struct {
 	diff  *dt.ResourceDiff
 	scope ChangeScope
+
+	// revisionNamePredictable reports whether the resulting revision's name can be derived from the
+	// composition as supplied. It is false in exactly one situation: the composition differs from the
+	// cluster's *only* by kubectl's last-applied-configuration annotation.
+	//
+	// The name is "<composition>-<hash[:7]>" and Composition.Hash() covers annotations, so the name
+	// depends on that annotation's post-apply value — which a client-side `kubectl apply` derives from
+	// the file being applied (see kubectl's GetModifiedConfiguration), not from what is in the file's
+	// own annotations. So the value the cluster will end up holding is a function of the user's apply
+	// mode, and this tool cannot know it: under server-side apply the annotation is left alone, under
+	// client-side apply it is rewritten. Predicting from the file as supplied would be a guess.
+	//
+	// Note what is NOT claimed when this is false. The delta is real, so the composition may well
+	// produce a revision and CreatesRevision stays true; a stale annotation genuinely would be
+	// rewritten, minting one. What is unknowable is the identity, so we decline to seed it and say so
+	// rather than seed a name we invented — which, for a template reading the name, would manufacture
+	// a downstream diff on a converged cluster. See issue #474.
+	revisionNamePredictable bool
 }
 
 // changed reports whether the composition differs at all in the fields Crossplane hashes.
@@ -676,9 +737,13 @@ func (p *DefaultCompDiffProcessor) calculateCompositionDiff(ctx context.Context,
 		"isNewComposition", originalCompUnstructured == nil)
 
 	if compDiff.DiffType != dt.DiffTypeEqual {
+		// A displayable difference means the compositions differ in something other than the annotation
+		// (which is never displayed), so the hash difference is driven by real content and the resulting
+		// revision's name follows from the composition as supplied.
 		return compositionComparison{
-			diff:  compDiff,
-			scope: compositionChangeScope(originalCompUnstructured, newCompUnstructured, true),
+			diff:                    compDiff,
+			scope:                   compositionChangeScope(originalCompUnstructured, newCompUnstructured, true),
+			revisionNamePredictable: true,
 		}, nil
 	}
 
@@ -699,13 +764,34 @@ func (p *DefaultCompDiffProcessor) calculateCompositionDiff(ctx context.Context,
 		return compositionComparison{}, errors.Wrap(err, "cannot calculate composition diff with masks lifted")
 	}
 
-	scope := compositionChangeScope(originalCompUnstructured, newCompUnstructured, unmasked.DiffType != dt.DiffTypeEqual)
+	anyChange := unmasked.DiffType != dt.DiffTypeEqual
+	scope := compositionChangeScope(originalCompUnstructured, newCompUnstructured, anyChange)
+
+	// One more local comparison, to find out whether the difference just detected is *only* kubectl's
+	// last-applied-configuration annotation: same mask-lifted view, but with that one path ignored. If
+	// the objects become equal, it was the sole delta, and the resulting revision's name is not
+	// predictable — see compositionComparison.revisionNamePredictable. Ordering matters: the annotation
+	// must stay in the comparison that decides `scope` (a real difference, and Crossplane hashes it) and
+	// be excluded only from this narrower question about identity.
+	revisionNamePredictable := true
+
+	if anyChange {
+		diffOptions.IgnorePaths = []string{renderer.PathLastAppliedConfiguration}
+
+		withoutLastApplied, err := renderer.GenerateDiffWithOptions(ctx, originalCompUnstructured, newCompUnstructured, p.config.Logger, diffOptions)
+		if err != nil {
+			return compositionComparison{}, errors.Wrap(err, "cannot calculate composition diff excluding last-applied-configuration")
+		}
+
+		revisionNamePredictable = withoutLastApplied.DiffType != dt.DiffTypeEqual
+	}
 
 	p.config.Logger.Debug("No displayable changes in composition",
 		"composition", newComp.GetName(),
-		"changeScope", string(scope))
+		"changeScope", string(scope),
+		"revisionNamePredictable", revisionNamePredictable)
 
-	return compositionComparison{diff: nil, scope: scope}, nil
+	return compositionComparison{diff: nil, scope: scope, revisionNamePredictable: revisionNamePredictable}, nil
 }
 
 // compositionChangeScope classifies how much of a composition differs from its in-cluster version,
@@ -736,19 +822,73 @@ func compositionChangeScope(original, proposed *un.Unstructured, anyChange bool)
 	return ChangeScopeMetadata
 }
 
+// predictedRevision is the identity of the CompositionRevision that applying a composition would
+// produce. Both fields derive from Crossplane's own Composition.Hash(), so neither is guessed.
+type predictedRevision struct {
+	// name is what the revision would be called: "<composition>-<hash[:7]>".
+	name string
+	// hash is the value of the crossplane.io/composition-hash label, i.e. the hash truncated to the
+	// 63-character limit on label values.
+	hash string
+}
+
+// revisionIdentity derives a revision's name and hash label from a composition's name and hash.
+//
+// This is the one and only thing this tool mirrors from upstream rather than calling: the derivation
+// lives in NewCompositionRevision, in an internal/ package we cannot import, while the hash itself
+// comes from the exported Composition.Hash(). The two truncations are different and both deliberate —
+// 63 characters for the label value (Kubernetes' limit), 7 for the name suffix — and the >= guards
+// are upstream's, kept verbatim so the degenerate hash Composition.Hash() returns on a marshal error
+// ("unknown", shorter than either bound) produces the same result here as it would in the cluster.
+func revisionIdentity(compName, hash string) predictedRevision {
+	if len(hash) >= 63 {
+		hash = hash[0:63]
+	}
+
+	nameSuffix := hash
+	if len(nameSuffix) >= 7 {
+		nameSuffix = nameSuffix[0:7]
+	}
+
+	return predictedRevision{
+		name: fmt.Sprintf("%s-%s", compName, nameSuffix),
+		hash: hash,
+	}
+}
+
+// predictRevision computes the identity of the CompositionRevision applying newComp would produce, by
+// calling Crossplane's own exported Composition.Hash() on the typed composition. newComp is not
+// mutated.
+func predictRevision(newComp *un.Unstructured) (predictedRevision, error) {
+	comp := &apiextensionsv1.Composition{}
+	if err := runtime.DefaultUnstructuredConverter.FromUnstructured(newComp.Object, comp); err != nil {
+		return predictedRevision{}, errors.Wrapf(err, "cannot convert composition %q to typed to predict its revision", newComp.GetName())
+	}
+
+	return revisionIdentity(comp.GetName(), comp.Hash()), nil
+}
+
 // predictedRevisionLabels returns the label set the CompositionRevision resulting from this
 // composition would carry, for evaluating an XR's compositionRevisionSelector. Crossplane stamps
-// every revision with the composition's own metadata.labels plus crossplane.io/composition-name
-// (and appends that label before matching a selector), so we mirror that here. The
-// composition-hash label is intentionally omitted — it isn't predictable before the revision is
-// created. newComp is not mutated.
-func predictedRevisionLabels(newComp *un.Unstructured) map[string]string {
+// every revision with the composition's own metadata.labels plus crossplane.io/composition-name and
+// crossplane.io/composition-hash (and appends them before matching a selector), so we mirror that
+// here — see NewCompositionRevision. Omitting the hash label used to drop an XR whose selector keys on
+// it as a selector mismatch, with a detail message that pointed the user at their own labels instead.
+//
+// The hash label is stamped even when compositionComparison.revisionNamePredictable is false, i.e. when
+// the eventual hash depends on the user's apply mode. That is deliberate, and is why this takes the
+// prediction rather than consulting predictability: withholding it would put us back to failing every
+// selector that merely requires the label to Exist, which is the common shape and is now always answered
+// correctly. A selector matching an exact hash *value* is the only case the caveat reaches, and there the
+// best available prediction beats a guaranteed mismatch. newComp is not mutated.
+func predictedRevisionLabels(newComp *un.Unstructured, pred predictedRevision) map[string]string {
 	compLabels := newComp.GetLabels()
 
-	labels := make(map[string]string, len(compLabels)+1)
+	labels := make(map[string]string, len(compLabels)+2)
 	maps.Copy(labels, compLabels)
 
 	labels[xp.LabelCompositionName] = newComp.GetName()
+	labels[xp.LabelCompositionHash] = pred.hash
 
 	return labels
 }
@@ -765,11 +905,12 @@ type filteredXR struct {
 // would adopt the CompositionRevision resulting from newComp. See classifyXR for the per-XR rules,
 // which also cover exclusions unrelated to update policy (e.g. XRs being deleted). A malformed
 // compositionRevisionSelector is a hard error (accuracy over guessing).
-func (p *DefaultCompDiffProcessor) partitionXRsByUpdatePolicy(xrs []*un.Unstructured, newComp *un.Unstructured) (kept []*un.Unstructured, dropped []filteredXR, err error) {
+func (p *DefaultCompDiffProcessor) partitionXRsByUpdatePolicy(xrs []*un.Unstructured, newComp *un.Unstructured, pred predictedRevision) (kept []*un.Unstructured, dropped []filteredXR, err error) {
 	// The selector is matched against the label set the new revision would carry (composition labels
-	// plus the stamped crossplane.io/composition-name), while mismatch messages display the user's
-	// own composition labels; see predictedRevisionLabels and xp.XRRevisionSelectorMatch.
-	targetLabels := predictedRevisionLabels(newComp)
+	// plus the stamped crossplane.io/composition-name and crossplane.io/composition-hash), while
+	// mismatch messages display the user's own composition labels; see predictedRevisionLabels and
+	// xp.XRRevisionSelectorMatch.
+	targetLabels := predictedRevisionLabels(newComp, pred)
 	compLabels := newComp.GetLabels()
 
 	for _, xr := range xrs {
@@ -860,6 +1001,63 @@ func (p *DefaultCompDiffProcessor) classifyXR(xr *un.Unstructured, targetLabels,
 	}
 
 	return nil, nil
+}
+
+// repointingXRs returns the keys (dt.MakeDiffKeyFromResource) of the composites that would actually
+// re-point to the revision the diffed composition produces. That is the kept set minus those pinned to
+// a specific revision by a Manual compositionUpdatePolicy: --include-manual asks for such a composite
+// to be *evaluated*, which does not make it adopt anything — Crossplane keeps honouring its
+// compositionRevisionRef.
+//
+// A set rather than a slice so callers keep the kept set's original ordering, which the impact analysis
+// and its rendered output follow.
+func (p *DefaultCompDiffProcessor) repointingXRs(xrs []*un.Unstructured) (map[string]bool, error) {
+	repointing := make(map[string]bool, len(xrs))
+
+	for _, xr := range xrs {
+		policy, err := xp.XRUpdatePolicy(xr.Object, xr.GetAPIVersion())
+		if err != nil {
+			return nil, errors.Wrapf(err, "cannot read compositionUpdatePolicy for XR %q", xr.GetName())
+		}
+
+		if policy == compositionUpdatePolicyManual {
+			continue
+		}
+
+		repointing[dt.MakeDiffKeyFromResource(xr)] = true
+	}
+
+	return repointing, nil
+}
+
+// seedRepointingXRs returns the composites to render: a copy of each re-pointing composite with its
+// compositionRevisionRef pointed at revisionName, and every other composite unchanged. Input order is
+// preserved, and the supplied composites are never mutated — they are the cluster's objects, and the
+// impact analysis and removal detection still read identity from them.
+//
+// Only composites in `repointing` are seeded, and of those only the ones already tracking a revision;
+// see SetCompositionRevisionRefName for why a ref is never created from nothing.
+func seedRepointingXRs(xrs []*un.Unstructured, repointing map[string]bool, revisionName string) []*un.Unstructured {
+	seeded := make([]*un.Unstructured, 0, len(xrs))
+
+	for _, xr := range xrs {
+		if !repointing[dt.MakeDiffKeyFromResource(xr)] {
+			seeded = append(seeded, xr)
+			continue
+		}
+
+		candidate := xr.DeepCopy()
+		if !SetCompositionRevisionRefName(candidate, revisionName) {
+			// Not tracking a revision yet, so there is no stale value to correct and nowhere safe to put
+			// one. Render the original rather than an identical copy.
+			seeded = append(seeded, xr)
+			continue
+		}
+
+		seeded = append(seeded, candidate)
+	}
+
+	return seeded
 }
 
 // filterCounts tallies dropped XRs by filter reason. A struct rather than a growing list of

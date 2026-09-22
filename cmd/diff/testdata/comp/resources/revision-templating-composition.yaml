@@ -1,0 +1,39 @@
+# The in-cluster copy of a composition whose template reads the CompositionRevision's own name off the
+# composite and propagates it into a composed resource. Functions receive the whole XR (AsState ->
+# xfn.AsStruct, no field stripping), so this is legitimate, if unusual — and it is the case that makes
+# "a revision is created, but it renders identically" a claim the tool has to verify rather than assume.
+#
+# Paired with ../revision-templating-updated-composition.yaml, which differs from this by a label only.
+apiVersion: apiextensions.crossplane.io/v1
+kind: Composition
+metadata:
+  name: xrevisionrefs.diff.example.org
+spec:
+  compositeTypeRef:
+    apiVersion: ns.diff.example.org/v1alpha1
+    kind: XNopResource
+  mode: Pipeline
+  pipeline:
+    - step: generate-resources
+      functionRef:
+        name: function-go-templating
+      input:
+        apiVersion: template.fn.crossplane.io/v1beta1
+        kind: GoTemplate
+        source: Inline
+        inline:
+          template: |
+            apiVersion: ns.nop.example.org/v1alpha1
+            kind: XDownstreamResource
+            metadata:
+              name: {{ .observed.composite.resource.metadata.name }}
+              namespace: {{ .observed.composite.resource.metadata.namespace }}
+              annotations:
+                gotemplating.fn.crossplane.io/composition-resource-name: nop-resource
+            spec:
+              forProvider:
+                configData: {{ .observed.composite.resource.spec.crossplane.compositionRevisionRef.name }}
+                resourceTier: basic
+    - step: automatically-detect-ready-composed-resources
+      functionRef:
+        name: function-auto-ready

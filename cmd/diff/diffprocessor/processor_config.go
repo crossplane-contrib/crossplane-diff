@@ -87,6 +87,16 @@ type ProcessorConfig struct {
 	// IncludeManual determines whether to include XRs with Manual update policy in composition diffs
 	IncludeManual bool
 
+	// SeededRevisionRef records that this operation seeds each re-pointing composite with the name of
+	// the CompositionRevision the diffed composition would produce, so the ref that reaches the
+	// renderer is tool-authored rather than cluster-read. Only comp does that, so only comp sets it
+	// (see makeDefaultCompProc); it reaches renderer.DiffOptions via GetDiffOptions, which is why it
+	// lives here rather than being decided inside the composition processor — the downstream diffs are
+	// computed by the *XR* processor comp delegates to, so both must agree.
+	//
+	// It is not a user-facing knob and no flag sets it. See renderer.DiffOptions.SeededRevisionRef.
+	SeededRevisionRef bool
+
 	// MinimizeComposition collapses composition changes to a single marker line per
 	// composition, omitting the full YAML diff body. Human renderer only; structured
 	// output always includes full compositionChanges.
@@ -224,6 +234,15 @@ func WithMaxNestedDepth(depth int) ProcessorOption {
 func WithIncludeManual(includeManual bool) ProcessorOption {
 	return func(config *ProcessorConfig) {
 		config.IncludeManual = includeManual
+	}
+}
+
+// WithSeededRevisionRef records that this operation seeds composites with the predicted
+// CompositionRevision name, so the renderer suppresses the tool-authored ref from the displayed diff.
+// See ProcessorConfig.SeededRevisionRef; only the comp command passes this.
+func WithSeededRevisionRef(seeded bool) ProcessorOption {
+	return func(config *ProcessorConfig) {
+		config.SeededRevisionRef = seeded
 	}
 }
 
@@ -397,6 +416,7 @@ func (c *ProcessorConfig) GetDiffOptions() renderer.DiffOptions {
 	opts.UseColors = c.Colorize
 	opts.Compact = c.Compact
 	opts.MinimizeComposition = c.MinimizeComposition
+	opts.SeededRevisionRef = c.SeededRevisionRef
 
 	opts.IgnorePaths = c.IgnorePaths
 	if c.OutputFormat != "" {
