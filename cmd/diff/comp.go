@@ -176,6 +176,11 @@ func makeDefaultCompProc(c *CompCmd, kongCtx *kong.Context, appCtx *AppContext, 
 		dp.WithIncludeManual(c.IncludeManual),
 		dp.WithMinimizeComposition(c.MinimizeComposition),
 		dp.WithAnalyzeOn(c.analyzeOn()),
+		// comp seeds each re-pointing composite with the predicted CompositionRevision name before
+		// rendering, so the ref the renderer sees is tool-authored and is suppressed from display. Set
+		// here rather than inside NewCompDiffProcessor because the downstream diffs are computed by
+		// xrProc below, and both processors must agree — which this shared opts slice guarantees.
+		dp.WithSeededRevisionRef(true),
 		dp.WithStdout(kongCtx.Stdout),
 		dp.WithStderr(kongCtx.Stderr),
 	)

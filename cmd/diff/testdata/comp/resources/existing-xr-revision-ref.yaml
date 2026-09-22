@@ -1,0 +1,22 @@
+# A composite with an Automatic update policy that is already tracking a CompositionRevision, which is
+# what Crossplane's composite reconciler writes once it has reconciled. Automatic, so it would re-point
+# to the revision a composition edit produces — and the ref is present, which is the condition for
+# seeding it (SetCompositionRevisionRefName never invents a ref: an existing one is the only evidence
+# the schema accepts that path).
+#
+# The suffix here is deliberately not seven hex characters, so that the pattern the test asserts the
+# predicted name against cannot also match this stale value. See the downstream fixture for why that
+# matters.
+apiVersion: ns.diff.example.org/v1alpha1
+kind: XNopResource
+metadata:
+  name: revision-ref-resource
+  namespace: default
+spec:
+  coolField: revision-ref-existing-value
+  crossplane:
+    compositionRef:
+      name: xrevisionrefs.diff.example.org
+    compositionUpdatePolicy: Automatic
+    compositionRevisionRef:
+      name: xrevisionrefs.diff.example.org-staleref

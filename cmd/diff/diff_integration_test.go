@@ -2149,6 +2149,8 @@ func TestCompDiffIntegration(t *testing.T) {
 
 Summary: 1 modified
 
+Applying this composition creates a new CompositionRevision, which 2 composites would adopt.
+
 === Affected Composite Resources ===
 
   ⚠ XNopResource/another-resource (namespace: default)
@@ -2371,12 +2373,63 @@ Impact analysis skipped: this composition is identical to the cluster's, so appl
 			namespace:        "default",
 			outputFormat:     "json",
 			expectedExitCode: dp.ExitCodeDiffDetected,
+			expectedStderrContains: []string{
+				// Issue #474: the composites are still evaluated, but they are rendered with their existing
+				// compositionRevisionRef, because the name of the revision this would create cannot be
+				// predicted for a client-side-applied composition. Saying so is the honest position: if this
+				// composition's template read the revision name, the resulting change would go undetected.
+				"Could not predict the name of the CompositionRevision",
+			},
 			expectedStructuredCompOutput: tu.ExpectCompDiff().
 				WithComposition("xnopresources.diff.example.org").
+				WithoutPredictedRevisionName().
 				WithAffectedResources(1, 1, 0, 0).
 				WithXRImpact("XNopResource", "test-resource", "default", "changed").
 				WithDownstreamSummary(0, 1, 0).
 				WithDownstreamResource("modified", "XDownstreamResource", "test-resource", "default"),
+		},
+		// Issue #474: the case that makes "creates a revision but renders identically" a claim to be
+		// verified rather than assumed. The composition edit is metadata-only — one added label, identical
+		// spec — so the CompositionRevision it mints carries a byte-identical spec. But the template reads
+		// the revision's own name off the composite and propagates it into the composed resource, so the
+		// rendered output genuinely changes.
+		//
+		// Before the fix, the composite was rendered with its EXISTING compositionRevisionRef: configData
+		// came out as the old revision's name, matched the cluster, and the tool reported unchanged with
+		// exit 0. Seeding the predicted ref is what turns that into the exit 3 below. This is the
+		// regression test for the whole feature — flip seedRepointingXRs off and this is what fails.
+		//
+		// Note also what is NOT in the output: the composite's own
+		// spec.crossplane.compositionRevisionRef diff. Suppressing it is why the exit code still reflects
+		// rendering rather than bookkeeping, and predictedRevisionName is what keeps the downstream change
+		// interpretable without it.
+		"RevisionNamePropagatesToComposedResource": {
+			reason: "A metadata-only composition edit whose template reads the CompositionRevision name changes rendered output, and is detected rather than assumed away",
+			setupFiles: []string{
+				"testdata/comp/resources/xrd.yaml",
+				"testdata/comp/resources/revision-templating-composition.yaml",
+				"testdata/comp/resources/functions.yaml",
+				"testdata/comp/resources/existing-xr-revision-ref.yaml",
+				"testdata/comp/resources/existing-downstream-revision-ref.yaml",
+			},
+			inputFiles:       []string{"testdata/comp/revision-templating-updated-composition.yaml"},
+			namespace:        "default",
+			outputFormat:     "json",
+			expectedExitCode: dp.ExitCodeDiffDetected,
+			expectedStructuredCompOutput: tu.ExpectCompDiff().
+				WithComposition("xrevisionrefs.diff.example.org").
+				WithRevisionImpact("metadata", true, 1).
+				// Matched by pattern, not literally: the suffix is the first 7 hex digits of the
+				// composition's hash, so pinning it would make any edit to the fixture a test failure. The
+				// derivation is pinned exactly by TestRevisionIdentity, which is where that belongs.
+				WithPredictedRevisionNamePattern(`^xrevisionrefs\.diff\.example\.org-[0-9a-f]{7}$`).
+				WithAffectedResources(1, 1, 0, 0).
+				WithXRImpact("XNopResource", "revision-ref-resource", "default", "changed").
+				WithDownstreamSummary(0, 1, 0).
+				WithDownstreamResource("modified", "XDownstreamResource", "revision-ref-resource", "default").
+				// The old value is the revision the composite currently tracks; the new one is the predicted
+				// revision, i.e. the thing this whole feature exists to surface.
+				WithFieldValuePattern("spec.forProvider.configData", `^xrevisionrefs\.diff\.example\.org-[0-9a-f]{7}$`),
 		},
 		// Issue #472: the same metadata-only change, with the user opting out of paying a render per
 		// composite for it. The composites go unevaluated — but the mutative consequence is still
@@ -2401,7 +2454,12 @@ Impact analysis skipped: this composition is identical to the cluster's, so appl
 			expectedStructuredCompOutput: tu.ExpectCompDiff().
 				WithComposition("xnopresources.diff.example.org").
 				WithImpactAnalysisSkipped().
-				WithRevisionImpact("metadata", true, 1),
+				WithRevisionImpact("metadata", true, 1).
+				// Issue #474: no predicted name here, and that absence is the point. The compositions
+				// differ by nothing but kubectl's last-applied-configuration, whose post-apply value is a
+				// function of how the user applies rather than of the file — so the hash, and therefore the
+				// revision's name, is unknowable. createsRevision stays true; only the identity is withheld.
+				WithoutPredictedRevisionName(),
 		},
 		// The same setup with --analyze-unchanged evaluates the XRs after all (the pre-edit
 		// convergence-baseline workflow). Note what it reports: a downstream modification even though
@@ -2493,6 +2551,8 @@ Impact analysis skipped: this composition is identical to the cluster's, so appl
 ---
 
 Summary: 1 modified
+
+Applying this composition creates a new CompositionRevision, which 1 composite would adopt.
 
 === Affected Composite Resources ===
 
@@ -2639,6 +2699,8 @@ Summary: 1 modified`,
 
 Summary: 1 modified
 
+Applying this composition creates a new CompositionRevision, which 2 composites would adopt.
+
 === Affected Composite Resources ===
 
   ⚠ XNopResource/another-resource (namespace: default)
@@ -2764,6 +2826,8 @@ Impact analysis skipped: this composition is identical to the cluster's, so appl
 
 Summary: 1 modified
 
+Applying this composition creates a new CompositionRevision, which 1 composite would adopt.
+
 === Affected Composite Resources ===
 
   ⚠ XNopResource/test-resource (namespace: default)
@@ -2861,6 +2925,8 @@ Summary: 1 modified`,
 ---
 
 Summary: 1 modified
+
+Applying this composition creates a new CompositionRevision, which 1 composite would adopt.
 
 === Affected Composite Resources ===
 
@@ -3017,6 +3083,8 @@ No XRs found using composition xnewresources.diff.example.org`,
 
 Summary: 1 modified
 
+Applying this composition creates a new CompositionRevision, which 2 composites would adopt.
+
 === Affected Composite Resources ===
 
   ✓ XNopResource/status-test-xr-1 (namespace: default)
@@ -3124,6 +3192,8 @@ All composite resources are up-to-date. No downstream resource changes detected.
 ---
 
 Summary: 1 modified
+
+Applying this composition creates a new CompositionRevision, which 3 composites would adopt.
 
 === Affected Composite Resources ===
 
@@ -3251,6 +3321,8 @@ Summary: 2 modified
 
 Summary: 1 modified
 
+Applying this composition creates a new CompositionRevision, which 2 composites would adopt.
+
 === Affected Composite Resources ===
 
   ⚠ NopClaim/test-claim-1 (namespace: test-namespace)
@@ -3368,6 +3440,8 @@ Summary: 2 modified`,
 
 Summary: 1 modified
 
+Applying this composition creates a new CompositionRevision, which 1 composite would adopt.
+
 === Affected Composite Resources ===
 
   ⚠ XNopResource/field-removal-test (namespace: default)
@@ -3453,6 +3527,8 @@ Summary: 1 modified`,
 ---
 
 Summary: 1 modified
+
+Applying this composition creates a new CompositionRevision, which 1 composite would adopt.
 
 === Affected Composite Resources ===
 
