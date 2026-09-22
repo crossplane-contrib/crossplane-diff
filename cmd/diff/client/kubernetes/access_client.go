@@ -7,44 +7,23 @@ import (
 
 	"github.com/crossplane-contrib/crossplane-diff/cmd/diff/client/core"
 	dtypes "github.com/crossplane-contrib/crossplane-diff/cmd/diff/types"
+	authorizationv1 "k8s.io/api/authorization/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	un "k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
-	"k8s.io/client-go/dynamic"
+	kubeclient "k8s.io/client-go/kubernetes"
 
 	"github.com/crossplane/crossplane-runtime/v2/pkg/errors"
 	"github.com/crossplane/crossplane-runtime/v2/pkg/logging"
 )
 
-const (
-	// ssarAPIVersion and ssarKind identify the SelfSubjectAccessReview type we
-	// POST through the dynamic client. SelfSubjectAccessReview is used (rather
-	// than SubjectAccessReview) because create on selfsubjectaccessreviews is
-	// granted to system:authenticated by default via the system:basic-user
-	// ClusterRole, so the check itself needs no special permission.
-	ssarAPIVersion = "authorization.k8s.io/v1"
-	ssarKind       = "SelfSubjectAccessReview"
-)
-
-// ssarGVR returns the GroupVersionResource of SelfSubjectAccessReview. The
-// resource is cluster-scoped, so requests are made without a namespace even when
-// the resourceAttributes being asked about are namespaced.
-func ssarGVR() schema.GroupVersionResource {
-	return schema.GroupVersionResource{
-		Group:    "authorization.k8s.io",
-		Version:  "v1",
-		Resource: "selfsubjectaccessreviews",
-	}
-}
-
 // AccessChecker answers authorization questions about the current credentials.
 type AccessChecker interface {
 	// Can reports whether the current credentials may perform verb on objects
 	// of the given GVK in the given namespace (empty namespace for
-	// cluster-scoped resources). verb must not be empty. When allowed is false,
-	// reason carries a human-readable explanation suitable for display. A
-	// non-nil error means the question could not be answered at all, which
-	// callers must treat as a tool error rather than as a denial.
+	// cluster-scoped resources). When allowed is false, reason carries a
+	// human-readable explanation suitable for display. A non-nil error means the
+	// question could not be answered at all, which callers must treat as a tool
+	// error rather than as a denial.
 	Can(ctx context.Context, gvk schema.GroupVersionKind, namespace string, verb dtypes.Verb) (allowed bool, reason string, err error)
 }
 
@@ -70,7 +49,7 @@ type accessDecision struct {
 // DefaultAccessClient implements AccessChecker via SelfSubjectAccessReview,
 // memoizing each answer for the lifetime of the client.
 type DefaultAccessClient struct {
-	dynamicClient dynamic.Interface
+	kube          kubeclient.Interface
 	typeConverter TypeConverter
 	logger        logging.Logger
 
@@ -90,7 +69,7 @@ type DefaultAccessClient struct {
 // NewAccessClient creates a new DefaultAccessClient.
 func NewAccessClient(clients *core.Clients, converter TypeConverter, logger logging.Logger) AccessChecker {
 	return &DefaultAccessClient{
-		dynamicClient: clients.Dynamic,
+		kube:          clients.Kube,
 		typeConverter: converter,
 		logger:        logger,
 		cache:         make(map[accessCacheKey]accessDecision),
@@ -140,74 +119,46 @@ func (c *DefaultAccessClient) review(ctx context.Context, gvr schema.GroupVersio
 
 	target := describeTarget(gvr, namespace)
 
-	ssar := &un.Unstructured{
-		Object: map[string]any{
-			"apiVersion": ssarAPIVersion,
-			"kind":       ssarKind,
-			"spec": map[string]any{
-				"resourceAttributes": map[string]any{
-					"group":     gvr.Group,
-					"resource":  gvr.Resource,
-					"namespace": namespace,
-					// string(verb), not verb: an Unstructured may only hold plain JSON
-					// scalars, and runtime.DeepCopyJSONValue panics ("cannot deep copy
-					// types.Verb") on a named string type. Do not drop the conversion —
-					// the panic only fires on paths that deep-copy the object, so it is
-					// easy to remove and not notice.
-					"verb": string(verb),
-				},
+	// SelfSubjectAccessReview is cluster-scoped, so there is no namespace on the
+	// request itself; the namespace being asked about travels in
+	// resourceAttributes. resourceAttributes is also expressed in terms of the
+	// plural resource rather than the Kind, which is why the GVK had to be
+	// resolved before we got here.
+	review := &authorizationv1.SelfSubjectAccessReview{
+		Spec: authorizationv1.SelfSubjectAccessReviewSpec{
+			ResourceAttributes: &authorizationv1.ResourceAttributes{
+				Group:     gvr.Group,
+				Resource:  gvr.Resource,
+				Namespace: namespace,
+				Verb:      string(verb),
 			},
 		},
 	}
 
-	// SelfSubjectAccessReview is cluster-scoped -- no .Namespace() here. The
-	// namespace being asked about travels in spec.resourceAttributes instead.
-	result, err := c.dynamicClient.Resource(ssarGVR()).Create(ctx, ssar, metav1.CreateOptions{})
+	result, err := c.kube.AuthorizationV1().SelfSubjectAccessReviews().Create(ctx, review, metav1.CreateOptions{})
 	if err != nil {
 		c.logger.Debug("SelfSubjectAccessReview failed", "verb", verb, "resource", gvr.String(), "namespace", namespace, "error", err)
 
 		return accessDecision{}, errors.Wrapf(err, "cannot create SelfSubjectAccessReview for %s on %s", verb, target)
 	}
 
-	allowed, found, err := un.NestedBool(result.Object, "status", "allowed")
-	if err != nil {
-		return accessDecision{}, errors.Wrapf(err, "cannot read status.allowed from SelfSubjectAccessReview for %s on %s", verb, target)
-	}
-
-	// status.allowed is a required, non-omitempty field of
-	// SubjectAccessReviewStatus, so a real apiserver always sends it -- false
-	// included. Its absence therefore means we did not get an authorization
-	// answer at all, which is a broken contract rather than a denial. Defaulting
-	// to false here would silently degrade every dry-run against such a server
-	// and mislabel it "forbidden"; defaulting to true would be far worse. Fail.
-	if !found {
-		return accessDecision{}, errors.Errorf("SelfSubjectAccessReview for %s on %s returned no status.allowed", verb, target)
-	}
-
-	reason, _, err := un.NestedString(result.Object, "status", "reason")
-	if err != nil {
-		return accessDecision{}, errors.Wrapf(err, "cannot read status.reason from SelfSubjectAccessReview for %s on %s", verb, target)
-	}
-
-	evalErr, _, err := un.NestedString(result.Object, "status", "evaluationError")
-	if err != nil {
-		return accessDecision{}, errors.Wrapf(err, "cannot read status.evaluationError from SelfSubjectAccessReview for %s on %s", verb, target)
-	}
+	allowed := result.Status.Allowed
+	reason := result.Status.Reason
 
 	// status.evaluationError means part of the authorizer chain failed to
 	// evaluate. Kubernetes documents that allowed may still be meaningful in
 	// that case, but "may still be" is not good enough here: this check exists so
 	// that a 403 from a dry-run can be attributed to admission rather than to
-	// RBAC. A wrongly-allowed answer converts an RBAC
-	// denial into a reported cluster rejection (exit 2) -- a false finding --
-	// whereas a wrongly-denied answer only costs fidelity on that resource.
-	// So an evaluation error is never read as permission.
+	// RBAC. A wrongly-allowed answer converts an RBAC denial into a reported
+	// cluster rejection (exit 2) -- a false finding -- whereas a wrongly-denied
+	// answer only costs fidelity on that one resource. So an evaluation error is
+	// never read as permission.
 	//
 	// It is also not returned as an error: the authorizer answered, just
 	// incompletely. Failing the whole diff over a partial authorizer hiccup
 	// would be a worse outcome than the graceful degradation this feature is
 	// designed around. The message is surfaced in reason so the cause is visible.
-	if evalErr != "" {
+	if evalErr := result.Status.EvaluationError; evalErr != "" {
 		allowed = false
 
 		if reason == "" {
