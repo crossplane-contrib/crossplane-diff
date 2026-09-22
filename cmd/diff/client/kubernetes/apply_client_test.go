@@ -409,17 +409,25 @@ func TestApplyClient_DryRunCreate(t *testing.T) {
 				errPredicate: apierrors.IsInvalid,
 			},
 		},
-		"ConverterError": {
-			reason: "Should return error when GVK to GVR conversion fails",
+		"ConverterErrorCarriesTheUnresolvableGVKSentinel": {
+			// The sentinel is the whole point of this case, not decoration. The request never reached the
+			// apiserver, yet a real discovery failure for an unserved group/version is apierrors-NotFound
+			// — identical in shape to NamespaceLifecycle refusing a resource whose type is perfectly
+			// fine. Callers classify on this sentinel precisely so they cannot confuse the two; if it
+			// stops being attached, an unknown type gets reported as a missing namespace.
+			reason: "A GVK that cannot be resolved is distinguishable from an admission-time rejection",
 			obj: tu.NewResource("example.org/v1", "ExampleResource", "test-resource").
 				InNamespace("test-namespace").
 				Build(),
 			converter: tu.NewMockTypeConverter().
 				WithGVKToGVR(func(context.Context, schema.GroupVersionKind) (schema.GroupVersionResource, error) {
-					return schema.GroupVersionResource{}, errors.New("conversion error")
+					// Shaped like the real thing: discovery 404 for an unserved group/version.
+					return schema.GroupVersionResource{}, apierrors.NewNotFound(schema.GroupResource{Group: "example.org", Resource: "exampleresources"}, "")
 				}).Build(),
 			want: want{
-				errContains: "cannot perform dry-run create for ExampleResource/test-resource",
+				// The GVK is named so the message points at the type, not at the namespace.
+				errContains:  "cannot perform dry-run create for ExampleResource/test-resource (example.org/v1, Kind=ExampleResource)",
+				errPredicate: func(err error) bool { return errors.Is(err, ErrUnresolvableGVK) },
 			},
 		},
 	}

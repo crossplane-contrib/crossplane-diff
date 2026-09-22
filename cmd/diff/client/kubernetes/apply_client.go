@@ -41,6 +41,21 @@ func GetComposedFieldOwner(obj *un.Unstructured) string {
 	return ""
 }
 
+// ErrUnresolvableGVK reports that a dry run never reached the apiserver because the object's
+// group/version/kind could not be resolved to a resource at all.
+//
+// It exists because the two failures are indistinguishable by error shape and must not be. Both
+// dry-run methods resolve the GVK through discovery first, and a discovery 404 for an unserved
+// group/version is apierrors-NotFound — exactly like NamespaceLifecycle refusing a resource whose
+// type is perfectly fine. A caller inferring the cause from the apierrors shape alone would blame a
+// missing namespace for a type that does not exist, sending the user after entirely the wrong root
+// cause. Callers MUST test for this sentinel before classifying an error by its apierrors shape.
+//
+// The gap is narrow but real: scope determination falls back to a CRD lookup when discovery fails,
+// whereas GVKToGVR is discovery-only, so a CRD whose version is not `served` (or one created moments
+// earlier, before discovery caught up) passes the earlier guards and fails here.
+var ErrUnresolvableGVK = errors.New("cannot resolve resource type")
+
 // ApplyClient handles server-side apply operations.
 type ApplyClient interface {
 	// DryRunApply performs a dry-run server-side apply.
@@ -86,7 +101,11 @@ func (c *DefaultApplyClient) DryRunApply(ctx context.Context, obj *un.Unstructur
 	gvr, err := c.typeConverter.GVKToGVR(ctx, gvk)
 	if err != nil {
 		c.logger.Debug("Failed to convert GVK to GVR", "gvk", gvk.String(), "error", err)
-		return nil, errors.Wrapf(err, "cannot perform dry-run apply for %s", resourceID)
+
+		// Joined, not wrapped, so the sentinel AND the discovery error both stay reachable via
+		// errors.Is/As: the caller needs the sentinel to classify, and the underlying message to
+		// explain. See ErrUnresolvableGVK for why the distinction matters.
+		return nil, errors.Join(ErrUnresolvableGVK, errors.Wrapf(err, "cannot perform dry-run apply for %s (%s)", resourceID, gvk))
 	}
 
 	// Get the resource client for the namespace
@@ -156,7 +175,10 @@ func (c *DefaultApplyClient) DryRunCreate(ctx context.Context, obj *un.Unstructu
 	gvr, err := c.typeConverter.GVKToGVR(ctx, gvk)
 	if err != nil {
 		c.logger.Debug("Failed to convert GVK to GVR", "gvk", gvk.String(), "error", err)
-		return nil, errors.Wrapf(err, "cannot perform dry-run create for %s", resourceID)
+
+		// See the matching branch in DryRunApply, and ErrUnresolvableGVK, for why this must be
+		// distinguishable from an admission-time NotFound.
+		return nil, errors.Join(ErrUnresolvableGVK, errors.Wrapf(err, "cannot perform dry-run create for %s (%s)", resourceID, gvk))
 	}
 
 	// Get the resource client for the namespace
