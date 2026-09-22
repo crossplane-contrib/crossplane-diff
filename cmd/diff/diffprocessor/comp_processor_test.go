@@ -1444,8 +1444,11 @@ func TestDefaultCompDiffProcessor_DiffComposition_ResourceMode(t *testing.T) {
 			Skipped        bool
 			Summary        renderer.AffectedResourcesSummary
 			RevisionImpact renderer.RevisionImpact
-			// FilteredNames are the composites surfaced as XRStatusFiltered impact entries, in order.
-			FilteredNames []string
+			// Impacts is every ImpactAnalysis entry as "<status> <name>", in order — deliberately not
+			// narrowed to the filtered ones. Under a skip the kept composites were never evaluated, so
+			// ImpactAnalysis must hold only the filtered entries; a changed/unchanged/error entry here
+			// would be a verdict the tool never earned, and narrowing this view would hide exactly that.
+			Impacts []string
 		}
 
 		cases := map[string]struct {
@@ -1469,7 +1472,7 @@ func TestDefaultCompDiffProcessor_DiffComposition_ResourceMode(t *testing.T) {
 					Skipped:        true,
 					Summary:        renderer.AffectedResourcesSummary{Total: 2, FilteredByPolicy: 1},
 					RevisionImpact: renderer.RevisionImpact{ChangeScope: "metadata", CreatesRevision: true, RepointedComposites: 1},
-					FilteredNames:  []string{"manual-xr"},
+					Impacts:        []string{"filtered manual-xr"},
 				},
 			},
 			// --include-manual keeps the Manual composite, so nothing is filtered — but it stays pinned by
@@ -1485,6 +1488,7 @@ func TestDefaultCompDiffProcessor_DiffComposition_ResourceMode(t *testing.T) {
 				},
 			},
 			// The same tally when the analysis does run: both composites are evaluated, one re-points.
+			// Evaluated, so unlike every skipped case they carry a verdict.
 			"Analysed_IncludeManual_ManualCompositeDoesNotRepoint": {
 				analyzeOn:       AnalyzeOnAnyChange,
 				includeManual:   true,
@@ -1492,6 +1496,7 @@ func TestDefaultCompDiffProcessor_DiffComposition_ResourceMode(t *testing.T) {
 				want: want{
 					Summary:        renderer.AffectedResourcesSummary{Total: 2, Unchanged: 2},
 					RevisionImpact: renderer.RevisionImpact{ChangeScope: "metadata", CreatesRevision: true, RepointedComposites: 1},
+					Impacts:        []string{"unchanged xr-1", "unchanged manual-xr"},
 				},
 			},
 		}
@@ -1510,19 +1515,17 @@ func TestDefaultCompDiffProcessor_DiffComposition_ResourceMode(t *testing.T) {
 					t.Fatalf("processSingleComposition: %v", err)
 				}
 
-				var filteredNames []string
+				impacts := make([]string, 0, len(got.ImpactAnalysis))
 
 				for _, impact := range got.ImpactAnalysis {
-					if impact.Status == renderer.XRStatusFiltered {
-						filteredNames = append(filteredNames, impact.Name)
-					}
+					impacts = append(impacts, fmt.Sprintf("%s %s", impact.Status, impact.Name))
 				}
 
 				gotWant := want{
 					Skipped:        got.ImpactAnalysisSkipped,
 					Summary:        got.AffectedResources,
 					RevisionImpact: got.RevisionImpact,
-					FilteredNames:  filteredNames,
+					Impacts:        impacts,
 				}
 
 				if diff := gcmp.Diff(tt.want, gotWant, cmpopts.EquateEmpty()); diff != "" {

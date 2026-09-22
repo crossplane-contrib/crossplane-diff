@@ -207,6 +207,11 @@ func skippedMessage(impact RevisionImpact) string {
 //
 // As elsewhere, --resource mode names each composite (the user asked about them by name, and their
 // FilterReason reached ImpactAnalysis) while default discovery reports the per-reason breakdown.
+//
+// ImpactAnalysis is listed as-is, not re-filtered by status: under a skip it holds only the filtered
+// entries, because the kept composites were never rendered. That is the processor's guarantee, pinned
+// by its SkipReportsFilterConsequences test. Re-filtering here would not add safety — it would hide an
+// unearned changed/unchanged verdict from this output while it still reached the structured output.
 func (r *DefaultCompDiffRenderer) renderFilteredUnderSkip(comp *CompositionDiff) error {
 	filtered := totalFiltered(comp.AffectedResources)
 	if filtered == 0 {
@@ -220,8 +225,8 @@ func (r *DefaultCompDiffRenderer) renderFilteredUnderSkip(comp *CompositionDiff)
 		return errors.Wrap(err, "cannot write filtered XRs summary")
 	}
 
-	if surfaced := filteredImpacts(comp.ImpactAnalysis); len(surfaced) > 0 {
-		if _, err := fmt.Fprint(stdout, r.buildXRStatusList(surfaced)); err != nil {
+	if len(comp.ImpactAnalysis) > 0 {
+		if _, err := fmt.Fprint(stdout, r.buildXRStatusList(comp.ImpactAnalysis)); err != nil {
 			return errors.Wrap(err, "cannot write filtered XRs list")
 		}
 	}
@@ -231,20 +236,6 @@ func (r *DefaultCompDiffRenderer) renderFilteredUnderSkip(comp *CompositionDiff)
 	}
 
 	return nil
-}
-
-// filteredImpacts returns the entries that record a filtered composite. Only --resource mode surfaces
-// them individually, so an empty result means the caller should fall back to the per-reason counts.
-func filteredImpacts(impacts []XRImpact) []XRImpact {
-	surfaced := make([]XRImpact, 0, len(impacts))
-
-	for _, impact := range impacts {
-		if impact.Status == XRStatusFiltered {
-			surfaced = append(surfaced, impact)
-		}
-	}
-
-	return surfaced
 }
 
 // writeNoDisplayableChanges reports a composition with no diff body to show. That covers two
