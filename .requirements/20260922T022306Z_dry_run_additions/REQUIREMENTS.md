@@ -41,9 +41,39 @@ if current != nil {
 }
 ```
 
-For additions (`current == nil`) the diff emits `desired` straight from the render pipeline. Consequence:
-`~~~` modification diffs reflect CRD `default:` values and mutating-webhook output; `+++` addition diffs do
-not. README §RBAC (lines 433–453) documents this as a deliberate limitation and links #334.
+For additions (`current == nil`) the diff emits `desired` straight from the render pipeline. README §RBAC
+(lines 433–453) documents this as a deliberate limitation and links #334.
+
+### The gap is narrower than the issue claims — CRD defaulting is already handled locally
+
+**This correction was found by writing the RED test first, and it invalidated the headline test as
+originally specified.** `DefaultSchemaValidator.ValidateResources` calls `applyCRDDefaults`
+(`schema_validator.go:121`, `:306`) over the XR **and every composed resource**, before the diff calculator
+runs, precisely so that "composed resources would [not] reach diff calculation undefaulted and produce
+spurious diffs for fields the cluster's defaulter would have populated". `TestDiffIntegration`'s existing
+`XRDDefaultsAppliedBeforeRendering` case already asserts a defaulted field appearing in a `+++` diff.
+
+So the issue's first bullet — "CRD `default:` field values" — is **already covered** for any type backed by
+a CRD, and a test asserting CRD defaulting on an addition would pass on unmodified `main`.
+
+What `applyCRDDefaults` does *not* cover, per its own doc comment ("Built-in types and resources whose CRD is
+unknown are skipped"), and what nothing else covers:
+
+| Gap | Covered locally today? |
+|---|---|
+| CRD `default:` on CRD-backed types | **Yes** — `applyCRDDefaults` |
+| Defaults on **built-in** Kubernetes types (no CRD → `IsCRDRequired` false → skipped) | **No** |
+| Mutating admission webhook output (any type) | **No** |
+| Validating webhook / quota / namespace-lifecycle rejection | **No** |
+
+Compositions rendering built-in types are a real, already-tested shape in this repo — see
+`composition-with-configmap.yaml` and `TestDiffIntegration/RendersBuiltInResourceWithoutCRD`. A composed
+`Deployment` gets none of `spec.strategy.type`, `spec.template.spec.restartPolicy`,
+`spec.template.spec.dnsPolicy`, `schedulerName`, or container `imagePullPolicy` today.
+
+This narrows the feature's value but does not eliminate it, and it sharpens what must be tested: **the
+headline test MUST target a built-in type or a mutating webhook, never a CRD `default:`.** It also means the
+README's framing of the gap needs correcting, not just extending (R14).
 
 ### Two premises recorded in the issue/code are wrong, and both simplify the work
 
@@ -327,10 +357,19 @@ is accepted (no empty-name request path).
 `sanitizeForDryRun`, and no comment claims rendered ownerRefs surface in output. The sanitized payload for
 both paths lacks all seven fields (unit-asserted).
 
-**AC-R5/R6 (the headline, integration, real apiserver).** A CRD with `default:` on a spec field, rendered as
-an *addition*:
-- with `--dry-run-on=all` (default) the defaulted value **appears** in the structured diff;
-- with `--dry-run-on=existing` it is **absent** and `dryRun.skipReason == "disabled"` is present.
+**AC-R5/R6 (the headline, integration, real apiserver).** A composition rendering a **built-in** Kubernetes
+type — a `Deployment`, following the established `composition-with-configmap.yaml` pattern — as an *addition*:
+- with `--dry-run-on=all` (default) apiserver-defaulted fields **appear** in the structured diff:
+  `spec.strategy.type == "RollingUpdate"`, `spec.template.spec.restartPolicy == "Always"`,
+  `spec.template.spec.dnsPolicy == "ClusterFirst"`;
+- with `--dry-run-on=existing` they are **absent** and `dryRun.skipReason == "disabled"` is present.
+
+A built-in type is required, not incidental: CRD-backed defaulting is already applied locally by
+`applyCRDDefaults` (§1), so a CRD `default:` assertion would pass on unmodified `main` and prove nothing.
+
+Assertions MUST be on **string-valued** defaults. `assertChangeFields` compares with `reflect.DeepEqual`
+against values decoded from JSON, so a numeric default such as `revisionHistoryLimit: 10` arrives as
+`float64` and an `int` literal in the expectation silently fails to match for the wrong reason.
 
 This pair is the whole feature. The first assertion is impossible to satisfy on `main`.
 
@@ -381,10 +420,14 @@ masks the exit code). E2E matrix green.
 
 ## 5. Testing Plan (TDD)
 
-**RED first.** The first thing written is AC-R5's integration case: a CRD carrying `default:`, an addition
-that should pick it up, and an assertion that the defaulted value is in the structured diff. On `main` this
-**must fail** — that failure is the proof the feature is absent and the test is not vacuous. Capture the
+**RED first.** The first thing written is AC-R5's integration case: a composition rendering a built-in
+`Deployment` as an addition, asserting apiserver-defaulted fields appear in the structured diff. On `main`
+this **must fail** — that failure is the proof the feature is absent and the test is not vacuous. Capture the
 failing output before touching `diff_calculator.go`.
+
+This step already earned its keep: the first draft of this spec specified a CRD `default:` as the instrument,
+and writing the test revealed `applyCRDDefaults` would have made it pass on `main` (§1). Do not substitute a
+CRD-backed type back in for convenience.
 
 Ordering:
 
