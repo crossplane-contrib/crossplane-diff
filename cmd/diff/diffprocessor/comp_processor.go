@@ -872,10 +872,15 @@ func predictRevision(newComp *un.Unstructured) (predictedRevision, error) {
 // composition would carry, for evaluating an XR's compositionRevisionSelector. Crossplane stamps
 // every revision with the composition's own metadata.labels plus crossplane.io/composition-name and
 // crossplane.io/composition-hash (and appends them before matching a selector), so we mirror that
-// here — see NewCompositionRevision. The hash label is as predictable as the name: both are pure
-// functions of the composition's labels, annotations and spec via the exported Composition.Hash().
-// Omitting it used to drop an XR whose selector keys on it as a selector mismatch, with a detail
-// message that pointed the user at their own labels instead. newComp is not mutated.
+// here — see NewCompositionRevision. Omitting the hash label used to drop an XR whose selector keys on
+// it as a selector mismatch, with a detail message that pointed the user at their own labels instead.
+//
+// The hash label is stamped even when compositionComparison.revisionNamePredictable is false, i.e. when
+// the eventual hash depends on the user's apply mode. That is deliberate, and is why this takes the
+// prediction rather than consulting predictability: withholding it would put us back to failing every
+// selector that merely requires the label to Exist, which is the common shape and is now always answered
+// correctly. A selector matching an exact hash *value* is the only case the caveat reaches, and there the
+// best available prediction beats a guaranteed mismatch. newComp is not mutated.
 func predictedRevisionLabels(newComp *un.Unstructured, pred predictedRevision) map[string]string {
 	compLabels := newComp.GetLabels()
 

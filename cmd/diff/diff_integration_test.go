@@ -2382,6 +2382,10 @@ Impact analysis skipped: this composition is identical to the cluster's, so appl
 			},
 			expectedStructuredCompOutput: tu.ExpectCompDiff().
 				WithComposition("xnopresources.diff.example.org").
+				// createsRevision stays true while the name is withheld: the annotation delta is real, and a
+				// stale annotation genuinely would be rewritten and mint a revision. Only the identity is
+				// unknowable, which is why the guard makes the weak claim rather than "no revision".
+				WithRevisionImpact("metadata", true, 1).
 				WithoutPredictedRevisionName().
 				WithAffectedResources(1, 1, 0, 0).
 				WithXRImpact("XNopResource", "test-resource", "default", "changed").

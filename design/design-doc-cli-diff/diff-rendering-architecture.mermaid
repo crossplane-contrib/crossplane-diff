@@ -53,6 +53,9 @@ classDiagram
         +ChunkSeparator string
         +Compact bool
         +IgnorePaths []string
+        +ForVerdict bool
+        +MinimizeComposition bool
+        +SeededRevisionRef bool
     }
 
     class StructuredDiffOutput {
@@ -100,6 +103,15 @@ classDiagram
         +AffectedResources AffectedResourcesSummary
         +ImpactAnalysis []XRImpact
         +ImpactAnalysisSkipped bool
+        +MaskedChangesOnly bool
+        +RevisionImpact RevisionImpact
+    }
+
+    class RevisionImpact {
+        +ChangeScope string
+        +CreatesRevision bool
+        +RepointedComposites int
+        +PredictedRevisionName string
     }
 
     class XRImpact {
@@ -214,6 +226,7 @@ classDiagram
     CompositionDiff --> AffectedResourcesSummary
     CompositionDiff --> XRImpact
     CompositionDiff --> ResourceDiff
+    CompositionDiff --> RevisionImpact
     OutputError --> ResourceValidationFailure
     ResourceValidationFailure --> FieldValidationError
     XRImpact --> XRStatus
