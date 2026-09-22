@@ -584,6 +584,36 @@ func TestDiffIntegration(t *testing.T) {
 			expectedError:    false,
 			expectedExitCode: dp.ExitCodeDiffDetected,
 		},
+		"UnservedGroupIsReportedAsAnUnknownTypeNotAMissingNamespace": {
+			// From the PR #502 review. A resource whose group/version the cluster does not serve must be
+			// reported as an unknown type; blaming its namespace would send the user after the wrong root
+			// cause entirely, since the namespace here exists and is irrelevant.
+			//
+			// Worth being precise about what this covers, because it is NOT the sentinel branch in
+			// dryRunCreateAddition. For a *.k8s.io group, two earlier guards let the resource through —
+			// IsCRDRequired skips discovery for that suffix, and FetchCurrentObject swallows NotFound as
+			// "this is new" — but removeNamespacesFromClusterScopedResources then fails first, because
+			// scope determination cannot resolve the GVK either. So this pins the outer behaviour (an
+			// accurate, type-naming error rather than a namespace one) without depending on which layer
+			// produces it.
+			//
+			// The sentinel branch is what covers the case this CANNOT reach: scope determination falls
+			// back to a CRD lookup when discovery fails, whereas GVKToGVR is discovery-only, so a CRD
+			// whose version is not `served` passes the scope check and fails inside DryRunCreate. That
+			// route is unit-covered in diff_calculator_test.go, since arranging a served:false CRD whose
+			// scope still resolves is far more setup than the classification warrants.
+			reason:       "An addition whose group/version the cluster does not serve is reported as an unknown type, not as a missing namespace",
+			outputFormat: "json",
+			inputFiles:   []string{"testdata/diff/new-xr.yaml"},
+			setupFiles: []string{
+				"testdata/diff/resources/xrd.yaml",
+				"testdata/diff/resources/composition-with-unserved-k8s-group.yaml",
+				"testdata/diff/resources/functions.yaml",
+			},
+			expectedError:         true,
+			expectedErrorContains: "totallynotserved.k8s.io/v1",
+			expectedExitCode:      dp.ExitCodeToolError,
+		},
 		"AdditionInMissingNamespaceDegradesRatherThanFailing": {
 			// Regression test for the e2e failure the first cut of this feature caused
 			// (TestDiffConcurrentDirectory diffs 21 XRs into a namespace that is never created).

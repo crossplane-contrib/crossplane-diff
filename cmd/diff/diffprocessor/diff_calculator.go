@@ -475,6 +475,15 @@ func (c *DefaultDiffCalculator) dryRunCreateAddition(ctx context.Context, desire
 		c.logger.Debug("Dry-run create succeeded", "resource", resourceID, "result", created)
 		return mergeDryRunCreateResult(desired, createDesired, created), nil, nil
 
+	case errors.Is(err, k8.ErrUnresolvableGVK):
+		// MUST precede every apierrors check below. The request never reached the apiserver: the GVK
+		// could not be resolved to a resource. A discovery 404 is apierrors-NotFound, so without this
+		// branch an unknown type would be reported as a missing namespace — the user would go looking
+		// at the wrong thing entirely. Nor is it a degradation: we cannot diff a type the cluster does
+		// not serve, and pretending otherwise would present rendered output for a resource that cannot
+		// exist.
+		return nil, nil, errors.Wrapf(err, "cannot dry-run create %s", resourceID)
+
 	case apierrors.IsForbidden(err):
 		// A 403 is ambiguous. It can mean we lack the create verb, in which case nothing was learned
 		// about the resource and we must degrade quietly. It can equally come from ResourceQuota or
@@ -564,6 +573,12 @@ func (c *DefaultDiffCalculator) resolveForbiddenCreate(ctx context.Context, desi
 // (see the README's RBAC section).
 func (c *DefaultDiffCalculator) classifyApplyFailure(ctx context.Context, desired *un.Unstructured, resourceID string, applyErr error) error {
 	switch {
+	case errors.Is(applyErr, k8.ErrUnresolvableGVK):
+		// MUST precede the apierrors checks, for the reason given in dryRunCreateAddition: a
+		// discovery-layer failure is shaped like an admission-layer one, and reporting "the cluster
+		// rejected this" for a type the cluster does not serve would be actively misleading.
+		return errors.Wrapf(applyErr, "cannot dry-run apply %s", resourceID)
+
 	case apierrors.IsForbidden(applyErr):
 		// As in resolveForbiddenCreate: Can reports whether we MAY patch, so a denial is !allowed.
 		allowed, reason, ssarErr := c.accessChecker.Can(ctx, desired.GroupVersionKind(), desired.GetNamespace(), verbPatch)

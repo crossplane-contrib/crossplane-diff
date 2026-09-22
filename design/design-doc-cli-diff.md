@@ -785,6 +785,7 @@ classification is by status class only, never by message text:
 | Outcome of the dry-run create | Handling |
 |-------------------------------|----------|
 | `nil` | Merge as above; no `DryRunInfo`. |
+| `errors.Is(err, ErrUnresolvableGVK)` | Fail (exit 1). Checked **first**, before any status class — see below. |
 | `IsInvalid` (422) | Report: cluster rejection. |
 | `IsForbidden` (403) | Ambiguous — resolved by `AccessChecker`, below. |
 | `IsInternalError` / `IsServiceUnavailable` / `IsTimeout` | Degrade, `DryRunSkipWebhookUnavailable`. |
@@ -794,6 +795,23 @@ classification is by status class only, never by message text:
 `DryRunSkipWebhookUnavailable` is named for its dominant cause but the predicate is broader: it means the apiserver could
 not complete the admission chain. `DryRunInfo.Detail` always carries the apiserver's own message, so the specific cause
 is never lost.
+
+`ErrUnresolvableGVK` must be tested before anything else in that table, and the reason is that status class alone is not
+sufficient to classify these errors — which is the one place the "classify by status class, never by message" rule needs
+a carve-out. Both dry-run methods resolve the GVK through discovery themselves (`apply_client.go`), and a discovery 404
+for an unserved group/version is `apierrors`-`NotFound`: identical in shape to `NamespaceLifecycle` refusing a resource
+whose type is perfectly fine. A discovery 503 or timeout is likewise identical to the apiserver failing admission. So
+without the sentinel, an unknown type would be degraded as `namespaceNotFound` and a transient discovery outage as
+`webhookUnavailable` — in both cases pointing the user at the wrong root cause, and in both cases *degrading* where the
+tool should fail, since a type the cluster does not serve cannot be diffed at all. The client therefore joins a sentinel
+onto the resolution failure and the calculator classifies on that, rather than inferring cause from shape.
+
+The gap this closes is narrow but real. Earlier guards catch most unresolvable types:
+`removeNamespacesFromClusterScopedResources` runs before diff calculation and fails on any composed resource whose scope
+cannot be determined. But scope determination falls back to a **CRD lookup** when discovery fails, whereas `GVKToGVR` is
+**discovery-only** — so a CRD whose version is not `served`, or one created moments before discovery caught up, passes
+the scope check and reaches the dry run. (`IsCRDRequired` has a related gap, assuming any `*.k8s.io` group other than
+`apiextensions.k8s.io` is built-in without consulting discovery, but for composed resources the scope check shadows it.)
 
 The existing-resource path (`classifyApplyFailure`) uses the same rejection classification, and that is a deliberate
 behaviour change rather than a side effect. A validating-webhook rejection of an existing resource used to surface as a

@@ -1,0 +1,42 @@
+# Renders a composed resource in a *.k8s.io group that the cluster does not serve.
+#
+# This shape slips past every earlier guard. IsCRDRequired (schema_client.go) assumes any group
+# ending in .k8s.io other than apiextensions.k8s.io is built-in and returns false WITHOUT consulting
+# discovery, so no CRD is demanded. FetchCurrentObject then propagates only non-NotFound errors, and
+# a discovery 404 for an unserved group/version is NotFound-shaped, so it is swallowed as "this
+# resource is new". The resource therefore reaches the addition path with a GVK that cannot be
+# resolved at all.
+#
+# It stands in for a typo in a group name, an apiVersion skew, a stripped-down cluster, or an
+# aggregated API that was never deployed.
+apiVersion: apiextensions.crossplane.io/v1
+kind: Composition
+metadata:
+  name: xnopresources.diff.example.org
+spec:
+  compositeTypeRef:
+    apiVersion: ns.diff.example.org/v1alpha1
+    kind: XNopResource
+  mode: Pipeline
+  pipeline:
+    - step: generate-resources
+      functionRef:
+        name: function-go-templating
+      input:
+        apiVersion: template.fn.crossplane.io/v1beta1
+        kind: GoTemplate
+        source: Inline
+        inline:
+          template: |
+            apiVersion: totallynotserved.k8s.io/v1
+            kind: Widget
+            metadata:
+              name: {{ .observed.composite.resource.metadata.name }}-widget
+              namespace: {{ .observed.composite.resource.metadata.namespace }}
+              annotations:
+                gotemplating.fn.crossplane.io/composition-resource-name: widget
+            spec:
+              size: large
+    - step: automatically-detect-ready-composed-resources
+      functionRef:
+        name: function-auto-ready

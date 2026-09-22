@@ -390,6 +390,97 @@ func TestDefaultDiffCalculator_CalculateDiff(t *testing.T) {
 				Detail:     `Internal error occurred: failed calling webhook "policy.example.org": connection refused`,
 			},
 		},
+		"AdditionWithUnresolvableGVKIsNotBlamedOnItsNamespace": {
+			// PR #502 review finding. The error here is deliberately BOTH sentinel-joined AND
+			// apierrors-NotFound, because that is the real situation: DryRunCreate resolves the GVK
+			// through discovery, and a discovery 404 for an unserved group/version is NotFound-shaped,
+			// indistinguishable from NamespaceLifecycle refusing a resource whose type is fine.
+			//
+			// So this case pins the ORDERING of the classification, not just its output. If the
+			// ErrUnresolvableGVK branch is moved below the IsNotFound branch, an unknown type gets
+			// reported as a missing namespace and the user goes looking at entirely the wrong thing.
+			setupMocks: func(t *testing.T) (k8.ApplyClient, xp.ResourceTreeClient, ResourceManager) {
+				t.Helper()
+
+				applyClient := tu.NewMockApplyClient().
+					WithDryRunCreate(func(context.Context, *un.Unstructured) (*un.Unstructured, error) {
+						return nil, errors.Join(
+							k8.ErrUnresolvableGVK,
+							apierrors.NewNotFound(schema.GroupResource{Group: "totallynotserved.k8s.io", Resource: "widgets"}, ""),
+						)
+					}).
+					Build()
+
+				resourceClient := tu.NewMockResourceClient().WithResourceNotFound().Build()
+				resourceManager := NewResourceManager(resourceClient, tu.NewMockDefinitionClient().Build(), tu.NewMockResourceTreeClient().Build(), tu.TestLogger(t, false))
+
+				return applyClient, tu.NewMockResourceTreeClient().Build(), resourceManager
+			},
+			composite:               nil,
+			desired:                 newResource,
+			wantErr:                 true,
+			wantSchemaValidationErr: false,
+			wantErrContains:         "cannot resolve resource type",
+		},
+		"AdditionWithTransientDiscoveryFailureIsNotBlamedOnAdmission": {
+			// The reviewer's second variant, and a genuine misclassification rather than just a poor
+			// message. Discovery can fail with 503/timeout as easily as 404, and those shapes feed the
+			// webhookUnavailable branch — so without the sentinel check first, "discovery was briefly
+			// unavailable" is reported as "the cluster could not complete admission", and the resource is
+			// silently degraded instead of failing.
+			setupMocks: func(t *testing.T) (k8.ApplyClient, xp.ResourceTreeClient, ResourceManager) {
+				t.Helper()
+
+				applyClient := tu.NewMockApplyClient().
+					WithDryRunCreate(func(context.Context, *un.Unstructured) (*un.Unstructured, error) {
+						return nil, errors.Join(
+							k8.ErrUnresolvableGVK,
+							apierrors.NewServiceUnavailable("discovery is warming up"),
+						)
+					}).
+					Build()
+
+				resourceClient := tu.NewMockResourceClient().WithResourceNotFound().Build()
+				resourceManager := NewResourceManager(resourceClient, tu.NewMockDefinitionClient().Build(), tu.NewMockResourceTreeClient().Build(), tu.TestLogger(t, false))
+
+				return applyClient, tu.NewMockResourceTreeClient().Build(), resourceManager
+			},
+			composite:               nil,
+			desired:                 newResource,
+			wantErr:                 true,
+			wantSchemaValidationErr: false,
+			wantErrContains:         "cannot resolve resource type",
+		},
+		"ExistingResourceWithUnresolvableGVKIsNotARejection": {
+			// The mirror on the apply path. Here the sentinel branch changes the message rather than the
+			// exit-code tier — a discovery failure would otherwise land in the catch-all, which is still
+			// a tool error. So this asserts the resource-bearing message the sentinel branch produces
+			// ("cannot dry-run apply TestResource/existing-resource"), not the generic "desired object"
+			// wording the catch-all emits; otherwise the case would pass with the branch removed and pin
+			// nothing at all.
+			setupMocks: func(t *testing.T) (k8.ApplyClient, xp.ResourceTreeClient, ResourceManager) {
+				t.Helper()
+
+				applyClient := tu.NewMockApplyClient().
+					WithDryRunApply(func(context.Context, *un.Unstructured, string) (*un.Unstructured, error) {
+						return nil, errors.Join(
+							k8.ErrUnresolvableGVK,
+							apierrors.NewNotFound(schema.GroupResource{Group: "totallynotserved.k8s.io", Resource: "widgets"}, ""),
+						)
+					}).
+					Build()
+
+				resourceClient := tu.NewMockResourceClient().WithResourcesExist(existingResource).Build()
+				resourceManager := NewResourceManager(resourceClient, tu.NewMockDefinitionClient().Build(), tu.NewMockResourceTreeClient().Build(), tu.TestLogger(t, false))
+
+				return applyClient, tu.NewMockResourceTreeClient().Build(), resourceManager
+			},
+			composite:               nil,
+			desired:                 modifiedResource,
+			wantErr:                 true,
+			wantSchemaValidationErr: false,
+			wantErrContains:         "cannot dry-run apply TestResource/existing-resource",
+		},
 		"AdditionInMissingNamespaceDegrades": {
 			// Regression test for the e2e failure this classification originally caused
 			// (TestDiffConcurrentDirectory diffs 21 XRs into a namespace that is never created).
