@@ -111,7 +111,7 @@ type CommonCmdFields struct {
 	// group; upstream render.EngineFlags enforces the same). When none is set,
 	// the docker engine pulls xpkg.crossplane.io/crossplane/crossplane:stable.
 	CrossplaneVersion string `help:"Pin the crossplane render version (e.g. v2.3.4); the docker engine pulls xpkg.crossplane.io/crossplane/crossplane:<version>. Minimum v2.3.4." name:"crossplane-version" placeholder:"VERSION" xor:"crossplane-render-backend"`
-	CrossplaneImage   string `help:"Override the full crossplane render image reference (e.g. for a private mirror)."                                                             name:"crossplane-image"   placeholder:"IMAGE"   xor:"crossplane-render-backend"`
+	CrossplaneImage   string `help:"Override the full crossplane render image reference (e.g. for a private mirror). Minimum v2.3.4 when its tag is a semantic version."          name:"crossplane-image"   placeholder:"IMAGE"   xor:"crossplane-render-backend"`
 
 	// CrossplaneRenderBinary is a hidden test-only override that points the
 	// render engine at a local `crossplane` binary. Production users leave
@@ -119,13 +119,28 @@ type CommonCmdFields struct {
 	CrossplaneRenderBinary string `help:"(test only) Path to a local crossplane binary used by the render engine instead of the docker image." hidden:"" name:"crossplane-render-binary" xor:"crossplane-render-backend"`
 }
 
-// Validate enforces the minimum supported crossplane render version when a
-// version is explicitly pinned via --crossplane-version. kong invokes this
-// during Parse (before Run), so an unsupported pin fails fast, before any
-// cluster connection or render. --crossplane-image is not checked: a full
-// image reference carries no comparable version. See
-// diffprocessor.MinCrossplaneRenderVersion / crossplane-diff#399.
+// Validate enforces the minimum supported crossplane render version on whichever
+// render backend was explicitly selected. kong invokes this during Parse (before
+// Run), so an unsupported pin fails fast, before any cluster connection or
+// render.
+//
+// --crossplane-image is checked too, but only as far as its reference permits: a
+// tag that parses as a semantic version is held to the same floor, while one that
+// does not — a digest, a floating tag, a bare mirror path — carries no comparable
+// version and is accepted, because refusing it would break the mirrored and
+// air-gapped registries the flag exists to serve. Those references draw a warning
+// instead, raised where the engine is built (see
+// diffprocessor.UncomparableRenderImageWarning) so it travels the same advisory
+// channel as warnings raised mid-diff.
+//
+// See diffprocessor.MinCrossplaneRenderVersion / crossplane-diff#399, #480.
 func (c *CommonCmdFields) Validate() error {
+	// The two flags are mutually exclusive (kong "xor"), so at most one of these
+	// branches has anything to check.
+	if c.CrossplaneImage != "" {
+		return dp.ValidateMinRenderImage(c.CrossplaneImage)
+	}
+
 	if c.CrossplaneVersion == "" {
 		return nil
 	}
