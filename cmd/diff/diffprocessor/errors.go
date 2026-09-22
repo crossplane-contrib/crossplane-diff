@@ -137,8 +137,7 @@ func NewOutputError(resourceID string, err error) dt.OutputError {
 		Message:    err.Error(),
 	}
 
-	var sve *SchemaValidationError
-	if errors.As(err, &sve) {
+	if sve, ok := errors.AsType[*SchemaValidationError](err); ok {
 		switch {
 		case len(sve.Failures) > 0:
 			out.ValidationFailures = sve.Failures

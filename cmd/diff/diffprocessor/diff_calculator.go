@@ -129,8 +129,9 @@ func (c *DefaultDiffCalculator) CalculateDiff(ctx context.Context, composite *un
 	// This ensures composed resources only have the XR as their controller owner.
 	c.resourceManager.UpdateOwnerRefs(ctx, composite, desired)
 
-	// Determine what the resource would look like after application
-	wouldBeResult := desired
+	// Determine what the resource would look like after application. Both branches below assign it,
+	// so it is declared without an initialiser.
+	var wouldBeResult *un.Unstructured
 
 	// dryRunInfo stays nil whenever the desired state did reach the apiserver, which is the success
 	// case and the common one. See dt.DryRunInfo.
@@ -570,15 +571,28 @@ func (c *DefaultDiffCalculator) classifyApplyFailure(ctx context.Context, desire
 // mergeDryRunCreateResult combines the apiserver's view of a dry-run created object with the two
 // things that must come from our side instead.
 //
+// BOTH restorations are currently LATENT — correct when reached, but not reachable on any path today.
+// They are kept as guards because each protects against a genuinely wrong output if the surrounding
+// code changes, and neither costs anything. Do not read either as live behaviour.
+//
 // Identity, when we sent a generateName and no name: the apiserver runs names.Generator in
 // rest.BeforeCreate, ahead of the dry-run short-circuit at the storage layer, so it invents a random
-// name. Letting that through would make an addition's diff differ on every run. For a *named*
-// resource we keep the server's name, so a mutating webhook that rewrites a name still surfaces.
+// name, which would make an addition's diff differ on every run. For a *named* resource we keep the
+// server's name, so a mutating webhook that rewrites a name still surfaces.
+// Latent because nothing reaches here with an empty name: prepareXRForDiff synthesizes a
+// deterministic name for generateName XRs (see SynthesizeGeneratedName), and the render binary names
+// generateName composed resources itself.
 //
 // Status, whenever the rendered object had one: composition pipelines are allowed to write their own
 // status, so a rendered status is authored content. The apiserver contributes nothing to status on
 // create (it is a subresource) and hands back an empty one, so taking the server's would delete the
 // user's output under the banner of fidelity.
+// Latent because status never reaches any rendered diff in the first place: cleanupForDiff
+// (renderer/diff_formatter.go) deletes metadata.status unconditionally from both sides, and Clean is
+// the only view renderers read. That makes this the same shape of mistake as the ownerReferences
+// comment this change deleted — a restoration justified by an output effect that does not exist — so
+// it is labelled rather than presented as load-bearing. Whether composition-authored status SHOULD be
+// visible in a diff is a rendering decision, tracked separately.
 func mergeDryRunCreateResult(rendered, sent, created *un.Unstructured) *un.Unstructured {
 	out := created.DeepCopy()
 
@@ -624,9 +638,12 @@ func (c *DefaultDiffCalculator) warnOnce(obj *un.Unstructured, reason dt.DryRunS
 	c.logger.Info(msg, keysAndValues...)
 }
 
-// dryRunStrippedMetadata are the metadata fields removed from any object before it is sent to the
-// apiserver for a dry run. All are either assigned by the server or rejected outright on input, so
-// sending them is never useful and is sometimes fatal.
+// sanitizeForDryRun returns a deep copy of obj with the server-owned metadata removed, ready to send
+// to the apiserver for a dry run. The copy matters: the caller's desired object is also what
+// downstream diff comparison reads, so it must not be mutated.
+//
+// Every field stripped is either assigned by the server or rejected outright on input, so sending it
+// is never useful and is sometimes fatal.
 //
 // ownerReferences is in this list, and a note on why, because the code it replaces claimed the
 // opposite. The previous comment here justified stripping ownerRefs on the update path only, on the
@@ -649,24 +666,18 @@ func (c *DefaultDiffCalculator) warnOnce(obj *un.Unstructured, reason dt.DryRunS
 // plausible for anything exported with `kubectl get -o yaml`) makes the apiserver reject the request
 // on optimistic concurrency, and it is illegal on a create. diff_processor.go already clears it for
 // the root XR; composed resources had no equivalent.
-var dryRunStrippedMetadata = []string{
-	"resourceVersion",
-	"uid",
-	"creationTimestamp",
-	"generation",
-	"selfLink",
-	"managedFields",
-	"ownerReferences",
-}
-
-// sanitizeForDryRun returns a deep copy of obj with the server-owned metadata in
-// dryRunStrippedMetadata removed, ready to send to the apiserver for a dry run. The copy matters:
-// the caller's desired object is also what downstream diff comparison reads, so it must not be
-// mutated.
 func sanitizeForDryRun(obj *un.Unstructured) *un.Unstructured {
 	out := obj.DeepCopy()
 
-	for _, field := range dryRunStrippedMetadata {
+	for _, field := range []string{
+		"resourceVersion",
+		"uid",
+		"creationTimestamp",
+		"generation",
+		"selfLink",
+		"managedFields",
+		"ownerReferences",
+	} {
 		un.RemoveNestedField(out.Object, "metadata", field)
 	}
 
