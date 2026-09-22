@@ -530,6 +530,37 @@ func TestDiffIntegration(t *testing.T) {
 			expectedError:    false,
 			expectedExitCode: dp.ExitCodeDiffDetected,
 		},
+		"BuiltInResourceAdditionPicksUpApiserverDefaults": {
+			// The choice of a built-in type is what makes this test non-vacuous. applyCRDDefaults
+			// (schema_validator.go) already applies CRD-derived `default:` values to the XR and to every
+			// composed resource before the diff calculator runs, so a CRD-backed resource's defaults show up
+			// in a `+++` diff with no apiserver involvement — see XRDDefaultsAppliedBeforeRendering. Deployment
+			// has no CRD, so IsCRDRequired is false, applyCRDDefaults skips it, and the fields asserted below
+			// can ONLY have come from round-tripping the addition through the apiserver.
+			//
+			// Every asserted default is string-valued on purpose: assertChangeFields compares with
+			// reflect.DeepEqual against JSON-decoded values, so a numeric default (revisionHistoryLimit: 10)
+			// would arrive as float64 and an int literal here would fail for the wrong reason.
+			reason:       "An added built-in resource is dry-run created against the apiserver, so apiserver-side defaults appear in its addition diff",
+			outputFormat: "json",
+			inputFiles:   []string{"testdata/diff/new-xr.yaml"},
+			setupFiles: []string{
+				"testdata/diff/resources/xrd.yaml",
+				"testdata/diff/resources/composition-with-builtin-defaults.yaml",
+				"testdata/diff/resources/functions.yaml",
+			},
+			expectedStructuredOutput: tu.ExpectDiff().
+				WithSummary(2, 0, 0).
+				WithAddedResource("Deployment", "test-resource-deploy", "default").
+				WithField("spec.strategy.type", "RollingUpdate").
+				WithField("spec.template.spec.restartPolicy", "Always").
+				WithField("spec.template.spec.dnsPolicy", "ClusterFirst").
+				And().
+				WithAddedResource("XNopResource", "test-resource", "default").
+				WithField("spec.coolField", "new-value"),
+			expectedError:    false,
+			expectedExitCode: dp.ExitCodeDiffDetected,
+		},
 		"MultipleXRsGroupedByInputXR": {
 			reason:       "Two input XRs in one invocation are grouped per input XR in the xrs[] structured view",
 			outputFormat: "json",

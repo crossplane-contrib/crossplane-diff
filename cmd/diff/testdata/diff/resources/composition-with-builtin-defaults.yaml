@@ -1,0 +1,61 @@
+# Renders a built-in Kubernetes resource whose apiserver defaults are NOT applied locally.
+#
+# This fixture exists to exercise the apiserver round-trip for additions (issue #334), and the
+# choice of a built-in type is load-bearing rather than incidental.
+#
+# DefaultSchemaValidator.applyCRDDefaults already applies CRD-derived `default:` values to the XR
+# and to every composed resource before the diff calculator runs, so a CRD-backed composed resource
+# shows its defaults in a `+++` diff with no apiserver involvement at all. Deployment has no CRD, so
+# IsCRDRequired is false and applyCRDDefaults skips it — which makes it the smallest resource whose
+# defaulted fields can only come from the apiserver.
+#
+# The Deployment deliberately sets only the fields a caller must set (selector, template, one
+# container). Everything asserted in the corresponding test — spec.strategy.type,
+# spec.template.spec.restartPolicy, spec.template.spec.dnsPolicy — is left for the apiserver to
+# populate. Deployment is preferred over Service here because Service creation allocates a
+# clusterIP even under dry-run, which would put a non-deterministic value in the diff; Deployment's
+# defaults are pure schema defaulting with no allocator involved.
+apiVersion: apiextensions.crossplane.io/v1
+kind: Composition
+metadata:
+  name: xnopresources.diff.example.org
+spec:
+  compositeTypeRef:
+    apiVersion: ns.diff.example.org/v1alpha1
+    kind: XNopResource
+  mode: Pipeline
+  pipeline:
+    - step: generate-resources
+      functionRef:
+        name: function-go-templating
+      input:
+        apiVersion: template.fn.crossplane.io/v1beta1
+        kind: GoTemplate
+        source: Inline
+        inline:
+          template: |
+            apiVersion: apps/v1
+            kind: Deployment
+            metadata:
+              name: {{ .observed.composite.resource.metadata.name }}-deploy
+              namespace: {{ .observed.composite.resource.metadata.namespace }}
+              annotations:
+                gotemplating.fn.crossplane.io/composition-resource-name: deployment
+            spec:
+              selector:
+                matchLabels:
+                  app: {{ .observed.composite.resource.metadata.name }}
+              template:
+                metadata:
+                  labels:
+                    app: {{ .observed.composite.resource.metadata.name }}
+                spec:
+                  containers:
+                    - name: main
+                      image: nginx:1.27
+                      env:
+                        - name: CONFIG_DATA
+                          value: {{ .observed.composite.resource.spec.coolField }}
+    - step: automatically-detect-ready-composed-resources
+      functionRef:
+        name: function-auto-ready
