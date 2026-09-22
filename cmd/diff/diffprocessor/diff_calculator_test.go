@@ -10,12 +10,14 @@ import (
 	"github.com/crossplane-contrib/crossplane-diff/cmd/diff/renderer"
 	dt "github.com/crossplane-contrib/crossplane-diff/cmd/diff/renderer/types"
 	tu "github.com/crossplane-contrib/crossplane-diff/cmd/diff/testutils"
+	dtypes "github.com/crossplane-contrib/crossplane-diff/cmd/diff/types"
 	"github.com/crossplane/cli/v2/cmd/crossplane/render"
 	gcmp "github.com/google/go-cmp/cmp"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	un "k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/util/validation/field"
 
 	"github.com/crossplane/crossplane-runtime/v2/pkg/errors"
 	cpd "github.com/crossplane/crossplane-runtime/v2/pkg/resource/unstructured/composed"
@@ -65,6 +67,31 @@ func TestDefaultDiffCalculator_CalculateDiff(t *testing.T) {
 		wantDiff   *dt.ResourceDiff
 		wantNil    bool
 		wantErr    bool
+
+		// accessChecker is the authorizer consulted when a dry run comes back Forbidden. Nil means
+		// "allows everything", which is what routes a Forbidden to the cluster-rejection path.
+		accessChecker k8.AccessChecker
+
+		// dryRunOn mirrors the CLI flag. The zero value means DryRunOnAll, as in ProcessorConfig, so
+		// unset cases exercise the default behaviour rather than a special test-only mode.
+		dryRunOn DryRunOn
+
+		// wantDryRun is the expected DryRunInfo on the resulting diff. Nil asserts its ABSENCE, i.e.
+		// that the desired state really did go through the apiserver.
+		wantDryRun *dt.DryRunInfo
+
+		// wantSchemaValidationErr asserts the error lands in the schema-validation exit-code tier,
+		// which is how a cluster rejection is distinguished from a tool failure.
+		wantSchemaValidationErr bool
+
+		// wantErrContains, when set, requires the error message to contain this substring. Several
+		// failure modes are all "an error" but must not be confused with each other.
+		wantErrContains string
+
+		// wantServerField, when set, requires spec.defaultedField in the DESIRED side of the diff to
+		// hold this value. That field is never present in the rendered input, so it can only have come
+		// from the apiserver's response — which is the whole claim this feature makes.
+		wantServerField string
 	}{
 		"ExistingResourceModified": {
 			setupMocks: func(t *testing.T) (k8.ApplyClient, xp.ResourceTreeClient, ResourceManager) {
@@ -100,9 +127,11 @@ func TestDefaultDiffCalculator_CalculateDiff(t *testing.T) {
 			setupMocks: func(t *testing.T) (k8.ApplyClient, xp.ResourceTreeClient, ResourceManager) {
 				t.Helper()
 
-				// Create mock apply client
+				// An addition is now dry-run CREATED, not left as rendered, so this mock must stub the
+				// create path as well.
 				applyClient := tu.NewMockApplyClient().
 					WithSuccessfulDryRun().
+					WithSuccessfulDryRunCreate().
 					Build()
 
 				// Create mock resource tree client (not used in this test)
@@ -194,6 +223,400 @@ func TestDefaultDiffCalculator_CalculateDiff(t *testing.T) {
 				ResourceName: "existing-resource",
 				DiffType:     dt.DiffTypeEqual,
 			},
+		},
+		// --- dry-run-create of additions (crossplane-diff#334) -------------------------------------
+		//
+		// These cases exercise every outcome of the addition path. The shared shape is a resource that
+		// is NOT in the cluster, so CalculateDiff takes the create branch; what varies is what the
+		// apiserver says and what the authorizer says about a Forbidden.
+
+		"AdditionPicksUpServerSideChanges": {
+			// The point of the whole feature: the apiserver's view of the object is what gets diffed, so
+			// fields it defaulted or a mutating webhook injected appear in the addition diff. Asserted by
+			// having the fake return a field the rendered object never had.
+			setupMocks: func(t *testing.T) (k8.ApplyClient, xp.ResourceTreeClient, ResourceManager) {
+				t.Helper()
+
+				applyClient := tu.NewMockApplyClient().
+					WithDryRunCreate(func(_ context.Context, obj *un.Unstructured) (*un.Unstructured, error) {
+						served := obj.DeepCopy()
+						_ = un.SetNestedField(served.Object, "server-assigned", "spec", "defaultedField")
+
+						return served, nil
+					}).
+					Build()
+
+				resourceClient := tu.NewMockResourceClient().WithResourceNotFound().Build()
+				resourceManager := NewResourceManager(resourceClient, tu.NewMockDefinitionClient().Build(), tu.NewMockResourceTreeClient().Build(), tu.TestLogger(t, false))
+
+				return applyClient, tu.NewMockResourceTreeClient().Build(), resourceManager
+			},
+			composite: nil,
+			desired:   newResource,
+			wantDiff: &dt.ResourceDiff{
+				Gvk:          schema.GroupVersionKind{Kind: "TestResource", Group: "example.org", Version: "v1"},
+				ResourceName: "new-resource",
+				DiffType:     dt.DiffTypeAdded,
+			},
+			wantServerField: "server-assigned",
+		},
+		"AdditionNotDryRunWhenDisabled": {
+			// --dry-run-on=existing reproduces the pre-#334 behaviour, and says so per-resource rather
+			// than presenting rendered output as verified. DryRunCreate is deliberately left unstubbed:
+			// if the flag were ignored the mock's "not implemented" error would fail the case.
+			setupMocks: func(t *testing.T) (k8.ApplyClient, xp.ResourceTreeClient, ResourceManager) {
+				t.Helper()
+
+				applyClient := tu.NewMockApplyClient().Build()
+				resourceClient := tu.NewMockResourceClient().WithResourceNotFound().Build()
+				resourceManager := NewResourceManager(resourceClient, tu.NewMockDefinitionClient().Build(), tu.NewMockResourceTreeClient().Build(), tu.TestLogger(t, false))
+
+				return applyClient, tu.NewMockResourceTreeClient().Build(), resourceManager
+			},
+			composite: nil,
+			desired:   newResource,
+			dryRunOn:  DryRunOnExisting,
+			wantDiff: &dt.ResourceDiff{
+				Gvk:          schema.GroupVersionKind{Kind: "TestResource", Group: "example.org", Version: "v1"},
+				ResourceName: "new-resource",
+				DiffType:     dt.DiffTypeAdded,
+			},
+			wantDryRun: &dt.DryRunInfo{SkipReason: dt.DryRunSkipDisabled},
+		},
+		"AdditionForbiddenByRBACDegrades": {
+			// Forbidden + authorizer says we may NOT create: a property of our credentials, not a finding
+			// about the resource. Fall back to rendered output and say so; do not fail the run.
+			setupMocks: func(t *testing.T) (k8.ApplyClient, xp.ResourceTreeClient, ResourceManager) {
+				t.Helper()
+
+				applyClient := tu.NewMockApplyClient().
+					WithDryRunCreate(func(context.Context, *un.Unstructured) (*un.Unstructured, error) {
+						return nil, apierrors.NewForbidden(schema.GroupResource{Group: "example.org", Resource: "testresources"}, "new-resource", errors.New("nope"))
+					}).
+					Build()
+
+				resourceClient := tu.NewMockResourceClient().WithResourceNotFound().Build()
+				resourceManager := NewResourceManager(resourceClient, tu.NewMockDefinitionClient().Build(), tu.NewMockResourceTreeClient().Build(), tu.TestLogger(t, false))
+
+				return applyClient, tu.NewMockResourceTreeClient().Build(), resourceManager
+			},
+			composite:     nil,
+			desired:       newResource,
+			accessChecker: tu.NewMockAccessChecker().WithDenied("no create on testresources").Build(),
+			wantDiff: &dt.ResourceDiff{
+				Gvk:          schema.GroupVersionKind{Kind: "TestResource", Group: "example.org", Version: "v1"},
+				ResourceName: "new-resource",
+				DiffType:     dt.DiffTypeAdded,
+			},
+			wantDryRun: &dt.DryRunInfo{SkipReason: dt.DryRunSkipForbidden, Detail: "no create on testresources"},
+		},
+		"AdditionForbiddenWhileAuthorizedIsARejection": {
+			// Forbidden + authorizer says we MAY create: the refusal came from admission, quota, or a
+			// missing namespace. A real finding, and the case that would be silently swallowed if every
+			// 403 were treated as an RBAC problem.
+			setupMocks: func(t *testing.T) (k8.ApplyClient, xp.ResourceTreeClient, ResourceManager) {
+				t.Helper()
+
+				applyClient := tu.NewMockApplyClient().
+					WithDryRunCreate(func(context.Context, *un.Unstructured) (*un.Unstructured, error) {
+						return nil, apierrors.NewForbidden(schema.GroupResource{Group: "example.org", Resource: "testresources"}, "new-resource", errors.New("exceeded quota: storage"))
+					}).
+					Build()
+
+				resourceClient := tu.NewMockResourceClient().WithResourceNotFound().Build()
+				resourceManager := NewResourceManager(resourceClient, tu.NewMockDefinitionClient().Build(), tu.NewMockResourceTreeClient().Build(), tu.TestLogger(t, false))
+
+				return applyClient, tu.NewMockResourceTreeClient().Build(), resourceManager
+			},
+			composite:               nil,
+			desired:                 newResource,
+			accessChecker:           tu.NewMockAccessChecker().WithAllowed().Build(),
+			wantErr:                 true,
+			wantSchemaValidationErr: true,
+			wantErrContains:         "exceeded quota",
+		},
+		"AdditionInvalidIsARejection": {
+			// A 422 needs no authorizer round-trip: it is unambiguously about the content.
+			setupMocks: func(t *testing.T) (k8.ApplyClient, xp.ResourceTreeClient, ResourceManager) {
+				t.Helper()
+
+				applyClient := tu.NewMockApplyClient().
+					WithDryRunCreate(func(context.Context, *un.Unstructured) (*un.Unstructured, error) {
+						return nil, apierrors.NewInvalid(
+							schema.GroupKind{Group: "example.org", Kind: "TestResource"},
+							"new-resource",
+							field.ErrorList{field.Invalid(field.NewPath("spec", "field"), "value", "must be uppercase")},
+						)
+					}).
+					Build()
+
+				resourceClient := tu.NewMockResourceClient().WithResourceNotFound().Build()
+				resourceManager := NewResourceManager(resourceClient, tu.NewMockDefinitionClient().Build(), tu.NewMockResourceTreeClient().Build(), tu.TestLogger(t, false))
+
+				return applyClient, tu.NewMockResourceTreeClient().Build(), resourceManager
+			},
+			composite:               nil,
+			desired:                 newResource,
+			wantErr:                 true,
+			wantSchemaValidationErr: true,
+			wantErrContains:         "must be uppercase",
+		},
+		"AdditionWebhookUnavailableDegrades": {
+			// The apiserver could not complete admission, so we cannot know what it would have done. Fall
+			// back, but disclaim it — presenting rendered output as verified here would be the dishonest
+			// option.
+			setupMocks: func(t *testing.T) (k8.ApplyClient, xp.ResourceTreeClient, ResourceManager) {
+				t.Helper()
+
+				applyClient := tu.NewMockApplyClient().
+					WithDryRunCreate(func(context.Context, *un.Unstructured) (*un.Unstructured, error) {
+						return nil, apierrors.NewInternalError(errors.New(`failed calling webhook "policy.example.org": connection refused`))
+					}).
+					Build()
+
+				resourceClient := tu.NewMockResourceClient().WithResourceNotFound().Build()
+				resourceManager := NewResourceManager(resourceClient, tu.NewMockDefinitionClient().Build(), tu.NewMockResourceTreeClient().Build(), tu.TestLogger(t, false))
+
+				return applyClient, tu.NewMockResourceTreeClient().Build(), resourceManager
+			},
+			composite: nil,
+			desired:   newResource,
+			wantDiff: &dt.ResourceDiff{
+				Gvk:          schema.GroupVersionKind{Kind: "TestResource", Group: "example.org", Version: "v1"},
+				ResourceName: "new-resource",
+				DiffType:     dt.DiffTypeAdded,
+			},
+			wantDryRun: &dt.DryRunInfo{
+				SkipReason: dt.DryRunSkipWebhookUnavailable,
+				Detail:     `Internal error occurred: failed calling webhook "policy.example.org": connection refused`,
+			},
+		},
+		"AdditionWithUnresolvableGVKIsNotBlamedOnItsNamespace": {
+			// PR #502 review finding. The error here is deliberately BOTH sentinel-joined AND
+			// apierrors-NotFound, because that is the real situation: DryRunCreate resolves the GVK
+			// through discovery, and a discovery 404 for an unserved group/version is NotFound-shaped,
+			// indistinguishable from NamespaceLifecycle refusing a resource whose type is fine.
+			//
+			// So this case pins the ORDERING of the classification, not just its output. If the
+			// ErrUnresolvableGVK branch is moved below the IsNotFound branch, an unknown type gets
+			// reported as a missing namespace and the user goes looking at entirely the wrong thing.
+			setupMocks: func(t *testing.T) (k8.ApplyClient, xp.ResourceTreeClient, ResourceManager) {
+				t.Helper()
+
+				applyClient := tu.NewMockApplyClient().
+					WithDryRunCreate(func(context.Context, *un.Unstructured) (*un.Unstructured, error) {
+						return nil, errors.Join(
+							k8.ErrUnresolvableGVK,
+							apierrors.NewNotFound(schema.GroupResource{Group: "totallynotserved.k8s.io", Resource: "widgets"}, ""),
+						)
+					}).
+					Build()
+
+				resourceClient := tu.NewMockResourceClient().WithResourceNotFound().Build()
+				resourceManager := NewResourceManager(resourceClient, tu.NewMockDefinitionClient().Build(), tu.NewMockResourceTreeClient().Build(), tu.TestLogger(t, false))
+
+				return applyClient, tu.NewMockResourceTreeClient().Build(), resourceManager
+			},
+			composite:               nil,
+			desired:                 newResource,
+			wantErr:                 true,
+			wantSchemaValidationErr: false,
+			wantErrContains:         "cannot resolve resource type",
+		},
+		"AdditionWithTransientDiscoveryFailureIsNotBlamedOnAdmission": {
+			// The reviewer's second variant, and a genuine misclassification rather than just a poor
+			// message. Discovery can fail with 503/timeout as easily as 404, and those shapes feed the
+			// webhookUnavailable branch — so without the sentinel check first, "discovery was briefly
+			// unavailable" is reported as "the cluster could not complete admission", and the resource is
+			// silently degraded instead of failing.
+			setupMocks: func(t *testing.T) (k8.ApplyClient, xp.ResourceTreeClient, ResourceManager) {
+				t.Helper()
+
+				applyClient := tu.NewMockApplyClient().
+					WithDryRunCreate(func(context.Context, *un.Unstructured) (*un.Unstructured, error) {
+						return nil, errors.Join(
+							k8.ErrUnresolvableGVK,
+							apierrors.NewServiceUnavailable("discovery is warming up"),
+						)
+					}).
+					Build()
+
+				resourceClient := tu.NewMockResourceClient().WithResourceNotFound().Build()
+				resourceManager := NewResourceManager(resourceClient, tu.NewMockDefinitionClient().Build(), tu.NewMockResourceTreeClient().Build(), tu.TestLogger(t, false))
+
+				return applyClient, tu.NewMockResourceTreeClient().Build(), resourceManager
+			},
+			composite:               nil,
+			desired:                 newResource,
+			wantErr:                 true,
+			wantSchemaValidationErr: false,
+			wantErrContains:         "cannot resolve resource type",
+		},
+		"ExistingResourceWithUnresolvableGVKIsNotARejection": {
+			// The mirror on the apply path. Here the sentinel branch changes the message rather than the
+			// exit-code tier — a discovery failure would otherwise land in the catch-all, which is still
+			// a tool error. So this asserts the resource-bearing message the sentinel branch produces
+			// ("cannot dry-run apply TestResource/existing-resource"), not the generic "desired object"
+			// wording the catch-all emits; otherwise the case would pass with the branch removed and pin
+			// nothing at all.
+			setupMocks: func(t *testing.T) (k8.ApplyClient, xp.ResourceTreeClient, ResourceManager) {
+				t.Helper()
+
+				applyClient := tu.NewMockApplyClient().
+					WithDryRunApply(func(context.Context, *un.Unstructured, string) (*un.Unstructured, error) {
+						return nil, errors.Join(
+							k8.ErrUnresolvableGVK,
+							apierrors.NewNotFound(schema.GroupResource{Group: "totallynotserved.k8s.io", Resource: "widgets"}, ""),
+						)
+					}).
+					Build()
+
+				resourceClient := tu.NewMockResourceClient().WithResourcesExist(existingResource).Build()
+				resourceManager := NewResourceManager(resourceClient, tu.NewMockDefinitionClient().Build(), tu.NewMockResourceTreeClient().Build(), tu.TestLogger(t, false))
+
+				return applyClient, tu.NewMockResourceTreeClient().Build(), resourceManager
+			},
+			composite:               nil,
+			desired:                 modifiedResource,
+			wantErr:                 true,
+			wantSchemaValidationErr: false,
+			wantErrContains:         "cannot dry-run apply TestResource/existing-resource",
+		},
+		"AdditionInMissingNamespaceDegrades": {
+			// Regression test for the e2e failure this classification originally caused
+			// (TestDiffConcurrentDirectory diffs 21 XRs into a namespace that is never created).
+			//
+			// A NotFound from a dry-run create is NamespaceLifecycle admission: the target namespace does
+			// not exist yet. That must degrade, not fail. A namespace and the resources inside it are
+			// routinely applied together, so the namespace's absence at diff time says nothing about
+			// whether the apply will succeed — which is exactly what separates it from a quota or webhook
+			// refusal, where the verdict describes the object and will still hold.
+			setupMocks: func(t *testing.T) (k8.ApplyClient, xp.ResourceTreeClient, ResourceManager) {
+				t.Helper()
+
+				applyClient := tu.NewMockApplyClient().
+					WithDryRunCreate(func(context.Context, *un.Unstructured) (*un.Unstructured, error) {
+						return nil, apierrors.NewNotFound(schema.GroupResource{Resource: "namespaces"}, "does-not-exist")
+					}).
+					Build()
+
+				resourceClient := tu.NewMockResourceClient().WithResourceNotFound().Build()
+				resourceManager := NewResourceManager(resourceClient, tu.NewMockDefinitionClient().Build(), tu.NewMockResourceTreeClient().Build(), tu.TestLogger(t, false))
+
+				return applyClient, tu.NewMockResourceTreeClient().Build(), resourceManager
+			},
+			composite: nil,
+			desired:   newResource,
+			wantDiff: &dt.ResourceDiff{
+				Gvk:          schema.GroupVersionKind{Kind: "TestResource", Group: "example.org", Version: "v1"},
+				ResourceName: "new-resource",
+				DiffType:     dt.DiffTypeAdded,
+			},
+			wantDryRun: &dt.DryRunInfo{
+				SkipReason: dt.DryRunSkipNamespaceNotFound,
+				Detail:     `namespaces "does-not-exist" not found`,
+			},
+		},
+		"AdditionAlreadyExistsFailsLoudly": {
+			// FetchCurrentObject said this resource does not exist and the apiserver says it does. The
+			// diff would rest on a false premise, so this must not degrade — and must not be reported as
+			// a cluster rejection of the user's content either.
+			setupMocks: func(t *testing.T) (k8.ApplyClient, xp.ResourceTreeClient, ResourceManager) {
+				t.Helper()
+
+				applyClient := tu.NewMockApplyClient().
+					WithDryRunCreate(func(context.Context, *un.Unstructured) (*un.Unstructured, error) {
+						return nil, apierrors.NewAlreadyExists(schema.GroupResource{Group: "example.org", Resource: "testresources"}, "new-resource")
+					}).
+					Build()
+
+				resourceClient := tu.NewMockResourceClient().WithResourceNotFound().Build()
+				resourceManager := NewResourceManager(resourceClient, tu.NewMockDefinitionClient().Build(), tu.NewMockResourceTreeClient().Build(), tu.TestLogger(t, false))
+
+				return applyClient, tu.NewMockResourceTreeClient().Build(), resourceManager
+			},
+			composite:               nil,
+			desired:                 newResource,
+			wantErr:                 true,
+			wantSchemaValidationErr: false,
+			wantErrContains:         "already exists, but it was not found in the cluster",
+		},
+		"AdditionForbiddenWithUnusableAuthorizerFailsLoudly": {
+			// We hold a 403 we cannot classify. Claiming a cluster rejection would assert an unestablished
+			// finding; claiming RBAC would hide a real one. Saying "we don't know" is the only honest
+			// option, and it must not be the schema-validation tier.
+			setupMocks: func(t *testing.T) (k8.ApplyClient, xp.ResourceTreeClient, ResourceManager) {
+				t.Helper()
+
+				applyClient := tu.NewMockApplyClient().
+					WithDryRunCreate(func(context.Context, *un.Unstructured) (*un.Unstructured, error) {
+						return nil, apierrors.NewForbidden(schema.GroupResource{Group: "example.org", Resource: "testresources"}, "new-resource", errors.New("denied"))
+					}).
+					Build()
+
+				resourceClient := tu.NewMockResourceClient().WithResourceNotFound().Build()
+				resourceManager := NewResourceManager(resourceClient, tu.NewMockDefinitionClient().Build(), tu.NewMockResourceTreeClient().Build(), tu.TestLogger(t, false))
+
+				return applyClient, tu.NewMockResourceTreeClient().Build(), resourceManager
+			},
+			composite:               nil,
+			desired:                 newResource,
+			accessChecker:           tu.NewMockAccessChecker().WithFailedCheck(errors.New("ssar exploded")).Build(),
+			wantErr:                 true,
+			wantSchemaValidationErr: false,
+			wantErrContains:         "cannot determine whether that was an authorization denial",
+		},
+		"ExistingResourceRejectionIsAValidationError": {
+			// The #334 reclassification: a cluster rejection of a MODIFICATION is the same fact as one of
+			// an addition, so it lands in the same exit-code tier rather than depending on whether the
+			// resource happened to exist already.
+			setupMocks: func(t *testing.T) (k8.ApplyClient, xp.ResourceTreeClient, ResourceManager) {
+				t.Helper()
+
+				applyClient := tu.NewMockApplyClient().
+					WithDryRunApply(func(context.Context, *un.Unstructured, string) (*un.Unstructured, error) {
+						return nil, apierrors.NewForbidden(schema.GroupResource{Group: "example.org", Resource: "testresources"}, "existing-resource",
+							errors.New(`admission webhook "policy.example.org" denied the request`))
+					}).
+					Build()
+
+				resourceClient := tu.NewMockResourceClient().WithResourcesExist(existingResource).Build()
+				resourceManager := NewResourceManager(resourceClient, tu.NewMockDefinitionClient().Build(), tu.NewMockResourceTreeClient().Build(), tu.TestLogger(t, false))
+
+				return applyClient, tu.NewMockResourceTreeClient().Build(), resourceManager
+			},
+			composite:               nil,
+			desired:                 modifiedResource,
+			accessChecker:           tu.NewMockAccessChecker().WithAllowed().Build(),
+			wantErr:                 true,
+			wantSchemaValidationErr: true,
+			wantErrContains:         "admission webhook",
+		},
+		"ExistingResourceMissingPatchIsAToolError": {
+			// The mirror of AdditionForbiddenByRBACDegrades, and deliberately NOT symmetric with it. An
+			// existing resource's diff depends on the apiserver's merge result for SSA field-removal
+			// detection, so falling back to rendered output would be wrong rather than merely less
+			// detailed. It must also not be reported as a rejection of the user's content.
+			setupMocks: func(t *testing.T) (k8.ApplyClient, xp.ResourceTreeClient, ResourceManager) {
+				t.Helper()
+
+				applyClient := tu.NewMockApplyClient().
+					WithDryRunApply(func(context.Context, *un.Unstructured, string) (*un.Unstructured, error) {
+						return nil, apierrors.NewForbidden(schema.GroupResource{Group: "example.org", Resource: "testresources"}, "existing-resource", errors.New("nope"))
+					}).
+					Build()
+
+				resourceClient := tu.NewMockResourceClient().WithResourcesExist(existingResource).Build()
+				resourceManager := NewResourceManager(resourceClient, tu.NewMockDefinitionClient().Build(), tu.NewMockResourceTreeClient().Build(), tu.TestLogger(t, false))
+
+				return applyClient, tu.NewMockResourceTreeClient().Build(), resourceManager
+			},
+			composite:               nil,
+			desired:                 modifiedResource,
+			accessChecker:           tu.NewMockAccessChecker().WithDeniedVerb(dtypes.VerbPatch, "no patch on testresources").Build(),
+			wantErr:                 true,
+			wantSchemaValidationErr: false,
+			wantErrContains:         "requires the 'patch' verb",
 		},
 		"ErrorGettingCurrentObject": {
 			setupMocks: func(t *testing.T) (k8.ApplyClient, xp.ResourceTreeClient, ResourceManager) {
@@ -440,13 +863,20 @@ func TestDefaultDiffCalculator_CalculateDiff(t *testing.T) {
 			// Setup mocks
 			applyClient, resourceTreeClient, resourceManager := tt.setupMocks(t)
 
+			accessChecker := tt.accessChecker
+			if accessChecker == nil {
+				accessChecker = tu.NewMockAccessChecker().Build()
+			}
+
 			// Setup the diff calculator with the mocks
 			calculator := NewDiffCalculator(
 				applyClient,
+				accessChecker,
 				resourceTreeClient,
 				resourceManager,
 				logger,
 				renderer.DefaultDiffOptions(),
+				tt.dryRunOn,
 			)
 
 			// Call the function under test
@@ -455,7 +885,16 @@ func TestDefaultDiffCalculator_CalculateDiff(t *testing.T) {
 			// Check error condition
 			if tt.wantErr {
 				if err == nil {
-					t.Errorf("CalculateDiff() expected error but got none")
+					t.Fatalf("CalculateDiff() expected error but got none")
+				}
+
+				if tt.wantErrContains != "" && !strings.Contains(err.Error(), tt.wantErrContains) {
+					t.Errorf("CalculateDiff() error %q does not contain %q", err, tt.wantErrContains)
+				}
+
+				if got := IsSchemaValidationError(err); got != tt.wantSchemaValidationErr {
+					t.Errorf("IsSchemaValidationError() = %v, want %v; a cluster rejection must land in the schema-validation exit-code tier and a tool failure must not: %v",
+						got, tt.wantSchemaValidationErr, err)
 				}
 
 				return
@@ -495,6 +934,28 @@ func TestDefaultDiffCalculator_CalculateDiff(t *testing.T) {
 			// For modified resources, check that LineDiffs is populated
 			if diff.DiffType == dt.DiffTypeModified && len(diff.LineDiffs) == 0 {
 				t.Errorf("LineDiffs is empty for %s", name)
+			}
+
+			// Nil wantDryRun asserts absence, which is the positive claim that the desired state was
+			// verified against the apiserver — not merely "we didn't check".
+			if d := gcmp.Diff(tt.wantDryRun, diff.DryRun); d != "" {
+				t.Errorf("DryRun mismatch (-want +got):\n%s", d)
+			}
+
+			if tt.wantServerField != "" {
+				if diff.Desired.Raw == nil {
+					t.Fatalf("expected the apiserver's object on the desired side, got no desired view at all")
+				}
+
+				got, found, err := un.NestedString(diff.Desired.Raw.Object, "spec", "defaultedField")
+				switch {
+				case err != nil:
+					t.Errorf("spec.defaultedField: %v", err)
+				case !found:
+					t.Errorf("spec.defaultedField absent from the desired side: the apiserver's response was discarded, so the addition diff shows only rendered output")
+				case got != tt.wantServerField:
+					t.Errorf("spec.defaultedField = %q, want %q", got, tt.wantServerField)
+				}
 			}
 		})
 	}
@@ -769,10 +1230,12 @@ func TestDefaultDiffCalculator_CalculateDiffs(t *testing.T) {
 			// Create a diff calculator with default options
 			calculator := NewDiffCalculator(
 				applyClient,
+				tu.NewMockAccessChecker().Build(),
 				resourceTreeClient,
 				resourceManager,
 				logger,
 				renderer.DefaultDiffOptions(),
+				DryRunOnAll,
 			)
 
 			// Call the function under test
@@ -947,10 +1410,12 @@ func TestDefaultDiffCalculator_CalculateRemovedResourceDiffs(t *testing.T) {
 			// Create a diff calculator with the mocks
 			calculator := NewDiffCalculator(
 				applyClient,
+				tu.NewMockAccessChecker().Build(),
 				resourceTreeClient,
 				resourceManager,
 				logger,
 				renderer.DefaultDiffOptions(),
+				DryRunOnAll,
 			)
 
 			// Call the method under test
@@ -1420,6 +1885,71 @@ func TestDefaultDiffCalculator_preserveExistingResourceIdentity(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// TestDefaultDiffCalculator_DegradationWarnsOncePerGroup covers AC-R9: a degraded dry run raises a
+// user-facing advisory, and raises it once per GVK + namespace + reason rather than once per
+// resource. A composition rendering forty new resources of one kind must not produce forty identical
+// warnings.
+//
+// This is a property of a calculator INSTANCE across calls, which is why it cannot be a row in the
+// per-call table above: a single calculator is reused for every resource in a run, and that reuse is
+// exactly what the deduplication depends on.
+func TestDefaultDiffCalculator_DegradationWarnsOncePerGroup(t *testing.T) {
+	ctx := t.Context()
+
+	forbidden := func(context.Context, *un.Unstructured) (*un.Unstructured, error) {
+		return nil, apierrors.NewForbidden(schema.GroupResource{Group: "example.org", Resource: "testresources"}, "", errors.New("nope"))
+	}
+
+	// Three resources of one kind in one namespace, plus one of the same kind in another namespace and
+	// one of a different kind. Correct behaviour is three advisories, not five.
+	desired := []*un.Unstructured{
+		tu.NewResource("example.org/v1", "TestResource", "a").WithSpecField("f", "1").Build(),
+		tu.NewResource("example.org/v1", "TestResource", "b").WithSpecField("f", "2").Build(),
+		tu.NewResource("example.org/v1", "TestResource", "c").WithSpecField("f", "3").Build(),
+		tu.NewResource("example.org/v1", "OtherResource", "d").WithSpecField("f", "4").Build(),
+	}
+	desired[0].SetNamespace("ns-a")
+	desired[1].SetNamespace("ns-a")
+	desired[2].SetNamespace("ns-b")
+	desired[3].SetNamespace("ns-a")
+
+	logger := tu.NewAdvisoryCapturingLogger(t)
+
+	calculator := NewDiffCalculator(
+		tu.NewMockApplyClient().WithDryRunCreate(forbidden).Build(),
+		tu.NewMockAccessChecker().WithDenied("no create").Build(),
+		tu.NewMockResourceTreeClient().Build(),
+		NewResourceManager(
+			tu.NewMockResourceClient().WithResourceNotFound().Build(),
+			tu.NewMockDefinitionClient().Build(),
+			tu.NewMockResourceTreeClient().Build(),
+			tu.TestLogger(t, false),
+		),
+		logger,
+		renderer.DefaultDiffOptions(),
+		DryRunOnAll,
+	)
+
+	for _, d := range desired {
+		diff, err := calculator.CalculateDiff(ctx, nil, d)
+		if err != nil {
+			t.Fatalf("CalculateDiff(%s/%s) unexpected error: %v", d.GetKind(), d.GetName(), err)
+		}
+
+		// Every degraded resource must carry the typed field; the advisory is the human channel and
+		// cannot substitute for it, because a warning has no resource anchor.
+		if diff.DryRun == nil || diff.DryRun.SkipReason != dt.DryRunSkipForbidden {
+			t.Errorf("%s/%s: expected dryRun.skipReason=forbidden, got %+v", d.GetKind(), d.GetName(), diff.DryRun)
+		}
+	}
+
+	// 3 = (TestResource, ns-a), (TestResource, ns-b), (OtherResource, ns-a).
+	if got := len(logger.Advisories()); got != 3 {
+		t.Errorf("got %d advisories for 4 degraded resources across 3 GVK+namespace groups, want 3: %v",
+			got, logger.Advisories())
 	}
 }
 

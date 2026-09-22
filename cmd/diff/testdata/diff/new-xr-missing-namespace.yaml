@@ -1,0 +1,13 @@
+# An XR targeting a namespace that does not exist in the cluster.
+#
+# This is a supported workflow, not a mistake: a Namespace and the resources inside it are routinely
+# applied together (one `kubectl apply -f ./manifests/`), so a user previewing that apply legitimately
+# has resources whose namespace is not there yet. The dry-run create cannot be performed, so the
+# resources degrade to rendered output and say so — they must NOT fail the run.
+apiVersion: ns.diff.example.org/v1alpha1
+kind: XNopResource
+metadata:
+  name: test-resource
+  namespace: nonexistent-namespace
+spec:
+  coolField: "new-value"

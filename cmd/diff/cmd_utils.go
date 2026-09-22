@@ -56,6 +56,7 @@ func defaultProcessorOptions(fields CommonCmdFields) []dp.ProcessorOption {
 		dp.WithMaxRenderIterations(fields.MaxIterations),
 		dp.WithEventualState(fields.EventualState),
 		dp.WithIgnorePaths(fields.IgnorePaths),
+		dp.WithDryRunOn(dp.DryRunOn(fields.DryRunOn)),
 	}
 
 	// Add output format option

@@ -9,6 +9,7 @@ import (
 	"github.com/crossplane/cli/v2/cmd/crossplane/common/resource/xrm"
 	"k8s.io/client-go/discovery"
 	"k8s.io/client-go/dynamic"
+	kubeclient "k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/rest"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -38,6 +39,14 @@ type Clients struct {
 	Dynamic   dynamic.Interface
 	Discovery discovery.DiscoveryInterface
 	Tree      *xrm.Client
+
+	// Kube is the generated, typed clientset. Most of this tool works in
+	// Unstructured because it deals in arbitrary user-defined GVKs, but a few
+	// built-in APIs have a fixed shape that is worth having checked at compile
+	// time -- SelfSubjectAccessReview (see kubernetes.AccessChecker) is one,
+	// where an untyped round-trip meant hand-writing the request's keys and
+	// reading the response back with NestedBool/NestedString.
+	Kube kubeclient.Interface
 }
 
 // NewClients initializes a bundle of built-in kube clients using the given rest config.
@@ -58,15 +67,25 @@ func NewClients(config *rest.Config) (*Clients, error) {
 		return nil, errors.Wrap(err, "cannot create xrm client")
 	}
 
+	kubeClient, err := makeKubeClient(config)
+	if err != nil {
+		return nil, errors.Wrap(err, "cannot create typed kubernetes client")
+	}
+
 	return &Clients{
 		Dynamic:   dynClient,
 		Discovery: disClient,
 		Tree:      xrmClient,
+		Kube:      kubeClient,
 	}, nil
 }
 
 func makeDynamicClient(config *rest.Config) (dynamic.Interface, error) {
 	return dynamic.NewForConfig(config)
+}
+
+func makeKubeClient(config *rest.Config) (kubeclient.Interface, error) {
+	return kubeclient.NewForConfig(config)
 }
 
 func makeXrmClient(config *rest.Config) (*xrm.Client, error) {

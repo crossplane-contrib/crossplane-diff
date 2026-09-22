@@ -1,0 +1,15 @@
+# A resource that rejecting-admission-policy.yaml must refuse.
+#
+# The harness dry-run creates this (never persisting it) until the apiserver rejects it, which is how
+# a test learns that the policy is actually enforcing. Admission policies reach the apiserver's
+# admission plugin through an informer, so for a short window after creation the cluster still
+# accepts what the policy will later refuse; a diff issued inside that window would observe no
+# rejection at all.
+apiVersion: ns.nop.example.org/v1alpha1
+kind: XDownstreamResource
+metadata:
+  name: admission-policy-canary
+  namespace: default
+spec:
+  forProvider:
+    configData: new-value

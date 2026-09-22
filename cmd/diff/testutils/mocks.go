@@ -489,9 +489,10 @@ func (m *MockSchemaClient) GetAllCRDs() []*extv1.CustomResourceDefinition {
 
 // MockApplyClient implements the kubernetes.ApplyClient interface.
 type MockApplyClient struct {
-	InitializeFn  func(ctx context.Context) error
-	ApplyFn       func(ctx context.Context, obj *un.Unstructured) (*un.Unstructured, error)
-	DryRunApplyFn func(ctx context.Context, obj *un.Unstructured, fieldOwner string) (*un.Unstructured, error)
+	InitializeFn   func(ctx context.Context) error
+	ApplyFn        func(ctx context.Context, obj *un.Unstructured) (*un.Unstructured, error)
+	DryRunApplyFn  func(ctx context.Context, obj *un.Unstructured, fieldOwner string) (*un.Unstructured, error)
+	DryRunCreateFn func(ctx context.Context, obj *un.Unstructured) (*un.Unstructured, error)
 }
 
 // Initialize implements kubernetes.ApplyClient.
@@ -519,6 +520,35 @@ func (m *MockApplyClient) DryRunApply(ctx context.Context, obj *un.Unstructured,
 	}
 
 	return nil, errors.New("DryRunApply not implemented")
+}
+
+// DryRunCreate implements kubernetes.ApplyClient.
+func (m *MockApplyClient) DryRunCreate(ctx context.Context, obj *un.Unstructured) (*un.Unstructured, error) {
+	if m.DryRunCreateFn != nil {
+		return m.DryRunCreateFn(ctx, obj)
+	}
+
+	return nil, errors.New("DryRunCreate not implemented")
+}
+
+// MockAccessChecker implements the kubernetes.AccessChecker interface.
+type MockAccessChecker struct {
+	CanFn func(ctx context.Context, gvk schema.GroupVersionKind, namespace string, verb types.Verb) (bool, string, error)
+}
+
+// Can implements kubernetes.AccessChecker.
+//
+// The unset default is "allowed", not an error, and that is deliberate. The production code only
+// consults the authorizer after a dry run has already come back Forbidden, and "allowed" is the
+// answer that routes such a 403 to the cluster-rejection path. So a test that wires a Forbidden
+// without saying anything about authorization gets the rejection behaviour rather than a confusing
+// "Can not implemented" failure from a collaborator it never meant to exercise.
+func (m *MockAccessChecker) Can(ctx context.Context, gvk schema.GroupVersionKind, namespace string, verb types.Verb) (bool, string, error) {
+	if m.CanFn != nil {
+		return m.CanFn(ctx, gvk, namespace, verb)
+	}
+
+	return true, "", nil
 }
 
 // MockTypeConverter implements the kubernetes.TypeConverter interface.

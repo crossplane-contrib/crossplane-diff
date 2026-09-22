@@ -85,6 +85,7 @@ classDiagram
         +Name string
         +Namespace string
         +Diff map[string]any
+        +DryRun *DryRunInfo
     }
 
     class CompDiffOutput {
@@ -177,6 +178,7 @@ classDiagram
         +LineDiffs []diffmatchpatch.Diff
         +Current *Unstructured
         +Desired *Unstructured
+        +DryRun *DryRunInfo
         +GetDiffKey() string
     }
 
@@ -186,6 +188,19 @@ classDiagram
         DiffTypeRemoved
         DiffTypeModified
         DiffTypeEqual
+    }
+
+    class DryRunInfo {
+        +Performed bool
+        +SkipReason DryRunSkipReason
+        +Detail string
+    }
+
+    class DryRunSkipReason {
+        <<enumeration>>
+        DryRunSkipDisabled
+        DryRunSkipForbidden
+        DryRunSkipWebhookUnavailable
     }
 
     DefaultDiffRenderer ..|> DiffRenderer
@@ -222,3 +237,6 @@ classDiagram
     DownstreamChanges --> ChangeDetail
 
     ResourceDiff --> DiffType
+    ResourceDiff --> DryRunInfo
+    ChangeDetail --> DryRunInfo
+    DryRunInfo --> DryRunSkipReason

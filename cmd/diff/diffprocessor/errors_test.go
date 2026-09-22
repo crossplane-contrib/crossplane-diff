@@ -24,6 +24,7 @@ import (
 	dt "github.com/crossplane-contrib/crossplane-diff/cmd/diff/renderer/types"
 	pkgvalidate "github.com/crossplane/cli/v2/pkg/validate"
 	gcmp "github.com/google/go-cmp/cmp"
+	un "k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 
 	xperrors "github.com/crossplane/crossplane-runtime/v2/pkg/errors"
 )
@@ -239,6 +240,85 @@ func TestNewOutputError(t *testing.T) {
 					Kind:       "Thing",
 					Name:       "thing",
 					Status:     "missingSchema",
+				}},
+			},
+		},
+		"AdmissionRejection_ExposesTypedFailureWithoutUpstreamResult": {
+			reason:     "An apiserver dry-run rejection carries no pkgvalidate.ValidationResult, so it populates Failures directly. The row must be shape-identical to a locally-produced one (status 'invalid') so a consumer iterating validationFailures cannot tell which detector found it — only the 'admission' type distinguishes it. The message names the rejected composed resource, because ResourceID identifies the user's input (the XR) and would otherwise leave a human unable to tell which composed resource the cluster refused.",
+			resourceID: "XBucket/my-xr",
+			err: NewAdmissionRejectionError("Bucket/my-bucket", &un.Unstructured{Object: map[string]any{
+				"apiVersion": "s3.aws.crossplane.io/v1beta1",
+				"kind":       "Bucket",
+				"metadata": map[string]any{
+					"name":      "my-bucket",
+					"namespace": "prod",
+				},
+			}}, errors.New(`admission webhook "policy.example.org" denied the request: region must be us-*`)),
+			want: dt.OutputError{
+				ResourceID: "XBucket/my-xr",
+				Message:    `the cluster rejected Bucket/my-bucket: admission webhook "policy.example.org" denied the request: region must be us-*`,
+				ValidationFailures: []dt.ResourceValidationFailure{{
+					APIVersion: "s3.aws.crossplane.io/v1beta1",
+					Kind:       "Bucket",
+					Name:       "my-bucket",
+					Namespace:  "prod",
+					Status:     "invalid",
+					Errors: []dt.FieldValidationError{{
+						Type:    "admission",
+						Message: `admission webhook "policy.example.org" denied the request: region must be us-*`,
+					}},
+				}},
+			},
+		},
+		"ExplicitFailuresWinOverResult": {
+			reason:     "Failures and Result are never both set in practice, but preferring the explicit list means a caller that sets it cannot have it silently dropped in favour of a stale Result.",
+			resourceID: "XR/my-xr",
+			err: NewSchemaValidationError("", "msg", errors.New("inner")).
+				WithResult(&pkgvalidate.ValidationResult{
+					Resources: []pkgvalidate.ResourceValidationResult{{
+						APIVersion: "from.result/v1",
+						Kind:       "FromResult",
+						Status:     pkgvalidate.ValidationStatusInvalid,
+					}},
+				}).
+				WithFailures([]dt.ResourceValidationFailure{{
+					APIVersion: "from.failures/v1",
+					Kind:       "FromFailures",
+					Status:     "invalid",
+				}}),
+			want: dt.OutputError{
+				ResourceID: "XR/my-xr",
+				Message:    "msg",
+				ValidationFailures: []dt.ResourceValidationFailure{{
+					APIVersion: "from.failures/v1",
+					Kind:       "FromFailures",
+					Status:     "invalid",
+				}},
+			},
+		},
+		"AdmissionRejection_UnnamedResourceStillProducesAUsableRow": {
+			reason:     "A generateName-only addition has no metadata.name, which is exactly the case SSA apply could not handle and dry-run create exists to cover. The failure row must still carry enough identity (apiVersion/kind/namespace) to be actionable rather than emitting a bare empty name as if it were the whole story, and the message must fall back to the generateName-shaped description.",
+			resourceID: "XBucket/my-xr",
+			err: NewAdmissionRejectionError("Bucket/my-bucket-(generated)", &un.Unstructured{Object: map[string]any{
+				"apiVersion": "s3.aws.crossplane.io/v1beta1",
+				"kind":       "Bucket",
+				"metadata": map[string]any{
+					"generateName": "my-bucket-",
+					"namespace":    "prod",
+				},
+			}}, errors.New("denied")),
+			want: dt.OutputError{
+				ResourceID: "XBucket/my-xr",
+				Message:    "the cluster rejected Bucket/my-bucket-(generated): denied",
+				ValidationFailures: []dt.ResourceValidationFailure{{
+					APIVersion: "s3.aws.crossplane.io/v1beta1",
+					Kind:       "Bucket",
+					Namespace:  "prod",
+					Status:     "invalid",
+					Errors: []dt.FieldValidationError{{
+						Type:    "admission",
+						Message: "denied",
+					}},
 				}},
 			},
 		},
@@ -648,6 +728,33 @@ func TestDetermineExitCode(t *testing.T) {
 			err:      fmt.Errorf("context: %w", &SchemaValidationError{Message: "inner"}),
 			hasDiffs: false,
 			want:     ExitCodeSchemaValidation,
+		},
+		"AdmissionRejectionIsAValidationError": {
+			// An apiserver dry-run rejection routes to exit 2, not 1. This is the
+			// behaviour change from crossplane-diff#334: before it, the same webhook
+			// rejection produced exit 1 for an existing resource, so the exit code
+			// depended on whether the resource already existed rather than on what
+			// the cluster said.
+			err: NewAdmissionRejectionError("Bucket/my-bucket", &un.Unstructured{Object: map[string]any{
+				"apiVersion": "s3.aws.crossplane.io/v1beta1",
+				"kind":       "Bucket",
+			}}, errors.New(`admission webhook "x" denied the request`)),
+			hasDiffs: false,
+			want:     ExitCodeSchemaValidation,
+		},
+		"AdmissionRejectionMixedWithToolErrorStillExitsToolError": {
+			// Tool errors outrank validation errors, so a run that both failed to
+			// reach the cluster and saw a rejection must not be reported as a mere
+			// validation problem.
+			err: errors.Join(
+				errors.New("kube unreachable"),
+				NewAdmissionRejectionError("Bucket/my-bucket", &un.Unstructured{Object: map[string]any{
+					"apiVersion": "s3.aws.crossplane.io/v1beta1",
+					"kind":       "Bucket",
+				}}, errors.New("denied")),
+			),
+			hasDiffs: false,
+			want:     ExitCodeToolError,
 		},
 		// Edge cases for batch processing with multiple errors
 		"MultipleSchemaValidationErrors": {

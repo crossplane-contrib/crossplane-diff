@@ -84,6 +84,12 @@ crossplane-diff xr xr.yaml \
 
 # Show eventual state with function-sequencer (all stages, not just first)
 crossplane-diff xr xr.yaml --eventual-state
+
+# Don't dry-run create added resources, so no 'create' permission is needed. Their +++ diffs
+# then show the rendered output rather than what the apiserver would store (no server-side
+# defaulting, no mutating admission), and say so via dryRun.skipReason in JSON/YAML output.
+# Also available on comp. See Required Permissions.
+crossplane-diff xr xr.yaml --dry-run-on=existing
 ```
 
 If the XR's counterpart in the cluster is being deleted (it has a `metadata.deletionTimestamp`),
@@ -123,7 +129,9 @@ are emitted when raised rather than at the end of the run, so a warning is still
 step fails, and appears in step with the work that produced it. Today they cover: a composed resource
 that belongs to a different composite (applying would take ownership), a nested XR whose composition
 could not be found (it will compose nothing), function credentials that could not be fetched (the
-render may not reflect reality), leftover function containers, and the deleting-XR case above.
+render may not reflect reality), leftover function containers, an added resource that could not be
+verified against the apiserver (see [Required Permissions](#required-permissions)), and the
+deleting-XR case above.
 
 ### Composition Diff - Analyze Impact of Composition Changes
 
@@ -235,6 +243,11 @@ Flags:
       --eventual-state         Show eventual state after all reconciliation cycles
                                complete. Useful with function-sequencer which hides
                                later stage resources until earlier stages become Ready.
+      --dry-run-on=all         Which resources to verify against the apiserver with a
+                               dry run: "all" also dry-run creates added resources so
+                               their diffs include server-side defaulting and admission
+                               (needs the 'create' verb; degrades per-resource without
+                               it), "existing" only resources already in the cluster.
       --crossplane-version=VERSION
                                Pin the crossplane render version; the docker engine
                                pulls xpkg.crossplane.io/crossplane/crossplane:<version>.
@@ -325,6 +338,11 @@ Flags:
       --analyze-unchanged      Deprecated: equivalent to --analyze-on=always. Still
                                honoured, but passing it together with a conflicting --analyze-on
                                value is an error.
+      --dry-run-on=all         Which resources to verify against the apiserver with a
+                               dry run: "all" also dry-run creates added resources so
+                               their diffs include server-side defaulting and admission
+                               (needs the 'create' verb; degrades per-resource without
+                               it), "existing" only resources already in the cluster.
       --crossplane-version=VERSION
                                Pin the crossplane render version; the docker engine
                                pulls xpkg.crossplane.io/crossplane/crossplane:<version>.
@@ -430,7 +448,12 @@ flags.
 
 ## Required Permissions
 
-The tool reads from the cluster to gather definitions and current state, and performs a server-side apply with `dryRun=All` against existing resources to compute the post-apply form — picking up CRD defaulting and mutating-webhook output, and surfacing any validating-webhook rejection as a diff-time error. Although nothing is ever persisted, the apiserver still authorizes SSA dry-run with the `patch` verb, so read-only access is **not** sufficient.
+The tool reads from the cluster to gather definitions and current state, and round-trips every resource it is about to diff through the apiserver with `dryRun=All` to compute the post-apply form — picking up server-side defaulting and mutating-admission output, and surfacing any rejection as a diff-time error. Two different requests are used, because they are two different operations:
+
+- **Resources that already exist** are server-side applied (`patch`).
+- **Additions** are created (`create`), which is what `--dry-run-on=all` (the default) does. Server-side apply cannot serve this path: it is a PUT-shaped request to a named path, and an addition that relies on `metadata.generateName` has no name yet.
+
+Although nothing is ever persisted, the apiserver authorizes a dry run exactly as it would the real request, so read-only access is **not** sufficient.
 
 ### Read-only (`get`, `list`, `watch`)
 
@@ -440,17 +463,46 @@ For the definition and configuration plane, which is only fetched:
 - `apiextensions.crossplane.io`: `compositeresourcedefinitions`, `compositions`, `compositionrevisions`, `environmentconfigs`
 - `pkg.crossplane.io`: `functions`
 
-### Read + `patch`
+### Read + `patch` (required)
 
-On every API group containing resources you want to diff — XRs, Claims, and any managed resource GVKs the compositions render. The `patch` verb is what authorizes the SSA dry-run.
+On every API group containing resources you want to diff — XRs, Claims, and any managed resource GVKs the compositions render. The `patch` verb is what authorizes the SSA dry-run against a resource that already exists.
+
+This one is not optional and does not degrade. An existing resource's diff depends on the apiserver's merge result — that is how field *removals* under server-side apply are detected — so a diff computed without it would be wrong rather than merely less detailed. Without `patch`, the run fails with a message naming the resource and the missing verb.
+
+### Read + `create` (required for full-fidelity addition diffs)
+
+On the same API groups. The `create` verb authorizes the dry-run create behind `--dry-run-on=all`, which is what makes a `+++` diff show the resource as the *apiserver* would store it rather than as the render pipeline emitted it. Two things are only visible this way:
+
+- **Defaults on built-in Kubernetes types.** For CRD-backed types the tool already applies the CRD's `default:` values locally before diffing, so those have never been missing. A built-in type (a `ConfigMap`, a `Deployment`) has no CRD to read them from, so its defaults — `spec.strategy.type`, `spec.template.spec.restartPolicy`, `imagePullPolicy`, and so on — only appear once the apiserver has seen the object.
+- **Mutating admission output, for any type.** Nothing local can predict what a mutating webhook will do.
+
+Unlike `patch`, this one **degrades per-resource rather than failing the run**. A resource that could not be verified falls back to the rendered output and is marked in structured output with a `dryRun` object saying why (see [Structured Output](#structured-output-jsonyaml)); each distinct reason raises one warning per GVK + namespace, not one per resource. The reasons are:
+
+| `dryRun.skipReason` | Cause |
+|---------------------|-------|
+| `forbidden` | The authorizer says these credentials may not create this kind here. Nothing was learned about the resource; this is a property of the credentials, not a finding about the resource. |
+| `webhookUnavailable` | The apiserver could not complete the admission chain — classically an unreachable webhook with `failurePolicy: Fail`. `dryRun.detail` carries the apiserver's own message. |
+| `namespaceNotFound` | The resource's target namespace does not exist yet, so the apiserver would not admit it. |
+| `disabled` | You passed `--dry-run-on=existing`. No warning is raised: you asked for it. |
+
+`namespaceNotFound` is a degradation rather than a finding on purpose. A Namespace and the resources inside it are routinely applied together, so the namespace being absent when you *diff* says nothing about whether the apply will succeed — `crossplane-diff` cannot know whether that Namespace is part of the same apply, and refusing to diff would break previewing a bootstrap. If you do want to treat it as a failure, gate on that `skipReason` value.
+
+If the cluster *rejects* an addition — a validating webhook, a `ValidatingAdmissionPolicy`, a `ResourceQuota` — that is a finding, not a degradation, and it is reported as one: exit code 2 with a typed `validationFailures[]` entry (see [Exit Codes](#exit-codes)). The difference is whether the verdict describes the object: a quota or policy refusal will still hold when you apply, whereas a missing namespace is a precondition you may be about to satisfy.
+
+A 403 alone cannot tell those two apart: the apiserver returns it both when RBAC denies the verb and when quota or a webhook refuses the object. Rather than pattern-match the apiserver's prose, the tool resolves the ambiguity with a `SelfSubjectAccessReview`, consulted only after a 403 has actually come back. `create` on `selfsubjectaccessreviews` is granted to `system:authenticated` by default through the built-in `system:basic-user` ClusterRole, so this normally needs no rule of its own.
+
+### Opting out: `--dry-run-on`
+
+`--dry-run-on` is available on both `xr` and `comp`:
+
+- `all` (default) — also dry-run creates additions, as described above.
+- `existing` — only dry-runs resources already in the cluster, which is the behaviour of releases before this flag existed. Needs no `create` permission and costs one apiserver round-trip fewer per added resource. Additions carry `dryRun.skipReason: "disabled"`.
+
+This is a depth/cost knob, not an accuracy toggle: at either setting every unverified resource says so in structured output, so "we did not check" stays distinguishable from "we checked and this is what the cluster would store".
 
 ### Optional: `get` on `secrets`
 
 Only required if you use the [auto-fetch credentials](#automatic-credential-fetching) feature. Skip this if you always supply credentials via `--function-credentials` or your compositions don't use credentialed functions.
-
-### `create` is **not** required
-
-The dry-run SSA only runs against resources that already exist in the cluster; for additions, the tool emits the rendered output directly without round-tripping through the apiserver. This keeps the RBAC surface smaller at the cost of slightly less faithful addition diffs (no apiserver defaulting or webhook mutation). See [#334](https://github.com/crossplane-contrib/crossplane-diff/issues/334) for the tracking issue on optionally enabling this.
 
 ### Example `ClusterRole`
 
@@ -470,19 +522,26 @@ rules:
 - apiGroups: [pkg.crossplane.io]
   resources: [functions]
   verbs: [get, list, watch]
-# Diffable resources — read + patch. List the provider/XR API groups you use;
-# you can combine them in one rule (as below) or split them into separate rules.
+# Diffable resources — read + patch + create. List the provider/XR API groups you
+# use; you can combine them in one rule (as below) or split them into separate rules.
+# patch authorizes the dry-run apply against existing resources and is required.
+# create authorizes the dry-run create behind --dry-run-on=all; drop it and
+# additions degrade per-resource (dryRun.skipReason: "forbidden") instead of failing.
 - apiGroups:
   - example.org                       # your XR groups
   - s3.aws.upbound.io                 # provider groups
   - s3.aws.m.upbound.io               # namespaced variants (Crossplane v2)
   resources: ['*']
-  verbs: [get, list, watch, patch]
+  verbs: [get, list, watch, patch, create]
 # Optional: function credential auto-fetch
 - apiGroups: ['']
   resources: [secrets]
   verbs: [get]
 ```
+
+If your compositions render **built-in** Kubernetes types (a `ConfigMap`, a `Deployment`, a `Service`), add a rule
+covering those groups too — the core group is `''`, apps is `apps`, and so on. Built-in types are exactly the case where
+the dry-run create earns its keep, since their defaults cannot be read from a CRD.
 
 ## Kubernetes Configuration
 
@@ -729,6 +788,33 @@ The structured output includes:
 - **Change types**: each entry's `type` field carries the word form — one of `"added"`, `"modified"`, or `"removed"`. (Unchanged resources are filtered out of structured output and never appear in `changes[]`. The `+` / `~` / `-` symbols appear only in the human-readable diff format described above.)
 - **Full resource details**: apiVersion, kind, name, namespace
 - **Diff content**: for modifications, `diff.old` and `diff.new` carry the full current/desired resource objects (apiVersion/kind/metadata/spec/status, etc.) — not just the diffing subset. For additions/removals, the full resource object lives under `diff.spec` (the JSON key is literally `spec` but the value is the entire resource, not its spec subtree).
+- **Dry-run fidelity**: a `dryRun` object on a change entry says that this resource's desired state did **not** go
+  through the apiserver, and why. It is **absent whenever the resource was verified** — that is the success case and the
+  common one, so a consumer checks for the key's presence, not for a value inside it. Removal diffs never carry it
+  either: they are computed straight from cluster state and have no desired state to preview, so read absence as
+  "nothing was skipped" rather than as a positive fidelity guarantee. The fields are `performed` (always `false` when the
+  object is present — the redundancy keeps the emitted JSON self-describing), `skipReason` (one of `"disabled"`,
+  `"forbidden"`, `"webhookUnavailable"`, `"namespaceNotFound"` — see [Required Permissions](#required-permissions) for what
+  each means), and
+  `detail`, the cluster's own explanation (the `SelfSubjectAccessReview`'s reason, or the apiserver's error message).
+  `dryRun` lives on the shared per-resource change shape, so it appears in `xr`'s `changes[]` and `xrs[].changes[]` and
+  in `comp`'s `impactAnalysis[].downstreamChanges.changes[]` alike:
+
+  ```json
+  {
+    "type": "added",
+    "apiVersion": "v1",
+    "kind": "ConfigMap",
+    "name": "new-config",
+    "namespace": "default",
+    "diff": { "spec": { ... } },
+    "dryRun": {
+      "performed": false,
+      "skipReason": "forbidden",
+      "detail": "not authorized to create configmaps in namespace \"default\""
+    }
+  }
+  ```
 - **Impact analysis** (comp only): which XRs are affected by composition changes and their status. When the composition
   change is smaller than `--analyze-on` asked to analyse — by default, a composition identical to its in-cluster
   version — its composites are not evaluated and the entry carries `"impactAnalysisSkipped": true` alongside an empty
@@ -753,7 +839,9 @@ The structured output includes:
 
 ### Validation Errors
 
-When schema validation fails on the input XR or any rendered composed resource, `crossplane-diff` reports the failure in both human-readable and machine-readable form. Exit-code precedence (per `DetermineExitCode`): any error in the run beats diff detection, so a partially-failed run never returns exit code 3 even if some XRs produced diffs. Among errors, tool errors (exit code 1) beat schema-validation errors (exit code 2). Exit code 2 therefore requires *every* error in the run to be a schema-validation error. See the [Exit Codes](#exit-codes) table below.
+When validation fails on the input XR or any rendered composed resource, `crossplane-diff` reports the failure in both human-readable and machine-readable form. Two things land here: local schema validation against the CRD/XRD, and the cluster's own refusal of a resource during the dry run (a validating webhook, a `ValidatingAdmissionPolicy`, a `ResourceQuota`). Both answer the same question — "will the cluster accept this?" — so they share the exit-code tier and the structured output field, and are told apart by `type` (see the `FieldValidationError` table below).
+
+Exit-code precedence (per `DetermineExitCode`): any error in the run beats diff detection, so a partially-failed run never returns exit code 3 even if some XRs produced diffs. Among errors, tool errors (exit code 1) beat validation errors (exit code 2). Exit code 2 therefore requires *every* error in the run to be a validation error. See the [Exit Codes](#exit-codes) table below.
 
 **Human-readable output** (`crossplane-diff xr invalid-xr.yaml`):
 
@@ -770,7 +858,7 @@ ns.nop.example.org/v1alpha1/XDownstreamResource default/invalid-schema-xr:
 (empty)
 ```
 
-The `cannot validate resources:` prefix is added by `DefaultDiffProcessor`'s `errors.Wrap` around the inner `SchemaValidationError` — every schema-validation failure carries that anchor.
+The `cannot validate resources:` prefix is added by `DefaultDiffProcessor`'s `errors.Wrap` around the inner `SchemaValidationError` — every *local schema* validation failure carries that anchor. A cluster rejection reaches the same exit-code tier by a different route (it is raised from diff calculation, not from the validator), so it carries a different anchor: `the cluster rejected <Kind>/<name>:`, followed by the apiserver's own message. Match on either, or on the structured `errors[].validationFailures[]`, rather than on `cannot validate resources:` alone.
 
 Each per-resource block starts with a header that includes the resource identity, followed by indented error lines:
 
@@ -779,6 +867,8 @@ Each per-resource block starts with a header that includes the resource identity
 - Resource without `metadata.name` (e.g. a resource discovered missing a schema before it was named): collapses to just `<apiVersion>/<Kind>:`
 
 Each indented error line has the shape `<message> [<type>]`, where `<type>` is one of `[schema]`, `[cel]`, `[unknownField]`, or `[defaulting]`. A bad value is appended as `(got <value>)` when it isn't already substring-present in the message. When some inputs in a batched run succeed and others fail validation, the successful diffs appear on stdout and the failing inputs' `ERROR:` blocks appear on stderr.
+
+This per-resource block form belongs to the local validator. A cluster rejection has nothing to break into field-level lines — the apiserver hands back one message — so it prints as a single `ERROR:` line and carries no `[<type>]` suffix. Its `"admission"` type is visible in structured output only.
 
 **Machine-readable output** (`crossplane-diff xr invalid-xr.yaml --output json`):
 
@@ -833,16 +923,18 @@ The `OutputError` schema:
 |-------|------|-------------|
 | `resourceID` | string | Identifies which user-supplied input the diff was processing (one entry per batched run). Format: `<Kind>/<name>`. |
 | `message` | string | Human-readable error string — the same text written to stderr. |
-| `validationFailures` | `[]ResourceValidationFailure`, optional | Structured per-resource breakdown. Set only for schema-validation failures; `nil` for tool, IO, render, and scope-check errors. |
+| `validationFailures` | `[]ResourceValidationFailure`, optional | Structured per-resource breakdown. Set for local schema-validation failures and for cluster rejections during the dry run; `nil` for tool, IO, render, and scope-check errors. |
 
 `ResourceValidationFailure` carries `apiVersion`, `kind`, `name`, `namespace`, `status` (one of `"invalid"` or `"missingSchema"` — `"valid"` rows are filtered out), and `errors`, a list of `FieldValidationError` records:
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `type` | string | `"schema"`, `"cel"`, `"unknownField"`, or `"defaulting"`. |
-| `field` | string, optional | JSONPath of the offending field, when locatable. |
-| `message` | string | Validator-emitted human-readable description; for k8s-derived schema errors this typically already embeds the field path and bad value. |
+| `type` | string | `"schema"`, `"cel"`, `"unknownField"`, `"defaulting"`, or `"admission"`. The first four come from local validation against the CRD/XRD. `"admission"` means the *apiserver* refused the resource during the dry run — a validating webhook, a `ValidatingAdmissionPolicy`, a `ResourceQuota`. A *missing namespace* is deliberately NOT here: it degrades instead, because it is a precondition you may be about to satisfy rather than a verdict on the object (see `dryRun.skipReason: namespaceNotFound`). It sits in the same field on purpose: to a consumer asking "why won't the cluster accept this?", it is the same kind of answer. |
+| `field` | string, optional | JSONPath of the offending field, when locatable. Absent for `"admission"`: the apiserver reports one rejection, not a field list. |
+| `message` | string | Validator-emitted human-readable description; for k8s-derived schema errors this typically already embeds the field path and bad value. For `"admission"` it is the apiserver's rejection message verbatim. |
 | `value` | any, optional | The offending value as the validator saw it. Type-preserved (string, number, bool, struct). |
+
+An `"admission"` failure is reported the same way whether the resource already exists or is being added — the cluster's verdict does not depend on that, so neither does the exit code. See the note under [Exit Codes](#exit-codes) for the behaviour change this represents.
 
 `resourceID` and `validationFailures` are intentionally complementary: `resourceID` anchors the failure to one user-supplied input, while `validationFailures` enumerates every resource (the input itself plus any composed resource) that failed validation under that input. They overlap on `kind`+`name` when the input itself is among the failing resources — that's deliberate, so consumers iterating `validationFailures` never miss an XR-level rejection.
 
@@ -856,7 +948,7 @@ The tool returns different exit codes to indicate the result of the diff operati
 |-----------|---------|
 | 0 | Success - no differences detected |
 | 1 | Tool error - execution failed (e.g., cluster access issues, invalid input) |
-| 2 | Schema validation error - resources failed validation against their CRD/XRD schemas |
+| 2 | Validation error - the cluster will not accept a resource: it failed local validation against its CRD/XRD schema, **or** the apiserver rejected it during the dry run (validating webhook, `ValidatingAdmissionPolicy`, `ResourceQuota`) |
 | 3 | Diff detected - differences were found between input and cluster state |
 
 Exit codes are ordered by severity. When processing multiple resources, the highest severity exit code is returned:
@@ -867,10 +959,20 @@ crossplane-diff xr my-xr.yaml
 case $? in
   0) echo "No changes needed" ;;
   1) echo "Error running diff" ; exit 1 ;;
-  2) echo "Schema validation failed" ; exit 1 ;;
+  2) echo "Cluster would reject a resource" ; exit 1 ;;
   3) echo "Changes detected - review required" ;;
 esac
 ```
+
+> **Behaviour change: cluster rejections now exit 2, not 1.** Exit code 2 used to mean only *local* schema validation.
+> A resource refused by a validating webhook during the dry-run apply surfaced as a plain tool error — **exit 1**. It is
+> now exit 2, with an `errors[].validationFailures[]` entry of `type: "admission"`.
+>
+> This deliberately covers **modifications of existing resources**, not just the newly dry-run additions. Reclassifying
+> only additions would have made the exit code for one cluster fact depend on whether the resource happened to exist
+> already, rather than on what the cluster said about it. A pipeline that treats exit 1 as "the tool broke, retry or
+> escalate" and exit 2 as "the input is bad, tell the author" now gets the right bucket for a webhook rejection; one that
+> was matching on exit 1 to detect rejections needs updating.
 
 **Revision churn does not set exit code 3.** For `comp`, exit code 3 means something renders differently: the composition's own diff is non-empty, or at least one composite's downstream resources change. A composition that only creates a new CompositionRevision without either — one differing solely in fields excluded from the diff, reported as `"maskedChangesOnly": true` — exits 0, so a GitOps loop re-applying the same manifests doesn't fail its diff gate on every run. A pipeline that *does* want to gate on revision churn reads `revisionImpact.createsRevision` from the structured output.
 
