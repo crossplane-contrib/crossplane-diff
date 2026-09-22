@@ -1,0 +1,38 @@
+# A ValidatingAdmissionPolicy that refuses XDownstreamResources carrying the configData values the
+# diff fixtures render, so a dry-run against the apiserver is rejected (crossplane-diff#334, R8).
+#
+# Why a VAP and not a CEL x-kubernetes-validations rule on the CRD: crossplane-diff's own schema
+# validator evaluates CEL rules locally, before the diff calculator runs, so a CEL rule would reject
+# the resource without the apiserver ever being consulted. The test would pass on code that never
+# dry-ran anything — the exact false positive this instrument has to avoid. A VAP is invisible to the
+# local validator, needs no webhook server, and has been GA since Kubernetes 1.30.
+#
+# CREATE covers the addition path (dry-run create); UPDATE covers the existing-resource path, where
+# a server-side-apply dry-run reaches admission as an UPDATE. The same policy therefore drives both
+# halves of AC-R8, including the deliberate reclassification of an existing resource's rejection
+# from a tool error to a validation failure.
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: reject-marked-downstream-resources
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: ["ns.nop.example.org"]
+        apiVersions: ["v1alpha1"]
+        operations: ["CREATE", "UPDATE"]
+        resources: ["xdownstreamresources"]
+  validations:
+    - expression: >-
+        !has(object.spec) || !has(object.spec.forProvider) || !has(object.spec.forProvider.configData)
+        || !(object.spec.forProvider.configData in ['new-value', 'modified-value'])
+      message: "this cluster refuses that configData value"
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: reject-marked-downstream-resources
+spec:
+  policyName: reject-marked-downstream-resources
+  validationActions: ["Deny"]
