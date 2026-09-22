@@ -74,39 +74,7 @@ func (r *DefaultCompDiffRenderer) RenderCompDiff(output *CompDiffOutput) error {
 			}
 		}
 
-		switch {
-		case r.opts.MinimizeComposition:
-			if err := r.renderMinimizedCompositionChanges(&comp); err != nil {
-				return err
-			}
-		default:
-			if err := r.renderCompositionChanges(&comp); err != nil {
-				return err
-			}
-		}
-
-		// Skip remaining sections if composition had a processing error
-		if comp.Error != nil {
-			continue
-		}
-
-		// The affected-XR and impact-analysis sections would both be empty and misleading for a
-		// composition whose XRs were deliberately not evaluated; say so once instead.
-		if comp.ImpactAnalysisSkipped {
-			if _, err := fmt.Fprint(stdout, skippedMessage(comp.RevisionImpact)); err != nil {
-				return errors.Wrap(err, "cannot write impact analysis skipped message")
-			}
-
-			continue
-		}
-
-		// Render affected XRs list with status indicators
-		if err := r.renderAffectedResourcesList(&comp); err != nil {
-			return err
-		}
-
-		// Render impact analysis (downstream diffs)
-		if err := r.renderImpactAnalysis(&comp); err != nil {
+		if err := r.renderComposition(&comp); err != nil {
 			return err
 		}
 	}
@@ -119,6 +87,58 @@ func (r *DefaultCompDiffRenderer) RenderCompDiff(output *CompDiffOutput) error {
 	}
 
 	return nil
+}
+
+// renderComposition renders every section belonging to a single composition: its own changes,
+// followed — only if it processed successfully — by the sections describing its effect on composites.
+// A composition that failed to process has no such sections to show; renderCompositionChanges
+// reported the error in their place.
+func (r *DefaultCompDiffRenderer) renderComposition(comp *CompositionDiff) error {
+	switch {
+	case r.opts.MinimizeComposition:
+		if err := r.renderMinimizedCompositionChanges(comp); err != nil {
+			return err
+		}
+	default:
+		if err := r.renderCompositionChanges(comp); err != nil {
+			return err
+		}
+	}
+
+	if comp.Error == nil {
+		return r.renderCompositionImpact(comp)
+	}
+
+	return nil
+}
+
+// renderCompositionImpact renders the sections describing how a composition affects its composites:
+// either the note standing in for them when their evaluation was skipped, or the affected-XR list and
+// the downstream impact analysis.
+func (r *DefaultCompDiffRenderer) renderCompositionImpact(comp *CompositionDiff) error {
+	if comp.ImpactAnalysisSkipped {
+		return r.renderSkippedComposition(comp)
+	}
+
+	// Render affected XRs list with status indicators
+	if err := r.renderAffectedResourcesList(comp); err != nil {
+		return err
+	}
+
+	// Render impact analysis (downstream diffs)
+	return r.renderImpactAnalysis(comp)
+}
+
+// renderSkippedComposition stands in for the affected-XR and impact-analysis sections when a
+// composition's XRs were deliberately not evaluated. Both sections would be empty and misleading in
+// that case, so say so once instead — then report the composites the tool did rule out locally, which
+// no render was needed to establish.
+func (r *DefaultCompDiffRenderer) renderSkippedComposition(comp *CompositionDiff) error {
+	if _, err := fmt.Fprint(r.opts.Stdout, skippedMessage(comp.RevisionImpact)); err != nil {
+		return errors.Wrap(err, "cannot write impact analysis skipped message")
+	}
+
+	return r.renderFilteredUnderSkip(comp)
 }
 
 // renderCompositionChanges renders the composition changes section.
@@ -176,6 +196,46 @@ func skippedMessage(impact RevisionImpact) string {
 	}
 
 	return "Impact analysis skipped: this composition is identical to the cluster's, so applying it creates no new CompositionRevision and no composite resource could change as a result. Pass --analyze-on=always to evaluate them anyway.\n\n"
+}
+
+// renderFilteredUnderSkip reports the composites ruled out as not adopting the resulting revision, for
+// a composition whose impact analysis was skipped. Deciding that needs no render, so the skip must not
+// suppress it: --analyze-on governs how much work is done, never whether a real consequence is
+// reported (issue #478). What is withheld is the changed/unchanged/errored summary
+// renderAffectedResourcesList prints, which would be unearned here — those composites went
+// unevaluated.
+//
+// As elsewhere, --resource mode names each composite (the user asked about them by name, and their
+// FilterReason reached ImpactAnalysis) while default discovery reports the per-reason breakdown.
+//
+// ImpactAnalysis is listed as-is, not re-filtered by status: under a skip it holds only the filtered
+// entries, because the kept composites were never rendered. That is the processor's guarantee, pinned
+// by its SkipReportsFilterConsequences test. Re-filtering here would not add safety — it would hide an
+// unearned changed/unchanged verdict from this output while it still reached the structured output.
+func (r *DefaultCompDiffRenderer) renderFilteredUnderSkip(comp *CompositionDiff) error {
+	filtered := totalFiltered(comp.AffectedResources)
+	if filtered == 0 {
+		return nil
+	}
+
+	stdout := r.opts.Stdout
+
+	if _, err := fmt.Fprintf(stdout, "%d of %d XR(s) using composition %s would not adopt this revision: %s\n",
+		filtered, comp.AffectedResources.Total, comp.Name, filteredClauses(comp.AffectedResources)); err != nil {
+		return errors.Wrap(err, "cannot write filtered XRs summary")
+	}
+
+	if len(comp.ImpactAnalysis) > 0 {
+		if _, err := fmt.Fprint(stdout, r.buildXRStatusList(comp.ImpactAnalysis)); err != nil {
+			return errors.Wrap(err, "cannot write filtered XRs list")
+		}
+	}
+
+	if _, err := fmt.Fprintln(stdout); err != nil {
+		return errors.Wrap(err, "cannot write filtered XRs separator")
+	}
+
+	return nil
 }
 
 // writeNoDisplayableChanges reports a composition with no diff body to show. That covers two
@@ -357,23 +417,31 @@ func allFilteredMessage(compName string, summary AffectedResourcesSummary) strin
 			total, compName)
 	}
 
+	return fmt.Sprintf("All %d XR(s) using composition %s were filtered: %s",
+		total, compName, filteredClauses(summary))
+}
+
+// filteredClauses enumerates the per-reason filter counters as a comma-separated breakdown (e.g.
+// "1 with Manual update policy (use --include-manual to see them), 2 being deleted"), omitting reasons
+// with no XRs. Shared by allFilteredMessage's mixed-reason case and renderFilteredUnderSkip so a newly
+// added reason is described identically in both.
+func filteredClauses(summary AffectedResourcesSummary) string {
 	clauses := make([]string, 0, 3)
 
 	for _, c := range []struct {
 		count int
 		text  string
 	}{
-		{byPolicy, "with Manual update policy (use --include-manual to see them)"},
-		{bySelector, "with a compositionRevisionSelector that does not match the composition's labels"},
-		{byDeletion, "being deleted"},
+		{summary.FilteredByPolicy, "with Manual update policy (use --include-manual to see them)"},
+		{summary.FilteredBySelector, "with a compositionRevisionSelector that does not match the composition's labels"},
+		{summary.FilteredByDeletion, "being deleted"},
 	} {
 		if c.count > 0 {
 			clauses = append(clauses, fmt.Sprintf("%d %s", c.count, c.text))
 		}
 	}
 
-	return fmt.Sprintf("All %d XR(s) using composition %s were filtered: %s",
-		total, compName, strings.Join(clauses, ", "))
+	return strings.Join(clauses, ", ")
 }
 
 // filteredSuffix returns the human-readable explanation appended to a filtered XR line, chosen by
@@ -536,7 +604,14 @@ func (r *StructuredCompDiffRenderer) buildStructuredCompOutput(output *CompDiffO
 			ImpactAnalysis:        make([]xrImpactWire, 0, len(comp.ImpactAnalysis)),
 			ImpactAnalysisSkipped: comp.ImpactAnalysisSkipped,
 			MaskedChangesOnly:     comp.MaskedChangesOnly,
-			RevisionImpact:        comp.RevisionImpact,
+		}
+
+		// Omit revisionImpact entirely when the comparison never completed, rather than serializing a
+		// zero value that would claim changeScope "" and createsRevision false. See
+		// RevisionImpact.determined and issue #479.
+		if comp.RevisionImpact.determined() {
+			revisionImpact := comp.RevisionImpact
+			jsonComp.RevisionImpact = &revisionImpact
 		}
 
 		// Include per-composition error if present

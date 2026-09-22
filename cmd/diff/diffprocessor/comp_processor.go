@@ -394,39 +394,17 @@ func (p *DefaultCompDiffProcessor) processSingleComposition(ctx context.Context,
 	}
 
 	// Partition XRs by whether they would adopt the diffed composition's resulting revision. This is
-	// local (no renders), and both paths below need it: the composites that would adopt the new
-	// revision are exactly the ones that would re-point at it.
-	keptXRs, droppedXRs, err := p.partitionXRsByUpdatePolicy(affectedXRs, newComp)
+	// local (no renders), and every path below needs it: the composites that would adopt the new
+	// revision are exactly the ones that would re-point at it, and the ones that would not are a
+	// consequence of applying this composition in their own right.
+	keptXRs, droppedXRs, repointing, err := p.partitionXRsByUpdatePolicy(affectedXRs, newComp)
 	if err != nil {
 		return nil, err
 	}
 
 	if comparison.changed() {
-		result.RevisionImpact.RepointedComposites = len(keptXRs)
+		result.RevisionImpact.RepointedComposites = repointing
 	}
-
-	// Skip the per-XR work — one function render per XR, the dominant cost of comp — when the change
-	// is smaller than the user asked to analyse.
-	//
-	// At the default (any-change) this skips only a composition identical in everything Crossplane
-	// hashes: no new CompositionRevision is created, so no XR adopts anything it hasn't already, and
-	// any downstream delta computed here would be caused by something else — drift, convergence lag,
-	// or a modeling artifact of this tool — which we cannot tell apart, so reporting it as this
-	// composition's "impact" would attribute cluster state to a change that does not exist.
-	// See issues #453 and #472.
-	if !comparison.scope.triggersAnalysis(p.config.AnalyzeOn) {
-		p.config.Logger.Debug("Skipping impact analysis",
-			"composition", newComp.GetName(),
-			"changeScope", string(comparison.scope),
-			"analyzeOn", string(p.config.AnalyzeOn),
-			"affectedXRCount", len(affectedXRs))
-
-		result.ImpactAnalysisSkipped = true
-
-		return result, nil
-	}
-
-	p.config.Logger.Debug("Processing affected XRs", "composition", newComp.GetName(), "count", len(affectedXRs), "surfaceFiltered", surfaceFiltered)
 
 	counts := countFilterReasons(droppedXRs)
 
@@ -434,6 +412,7 @@ func (p *DefaultCompDiffProcessor) processSingleComposition(ctx context.Context,
 		"composition", newComp.GetName(),
 		"originalCount", len(affectedXRs),
 		"keptCount", len(keptXRs),
+		"repointingCount", repointing,
 		"droppedCount", len(droppedXRs),
 		"filteredByPolicy", counts.byPolicy,
 		"filteredBySelector", counts.bySelector,
@@ -459,11 +438,39 @@ func (p *DefaultCompDiffProcessor) processSingleComposition(ctx context.Context,
 		}
 	}
 
-	if len(keptXRs) == 0 {
-		// All XRs were filtered.
-		result.AffectedResources.Total = len(affectedXRs)
-		counts.applyTo(&result.AffectedResources)
+	// Which composites were discovered, and which of them would not adopt the resulting revision, is
+	// settled above without rendering anything. So it is recorded before the skip below, which
+	// suppresses only the per-XR renders: --analyze-on is a cost knob, and a flag may change how much
+	// work is done but never whether a real consequence is reported. Reporting a total of 0 here while
+	// RevisionImpact.RepointedComposites said otherwise was issue #478.
+	result.AffectedResources.Total = len(affectedXRs)
+	counts.applyTo(&result.AffectedResources)
 
+	// Skip the per-XR work — one function render per XR, the dominant cost of comp — when the change
+	// is smaller than the user asked to analyse.
+	//
+	// At the default (any-change) this skips only a composition identical in everything Crossplane
+	// hashes: no new CompositionRevision is created, so no XR adopts anything it hasn't already, and
+	// any downstream delta computed here would be caused by something else — drift, convergence lag,
+	// or a modeling artifact of this tool — which we cannot tell apart, so reporting it as this
+	// composition's "impact" would attribute cluster state to a change that does not exist.
+	// See issues #453 and #472.
+	if !comparison.scope.triggersAnalysis(p.config.AnalyzeOn) {
+		p.config.Logger.Debug("Skipping impact analysis",
+			"composition", newComp.GetName(),
+			"changeScope", string(comparison.scope),
+			"analyzeOn", string(p.config.AnalyzeOn),
+			"affectedXRCount", len(affectedXRs))
+
+		result.ImpactAnalysisSkipped = true
+
+		return result, nil
+	}
+
+	p.config.Logger.Debug("Processing affected XRs", "composition", newComp.GetName(), "count", len(affectedXRs), "surfaceFiltered", surfaceFiltered)
+
+	if len(keptXRs) == 0 {
+		// All XRs were filtered; the summary recorded above is already complete.
 		return result, nil
 	}
 
@@ -765,7 +772,11 @@ type filteredXR struct {
 // would adopt the CompositionRevision resulting from newComp. See classifyXR for the per-XR rules,
 // which also cover exclusions unrelated to update policy (e.g. XRs being deleted). A malformed
 // compositionRevisionSelector is a hard error (accuracy over guessing).
-func (p *DefaultCompDiffProcessor) partitionXRsByUpdatePolicy(xrs []*un.Unstructured, newComp *un.Unstructured) (kept []*un.Unstructured, dropped []filteredXR, err error) {
+//
+// `repointing` counts the kept XRs that would genuinely re-point at the resulting revision, which is
+// not the same as len(kept): --include-manual keeps a Manual-policy XR for analysis even though it
+// stays pinned to whatever compositionRevisionRef already names. See classifyXR and issue #479.
+func (p *DefaultCompDiffProcessor) partitionXRsByUpdatePolicy(xrs []*un.Unstructured, newComp *un.Unstructured) (kept []*un.Unstructured, dropped []filteredXR, repointing int, err error) {
 	// The selector is matched against the label set the new revision would carry (composition labels
 	// plus the stamped crossplane.io/composition-name), while mismatch messages display the user's
 	// own composition labels; see predictedRevisionLabels and xp.XRRevisionSelectorMatch.
@@ -773,38 +784,55 @@ func (p *DefaultCompDiffProcessor) partitionXRsByUpdatePolicy(xrs []*un.Unstruct
 	compLabels := newComp.GetLabels()
 
 	for _, xr := range xrs {
-		drop, classifyErr := p.classifyXR(xr, targetLabels, compLabels)
+		disposition, classifyErr := p.classifyXR(xr, targetLabels, compLabels)
 		if classifyErr != nil {
-			return nil, nil, classifyErr
+			return nil, nil, 0, classifyErr
 		}
 
-		if drop != nil {
-			dropped = append(dropped, *drop)
+		if disposition.filtered != nil {
+			dropped = append(dropped, *disposition.filtered)
 			continue
 		}
 
 		kept = append(kept, xr)
+
+		if !disposition.pinnedToRevision {
+			repointing++
+		}
 	}
 
-	return kept, dropped, nil
+	return kept, dropped, repointing, nil
+}
+
+// xrDisposition is what classifyXR decided about one XR.
+type xrDisposition struct {
+	// filtered is non-nil when the XR is dropped from impact analysis, carrying the reason.
+	filtered *filteredXR
+
+	// pinnedToRevision marks a *kept* XR that nonetheless would not adopt the CompositionRevision this
+	// composition would produce, because a Manual compositionUpdatePolicy pins it to whatever
+	// compositionRevisionRef already names. Only reachable under --include-manual, which keeps such an
+	// XR so its would-be rendered output can be inspected — without changing the fact that it does not
+	// re-point. Counting it as re-pointing was issue #479.
+	pinnedToRevision bool
 }
 
 // classifyXR decides whether a single XR should be kept for impact analysis or dropped (and why),
 // based on whether it would adopt the CompositionRevision resulting from the diffed composition.
-// It returns a non-nil *filteredXR when the XR is dropped, or nil to keep it. targetLabels is the
-// predicted revision label set (used for selector matching); compLabels is the composition's own
-// metadata.labels (used for the user-facing mismatch detail).
+// targetLabels is the predicted revision label set (used for selector matching); compLabels is the
+// composition's own metadata.labels (used for the user-facing mismatch detail).
 //
 // Rules:
 //   - Being deleted (metadata.deletionTimestamp set): dropped (reason deleting). Checked first,
 //     and NOT overridden by IncludeManual, because deletion supersedes the policy rules entirely.
 //   - Manual compositionUpdatePolicy: dropped (reason manual_policy) — pinned via
-//     compositionRevisionRef — unless IncludeManual is set.
+//     compositionRevisionRef — unless IncludeManual is set, in which case it is kept but marked
+//     pinnedToRevision: opting into analysing it does not make it adopt the new revision.
 //   - Automatic policy with a compositionRevisionSelector that does not match: dropped (reason
 //     revision_selector_mismatch). NOT overridden by IncludeManual, since the XR genuinely would
 //     not select the resulting revision.
-//   - Automatic policy with no selector, or a matching selector: kept.
-func (p *DefaultCompDiffProcessor) classifyXR(xr *un.Unstructured, targetLabels, compLabels map[string]string) (*filteredXR, error) {
+//   - Automatic policy with no selector, or a matching selector: kept, and re-points.
+func (p *DefaultCompDiffProcessor) classifyXR(xr *un.Unstructured, targetLabels, compLabels map[string]string) (xrDisposition, error) {
 	// An XR with a deletionTimestamp is on Crossplane's teardown path: the composite reconciler
 	// deletes its composed resources instead of composing them. It will never adopt the revision
 	// this composition would produce, and rendering it yields no composed resources to diff — so
@@ -821,16 +849,16 @@ func (p *DefaultCompDiffProcessor) classifyXR(xr *un.Unstructured, targetLabels,
 			"kind", xr.GetKind(),
 			"deletionTimestamp", stamp)
 
-		return &filteredXR{
+		return xrDisposition{filtered: &filteredXR{
 			xr:     xr,
 			reason: renderer.FilterReasonDeleting,
 			detail: fmt.Sprintf("deletionTimestamp: %s", stamp),
-		}, nil
+		}}, nil
 	}
 
 	policy, err := xp.XRUpdatePolicy(xr.Object, xr.GetAPIVersion())
 	if err != nil {
-		return nil, errors.Wrapf(err, "cannot read compositionUpdatePolicy for XR %q", xr.GetName())
+		return xrDisposition{}, errors.Wrapf(err, "cannot read compositionUpdatePolicy for XR %q", xr.GetName())
 	}
 
 	p.config.Logger.Debug("Classifying XR",
@@ -838,13 +866,14 @@ func (p *DefaultCompDiffProcessor) classifyXR(xr *un.Unstructured, targetLabels,
 		"kind", xr.GetKind(),
 		"policy", policy)
 
-	// Manual policy: pinned to a specific revision; excluded unless the user opts in.
+	// Manual policy: pinned to a specific revision; excluded unless the user opts in. Opting in keeps
+	// it for analysis but does not unpin it, so it is marked as not re-pointing.
 	if policy == compositionUpdatePolicyManual {
 		if p.config.IncludeManual {
-			return nil, nil
+			return xrDisposition{pinnedToRevision: true}, nil
 		}
 
-		return &filteredXR{xr: xr, reason: renderer.FilterReasonManualPolicy}, nil
+		return xrDisposition{filtered: &filteredXR{xr: xr, reason: renderer.FilterReasonManualPolicy}}, nil
 	}
 
 	// Automatic (or default) policy: honor compositionRevisionSelector. An XR whose selector does not
@@ -852,14 +881,14 @@ func (p *DefaultCompDiffProcessor) classifyXR(xr *un.Unstructured, targetLabels,
 	// regardless of IncludeManual.
 	matches, detail, err := xp.XRRevisionSelectorMatch(xr, targetLabels, compLabels)
 	if err != nil {
-		return nil, errors.Wrapf(err, "cannot evaluate compositionRevisionSelector for XR %q", xr.GetName())
+		return xrDisposition{}, errors.Wrapf(err, "cannot evaluate compositionRevisionSelector for XR %q", xr.GetName())
 	}
 
 	if !matches {
-		return &filteredXR{xr: xr, reason: renderer.FilterReasonRevisionSelectorMismatch, detail: detail}, nil
+		return xrDisposition{filtered: &filteredXR{xr: xr, reason: renderer.FilterReasonRevisionSelectorMismatch, detail: detail}}, nil
 	}
 
-	return nil, nil
+	return xrDisposition{}, nil
 }
 
 // filterCounts tallies dropped XRs by filter reason. A struct rather than a growing list of

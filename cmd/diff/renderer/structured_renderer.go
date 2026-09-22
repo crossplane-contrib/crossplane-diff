@@ -172,8 +172,13 @@ type CompositionDiff struct {
 	ImpactAnalysis    []XRImpact
 	// ImpactAnalysisSkipped records that the affected XRs were deliberately not evaluated, because
 	// the composition changed by less than --analyze-on asked to analyse. Distinguishes "we did not
-	// look" from "we looked and found no affected XRs", which are otherwise indistinguishable from an
-	// empty ImpactAnalysis.
+	// look" from "we looked and found no affected XRs", which would otherwise be indistinguishable.
+	//
+	// It does not mean ImpactAnalysis is empty. Composites excluded by update policy, revision
+	// selector or deletion are identified locally, with no render, so they are reported whether or not
+	// the analysis ran — in --resource mode as XRStatusFiltered entries here, and always via the
+	// AffectedResources filter counters (issue #478). What a skip suppresses is the renders, and
+	// therefore any changed/unchanged/errored verdict about the composites that were kept.
 	//
 	// Why the composites went unevaluated is not recoverable from this field alone — read
 	// RevisionImpact.ChangeScope alongside it. A "none" scope means no CompositionRevision is created
@@ -186,8 +191,9 @@ type CompositionDiff struct {
 	// renderer must not report it as unchanged.
 	MaskedChangesOnly bool
 	// RevisionImpact is what applying this composition does to CompositionRevisions, independent of
-	// whether anything renders differently. Always populated, including when the composites were not
-	// evaluated.
+	// whether anything renders differently. Populated whenever the comparison completed, including
+	// when the composites were not evaluated; left zero for a composition that failed to process,
+	// where nothing about it was established (see RevisionImpact.determined).
 	RevisionImpact RevisionImpact
 }
 
@@ -206,10 +212,23 @@ type RevisionImpact struct {
 	// CreatesRevision records whether applying this composition produces a new CompositionRevision.
 	CreatesRevision bool `json:"createsRevision"`
 	// RepointedComposites counts the composites that would adopt that revision and reconcile as a
-	// result — those not excluded by update policy, revision selector, or deletion. Note this counts
-	// composites that re-point, which is not the same as composites whose rendered output changes;
-	// re-pointing alone usually renders identically.
+	// result: those with an Automatic (or defaulted) compositionUpdatePolicy whose
+	// compositionRevisionSelector, if any, selects the resulting revision, and which are not being
+	// deleted. A Manual-policy composite is never counted — it is pinned by compositionRevisionRef, so
+	// --include-manual keeping it for analysis does not make it re-point (issue #479).
+	//
+	// Note this counts composites that re-point, which is not the same as composites whose rendered
+	// output changes; re-pointing alone usually renders identically.
 	RepointedComposites int `json:"repointedComposites"`
+}
+
+// determined reports whether the comparison that populates a RevisionImpact actually ran. ChangeScope
+// is set unconditionally alongside the other fields and every real scope is non-empty, so an empty
+// scope means nothing here was established. That is the case for a composition that failed to process:
+// serializing the zero value would put changeScope outside its documented enum and would assert
+// createsRevision: false, a positive claim about an apply the tool never evaluated (issue #479).
+func (i RevisionImpact) determined() bool {
+	return i.ChangeScope != ""
 }
 
 // HasChanges returns true if this composition diff has any changes, which is what drives
@@ -286,17 +305,21 @@ type compositionDiffWire struct {
 	CompositionChanges *ChangeDetail            `json:"compositionChanges,omitempty"`
 	AffectedResources  AffectedResourcesSummary `json:"affectedResources"`
 	ImpactAnalysis     []xrImpactWire           `json:"impactAnalysis"`
-	// ImpactAnalysisSkipped tells consumers the empty impactAnalysis means "not evaluated" rather
-	// than "no affected XRs found". Read revisionImpact.changeScope alongside it to tell "nothing
+	// ImpactAnalysisSkipped tells consumers that no changed/unchanged/errored verdict was reached for
+	// the composites that would adopt the resulting revision, rather than that none were found. It
+	// does not imply impactAnalysis is empty: composites excluded by update policy, revision selector
+	// or deletion are identified without rendering, so they are still reported here and in
+	// affectedResources (issue #478). Read revisionImpact.changeScope alongside it to tell "nothing
 	// could have changed" from "a revision is created but was not evaluated".
 	ImpactAnalysisSkipped bool `json:"impactAnalysisSkipped,omitempty"`
 	// MaskedChangesOnly tells consumers that an absent compositionChanges does not mean the
 	// composition is unchanged: it differs only in fields excluded from the diff.
 	MaskedChangesOnly bool `json:"maskedChangesOnly,omitempty"`
 	// RevisionImpact is what applying this composition does to CompositionRevisions, independent of
-	// whether anything renders differently. Always present, including when impactAnalysis was
-	// skipped — that is the point of it.
-	RevisionImpact RevisionImpact `json:"revisionImpact"`
+	// whether anything renders differently. Present whenever the comparison completed — including when
+	// impactAnalysis was skipped, which is the point of it — and absent for a composition that failed
+	// to process, where the `error` field says why nothing about the revision was determined.
+	RevisionImpact *RevisionImpact `json:"revisionImpact,omitempty"`
 }
 
 type xrImpactWire struct {

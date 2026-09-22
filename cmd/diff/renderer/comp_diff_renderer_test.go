@@ -192,6 +192,61 @@ func sharedCompDiffFixtures() []testCompDiffFixture {
 				}
 			},
 		},
+		{
+			// Issue #479: a composition that failed to process never completed the comparison, so nothing
+			// about its revision impact was determined. Serializing the zero value would put changeScope
+			// outside its "none"/"metadata"/"spec" enum and assert createsRevision: false about an apply
+			// the tool never evaluated. The object is omitted instead; a composition that *was* compared
+			// keeps it, including when the composites went unevaluated.
+			name: "FailedCompositionOmitsRevisionImpact",
+			output: &CompDiffOutput{
+				Compositions: []CompositionDiff{
+					{
+						Name:                  "compared.example.org",
+						ImpactAnalysisSkipped: true,
+						RevisionImpact:        RevisionImpact{ChangeScope: "metadata", CreatesRevision: true, RepointedComposites: 1},
+						ImpactAnalysis:        []XRImpact{},
+					},
+					{
+						Name:           "broken.example.org",
+						Error:          errors.New("cannot calculate composition diff"),
+						ImpactAnalysis: []XRImpact{},
+					},
+				},
+			},
+			validate: func(t *testing.T, format OutputFormat, result string) {
+				t.Helper()
+
+				if format != OutputFormatJSON {
+					// YAML shares the JSON tags, so absence of the key is the whole assertion here.
+					if strings.Count(result, "revisionImpact:") != 1 {
+						t.Errorf("expected exactly one revisionImpact block in YAML, got:\n%s", result)
+					}
+
+					return
+				}
+
+				var parsed compDiffWire
+				if err := json.Unmarshal([]byte(result), &parsed); err != nil {
+					t.Fatalf("Failed to parse JSON: %v", err)
+				}
+
+				if len(parsed.Compositions) != 2 {
+					t.Fatalf("expected 2 compositions, got %d", len(parsed.Compositions))
+				}
+
+				compared, broken := parsed.Compositions[0], parsed.Compositions[1]
+
+				want := &RevisionImpact{ChangeScope: "metadata", CreatesRevision: true, RepointedComposites: 1}
+				if diff := gcmp.Diff(want, compared.RevisionImpact); diff != "" {
+					t.Errorf("compared composition revisionImpact mismatch (-want +got):\n%s", diff)
+				}
+
+				if broken.RevisionImpact != nil {
+					t.Errorf("failed composition should omit revisionImpact, got %+v", *broken.RevisionImpact)
+				}
+			},
+		},
 	}
 }
 
@@ -391,6 +446,100 @@ func TestDefaultCompDiffRenderer_RenderCompDiff(t *testing.T) {
 
 				if strings.Contains(result, "Summary: 1 modified") {
 					t.Errorf("expected no composition Summary footer when minimized, got: %q", result)
+				}
+			},
+		},
+		// Issue #478: which composites would not adopt the resulting revision is settled locally, with no
+		// render, so a skipped impact analysis must still report it. What the skip withholds is the
+		// changed/unchanged/errored summary — that verdict needed the renders it did not run.
+		"SkippedAnalysisStillReportsFilteredComposites": {
+			output: &CompDiffOutput{
+				Compositions: []CompositionDiff{{
+					Name:                  "test-comp",
+					ImpactAnalysisSkipped: true,
+					RevisionImpact:        RevisionImpact{ChangeScope: "metadata", CreatesRevision: true, RepointedComposites: 1},
+					AffectedResources:     AffectedResourcesSummary{Total: 3, FilteredByPolicy: 1, FilteredByDeletion: 1},
+					ImpactAnalysis:        []XRImpact{},
+				}},
+			},
+			colorize: false,
+			validate: func(t *testing.T, result string) {
+				t.Helper()
+
+				for _, want := range []string{
+					"Impact analysis skipped",
+					"2 of 3 XR(s) using composition test-comp would not adopt this revision",
+					"1 with Manual update policy (use --include-manual to see them)",
+					"1 being deleted",
+				} {
+					if !strings.Contains(result, want) {
+						t.Errorf("expected %q in output, got:\n%s", want, result)
+					}
+				}
+
+				// The kept composites went unevaluated, so no per-status verdict may be printed for them.
+				for _, unwanted := range []string{"=== Affected Composite Resources ===", "=== Impact Analysis ==="} {
+					if strings.Contains(result, unwanted) {
+						t.Errorf("did not expect %q for a skipped composition, got:\n%s", unwanted, result)
+					}
+				}
+			},
+		},
+		// In --resource mode the filtered composites reach ImpactAnalysis, so the skip path names them
+		// individually with their reason and detail — the affordance issue #457 shipped, which the skip
+		// used to discard.
+		"SkippedAnalysisNamesFilteredCompositesInResourceMode": {
+			output: &CompDiffOutput{
+				Compositions: []CompositionDiff{{
+					Name:                  "test-comp",
+					ImpactAnalysisSkipped: true,
+					RevisionImpact:        RevisionImpact{ChangeScope: "metadata", CreatesRevision: true},
+					AffectedResources:     AffectedResourcesSummary{Total: 1, FilteredByDeletion: 1},
+					ImpactAnalysis: []XRImpact{{
+						ObjectReference: corev1.ObjectReference{APIVersion: "example.org/v1", Kind: "XR", Name: "my-deleting-xr", Namespace: "default"},
+						Status:          XRStatusFiltered,
+						FilterReason:    FilterReasonDeleting,
+						FilterDetail:    "deletionTimestamp: 2026-09-07T11:25:03Z",
+					}},
+				}},
+			},
+			colorize: false,
+			validate: func(t *testing.T, result string) {
+				t.Helper()
+
+				for _, want := range []string{
+					"Impact analysis skipped",
+					"1 of 1 XR(s) using composition test-comp would not adopt this revision",
+					"XR/my-deleting-xr",
+					"filtered: being deleted (deletionTimestamp: 2026-09-07T11:25:03Z)",
+				} {
+					if !strings.Contains(result, want) {
+						t.Errorf("expected %q in output, got:\n%s", want, result)
+					}
+				}
+			},
+		},
+		// Nothing was filtered, so the skip note stands alone — no "0 of 0" line.
+		"SkippedAnalysisWithNothingFilteredSaysNoMore": {
+			output: &CompDiffOutput{
+				Compositions: []CompositionDiff{{
+					Name:                  "test-comp",
+					ImpactAnalysisSkipped: true,
+					RevisionImpact:        RevisionImpact{ChangeScope: "none"},
+					AffectedResources:     AffectedResourcesSummary{Total: 2},
+					ImpactAnalysis:        []XRImpact{},
+				}},
+			},
+			colorize: false,
+			validate: func(t *testing.T, result string) {
+				t.Helper()
+
+				if !strings.Contains(result, "Impact analysis skipped") {
+					t.Errorf("expected the skip note, got:\n%s", result)
+				}
+
+				if strings.Contains(result, "would not adopt this revision") {
+					t.Errorf("did not expect a filtered-composites line when nothing was filtered, got:\n%s", result)
 				}
 			},
 		},

@@ -269,6 +269,54 @@ func TestDefaultCompDiffProcessor_DiffComposition(t *testing.T) {
 			},
 			wantErr: false,
 		},
+		// Issue #478: at --analyze-on=spec-change a metadata-only change skips the per-XR renders, but
+		// the composites ruled out by the local filter pass are still reported — and their count must
+		// agree with the repointedComposites the same run reports, rather than the run claiming zero
+		// affected composites beside one that would re-point.
+		"AnalyzeOnSpecChangeStillReportsFilteredComposites": {
+			namespace:    "default",
+			compositions: []*un.Unstructured{changedComp()},
+			analyzeOn:    AnalyzeOnSpecChange,
+			setupMocks: func() xp.Clients {
+				deletingXR := tu.NewResource("example.org/v1", "XResource", "deleting-xr").
+					WithNamespace("default").
+					WithDeletionTimestamp("2026-09-07T11:25:03Z").
+					Build()
+
+				return xp.Clients{
+					Composition: tu.NewMockCompositionClient().
+						WithSuccessfulCompositionFetch(testComp).
+						WithResourcesForComposition("test-composition", "default", []*un.Unstructured{testXR, deletingXR}).
+						Build(),
+					Definition:   tu.NewMockDefinitionClient().Build(),
+					Environment:  tu.NewMockEnvironmentClient().Build(),
+					Function:     tu.NewMockFunctionClient().Build(),
+					ResourceTree: tu.NewMockResourceTreeClient().Build(),
+				}
+			},
+			verifyOutput: func(t *testing.T, output string) {
+				t.Helper()
+
+				for _, want := range []string{
+					"Impact analysis skipped",
+					// The metadata-only skip note may not claim nothing could change, and the composite it
+					// names as re-pointing is the one the filter pass kept.
+					"creates a new CompositionRevision that 1 composite would adopt",
+					"1 of 2 XR(s) using composition test-composition would not adopt this revision",
+					"1 being deleted",
+				} {
+					if !strings.Contains(output, want) {
+						t.Errorf("Expected %q in output, got:\n%s", want, output)
+					}
+				}
+
+				// The kept composite went unevaluated, so no changed/unchanged verdict may be printed.
+				if strings.Contains(output, "=== Affected Composite Resources ===") {
+					t.Errorf("Expected no affected-resources section for a skipped composition, got:\n%s", output)
+				}
+			},
+			wantErr: false,
+		},
 		"NoCompositions": {
 			namespace:    "default",
 			compositions: []*un.Unstructured{},
@@ -609,7 +657,11 @@ func TestDefaultCompDiffProcessor_partitionXRsByUpdatePolicy(t *testing.T) {
 		xrs           []*un.Unstructured
 		wantKept      []string
 		wantDropped   []droppedWant
-		wantErr       bool
+		// wantRepointing is how many of wantKept would actually adopt the resulting revision. It equals
+		// len(wantKept) except where --include-manual keeps a Manual-policy XR, which stays pinned by
+		// its compositionRevisionRef (issue #479).
+		wantRepointing int
+		wantErr        bool
 	}{
 		// AC2.5 (Manual side): --include-manual keeps Manual XRs...
 		"IncludeManualTrue_KeepsManualXRs": {
@@ -623,6 +675,21 @@ func TestDefaultCompDiffProcessor_partitionXRsByUpdatePolicy(t *testing.T) {
 			},
 			wantKept:    []string{"manual-xr", "auto-xr"},
 			wantDropped: nil,
+			// ...but keeping the Manual XR for analysis does not unpin it: only auto-xr re-points.
+			wantRepointing: 1,
+		},
+		// A Manual XR kept only by --include-manual re-points not at all, so a run whose entire kept set
+		// is Manual reports zero repointed composites even though it renders one composite.
+		"IncludeManualTrue_OnlyManualXR_NoneRepoint": {
+			includeManual: true,
+			compLabels:    map[string]string{"version": "0.0.2"},
+			xrs: []*un.Unstructured{
+				tu.NewResource("example.org/v1", "XResource", "manual-only").WithNamespace("default").
+					WithNestedField("Manual", "spec", "crossplane", "compositionUpdatePolicy").Build(),
+			},
+			wantKept:       []string{"manual-only"},
+			wantDropped:    nil,
+			wantRepointing: 0,
 		},
 		// AC2.5 (selector side): ...but --include-manual does NOT re-include selector-mismatched
 		// Automatic XRs — they would never adopt the new revision.
@@ -638,6 +705,8 @@ func TestDefaultCompDiffProcessor_partitionXRsByUpdatePolicy(t *testing.T) {
 			},
 			wantKept:    []string{"manual-xr"},
 			wantDropped: []droppedWant{{name: "auto-mismatch", reason: renderer.FilterReasonRevisionSelectorMismatch}},
+			// The only kept XR is the pinned Manual one, so nothing re-points.
+			wantRepointing: 0,
 		},
 		"IncludeManualFalse_FiltersManualXRs": {
 			includeManual: false,
@@ -648,8 +717,9 @@ func TestDefaultCompDiffProcessor_partitionXRsByUpdatePolicy(t *testing.T) {
 				tu.NewResource("example.org/v1", "XResource", "auto-xr").WithNamespace("default").
 					WithNestedField("Automatic", "spec", "crossplane", "compositionUpdatePolicy").Build(),
 			},
-			wantKept:    []string{"auto-xr"},
-			wantDropped: []droppedWant{{name: "manual-xr", reason: renderer.FilterReasonManualPolicy}},
+			wantKept:       []string{"auto-xr"},
+			wantDropped:    []droppedWant{{name: "manual-xr", reason: renderer.FilterReasonManualPolicy}},
+			wantRepointing: 1,
 		},
 		// AC2.1: Automatic XR whose selector does not match the composition labels is dropped.
 		"AutomaticSelectorMismatch_Dropped": {
@@ -672,8 +742,9 @@ func TestDefaultCompDiffProcessor_partitionXRsByUpdatePolicy(t *testing.T) {
 					WithNestedField("Automatic", "spec", "crossplane", "compositionUpdatePolicy").
 					WithCompositionRevisionSelector(xp.CrossplaneAPIExtGroupV2, map[string]string{"version": "0.0.2"}, nil).Build(),
 			},
-			wantKept:    []string{"selector-new"},
-			wantDropped: nil,
+			wantKept:       []string{"selector-new"},
+			wantDropped:    nil,
+			wantRepointing: 1,
 		},
 		// A selector that keys on crossplane.io/composition-name (via Exists) matches because the
 		// composition's predicted revision labels include that stamped label (added by
@@ -689,8 +760,9 @@ func TestDefaultCompDiffProcessor_partitionXRsByUpdatePolicy(t *testing.T) {
 						{"key": xp.LabelCompositionName, "operator": "Exists"},
 					}).Build(),
 			},
-			wantKept:    []string{"name-selector"},
-			wantDropped: nil,
+			wantKept:       []string{"name-selector"},
+			wantDropped:    nil,
+			wantRepointing: 1,
 		},
 		// AC2.3: Automatic XR with no selector is kept (unchanged from prior behavior).
 		"AutomaticNoSelector_Kept": {
@@ -701,8 +773,9 @@ func TestDefaultCompDiffProcessor_partitionXRsByUpdatePolicy(t *testing.T) {
 					WithNestedField("Automatic", "spec", "crossplane", "compositionUpdatePolicy").Build(),
 				tu.NewResource("example.org/v1", "XResource", "default-policy").WithNamespace("default").Build(),
 			},
-			wantKept:    []string{"no-selector", "default-policy"},
-			wantDropped: nil,
+			wantKept:       []string{"no-selector", "default-policy"},
+			wantDropped:    nil,
+			wantRepointing: 2,
 		},
 		// AC2.4: Manual XR with a matching selector is still dropped by policy (reason manual_policy),
 		// not rescued by the selector match.
@@ -736,8 +809,9 @@ func TestDefaultCompDiffProcessor_partitionXRsByUpdatePolicy(t *testing.T) {
 				tu.NewResource("example.org/v1", "XResource", "live-xr").WithNamespace("default").
 					WithNestedField("Automatic", "spec", "crossplane", "compositionUpdatePolicy").Build(),
 			},
-			wantKept:    []string{"live-xr"},
-			wantDropped: []droppedWant{{name: "deleting-xr", reason: renderer.FilterReasonDeleting}},
+			wantKept:       []string{"live-xr"},
+			wantDropped:    []droppedWant{{name: "deleting-xr", reason: renderer.FilterReasonDeleting}},
+			wantRepointing: 1,
 		},
 		// Deletion is evaluated before the policy rules and is not rescued by --include-manual: a
 		// deleting Manual XR is reported as deleting, not as manual_policy.
@@ -775,8 +849,9 @@ func TestDefaultCompDiffProcessor_partitionXRsByUpdatePolicy(t *testing.T) {
 					WithNestedField("Automatic", "spec", "crossplane", "compositionUpdatePolicy").
 					WithDeletionTimestamp(nil).Build(),
 			},
-			wantKept:    []string{"null-ts-xr"},
-			wantDropped: nil,
+			wantKept:       []string{"null-ts-xr"},
+			wantDropped:    nil,
+			wantRepointing: 1,
 		},
 		// Composition with no labels: an Automatic XR with a non-empty selector cannot match, so it
 		// is dropped as a selector mismatch.
@@ -812,7 +887,7 @@ func TestDefaultCompDiffProcessor_partitionXRsByUpdatePolicy(t *testing.T) {
 				WithLabels(tt.compLabels).
 				BuildAsUnstructured()
 
-			kept, dropped, err := processor.partitionXRsByUpdatePolicy(tt.xrs, newComp)
+			kept, dropped, repointing, err := processor.partitionXRsByUpdatePolicy(tt.xrs, newComp)
 
 			if tt.wantErr {
 				if err == nil {
@@ -842,6 +917,10 @@ func TestDefaultCompDiffProcessor_partitionXRsByUpdatePolicy(t *testing.T) {
 
 			if diff := gcmp.Diff(tt.wantDropped, gotDropped, cmpopts.EquateEmpty(), gcmp.AllowUnexported(droppedWant{})); diff != "" {
 				t.Errorf("dropped XRs mismatch (-want +got):\n%s", diff)
+			}
+
+			if diff := gcmp.Diff(tt.wantRepointing, repointing); diff != "" {
+				t.Errorf("repointing count mismatch (-want +got):\n%s", diff)
 			}
 		})
 	}
@@ -1195,7 +1274,9 @@ func newCompProcessorForTest(t *testing.T, compClient xp.CompositionClient, incl
 }
 
 // TestDefaultCompDiffProcessor_DiffComposition_ResourceMode covers the --resource code path:
-// preflight, fail-fast on globally-unmatched refs, and surfacing of policy-filtered composites.
+// preflight, fail-fast on globally-unmatched refs, and surfacing of policy-filtered composites —
+// including that a skipped impact analysis still reports them, since establishing them needs no
+// render.
 func TestDefaultCompDiffProcessor_DiffComposition_ResourceMode(t *testing.T) {
 	comp := tu.NewComposition("test-comp").
 		WithCompositeTypeRef("example.org/v1", "XR").
@@ -1333,6 +1414,122 @@ func TestDefaultCompDiffProcessor_DiffComposition_ResourceMode(t *testing.T) {
 
 				if got.AffectedResources.Total != 1 {
 					t.Errorf("Total: got %d, want 1", got.AffectedResources.Total)
+				}
+			})
+		}
+	})
+
+	// SkipReportsFilterConsequences: a skipped impact analysis suppresses only the per-XR renders. What
+	// the local filter pass already determined — how many composites were discovered, which of them
+	// would not adopt the resulting revision, and how many would re-point — is reported either way, so
+	// a run can never report zero affected composites beside a non-zero repointedComposites (issue
+	// #478). The same table pins that a Manual composite kept by --include-manual does not count as
+	// re-pointing, whether or not the analysis runs (issue #479).
+	t.Run("SkipReportsFilterConsequences", func(t *testing.T) {
+		// A metadata-only edit: the same spec as the cluster copy plus one label. That is the only scope
+		// --analyze-on=spec-change skips while still creating a CompositionRevision, which is what makes
+		// the dropped-consequence bug observable.
+		metaOnlyComp := tu.NewComposition("test-comp").
+			WithCompositeTypeRef("example.org/v1", "XR").
+			WithPipelineMode().
+			WithLabels(map[string]string{"version": "0.0.2"}).
+			BuildAsUnstructured()
+
+		clusterComp := tu.NewComposition("test-comp").
+			WithCompositeTypeRef("example.org/v1", "XR").
+			WithPipelineMode().
+			Build()
+
+		type want struct {
+			Skipped        bool
+			Summary        renderer.AffectedResourcesSummary
+			RevisionImpact renderer.RevisionImpact
+			// Impacts is every ImpactAnalysis entry as "<status> <name>", in order — deliberately not
+			// narrowed to the filtered ones. Under a skip the kept composites were never evaluated, so
+			// ImpactAnalysis must hold only the filtered entries; a changed/unchanged/error entry here
+			// would be a verdict the tool never earned, and narrowing this view would hide exactly that.
+			Impacts []string
+		}
+
+		cases := map[string]struct {
+			analyzeOn       AnalyzeOn
+			includeManual   bool
+			surfaceFiltered bool
+			want            want
+		}{
+			"Skipped_DefaultDiscovery_CountsFilteredComposites": {
+				analyzeOn: AnalyzeOnSpecChange,
+				want: want{
+					Skipped:        true,
+					Summary:        renderer.AffectedResourcesSummary{Total: 2, FilteredByPolicy: 1},
+					RevisionImpact: renderer.RevisionImpact{ChangeScope: "metadata", CreatesRevision: true, RepointedComposites: 1},
+				},
+			},
+			"Skipped_ResourceMode_NamesFilteredComposites": {
+				analyzeOn:       AnalyzeOnSpecChange,
+				surfaceFiltered: true,
+				want: want{
+					Skipped:        true,
+					Summary:        renderer.AffectedResourcesSummary{Total: 2, FilteredByPolicy: 1},
+					RevisionImpact: renderer.RevisionImpact{ChangeScope: "metadata", CreatesRevision: true, RepointedComposites: 1},
+					Impacts:        []string{"filtered manual-xr"},
+				},
+			},
+			// --include-manual keeps the Manual composite, so nothing is filtered — but it stays pinned by
+			// compositionRevisionRef, so only the Automatic composite re-points.
+			"Skipped_IncludeManual_ManualCompositeDoesNotRepoint": {
+				analyzeOn:       AnalyzeOnSpecChange,
+				includeManual:   true,
+				surfaceFiltered: true,
+				want: want{
+					Skipped:        true,
+					Summary:        renderer.AffectedResourcesSummary{Total: 2},
+					RevisionImpact: renderer.RevisionImpact{ChangeScope: "metadata", CreatesRevision: true, RepointedComposites: 1},
+				},
+			},
+			// The same tally when the analysis does run: both composites are evaluated, one re-points.
+			// Evaluated, so unlike every skipped case they carry a verdict.
+			"Analysed_IncludeManual_ManualCompositeDoesNotRepoint": {
+				analyzeOn:       AnalyzeOnAnyChange,
+				includeManual:   true,
+				surfaceFiltered: true,
+				want: want{
+					Summary:        renderer.AffectedResourcesSummary{Total: 2, Unchanged: 2},
+					RevisionImpact: renderer.RevisionImpact{ChangeScope: "metadata", CreatesRevision: true, RepointedComposites: 1},
+					Impacts:        []string{"unchanged xr-1", "unchanged manual-xr"},
+				},
+			},
+		}
+
+		for name, tt := range cases {
+			t.Run(name, func(t *testing.T) {
+				client := tu.NewMockCompositionClient().
+					WithSuccessfulCompositionFetch(clusterComp).
+					Build()
+
+				proc, _ := newCompProcessorForTest(t, client, tt.includeManual)
+				proc.config.AnalyzeOn = tt.analyzeOn
+
+				got, err := proc.processSingleComposition(t.Context(), metaOnlyComp, []*un.Unstructured{xr1, manualXR}, tt.surfaceFiltered)
+				if err != nil {
+					t.Fatalf("processSingleComposition: %v", err)
+				}
+
+				impacts := make([]string, 0, len(got.ImpactAnalysis))
+
+				for _, impact := range got.ImpactAnalysis {
+					impacts = append(impacts, fmt.Sprintf("%s %s", impact.Status, impact.Name))
+				}
+
+				gotWant := want{
+					Skipped:        got.ImpactAnalysisSkipped,
+					Summary:        got.AffectedResources,
+					RevisionImpact: got.RevisionImpact,
+					Impacts:        impacts,
+				}
+
+				if diff := gcmp.Diff(tt.want, gotWant, cmpopts.EquateEmpty()); diff != "" {
+					t.Errorf("processSingleComposition() mismatch (-want +got):\n%s", diff)
 				}
 			})
 		}
