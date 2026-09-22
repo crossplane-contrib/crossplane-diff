@@ -297,7 +297,11 @@ The `comp` subcommand has its own set of integration tests:
   fetching observed state.
 - **`--max-nested-depth`**: Verifies the recursion limit short-circuits cleanly — that a cyclic composition terminates
   with a "maximum nesting depth exceeded" error instead of exhausting the stack, that `--max-nested-depth 1` refuses a
-  second level of nesting, and that it still accepts a tree exactly one level deep (the bound is inclusive).
+  second level of nesting, and that it still accepts a tree exactly one level deep (the bound is inclusive). The unit
+  tests drive the guard with a render stub that caps its own recursion, so a regression fails an assertion rather than
+  the test binary; integration tests separately drive a real two-kind cycle (`XCycleA` → `XCycleB` → …) through real
+  renders for **both** `xr` and `comp`, since `comp` shares the recursion. For `comp`, whose top-level error only
+  counts failed composites, they assert the depth message reaches the failing composite's impact entry.
 - **Two-phase Diff**: Verifies that resources rendered only by nested XRs are not falsely flagged as removals.
 - **`--eventual-state`**: Tests multi-stage compositions (e.g., function-sequencer / `function-conditional`) whose
   full effect requires multiple reconciliation cycles.

@@ -1166,6 +1166,7 @@ type XRImpactExpectation struct {
 	anyNameAllowed      bool
 	status              string // "changed", "unchanged", "error", "filtered"
 	filterReason        string // "manual_policy", "revision_selector_mismatch", "deleting"; only checked when set
+	errorContains       string // substring of an "error" impact's Error; only checked when set
 	downstreamSummary   *expectedSummary
 	downstreamResources []*DownstreamResourceExpectation
 }
@@ -1277,6 +1278,13 @@ func (x *XRImpactExpectation) WithAnyName() *XRImpactExpectation {
 // "revision_selector_mismatch", or "deleting"). Only asserted when set.
 func (x *XRImpactExpectation) WithFilterReason(reason string) *XRImpactExpectation {
 	x.filterReason = reason
+	return x
+}
+
+// WithErrorContaining pins a substring of an "error" XR impact's Error, so a test can assert why
+// the composite failed rather than only that it did. Only asserted when set.
+func (x *XRImpactExpectation) WithErrorContaining(s string) *XRImpactExpectation {
+	x.errorContains = s
 	return x
 }
 
@@ -1542,6 +1550,12 @@ func AssertStructuredCompDiff(t *testing.T, jsonOutput string, e CompDiffExpecta
 			if expectXR.filterReason != "" && foundXR.FilterReason != expectXR.filterReason {
 				t.Errorf("Composition %s: XR %s/%s: expected filterReason %s, got %s",
 					expectComp.name, expectXR.kind, expectXR.name, expectXR.filterReason, foundXR.FilterReason)
+			}
+
+			// Check error message if specified
+			if expectXR.errorContains != "" && !strings.Contains(foundXR.Error, expectXR.errorContains) {
+				t.Errorf("Composition %s: XR %s/%s: expected error containing %q, got %q",
+					expectComp.name, expectXR.kind, expectXR.name, expectXR.errorContains, foundXR.Error)
 			}
 
 			// Check downstream summary if specified
