@@ -9,7 +9,9 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"testing"
+	"time"
 
 	tu "github.com/crossplane-contrib/crossplane-diff/cmd/diff/testutils"
 	gyaml "gopkg.in/yaml.v3"
@@ -337,6 +339,66 @@ func deleteResourcesFromFiles(ctx context.Context, c client.Client, paths []stri
 	}
 
 	return nil
+}
+
+// awaitAdmissionDenial blocks until every resource in the supplied manifest is refused by a
+// ValidatingAdmissionPolicy on a dry-run create. An empty path is a no-op.
+//
+// A VAP does not take effect the instant it is created: the apiserver's admission plugin learns
+// about policies and bindings through an informer, so for a short window after setup the cluster
+// still accepts what the policy will later refuse. Any test that depends on a rejection must wait
+// for that window to close, or it silently becomes a test of nothing.
+//
+// The gate is deliberately narrow: only an error naming ValidatingAdmissionPolicy counts as
+// "enforcing". Accepting any rejection would let an unrelated failure (a schema error in the canary,
+// a missing namespace) masquerade as a working policy.
+func awaitAdmissionDenial(ctx context.Context, c client.Client, path string) error {
+	if path == "" {
+		return nil
+	}
+
+	resources, err := readResourcesFromFile(path)
+	if err != nil {
+		return fmt.Errorf("failed to read resources from %s: %w", path, err)
+	}
+
+	// Bounded independently of the caller's context so a slow policy rollout fails here with a
+	// clear message instead of consuming the whole test's budget and timing out inside the diff.
+	waitCtx, cancel := context.WithTimeout(ctx, admissionPolicyPropagationTimeout)
+	defer cancel()
+
+	for _, r := range resources {
+		if err := awaitOneAdmissionDenial(waitCtx, c, r); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+// admissionPolicyPropagationTimeout bounds the wait for a ValidatingAdmissionPolicy to start
+// enforcing. Measured at ~600ms on envtest 1.32; the margin is for loaded CI machines.
+const admissionPolicyPropagationTimeout = 30 * time.Second
+
+func awaitOneAdmissionDenial(ctx context.Context, c client.Client, canary *un.Unstructured) error {
+	for attempts := 1; ; attempts++ {
+		err := c.Create(ctx, canary.DeepCopy(), client.DryRunAll)
+
+		switch {
+		case err != nil && strings.Contains(err.Error(), "ValidatingAdmissionPolicy"):
+			return nil
+		case err != nil:
+			return fmt.Errorf("dry-run create of canary %s/%s failed for a reason unrelated to admission policy: %w",
+				canary.GetKind(), canary.GetName(), err)
+		}
+
+		if ctx.Err() != nil {
+			return fmt.Errorf("canary %s/%s was still accepted after %d attempts; no ValidatingAdmissionPolicy is enforcing: %w",
+				canary.GetKind(), canary.GetName(), attempts, ctx.Err())
+		}
+
+		time.Sleep(100 * time.Millisecond)
+	}
 }
 
 // readResourcesFromFile reads YAML resources from a file.

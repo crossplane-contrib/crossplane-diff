@@ -64,8 +64,27 @@ type IntegrationTestCase struct {
 	includeManual              bool          // For composition tests: pass --include-manual flag
 	analyzeUnchanged           bool          // For composition tests: pass the deprecated --analyze-unchanged flag
 	analyzeOn                  string        // For composition tests: pass --analyze-on=<value> (empty = rely on the default)
-	skip                       bool
-	skipReason                 string
+	// dryRunOn passes --dry-run-on=<value> (empty = rely on the default, which is "all").
+	// The flag lives on CommonCmdFields, so it applies to both `xr` and `comp`.
+	dryRunOn string
+	// awaitAdmissionDenialFor names a manifest whose resources a correctly-installed
+	// ValidatingAdmissionPolicy must refuse. Before running the diff, the harness dry-run
+	// creates each of them until the apiserver rejects it.
+	//
+	// This is not belt-and-braces: the apiserver loads admission policies through an informer,
+	// so a diff issued immediately after the policy is created races the plugin and observes a
+	// cluster that accepts everything. Measured on envtest 1.32, the policy took ~600ms and four
+	// attempts to take effect — long enough that without this gate the test would pass or fail
+	// depending on machine load, and a "pass" would prove nothing.
+	awaitAdmissionDenialFor string
+	// assertDeterministicAcrossRuns runs the command twice against the same cluster and requires
+	// byte-identical stdout, then applies the usual assertions to the second run. Needed for
+	// server-generated identity: the apiserver runs names.Generator before the dry-run
+	// short-circuit, so a generateName addition whose identity was not restored would emit a
+	// different random name on each run — which a single-run test cannot see.
+	assertDeterministicAcrossRuns bool
+	skip                          bool
+	skipReason                    string
 	// JSON output support: set outputFormat to "json" to use structured assertions.
 	// For XR tests, populate expectedStructuredOutput. For CompositionDiffTest tests,
 	// populate expectedStructuredCompOutput. Only one should be set per test case.
@@ -286,6 +305,12 @@ func runIntegrationTest(t *testing.T, testType DiffTestType, tt IntegrationTestC
 		args = append(args, "--eventual-state")
 	}
 
+	// --dry-run-on lives on CommonCmdFields, so unlike --analyze-on it is threaded for both
+	// command types. An empty value relies on the flag's own default.
+	if tt.dryRunOn != "" {
+		args = append(args, "--dry-run-on="+tt.dryRunOn)
+	}
+
 	// Add --resource flags (composition tests only)
 	if testType == CompositionDiffTest {
 		for _, r := range tt.resources {
@@ -312,19 +337,13 @@ func runIntegrationTest(t *testing.T, testType DiffTestType, tt IntegrationTestC
 	// Add files as positional arguments
 	args = append(args, testFiles...)
 
-	// Set up the appropriate command based on test type
-	var cmd any
-	if testType == CompositionDiffTest {
-		cmd = &CompCmd{}
-	} else {
-		cmd = &XRCmd{}
+	// Block until any ValidatingAdmissionPolicy in the setup is actually enforcing, so the diff
+	// cannot race the apiserver's policy informer. See the field's doc comment.
+	if err := awaitAdmissionDenial(ctx, k8sClient, tt.awaitAdmissionDenialFor); err != nil {
+		t.Fatalf("admission policy never took effect: %v", err)
 	}
 
-	// Wrap the logger the way main() does, so the warning channel is exercised: Info calls land on
-	// stderr AND in structured output, rather than being silently dropped by the test logger.
 	logger := tu.TestLogger(t, true)
-	warnings := dp.NewWarningLogger(logger, &stderr)
-	exitCode := &ExitCode{}
 
 	// Create AppContext from the test environment's config
 	appCtx, err := NewAppContext(cfg, logger)
@@ -332,24 +351,59 @@ func runIntegrationTest(t *testing.T, testType DiffTestType, tt IntegrationTestC
 		t.Fatalf("failed to create app context: %v", err)
 	}
 
-	// Create a Kong context with stdout
-	parser, err := kong.New(cmd,
-		kong.Writers(&stdout, &stderr),
-		kong.Bind(appCtx),
-		kong.Bind(exitCode),
-		kong.Bind(warnings),
-		kong.BindTo(warnings, (*logging.Logger)(nil)),
-	)
-	if err != nil {
-		t.Fatalf("failed to create kong parser: %v", err)
+	// runOnce executes the command against the running cluster, leaving its output in stdout /
+	// stderr. Everything kong touches is rebuilt per call because Parse writes into the command
+	// struct, so a second run must not inherit the first one's parsed state.
+	exitCode := &ExitCode{}
+
+	runOnce := func() error {
+		stdout.Reset()
+		stderr.Reset()
+
+		// Set up the appropriate command based on test type
+		var cmd any
+		if testType == CompositionDiffTest {
+			cmd = &CompCmd{}
+		} else {
+			cmd = &XRCmd{}
+		}
+
+		// Wrap the logger the way main() does, so the warning channel is exercised: Info calls land on
+		// stderr AND in structured output, rather than being silently dropped by the test logger.
+		warnings := dp.NewWarningLogger(logger, &stderr)
+		exitCode = &ExitCode{}
+
+		// Create a Kong context with stdout
+		parser, err := kong.New(cmd,
+			kong.Writers(&stdout, &stderr),
+			kong.Bind(appCtx),
+			kong.Bind(exitCode),
+			kong.Bind(warnings),
+			kong.BindTo(warnings, (*logging.Logger)(nil)),
+		)
+		if err != nil {
+			t.Fatalf("failed to create kong parser: %v", err)
+		}
+
+		kongCtx, err := parser.Parse(args)
+		if err != nil {
+			t.Fatalf("failed to parse kong context: %v", err)
+		}
+
+		return kongCtx.Run()
 	}
 
-	kongCtx, err := parser.Parse(args)
-	if err != nil {
-		t.Fatalf("failed to parse kong context: %v", err)
-	}
+	err = runOnce()
 
-	err = kongCtx.Run()
+	if tt.assertDeterministicAcrossRuns {
+		first := stdout.String()
+
+		err = runOnce()
+
+		if second := stdout.String(); second != first {
+			t.Errorf("output differs between two runs against the same cluster; a value the apiserver generated has leaked into the diff.\nfirst run:\n%s\nsecond run:\n%s", first, second)
+		}
+	}
 
 	// Check exit code matches expected
 	if exitCode.Code != tt.expectedExitCode {
@@ -552,14 +606,188 @@ func TestDiffIntegration(t *testing.T) {
 			expectedStructuredOutput: tu.ExpectDiff().
 				WithSummary(2, 0, 0).
 				WithAddedResource("Deployment", "test-resource-deploy", "default").
+				// Absence of dryRun is the machine-readable claim that this desired state was
+				// verified against the apiserver. Asserted alongside the defaults so that a
+				// regression which stopped dry-running additions fails on the contract as well as
+				// on whichever fields happen to depend on server-side defaulting.
+				WithDryRunPerformed().
 				WithField("spec.strategy.type", "RollingUpdate").
 				WithField("spec.template.spec.restartPolicy", "Always").
 				WithField("spec.template.spec.dnsPolicy", "ClusterFirst").
 				And().
 				WithAddedResource("XNopResource", "test-resource", "default").
+				WithDryRunPerformed().
 				WithField("spec.coolField", "new-value"),
 			expectedError:    false,
 			expectedExitCode: dp.ExitCodeDiffDetected,
+		},
+		// The inverse of the case above, and the pair is what makes either meaningful: on its own,
+		// "the defaults appear" could be satisfied by something other than the apiserver round-trip,
+		// and "the defaults are absent" could be satisfied by the feature being broken. Together they
+		// pin the flag as the thing that decides.
+		//
+		// This is also AC-R12's assertion that `existing` reproduces the pre-#334 behaviour, which is
+		// why the fields are asserted absent rather than merely unasserted.
+		"BuiltInResourceAdditionSkipsApiserverWhenDryRunOnExisting": {
+			reason:       "With --dry-run-on=existing an added built-in resource is not sent to the apiserver, so its diff carries no server-side defaults and reports skipReason disabled",
+			outputFormat: "json",
+			dryRunOn:     "existing",
+			inputFiles:   []string{"testdata/diff/new-xr.yaml"},
+			setupFiles: []string{
+				"testdata/diff/resources/xrd.yaml",
+				"testdata/diff/resources/composition-with-builtin-defaults.yaml",
+				"testdata/diff/resources/functions.yaml",
+			},
+			expectedStructuredOutput: tu.ExpectDiff().
+				WithSummary(2, 0, 0).
+				WithAddedResource("Deployment", "test-resource-deploy", "default").
+				// No detail substring: "disabled" is the one skip reason the user asked for, so
+				// there is no cluster explanation to propagate.
+				WithDryRunSkipped("disabled", "").
+				WithFieldAbsent("spec.strategy.type").
+				WithFieldAbsent("spec.template.spec.restartPolicy").
+				WithFieldAbsent("spec.template.spec.dnsPolicy").
+				// The rendered fields must still be there — `existing` degrades fidelity, it does
+				// not degrade the diff.
+				WithField("spec.template.spec.containers[0].image", "nginx:1.27").
+				And().
+				WithAddedResource("XNopResource", "test-resource", "default").
+				WithDryRunSkipped("disabled", "").
+				WithField("spec.coolField", "new-value"),
+			expectedError:    false,
+			expectedExitCode: dp.ExitCodeDiffDetected,
+		},
+		// R6.2: a status authored by the composition pipeline must survive the apiserver round-trip.
+		// XStatusResource declares the status subresource, so the apiserver strips status from the
+		// dry-run create and returns an object without one; the value below can therefore only come
+		// from the calculator re-attaching what was rendered. Every other composed kind in this
+		// testdata tree omits the subresource, which would have made this assertion vacuous.
+		//
+		// SKIPPED, and the reason is a finding rather than an environment problem: the re-attach
+		// works, but nothing renders it. See skipReason.
+		"AddedResourceRetainsCompositionAuthoredStatus": {
+			skip: true,
+			skipReason: "R6.2's re-attached status cannot be observed in any output, so this assertion " +
+				"cannot pass and could not be made to fail by breaking the production code it targets. " +
+				"cleanupForDiff (renderer/diff_formatter.go) deletes metadata.status unconditionally from " +
+				"both sides of every diff, in the same block that deletes ownerReferences — the strip whose " +
+				"identical consequence for ownerReferences this feature's own spec documented (§1a) and then " +
+				"missed for status. ResourceViews.Clean is the only view any renderer reads " +
+				"(structured_renderer.go:462-472); ResourceViews.Desired.Raw, which does carry the " +
+				"re-attached status, has no reader at all. Verified empirically: the apiserver's dry-run " +
+				"create response for XStatusResource carries no status, the object handed to cleanupForDiff " +
+				"carries status.phase=authored-by-composition, and the object cleanupForDiff returns does " +
+				"not. Deciding whether status belongs in diff output is a rendering-design question well " +
+				"outside a test task, so this is left failing-by-skip with its instrument intact rather " +
+				"than quietly reworded into an assertion that passes.",
+			reason:       "A status written by the composition pipeline survives the dry-run create of an added resource",
+			outputFormat: "json",
+			inputFiles:   []string{"testdata/diff/new-xr.yaml"},
+			setupFiles: []string{
+				"testdata/diff/resources/xrd.yaml",
+				"testdata/diff/resources/composition-with-status.yaml",
+				"testdata/diff/resources/functions.yaml",
+			},
+			expectedStructuredOutput: tu.ExpectDiff().
+				WithSummary(2, 0, 0).
+				WithAddedResource("XStatusResource", "test-resource", "default").
+				WithDryRunPerformed().
+				WithField("status.phase", "authored-by-composition").
+				WithField("spec.forProvider.configData", "new-value").
+				And().
+				WithAddedResource("XNopResource", "test-resource", "default").
+				WithField("spec.coolField", "new-value"),
+			expectedError:    false,
+			expectedExitCode: dp.ExitCodeDiffDetected,
+		},
+		// R6.1: the apiserver runs names.Generator in rest.BeforeCreate, ahead of the dry-run
+		// short-circuit at the storage layer, so it mints a real random name even for a request it
+		// never persists. Unless that identity is restored, a generateName addition's diff differs on
+		// every invocation — which only a repeated run can detect, hence assertDeterministicAcrossRuns.
+		"GenerateNameAdditionIsDeterministicAcrossRuns": {
+			reason:                        "An addition using generateName renders identically across two runs, i.e. no server-generated name leaks into the diff",
+			outputFormat:                  "json",
+			dryRunOn:                      "all",
+			assertDeterministicAcrossRuns: true,
+			setupFiles: []string{
+				"testdata/diff/resources/xrd.yaml",
+				"testdata/diff/resources/generated-name-composition.yaml",
+				"testdata/diff/resources/functions.yaml",
+			},
+			inputFiles: []string{"testdata/diff/generated-name-xr.yaml"},
+			expectedStructuredOutput: tu.ExpectDiff().
+				WithSummary(2, 0, 0).
+				// Both the XR and its composed resource use generateName, so both exercise the
+				// identity restore. The pattern is the renderer's display form for a
+				// not-yet-named object; a leaked server name would be a random suffix instead.
+				WithAddedResource("XDownstreamResource", "", "default").
+				WithDryRunPerformed().
+				WithNamePattern(`^test-resource-\(generated\)$`).
+				WithField("spec.forProvider.configData", "new-value").
+				And().
+				WithAddedResource("XNopResource", "", "default").
+				WithDryRunPerformed().
+				WithNamePattern(`^generated-xr-\(generated\)$`).
+				WithField("spec.coolField", "new-value"),
+			expectedError:    false,
+			expectedExitCode: dp.ExitCodeDiffDetected,
+		},
+		// R8, addition half. A ValidatingAdmissionPolicy is the instrument rather than a CEL
+		// x-kubernetes-validations rule on the CRD, because crossplane-diff evaluates CEL rules
+		// locally before the diff calculator runs: a CEL rule would reject the resource without the
+		// apiserver ever being consulted, so the test would pass on code that never dry-ran anything.
+		"AddedResourceRejectedByAdmissionPolicyIsAValidationFailure": {
+			reason:       "An apiserver rejection of an added resource is exit 2 with a typed admission validation failure, not a bare tool error",
+			outputFormat: "json",
+			inputFiles:   []string{"testdata/diff/new-xr.yaml"},
+			setupFiles: []string{
+				"testdata/diff/resources/xrd.yaml",
+				"testdata/diff/resources/composition.yaml",
+				"testdata/diff/resources/functions.yaml",
+				"testdata/diff/resources/rejecting-admission-policy.yaml",
+			},
+			awaitAdmissionDenialFor: "testdata/diff/resources/admission-policy-canary.yaml",
+			expectedError:           true,
+			expectedExitCode:        dp.ExitCodeSchemaValidation,
+			expectedStructuredOutput: tu.ExpectDiff().
+				// errors[].resourceID names the input the user supplied, so the rejected composed
+				// resource has to be identifiable from the message and the validationFailures entry.
+				WithError("XNopResource/test-resource").
+				WithMessageContaining("the cluster rejected XDownstreamResource/test-resource").
+				WithValidationFailure("ns.nop.example.org/v1alpha1", "XDownstreamResource", "test-resource", "default").
+				WithStatus("invalid").
+				// The "admission" type is what distinguishes a cluster rejection from a local schema
+				// rejection; field is empty because an admission refusal is not localized to one field.
+				WithFieldError("admission", "").
+				WithMessageContaining("this cluster refuses that configData value"),
+		},
+		// R8, modification half — the deliberate behaviour change. The identical cluster fact used to
+		// surface as a plain tool error (exit 1) for an existing resource while an addition's rejection
+		// would have been exit 2, i.e. the same rejection reported in two different tiers depending
+		// only on whether the resource happened to exist. This pins the reclassification.
+		"ModifiedResourceRejectedByAdmissionPolicyIsAValidationFailure": {
+			reason:       "An apiserver rejection of an EXISTING resource's dry-run apply is reported in the same tier as a rejected addition",
+			outputFormat: "json",
+			setupFiles: []string{
+				"testdata/diff/resources/xrd.yaml",
+				"testdata/diff/resources/composition.yaml",
+				"testdata/diff/resources/composition-revision-default.yaml",
+				"testdata/diff/resources/functions.yaml",
+				"testdata/diff/resources/existing-downstream-resource.yaml",
+				"testdata/diff/resources/existing-xr.yaml",
+				"testdata/diff/resources/rejecting-admission-policy.yaml",
+			},
+			awaitAdmissionDenialFor: "testdata/diff/resources/admission-policy-canary.yaml",
+			inputFiles:              []string{"testdata/diff/modified-xr.yaml"},
+			expectedError:           true,
+			expectedExitCode:        dp.ExitCodeSchemaValidation,
+			expectedStructuredOutput: tu.ExpectDiff().
+				WithError("XNopResource/test-resource").
+				WithMessageContaining("the cluster rejected XDownstreamResource/test-resource").
+				WithValidationFailure("ns.nop.example.org/v1alpha1", "XDownstreamResource", "test-resource", "default").
+				WithStatus("invalid").
+				WithFieldError("admission", "").
+				WithMessageContaining("this cluster refuses that configData value"),
 		},
 		"MultipleXRsGroupedByInputXR": {
 			reason:       "Two input XRs in one invocation are grouped per input XR in the xrs[] structured view",
@@ -1143,9 +1371,16 @@ Summary: 2 modified, 2 removed`,
 			expectedStructuredOutput: tu.ExpectDiff().
 				WithSummary(0, 0, 2).
 				WithRemovedResource("XDownstreamResource", "resource-to-be-removed", "default").
+				// AC-R7, removal half. A removal has no desired state to preview, so it can never
+				// carry a dryRun object; WithDryRunPerformed asserts exactly that absence. The method
+				// name reads oddly here — nothing was dry run — but the claim it makes ("no dryRun
+				// object is present") is the right one, and having a second spelling for the same
+				// assertion would be worse.
+				WithDryRunPerformed().
 				WithField("spec.forProvider.configData", "existing-value").
 				And().
 				WithRemovedResource("XDownstreamResource", "resource-to-be-removed-child", "default").
+				WithDryRunPerformed().
 				WithField("spec.forProvider.configData", "child-value"),
 			expectedError:    false,
 			expectedExitCode: dp.ExitCodeDiffDetected,
@@ -3702,6 +3937,10 @@ Summary: 2 modified`,
 				WithXRImpact("XNopResource", "sequencer-gating-test", "default", "changed").
 				WithDownstreamSummary(1, 0, 0).
 				WithDownstreamResource("added", "XDownstreamResource", "0-stage0-resource", "default").
+				// AC-R7 for `comp`, absence half: a downstream addition that reached the apiserver
+				// carries no dryRun object. Piggy-backed on an existing case rather than given its
+				// own envtest instance, since it is a pure additional assertion.
+				WithDryRunPerformed().
 				WithField("spec.forProvider.configData", "updated-existing-value"),
 			expectedError: false,
 		},
@@ -3783,6 +4022,36 @@ Summary: 2 modified`,
 				WithField("spec.forProvider.configData", "updated-existing-value").
 				AndXR().
 				WithDownstreamResource("added", "XDownstreamResource", "1-stage1-resource", "default").
+				WithField("spec.forProvider.configData", "updated-existing-value"),
+			expectedError: false,
+		},
+		// AC-R7 for `comp`, presence half. dryRun lives on ChangeDetail, which `xr` reaches via
+		// changes[] and `comp` via impactAnalysis[].downstreamChanges.changes[] — one shared wire
+		// shape, but only an assertion through the comp renderer proves comp actually populates it.
+		// The composed resource is deliberately absent from the setup so the impact is an ADDITION,
+		// which is the only kind of change the dryRun field applies to.
+		"CompDownstreamAdditionReportsDryRunSkippedWhenDryRunOnExisting": {
+			reason:       "`comp` structured output carries dryRun.skipReason on a downstream addition when --dry-run-on=existing",
+			outputFormat: "json",
+			dryRunOn:     "existing",
+			setupFiles: []string{
+				"testdata/comp/resources/xrd.yaml",
+				"testdata/comp/resources/original-composition.yaml",
+				"testdata/comp/resources/functions.yaml",
+				// existing-downstream-1.yaml is intentionally NOT applied: with no composed resource
+				// in the cluster, the impact analysis reports an addition rather than a modification.
+				"testdata/comp/resources/existing-xr-1.yaml",
+			},
+			inputFiles:       []string{"testdata/comp/updated-composition.yaml"},
+			namespace:        "default",
+			expectedExitCode: dp.ExitCodeDiffDetected,
+			expectedStructuredCompOutput: tu.ExpectCompDiff().
+				WithComposition("xnopresources.diff.example.org").
+				WithCompositionModified().
+				WithXRImpact("XNopResource", "test-resource", "default", "changed").
+				WithDownstreamSummary(1, 0, 0).
+				WithDownstreamResource("added", "XDownstreamResource", "test-resource", "default").
+				WithDryRunSkipped("disabled", "").
 				WithField("spec.forProvider.configData", "updated-existing-value"),
 			expectedError: false,
 		},
