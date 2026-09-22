@@ -74,44 +74,7 @@ func (r *DefaultCompDiffRenderer) RenderCompDiff(output *CompDiffOutput) error {
 			}
 		}
 
-		switch {
-		case r.opts.MinimizeComposition:
-			if err := r.renderMinimizedCompositionChanges(&comp); err != nil {
-				return err
-			}
-		default:
-			if err := r.renderCompositionChanges(&comp); err != nil {
-				return err
-			}
-		}
-
-		// Skip remaining sections if composition had a processing error
-		if comp.Error != nil {
-			continue
-		}
-
-		// The affected-XR and impact-analysis sections would both be empty and misleading for a
-		// composition whose XRs were deliberately not evaluated; say so once instead — then report the
-		// composites the tool did rule out locally, which no render was needed to establish.
-		if comp.ImpactAnalysisSkipped {
-			if _, err := fmt.Fprint(stdout, skippedMessage(comp.RevisionImpact)); err != nil {
-				return errors.Wrap(err, "cannot write impact analysis skipped message")
-			}
-
-			if err := r.renderFilteredUnderSkip(&comp); err != nil {
-				return err
-			}
-
-			continue
-		}
-
-		// Render affected XRs list with status indicators
-		if err := r.renderAffectedResourcesList(&comp); err != nil {
-			return err
-		}
-
-		// Render impact analysis (downstream diffs)
-		if err := r.renderImpactAnalysis(&comp); err != nil {
+		if err := r.renderComposition(&comp); err != nil {
 			return err
 		}
 	}
@@ -124,6 +87,58 @@ func (r *DefaultCompDiffRenderer) RenderCompDiff(output *CompDiffOutput) error {
 	}
 
 	return nil
+}
+
+// renderComposition renders every section belonging to a single composition: its own changes,
+// followed — only if it processed successfully — by the sections describing its effect on composites.
+// A composition that failed to process has no such sections to show; renderCompositionChanges
+// reported the error in their place.
+func (r *DefaultCompDiffRenderer) renderComposition(comp *CompositionDiff) error {
+	switch {
+	case r.opts.MinimizeComposition:
+		if err := r.renderMinimizedCompositionChanges(comp); err != nil {
+			return err
+		}
+	default:
+		if err := r.renderCompositionChanges(comp); err != nil {
+			return err
+		}
+	}
+
+	if comp.Error == nil {
+		return r.renderCompositionImpact(comp)
+	}
+
+	return nil
+}
+
+// renderCompositionImpact renders the sections describing how a composition affects its composites:
+// either the note standing in for them when their evaluation was skipped, or the affected-XR list and
+// the downstream impact analysis.
+func (r *DefaultCompDiffRenderer) renderCompositionImpact(comp *CompositionDiff) error {
+	if comp.ImpactAnalysisSkipped {
+		return r.renderSkippedComposition(comp)
+	}
+
+	// Render affected XRs list with status indicators
+	if err := r.renderAffectedResourcesList(comp); err != nil {
+		return err
+	}
+
+	// Render impact analysis (downstream diffs)
+	return r.renderImpactAnalysis(comp)
+}
+
+// renderSkippedComposition stands in for the affected-XR and impact-analysis sections when a
+// composition's XRs were deliberately not evaluated. Both sections would be empty and misleading in
+// that case, so say so once instead — then report the composites the tool did rule out locally, which
+// no render was needed to establish.
+func (r *DefaultCompDiffRenderer) renderSkippedComposition(comp *CompositionDiff) error {
+	if _, err := fmt.Fprint(r.opts.Stdout, skippedMessage(comp.RevisionImpact)); err != nil {
+		return errors.Wrap(err, "cannot write impact analysis skipped message")
+	}
+
+	return r.renderFilteredUnderSkip(comp)
 }
 
 // renderCompositionChanges renders the composition changes section.
