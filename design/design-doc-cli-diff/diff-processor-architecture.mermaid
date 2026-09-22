@@ -56,9 +56,12 @@ classDiagram
         +FunctionCredentials []corev1.Secret
         +FunctionRegistryOverride string
         +CrossplaneRenderBinary string
+        +CrossplaneVersion string
+        +CrossplaneImage string
         +Stdout io.Writer
         +Stderr io.Writer
         +Logger logging.Logger
+        +Warnings *WarningLogger
         +RenderFunc RenderFn
         +Factories ComponentFactories
     }

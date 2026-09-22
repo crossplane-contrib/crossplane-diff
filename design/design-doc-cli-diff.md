@@ -1015,7 +1015,7 @@ That last annotation is **display-only** suppression (`displayOnlyIgnoredPaths` 
 renderer rather than prepended to `IgnorePaths` at the CLI layer, so that `IgnorePaths` means exactly "masks the user
 asked for". Showing it is useless — it is a multi-KB serialization of the object itself — but suppressing it from
 *display* must not suppress it from a change *verdict*: Crossplane hashes annotations into a composition's identity, so a
-difference here produces a new CompositionRevision (see §7 step 3a). `DiffOptions.ForVerdict` exists for exactly this —
+difference here produces a new CompositionRevision (see §6.2 step 3a). `DiffOptions.ForVerdict` exists for exactly this —
 it keeps the display-only fields in the comparison, and comp's change verdict sets it alongside clearing `IgnorePaths`.
 The general rule: **a field hidden to keep output readable may never decide whether a change exists.** Cleanup happens
 during diff generation (`GenerateDiffWithOptions`), not in the renderers, and each object is cleaned at most once: the
