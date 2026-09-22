@@ -1761,6 +1761,71 @@ func TestDefaultDiffCalculator_preserveExistingResourceIdentity(t *testing.T) {
 	}
 }
 
+// TestDefaultDiffCalculator_DegradationWarnsOncePerGroup covers AC-R9: a degraded dry run raises a
+// user-facing advisory, and raises it once per GVK + namespace + reason rather than once per
+// resource. A composition rendering forty new resources of one kind must not produce forty identical
+// warnings.
+//
+// This is a property of a calculator INSTANCE across calls, which is why it cannot be a row in the
+// per-call table above: a single calculator is reused for every resource in a run, and that reuse is
+// exactly what the deduplication depends on.
+func TestDefaultDiffCalculator_DegradationWarnsOncePerGroup(t *testing.T) {
+	ctx := t.Context()
+
+	forbidden := func(context.Context, *un.Unstructured) (*un.Unstructured, error) {
+		return nil, apierrors.NewForbidden(schema.GroupResource{Group: "example.org", Resource: "testresources"}, "", errors.New("nope"))
+	}
+
+	// Three resources of one kind in one namespace, plus one of the same kind in another namespace and
+	// one of a different kind. Correct behaviour is three advisories, not five.
+	desired := []*un.Unstructured{
+		tu.NewResource("example.org/v1", "TestResource", "a").WithSpecField("f", "1").Build(),
+		tu.NewResource("example.org/v1", "TestResource", "b").WithSpecField("f", "2").Build(),
+		tu.NewResource("example.org/v1", "TestResource", "c").WithSpecField("f", "3").Build(),
+		tu.NewResource("example.org/v1", "OtherResource", "d").WithSpecField("f", "4").Build(),
+	}
+	desired[0].SetNamespace("ns-a")
+	desired[1].SetNamespace("ns-a")
+	desired[2].SetNamespace("ns-b")
+	desired[3].SetNamespace("ns-a")
+
+	logger := tu.NewAdvisoryCapturingLogger(t)
+
+	calculator := NewDiffCalculator(
+		tu.NewMockApplyClient().WithDryRunCreate(forbidden).Build(),
+		tu.NewMockAccessChecker().WithDenied("no create").Build(),
+		tu.NewMockResourceTreeClient().Build(),
+		NewResourceManager(
+			tu.NewMockResourceClient().WithResourceNotFound().Build(),
+			tu.NewMockDefinitionClient().Build(),
+			tu.NewMockResourceTreeClient().Build(),
+			tu.TestLogger(t, false),
+		),
+		logger,
+		renderer.DefaultDiffOptions(),
+		DryRunOnAll,
+	)
+
+	for _, d := range desired {
+		diff, err := calculator.CalculateDiff(ctx, nil, d)
+		if err != nil {
+			t.Fatalf("CalculateDiff(%s/%s) unexpected error: %v", d.GetKind(), d.GetName(), err)
+		}
+
+		// Every degraded resource must carry the typed field; the advisory is the human channel and
+		// cannot substitute for it, because a warning has no resource anchor.
+		if diff.DryRun == nil || diff.DryRun.SkipReason != dt.DryRunSkipForbidden {
+			t.Errorf("%s/%s: expected dryRun.skipReason=forbidden, got %+v", d.GetKind(), d.GetName(), diff.DryRun)
+		}
+	}
+
+	// 3 = (TestResource, ns-a), (TestResource, ns-b), (OtherResource, ns-a).
+	if got := len(logger.Advisories()); got != 3 {
+		t.Errorf("got %d advisories for 4 degraded resources across 3 GVK+namespace groups, want 3: %v",
+			got, logger.Advisories())
+	}
+}
+
 func TestCalculateNonRemovalDiffs_NilCompositeResource(t *testing.T) {
 	calculator := &DefaultDiffCalculator{
 		logger: tu.TestLogger(t, false),
