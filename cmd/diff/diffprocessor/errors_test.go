@@ -271,7 +271,7 @@ func TestNewOutputError(t *testing.T) {
 			},
 		},
 		"ExplicitFailuresWinOverResult": {
-			reason: "Failures and Result are never both set in practice, but preferring the explicit list means a caller that sets it cannot have it silently dropped in favour of a stale Result.",
+			reason:     "Failures and Result are never both set in practice, but preferring the explicit list means a caller that sets it cannot have it silently dropped in favour of a stale Result.",
 			resourceID: "XR/my-xr",
 			err: NewSchemaValidationError("", "msg", errors.New("inner")).
 				WithResult(&pkgvalidate.ValidationResult{
