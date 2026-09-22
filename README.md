@@ -123,7 +123,9 @@ are emitted when raised rather than at the end of the run, so a warning is still
 step fails, and appears in step with the work that produced it. Today they cover: a composed resource
 that belongs to a different composite (applying would take ownership), a nested XR whose composition
 could not be found (it will compose nothing), function credentials that could not be fetched (the
-render may not reflect reality), leftover function containers, and the deleting-XR case above.
+render may not reflect reality), leftover function containers, a CompositionRevision whose name could
+not be predicted (see `predictedRevisionName` under
+[Structured Output](#structured-output-jsonyaml)), and the deleting-XR case above.
 
 ### Composition Diff - Analyze Impact of Composition Changes
 
@@ -176,7 +178,9 @@ crossplane-diff comp unchanged-composition.yaml --analyze-on=always
 # cost for a metadata-only edit. Note that such an edit still creates a new CompositionRevision that
 # Automatic composites re-point to, so this asserts none of your compositions can observe a revision's
 # identity (via the XR's compositionRevisionRef, or a compositionRevisionSelector matching revision
-# labels). Either way revisionImpact in JSON/YAML output reports the revision.
+# labels). Either way revisionImpact in JSON/YAML output names the revision it would create
+# (predictedRevisionName). Note that at the default setting the composites are rendered with that
+# revision seeded, so a template reading its name produces a real diff rather than a stale value.
 crossplane-diff comp updated-composition.yaml --analyze-on=spec-change
 
 # Collapse each changed composition to a single change-marker line (human output only;
@@ -669,7 +673,8 @@ single-XR invocation renders flat, exactly as before.
       "revisionImpact": {
         "changeScope": "spec",
         "createsRevision": true,
-        "repointedComposites": 4
+        "repointedComposites": 4,
+        "predictedRevisionName": "xbuckets.example.org-a1b2c3d"
       },
       "affectedResources": {
         "total": 6,
@@ -738,11 +743,30 @@ The structured output includes:
   CompositionRevisions regardless of whether anything renders differently. It carries `changeScope` (`"none"`,
   `"metadata"` or `"spec"` — how much of the composition differs, in the terms Crossplane's `Composition.Hash()` uses,
   which covers labels and annotations as well as spec), `createsRevision` (whether applying the composition produces a
-  new CompositionRevision), and `repointedComposites` (how many composites would adopt that revision and reconcile as a
-  result — those not excluded by update policy, revision selector, or deletion). It is **always present**, including
-  when `impactAnalysisSkipped` is true: that is the point of it, and it is what keeps `--analyze-on` a cost knob rather
-  than a correctness mode. Note that a composite re-pointing to a new revision is not the same as its rendered output
-  changing; re-pointing alone usually renders identically.
+  new CompositionRevision), `repointedComposites` (how many composites would adopt that revision and reconcile as a
+  result — those not excluded by update policy, revision selector, or deletion; composites pinned by a `Manual`
+  `compositionUpdatePolicy` are excluded even when `--include-manual` surfaces them, because being evaluated is not the
+  same as adopting anything), and `predictedRevisionName` (what that revision would be called). It is **always
+  present**, including when `impactAnalysisSkipped` is true: that is the point of it, and it is what keeps
+  `--analyze-on` a cost knob rather than a correctness mode. Note that a composite re-pointing to a new revision is not
+  the same as its rendered output changing; re-pointing alone usually renders identically.
+- **Predicted revision name** (comp only): `revisionImpact.predictedRevisionName` is `<composition>-<hash[:7]>`, derived
+  from Crossplane's own `Composition.Hash()` — the same value the cluster would produce. Composites are **rendered with
+  it seeded onto their `compositionRevisionRef`**, so a composition template that reads the revision name (templates
+  receive the whole composite, with no field stripping) renders the value it would really get, and a change it causes is
+  detected rather than assumed away. The composites' own `compositionRevisionRef` diff is suppressed from the rendered
+  output, since `revisionImpact` already carries that fact once per composition rather than once per composite; a
+  composed resource deriving a value *from* the revision name is not suppressed, and is precisely the signal this
+  exists to surface.
+
+  The field is **absent when `createsRevision` is true** only if the name could not be predicted, which happens when the
+  composition differs from the cluster's copy by nothing but the `kubectl.kubernetes.io/last-applied-configuration`
+  annotation. A client-side `kubectl apply` derives that annotation's value from the file being applied rather than
+  leaving it alone, so its post-apply value — and therefore the hash and the name — depends on *how* you apply, not on
+  what you are applying. In that case nothing is seeded, a warning says so, and a revision-observing change would go
+  undetected; apply with `--server-side` (or via Argo/Flux) to make it predictable. For a composition applied
+  client-side *with* other edits the name is predicted from the file as supplied, so the suffix may differ from the
+  eventual one — the change is still detected, its predicted value is just imprecise.
 - **Masked changes** (comp only): `"maskedChangesOnly": true` says an absent `compositionChanges` does *not* mean the
   composition is unchanged — it differs only in fields excluded from the diff (your `--ignore-paths`, or the fields
   suppressed for readability). Applying it still creates a new CompositionRevision, which `revisionImpact` reports.
@@ -872,7 +896,9 @@ case $? in
 esac
 ```
 
-**Revision churn does not set exit code 3.** For `comp`, exit code 3 means something renders differently: the composition's own diff is non-empty, or at least one composite's downstream resources change. A composition that only creates a new CompositionRevision without either — one differing solely in fields excluded from the diff, reported as `"maskedChangesOnly": true` — exits 0, so a GitOps loop re-applying the same manifests doesn't fail its diff gate on every run. A pipeline that *does* want to gate on revision churn reads `revisionImpact.createsRevision` from the structured output.
+**Revision churn does not set exit code 3.** For `comp`, exit code 3 means the composition's *displayed* diff is non-empty, or at least one composite's downstream resources change. Note the first of those: exit 3 does **not** imply that anything renders differently — a visible metadata-only edit (adding a label, say) shows a composition diff and so exits 3, even though every composite renders identically.
+
+Exit 0 therefore requires *both* an empty displayed diff and no composite reporting downstream changes. A composition that creates a new CompositionRevision can satisfy both — when its difference is confined to fields excluded from the diff (reported as `"maskedChangesOnly": true`), and, for such a composition, when its composites were also left unevaluated (reported as `"impactAnalysisSkipped": true`; see [`--analyze-on`](#composition-diff---analyze-impact-of-composition-changes)). Note that neither flag *causes* exit 0 on its own: a visible composition diff exits 3 whether or not the composites were evaluated. This is what keeps a GitOps loop re-applying the same manifests from failing its diff gate on every run. A pipeline that *does* want to gate on revision churn reads `revisionImpact.createsRevision` from the structured output.
 
 ## Guiding Principles
 
