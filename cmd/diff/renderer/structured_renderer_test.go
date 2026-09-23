@@ -376,13 +376,46 @@ func TestStructuredDiffRenderer_GroupsByXR(t *testing.T) {
 				},
 			},
 		},
-		// Issue #476: two input XRs producing the same diff key. The flat
-		// changes[] can only carry one of them (whichever group merges last),
-		// but the aggregate summary must still agree with xrs[] — it is
-		// documented as the count across every input XR, so it counts inputs'
-		// changes, not surviving map keys. The lossy changes[] is pinned here
-		// deliberately: the processor turns this input into a hard error
-		// (see DetectDiffKeyCollisions), so no consumer reads it silently.
+		// One resource reached through two inputs with the same rendering — a claim and its backing
+		// XR, say. It is one change, so the flat view (summary and changes[]) counts and lists it once,
+		// while each xrs[] entry still reports everything its input produces. So the xrs[] summaries can
+		// sum to more than the top-level summary when inputs overlap; that is the point of the split —
+		// the flat view counts resources, the grouped view is complete per input.
+		"SameResourceReachedThroughTwoInputs": {
+			groups: []dt.XRDiffGroup{
+				{
+					XR:    xrRef("app-claim"),
+					Diffs: map[string]*dt.ResourceDiff{"example.org/v1/Bucket/default/shared": sharedDiff("us-west-2")},
+				},
+				{
+					XR:    xrRef("app-xr"),
+					Diffs: map[string]*dt.ResourceDiff{"example.org/v1/Bucket/default/shared": sharedDiff("us-west-2")},
+				},
+			},
+			want: StructuredDiffOutput{
+				Summary: Summary{Modified: 1},
+				Changes: []ChangeDetail{sharedChange("us-west-2")},
+				Xrs: []xrDiffWire{
+					{
+						XR:      xrRef("app-claim"),
+						Status:  XRStatusChanged,
+						Summary: Summary{Modified: 1},
+						Changes: []ChangeDetail{sharedChange("us-west-2")},
+					},
+					{
+						XR:      xrRef("app-xr"),
+						Status:  XRStatusChanged,
+						Summary: Summary{Modified: 1},
+						Changes: []ChangeDetail{sharedChange("us-west-2")},
+					},
+				},
+			},
+		},
+		// Issue #476: two input XRs producing the same diff key with different renderings. The flat
+		// changes[] can only carry one of them (whichever group merges last), and the summary counts
+		// what changes[] lists. That lossy flat view is pinned here deliberately: the processor turns
+		// this input into a hard error (see DetectDiffKeyCollisions), so no consumer reads it silently.
+		// xrs[] still reports each input's rendering in full.
 		"SameKeyFromTwoXRs": {
 			groups: []dt.XRDiffGroup{
 				{
@@ -395,7 +428,7 @@ func TestStructuredDiffRenderer_GroupsByXR(t *testing.T) {
 				},
 			},
 			want: StructuredDiffOutput{
-				Summary: Summary{Modified: 2},
+				Summary: Summary{Modified: 1},
 				Changes: []ChangeDetail{sharedChange("eu-west-1")},
 				Xrs: []xrDiffWire{
 					{

@@ -680,19 +680,36 @@ entry's `errors[]` (and also in the top-level `errors[]`).
 > `summary` and top-level `errors[]` remain. New consumers should read `xrs[]`;
 > existing consumers of `changes[]` keep working during the deprecation window.
 
-The aggregate `summary` is always the sum of the per-XR `xrs[].summary` values,
-so the two views never disagree.
+The aggregate `summary` counts exactly what `changes[]` lists: each changed
+resource once, however many of the XRs you supply reach it. Each `xrs[]` entry
+is complete for its own input, so where inputs overlap — a claim and its
+backing XR, say — a shared resource appears under each, and the `xrs[].summary`
+values can sum to more than the top-level `summary`.
 
-**Two input XRs that render the same resource are rejected.** A change is
-identified by `apiVersion/kind/namespace/name`, which says nothing about which
-input XR produced it. If two of the XRs you supply render the same resource —
-a shared `Namespace`, a fixed-name policy object, the same XR passed twice, or
-two XRs sharing a `metadata.generateName` — they contend for one cluster object:
-whichever is applied second wins, so neither XR's diff predicts what you would
-actually get. Rather than emit a result that is wrong for one of the inputs,
-`xr` reports the collision in `errors[]` (and on stderr) and exits with the tool
-error code, in every output format. Diff those XRs in separate invocations. The
-structured document is still written, so the error is machine-readable.
+**When two inputs render the same resource.** A change is identified by
+`apiVersion/kind/namespace/name`, which says nothing about which input XR
+produced it, so `xr` decides by who would control the resource in the cluster:
+
+- **The same resource reached through one controller, rendered identically** —
+  the same XR passed twice, a claim alongside its backing XR, or a parent
+  alongside a nested child XR it composes — is one change reported twice. It is
+  counted once and the run succeeds.
+- **Two XRs that would both control it** — a shared `Namespace` or a fixed-name
+  object composed by two XRs — genuinely conflict. Crossplane gives the resource
+  to whichever XR creates it first, and the other fails to reconcile it, however
+  alike their renderings are. No diff predicts that, so the run fails.
+- **One controller, but renderings that differ** — the same XR passed twice with
+  different specs, or a child XR passed alongside a parent that renders it
+  differently — means the inputs disagree about the resource, so the run fails.
+- **Two XRs sharing a `metadata.generateName`** fail too. The API server would
+  give them different names, so in the cluster they would not collide; but they
+  have no names yet, and `xr` renders both under the same placeholder, so it
+  cannot tell their resources apart.
+
+A failing collision is reported in `errors[]` (and on stderr) with the reason
+that applies, and `xr` exits with the tool error code, in every output format.
+Diff those XRs in separate invocations. The structured document is still
+written, so the error is machine-readable.
 
 An XR supplied with only `metadata.generateName` has no name yet; it appears
 throughout the output — including its `xrs[]` identity and its human-readable
