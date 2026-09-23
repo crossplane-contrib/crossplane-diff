@@ -10,6 +10,8 @@ import (
 
 	"github.com/sergi/go-diff/diffmatchpatch"
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/equality"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	un "k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 )
@@ -35,9 +37,14 @@ import (
 // DiffRenderer mock — can reference it without importing renderer, which would
 // close an import cycle through renderer's in-package tests.
 type XRDiffGroup struct {
-	XR    corev1.ObjectReference
-	Diffs map[string]*ResourceDiff
-	Err   *OutputError
+	XR corev1.ObjectReference
+	// NameGenerated is true when the input XR had only a generateName, so XR.Name — and the name
+	// its render used — is a placeholder this tool synthesized, not one the API server would assign.
+	// Two such XRs sharing a generateName are distinct in the cluster but indistinguishable here; see
+	// DetectDiffKeyCollisions.
+	NameGenerated bool
+	Diffs         map[string]*ResourceDiff
+	Err           *OutputError
 }
 
 // ResourceViews holds the two representations of a single resource involved in
@@ -252,58 +259,143 @@ func MakeDiffKeyFromResource(res *un.Unstructured) string {
 	return MakeDiffKey(res.GetAPIVersion(), res.GetKind(), res.GetNamespace(), res.GetName())
 }
 
+// CollisionKind says what a DiffKeyCollision would mean in the cluster. That is what decides both
+// that it is an error and what the error must say: each kind has a different cause and a different
+// truth to tell the user.
+type CollisionKind string
+
+const (
+	// CollisionContention means the resource would be controlled by more than one XR. Crossplane's
+	// server-side apply refuses to add a second controller reference, so the first XR to create the
+	// resource keeps it and every other fails to reconcile it. No diff predicts that.
+	CollisionContention CollisionKind = "contention"
+
+	// CollisionDisagreement means one controller (or none) but inputs that render the resource
+	// differently: the same XR passed twice with different specs, or passed alongside an input that
+	// composes it and renders it otherwise. No single diff is right for both.
+	CollisionDisagreement CollisionKind = "disagreement"
+
+	// CollisionIndistinguishable means the resource collides only because two inputs share a
+	// generateName, which this tool resolves to the same placeholder name. The API server would name
+	// them differently, so the collision exists only in the diff — but the tool cannot tell their
+	// resources apart, so it must not merge them either.
+	CollisionIndistinguishable CollisionKind = "indistinguishable"
+)
+
 // DiffKeyCollision records a single resource diff key that more than one input
-// XR's group produced. Key is the colliding map key (the
-// apiVersion/kind/namespace/name form MakeDiffKey builds); XRs lists the
-// colliding groups' identities as "Kind/Name", in input order, with duplicates
-// preserved (two entries for the same identity means the same XR was supplied
-// twice).
+// XR's group produced, and cannot simply be reported once. Key is the colliding
+// map key (the apiVersion/kind/namespace/name form MakeDiffKey builds); XRs lists
+// the colliding groups' identities as "Kind/Name", in input order, with
+// duplicates preserved (two entries for the same identity means the same XR was
+// supplied twice). Controllers lists, for a CollisionContention, the distinct XRs
+// that would control the resource, as "Kind/Name", sorted.
 type DiffKeyCollision struct {
-	Key string
-	XRs []string
+	Key         string
+	Kind        CollisionKind
+	XRs         []string
+	Controllers []string
 }
 
-// DetectDiffKeyCollisions reports resource diff keys produced by more than one
-// input XR's group.
+// DetectDiffKeyCollisions reports the resource diff keys produced by more than one input XR's group
+// that no single diff can truthfully represent.
 //
-// A diff key carries no owning-XR component (see MakeDiffKey), so two input XRs
-// that render the same apiVersion/kind/namespace/name produce the same key. Any
-// view built by merging the groups into one map — the deprecated flat changes[]
-// — silently keeps whichever group is merged last and drops the other. Worse,
-// the collision means the two XRs contend for one cluster object, so neither
-// XR's diff is a truthful prediction of applying them together: whichever is
-// applied second wins. Callers therefore treat a collision as a hard error
-// rather than emitting a result that is wrong for at least one input.
+// A diff key carries no owning-XR component (see MakeDiffKey), so two input XRs that render the same
+// apiVersion/kind/namespace/name produce the same key, and any view that merges the groups into one
+// map — the deprecated flat changes[] — keeps only one of them. Whether that loses anything depends
+// on what the overlap means in the cluster, which is decided by who would control the resource:
 //
-// A key whose every colliding entry is DiffTypeEqual is deliberately NOT
-// reported. Equal diffs are excluded from every rendered view (changes[], the
-// summary, and the human output all skip them), so merging loses nothing
-// observable and there is nothing for the user to act on — failing the run
-// there would reject input whose output is provably correct either way.
+//   - Different controllers: CollisionContention. Two XRs claiming one object is a real conflict —
+//     the first to create it keeps it and the others fail to reconcile it — however alike their
+//     renderings are.
+//   - One controller, or none: the same object reached through more than one input. A claim and its
+//     backing XR, the same file passed twice, and a parent passed alongside a nested child it composes
+//     all do this. If every rendering is identical it is one change reported twice, which merges
+//     losslessly and is NOT reported. If they differ, the inputs disagree: CollisionDisagreement.
+//   - Two inputs sharing a generateName: CollisionIndistinguishable, checked first. Both render under
+//     one synthesized placeholder name, so their resources collide here though they would not in the
+//     cluster, and merging identical renderings would report one XR's changes for two.
+//
+// The controller is read from the rendered (or, for a removal, current) object's controller reference,
+// compared by group, kind and name. Never by UID: a render synthesizes a fresh UID for an XR that does
+// not exist yet, so the same controller carries a different UID in every group. Renderings are compared
+// by their diff type and Clean views, which cleanupForDiff has already stripped of ownerReferences and
+// uid for the same reason.
+//
+// A key whose every entry is DiffTypeEqual is not reported either: equal diffs are excluded from every
+// rendered view (changes[], the summary, and the human output all skip them), so merging loses
+// nothing observable.
 func DetectDiffKeyCollisions(groups []XRDiffGroup) []DiffKeyCollision {
-	owners := make(map[string][]string)
-	observable := make(map[string]bool)
+	type entry struct {
+		group int
+		diff  *ResourceDiff
+	}
 
-	for _, g := range groups {
-		id := fmt.Sprintf("%s/%s", g.XR.Kind, g.XR.Name)
+	// Groups are visited in input order, so each key's entries are too.
+	entries := make(map[string][]entry)
 
+	for i, g := range groups {
 		for key, d := range g.Diffs {
-			owners[key] = append(owners[key], id)
-
-			// A nil entry is not expected; count it as observable so a
-			// malformed group errors loudly rather than being merged away.
-			if d == nil || d.DiffType != DiffTypeEqual {
-				observable[key] = true
-			}
+			entries[key] = append(entries[key], entry{group: i, diff: d})
 		}
 	}
 
 	collisions := make([]DiffKeyCollision, 0)
 
-	for key, xrs := range owners {
-		if len(xrs) > 1 && observable[key] {
-			collisions = append(collisions, DiffKeyCollision{Key: key, XRs: xrs})
+	for key, es := range entries {
+		if len(es) < 2 {
+			continue
 		}
+
+		allEqual, identical := true, true
+		generatedNames := make(map[string]int)
+		controllers := make(map[string]string) // group/kind/name -> "Kind/Name" for display
+
+		c := DiffKeyCollision{Key: key}
+
+		for _, e := range es {
+			g := groups[e.group]
+			c.XRs = append(c.XRs, fmt.Sprintf("%s/%s", g.XR.Kind, g.XR.Name))
+
+			if g.NameGenerated {
+				generatedNames[g.XR.Name]++
+			}
+
+			// A nil entry is not expected; treat it as observable and as matching nothing, so a
+			// malformed group errors loudly rather than being merged away.
+			if e.diff == nil || e.diff.DiffType != DiffTypeEqual {
+				allEqual = false
+			}
+
+			if !sameRendering(es[0].diff, e.diff) {
+				identical = false
+			}
+
+			if id, display := controllerOf(e.diff); id != "" {
+				controllers[id] = display
+			}
+		}
+
+		if allEqual {
+			continue
+		}
+
+		switch {
+		case sharesPlaceholderName(generatedNames):
+			c.Kind = CollisionIndistinguishable
+		case len(controllers) > 1:
+			c.Kind = CollisionContention
+			for _, display := range controllers {
+				c.Controllers = append(c.Controllers, display)
+			}
+
+			sort.Strings(c.Controllers)
+		case identical:
+			continue
+		default:
+			c.Kind = CollisionDisagreement
+		}
+
+		collisions = append(collisions, c)
 	}
 
 	// Map iteration order is not stable; sort so the reported errors (and the
@@ -313,6 +405,71 @@ func DetectDiffKeyCollisions(groups []XRDiffGroup) []DiffKeyCollision {
 	})
 
 	return collisions
+}
+
+// sharesPlaceholderName reports whether two generateName-only inputs resolved to the same
+// synthesized name. Inputs with different generateNames get different placeholders, so a collision
+// between them is judged on its merits like any other.
+func sharesPlaceholderName(counts map[string]int) bool {
+	for _, n := range counts {
+		if n > 1 {
+			return true
+		}
+	}
+
+	return false
+}
+
+// controllerOf returns the identity of the XR that would control the diffed resource, as a
+// comparison key (group/kind/name) and a display form (Kind/Name), or empty strings if nothing
+// controls it — as for an input XR itself. It reads the rendered object, falling back to the current
+// one for a removal, which has no rendered form. The UID is deliberately ignored; see
+// DetectDiffKeyCollisions.
+func controllerOf(d *ResourceDiff) (string, string) {
+	if d == nil {
+		return "", ""
+	}
+
+	obj := d.Desired.Raw
+	if obj == nil {
+		obj = d.Current.Raw
+	}
+
+	if obj == nil {
+		return "", ""
+	}
+
+	ref := metav1.GetControllerOf(obj)
+	if ref == nil {
+		return "", ""
+	}
+
+	group := ""
+	if gv, err := schema.ParseGroupVersion(ref.APIVersion); err == nil {
+		group = gv.Group
+	}
+
+	return fmt.Sprintf("%s/%s/%s", group, ref.Kind, ref.Name), fmt.Sprintf("%s/%s", ref.Kind, ref.Name)
+}
+
+// sameRendering reports whether two diffs describe the same change: the same diff type, and the same
+// cleaned desired and current objects.
+func sameRendering(a, b *ResourceDiff) bool {
+	if a == nil || b == nil {
+		return false
+	}
+
+	return a.DiffType == b.DiffType &&
+		sameObject(a.Desired.Clean, b.Desired.Clean) &&
+		sameObject(a.Current.Clean, b.Current.Clean)
+}
+
+func sameObject(a, b *un.Unstructured) bool {
+	if a == nil || b == nil {
+		return a == nil && b == nil
+	}
+
+	return equality.Semantic.DeepEqual(a.Object, b.Object)
 }
 
 // OutputError represents an error in structured output.

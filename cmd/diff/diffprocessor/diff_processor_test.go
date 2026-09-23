@@ -829,17 +829,39 @@ func TestDefaultDiffProcessor_PerformDiff_Groups(t *testing.T) {
 	// inputs collide on it.
 	const sharedKey = "example.org/v1/Bucket/default/shared"
 
-	// sharedDiffs is the calculator's (XR-independent) result. The XR's own diff
-	// key is deliberately absent so removal detection stays out of the picture.
-	sharedDiffs := func(diffType dt.DiffType) map[string]*dt.ResourceDiff {
-		return map[string]*dt.ResourceDiff{
-			sharedKey: {
-				Gvk:          schema.GroupVersionKind{Group: "example.org", Version: "v1", Kind: "Bucket"},
-				Namespace:    "default",
-				ResourceName: "shared",
-				DiffType:     diffType,
-			},
+	// bucket is the shared resource as one input XR's render produces it: diffed as diffType,
+	// controlled by the XR named controller ("" for none), with spec.value set to value. renderedBy
+	// is the input XR doing the rendering; it only varies the controller reference's UID, the way a
+	// render synthesizes a fresh UID for an XR that does not exist yet — so a collision must be judged
+	// on the controller's kind and name, never its UID. Clean mirrors cleanupForDiff, which strips
+	// ownerReferences (and uid) before anything is compared or displayed.
+	bucket := func(diffType dt.DiffType, controller, value, renderedBy string) *dt.ResourceDiff {
+		b := tu.NewResource("example.org/v1", "Bucket", "shared").
+			InNamespace("default").
+			WithSpecField("value", value)
+		if controller != "" {
+			b = b.WithControllerReference(testKind, controller, testGroup+"/"+testAPIVersion, "uid-rendered-by-"+renderedBy)
 		}
+
+		desired := b.Build()
+		clean := desired.DeepCopy()
+		clean.SetOwnerReferences(nil)
+
+		return &dt.ResourceDiff{
+			Gvk:          schema.GroupVersionKind{Group: "example.org", Version: "v1", Kind: "Bucket"},
+			Namespace:    "default",
+			ResourceName: "shared",
+			DiffType:     diffType,
+			Desired:      dt.ResourceViews{Raw: desired, Clean: clean},
+		}
+	}
+
+	xr := func(name string) *un.Unstructured {
+		return tu.NewResource(testGroup+"/"+testAPIVersion, testKind, name).WithSpecField("coolField", name).Build()
+	}
+
+	ref := func(name string) corev1.ObjectReference {
+		return corev1.ObjectReference{APIVersion: testGroup + "/" + testAPIVersion, Kind: testKind, Name: name}
 	}
 
 	// got is the whole handoff, asserted as one value: the group identities in
@@ -851,75 +873,104 @@ func TestDefaultDiffProcessor_PerformDiff_Groups(t *testing.T) {
 		Err        string
 	}
 
+	const (
+		contendErr = `cannot combine diffs: resource "example.org/v1/Bucket/default/shared" would be controlled by ` +
+			`more than one XR (XR1/my-xr-1, XR1/my-xr-2); Crossplane gives it to whichever of them creates it first, ` +
+			`and the other fails to reconcile it, so no diff predicts applying these inputs together — diff them separately`
+		disagreeErr = `cannot combine diffs: inputs XR1/my-xr-1 and XR1/my-xr-2 both produce resource ` +
+			`"example.org/v1/Bucket/default/shared", but differently, so no single diff is correct for both — diff them ` +
+			`separately. This happens when the same XR is passed twice with different specs, or alongside an input that composes it`
+		generatedErr = `cannot combine diffs: inputs XR1/gen-xr-(generated) and XR1/gen-xr-(generated) both produce resource ` +
+			`"example.org/v1/Bucket/default/shared" only because crossplane-diff gives XRs that share a generateName the ` +
+			`same placeholder name; the API server would name them differently, so they cannot be told apart here — diff ` +
+			`them separately`
+	)
+
+	genXR := tu.NewResource(testGroup+"/"+testAPIVersion, testKind, "").
+		WithGenerateName("gen-xr-").
+		WithSpecField("coolField", "value").
+		Build()
+
 	tests := map[string]struct {
 		resources []*un.Unstructured
-		diffType  dt.DiffType
-		want      got
+		// shared is sharedKey's diff as rendered for the input XR named xrName (the effective,
+		// possibly synthesized, name the processor renders with).
+		shared func(xrName string) *dt.ResourceDiff
+		want   got
 	}{
 		// Issue #477: the name used for rendering is synthesized from
 		// generateName inside SanitizeXR, so the identity must carry that
 		// effective name rather than the input's empty metadata.name.
 		"GenerateNameOnlyXR": {
-			resources: []*un.Unstructured{
-				tu.NewResource(testGroup+"/"+testAPIVersion, testKind, "").
-					WithGenerateName("gen-xr-").
-					WithSpecField("coolField", "value").
-					Build(),
-			},
-			diffType: dt.DiffTypeModified,
-			want: got{
-				XRs: []corev1.ObjectReference{
-					{APIVersion: testGroup + "/" + testAPIVersion, Kind: testKind, Name: "gen-xr-(generated)"},
-				},
-			},
+			resources: []*un.Unstructured{genXR},
+			shared:    func(xrName string) *dt.ResourceDiff { return bucket(dt.DiffTypeModified, xrName, "v", xrName) },
+			want:      got{XRs: []corev1.ObjectReference{ref("gen-xr-(generated)")}},
 		},
-		// Issue #476: both XRs produce sharedKey, so the flat changes[] can only
-		// carry one of them and applying both would have them contend for the
-		// same object. Neither result is correct for both inputs, so the run
-		// fails — loudly, in errors[] as well as on the returned error.
-		"SameKeyFromTwoXRs": {
-			resources: []*un.Unstructured{
-				tu.NewResource(testGroup+"/"+testAPIVersion, testKind, "my-xr-1").
-					WithSpecField("coolField", "value-1").
-					Build(),
-				tu.NewResource(testGroup+"/"+testAPIVersion, testKind, "my-xr-2").
-					WithSpecField("coolField", "value-2").
-					Build(),
-			},
-			diffType: dt.DiffTypeModified,
+		// Issue #476, scenario "two XRs compose one object": each XR renders the shared resource as
+		// its own. Crossplane's server-side apply refuses to add a second controller reference, so the
+		// first XR to create it keeps it and the other fails every reconcile. No diff predicts that,
+		// even though both render identical content — contention is decided by the controller, not the
+		// content. The run fails, in errors[] as well as on the returned error.
+		"DifferentControllersContend": {
+			resources: []*un.Unstructured{xr("my-xr-1"), xr("my-xr-2")},
+			shared:    func(xrName string) *dt.ResourceDiff { return bucket(dt.DiffTypeModified, xrName, "same", xrName) },
 			want: got{
-				XRs: []corev1.ObjectReference{
-					{APIVersion: testGroup + "/" + testAPIVersion, Kind: testKind, Name: "my-xr-1"},
-					{APIVersion: testGroup + "/" + testAPIVersion, Kind: testKind, Name: "my-xr-2"},
-				},
-				GlobalErrs: []string{
-					`cannot combine diffs: resource "example.org/v1/Bucket/default/shared" is produced by more than one ` +
-						`input XR (XR1/my-xr-1, XR1/my-xr-2); those XRs contend for the same object, so no single diff ` +
-						`is correct for both — diff them separately`,
-				},
-				Err: `cannot combine diffs: resource "example.org/v1/Bucket/default/shared" is produced by more than one ` +
-					`input XR (XR1/my-xr-1, XR1/my-xr-2); those XRs contend for the same object, so no single diff ` +
-					`is correct for both — diff them separately`,
+				XRs:        []corev1.ObjectReference{ref("my-xr-1"), ref("my-xr-2")},
+				GlobalErrs: []string{contendErr},
+				Err:        contendErr,
 			},
 		},
 		// A collision whose every entry is equal loses nothing observable (equal
 		// diffs are excluded from every rendered view), so it must NOT fail:
 		// rejecting it would reject input whose output is provably correct.
 		"SameEqualKeyFromTwoXRsTolerated": {
-			resources: []*un.Unstructured{
-				tu.NewResource(testGroup+"/"+testAPIVersion, testKind, "my-xr-1").
-					WithSpecField("coolField", "value-1").
-					Build(),
-				tu.NewResource(testGroup+"/"+testAPIVersion, testKind, "my-xr-2").
-					WithSpecField("coolField", "value-2").
-					Build(),
-			},
-			diffType: dt.DiffTypeEqual,
+			resources: []*un.Unstructured{xr("my-xr-1"), xr("my-xr-2")},
+			shared:    func(xrName string) *dt.ResourceDiff { return bucket(dt.DiffTypeEqual, xrName, "same", xrName) },
+			want:      got{XRs: []corev1.ObjectReference{ref("my-xr-1"), ref("my-xr-2")}},
+		},
+		// Two inputs reaching the same object through the same controller — a claim and its backing
+		// XR, the same file passed twice, or a parent alongside a nested child it composes — do not
+		// contend: there is one controller and one desired state. Identical renderings are the same
+		// change reported twice, so they must NOT fail. The per-render UIDs deliberately differ.
+		"SameControllerIdenticalIsNotACollision": {
+			resources: []*un.Unstructured{xr("my-xr-1"), xr("my-xr-2")},
+			shared:    func(xrName string) *dt.ResourceDiff { return bucket(dt.DiffTypeModified, "parent-xr", "same", xrName) },
+			want:      got{XRs: []corev1.ObjectReference{ref("my-xr-1"), ref("my-xr-2")}},
+		},
+		// Same controller but different content: the inputs disagree about one object (say, a
+		// hand-edited child passed alongside a parent that renders it differently), so no single diff
+		// is right for both. That is a disagreement between inputs, not contention between XRs.
+		"SameControllerDifferentContentDisagrees": {
+			resources: []*un.Unstructured{xr("my-xr-1"), xr("my-xr-2")},
+			shared:    func(xrName string) *dt.ResourceDiff { return bucket(dt.DiffTypeModified, "parent-xr", xrName, xrName) },
 			want: got{
-				XRs: []corev1.ObjectReference{
-					{APIVersion: testGroup + "/" + testAPIVersion, Kind: testKind, Name: "my-xr-1"},
-					{APIVersion: testGroup + "/" + testAPIVersion, Kind: testKind, Name: "my-xr-2"},
-				},
+				XRs:        []corev1.ObjectReference{ref("my-xr-1"), ref("my-xr-2")},
+				GlobalErrs: []string{disagreeErr},
+				Err:        disagreeErr,
+			},
+		},
+		// The uncontrolled form of the same disagreement: an object no XR controls (an input XR
+		// itself), produced differently by two inputs — the same XR passed twice with different specs.
+		"UncontrolledDifferentContentDisagrees": {
+			resources: []*un.Unstructured{xr("my-xr-1"), xr("my-xr-2")},
+			shared:    func(xrName string) *dt.ResourceDiff { return bucket(dt.DiffTypeModified, "", xrName, xrName) },
+			want: got{
+				XRs:        []corev1.ObjectReference{ref("my-xr-1"), ref("my-xr-2")},
+				GlobalErrs: []string{disagreeErr},
+				Err:        disagreeErr,
+			},
+		},
+		// Two XRs sharing a generateName get the same synthesized placeholder name here, so their
+		// resources collide — but the API server would give them different names, so in the cluster they
+		// would not. The collision is this tool's, and even identical content must not be merged (that
+		// would report one XR's worth of changes for two). Say what is true, not that they contend.
+		"SharedGenerateNameCannotBeToldApart": {
+			resources: []*un.Unstructured{genXR, genXR.DeepCopy()},
+			shared:    func(xrName string) *dt.ResourceDiff { return bucket(dt.DiffTypeModified, xrName, "same", xrName) },
+			want: got{
+				XRs:        []corev1.ObjectReference{ref("gen-xr-(generated)"), ref("gen-xr-(generated)")},
+				GlobalErrs: []string{generatedErr},
+				Err:        generatedErr,
 			},
 		},
 	}
@@ -959,8 +1010,8 @@ func TestDefaultDiffProcessor_PerformDiff_Groups(t *testing.T) {
 				}),
 				WithDiffCalculatorFactory(func(k8.ApplyClient, xp.ResourceTreeClient, ResourceManager, logging.Logger, renderer.DiffOptions) DiffCalculator {
 					return &tu.MockDiffCalculator{
-						CalculateNonRemovalDiffsFn: func(context.Context, *cmp.Unstructured, *un.Unstructured, render.CompositionOutputs) (map[string]*dt.ResourceDiff, map[string]bool, error) {
-							return sharedDiffs(tt.diffType), map[string]bool{sharedKey: true}, nil
+						CalculateNonRemovalDiffsFn: func(_ context.Context, rendered *cmp.Unstructured, _ *un.Unstructured, _ render.CompositionOutputs) (map[string]*dt.ResourceDiff, map[string]bool, error) {
+							return map[string]*dt.ResourceDiff{sharedKey: tt.shared(rendered.GetName())}, map[string]bool{sharedKey: true}, nil
 						},
 					}
 				}),

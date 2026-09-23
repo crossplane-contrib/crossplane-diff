@@ -1,0 +1,24 @@
+# Two distinct XRs on the shared-child composition, in one namespace and with the SAME spec, so they
+# render byte-identical children. They still contend for that child: the collision is decided by who
+# would control it, not by whether the renderings match.
+apiVersion: ns.diff.example.org/v1alpha1
+kind: XNopResource
+metadata:
+  name: shared-child-owner-a
+  namespace: default
+spec:
+  coolField: "same-value"
+  crossplane:
+    compositionRef:
+      name: xnopresources-shared-child.diff.example.org
+---
+apiVersion: ns.diff.example.org/v1alpha1
+kind: XNopResource
+metadata:
+  name: shared-child-owner-b
+  namespace: default
+spec:
+  coolField: "same-value"
+  crossplane:
+    compositionRef:
+      name: xnopresources-shared-child.diff.example.org

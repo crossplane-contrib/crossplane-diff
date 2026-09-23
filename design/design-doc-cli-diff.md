@@ -212,9 +212,10 @@ test cases cover:
 
 - **Multiple XRs**: Tests processing multiple input files containing different XRs, ensuring that all changes are
   correctly identified and summarized.
-- **Duplicate input XRs collide on diff keys**: Verifies that two input XRs rendering the same
-  `apiVersion/kind/namespace/name` fail the run (with the collision in `errors[]`) rather than silently dropping one
-  XR's diff from the merged flat view. See §6.8.3.
+- **Inputs that render the same resource**: Verifies that the same XR passed twice is one change reported twice and
+  succeeds, and that two distinct XRs composing one fixed-name object fail as contention even when their renderings
+  are byte-identical — which depends on real renders carrying the controller reference. Unit tests cover the other
+  collision kinds (disagreeing renderings, and a shared `generateName`). See §6.8.3.
 
 ### 4.8 Composition Selection
 
@@ -1029,19 +1030,32 @@ contract:
   XRs), `Changes []ChangeDetail` (flat list, one entry per non-equal resource across all XRs), optional
   `Errors []OutputError` (union), and `Xrs` (per-input-XR grouping, JSON key `xrs`). **`Changes` is deprecated** in
   favor of `Xrs` and will be removed in a future major release; `Summary` and `Errors` are retained.
-  `Summary` is derived from `Xrs` (the field-wise sum of the per-XR summaries), not from the flat merge that produces
-  `Changes`. That is a correctness requirement, not a convenience: a diff key is
-  `apiVersion/kind/namespace/name` with no owning-XR component, so two input XRs that render the same resource
-  produce the same key, and the merge behind `Changes` keeps only one of them. Summing the groups keeps `Summary`
-  equal to what `Xrs` reports in every document that renders, which is what it is documented to mean.
-  Such input is also rejected outright: `PerformDiff` runs `types.DetectDiffKeyCollisions` over the groups before
-  rendering and, for any key produced by more than one group, adds a global `OutputError` and fails the run
-  (`ExitCodeToolError`). Two XRs claiming one object contend for it — whichever is applied second wins — so neither
-  XR's diff predicts the outcome, and emitting one anyway would be a possibly-incorrect partial result. The check is
-  format-independent (the contention is real regardless of how the diff is rendered) and, per the "always render"
-  contract above, the structured document is still emitted, carrying the error. A collision whose every entry is
-  `DiffTypeEqual` is deliberately **not** reported: equal diffs are excluded from every rendered view, so the merge
-  loses nothing observable and failing would reject input whose output is provably correct either way.
+  `Summary` counts exactly what `Changes` lists — each resource once, however many inputs reach it — while each
+  `Xrs` entry is complete for its own input. Where inputs overlap (a claim and its backing XR), a shared resource
+  appears under each entry, so the `Xrs` summaries can sum to more than `Summary`: the flat view counts resources, the
+  grouped view reports inputs.
+  That merge is lossless in every successful run, which is what `types.DetectDiffKeyCollisions` guarantees. A diff key
+  is `apiVersion/kind/namespace/name` with no owning-XR component, so two input XRs that render the same resource
+  produce the same key and the merge keeps only one. Whether that loses anything is decided by who would control the
+  resource, read from the rendered (or, for a removal, current) object's controller reference and compared by group,
+  kind and name — never UID, which a render synthesizes afresh for an XR that does not yet exist:
+    - **Different controllers — contention.** Crossplane's server-side apply refuses to add a second controller
+      reference, so the first XR to create the object keeps it and every other fails to reconcile it. No diff
+      predicts that, however alike the renderings.
+    - **One controller or none, identical renderings** (compared by diff type and `Clean` views, which
+      `cleanupForDiff` has stripped of `ownerReferences` and `uid`) — the same XR passed twice, a claim and its
+      backing XR, a parent and a nested child it composes. One change reported twice: merged, not reported.
+    - **One controller or none, differing renderings — disagreement.** The inputs disagree about one object.
+    - **Two inputs sharing a `generateName` — indistinguishable**, checked first. Both render under one synthesized
+      placeholder name, so their resources collide here though the API server would name them apart; merging
+      identical renderings would report one XR's changes for two.
+  Each reported collision adds a global `OutputError` whose message states that kind's cause, and fails the run
+  (`ExitCodeToolError`). The check is format-independent and, per the "always render" contract above, the structured
+  document is still emitted, carrying the error. A collision whose every entry is `DiffTypeEqual` is not reported:
+  equal diffs are excluded from every rendered view, so the merge loses nothing observable.
+  Two overlaps are out of reach of this check, because they never produce two groups sharing a key: one XR rendering
+  the same object under two composition resource names (the per-XR diff map overwrites it; #505), and the same
+  object rendered at two API versions (two keys for one object; #506).
 - `xrDiffWire` — one entry in the `xrs[]` array, per input XR/claim in input order: an `xr` identity object, a
   `status` (`"changed"` / `"unchanged"` / `"error"` — the same `XRStatus` enum comp uses; `"filtered"` does not apply
   to `xr`), its own `summary`, its own `changes[]`, and (for a failed XR) its own `errors[]`.
