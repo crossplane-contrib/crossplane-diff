@@ -224,15 +224,16 @@ func (p *DefaultDiffProcessor) PerformDiff(ctx context.Context, resources []*un.
 	var errs []error
 
 	for _, res := range resources {
-		resourceID := fmt.Sprintf("%s/%s", res.GetKind(), res.GetName())
+		resourceID := fmt.Sprintf("%s/%s", res.GetKind(), xrIdentityName(res))
 
 		group := dt.XRDiffGroup{
 			XR: corev1.ObjectReference{
 				APIVersion: res.GetAPIVersion(),
 				Kind:       res.GetKind(),
-				Name:       res.GetName(),
+				Name:       xrIdentityName(res),
 				Namespace:  res.GetNamespace(),
 			},
+			NameGenerated: res.GetName() == "" && res.GetGenerateName() != "",
 		}
 
 		diffs, err := p.DiffSingleResource(ctx, res, compositionProvider)
@@ -262,6 +263,19 @@ func (p *DefaultDiffProcessor) PerformDiff(ctx context.Context, resources []*un.
 		}
 
 		groups = append(groups, group)
+	}
+
+	// A diff key carries no owning-XR component, so two input XRs that render the same resource
+	// collide, and the flat changes[] view can keep only one of them. When the renderings are the same
+	// change reached twice nothing is lost; otherwise no single result is correct for every input, so
+	// report it rather than emit a result that is wrong for at least one of them. Each kind of collision
+	// has a different cause and says so (see dt.DetectDiffKeyCollisions). Collected before rendering so
+	// it reaches errors[] and stderr like any other error; the render still happens so structured output
+	// stays valid.
+	for _, c := range dt.DetectDiffKeyCollisions(groups) {
+		err := diffKeyCollisionError(c)
+		errs = append(errs, err)
+		outputErrors = append(outputErrors, dt.OutputError{Message: err.Error()})
 	}
 
 	// Always render (even if only errors exist) to ensure valid structured output
@@ -1089,6 +1103,65 @@ func (p *DefaultDiffProcessor) ProcessNestedXRs(
 		"depth", depth)
 
 	return allDiffs, allRenderedResources, nil
+}
+
+// xrIdentityName returns the name an input XR's diffs should be attributed to.
+//
+// For an XR supplied with only metadata.generateName there is no name to
+// attribute to: SanitizeXR synthesizes one for rendering, but on a deep copy, so
+// the raw input's name stays empty. Left as-is the group identity is nameless —
+// and, since corev1.ObjectReference.Name is omitempty, absent from structured
+// output entirely, making two such XRs indistinguishable (issue #477).
+//
+// So mirror SanitizeXR's synthesis here and render it the way the diff formatter
+// renders that synthesized name, giving "<generateName>(generated)". That is the
+// name the same XR already carries in changes[], so the grouped and flat views
+// agree, and it avoids publishing a synthetic hash the user cannot predict.
+func xrIdentityName(res *un.Unstructured) string {
+	if name := res.GetName(); name != "" {
+		return name
+	}
+
+	gen := res.GetGenerateName()
+	if gen == "" {
+		return ""
+	}
+
+	return dt.GeneratedDisplayName(dt.SynthesizeGeneratedName(gen), gen)
+}
+
+// diffKeyCollisionError explains why a collision's inputs cannot be diffed together. Each kind has a
+// different cause, and the message states the one that is true: only a contention is a conflict in the
+// cluster, so only it says what Crossplane would do.
+func diffKeyCollisionError(c dt.DiffKeyCollision) error {
+	switch c.Kind {
+	case dt.CollisionContention:
+		return errors.Errorf("cannot combine diffs: resource %q would be controlled by more than one XR (%s); "+
+			"Crossplane gives it to whichever of them creates it first, and the other fails to reconcile it, "+
+			"so no diff predicts applying these inputs together — diff them separately",
+			c.Key, strings.Join(c.Controllers, ", "))
+	case dt.CollisionIndistinguishable:
+		return errors.Errorf("cannot combine diffs: inputs %s both produce resource %q only because crossplane-diff "+
+			"gives XRs that share a generateName the same placeholder name; the API server would name them "+
+			"differently, so they cannot be told apart here — diff them separately",
+			joinInputs(c.XRs), c.Key)
+	case dt.CollisionDisagreement:
+		fallthrough
+	default:
+		return errors.Errorf("cannot combine diffs: inputs %s both produce resource %q, but differently, so no "+
+			"single diff is correct for both — diff them separately. This happens when the same XR is passed "+
+			"twice with different specs, or alongside an input that composes it",
+			joinInputs(c.XRs), c.Key)
+	}
+}
+
+// joinInputs lists input XR identities for a sentence: "A and B", or "A, B and C".
+func joinInputs(xrs []string) string {
+	if len(xrs) < 2 {
+		return strings.Join(xrs, "")
+	}
+
+	return strings.Join(xrs[:len(xrs)-1], ", ") + " and " + xrs[len(xrs)-1]
 }
 
 // SanitizeXR makes an XR into a valid unstructured object that we can use in a dry-run apply.

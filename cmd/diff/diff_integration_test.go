@@ -1247,9 +1247,54 @@ Summary: 2 modified, 2 removed`,
 				And().
 				WithAddedResource("XNopResource", "", "default").
 				WithNamePattern(`generated-xr-\(generated\)`).
-				WithField("spec.coolField", "new-value"),
+				WithField("spec.coolField", "new-value").
+				And().
+				// Issue #477: the grouped view must attribute these changes to a
+				// named XR. metadata.name is empty on the input, so the identity
+				// carries the effective (synthesized) name — the same one the
+				// changes above are keyed by.
+				WithXRs(
+					tu.XR("XNopResource", "generated-xr-(generated)", "default").
+						Status("changed").
+						Summary(2, 0, 0),
+				),
 			expectedError:    false,
 			expectedExitCode: dp.ExitCodeDiffDetected,
+		},
+		// Issue #476. The same XR passed twice reaches every resource through one controller with one
+		// rendering: the same change reported twice, not a conflict. It must succeed, and the flat view
+		// must count each resource once while xrs[] reports each input in full.
+		"DuplicateInputXRIsNotACollision": {
+			reason:       "The same XR passed twice is one change reported twice, not a collision, so it must not fail",
+			outputFormat: "json",
+			setupFiles: []string{
+				"testdata/diff/resources/xrd.yaml",
+				"testdata/diff/resources/composition.yaml",
+				"testdata/diff/resources/functions.yaml",
+			},
+			inputFiles: []string{
+				"testdata/diff/new-xr.yaml",
+				"testdata/diff/new-xr.yaml",
+			},
+			expectedExitCode:         dp.ExitCodeDiffDetected,
+			expectedStructuredOutput: tu.ExpectDiff().WithSummary(2, 0, 0),
+		},
+		// Issue #476. Two distinct XRs whose composition gives one child a fixed name render the same
+		// object — here with byte-identical content. Crossplane gives it to whichever XR creates it first
+		// and the other fails to reconcile it, so the run must fail however alike the renderings are.
+		// This depends on real renders carrying the controller reference; unit tests build that by hand.
+		"TwoXRsComposingOneObjectContend": {
+			reason: "Two XRs that would both control one object fail, even when their renderings are identical",
+			setupFiles: []string{
+				"testdata/diff/resources/xrd.yaml",
+				"testdata/diff/resources/shared-child-composition.yaml",
+				"testdata/diff/resources/functions.yaml",
+			},
+			inputFiles:       []string{"testdata/diff/shared-child-xrs.yaml"},
+			expectedError:    true,
+			expectedExitCode: dp.ExitCodeToolError,
+			expectedErrorContains: `resource "ns.nop.example.org/v1alpha1/XDownstreamResource/default/shared-child" would be ` +
+				`controlled by more than one XR (XNopResource/shared-child-owner-a, XNopResource/shared-child-owner-b)`,
 		},
 		// Reproduces the PR #294 scenario: a net-new XR is diffed while the
 		// composed resource it would manage already exists in the cluster

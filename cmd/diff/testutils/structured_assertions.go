@@ -712,11 +712,32 @@ func assertChangeFields(t *testing.T, prefix string, found *ChangeDetail, expect
 
 // assertXRExpectations validates xrs[] entry expectations against the actual
 // grouped output.
+//
+// Each expectation consumes the entry it matches, so two expectations can never
+// both resolve to the same entry, and the entry count is pinned once the test
+// has an opinion on xrs[] at all. Without those guards a duplicated identity —
+// exactly the symptom of issue #477 — satisfied every expectation that matched
+// it and went unnoticed (issue #488).
 func assertXRExpectations(t *testing.T, actual []XRDiffWire, expected []*XRExpectation) {
 	t.Helper()
 
+	if len(expected) == 0 {
+		return
+	}
+
+	if len(actual) != len(expected) {
+		actualXRs := make([]string, 0, len(actual))
+		for _, x := range actual {
+			actualXRs = append(actualXRs, fmt.Sprintf("%s/%s (ns=%s)", x.XR.Kind, x.XR.Name, x.XR.Namespace))
+		}
+
+		t.Errorf("Expected %d xrs[] entries, got %d: %v", len(expected), len(actual), actualXRs)
+	}
+
+	used := make([]bool, len(actual))
+
 	for _, want := range expected {
-		got := findMatchingXR(actual, want)
+		got := findMatchingXR(actual, used, want)
 		if got == nil {
 			actualXRs := make([]string, 0, len(actual))
 			for _, x := range actual {
@@ -745,6 +766,12 @@ func assertXRExpectations(t *testing.T, actual []XRDiffWire, expected []*XRExpec
 
 		assertResourceExpectations(t, label, got.Changes, want.changes)
 
+		// Pin the entry's change count too, so a change the test did not ask
+		// for cannot hide inside a matched entry.
+		if len(want.changes) > 0 && len(got.Changes) != len(want.changes) {
+			t.Errorf("xr %s: expected %d changes, got %d", label, len(want.changes), len(got.Changes))
+		}
+
 		for _, id := range want.errorIDs {
 			if findMatchingError(got.Errors, id) == nil {
 				t.Errorf("xr %s: expected error with resourceID %q not found in entry errors", label, id)
@@ -753,10 +780,17 @@ func assertXRExpectations(t *testing.T, actual []XRDiffWire, expected []*XRExpec
 	}
 }
 
-// findMatchingXR locates the xrs[] entry matching an XRExpectation by
-// kind/namespace and (unless anyName / a name pattern is used) exact name.
-func findMatchingXR(actual []XRDiffWire, want *XRExpectation) *XRDiffWire {
+// findMatchingXR locates the first not-yet-consumed xrs[] entry matching an
+// XRExpectation by kind/namespace and (unless anyName / a name pattern is used)
+// exact name, marking it consumed in used. Consuming matters because identities
+// need not be unique: without it, N expectations could all be satisfied by one
+// entry (or by N byte-identical ones).
+func findMatchingXR(actual []XRDiffWire, used []bool, want *XRExpectation) *XRDiffWire {
 	for i := range actual {
+		if used[i] {
+			continue
+		}
+
 		x := &actual[i]
 
 		if x.XR.Kind != want.kind || x.XR.Namespace != want.namespace {
@@ -765,14 +799,17 @@ func findMatchingXR(actual []XRDiffWire, want *XRExpectation) *XRDiffWire {
 
 		switch {
 		case want.anyName:
-			return x
 		case want.namePattern != nil:
-			if want.namePattern.MatchString(x.XR.Name) {
-				return x
+			if !want.namePattern.MatchString(x.XR.Name) {
+				continue
 			}
-		case x.XR.Name == want.name:
-			return x
+		case x.XR.Name != want.name:
+			continue
 		}
+
+		used[i] = true
+
+		return x
 	}
 
 	return nil
