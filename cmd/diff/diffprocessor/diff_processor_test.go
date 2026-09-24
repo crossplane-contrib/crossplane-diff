@@ -3,6 +3,7 @@ package diffprocessor
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"testing"
@@ -12,16 +13,19 @@ import (
 	"github.com/crossplane-contrib/crossplane-diff/cmd/diff/renderer"
 	dt "github.com/crossplane-contrib/crossplane-diff/cmd/diff/renderer/types"
 	tu "github.com/crossplane-contrib/crossplane-diff/cmd/diff/testutils"
+	"github.com/crossplane-contrib/crossplane-diff/cmd/diff/types"
 	"github.com/crossplane/cli/v2/cmd/crossplane/common/resource"
 	"github.com/crossplane/cli/v2/cmd/crossplane/render"
 	v1 "github.com/crossplane/function-sdk-go/proto/v1"
 	gcmp "github.com/google/go-cmp/cmp"
+	"github.com/google/go-cmp/cmp/cmpopts"
 	"github.com/sergi/go-diff/diffmatchpatch"
 	corev1 "k8s.io/api/core/v1"
 	extv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	un "k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	k8stypes "k8s.io/apimachinery/pkg/types"
 
 	"github.com/crossplane/crossplane-runtime/v2/pkg/errors"
 	"github.com/crossplane/crossplane-runtime/v2/pkg/logging"
@@ -803,6 +807,93 @@ func TestDefaultDiffProcessor_PerformDiff(t *testing.T) {
 // the per-group xrs[] shape — including errored groups — by
 // TestStructuredDiffRenderer_GroupsByXR, so there is no separate unit test
 // asserting the intermediate []XRDiffGroup handoff.
+
+// TestDefaultDiffProcessor_PerformDiff_LateWarningsReachStructuredOutput pins the warning channel's
+// contract for advisories that can only be discovered during teardown. The leftover-function-container
+// advisory is raised from FunctionProvider.Cleanup, which used to run in the command layer's defer —
+// i.e. after the renderer had already consumed and serialized the warning slice — so it reached stderr
+// but was structurally absent from warnings[], contradicting the README. PerformDiff therefore tears
+// down before rendering, and this test fails if that ordering is lost.
+func TestDefaultDiffProcessor_PerformDiff_LateWarningsReachStructuredOutput(t *testing.T) {
+	ctx := t.Context()
+
+	const advisory = "Some containers could not be cleaned up"
+
+	var stdout, stderr bytes.Buffer
+
+	warnings := NewWarningLogger(tu.TestLogger(t, false), &stderr)
+
+	k8sClients := k8.Clients{
+		Apply:    tu.NewMockApplyClient().Build(),
+		Resource: tu.NewMockResourceClient().Build(),
+		Schema:   tu.NewMockSchemaClient().Build(),
+		Type:     tu.NewMockTypeConverter().Build(),
+	}
+
+	// The XR's own diff fails (no matching composition), which additionally pins the README's claim
+	// that a warning is still reported when a later step fails — the advisory has to survive alongside
+	// errors[], not instead of it.
+	xpClients := xp.Clients{
+		Composition:  tu.NewMockCompositionClient().WithNoMatchingComposition().Build(),
+		Credential:   &tu.MockCredentialClient{},
+		Definition:   tu.NewMockDefinitionClient().Build(),
+		Environment:  tu.NewMockEnvironmentClient().WithNoEnvironmentConfigs().Build(),
+		Function:     tu.NewMockFunctionClient().Build(),
+		ResourceTree: tu.NewMockResourceTreeClient().Build(),
+	}
+
+	processor := NewDiffProcessor(k8sClients, xpClients,
+		append(testProcessorOptions(t),
+			WithLogger(warnings),
+			WithWarnings(warnings),
+			WithOutputFormat(renderer.OutputFormatJSON),
+			WithStdout(&stdout),
+			WithStderr(&stderr),
+			// Stands in for CachedFunctionProvider.Cleanup raising its advisory when a container could
+			// not be removed; the point under test is WHEN cleanup runs, not how it detects leftovers.
+			WithFunctionProviderFactory(func(_ xp.FunctionClient, logger logging.Logger) FunctionProvider {
+				return &tu.MockFunctionProvider{
+					CleanupFn: func(context.Context) error {
+						logger.Info(advisory, "errors", 1)
+						return nil
+					},
+				}
+			}),
+		)...,
+	)
+
+	resource := tu.NewResource("example.org/v1", "XR1", "my-xr-1").
+		WithSpecField("coolField", "test-value-1").
+		Build()
+
+	if _, err := processor.PerformDiff(ctx, []*un.Unstructured{resource}, xpClients.Composition.FindMatchingComposition); err == nil {
+		t.Fatal("PerformDiff(): expected the XR's diff to fail, got nil")
+	}
+
+	if !strings.Contains(stderr.String(), advisory) {
+		t.Errorf("teardown advisory should reach stderr, got:\n%s", stderr.String())
+	}
+
+	// Decoded via the wire contract rather than the renderer's own struct: what matters is that a
+	// machine consumer reading warnings[] out of the JSON sees the advisory.
+	var got struct {
+		Warnings []dt.OutputWarning `json:"warnings"`
+		Errors   []dt.OutputError   `json:"errors"`
+	}
+
+	if err := json.Unmarshal(stdout.Bytes(), &got); err != nil {
+		t.Fatalf("cannot parse structured output %q: %v", stdout.String(), err)
+	}
+
+	want := []dt.OutputWarning{{Message: advisory, Context: map[string]string{"errors": "1"}}}
+	if diff := gcmp.Diff(want, got.Warnings); diff != "" {
+		t.Errorf("structured warnings[] mismatch (-want +got):\n%s", diff)
+	}
+
+	if len(got.Errors) != 1 {
+		t.Errorf("expected the XR's failure to still be reported in errors[], got %v", got.Errors)
+	}
+}
 
 // TestDefaultDiffProcessor_PerformDiff_StderrErrorOutput verifies that when
 // resource processing fails, detailed errors are written to stderr for human visibility.
@@ -3974,64 +4065,190 @@ func TestMergeCredentials(t *testing.T) {
 	}
 }
 
-func TestFetchCompositionCredentials(t *testing.T) {
-	// This tests that fetchCompositionCredentials correctly delegates to the CredentialClient.
-	// The detailed credential fetching logic is tested in credential_client_test.go.
-	var azureCredentials corev1.Secret
-	tu.NewResource("v1", "Secret", "azure-credentials").
+// TestResolveFunctionCredentials covers the credential resolution seam: delegation to the
+// CredentialClient (whose own fetch logic is tested in credential_client_test.go), the merge with
+// CLI-supplied credentials, and — the part that matters to a user — exactly when the shortfall advisory
+// fires. The advisory must describe the state AFTER the merge: a user who supplied the absent secret
+// with --function-credentials has already solved the problem and must not be told to solve it.
+func TestResolveFunctionCredentials(t *testing.T) {
+	var clusterSecret corev1.Secret
+	tu.NewResource("v1", "Secret", "cluster-credentials").
 		InNamespace("crossplane-system").
-		BuildTyped(&azureCredentials)
+		BuildTyped(&clusterSecret)
+
+	var suppliedSecret corev1.Secret
+	tu.NewResource("v1", "Secret", "absent-credentials").
+		InNamespace("crossplane-system").
+		BuildTyped(&suppliedSecret)
+
+	absentRef := k8stypes.NamespacedName{Namespace: "crossplane-system", Name: "absent-credentials"}
+	otherAbsentRef := k8stypes.NamespacedName{Namespace: "ns2", Name: "other-credentials"}
+
+	composition := tu.NewComposition("test-comp").
+		WithCompositeTypeRef("example.org/v1", "XR1").
+		WithPipelineMode().
+		WithPipelineStep("step1", "function-msgraph", nil,
+			tu.WithCredentials("azure-creds", "crossplane-system", "cluster-credentials")).
+		Build()
+
+	const (
+		advisoryMsg  = "Some function credential secrets could not be fetched from cluster"
+		advisoryHint = "Use --function-credentials to provide secrets that don't exist on cluster"
+	)
 
 	tests := map[string]struct {
-		composition     *apiextensionsv1.Composition
-		mockCredentials []corev1.Secret
-		wantSecrets     int
+		reason string
+		// composition is passed straight through; nil exercises the delegation guard.
+		composition *apiextensionsv1.Composition
+		// calls is how many times resolveFunctionCredentials runs, standing in for the per-XR repeat:
+		// RenderToStableState resolves credentials once per XR, so a composition affecting many XRs
+		// resolves many times against identical inputs.
+		calls          int
+		cliCredentials []corev1.Secret
+		fetchResult    types.CredentialFetchResult
+		fetchErr       error
+		wantMerged     []string
+		wantAdvisories []dt.OutputWarning
+		wantErr        string
 	}{
-		"NilComposition": {
-			composition:     nil,
-			mockCredentials: nil,
-			wantSecrets:     0,
+		"NilCompositionResolvesNothing": {
+			reason:      "A nil composition has no pipeline to inspect, so nothing is fetched or warned about",
+			composition: nil,
 		},
 		"DelegatesToCredentialClient": {
-			composition: tu.NewComposition("test-comp").
-				WithCompositeTypeRef("example.org/v1", "XR1").
-				WithPipelineMode().
-				WithPipelineStep("step1", "function-msgraph", nil,
-					tu.WithCredentials("azure-creds", "crossplane-system", "azure-credentials")).
-				Build(),
-			mockCredentials: []corev1.Secret{azureCredentials},
-			wantSecrets:     1,
+			reason:      "Secrets the client fetched from the cluster are returned for rendering",
+			composition: composition,
+			fetchResult: types.CredentialFetchResult{Secrets: []corev1.Secret{clusterSecret}},
+			wantMerged:  []string{"crossplane-system/cluster-credentials"},
 		},
-		"ReturnsEmptyWhenNoCredentials": {
-			composition: tu.NewComposition("test-comp").
-				WithCompositeTypeRef("example.org/v1", "XR1").
-				WithPipelineMode().
-				WithPipelineStep("step1", "function-test", nil).
-				Build(),
-			mockCredentials: nil,
-			wantSecrets:     0,
+		"AbsentAndNotSuppliedWarns": {
+			reason:      "A shortfall the user has not covered is exactly what the advisory exists to report",
+			composition: composition,
+			fetchResult: types.CredentialFetchResult{
+				Secrets: []corev1.Secret{clusterSecret},
+				Absent:  []k8stypes.NamespacedName{absentRef},
+			},
+			wantMerged: []string{"crossplane-system/cluster-credentials"},
+			wantAdvisories: []dt.OutputWarning{{
+				Message: advisoryMsg,
+				Context: map[string]string{
+					"composition": "test-comp",
+					"missing":     "crossplane-system/absent-credentials",
+					"hint":        advisoryHint,
+				},
+			}},
+		},
+		"AbsentButSuppliedViaCLIDoesNotWarn": {
+			reason:         "The user passed --function-credentials for the very secret the cluster lacks; warning would tell them to do what they just did",
+			composition:    composition,
+			cliCredentials: []corev1.Secret{suppliedSecret},
+			fetchResult: types.CredentialFetchResult{
+				Secrets: []corev1.Secret{clusterSecret},
+				Absent:  []k8stypes.NamespacedName{absentRef},
+			},
+			wantMerged: []string{"crossplane-system/absent-credentials", "crossplane-system/cluster-credentials"},
+		},
+		"PartiallySuppliedWarnsOnlyAboutTheRemainder": {
+			reason:         "Naming the secrets that are still missing is what makes the advisory actionable",
+			composition:    composition,
+			cliCredentials: []corev1.Secret{suppliedSecret},
+			fetchResult: types.CredentialFetchResult{
+				Absent: []k8stypes.NamespacedName{otherAbsentRef, absentRef},
+			},
+			wantMerged: []string{"crossplane-system/absent-credentials"},
+			wantAdvisories: []dt.OutputWarning{{
+				Message: advisoryMsg,
+				Context: map[string]string{
+					"composition": "test-comp",
+					"missing":     "ns2/other-credentials",
+					"hint":        advisoryHint,
+				},
+			}},
+		},
+		"RepeatedResolutionWarnsOnce": {
+			reason:      "The shortfall is a property of the composition, so thirty affected XRs must not produce thirty identical warnings",
+			composition: composition,
+			calls:       3,
+			fetchResult: types.CredentialFetchResult{
+				Absent: []k8stypes.NamespacedName{absentRef},
+			},
+			wantAdvisories: []dt.OutputWarning{{
+				Message: advisoryMsg,
+				Context: map[string]string{
+					"composition": "test-comp",
+					"missing":     "crossplane-system/absent-credentials",
+					"hint":        advisoryHint,
+				},
+			}},
+		},
+		"FetchErrorPropagates": {
+			reason:      "A credential that could not be read leaves the diff possibly wrong, so the failure must not be degraded to an advisory",
+			composition: composition,
+			fetchErr:    errors.New("secrets is forbidden"),
+			wantErr:     "secrets is forbidden",
 		},
 	}
 
 	for name, tc := range tests {
 		t.Run(name, func(t *testing.T) {
 			credentialClient := &tu.MockCredentialClient{
-				FetchCompositionCredentialsFn: func(_ context.Context, _ *apiextensionsv1.Composition) []corev1.Secret {
-					return tc.mockCredentials
+				FetchCompositionCredentialsFn: func(_ context.Context, _ *apiextensionsv1.Composition) (types.CredentialFetchResult, error) {
+					return tc.fetchResult, tc.fetchErr
 				},
 			}
+
+			// A real WarningLogger, so the assertion covers the whole advisory channel — message,
+			// machine-readable context, and the sink's dedup — rather than just "an Info happened".
+			var stderr bytes.Buffer
+
+			warnings := NewWarningLogger(tu.TestLogger(t, false), &stderr)
 
 			processor := &DefaultDiffProcessor{
 				credentialClient: credentialClient,
 				config: ProcessorConfig{
-					Logger: tu.TestLogger(t, false),
+					Logger:              warnings,
+					FunctionCredentials: tc.cliCredentials,
 				},
 			}
 
-			secrets := processor.fetchCompositionCredentials(t.Context(), tc.composition)
+			calls := max(tc.calls, 1)
 
-			if len(secrets) != tc.wantSecrets {
-				t.Errorf("fetchCompositionCredentials() returned %d secrets, want %d", len(secrets), tc.wantSecrets)
+			var (
+				merged []corev1.Secret
+				err    error
+			)
+
+			for range calls {
+				merged, err = processor.resolveFunctionCredentials(t.Context(), tc.composition, "XR1/my-xr")
+			}
+
+			if tc.wantErr != "" {
+				if err == nil {
+					t.Fatalf("\n%s\nresolveFunctionCredentials(): expected error containing %q, got nil", tc.reason, tc.wantErr)
+				}
+
+				if !strings.Contains(err.Error(), tc.wantErr) {
+					t.Fatalf("\n%s\nresolveFunctionCredentials(): error %q does not contain %q", tc.reason, err.Error(), tc.wantErr)
+				}
+
+				return
+			}
+
+			if err != nil {
+				t.Fatalf("\n%s\nresolveFunctionCredentials(): unexpected error: %v", tc.reason, err)
+			}
+
+			gotMerged := make([]string, 0, len(merged))
+			for _, s := range merged {
+				gotMerged = append(gotMerged, s.Namespace+"/"+s.Name)
+			}
+
+			if diff := gcmp.Diff(tc.wantMerged, gotMerged, cmpopts.EquateEmpty()); diff != "" {
+				t.Errorf("\n%s\nmerged credentials mismatch (-want +got):\n%s", tc.reason, diff)
+			}
+
+			if diff := gcmp.Diff(tc.wantAdvisories, warnings.Warnings()); diff != "" {
+				t.Errorf("\n%s\nadvisories mismatch (-want +got):\n%s", tc.reason, diff)
 			}
 		})
 	}

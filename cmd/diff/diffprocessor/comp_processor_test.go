@@ -19,6 +19,7 @@ package diffprocessor
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"testing"
@@ -1231,6 +1232,84 @@ func TestDefaultCompDiffProcessor_DiffComposition_StderrErrorOutput(t *testing.T
 
 	if !strings.Contains(stderrOutput, "render pipeline failed") {
 		t.Errorf("Expected stderr to contain error message 'render pipeline failed', got: %q", stderrOutput)
+	}
+}
+
+// TestDefaultCompDiffProcessor_DiffComposition_LateWarningsReachStructuredOutput is the comp-side twin
+// of TestDefaultDiffProcessor_PerformDiff_LateWarningsReachStructuredOutput: an advisory that can only
+// be discovered while releasing resources must still be in warnings[], not just on stderr. comp reaches
+// teardown via xrProc.Cleanup, so it needs its own guard — the xr-side test cannot fail for it.
+func TestDefaultCompDiffProcessor_DiffComposition_LateWarningsReachStructuredOutput(t *testing.T) {
+	ctx := t.Context()
+
+	const advisory = "Some containers could not be cleaned up"
+
+	testComp := tu.NewComposition("test-composition").
+		WithCompositeTypeRef("example.org/v1", "XResource").
+		WithPipelineMode().
+		Build()
+
+	testXR := tu.NewResource("example.org/v1", "XResource", "test-xr").
+		WithNamespace("default").
+		Build()
+
+	compClient := tu.NewMockCompositionClient().
+		WithSuccessfulCompositionFetch(testComp).
+		WithResourcesForComposition("test-composition", "default", []*un.Unstructured{testXR}).
+		Build()
+
+	var stdout, stderr bytes.Buffer
+
+	warnings := NewWarningLogger(tu.TestLogger(t, false), &stderr)
+
+	mockXRProc := &tu.MockDiffProcessor{
+		DiffSingleResourceFn: func(context.Context, *un.Unstructured, types.CompositionProvider) (map[string]*dt.ResourceDiff, error) {
+			return map[string]*dt.ResourceDiff{}, nil
+		},
+		// Stands in for the leftover-container advisory raised from the function provider's teardown,
+		// which reaches comp through DefaultCompDiffProcessor.Cleanup -> xrProc.Cleanup.
+		CleanupFn: func(context.Context) error {
+			warnings.Info(advisory, "errors", 1)
+			return nil
+		},
+	}
+
+	processor := NewCompDiffProcessor(mockXRProc, compClient,
+		WithLogger(warnings),
+		WithWarnings(warnings),
+		WithColorize(false),
+		WithCompact(false),
+		WithOutputFormat(renderer.OutputFormatJSON),
+		WithStdout(&stdout),
+		WithStderr(&stderr),
+	)
+
+	// The input composition carries a label the cluster copy lacks, so impact analysis actually runs.
+	changed := tu.NewComposition("test-composition").
+		WithCompositeTypeRef("example.org/v1", "XResource").
+		WithPipelineMode().
+		WithLabels(map[string]string{"version": "0.0.2"}).
+		BuildAsUnstructured()
+
+	if _, err := processor.DiffComposition(ctx, []*un.Unstructured{changed}, "default", nil); err != nil {
+		t.Fatalf("DiffComposition(): unexpected error: %v", err)
+	}
+
+	if !strings.Contains(stderr.String(), advisory) {
+		t.Errorf("teardown advisory should reach stderr, got:\n%s", stderr.String())
+	}
+
+	var got struct {
+		Warnings []dt.OutputWarning `json:"warnings"`
+	}
+
+	if err := json.Unmarshal(stdout.Bytes(), &got); err != nil {
+		t.Fatalf("cannot parse structured output %q: %v", stdout.String(), err)
+	}
+
+	want := []dt.OutputWarning{{Message: advisory, Context: map[string]string{"errors": "1"}}}
+	if diff := gcmp.Diff(want, got.Warnings); diff != "" {
+		t.Errorf("structured warnings[] mismatch (-want +got):\n%s", diff)
 	}
 }
 

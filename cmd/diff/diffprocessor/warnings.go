@@ -19,6 +19,9 @@ package diffprocessor
 import (
 	"fmt"
 	"io"
+	"maps"
+	"slices"
+	"strings"
 	"sync"
 
 	dt "github.com/crossplane-contrib/crossplane-diff/cmd/diff/renderer/types"
@@ -58,6 +61,19 @@ import (
 // OutputError follows — and the text stays fit for a CLI. Info is therefore NOT forwarded to the
 // wrapped logger; otherwise a --verbose run would print every warning twice, once in each format.
 //
+// # Why identical warnings are collapsed
+//
+// A warning is raised where the condition is discovered, and several of those sites sit inside loops
+// the caller chose — resolveFunctionCredentials runs once per XR, so a single unfetchable secret on a
+// composition affecting thirty XRs would otherwise produce thirty byte-identical WARNING lines and
+// thirty identical warnings[] entries. A repeat that is identical in BOTH message and context carries
+// no information the user has not already been given, so the sink keeps only the first. Warnings whose
+// context differs in any pair are distinct occurrences and every one of them is kept: the
+// ownership-theft advisory in resource_manager.go names the composed resource in its context and must
+// fire once per resource. The consequence for a warning site is therefore a simple rule — put what
+// distinguishes one occurrence from another in the context, which it should be doing regardless, since
+// context is what a machine consumer reads.
+//
 // A zero WarningLogger is not usable; construct one with NewWarningLogger.
 type WarningLogger struct {
 	// sink is shared by every logger derived via WithValues, so warnings raised through a derived
@@ -77,20 +93,24 @@ type warningSink struct {
 	mu       sync.Mutex
 	stderr   io.Writer
 	warnings []dt.OutputWarning
+	// seen holds the identity of every warning already recorded, so an identical repeat is dropped
+	// from both channels rather than re-emitted. Keyed by warningKey.
+	seen map[string]struct{}
 }
 
 // NewWarningLogger wraps logger so that Info calls become user-facing warnings written to stderr and
 // collected for structured output. Debug calls pass through to logger unchanged.
 func NewWarningLogger(logger logging.Logger, stderr io.Writer) *WarningLogger {
 	return &WarningLogger{
-		sink:    &warningSink{stderr: stderr},
+		sink:    &warningSink{stderr: stderr, seen: map[string]struct{}{}},
 		values:  nil,
 		wrapped: logger,
 	}
 }
 
 // Info records msg as a user-facing warning: written to stderr now, and collected for structured
-// output. It is deliberately not forwarded to the wrapped logger; see the type comment.
+// output. A warning identical to one already raised — same message and same context — is dropped from
+// both channels; see the type comment. It is deliberately not forwarded to the wrapped logger.
 func (l *WarningLogger) Info(msg string, keysAndValues ...any) {
 	warning := dt.OutputWarning{
 		Message: msg,
@@ -100,6 +120,12 @@ func (l *WarningLogger) Info(msg string, keysAndValues ...any) {
 	l.sink.mu.Lock()
 	defer l.sink.mu.Unlock()
 
+	key := warningKey(warning)
+	if _, repeat := l.sink.seen[key]; repeat {
+		return
+	}
+
+	l.sink.seen[key] = struct{}{}
 	l.sink.warnings = append(l.sink.warnings, warning)
 
 	if l.sink.stderr != nil {
@@ -138,6 +164,23 @@ func (l *WarningLogger) Warnings() []dt.OutputWarning {
 	copy(out, l.sink.warnings)
 
 	return out
+}
+
+// warningKey builds the dedup identity of a warning: its message followed by its context pairs in
+// sorted key order, so a map's randomized iteration and a caller's argument order cannot produce two
+// keys for one warning. Every component is rendered with %q, which escapes the quote and backslash
+// characters, so a key or value that happens to contain the separators cannot be mistaken for a
+// differently split pair — {"a": "b=c"} and {"a=b": "c"} are different warnings and get different keys.
+func warningKey(w dt.OutputWarning) string {
+	var b strings.Builder
+
+	fmt.Fprintf(&b, "%q", w.Message)
+
+	for _, k := range slices.Sorted(maps.Keys(w.Context)) {
+		fmt.Fprintf(&b, " %q=%q", k, w.Context[k])
+	}
+
+	return b.String()
 }
 
 // contextFromKeysAndValues converts a logr-style variadic key/value list into the string map carried

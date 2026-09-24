@@ -18,7 +18,6 @@ package main
 
 import (
 	"context"
-	"time"
 
 	"github.com/alecthomas/kong"
 	dp "github.com/crossplane-contrib/crossplane-diff/cmd/diff/diffprocessor"
@@ -196,14 +195,19 @@ func (c *CompCmd) Run(_ *kong.Context, log logging.Logger, appCtx *AppContext, p
 	}
 	defer cancel()
 
-	// Cleanup any resources held by the processor (e.g., Docker containers)
+	// Cleanup any resources held by the processor (e.g., Docker containers).
+	//
+	// DiffComposition already releases them before it renders, so that an advisory raised during
+	// teardown reaches structured output and not just stderr. This defer covers the paths that return
+	// before any rendering happens (load failure, initialization failure, cancellation); Cleanup is
+	// idempotent, so running in both places is safe.
 	defer func() {
 		// Use background context with timeout for cleanup instead of the command context.
 		// The command context may be cancelled (user Ctrl+C, timeout, etc.), which would cause
 		// Docker API calls to fail immediately, leaving containers running. By using a background
 		// context, we ensure cleanup completes even after cancellation, but we add a timeout to
 		// prevent cleanup from blocking indefinitely if the Docker daemon is slow or hung.
-		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 30*time.Second)
+		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), dp.CleanupTimeout)
 		defer cleanupCancel()
 
 		if err := proc.Cleanup(cleanupCtx); err != nil {
