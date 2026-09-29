@@ -369,9 +369,10 @@ func (r *StructuredDiffRenderer) RenderDiffs(groups []dt.XRDiffGroup, errs []dt.
 	// Flat, deprecated view: merge all groups' diffs. The summary counts exactly what changes[]
 	// lists — each resource once, however many inputs reach it. The merge is lossless whenever the
 	// run succeeds: a diff key produced by more than one input either carries the same rendering from
-	// each (one change reached twice, e.g. a claim and its backing XR) or fails the run (see
+	// each, through one controller (one change reached twice), or fails the run (see
 	// types.DetectDiffKeyCollisions), which is how the lossy merge of issue #476 is kept out of any
-	// successful result.
+	// successful result. Overlaps that come from the inputs themselves — a duplicate, or an input
+	// another input manages — are settled before this, in the diff processor.
 	summary, changes := buildChangeSet(flattenGroups(groups))
 	output := StructuredDiffOutput{Summary: summary, Changes: changes}
 	output.Errors = errs

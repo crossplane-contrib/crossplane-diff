@@ -212,10 +212,12 @@ test cases cover:
 
 - **Multiple XRs**: Tests processing multiple input files containing different XRs, ensuring that all changes are
   correctly identified and summarized.
-- **Inputs that render the same resource**: Verifies that the same XR passed twice is one change reported twice and
-  succeeds, and that two distinct XRs composing one fixed-name object fail as contention even when their renderings
-  are byte-identical — which depends on real renders carrying the controller reference. Unit tests cover the other
-  collision kinds (disagreeing renderings, and a shared `generateName`). See §6.8.3.
+- **Overlapping inputs**: Verifies, through real renders, that an input identical to an earlier one is diffed once
+  with a warning; that the same object twice with different content fails both inputs; that a claim passed with its
+  backing XR, and a child XR passed with the parent that composes it, are rejected on the managed input; and that two
+  distinct XRs composing one fixed-name object fail as contention even when their renderings are byte-identical —
+  which depends on real renders carrying the controller reference. Unit tests cover the remaining kinds (disagreeing
+  renderings, a shared `generateName`, and a managed input's verdict superseding its own render failure). See §6.8.3.
 
 ### 4.8 Composition Selection
 
@@ -1031,10 +1033,24 @@ contract:
   `Errors []OutputError` (union), and `Xrs` (per-input-XR grouping, JSON key `xrs`). **`Changes` is deprecated** in
   favor of `Xrs` and will be removed in a future major release; `Summary` and `Errors` are retained.
   `Summary` counts exactly what `Changes` lists — each resource once, however many inputs reach it — while each
-  `Xrs` entry is complete for its own input. Where inputs overlap (a claim and its backing XR), a shared resource
+  `Xrs` entry is complete for its own input. Where two inputs' renders reach one resource through one controller, it
   appears under each entry, so the `Xrs` summaries can sum to more than `Summary`: the flat view counts resources, the
   grouped view reports inputs.
-  That merge is lossless in every successful run, which is what `types.DetectDiffKeyCollisions` guarantees. A diff key
+  **The input set is judged first.** `xr`'s inputs are one change set, and `PerformDiff` settles overlaps that come from
+  the inputs themselves before comparing renders. Identity is group, kind, namespace and name, independent of API
+  version; an input with only a `generateName` has none and is not judged. `classifyInputs` runs before rendering: an
+  input semantically identical to an earlier one is dropped with a warning (a fat-fingered command line, or CI
+  enumerating one file twice, has one clear intent), and the same object twice with different content is an input error
+  on both — applying both leaves whichever is applied last, and input order (often a glob's) is not intent.
+  `rejectManagedInputs` runs after rendering and rejects an input another input manages, since applying both gives it a
+  second writer: an XR in another input's rendered key set (which, unlike its diffs, includes unchanged resources), i.e.
+  a nested XR supplied with its parent; and an XR bound to a claim input, read from either side of the binding — the
+  claim's `spec.resourceRef`, or the XR's `spec.claimRef` or `crossplane.io/claim-name`/`claim-namespace` labels — in
+  the raw input or the cluster copy its own diff carries. Crossplane's claim syncer applies the backing XR with
+  `ForceOwnership`, and a parent's composition applies its children the same way. That verdict replaces the managed
+  input's own render failure, which is moot and often a symptom of the same mistake. Rejected inputs fail individually;
+  unaffected inputs still get their diffs.
+  The remaining merge is lossless in every successful run, which is what `types.DetectDiffKeyCollisions` guarantees. A diff key
   is `apiVersion/kind/namespace/name` with no owning-XR component, so two input XRs that render the same resource
   produce the same key and the merge keeps only one. Whether that loses anything is decided by who would control the
   resource, read from the rendered (or, for a removal, current) object's controller reference and compared by group,
@@ -1043,9 +1059,9 @@ contract:
       reference, so the first XR to create the object keeps it and every other fails to reconcile it. No diff
       predicts that, however alike the renderings.
     - **One controller or none, identical renderings** (compared by diff type and `Clean` views, which
-      `cleanupForDiff` has stripped of `ownerReferences` and `uid`) — the same XR passed twice, a claim and its
-      backing XR, a parent and a nested child it composes. One change reported twice: merged, not reported.
-    - **One controller or none, differing renderings — disagreement.** The inputs disagree about one object.
+      `cleanupForDiff` has stripped of `ownerReferences` and `uid`). One change reached twice: merged, not reported.
+    - **One controller or none, differing renderings — disagreement.** Defensive: the ordinary causes are rejected as
+      input errors first.
     - **Two inputs sharing a `generateName` — indistinguishable**, checked first. Both render under one synthesized
       placeholder name, so their resources collide here though the API server would name them apart; merging
       identical renderings would report one XR's changes for two.

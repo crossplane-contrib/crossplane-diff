@@ -682,34 +682,45 @@ entry's `errors[]` (and also in the top-level `errors[]`).
 
 The aggregate `summary` counts exactly what `changes[]` lists: each changed
 resource once, however many of the XRs you supply reach it. Each `xrs[]` entry
-is complete for its own input, so where inputs overlap — a claim and its
-backing XR, say — a shared resource appears under each, and the `xrs[].summary`
+is complete for its own input, so where two inputs' renders reach the same
+resource through one controller, it appears under each, and the `xrs[].summary`
 values can sum to more than the top-level `summary`.
 
-**When two inputs render the same resource.** A change is identified by
-`apiVersion/kind/namespace/name`, which says nothing about which input XR
-produced it, so `xr` decides by who would control the resource in the cluster:
+**When inputs overlap.** The XRs you pass are one change set, each rendered
+against the live cluster. `xr` checks the input set itself first:
 
-- **The same resource reached through one controller, rendered identically** —
-  the same XR passed twice, a claim alongside its backing XR, or a parent
-  alongside a nested child XR it composes — is one change reported twice. It is
-  counted once and the run succeeds.
+- **An input identical to an earlier one** — the same file passed twice, or CI
+  enumerating one file twice — is diffed once, with a warning. The intent is
+  clear, so the run is not failed.
+- **The same object twice with different content** fails both inputs. Applying
+  both would leave whichever is applied last, and the order inputs are given in
+  (often a glob's) is not a statement of intent. Pass only one of them.
+- **An input that another input manages** fails that input. A claim's backing XR
+  is written by Crossplane's claim controller, and a nested XR by its parent's
+  composition, so passing either alongside its manager would give it a second
+  writer. Pass the claim, or the parent, not the object it manages.
+
+Then, among what the inputs render, a change is identified by
+`apiVersion/kind/namespace/name`, which says nothing about which input produced
+it, so `xr` decides by who would control the resource in the cluster:
+
+- **The same resource reached through one controller, rendered identically**, is
+  one change reached twice. It is counted once.
 - **Two XRs that would both control it** — a shared `Namespace` or a fixed-name
   object composed by two XRs — genuinely conflict. Crossplane gives the resource
   to whichever XR creates it first, and the other fails to reconcile it, however
   alike their renderings are. No diff predicts that, so the run fails.
-- **One controller, but renderings that differ** — the same XR passed twice with
-  different specs, or a child XR passed alongside a parent that renders it
-  differently — means the inputs disagree about the resource, so the run fails.
+- **Renderings that differ** for one resource mean no single diff is correct for
+  both, so the run fails.
 - **Two XRs sharing a `metadata.generateName`** fail too. The API server would
   give them different names, so in the cluster they would not collide; but they
   have no names yet, and `xr` renders both under the same placeholder, so it
   cannot tell their resources apart.
 
-A failing collision is reported in `errors[]` (and on stderr) with the reason
-that applies, and `xr` exits with the tool error code, in every output format.
-Diff those XRs in separate invocations. The structured document is still
-written, so the error is machine-readable.
+A rejected input, or a failing overlap, is reported in `errors[]` (and on
+stderr) with the reason that applies, and `xr` exits with the tool error code,
+in every output format. Inputs that are unaffected still get their diffs, and
+the structured document is still written, so the error is machine-readable.
 
 An XR supplied with only `metadata.generateName` has no name yet; it appears
 throughout the output — including its `xrs[]` identity and its human-readable

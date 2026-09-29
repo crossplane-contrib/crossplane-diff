@@ -376,8 +376,8 @@ func TestStructuredDiffRenderer_GroupsByXR(t *testing.T) {
 				},
 			},
 		},
-		// One resource reached through two inputs with the same rendering — a claim and its backing
-		// XR, say. It is one change, so the flat view (summary and changes[]) counts and lists it once,
+		// One resource reached through two inputs' renders with the same rendering, through one
+		// controller. It is one change, so the flat view (summary and changes[]) counts and lists it once,
 		// while each xrs[] entry still reports everything its input produces. So the xrs[] summaries can
 		// sum to more than the top-level summary when inputs overlap; that is the point of the split —
 		// the flat view counts resources, the grouped view is complete per input.

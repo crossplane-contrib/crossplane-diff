@@ -270,9 +270,10 @@ const (
 	// resource keeps it and every other fails to reconcile it. No diff predicts that.
 	CollisionContention CollisionKind = "contention"
 
-	// CollisionDisagreement means one controller (or none) but inputs that render the resource
-	// differently: the same XR passed twice with different specs, or passed alongside an input that
-	// composes it and renders it otherwise. No single diff is right for both.
+	// CollisionDisagreement means one controller (or none) but renderings of the resource that differ,
+	// so no single diff is right for both. The ordinary causes — the same object given twice with
+	// different content, or an input passed alongside one that manages it — are rejected as input
+	// errors before rendering is compared, so this is a defensive backstop.
 	CollisionDisagreement CollisionKind = "disagreement"
 
 	// CollisionIndistinguishable means the resource collides only because two inputs share a
@@ -307,10 +308,11 @@ type DiffKeyCollision struct {
 //   - Different controllers: CollisionContention. Two XRs claiming one object is a real conflict —
 //     the first to create it keeps it and the others fail to reconcile it — however alike their
 //     renderings are.
-//   - One controller, or none: the same object reached through more than one input. A claim and its
-//     backing XR, the same file passed twice, and a parent passed alongside a nested child it composes
-//     all do this. If every rendering is identical it is one change reported twice, which merges
-//     losslessly and is NOT reported. If they differ, the inputs disagree: CollisionDisagreement.
+//   - One controller, or none: the same object reached through more than one render. If every
+//     rendering is identical it is one change reached twice, which merges losslessly and is NOT
+//     reported. If they differ: CollisionDisagreement. (Overlaps that come from the inputs
+//     themselves — a duplicate input, or an input another input manages, such as a claim's backing XR
+//     or a parent's nested child — are the diff processor's to reject first, as input errors.)
 //   - Two inputs sharing a generateName: CollisionIndistinguishable, checked first. Both render under
 //     one synthesized placeholder name, so their resources collide here though they would not in the
 //     cluster, and merging identical renderings would report one XR's changes for two.

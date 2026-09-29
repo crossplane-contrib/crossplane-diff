@@ -864,11 +864,30 @@ func TestDefaultDiffProcessor_PerformDiff_Groups(t *testing.T) {
 		return corev1.ObjectReference{APIVersion: testGroup + "/" + testAPIVersion, Kind: testKind, Name: name}
 	}
 
+	// ownKey and ownDiff are an input XR's own diff key and diff, which the real calculator always
+	// stores (even when equal). current is the XR's cluster copy, or nil for a new XR.
+	ownKey := func(name string) string {
+		return dt.MakeDiffKey(testGroup+"/"+testAPIVersion, testKind, "", name)
+	}
+	ownDiff := func(name string, current *un.Unstructured) *dt.ResourceDiff {
+		desired := xr(name)
+		return &dt.ResourceDiff{
+			Gvk:          schema.GroupVersionKind{Group: testGroup, Version: testAPIVersion, Kind: testKind},
+			ResourceName: name,
+			DiffType:     dt.DiffTypeEqual,
+			Desired:      dt.ResourceViews{Raw: desired, Clean: desired},
+			Current:      dt.ResourceViews{Raw: current, Clean: current},
+		}
+	}
+
 	// got is the whole handoff, asserted as one value: the group identities in
-	// input order, the global (union) error list the renderer was given, and the
-	// error PerformDiff returned.
+	// input order, each errored group's message by name, the warnings raised,
+	// the global (union) error list the renderer was given, and the error
+	// PerformDiff returned.
 	type got struct {
 		XRs        []corev1.ObjectReference
+		GroupErrs  map[string]string
+		Warnings   []string
 		GlobalErrs []string
 		Err        string
 	}
@@ -878,12 +897,26 @@ func TestDefaultDiffProcessor_PerformDiff_Groups(t *testing.T) {
 			`more than one XR (XR1/my-xr-1, XR1/my-xr-2); Crossplane gives it to whichever of them creates it first, ` +
 			`and the other fails to reconcile it, so no diff predicts applying these inputs together — diff them separately`
 		disagreeErr = `cannot combine diffs: inputs XR1/my-xr-1 and XR1/my-xr-2 both produce resource ` +
-			`"example.org/v1/Bucket/default/shared", but differently, so no single diff is correct for both — diff them ` +
-			`separately. This happens when the same XR is passed twice with different specs, or alongside an input that composes it`
+			`"example.org/v1/Bucket/default/shared", but differently, so no single diff is correct for both — diff them separately`
 		generatedErr = `cannot combine diffs: inputs XR1/gen-xr-(generated) and XR1/gen-xr-(generated) both produce resource ` +
 			`"example.org/v1/Bucket/default/shared" only because crossplane-diff gives XRs that share a generateName the ` +
 			`same placeholder name; the API server would name them differently, so they cannot be told apart here — diff ` +
 			`them separately`
+
+		// Rule: the same object twice with different content is an input error. Each input carries it,
+		// naming the other, since neither can be preferred.
+		conflictErr1 = `input 1 defines XR1/my-xr differently from input 2; applying both would leave whichever is ` +
+			`applied last, and the order inputs are given in is not a statement of intent — pass only one of them`
+		conflictErr2 = `input 2 defines XR1/my-xr differently from input 1; applying both would leave whichever is ` +
+			`applied last, and the order inputs are given in is not a statement of intent — pass only one of them`
+
+		// Rule: an input another input manages is an input error, carried by the managed one.
+		composedErr = `XR1/child-xr is composed by input 1 (XR1/parent-xr), whose composition writes it; supplying ` +
+			`it as an input too gives it a second writer — pass input 1 only`
+		claimErr = `XR1/backing-xr is the XR bound to claim XR1/my-claim (input 1), which Crossplane's claim ` +
+			`controller writes; supplying it as an input too gives it a second writer — pass the claim, not its XR`
+
+		dupWarning = "Ignoring a duplicate input: it is identical to an earlier one"
 	)
 
 	genXR := tu.NewResource(testGroup+"/"+testAPIVersion, testKind, "").
@@ -896,8 +929,123 @@ func TestDefaultDiffProcessor_PerformDiff_Groups(t *testing.T) {
 		// shared is sharedKey's diff as rendered for the input XR named xrName (the effective,
 		// possibly synthesized, name the processor renders with).
 		shared func(xrName string) *dt.ResourceDiff
-		want   got
+		// render, when set, replaces shared: the calculator's full result (diffs and the rendered
+		// key set, which covers unchanged resources too) for the XR named xrName.
+		render func(xrName string) (map[string]*dt.ResourceDiff, map[string]bool)
+		// failRender names an input XR whose render fails.
+		failRender string
+		want       got
 	}{
+		// A managed input whose own render also fails reports why it should not have been passed, not
+		// the render failure: that failure is moot, and often a symptom of the same mistake — an XR's
+		// cluster copy is rarely a valid standalone input.
+		"ManagedVerdictSupersedesTheManagedInputsRenderFailure": {
+			resources: []*un.Unstructured{xr("parent-xr"), xr("child-xr")},
+			render: func(string) (map[string]*dt.ResourceDiff, map[string]bool) {
+				return map[string]*dt.ResourceDiff{ownKey("parent-xr"): ownDiff("parent-xr", nil)},
+					map[string]bool{ownKey("child-xr"): true}
+			},
+			failRender: "child-xr",
+			want: got{
+				XRs:        []corev1.ObjectReference{ref("parent-xr"), ref("child-xr")},
+				GroupErrs:  map[string]string{"child-xr": composedErr},
+				GlobalErrs: []string{composedErr},
+				Err:        "unable to process resource XR1/child-xr: " + composedErr,
+			},
+		},
+		// An identical input passed twice — a fat-fingered command line, or CI enumerating one file
+		// twice — has one clear intent. It is rendered once, with a warning rather than a failure.
+		"IdenticalDuplicateInputIsDeduplicated": {
+			resources: []*un.Unstructured{xr("my-xr"), xr("my-xr")},
+			shared:    func(xrName string) *dt.ResourceDiff { return bucket(dt.DiffTypeModified, xrName, "v", xrName) },
+			want: got{
+				XRs:      []corev1.ObjectReference{ref("my-xr")},
+				Warnings: []string{dupWarning},
+			},
+		},
+		// The same object twice with different content: applying both leaves whichever is applied
+		// last, and input order — often a CI glob's — is not intent. Neither input is rendered; each
+		// fails, naming the other, and the run fails.
+		"SameObjectTwiceWithDifferentContentFails": {
+			resources: []*un.Unstructured{
+				tu.NewResource(testGroup+"/"+testAPIVersion, testKind, "my-xr").WithSpecField("coolField", "a").Build(),
+				tu.NewResource(testGroup+"/"+testAPIVersion, testKind, "my-xr").WithSpecField("coolField", "b").Build(),
+			},
+			shared: func(xrName string) *dt.ResourceDiff { return bucket(dt.DiffTypeModified, xrName, "v", xrName) },
+			want: got{
+				XRs:        []corev1.ObjectReference{ref("my-xr"), ref("my-xr")},
+				GroupErrs:  map[string]string{"input 1": conflictErr1, "input 2": conflictErr2},
+				GlobalErrs: []string{conflictErr1, conflictErr2},
+				Err: "[unable to process resource XR1/my-xr: " + conflictErr1 + ", " +
+					"unable to process resource XR1/my-xr: " + conflictErr2 + "]",
+			},
+		},
+		// A child XR passed alongside the parent that composes it: the parent's composition writes the
+		// child, so the child input is a second writer. Detected from the parent's rendered key set,
+		// which includes the child even when it is unchanged (as here) and so absent from the diffs.
+		"InputComposedByAnotherInputIsRejected": {
+			resources: []*un.Unstructured{xr("parent-xr"), xr("child-xr")},
+			render: func(xrName string) (map[string]*dt.ResourceDiff, map[string]bool) {
+				if xrName == "parent-xr" {
+					return map[string]*dt.ResourceDiff{ownKey("parent-xr"): ownDiff("parent-xr", nil)},
+						map[string]bool{ownKey("child-xr"): true}
+				}
+
+				return map[string]*dt.ResourceDiff{ownKey("child-xr"): ownDiff("child-xr", nil)}, map[string]bool{}
+			},
+			want: got{
+				XRs:        []corev1.ObjectReference{ref("parent-xr"), ref("child-xr")},
+				GroupErrs:  map[string]string{"child-xr": composedErr},
+				GlobalErrs: []string{composedErr},
+				Err:        "unable to process resource XR1/child-xr: " + composedErr,
+			},
+		},
+		// A claim passed alongside its backing XR: Crossplane's claim controller writes that XR, so the
+		// XR input is a second writer. The claim is recognised by spec.resourceRef, which only claims
+		// carry, read here from the claim's cluster copy.
+		"InputBoundToAClaimInputIsRejected_ViaClaimResourceRef": {
+			resources: []*un.Unstructured{xr("my-claim"), xr("backing-xr")},
+			render: func(xrName string) (map[string]*dt.ResourceDiff, map[string]bool) {
+				if xrName == "my-claim" {
+					cluster := tu.NewResource(testGroup+"/"+testAPIVersion, testKind, "my-claim").
+						WithSpecField("resourceRef", map[string]any{
+							"apiVersion": testGroup + "/" + testAPIVersion, "kind": testKind, "name": "backing-xr",
+						}).Build()
+
+					return map[string]*dt.ResourceDiff{ownKey("my-claim"): ownDiff("my-claim", cluster)}, map[string]bool{}
+				}
+
+				return map[string]*dt.ResourceDiff{ownKey(xrName): ownDiff(xrName, nil)}, map[string]bool{}
+			},
+			want: got{
+				XRs:        []corev1.ObjectReference{ref("my-claim"), ref("backing-xr")},
+				GroupErrs:  map[string]string{"backing-xr": claimErr},
+				GlobalErrs: []string{claimErr},
+				Err:        "unable to process resource XR1/backing-xr: " + claimErr,
+			},
+		},
+		// The same binding seen from the XR's side: the claim labels Crossplane stamps on it, read
+		// from its cluster copy. Either side of the binding is enough.
+		"InputBoundToAClaimInputIsRejected_ViaXRClaimLabels": {
+			resources: []*un.Unstructured{xr("my-claim"), xr("backing-xr")},
+			render: func(xrName string) (map[string]*dt.ResourceDiff, map[string]bool) {
+				if xrName == "backing-xr" {
+					cluster := tu.NewResource(testGroup+"/"+testAPIVersion, testKind, "backing-xr").
+						WithLabels(map[string]string{"crossplane.io/claim-name": "my-claim", "crossplane.io/claim-namespace": ""}).
+						Build()
+
+					return map[string]*dt.ResourceDiff{ownKey("backing-xr"): ownDiff("backing-xr", cluster)}, map[string]bool{}
+				}
+
+				return map[string]*dt.ResourceDiff{ownKey(xrName): ownDiff(xrName, nil)}, map[string]bool{}
+			},
+			want: got{
+				XRs:        []corev1.ObjectReference{ref("my-claim"), ref("backing-xr")},
+				GroupErrs:  map[string]string{"backing-xr": claimErr},
+				GlobalErrs: []string{claimErr},
+				Err:        "unable to process resource XR1/backing-xr: " + claimErr,
+			},
+		},
 		// Issue #477: the name used for rendering is synthesized from
 		// generateName inside SanitizeXR, so the identity must carry that
 		// effective name rather than the input's empty metadata.name.
@@ -928,18 +1076,18 @@ func TestDefaultDiffProcessor_PerformDiff_Groups(t *testing.T) {
 			shared:    func(xrName string) *dt.ResourceDiff { return bucket(dt.DiffTypeEqual, xrName, "same", xrName) },
 			want:      got{XRs: []corev1.ObjectReference{ref("my-xr-1"), ref("my-xr-2")}},
 		},
-		// Two inputs reaching the same object through the same controller — a claim and its backing
-		// XR, the same file passed twice, or a parent alongside a nested child it composes — do not
-		// contend: there is one controller and one desired state. Identical renderings are the same
-		// change reported twice, so they must NOT fail. The per-render UIDs deliberately differ.
+		// Rendering overlap: two inputs whose renders reach one object through the same controller —
+		// neither input being the object or managing the other, which the input rules above reject.
+		// There is one controller and one desired state, so identical renderings are the same change
+		// reached twice and must NOT fail. The per-render UIDs deliberately differ.
 		"SameControllerIdenticalIsNotACollision": {
 			resources: []*un.Unstructured{xr("my-xr-1"), xr("my-xr-2")},
 			shared:    func(xrName string) *dt.ResourceDiff { return bucket(dt.DiffTypeModified, "parent-xr", "same", xrName) },
 			want:      got{XRs: []corev1.ObjectReference{ref("my-xr-1"), ref("my-xr-2")}},
 		},
-		// Same controller but different content: the inputs disagree about one object (say, a
-		// hand-edited child passed alongside a parent that renders it differently), so no single diff
-		// is right for both. That is a disagreement between inputs, not contention between XRs.
+		// Same controller but different content: two renders disagree about one object, so no single
+		// diff is right for both. Defensive — the input rules catch the ordinary causes first — but a
+		// contradiction must never merge silently.
 		"SameControllerDifferentContentDisagrees": {
 			resources: []*un.Unstructured{xr("my-xr-1"), xr("my-xr-2")},
 			shared:    func(xrName string) *dt.ResourceDiff { return bucket(dt.DiffTypeModified, "parent-xr", xrName, xrName) },
@@ -949,8 +1097,8 @@ func TestDefaultDiffProcessor_PerformDiff_Groups(t *testing.T) {
 				Err:        disagreeErr,
 			},
 		},
-		// The uncontrolled form of the same disagreement: an object no XR controls (an input XR
-		// itself), produced differently by two inputs — the same XR passed twice with different specs.
+		// The uncontrolled form of the same disagreement: an object no XR controls, produced
+		// differently by two renders.
 		"UncontrolledDifferentContentDisagrees": {
 			resources: []*un.Unstructured{xr("my-xr-1"), xr("my-xr-2")},
 			shared:    func(xrName string) *dt.ResourceDiff { return bucket(dt.DiffTypeModified, "", xrName, xrName) },
@@ -996,11 +1144,16 @@ func TestDefaultDiffProcessor_PerformDiff_Groups(t *testing.T) {
 			}
 
 			var (
-				gotGroups []dt.XRDiffGroup
-				gotErrs   []dt.OutputError
+				gotGroups   []dt.XRDiffGroup
+				gotErrs     []dt.OutputError
+				gotWarnings []dt.OutputWarning
 			)
 
+			warnings := NewWarningLogger(tu.TestLogger(t, false), &bytes.Buffer{})
+
 			opts := append(testProcessorOptions(t),
+				WithLogger(warnings),
+				WithWarnings(warnings),
 				WithSchemaValidatorFactory(func(k8.SchemaClient, k8.ResourceClient, xp.DefinitionClient, logging.Logger) SchemaValidator {
 					return &tu.MockSchemaValidator{
 						ValidateResourcesFn: func(context.Context, *un.Unstructured, []cpd.Unstructured) error {
@@ -1011,15 +1164,25 @@ func TestDefaultDiffProcessor_PerformDiff_Groups(t *testing.T) {
 				WithDiffCalculatorFactory(func(k8.ApplyClient, xp.ResourceTreeClient, ResourceManager, logging.Logger, renderer.DiffOptions) DiffCalculator {
 					return &tu.MockDiffCalculator{
 						CalculateNonRemovalDiffsFn: func(_ context.Context, rendered *cmp.Unstructured, _ *un.Unstructured, _ render.CompositionOutputs) (map[string]*dt.ResourceDiff, map[string]bool, error) {
+							if rendered.GetName() == tt.failRender {
+								return nil, nil, errors.New("render failed")
+							}
+
+							if tt.render != nil {
+								diffs, keys := tt.render(rendered.GetName())
+								return diffs, keys, nil
+							}
+
 							return map[string]*dt.ResourceDiff{sharedKey: tt.shared(rendered.GetName())}, map[string]bool{sharedKey: true}, nil
 						},
 					}
 				}),
 				WithDiffRendererFactory(func(logging.Logger, renderer.DiffOptions) renderer.DiffRenderer {
 					return &tu.MockDiffRenderer{
-						RenderDiffsFn: func(groups []dt.XRDiffGroup, errs []dt.OutputError, _ []dt.OutputWarning) error {
+						RenderDiffsFn: func(groups []dt.XRDiffGroup, errs []dt.OutputError, warns []dt.OutputWarning) error {
 							gotGroups = groups
 							gotErrs = errs
+							gotWarnings = warns
 
 							return nil
 						},
@@ -1035,12 +1198,37 @@ func TestDefaultDiffProcessor_PerformDiff_Groups(t *testing.T) {
 
 			result := got{}
 
+			nameCount := map[string]int{}
 			for _, g := range gotGroups {
+				nameCount[g.XR.Name]++
+			}
+
+			for i, g := range gotGroups {
 				result.XRs = append(result.XRs, g.XR)
 
-				if g.Err != nil {
-					t.Errorf("group %s/%s carried an unexpected error: %s", g.XR.Kind, g.XR.Name, g.Err.Message)
+				if g.Err == nil {
+					continue
 				}
+
+				if g.Diffs != nil {
+					t.Errorf("group %s/%s carries an error and diffs; an errored input must emit no partial result", g.XR.Kind, g.XR.Name)
+				}
+
+				// Keyed by name, or by input position where two groups share one.
+				key := g.XR.Name
+				if nameCount[key] > 1 {
+					key = fmt.Sprintf("input %d", i+1)
+				}
+
+				if result.GroupErrs == nil {
+					result.GroupErrs = map[string]string{}
+				}
+
+				result.GroupErrs[key] = g.Err.Message
+			}
+
+			for _, w := range gotWarnings {
+				result.Warnings = append(result.Warnings, w.Message)
 			}
 
 			for _, e := range gotErrs {
