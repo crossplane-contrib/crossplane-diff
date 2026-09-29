@@ -241,14 +241,22 @@ func (p *DefaultDiffProcessor) PerformDiff(ctx context.Context, resources []*un.
 
 		res := in.res
 
+		// Attribute the group to the name the XR is rendered under. A synthesized one (generateName
+		// only) is shown the way the diff formatter shows it, "<generateName>(generated)", so the
+		// grouped and flat views agree and no unpredictable hash is published (issue #477).
+		name, generated := renderName(res)
+		if generated {
+			name = dt.GeneratedDisplayName(name, res.GetGenerateName())
+		}
+
 		group := dt.XRDiffGroup{
 			XR: corev1.ObjectReference{
 				APIVersion: res.GetAPIVersion(),
 				Kind:       res.GetKind(),
-				Name:       xrIdentityName(res),
+				Name:       name,
 				Namespace:  res.GetNamespace(),
 			},
-			NameGenerated: res.GetName() == "" && res.GetGenerateName() != "",
+			NameGenerated: generated,
 		}
 
 		var (
@@ -285,7 +293,7 @@ func (p *DefaultDiffProcessor) PerformDiff(ctx context.Context, resources []*un.
 		}
 
 		res := groupInputs[i].res
-		resourceID := fmt.Sprintf("%s/%s", res.GetKind(), xrIdentityName(res))
+		resourceID := fmt.Sprintf("%s/%s", groups[i].XR.Kind, groups[i].XR.Name)
 
 		// Debug, not Info: this failure is already surfaced as an OutputError, which goes to
 		// stderr and into structured output. Raising it as a warning too would double-report it.
@@ -1142,31 +1150,6 @@ func (p *DefaultDiffProcessor) ProcessNestedXRs(
 	return allDiffs, allRenderedResources, nil
 }
 
-// xrIdentityName returns the name an input XR's diffs should be attributed to.
-//
-// For an XR supplied with only metadata.generateName there is no name to
-// attribute to: SanitizeXR synthesizes one for rendering, but on a deep copy, so
-// the raw input's name stays empty. Left as-is the group identity is nameless —
-// and, since corev1.ObjectReference.Name is omitempty, absent from structured
-// output entirely, making two such XRs indistinguishable (issue #477).
-//
-// So mirror SanitizeXR's synthesis here and render it the way the diff formatter
-// renders that synthesized name, giving "<generateName>(generated)". That is the
-// name the same XR already carries in changes[], so the grouped and flat views
-// agree, and it avoids publishing a synthetic hash the user cannot predict.
-func xrIdentityName(res *un.Unstructured) string {
-	if name := res.GetName(); name != "" {
-		return name
-	}
-
-	gen := res.GetGenerateName()
-	if gen == "" {
-		return ""
-	}
-
-	return dt.GeneratedDisplayName(dt.SynthesizeGeneratedName(gen), gen)
-}
-
 // SanitizeXR makes an XR into a valid unstructured object that we can use in a dry-run apply.
 func (p *DefaultDiffProcessor) SanitizeXR(res *un.Unstructured, resourceID string) (*cmp.Unstructured, bool, error) {
 	// Convert the unstructured resource to a composite unstructured for rendering
@@ -1179,25 +1162,31 @@ func (p *DefaultDiffProcessor) SanitizeXR(res *un.Unstructured, resourceID strin
 	}
 
 	// Handle XRs with generateName but no name
-	if xr.GetName() == "" && xr.GetGenerateName() != "" {
-		// Synthesize a metadata.name in the same shape upstream's nameGenerator
-		// produces — "<generateName-with-dash><12 lowercase hex>" — so the
-		// binary's apiserver-style name validation accepts the XR AND the
-		// rendered XR name is shape-compatible with the composed-resource
-		// names the binary itself emits. The diff formatter then runs one
-		// detector (LooksLikeGeneratedName) over both to substitute
-		// "<generateName>(generated)" for display.
-		synthesizedName := dt.SynthesizeGeneratedName(xr.GetGenerateName())
+	if name, generated := renderName(res); generated {
 		p.config.Logger.Debug("Setting synthesized name for XR with generateName",
 			"generateName", xr.GetGenerateName(),
-			"synthesizedName", synthesizedName)
+			"synthesizedName", name)
 
 		xrCopy := xr.DeepCopy()
-		xrCopy.SetName(synthesizedName)
+		xrCopy.SetName(name)
 		xr = xrCopy
 	}
 
 	return xr, false, nil
+}
+
+// renderName returns the name an input XR is rendered under, and whether it was synthesized. That is
+// its own name; or, for an XR with only a generateName, one synthesized in the shape upstream's
+// nameGenerator produces — "<generateName-with-dash><12 lowercase hex>" — so the binary's
+// apiserver-style name validation accepts the XR AND the rendered XR name is shape-compatible with the
+// composed-resource names the binary itself emits. The diff formatter then runs one detector
+// (LooksLikeGeneratedName) over both to substitute "<generateName>(generated)" for display.
+func renderName(res *un.Unstructured) (string, bool) {
+	if name := res.GetName(); name != "" || res.GetGenerateName() == "" {
+		return name, false
+	}
+
+	return dt.SynthesizeGeneratedName(res.GetGenerateName()), true
 }
 
 // mergeUnstructured merges two unstructured objects.

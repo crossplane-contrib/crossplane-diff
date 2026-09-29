@@ -914,6 +914,11 @@ func TestDefaultDiffProcessor_PerformDiff_Groups(t *testing.T) {
 			`it as an input too gives it a second writer — pass XR1/parent-xr only`
 
 		dupWarning = "Ignoring a duplicate input: it is identical to an earlier one"
+
+		generatedErr = `cannot combine diffs: inputs XR1/gen-xr-(generated), XR1/gen-xr-(generated) both produce resource ` +
+			`"example.org/v1/Bucket/default/shared" only because crossplane-diff gives XRs that share a generateName the ` +
+			`same placeholder name; the API server would name them differently, so they cannot be told apart here — diff ` +
+			`them separately`
 	)
 
 	genXR := tu.NewResource(testGroup+"/"+testAPIVersion, testKind, "").
@@ -1010,6 +1015,18 @@ func TestDefaultDiffProcessor_PerformDiff_Groups(t *testing.T) {
 		// first XR to create it keeps it and the other fails every reconcile. No diff predicts that,
 		// even though both render identical content — contention is decided by the controller, not the
 		// content. The run fails, in errors[] as well as on the returned error.
+		// Wiring: PerformDiff marks a group whose name it synthesized, which is the only way the overlap
+		// check can tell two generateName-only inputs apart from one XR reached twice. Without it these
+		// identical renderings would merge, reporting one XR's changes for two.
+		"SharedGenerateNameReachesTheOverlapCheck": {
+			resources: []*un.Unstructured{genXR, genXR.DeepCopy()},
+			shared:    func(xrName string) *dt.ResourceDiff { return bucket(dt.DiffTypeModified, "parent", "same", xrName) },
+			want: got{
+				XRs:        []corev1.ObjectReference{ref("gen-xr-(generated)"), ref("gen-xr-(generated)")},
+				GlobalErrs: []string{generatedErr},
+				Err:        generatedErr,
+			},
+		},
 		"DifferentControllersContend": {
 			resources: []*un.Unstructured{xr("my-xr-1"), xr("my-xr-2")},
 			shared:    func(xrName string) *dt.ResourceDiff { return bucket(dt.DiffTypeModified, xrName, "same", xrName) },

@@ -1016,7 +1016,7 @@ The structured types are split across two files:
   input's `metadata.name`. For an XR supplied with only `metadata.generateName` those differ: `SanitizeXR` synthesizes a
   name, but on a deep copy, so the input stays nameless. `ObjectReference.Name` is `omitempty`, so a nameless identity
   disappears from the wire entirely and two such XRs become indistinguishable. `PerformDiff` therefore resolves the
-  name through `xrIdentityName`, which mirrors that synthesis and renders it the way the diff formatter does
+  name through `renderName`, the helper `SanitizeXR` itself uses to synthesize it, and renders it the way the diff formatter does
   (`<generateName>(generated)`) — the same string the XR carries in `changes[]`, so the grouped and flat views agree,
   and no unpredictable synthetic hash reaches output.
 
