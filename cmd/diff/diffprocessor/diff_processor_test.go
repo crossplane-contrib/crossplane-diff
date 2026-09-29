@@ -896,9 +896,9 @@ func TestDefaultDiffProcessor_PerformDiff_Groups(t *testing.T) {
 		contendErr = `cannot combine diffs: resource "example.org/v1/Bucket/default/shared" would be controlled by ` +
 			`more than one XR (XR1/my-xr-1, XR1/my-xr-2); Crossplane gives it to whichever of them creates it first, ` +
 			`and the other fails to reconcile it, so no diff predicts applying these inputs together — diff them separately`
-		disagreeErr = `cannot combine diffs: inputs XR1/my-xr-1 and XR1/my-xr-2 both produce resource ` +
+		disagreeErr = `cannot combine diffs: inputs XR1/my-xr-1, XR1/my-xr-2 both produce resource ` +
 			`"example.org/v1/Bucket/default/shared", but differently, so no single diff is correct for both — diff them separately`
-		generatedErr = `cannot combine diffs: inputs XR1/gen-xr-(generated) and XR1/gen-xr-(generated) both produce resource ` +
+		generatedErr = `cannot combine diffs: inputs XR1/gen-xr-(generated), XR1/gen-xr-(generated) both produce resource ` +
 			`"example.org/v1/Bucket/default/shared" only because crossplane-diff gives XRs that share a generateName the ` +
 			`same placeholder name; the API server would name them differently, so they cannot be told apart here — diff ` +
 			`them separately`
@@ -911,9 +911,9 @@ func TestDefaultDiffProcessor_PerformDiff_Groups(t *testing.T) {
 			`applied last, and the order inputs are given in is not a statement of intent — pass only one of them`
 
 		// Rule: an input another input manages is an input error, carried by the managed one.
-		composedErr = `XR1/child-xr is composed by input 1 (XR1/parent-xr), whose composition writes it; supplying ` +
-			`it as an input too gives it a second writer — pass input 1 only`
-		claimErr = `XR1/backing-xr is the XR bound to claim XR1/my-claim (input 1), which Crossplane's claim ` +
+		composedErr = `XR1/child-xr is composed by input XR1/parent-xr, whose composition writes it; supplying ` +
+			`it as an input too gives it a second writer — pass XR1/parent-xr only`
+		claimErr = `XR1/backing-xr is the XR bound to claim XR1/my-claim, which Crossplane's claim ` +
 			`controller writes; supplying it as an input too gives it a second writer — pass the claim, not its XR`
 
 		dupWarning = "Ignoring a duplicate input: it is identical to an earlier one"

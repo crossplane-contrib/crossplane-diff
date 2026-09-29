@@ -22,11 +22,9 @@ import (
 	clixr "github.com/crossplane/cli/v2/pkg/xr"
 	corev1 "k8s.io/api/core/v1"
 	extv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
-	"k8s.io/apimachinery/pkg/api/equality"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	un "k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
-	"k8s.io/apimachinery/pkg/runtime/schema"
 
 	"github.com/crossplane/crossplane-runtime/v2/pkg/errors"
 	"github.com/crossplane/crossplane-runtime/v2/pkg/logging"
@@ -225,20 +223,19 @@ func (p *DefaultDiffProcessor) PerformDiff(ctx context.Context, resources []*un.
 
 	var errs []error
 
-	// Reject input errors in the input set itself before rendering anything: an identical duplicate
-	// is dropped with a warning, and the same object given twice with different content fails both.
-	// See classifyInputs.
-	inputs := p.classifyInputs(resources)
+	// Overlapping inputs are settled in three stages; see input_overlap.go. First, before rendering:
+	// an identical duplicate is dropped with a warning, and the same object twice differently fails.
+	inputs := checkInputs(p.config.Logger, resources)
 
 	// The inputs behind each group, every resource key each group's render produced (including
 	// unchanged ones, which its diffs omit), and each group's own failure. All feed rejectManagedInputs
 	// below; errors are only reported once it has run, because its verdict supersedes a render failure.
-	groupInputs := make([]input, 0, len(resources))
+	groupInputs := make([]inputCheck, 0, len(resources))
 	groupRendered := make([]map[string]bool, 0, len(resources))
 	groupErrs := make([]error, 0, len(resources))
 
 	for _, in := range inputs {
-		if in.duplicateOf != 0 {
+		if in.duplicate {
 			continue
 		}
 
@@ -257,7 +254,7 @@ func (p *DefaultDiffProcessor) PerformDiff(ctx context.Context, resources []*un.
 		var (
 			diffs    map[string]*dt.ResourceDiff
 			rendered map[string]bool
-			err      = in.inputErr
+			err      = in.err
 		)
 
 		if err == nil {
@@ -276,14 +273,10 @@ func (p *DefaultDiffProcessor) PerformDiff(ctx context.Context, resources []*un.
 		groupErrs = append(groupErrs, err)
 	}
 
-	// An input that another input manages — an XR a claim input is bound to, or an XR a parent input
-	// composes — has a second writer if both are applied, so it is an input error. That verdict replaces
-	// the managed input's own render failure, if it had one: the input should not have been given at all,
-	// and its failure is often a symptom of the same mistake (an XR's cluster copy is rarely a valid
-	// standalone input).
-	for _, rejected := range rejectManagedInputs(groups, groupInputs, groupRendered, groupErrs) {
-		groupErrs[rejected.group] = rejected.err
-		groups[rejected.group].Diffs = nil
+	// Second: an input another input manages is rejected, superseding its own render failure.
+	for i, err := range rejectManagedInputs(groups, groupInputs, groupRendered, groupErrs) {
+		groupErrs[i] = err
+		groups[i].Diffs = nil
 	}
 
 	for i, err := range groupErrs {
@@ -314,15 +307,10 @@ func (p *DefaultDiffProcessor) PerformDiff(ctx context.Context, resources []*un.
 		groups[i].Err = &outErr
 	}
 
-	// A diff key carries no owning-XR component, so two input XRs that render the same resource
-	// collide, and the flat changes[] view can keep only one of them. When the renderings are the same
-	// change reached twice nothing is lost; otherwise no single result is correct for every input, so
-	// report it rather than emit a result that is wrong for at least one of them. Each kind of collision
-	// has a different cause and says so (see dt.DetectDiffKeyCollisions). Collected before rendering so
-	// it reaches errors[] and stderr like any other error; the render still happens so structured output
-	// stays valid.
-	for _, c := range dt.DetectDiffKeyCollisions(groups) {
-		err := diffKeyCollisionError(c)
+	// Third: renders that reach one resource in ways no single diff can represent. Collected before the
+	// output is rendered so they reach errors[] and stderr like any other error; the output is still
+	// rendered, so structured output stays valid.
+	for _, err := range renderOverlapErrors(groups) {
 		errs = append(errs, err)
 		outputErrors = append(outputErrors, dt.OutputError{Message: err.Error()})
 	}
@@ -1177,258 +1165,6 @@ func xrIdentityName(res *un.Unstructured) string {
 	}
 
 	return dt.GeneratedDisplayName(dt.SynthesizeGeneratedName(gen), gen)
-}
-
-// diffKeyCollisionError explains why a collision's inputs cannot be diffed together. Each kind has a
-// different cause, and the message states the one that is true: only a contention is a conflict in the
-// cluster, so only it says what Crossplane would do.
-func diffKeyCollisionError(c dt.DiffKeyCollision) error {
-	switch c.Kind {
-	case dt.CollisionContention:
-		return errors.Errorf("cannot combine diffs: resource %q would be controlled by more than one XR (%s); "+
-			"Crossplane gives it to whichever of them creates it first, and the other fails to reconcile it, "+
-			"so no diff predicts applying these inputs together — diff them separately",
-			c.Key, strings.Join(c.Controllers, ", "))
-	case dt.CollisionIndistinguishable:
-		return errors.Errorf("cannot combine diffs: inputs %s both produce resource %q only because crossplane-diff "+
-			"gives XRs that share a generateName the same placeholder name; the API server would name them "+
-			"differently, so they cannot be told apart here — diff them separately",
-			joinInputs(c.XRs), c.Key)
-	case dt.CollisionDisagreement:
-		fallthrough
-	default:
-		return errors.Errorf("cannot combine diffs: inputs %s both produce resource %q, but differently, so no "+
-			"single diff is correct for both — diff them separately",
-			joinInputs(c.XRs), c.Key)
-	}
-}
-
-// joinInputs lists input XR identities for a sentence: "A and B", or "A, B and C".
-func joinInputs(xrs []string) string {
-	if len(xrs) < 2 {
-		return strings.Join(xrs, "")
-	}
-
-	return strings.Join(xrs[:len(xrs)-1], ", ") + " and " + xrs[len(xrs)-1]
-}
-
-// input is one entry of the xr command's input set, as classifyInputs judges it.
-type input struct {
-	res *un.Unstructured
-	// position is the input's 1-based position in the input set, for messages.
-	position int
-	// duplicateOf is the position of an earlier, identical input this one repeats; 0 if none.
-	duplicateOf int
-	// inputErr rejects the input before it is rendered; nil when it is acceptable.
-	inputErr error
-}
-
-// classifyInputs judges the input set itself, before anything is rendered. An input identical to an
-// earlier one is a repeat with one clear intent — a fat-fingered command line, or CI enumerating the
-// same file twice — so it is dropped with a warning. The same object given twice with different
-// content is an input error on both: applying both would leave whichever is applied last, and the
-// order inputs arrive in (often a glob's) is not a statement of intent. Identity is group, kind,
-// namespace and name, independent of API version, so one object at two versions counts as different
-// content. An input with no name yet (generateName only) has no identity and is never judged here.
-func (p *DefaultDiffProcessor) classifyInputs(resources []*un.Unstructured) []input {
-	inputs := make([]input, len(resources))
-	first := make(map[string]int, len(resources))
-
-	for i, res := range resources {
-		inputs[i] = input{res: res, position: i + 1}
-
-		id := objectIdentity(res.GetAPIVersion(), res.GetKind(), res.GetNamespace(), res.GetName())
-		if id == "" {
-			continue
-		}
-
-		j, seen := first[id]
-		if !seen {
-			first[id] = i
-			continue
-		}
-
-		if equality.Semantic.DeepEqual(resources[j].Object, res.Object) {
-			inputs[i].duplicateOf = j + 1
-			p.config.Logger.Info("Ignoring a duplicate input: it is identical to an earlier one",
-				"resource", fmt.Sprintf("%s/%s", res.GetKind(), res.GetName()),
-				"input", i+1,
-				"duplicateOf", j+1)
-
-			continue
-		}
-
-		inputs[i].inputErr = conflictingInputError(i+1, j+1, res)
-		if inputs[j].inputErr == nil {
-			inputs[j].inputErr = conflictingInputError(j+1, i+1, res)
-		}
-	}
-
-	return inputs
-}
-
-func conflictingInputError(position, other int, res *un.Unstructured) error {
-	return errors.Errorf("input %d defines %s/%s differently from input %d; applying both would leave whichever "+
-		"is applied last, and the order inputs are given in is not a statement of intent — pass only one of them",
-		position, res.GetKind(), res.GetName(), other)
-}
-
-// rejectedInput is an input rejectManagedInputs found to be managed by another input.
-type rejectedInput struct {
-	group      int
-	resourceID string
-	err        error
-}
-
-// rejectManagedInputs finds inputs that another input manages: an XR a parent input composes (it is
-// among the resources the parent's render produced), and an XR a claim input is bound to. Crossplane
-// writes such an object on the managing input's behalf — the parent's composition, or the claim
-// controller, applies it with forced ownership — so supplying it as an input too gives it a second
-// writer. The managed input is the mistake, so it is the one rejected; the manager's own result stands.
-//
-// rendered holds every resource key each group's render produced, including unchanged ones, which its
-// diffs omit; failed holds each group's own failure. A managed input is judged even if its own render
-// failed, since the verdict supersedes that failure, but a manager must have rendered: what it manages
-// is read from its render. An input rejected before rendering (a conflicting duplicate) is not judged.
-func rejectManagedInputs(groups []dt.XRDiffGroup, inputs []input, rendered []map[string]bool, failed []error) []rejectedInput {
-	renderedIDs := make([]map[string]bool, len(groups))
-
-	for i := range groups {
-		renderedIDs[i] = make(map[string]bool, len(rendered[i]))
-		for key := range rendered[i] {
-			if id := diffKeyIdentity(key); id != "" {
-				renderedIDs[i][id] = true
-			}
-		}
-	}
-
-	var rejected []rejectedInput
-
-	for b := range groups {
-		bRes := inputs[b].res
-		bID := objectIdentity(bRes.GetAPIVersion(), bRes.GetKind(), bRes.GetNamespace(), bRes.GetName())
-
-		if inputs[b].inputErr != nil || bID == "" {
-			continue
-		}
-
-		for a := range groups {
-			if a == b || failed[a] != nil {
-				continue
-			}
-
-			aRes := inputs[a].res
-
-			var err error
-
-			switch {
-			case renderedIDs[a][bID]:
-				err = errors.Errorf("%s/%s is composed by input %d (%s/%s), whose composition writes it; supplying "+
-					"it as an input too gives it a second writer — pass input %d only",
-					bRes.GetKind(), bRes.GetName(), inputs[a].position, aRes.GetKind(), aRes.GetName(), inputs[a].position)
-			case boundToClaim(groups[b], bRes, groups[a], aRes):
-				err = errors.Errorf("%s/%s is the XR bound to claim %s/%s (input %d), which Crossplane's claim "+
-					"controller writes; supplying it as an input too gives it a second writer — pass the claim, not its XR",
-					bRes.GetKind(), bRes.GetName(), aRes.GetKind(), aRes.GetName(), inputs[a].position)
-			}
-
-			if err != nil {
-				rejected = append(rejected, rejectedInput{
-					group:      b,
-					resourceID: fmt.Sprintf("%s/%s", bRes.GetKind(), bRes.GetName()),
-					err:        err,
-				})
-
-				break
-			}
-		}
-	}
-
-	return rejected
-}
-
-// boundToClaim reports whether the input xrRes is the XR bound to the input claimRes. Either side of the
-// binding is enough, read from the raw input and from the cluster copy its own diff carries: the claim's
-// spec.resourceRef (which only claims have; XRs have resourceRefs) naming the XR, or the XR's
-// spec.claimRef, or the claim-name/claim-namespace labels Crossplane stamps on it, naming the claim.
-func boundToClaim(xrGroup dt.XRDiffGroup, xrRes *un.Unstructured, claimGroup dt.XRDiffGroup, claimRes *un.Unstructured) bool {
-	xrID := objectIdentity(xrRes.GetAPIVersion(), xrRes.GetKind(), xrRes.GetNamespace(), xrRes.GetName())
-	claimID := objectIdentity(claimRes.GetAPIVersion(), claimRes.GetKind(), claimRes.GetNamespace(), claimRes.GetName())
-
-	for _, obj := range inputObjects(claimGroup, claimRes) {
-		if refIdentity(obj, "spec", "resourceRef") == xrID {
-			return true
-		}
-	}
-
-	for _, obj := range inputObjects(xrGroup, xrRes) {
-		if refIdentity(obj, "spec", "claimRef") == claimID {
-			return true
-		}
-
-		labels := obj.GetLabels()
-		if name, ok := labels[LabelClaimName]; ok && name == claimRes.GetName() && labels[LabelClaimNamespace] == claimRes.GetNamespace() {
-			return true
-		}
-	}
-
-	return false
-}
-
-// inputObjects returns what is known of an input's object: the input as given and, from its own diff, its
-// cluster copy and rendered form.
-func inputObjects(g dt.XRDiffGroup, res *un.Unstructured) []*un.Unstructured {
-	objs := []*un.Unstructured{res}
-
-	if own := g.Diffs[dt.MakeDiffKeyFromResource(res)]; own != nil {
-		for _, obj := range []*un.Unstructured{own.Current.Raw, own.Desired.Raw} {
-			if obj != nil {
-				objs = append(objs, obj)
-			}
-		}
-	}
-
-	return objs
-}
-
-// refIdentity reads an object reference (apiVersion, kind, name, and optionally namespace) at path and
-// returns its objectIdentity, or "" if there is none.
-func refIdentity(obj *un.Unstructured, path ...string) string {
-	ref, found, err := un.NestedStringMap(obj.Object, path...)
-	if err != nil || !found {
-		return ""
-	}
-
-	return objectIdentity(ref["apiVersion"], ref["kind"], ref["namespace"], ref["name"])
-}
-
-// objectIdentity is a resource's identity independent of its API version — group, kind, namespace and
-// name — since one object served at two versions is still one object. It is "" for a resource with no
-// name yet, which has no identity to compare.
-func objectIdentity(apiVersion, kind, namespace, name string) string {
-	if name == "" || kind == "" {
-		return ""
-	}
-
-	group := ""
-	if gv, err := schema.ParseGroupVersion(apiVersion); err == nil {
-		group = gv.Group
-	}
-
-	return group + "/" + kind + "/" + namespace + "/" + name
-}
-
-// diffKeyIdentity is objectIdentity for a key built by dt.MakeDiffKey
-// ("<apiVersion>/<kind>/<namespace>/<name>", where apiVersion may itself contain a slash).
-func diffKeyIdentity(key string) string {
-	parts := strings.Split(key, "/")
-	n := len(parts)
-
-	if n < 4 {
-		return ""
-	}
-
-	return objectIdentity(strings.Join(parts[:n-3], "/"), parts[n-3], parts[n-2], parts[n-1])
 }
 
 // SanitizeXR makes an XR into a valid unstructured object that we can use in a dry-run apply.

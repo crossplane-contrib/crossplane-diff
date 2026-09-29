@@ -414,7 +414,7 @@ func TestStructuredDiffRenderer_GroupsByXR(t *testing.T) {
 		// Issue #476: two input XRs producing the same diff key with different renderings. The flat
 		// changes[] can only carry one of them (whichever group merges last), and the summary counts
 		// what changes[] lists. That lossy flat view is pinned here deliberately: the processor turns
-		// this input into a hard error (see DetectDiffKeyCollisions), so no consumer reads it silently.
+		// this input into a hard error (see the diff processor's input_overlap.go), so no consumer reads it silently.
 		// xrs[] still reports each input's rendering in full.
 		"SameKeyFromTwoXRs": {
 			groups: []dt.XRDiffGroup{

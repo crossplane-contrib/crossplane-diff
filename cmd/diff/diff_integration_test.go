@@ -1316,7 +1316,7 @@ Summary: 2 modified, 2 removed`,
 				"testdata/diff/new-nested-child-xr.yaml",
 			},
 			expectedError: true,
-			expectedErrorContains: "XChildResource/test-parent-child is composed by input 1 (XParentResource/test-parent), " +
+			expectedErrorContains: "XChildResource/test-parent-child is composed by input XParentResource/test-parent, " +
 				"whose composition writes it",
 			expectedExitCode: dp.ExitCodeToolError,
 		},
@@ -1979,7 +1979,7 @@ Summary: 2 modified, 2 removed`,
 			},
 			expectedError: true,
 			expectedErrorContains: "XParentNopClaim/existing-parent-claim-82crv is the XR bound to claim " +
-				"ParentNopClaim/existing-parent-claim (input 1)",
+				"ParentNopClaim/existing-parent-claim, which Crossplane's claim controller writes",
 			expectedExitCode: dp.ExitCodeToolError,
 		},
 		"ModifiedClaimWithNestedXRsShowsDiff": {
