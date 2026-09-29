@@ -411,11 +411,10 @@ func TestStructuredDiffRenderer_GroupsByXR(t *testing.T) {
 				},
 			},
 		},
-		// Issue #476: two input XRs producing the same diff key with different renderings. The flat
-		// changes[] can only carry one of them (whichever group merges last), and the summary counts
-		// what changes[] lists. That lossy flat view is pinned here deliberately: the processor turns
-		// this input into a hard error (see the diff processor's input_validator.go), so no consumer reads it silently.
-		// xrs[] still reports each input's rendering in full.
+		// Issue #476: two input XRs rendering one resource differently. The flat view lists both,
+		// in input order: it is lossless on its own terms, not only because today's validator rejects
+		// such input. That keeps the renderer correct under any InputValidator, including one that
+		// treats inputs individually, where two inputs may legitimately disagree about a resource.
 		"SameKeyFromTwoXRs": {
 			groups: []dt.XRDiffGroup{
 				{
@@ -428,8 +427,8 @@ func TestStructuredDiffRenderer_GroupsByXR(t *testing.T) {
 				},
 			},
 			want: StructuredDiffOutput{
-				Summary: Summary{Modified: 1},
-				Changes: []ChangeDetail{sharedChange("eu-west-1")},
+				Summary: Summary{Modified: 2},
+				Changes: []ChangeDetail{sharedChange("us-west-2"), sharedChange("eu-west-1")},
 				Xrs: []xrDiffWire{
 					{
 						XR:      xrRef("app-a"),

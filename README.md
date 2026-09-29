@@ -680,8 +680,9 @@ entry's `errors[]` (and also in the top-level `errors[]`).
 > `summary` and top-level `errors[]` remain. New consumers should read `xrs[]`;
 > existing consumers of `changes[]` keep working during the deprecation window.
 
-The aggregate `summary` counts exactly what `changes[]` lists: each changed
-resource once, however many of the XRs you supply reach it. Each `xrs[]` entry
+The aggregate `summary` counts exactly what `changes[]` lists: each distinct
+change once, however many of the XRs you supply reach it, so the same change
+reached through two inputs is listed and counted once. Each `xrs[]` entry
 is complete for its own input, so where two inputs' renders reach the same
 resource through one controller, it appears under each, and the `xrs[].summary`
 values can sum to more than the top-level `summary`.

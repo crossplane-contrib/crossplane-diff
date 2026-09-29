@@ -1061,10 +1061,12 @@ contract:
   XRs), `Changes []ChangeDetail` (flat list, one entry per non-equal resource across all XRs), optional
   `Errors []OutputError` (union), and `Xrs` (per-input-XR grouping, JSON key `xrs`). **`Changes` is deprecated** in
   favor of `Xrs` and will be removed in a future major release; `Summary` and `Errors` are retained.
-  `Summary` counts exactly what `Changes` lists — each resource once, however many inputs reach it — while each
-  `Xrs` entry is complete for its own input. Where two inputs' renders reach one resource through one controller, it
-  appears under each entry, so the `Xrs` summaries can sum to more than `Summary`: the flat view counts resources, the
-  grouped view reports inputs.
+  `Summary` counts exactly what `Changes` lists. `Changes` is built by `flatChangeSet` as the union of every group's
+  changes, keeping one copy of a change identical to one already listed for that resource, so it is lossless on its own
+  terms rather than because the validator happens to reject differing renderings: two differing changes to one resource
+  would both be listed. Each `Xrs` entry is complete for its own input. Where two inputs' renders reach one resource
+  through one controller, it appears under each entry, so the `Xrs` summaries can sum to more than `Summary`: the flat
+  view counts distinct changes, the grouped view reports inputs.
   **The input set is judged first.** `xr`'s inputs are one change set, and `PerformDiff` settles overlaps that come
   from the inputs themselves before comparing renders. Identity is group, kind, namespace and name, independent of API
   version; an input with only a `generateName` has none and is not judged. All three stages live in

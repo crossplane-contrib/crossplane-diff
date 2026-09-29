@@ -13,10 +13,12 @@ import (
 	"github.com/crossplane/crossplane-runtime/v2/pkg/logging"
 )
 
-// flattenGroups merges every group's diffs into a single map. It is the basis
-// for the deprecated flat changes[] view in structured output and for the
-// composition renderer's flat reuse of the human renderer. A nil group.Diffs
-// is a safe no-op under maps.Copy.
+// flattenGroups merges every group's diffs into a single map, for the human
+// renderer's flat block. That block is only rendered for at most one input
+// with an identity (see RenderDiffs), and for the composition renderer's
+// identity-less reuse, so no two inputs' diffs are merged here; the
+// structured flat view, which does span inputs, uses flatChangeSet instead.
+// A nil group.Diffs is a safe no-op under maps.Copy.
 func flattenGroups(groups []dt.XRDiffGroup) map[string]*dt.ResourceDiff {
 	out := make(map[string]*dt.ResourceDiff)
 	for _, g := range groups {

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"maps"
+	"reflect"
 	"slices"
 
 	dt "github.com/crossplane-contrib/crossplane-diff/cmd/diff/renderer/types"
@@ -72,8 +73,8 @@ type OutputError = dt.OutputError
 // StructuredDiffOutput represents the structured output format for diffs.
 // Note: Only JSON tags are used because sigs.k8s.io/yaml uses JSON tags for YAML serialization.
 type StructuredDiffOutput struct {
-	// Summary counts the changed resources Changes lists, each once however many input XRs reach
-	// it. Per-input counts are on each Xrs entry; where inputs overlap those can sum to more.
+	// Summary counts exactly what Changes lists: each distinct change once, however many input XRs
+	// reach it. Per-input counts are on each Xrs entry; where inputs overlap those can sum to more.
 	Summary Summary `json:"summary"`
 
 	// Changes is the flat, ungrouped list of all resource changes across every
@@ -366,14 +367,9 @@ func (r *StructuredDiffRenderer) RenderDiffs(groups []dt.XRDiffGroup, errs []dt.
 		"errorCount", len(errs),
 		"warningCount", len(warnings))
 
-	// Flat, deprecated view: merge all groups' diffs. The summary counts exactly what changes[]
-	// lists — each resource once, however many inputs reach it. The merge is lossless whenever the
-	// run succeeds: a diff key produced by more than one input either carries the same rendering from
-	// each, through one controller (one change reached twice), or fails the run (see
-	// the diff processor's input_validator.go), which is how the lossy merge of issue #476 is kept out of any
-	// successful result. Overlaps that come from the inputs themselves — a duplicate, or an input
-	// another input manages — are settled before this, in the diff processor.
-	summary, changes := buildChangeSet(flattenGroups(groups))
+	// Flat, deprecated view: every input's changes, one copy of each distinct change (see
+	// flatChangeSet). The summary counts exactly what changes[] lists.
+	summary, changes := flatChangeSet(groups)
 	output := StructuredDiffOutput{Summary: summary, Changes: changes}
 	output.Errors = errs
 	output.Warnings = warnings
@@ -442,6 +438,47 @@ func buildChangeSet(diffs map[string]*dt.ResourceDiff) (Summary, []ChangeDetail)
 
 		summary.increment(diff.DiffType)
 		changes = append(changes, *resourceDiffToChangeDetail(diff))
+	}
+
+	return summary, changes
+}
+
+// flatChangeSet builds the deprecated flat view: every group's non-equal changes, in canonical order
+// (see diffSortFunc), keeping one copy of a change identical to one already listed for the same
+// resource. It is lossless on its own terms: two inputs that render one resource differently are both
+// listed, rather than one silently replacing the other in a map keyed by resource (issue #476). That
+// keeps the flat view correct whatever the input validator allows, including a validator that treats
+// inputs individually, where they may legitimately disagree about a resource. Identical renderings, the
+// same change reached twice, still count once.
+func flatChangeSet(groups []dt.XRDiffGroup) (Summary, []ChangeDetail) {
+	var all []*dt.ResourceDiff
+
+	for _, g := range groups {
+		for _, d := range g.Diffs {
+			if d.DiffType != dt.DiffTypeEqual {
+				all = append(all, d)
+			}
+		}
+	}
+
+	// Stable, so that differing changes to one resource stay in input order.
+	slices.SortStableFunc(all, diffSortFunc)
+
+	summary := Summary{}
+	changes := make([]ChangeDetail, 0, len(all))
+	listed := make(map[string][]ChangeDetail, len(all))
+
+	for _, d := range all {
+		change := *resourceDiffToChangeDetail(d)
+		key := d.GetDiffKey()
+
+		if slices.ContainsFunc(listed[key], func(c ChangeDetail) bool { return reflect.DeepEqual(c, change) }) {
+			continue
+		}
+
+		listed[key] = append(listed[key], change)
+		summary.increment(d.DiffType)
+		changes = append(changes, change)
 	}
 
 	return summary, changes
