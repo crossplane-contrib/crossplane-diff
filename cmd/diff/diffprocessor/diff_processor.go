@@ -223,7 +223,7 @@ func (p *DefaultDiffProcessor) PerformDiff(ctx context.Context, resources []*un.
 
 	var errs []error
 
-	// Overlapping inputs are settled in three stages; see input_overlap.go. First, before rendering:
+	// Overlapping inputs are settled in three stages; see input_validation.go. First, before rendering:
 	// an identical duplicate is dropped with a warning, and the same object twice differently fails.
 	inputs := checkInputs(p.config.Logger, resources)
 

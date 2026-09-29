@@ -15,8 +15,8 @@ import (
 	"github.com/crossplane/crossplane-runtime/v2/pkg/logging"
 )
 
-// This file is everything the xr command does about inputs that overlap. Its inputs are one change
-// set, so an overlap is settled in three stages, each a single call from PerformDiff:
+// This file validates the xr command's input set. Its inputs are one change set, so any overlap among
+// them is settled here, in three stages, each a single call from PerformDiff:
 //
 //  1. checkInputs, before rendering: a duplicate input, and the same object given twice differently.
 //  2. rejectManagedInputs, after rendering: an input that another input manages.
@@ -138,6 +138,12 @@ func rejectManagedInputs(groups []dt.XRDiffGroup, inputs []inputCheck, rendered 
 // only claims have; XRs have resourceRefs) naming the XR, or the XR's spec.claimRef, or the
 // claim-name/claim-namespace labels Crossplane stamps on it, naming the claim.
 func boundToClaim(xrGroup dt.XRDiffGroup, xr *un.Unstructured, claimGroup dt.XRDiffGroup, claim *un.Unstructured) bool {
+	// A claim with no name yet binds nothing. Without this, an XR with no claimRef — whose reference
+	// identity is also "" — would match it.
+	if identityOf(claim) == "" {
+		return false
+	}
+
 	for _, obj := range knownForms(claimGroup, claim) {
 		if refIdentity(obj, "spec", "resourceRef") == identityOf(xr) {
 			return true

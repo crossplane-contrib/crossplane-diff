@@ -1039,7 +1039,7 @@ contract:
   **The input set is judged first.** `xr`'s inputs are one change set, and `PerformDiff` settles overlaps that come
   from the inputs themselves before comparing renders. Identity is group, kind, namespace and name, independent of API
   version; an input with only a `generateName` has none and is not judged. All three stages live in
-  `diffprocessor/input_overlap.go`, each one call from `PerformDiff`. `checkInputs` runs before rendering: an input
+  `diffprocessor/input_validation.go`, each one call from `PerformDiff`. `checkInputs` runs before rendering: an input
   semantically identical to an earlier one is dropped with a warning (a fat-fingered command line, or CI enumerating
   one file twice, has one clear intent), and the same object twice with different content is an input error on both —
   applying both leaves whichever is applied last, and input order (often a glob's) is not intent.

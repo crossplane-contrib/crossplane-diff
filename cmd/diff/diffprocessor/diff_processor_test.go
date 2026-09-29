@@ -809,6 +809,11 @@ func TestDefaultDiffProcessor_PerformDiff(t *testing.T) {
 // renderer: the identity of each per-input-XR group (issue #477 — a
 // generateName-only XR must not be nameless) and its refusal to merge two input
 // XRs' diffs for the same resource key (issue #476).
+// TestDefaultDiffProcessor_PerformDiff_Groups pins how PerformDiff hands its groups to the renderer: the
+// group identities, and where each stage of input validation lands — a dropped group and a warning, a
+// group error, errors[], and the returned error — plus the precedence of a managed-input verdict over a
+// render failure, which is PerformDiff's to apply. The validation rules themselves are tested directly
+// in input_validation_test.go; add rule cases there, not here.
 func TestDefaultDiffProcessor_PerformDiff_Groups(t *testing.T) {
 	ctx := t.Context()
 
@@ -896,12 +901,6 @@ func TestDefaultDiffProcessor_PerformDiff_Groups(t *testing.T) {
 		contendErr = `cannot combine diffs: resource "example.org/v1/Bucket/default/shared" would be controlled by ` +
 			`more than one XR (XR1/my-xr-1, XR1/my-xr-2); Crossplane gives it to whichever of them creates it first, ` +
 			`and the other fails to reconcile it, so no diff predicts applying these inputs together — diff them separately`
-		disagreeErr = `cannot combine diffs: inputs XR1/my-xr-1, XR1/my-xr-2 both produce resource ` +
-			`"example.org/v1/Bucket/default/shared", but differently, so no single diff is correct for both — diff them separately`
-		generatedErr = `cannot combine diffs: inputs XR1/gen-xr-(generated), XR1/gen-xr-(generated) both produce resource ` +
-			`"example.org/v1/Bucket/default/shared" only because crossplane-diff gives XRs that share a generateName the ` +
-			`same placeholder name; the API server would name them differently, so they cannot be told apart here — diff ` +
-			`them separately`
 
 		// Rule: the same object twice with different content is an input error. Each input carries it,
 		// naming the other, since neither can be preferred.
@@ -913,8 +912,6 @@ func TestDefaultDiffProcessor_PerformDiff_Groups(t *testing.T) {
 		// Rule: an input another input manages is an input error, carried by the managed one.
 		composedErr = `XR1/child-xr is composed by input XR1/parent-xr, whose composition writes it; supplying ` +
 			`it as an input too gives it a second writer — pass XR1/parent-xr only`
-		claimErr = `XR1/backing-xr is the XR bound to claim XR1/my-claim, which Crossplane's claim ` +
-			`controller writes; supplying it as an input too gives it a second writer — pass the claim, not its XR`
 
 		dupWarning = "Ignoring a duplicate input: it is identical to an earlier one"
 	)
@@ -1000,52 +997,6 @@ func TestDefaultDiffProcessor_PerformDiff_Groups(t *testing.T) {
 				Err:        "unable to process resource XR1/child-xr: " + composedErr,
 			},
 		},
-		// A claim passed alongside its backing XR: Crossplane's claim controller writes that XR, so the
-		// XR input is a second writer. The claim is recognised by spec.resourceRef, which only claims
-		// carry, read here from the claim's cluster copy.
-		"InputBoundToAClaimInputIsRejected_ViaClaimResourceRef": {
-			resources: []*un.Unstructured{xr("my-claim"), xr("backing-xr")},
-			render: func(xrName string) (map[string]*dt.ResourceDiff, map[string]bool) {
-				if xrName == "my-claim" {
-					cluster := tu.NewResource(testGroup+"/"+testAPIVersion, testKind, "my-claim").
-						WithSpecField("resourceRef", map[string]any{
-							"apiVersion": testGroup + "/" + testAPIVersion, "kind": testKind, "name": "backing-xr",
-						}).Build()
-
-					return map[string]*dt.ResourceDiff{ownKey("my-claim"): ownDiff("my-claim", cluster)}, map[string]bool{}
-				}
-
-				return map[string]*dt.ResourceDiff{ownKey(xrName): ownDiff(xrName, nil)}, map[string]bool{}
-			},
-			want: got{
-				XRs:        []corev1.ObjectReference{ref("my-claim"), ref("backing-xr")},
-				GroupErrs:  map[string]string{"backing-xr": claimErr},
-				GlobalErrs: []string{claimErr},
-				Err:        "unable to process resource XR1/backing-xr: " + claimErr,
-			},
-		},
-		// The same binding seen from the XR's side: the claim labels Crossplane stamps on it, read
-		// from its cluster copy. Either side of the binding is enough.
-		"InputBoundToAClaimInputIsRejected_ViaXRClaimLabels": {
-			resources: []*un.Unstructured{xr("my-claim"), xr("backing-xr")},
-			render: func(xrName string) (map[string]*dt.ResourceDiff, map[string]bool) {
-				if xrName == "backing-xr" {
-					cluster := tu.NewResource(testGroup+"/"+testAPIVersion, testKind, "backing-xr").
-						WithLabels(map[string]string{"crossplane.io/claim-name": "my-claim", "crossplane.io/claim-namespace": ""}).
-						Build()
-
-					return map[string]*dt.ResourceDiff{ownKey("backing-xr"): ownDiff("backing-xr", cluster)}, map[string]bool{}
-				}
-
-				return map[string]*dt.ResourceDiff{ownKey(xrName): ownDiff(xrName, nil)}, map[string]bool{}
-			},
-			want: got{
-				XRs:        []corev1.ObjectReference{ref("my-claim"), ref("backing-xr")},
-				GroupErrs:  map[string]string{"backing-xr": claimErr},
-				GlobalErrs: []string{claimErr},
-				Err:        "unable to process resource XR1/backing-xr: " + claimErr,
-			},
-		},
 		// Issue #477: the name used for rendering is synthesized from
 		// generateName inside SanitizeXR, so the identity must carry that
 		// effective name rather than the input's empty metadata.name.
@@ -1066,59 +1017,6 @@ func TestDefaultDiffProcessor_PerformDiff_Groups(t *testing.T) {
 				XRs:        []corev1.ObjectReference{ref("my-xr-1"), ref("my-xr-2")},
 				GlobalErrs: []string{contendErr},
 				Err:        contendErr,
-			},
-		},
-		// A collision whose every entry is equal loses nothing observable (equal
-		// diffs are excluded from every rendered view), so it must NOT fail:
-		// rejecting it would reject input whose output is provably correct.
-		"SameEqualKeyFromTwoXRsTolerated": {
-			resources: []*un.Unstructured{xr("my-xr-1"), xr("my-xr-2")},
-			shared:    func(xrName string) *dt.ResourceDiff { return bucket(dt.DiffTypeEqual, xrName, "same", xrName) },
-			want:      got{XRs: []corev1.ObjectReference{ref("my-xr-1"), ref("my-xr-2")}},
-		},
-		// Rendering overlap: two inputs whose renders reach one object through the same controller —
-		// neither input being the object or managing the other, which the input rules above reject.
-		// There is one controller and one desired state, so identical renderings are the same change
-		// reached twice and must NOT fail. The per-render UIDs deliberately differ.
-		"SameControllerIdenticalIsNotACollision": {
-			resources: []*un.Unstructured{xr("my-xr-1"), xr("my-xr-2")},
-			shared:    func(xrName string) *dt.ResourceDiff { return bucket(dt.DiffTypeModified, "parent-xr", "same", xrName) },
-			want:      got{XRs: []corev1.ObjectReference{ref("my-xr-1"), ref("my-xr-2")}},
-		},
-		// Same controller but different content: two renders disagree about one object, so no single
-		// diff is right for both. Defensive — the input rules catch the ordinary causes first — but a
-		// contradiction must never merge silently.
-		"SameControllerDifferentContentDisagrees": {
-			resources: []*un.Unstructured{xr("my-xr-1"), xr("my-xr-2")},
-			shared:    func(xrName string) *dt.ResourceDiff { return bucket(dt.DiffTypeModified, "parent-xr", xrName, xrName) },
-			want: got{
-				XRs:        []corev1.ObjectReference{ref("my-xr-1"), ref("my-xr-2")},
-				GlobalErrs: []string{disagreeErr},
-				Err:        disagreeErr,
-			},
-		},
-		// The uncontrolled form of the same disagreement: an object no XR controls, produced
-		// differently by two renders.
-		"UncontrolledDifferentContentDisagrees": {
-			resources: []*un.Unstructured{xr("my-xr-1"), xr("my-xr-2")},
-			shared:    func(xrName string) *dt.ResourceDiff { return bucket(dt.DiffTypeModified, "", xrName, xrName) },
-			want: got{
-				XRs:        []corev1.ObjectReference{ref("my-xr-1"), ref("my-xr-2")},
-				GlobalErrs: []string{disagreeErr},
-				Err:        disagreeErr,
-			},
-		},
-		// Two XRs sharing a generateName get the same synthesized placeholder name here, so their
-		// resources collide — but the API server would give them different names, so in the cluster they
-		// would not. The collision is this tool's, and even identical content must not be merged (that
-		// would report one XR's worth of changes for two). Say what is true, not that they contend.
-		"SharedGenerateNameCannotBeToldApart": {
-			resources: []*un.Unstructured{genXR, genXR.DeepCopy()},
-			shared:    func(xrName string) *dt.ResourceDiff { return bucket(dt.DiffTypeModified, xrName, "same", xrName) },
-			want: got{
-				XRs:        []corev1.ObjectReference{ref("gen-xr-(generated)"), ref("gen-xr-(generated)")},
-				GlobalErrs: []string{generatedErr},
-				Err:        generatedErr,
 			},
 		},
 	}

@@ -1229,6 +1229,26 @@ Summary: 2 modified, 2 removed`,
 			expectedError:    false,
 			expectedExitCode: dp.ExitCodeDiffDetected,
 		},
+		// A generateName-only input next to an ordinary one is an ordinary invocation. The unnamed input
+		// has no identity, so input validation must not mistake it for the named XR's claim: an XR with
+		// no claimRef has an empty reference identity too, and the two must not match.
+		"GenerateNameInputAlongsideANamedInput": {
+			reason:       "A generateName-only input beside a named one is valid; both are diffed",
+			outputFormat: "json",
+			setupFiles: []string{
+				"testdata/diff/resources/xrd.yaml",
+				"testdata/diff/resources/composition.yaml",
+				"testdata/diff/resources/functions.yaml",
+			},
+			inputFiles:       []string{"testdata/diff/new-xr.yaml", "testdata/diff/generated-name-xr.yaml"},
+			expectedExitCode: dp.ExitCodeDiffDetected,
+			expectedStructuredOutput: tu.ExpectDiff().
+				WithSummary(4, 0, 0).
+				WithXRs(
+					tu.XR("XNopResource", "test-resource", "default").Status("changed").Summary(2, 0, 0),
+					tu.XR("XNopResource", "generated-xr-(generated)", "default").Status("changed").Summary(2, 0, 0),
+				),
+		},
 		"NewXRWithGenerateName": {
 			reason:       "Shows diff for new XR with generateName",
 			outputFormat: "json",
