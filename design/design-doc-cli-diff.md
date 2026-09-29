@@ -572,6 +572,8 @@ The `ProcessorConfig` structure provides configuration options:
 - `Logger`: Structured logger, propagated to all subcomponents.
 - `RenderFunc`: Renders a composition pipeline; defaults to the in-process engine.
 - `Factories`: Factory functions for creating subcomponents (used for testing and to swap caching strategies).
+  `Factories.InputValidator` (set with `WithInputValidatorFactory`, defaulting to `NewBundleInputValidator`) creates
+  the `InputValidator` for each `PerformDiff` run (see §6.7a).
 
 Note: `comp`'s `--namespace` filter and `--resource` filter are call-time parameters to `DiffComposition`, not
 processor-wide config; they describe what to include in a single impact analysis run, not how the processor itself
@@ -914,6 +916,33 @@ annotation is applied on every `GetFunctionsForComposition` call, including cach
 the env var works correctly regardless of when it is set relative to cache population. Any non-empty value the user
 has pre-set on a function package is preserved.
 
+### 6.7a InputValidator
+
+The `InputValidator` validates one `xr` run's input set (`PerformDiff`). It is created per run by an
+`InputValidatorFactory`, because it carries that run's state between its stages.
+
+```go
+type InputValidator interface {
+    // ToRender returns the inputs to render, in input order, with duplicates already dropped.
+    // An input with a non-nil Err was rejected before rendering and must not be rendered.
+    ToRender() []ValidatedInput
+    // RecordRender records the render of ToRender()[i]: every resource key it produced and its error.
+    RecordRender(i int, rendered map[string]bool, err error)
+    // Verdicts returns the final error for each group (indexed like ToRender()), or nil.
+    Verdicts(groups []dt.XRDiffGroup) []error
+    // RenderOverlaps returns the errors for renders that reach one resource irreconcilably.
+    RenderOverlaps(groups []dt.XRDiffGroup) []error
+}
+
+type InputValidatorFactory func(logger logging.Logger, inputs []*un.Unstructured) InputValidator
+```
+
+The only implementation, `bundleInputValidator` (`NewBundleInputValidator`, in `diffprocessor/input_validator.go`),
+treats the inputs as one change set; its rules are described under §6.8.3's grouped view. `PerformDiff` owns only the
+wiring: it renders what `ToRender` returns, records each render, and reports `Verdicts` and `RenderOverlaps` errors as
+group errors, `errors[]` entries and the returned error. The precedence of a managed-input verdict over that input's own
+render failure is the validator's, applied in `Verdicts`.
+
 ### 6.8 DiffRenderer and CompDiffRenderer
 
 The renderer layer formats diff results. It is split into two interfaces — one per subcommand — and each has a
@@ -1039,7 +1068,7 @@ contract:
   **The input set is judged first.** `xr`'s inputs are one change set, and `PerformDiff` settles overlaps that come
   from the inputs themselves before comparing renders. Identity is group, kind, namespace and name, independent of API
   version; an input with only a `generateName` has none and is not judged. All three stages live in
-  `diffprocessor/input_validation.go`, each one call from `PerformDiff`. `checkInputs` runs before rendering: an input
+  `diffprocessor/input_validator.go`, behind the `InputValidator` `PerformDiff` drives (§6.7a). `checkInputs` runs before rendering: an input
   semantically identical to an earlier one is dropped with a warning (a fat-fingered command line, or CI enumerating
   one file twice, has one clear intent), and the same object twice with different content is an input error on both —
   applying both leaves whichever is applied last, and input order (often a glob's) is not intent.

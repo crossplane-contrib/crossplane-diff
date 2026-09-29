@@ -802,18 +802,57 @@ func TestDefaultDiffProcessor_PerformDiff(t *testing.T) {
 // renderer, real JSON) by TestDiffIntegration/MultipleXRsGroupedByInputXR, and
 // the per-group xrs[] shape — including errored groups — by
 // TestStructuredDiffRenderer_GroupsByXR. The identity each group carries, and
-// the cross-XR key collision PerformDiff must refuse, are asserted on the
-// intermediate []XRDiffGroup handoff by TestDefaultDiffProcessor_PerformDiff_Groups.
+// how the input validator's verdicts land, are asserted on the intermediate
+// []XRDiffGroup handoff by TestDefaultDiffProcessor_PerformDiff_Groups.
 
-// TestDefaultDiffProcessor_PerformDiff_Groups asserts what PerformDiff hands the
-// renderer: the identity of each per-input-XR group (issue #477 — a
-// generateName-only XR must not be nameless) and its refusal to merge two input
-// XRs' diffs for the same resource key (issue #476).
-// TestDefaultDiffProcessor_PerformDiff_Groups pins how PerformDiff hands its groups to the renderer: the
-// group identities, and where each stage of input validation lands — a dropped group and a warning, a
-// group error, errors[], and the returned error — plus the precedence of a managed-input verdict over a
-// render failure, which is PerformDiff's to apply. The validation rules themselves are tested directly
-// in input_validation_test.go; add rule cases there, not here.
+// mockInputValidator is an InputValidator whose methods are function fields. It lives here rather than
+// in testutils beside the other mocks because its methods use ValidatedInput, which diffprocessor
+// defines and testutils cannot import.
+type mockInputValidator struct {
+	ToRenderFn       func() []ValidatedInput
+	RecordRenderFn   func(i int, rendered map[string]bool, err error)
+	VerdictsFn       func(groups []dt.XRDiffGroup) []error
+	RenderOverlapsFn func(groups []dt.XRDiffGroup) []error
+}
+
+func (m *mockInputValidator) ToRender() []ValidatedInput {
+	if m.ToRenderFn != nil {
+		return m.ToRenderFn()
+	}
+
+	return nil
+}
+
+func (m *mockInputValidator) RecordRender(i int, rendered map[string]bool, err error) {
+	if m.RecordRenderFn != nil {
+		m.RecordRenderFn(i, rendered, err)
+	}
+}
+
+func (m *mockInputValidator) Verdicts(groups []dt.XRDiffGroup) []error {
+	if m.VerdictsFn != nil {
+		return m.VerdictsFn(groups)
+	}
+
+	return make([]error, len(groups))
+}
+
+func (m *mockInputValidator) RenderOverlaps(groups []dt.XRDiffGroup) []error {
+	if m.RenderOverlapsFn != nil {
+		return m.RenderOverlapsFn(groups)
+	}
+
+	return nil
+}
+
+// TestDefaultDiffProcessor_PerformDiff_Groups pins how PerformDiff hands its groups to the renderer. With
+// a mock InputValidator it pins the wiring: only what ToRender returns is rendered, and an input it
+// rejected is not; every render is recorded; and each Verdicts and RenderOverlaps error lands as a group
+// error (replacing that group's diffs), in errors[], and on the returned error. With the real default
+// validator it pins what PerformDiff itself decides: the group identity of a generateName-only XR (issue
+// #477), and the NameGenerated mark the overlap check relies on. The validation rules themselves are
+// tested directly in input_validator_test.go and end to end in diff_integration_test.go; add rule cases
+// there, not here.
 func TestDefaultDiffProcessor_PerformDiff_Groups(t *testing.T) {
 	ctx := t.Context()
 
@@ -834,21 +873,16 @@ func TestDefaultDiffProcessor_PerformDiff_Groups(t *testing.T) {
 	// inputs collide on it.
 	const sharedKey = "example.org/v1/Bucket/default/shared"
 
-	// bucket is the shared resource as one input XR's render produces it: diffed as diffType,
-	// controlled by the XR named controller ("" for none), with spec.value set to value. renderedBy
-	// is the input XR doing the rendering; it only varies the controller reference's UID, the way a
-	// render synthesizes a fresh UID for an XR that does not exist yet — so a collision must be judged
-	// on the controller's kind and name, never its UID. Clean mirrors cleanupForDiff, which strips
-	// ownerReferences (and uid) before anything is compared or displayed.
-	bucket := func(diffType dt.DiffType, controller, value, renderedBy string) *dt.ResourceDiff {
-		b := tu.NewResource("example.org/v1", "Bucket", "shared").
+	// bucket is the shared resource as one input XR's render produces it, controlled by the XR named
+	// controller, with spec.value set to value. renderedBy only varies the controller reference's UID,
+	// the way a render synthesizes a fresh UID for an XR that does not exist yet. Clean mirrors
+	// cleanupForDiff, which strips ownerReferences (and uid) before anything is compared or displayed.
+	bucket := func(controller, value, renderedBy string) *dt.ResourceDiff {
+		desired := tu.NewResource("example.org/v1", "Bucket", "shared").
 			InNamespace("default").
-			WithSpecField("value", value)
-		if controller != "" {
-			b = b.WithControllerReference(testKind, controller, testGroup+"/"+testAPIVersion, "uid-rendered-by-"+renderedBy)
-		}
-
-		desired := b.Build()
+			WithSpecField("value", value).
+			WithControllerReference(testKind, controller, testGroup+"/"+testAPIVersion, "uid-rendered-by-"+renderedBy).
+			Build()
 		clean := desired.DeepCopy()
 		clean.SetOwnerReferences(nil)
 
@@ -856,7 +890,7 @@ func TestDefaultDiffProcessor_PerformDiff_Groups(t *testing.T) {
 			Gvk:          schema.GroupVersionKind{Group: "example.org", Version: "v1", Kind: "Bucket"},
 			Namespace:    "default",
 			ResourceName: "shared",
-			DiffType:     diffType,
+			DiffType:     dt.DiffTypeModified,
 			Desired:      dt.ResourceViews{Raw: desired, Clean: clean},
 		}
 	}
@@ -869,56 +903,33 @@ func TestDefaultDiffProcessor_PerformDiff_Groups(t *testing.T) {
 		return corev1.ObjectReference{APIVersion: testGroup + "/" + testAPIVersion, Kind: testKind, Name: name}
 	}
 
-	// ownKey and ownDiff are an input XR's own diff key and diff, which the real calculator always
-	// stores (even when equal). current is the XR's cluster copy, or nil for a new XR.
-	ownKey := func(name string) string {
-		return dt.MakeDiffKey(testGroup+"/"+testAPIVersion, testKind, "", name)
-	}
-	ownDiff := func(name string, current *un.Unstructured) *dt.ResourceDiff {
-		desired := xr(name)
-		return &dt.ResourceDiff{
-			Gvk:          schema.GroupVersionKind{Group: testGroup, Version: testAPIVersion, Kind: testKind},
-			ResourceName: name,
-			DiffType:     dt.DiffTypeEqual,
-			Desired:      dt.ResourceViews{Raw: desired, Clean: desired},
-			Current:      dt.ResourceViews{Raw: current, Clean: current},
-		}
+	// recorded is one RecordRender call.
+	type recorded struct {
+		I        int
+		Rendered map[string]bool
+		Err      string
 	}
 
 	// got is the whole handoff, asserted as one value: the group identities in
-	// input order, each errored group's message by name, the warnings raised,
-	// the global (union) error list the renderer was given, and the error
-	// PerformDiff returned.
+	// input order, each errored group's message by name, the global (union)
+	// error list the renderer was given, the error PerformDiff returned, and
+	// (with a mock validator) the renders it recorded.
 	type got struct {
 		XRs        []corev1.ObjectReference
 		GroupErrs  map[string]string
-		Warnings   []string
 		GlobalErrs []string
 		Err        string
+		Recorded   []recorded
 	}
 
 	const (
-		contendErr = `cannot combine diffs: resource "example.org/v1/Bucket/default/shared" would be controlled by ` +
-			`more than one XR (XR1/my-xr-1, XR1/my-xr-2); Crossplane gives it to whichever of them creates it first, ` +
-			`and the other fails to reconcile it, so no diff predicts applying these inputs together — diff them separately`
-
-		// Rule: the same object twice with different content is an input error. Each input carries it,
-		// naming the other, since neither can be preferred.
-		conflictErr1 = `input 1 defines XR1/my-xr differently from input 2; applying both would leave whichever is ` +
-			`applied last, and the order inputs are given in is not a statement of intent — pass only one of them`
-		conflictErr2 = `input 2 defines XR1/my-xr differently from input 1; applying both would leave whichever is ` +
-			`applied last, and the order inputs are given in is not a statement of intent — pass only one of them`
-
-		// Rule: an input another input manages is an input error, carried by the managed one.
-		composedErr = `XR1/child-xr is composed by input XR1/parent-xr, whose composition writes it; supplying ` +
-			`it as an input too gives it a second writer — pass XR1/parent-xr only`
-
-		dupWarning = "Ignoring a duplicate input: it is identical to an earlier one"
-
 		generatedErr = `cannot combine diffs: inputs XR1/gen-xr-(generated), XR1/gen-xr-(generated) both produce resource ` +
 			`"example.org/v1/Bucket/default/shared" only because crossplane-diff gives XRs that share a generateName the ` +
 			`same placeholder name; the API server would name them differently, so they cannot be told apart here — diff ` +
 			`them separately`
+
+		// renderFailedErr is how a render failure reaches RecordRender: wrapped by the render path.
+		renderFailedErr = "cannot calculate diffs for composed resources: render failed"
 	)
 
 	genXR := tu.NewResource(testGroup+"/"+testAPIVersion, testKind, "").
@@ -926,80 +937,89 @@ func TestDefaultDiffProcessor_PerformDiff_Groups(t *testing.T) {
 		WithSpecField("coolField", "value").
 		Build()
 
+	// validation is what a mock validator returns: ToRender's list, and Verdicts and RenderOverlaps
+	// errors. A nil validation means the real default validator.
+	type validation struct {
+		toRender []ValidatedInput
+		verdicts []error
+		overlaps []error
+	}
+
 	tests := map[string]struct {
 		resources []*un.Unstructured
-		// shared is sharedKey's diff as rendered for the input XR named xrName (the effective,
-		// possibly synthesized, name the processor renders with).
-		shared func(xrName string) *dt.ResourceDiff
-		// render, when set, replaces shared: the calculator's full result (diffs and the rendered
-		// key set, which covers unchanged resources too) for the XR named xrName.
-		render func(xrName string) (map[string]*dt.ResourceDiff, map[string]bool)
+		validator *validation
 		// failRender names an input XR whose render fails.
 		failRender string
 		want       got
 	}{
-		// A managed input whose own render also fails reports why it should not have been passed, not
-		// the render failure: that failure is moot, and often a symptom of the same mistake — an XR's
-		// cluster copy is rarely a valid standalone input.
-		"ManagedVerdictSupersedesTheManagedInputsRenderFailure": {
-			resources: []*un.Unstructured{xr("parent-xr"), xr("child-xr")},
-			render: func(string) (map[string]*dt.ResourceDiff, map[string]bool) {
-				return map[string]*dt.ResourceDiff{ownKey("parent-xr"): ownDiff("parent-xr", nil)},
-					map[string]bool{ownKey("child-xr"): true}
+		// An input ToRender already rejected is not rendered; its verdict is a group error, in errors[],
+		// and on the returned error.
+		"InputRejectedBeforeRenderingIsNotRendered": {
+			resources: []*un.Unstructured{xr("my-xr-1"), xr("my-xr-2")},
+			validator: &validation{
+				toRender: []ValidatedInput{{Resource: xr("my-xr-1")}, {Resource: xr("my-xr-2"), Err: errors.New("rejected")}},
+				verdicts: []error{nil, errors.New("rejected")},
 			},
-			failRender: "child-xr",
 			want: got{
-				XRs:        []corev1.ObjectReference{ref("parent-xr"), ref("child-xr")},
-				GroupErrs:  map[string]string{"child-xr": composedErr},
-				GlobalErrs: []string{composedErr},
-				Err:        "unable to process resource XR1/child-xr: " + composedErr,
+				XRs:        []corev1.ObjectReference{ref("my-xr-1"), ref("my-xr-2")},
+				GroupErrs:  map[string]string{"my-xr-2": "rejected"},
+				GlobalErrs: []string{"rejected"},
+				Err:        "unable to process resource XR1/my-xr-2: rejected",
+				Recorded:   []recorded{{I: 0, Rendered: map[string]bool{sharedKey: true}}},
 			},
 		},
-		// An identical input passed twice — a fat-fingered command line, or CI enumerating one file
-		// twice — has one clear intent. It is rendered once, with a warning rather than a failure.
-		"IdenticalDuplicateInputIsDeduplicated": {
-			resources: []*un.Unstructured{xr("my-xr"), xr("my-xr")},
-			shared:    func(xrName string) *dt.ResourceDiff { return bucket(dt.DiffTypeModified, xrName, "v", xrName) },
+		// A Verdicts error on a group that rendered fine replaces its diffs.
+		"VerdictReplacesAGroupsDiffs": {
+			resources: []*un.Unstructured{xr("my-xr-1"), xr("my-xr-2")},
+			validator: &validation{
+				toRender: []ValidatedInput{{Resource: xr("my-xr-1")}, {Resource: xr("my-xr-2")}},
+				verdicts: []error{nil, errors.New("verdict")},
+			},
 			want: got{
-				XRs:      []corev1.ObjectReference{ref("my-xr")},
-				Warnings: []string{dupWarning},
+				XRs:        []corev1.ObjectReference{ref("my-xr-1"), ref("my-xr-2")},
+				GroupErrs:  map[string]string{"my-xr-2": "verdict"},
+				GlobalErrs: []string{"verdict"},
+				Err:        "unable to process resource XR1/my-xr-2: verdict",
+				Recorded: []recorded{
+					{I: 0, Rendered: map[string]bool{sharedKey: true}},
+					{I: 1, Rendered: map[string]bool{sharedKey: true}},
+				},
 			},
 		},
-		// The same object twice with different content: applying both leaves whichever is applied
-		// last, and input order — often a CI glob's — is not intent. Neither input is rendered; each
-		// fails, naming the other, and the run fails.
-		"SameObjectTwiceWithDifferentContentFails": {
-			resources: []*un.Unstructured{
-				tu.NewResource(testGroup+"/"+testAPIVersion, testKind, "my-xr").WithSpecField("coolField", "a").Build(),
-				tu.NewResource(testGroup+"/"+testAPIVersion, testKind, "my-xr").WithSpecField("coolField", "b").Build(),
+		"RenderOverlapsReachErrorsAndTheReturnedError": {
+			resources: []*un.Unstructured{xr("my-xr-1")},
+			validator: &validation{
+				toRender: []ValidatedInput{{Resource: xr("my-xr-1")}},
+				overlaps: []error{errors.New("overlap")},
 			},
-			shared: func(xrName string) *dt.ResourceDiff { return bucket(dt.DiffTypeModified, xrName, "v", xrName) },
 			want: got{
-				XRs:        []corev1.ObjectReference{ref("my-xr"), ref("my-xr")},
-				GroupErrs:  map[string]string{"input 1": conflictErr1, "input 2": conflictErr2},
-				GlobalErrs: []string{conflictErr1, conflictErr2},
-				Err: "[unable to process resource XR1/my-xr: " + conflictErr1 + ", " +
-					"unable to process resource XR1/my-xr: " + conflictErr2 + "]",
+				XRs:        []corev1.ObjectReference{ref("my-xr-1")},
+				GlobalErrs: []string{"overlap"},
+				Err:        "overlap",
+				Recorded:   []recorded{{I: 0, Rendered: map[string]bool{sharedKey: true}}},
 			},
 		},
-		// A child XR passed alongside the parent that composes it: the parent's composition writes the
-		// child, so the child input is a second writer. Detected from the parent's rendered key set,
-		// which includes the child even when it is unchanged (as here) and so absent from the diffs.
-		"InputComposedByAnotherInputIsRejected": {
-			resources: []*un.Unstructured{xr("parent-xr"), xr("child-xr")},
-			render: func(xrName string) (map[string]*dt.ResourceDiff, map[string]bool) {
-				if xrName == "parent-xr" {
-					return map[string]*dt.ResourceDiff{ownKey("parent-xr"): ownDiff("parent-xr", nil)},
-						map[string]bool{ownKey("child-xr"): true}
-				}
-
-				return map[string]*dt.ResourceDiff{ownKey("child-xr"): ownDiff("child-xr", nil)}, map[string]bool{}
-			},
+		// Only what ToRender returns is rendered: a duplicate it dropped yields no group.
+		"OnlyWhatToRenderReturnsIsRendered": {
+			resources: []*un.Unstructured{xr("my-xr-1"), xr("my-xr-1")},
+			validator: &validation{toRender: []ValidatedInput{{Resource: xr("my-xr-1")}}},
 			want: got{
-				XRs:        []corev1.ObjectReference{ref("parent-xr"), ref("child-xr")},
-				GroupErrs:  map[string]string{"child-xr": composedErr},
-				GlobalErrs: []string{composedErr},
-				Err:        "unable to process resource XR1/child-xr: " + composedErr,
+				XRs:      []corev1.ObjectReference{ref("my-xr-1")},
+				Recorded: []recorded{{I: 0, Rendered: map[string]bool{sharedKey: true}}},
+			},
+		},
+		// RecordRender sees each render's keys and its error; the error is reported only if Verdicts
+		// returns it, which this mock does not.
+		"RecordRenderReceivesEachRender": {
+			resources:  []*un.Unstructured{xr("my-xr-1"), xr("my-xr-2")},
+			validator:  &validation{toRender: []ValidatedInput{{Resource: xr("my-xr-1")}, {Resource: xr("my-xr-2")}}},
+			failRender: "my-xr-2",
+			want: got{
+				XRs: []corev1.ObjectReference{ref("my-xr-1"), ref("my-xr-2")},
+				Recorded: []recorded{
+					{I: 0, Rendered: map[string]bool{sharedKey: true}},
+					{I: 1, Err: renderFailedErr},
+				},
 			},
 		},
 		// Issue #477: the name used for rendering is synthesized from
@@ -1007,33 +1027,17 @@ func TestDefaultDiffProcessor_PerformDiff_Groups(t *testing.T) {
 		// effective name rather than the input's empty metadata.name.
 		"GenerateNameOnlyXR": {
 			resources: []*un.Unstructured{genXR},
-			shared:    func(xrName string) *dt.ResourceDiff { return bucket(dt.DiffTypeModified, xrName, "v", xrName) },
 			want:      got{XRs: []corev1.ObjectReference{ref("gen-xr-(generated)")}},
 		},
-		// Issue #476, scenario "two XRs compose one object": each XR renders the shared resource as
-		// its own. Crossplane's server-side apply refuses to add a second controller reference, so the
-		// first XR to create it keeps it and the other fails every reconcile. No diff predicts that,
-		// even though both render identical content — contention is decided by the controller, not the
-		// content. The run fails, in errors[] as well as on the returned error.
-		// Wiring: PerformDiff marks a group whose name it synthesized, which is the only way the overlap
-		// check can tell two generateName-only inputs apart from one XR reached twice. Without it these
+		// PerformDiff marks a group whose name it synthesized, which is the only way the overlap check
+		// can tell two generateName-only inputs apart from one XR reached twice. Without it these
 		// identical renderings would merge, reporting one XR's changes for two.
 		"SharedGenerateNameReachesTheOverlapCheck": {
 			resources: []*un.Unstructured{genXR, genXR.DeepCopy()},
-			shared:    func(xrName string) *dt.ResourceDiff { return bucket(dt.DiffTypeModified, "parent", "same", xrName) },
 			want: got{
 				XRs:        []corev1.ObjectReference{ref("gen-xr-(generated)"), ref("gen-xr-(generated)")},
 				GlobalErrs: []string{generatedErr},
 				Err:        generatedErr,
-			},
-		},
-		"DifferentControllersContend": {
-			resources: []*un.Unstructured{xr("my-xr-1"), xr("my-xr-2")},
-			shared:    func(xrName string) *dt.ResourceDiff { return bucket(dt.DiffTypeModified, xrName, "same", xrName) },
-			want: got{
-				XRs:        []corev1.ObjectReference{ref("my-xr-1"), ref("my-xr-2")},
-				GlobalErrs: []string{contendErr},
-				Err:        contendErr,
 			},
 		},
 	}
@@ -1061,14 +1065,10 @@ func TestDefaultDiffProcessor_PerformDiff_Groups(t *testing.T) {
 			var (
 				gotGroups   []dt.XRDiffGroup
 				gotErrs     []dt.OutputError
-				gotWarnings []dt.OutputWarning
+				gotRecorded []recorded
 			)
 
-			warnings := NewWarningLogger(tu.TestLogger(t, false), &bytes.Buffer{})
-
 			opts := append(testProcessorOptions(t),
-				WithLogger(warnings),
-				WithWarnings(warnings),
 				WithSchemaValidatorFactory(func(k8.SchemaClient, k8.ResourceClient, xp.DefinitionClient, logging.Logger) SchemaValidator {
 					return &tu.MockSchemaValidator{
 						ValidateResourcesFn: func(context.Context, *un.Unstructured, []cpd.Unstructured) error {
@@ -1083,21 +1083,17 @@ func TestDefaultDiffProcessor_PerformDiff_Groups(t *testing.T) {
 								return nil, nil, errors.New("render failed")
 							}
 
-							if tt.render != nil {
-								diffs, keys := tt.render(rendered.GetName())
-								return diffs, keys, nil
-							}
+							diff := bucket("parent", "same", rendered.GetName())
 
-							return map[string]*dt.ResourceDiff{sharedKey: tt.shared(rendered.GetName())}, map[string]bool{sharedKey: true}, nil
+							return map[string]*dt.ResourceDiff{sharedKey: diff}, map[string]bool{sharedKey: true}, nil
 						},
 					}
 				}),
 				WithDiffRendererFactory(func(logging.Logger, renderer.DiffOptions) renderer.DiffRenderer {
 					return &tu.MockDiffRenderer{
-						RenderDiffsFn: func(groups []dt.XRDiffGroup, errs []dt.OutputError, warns []dt.OutputWarning) error {
+						RenderDiffsFn: func(groups []dt.XRDiffGroup, errs []dt.OutputError, _ []dt.OutputWarning) error {
 							gotGroups = groups
 							gotErrs = errs
-							gotWarnings = warns
 
 							return nil
 						},
@@ -1105,20 +1101,34 @@ func TestDefaultDiffProcessor_PerformDiff_Groups(t *testing.T) {
 				}),
 			)
 
+			if v := tt.validator; v != nil {
+				opts = append(opts, WithInputValidatorFactory(func(logging.Logger, []*un.Unstructured) InputValidator {
+					return &mockInputValidator{
+						ToRenderFn: func() []ValidatedInput { return v.toRender },
+						RecordRenderFn: func(i int, rendered map[string]bool, err error) {
+							gotRecorded = append(gotRecorded, recorded{I: i, Rendered: rendered, Err: errMessage(err)})
+						},
+						VerdictsFn: func(groups []dt.XRDiffGroup) []error {
+							if v.verdicts == nil {
+								return make([]error, len(groups))
+							}
+
+							return v.verdicts
+						},
+						RenderOverlapsFn: func([]dt.XRDiffGroup) []error { return v.overlaps },
+					}
+				}))
+			}
+
 			processor := NewDiffProcessor(k8sClients, xpClients, opts...)
 
 			_, err := processor.PerformDiff(ctx, tt.resources, func(ctx context.Context, res *un.Unstructured) (*apiextensionsv1.Composition, error) {
 				return xpClients.Composition.FindMatchingComposition(ctx, res)
 			})
 
-			result := got{}
+			result := got{Recorded: gotRecorded}
 
-			nameCount := map[string]int{}
 			for _, g := range gotGroups {
-				nameCount[g.XR.Name]++
-			}
-
-			for i, g := range gotGroups {
 				result.XRs = append(result.XRs, g.XR)
 
 				if g.Err == nil {
@@ -1129,21 +1139,11 @@ func TestDefaultDiffProcessor_PerformDiff_Groups(t *testing.T) {
 					t.Errorf("group %s/%s carries an error and diffs; an errored input must emit no partial result", g.XR.Kind, g.XR.Name)
 				}
 
-				// Keyed by name, or by input position where two groups share one.
-				key := g.XR.Name
-				if nameCount[key] > 1 {
-					key = fmt.Sprintf("input %d", i+1)
-				}
-
 				if result.GroupErrs == nil {
 					result.GroupErrs = map[string]string{}
 				}
 
-				result.GroupErrs[key] = g.Err.Message
-			}
-
-			for _, w := range gotWarnings {
-				result.Warnings = append(result.Warnings, w.Message)
+				result.GroupErrs[g.XR.Name] = g.Err.Message
 			}
 
 			for _, e := range gotErrs {

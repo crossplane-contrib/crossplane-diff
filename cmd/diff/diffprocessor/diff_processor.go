@@ -223,23 +223,13 @@ func (p *DefaultDiffProcessor) PerformDiff(ctx context.Context, resources []*un.
 
 	var errs []error
 
-	// Overlapping inputs are settled in three stages; see input_validation.go. First, before rendering:
-	// an identical duplicate is dropped with a warning, and the same object twice differently fails.
-	inputs := checkInputs(p.config.Logger, resources)
+	// Overlapping inputs are settled in three stages by a per-run InputValidator; see input_validator.go.
+	// First, before rendering: the validator says what to render, and which inputs it already rejected.
+	validator := p.config.Factories.InputValidator(p.config.Logger, resources)
+	toRender := validator.ToRender()
 
-	// The inputs behind each group, every resource key each group's render produced (including
-	// unchanged ones, which its diffs omit), and each group's own failure. All feed rejectManagedInputs
-	// below; errors are only reported once it has run, because its verdict supersedes a render failure.
-	groupInputs := make([]inputCheck, 0, len(resources))
-	groupRendered := make([]map[string]bool, 0, len(resources))
-	groupErrs := make([]error, 0, len(resources))
-
-	for _, in := range inputs {
-		if in.duplicate {
-			continue
-		}
-
-		res := in.res
+	for i, in := range toRender {
+		res := in.Resource
 
 		// Attribute the group to the name the XR is rendered under. A synthesized one (generateName
 		// only) is shown the way the diff formatter shows it, "<generateName>(generated)", so the
@@ -259,40 +249,30 @@ func (p *DefaultDiffProcessor) PerformDiff(ctx context.Context, resources []*un.
 			NameGenerated: generated,
 		}
 
-		var (
-			diffs    map[string]*dt.ResourceDiff
-			rendered map[string]bool
-			err      = in.err
-		)
+		if in.Err == nil {
+			diffs, rendered, err := p.diffSingleResourceInternal(ctx, res, compositionProvider, nil, true, 0)
+			validator.RecordRender(i, rendered, err)
 
-		if err == nil {
-			diffs, rendered, err = p.diffSingleResourceInternal(ctx, res, compositionProvider, nil, true, 0)
-		}
-
-		if err == nil {
-			// We don't emit partial results for a single XR: on success the
-			// whole diff tree is attached, on failure none of it.
-			group.Diffs = diffs
+			if err == nil {
+				// We don't emit partial results for a single XR: on success the
+				// whole diff tree is attached, on failure none of it.
+				group.Diffs = diffs
+			}
 		}
 
 		groups = append(groups, group)
-		groupInputs = append(groupInputs, in)
-		groupRendered = append(groupRendered, rendered)
-		groupErrs = append(groupErrs, err)
 	}
 
-	// Second: an input another input manages is rejected, superseding its own render failure.
-	for i, err := range rejectManagedInputs(groups, groupInputs, groupRendered, groupErrs) {
-		groupErrs[i] = err
-		groups[i].Diffs = nil
-	}
-
-	for i, err := range groupErrs {
+	// Second: each group's final error, including any input another input manages. Errors are only
+	// reported now, because the validator's verdict may supersede a render failure.
+	for i, err := range validator.Verdicts(groups) {
 		if err == nil {
 			continue
 		}
 
-		res := groupInputs[i].res
+		groups[i].Diffs = nil
+
+		res := toRender[i].Resource
 		resourceID := fmt.Sprintf("%s/%s", groups[i].XR.Kind, groups[i].XR.Name)
 
 		// Debug, not Info: this failure is already surfaced as an OutputError, which goes to
@@ -318,7 +298,7 @@ func (p *DefaultDiffProcessor) PerformDiff(ctx context.Context, resources []*un.
 	// Third: renders that reach one resource in ways no single diff can represent. Collected before the
 	// output is rendered so they reach errors[] and stderr like any other error; the output is still
 	// rendered, so structured output stays valid.
-	for _, err := range renderOverlapErrors(groups) {
+	for _, err := range validator.RenderOverlaps(groups) {
 		errs = append(errs, err)
 		outputErrors = append(outputErrors, dt.OutputError{Message: err.Error()})
 	}

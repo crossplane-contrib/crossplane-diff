@@ -15,15 +15,105 @@ import (
 	"github.com/crossplane/crossplane-runtime/v2/pkg/logging"
 )
 
-// This file validates the xr command's input set. Its inputs are one change set, so any overlap among
-// them is settled here, in three stages, each a single call from PerformDiff:
+// This file validates the xr command's input set. PerformDiff drives an InputValidator through three
+// stages; the default, bundleInputValidator, treats the inputs as one change set, so any overlap among
+// them is settled here:
 //
-//  1. checkInputs, before rendering: a duplicate input, and the same object given twice differently.
-//  2. rejectManagedInputs, after rendering: an input that another input manages.
-//  3. renderOverlapErrors: two inputs' renders reaching one resource.
+//  1. checkInputs, before rendering (ToRender): a duplicate input, and the same object given twice differently.
+//  2. rejectManagedInputs, after rendering (Verdicts): an input that another input manages.
+//  3. renderOverlapErrors (RenderOverlaps): two inputs' renders reaching one resource.
 //
 // Identity throughout is group, kind, namespace and name, independent of API version, since one object
 // served at two versions is still one object. An input with no name yet (generateName only) has none.
+
+// InputValidator validates one PerformDiff run's input set. It is created per run by an
+// InputValidatorFactory, because it carries that run's state between stages.
+type InputValidator interface {
+	// ToRender returns the inputs to render, in input order, with duplicates already dropped.
+	// An input with a non-nil Err was rejected before rendering and must not be rendered.
+	ToRender() []ValidatedInput
+	// RecordRender records the render of ToRender()[i]: every resource key it produced
+	// (including unchanged ones) and its error, if any.
+	RecordRender(i int, rendered map[string]bool, err error)
+	// Verdicts returns the final error for each group (indexed like ToRender()), or nil.
+	// It applies stage 2 and the precedence rule: a managed-input verdict replaces that
+	// group's own render failure.
+	Verdicts(groups []dt.XRDiffGroup) []error
+	// RenderOverlaps returns the stage-3 errors.
+	RenderOverlaps(groups []dt.XRDiffGroup) []error
+}
+
+// ValidatedInput is one input InputValidator.ToRender hands back.
+type ValidatedInput struct {
+	Resource *un.Unstructured
+	Err      error // non-nil if rejected before rendering
+}
+
+// InputValidatorFactory creates the InputValidator for one run.
+type InputValidatorFactory func(logger logging.Logger, inputs []*un.Unstructured) InputValidator
+
+// bundleInputValidator is the default InputValidator. It is a "bundle" validator because it treats the
+// inputs as one change set, to be applied together: any overlap among them — a duplicate, the same object
+// twice differently, an input another input manages, two renders reaching one resource — is settled
+// against the set as a whole, not per input.
+type bundleInputValidator struct {
+	// checks are checkInputs' verdicts on the inputs to render (duplicates dropped), indexed like toRender.
+	checks   []inputCheck
+	toRender []ValidatedInput
+	// rendered and failed are, by index, each render's resource keys and each input's own failure
+	// (its pre-render rejection, or else its render error).
+	rendered []map[string]bool
+	failed   []error
+}
+
+// NewBundleInputValidator returns the default InputValidator for one run over inputs. It has the
+// InputValidatorFactory signature. Stage 1 (checkInputs) runs here, so duplicates are logged once.
+func NewBundleInputValidator(logger logging.Logger, inputs []*un.Unstructured) InputValidator {
+	v := &bundleInputValidator{}
+
+	for _, in := range checkInputs(logger, inputs) {
+		if in.duplicate {
+			continue
+		}
+
+		v.checks = append(v.checks, in)
+		v.toRender = append(v.toRender, ValidatedInput{Resource: in.res, Err: in.err})
+		v.failed = append(v.failed, in.err)
+	}
+
+	v.rendered = make([]map[string]bool, len(v.checks))
+
+	return v
+}
+
+// ToRender returns the non-duplicate inputs in input order; see InputValidator.
+func (v *bundleInputValidator) ToRender() []ValidatedInput {
+	return v.toRender
+}
+
+// RecordRender records the render of ToRender()[i]; see InputValidator.
+func (v *bundleInputValidator) RecordRender(i int, rendered map[string]bool, err error) {
+	v.rendered[i] = rendered
+	v.failed[i] = err
+}
+
+// Verdicts returns each group's final error. A managed-input verdict replaces the group's own failure:
+// that failure is moot, and often a symptom of the same mistake. See rejectManagedInputs.
+func (v *bundleInputValidator) Verdicts(groups []dt.XRDiffGroup) []error {
+	verdicts := make([]error, len(v.failed))
+	copy(verdicts, v.failed)
+
+	for i, err := range rejectManagedInputs(groups, v.checks, v.rendered, v.failed) {
+		verdicts[i] = err
+	}
+
+	return verdicts
+}
+
+// RenderOverlaps returns the stage-3 errors; see renderOverlapErrors.
+func (v *bundleInputValidator) RenderOverlaps(groups []dt.XRDiffGroup) []error {
+	return renderOverlapErrors(groups)
+}
 
 // inputCheck is checkInputs' verdict on one input.
 type inputCheck struct {

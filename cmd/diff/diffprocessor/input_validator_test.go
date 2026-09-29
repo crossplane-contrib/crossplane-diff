@@ -285,6 +285,111 @@ func TestRejectManagedInputs(t *testing.T) {
 	}
 }
 
+// TestBundleInputValidatorVerdicts drives the default validator through its stages as PerformDiff does,
+// pinning what it owns beyond its rules: dropping duplicates from ToRender, and the precedence of a
+// managed-input verdict over that input's own render failure.
+func TestBundleInputValidatorVerdicts(t *testing.T) {
+	xr := func(name string) *un.Unstructured { return tu.NewResource("example.org/v1", "XR", name).Build() }
+	childKey := dt.MakeDiffKey("example.org/v1", "XR", "", "child")
+
+	const composedErr = "XR/child is composed by input XR/parent, whose composition writes it; supplying it as an " +
+		"input too gives it a second writer — pass XR/parent only"
+
+	conflict34 := conflictingInputError(3, 4, xr("b")).Error()
+	conflict43 := conflictingInputError(4, 3, xr("b")).Error()
+
+	// render is one input's recorded render: its rendered keys and its own failure.
+	type render struct {
+		keys []string
+		err  string
+	}
+
+	type want struct {
+		ToRender []string // name, or "name: err" for an input rejected before rendering
+		Verdicts []string
+	}
+
+	tests := map[string]struct {
+		reason  string
+		inputs  []*un.Unstructured
+		renders map[int]render // by ToRender index; an input rejected before rendering is not rendered
+		want    want
+	}{
+		"ManagedVerdictReplacesTheManagedInputsRenderFailure": {
+			reason: "A managed input whose own render failed reports why it should not have been passed, not the render failure.",
+			inputs: []*un.Unstructured{xr("parent"), xr("child")},
+			renders: map[int]render{
+				0: {keys: []string{childKey}},
+				1: {err: "render failed"},
+			},
+			want: want{ToRender: []string{"parent", "child"}, Verdicts: []string{"", composedErr}},
+		},
+		"AnUnmanagedRenderFailureIsKept": {
+			reason:  "Without a managed-input verdict, a group's final error is its own render failure.",
+			inputs:  []*un.Unstructured{xr("a"), xr("b")},
+			renders: map[int]render{0: {}, 1: {err: "render failed"}},
+			want:    want{ToRender: []string{"a", "b"}, Verdicts: []string{"", "render failed"}},
+		},
+		"DuplicateIsDroppedAndAConflictIsRejectedBeforeRendering": {
+			reason: "An identical duplicate is not handed back to render; the same object twice differently is, " +
+				"rejected, and that rejection is its verdict.",
+			inputs: []*un.Unstructured{
+				xr("a"), xr("a"),
+				tu.NewResource("example.org/v1", "XR", "b").WithSpecField("v", "1").Build(),
+				tu.NewResource("example.org/v1", "XR", "b").WithSpecField("v", "2").Build(),
+			},
+			renders: map[int]render{0: {}},
+			want: want{
+				ToRender: []string{"a", "b: " + conflict34, "b: " + conflict43},
+				Verdicts: []string{"", conflict34, conflict43},
+			},
+		},
+	}
+
+	for name, tt := range tests {
+		t.Run(name, func(t *testing.T) {
+			v := NewBundleInputValidator(tu.TestLogger(t, false), tt.inputs)
+
+			got := want{}
+
+			toRender := v.ToRender()
+			for i, in := range toRender {
+				entry := in.Resource.GetName()
+				if in.Err != nil {
+					entry += ": " + in.Err.Error()
+				}
+
+				got.ToRender = append(got.ToRender, entry)
+
+				r, ok := tt.renders[i]
+				if !ok {
+					continue
+				}
+
+				keys := map[string]bool{}
+				for _, k := range r.keys {
+					keys[k] = true
+				}
+
+				var err error
+				if r.err != "" {
+					err = errors.New(r.err)
+				}
+
+				v.RecordRender(i, keys, err)
+			}
+
+			for _, err := range v.Verdicts(make([]dt.XRDiffGroup, len(toRender))) {
+				got.Verdicts = append(got.Verdicts, errMessage(err))
+			}
+
+			if diff := gcmp.Diff(tt.want, got); diff != "" {
+				t.Errorf("%s\nbundleInputValidator: -want, +got:\n%s", tt.reason, diff)
+			}
+		})
+	}
+}
+
 func TestRenderOverlapErrors(t *testing.T) {
 	const key = "example.org/v1/Bucket/default/shared"
 

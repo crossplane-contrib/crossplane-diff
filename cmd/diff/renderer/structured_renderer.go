@@ -370,7 +370,7 @@ func (r *StructuredDiffRenderer) RenderDiffs(groups []dt.XRDiffGroup, errs []dt.
 	// lists — each resource once, however many inputs reach it. The merge is lossless whenever the
 	// run succeeds: a diff key produced by more than one input either carries the same rendering from
 	// each, through one controller (one change reached twice), or fails the run (see
-	// the diff processor's input_validation.go), which is how the lossy merge of issue #476 is kept out of any
+	// the diff processor's input_validator.go), which is how the lossy merge of issue #476 is kept out of any
 	// successful result. Overlaps that come from the inputs themselves — a duplicate, or an input
 	// another input manages — are settled before this, in the diff processor.
 	summary, changes := buildChangeSet(flattenGroups(groups))

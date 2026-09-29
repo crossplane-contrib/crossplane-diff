@@ -187,6 +187,9 @@ type ComponentFactories struct {
 
 	// FunctionProvider creates a FunctionProvider
 	FunctionProvider func(fnClient xp.FunctionClient, logger logging.Logger) FunctionProvider
+
+	// InputValidator creates the InputValidator for one PerformDiff run
+	InputValidator InputValidatorFactory
 }
 
 // ProcessorOption defines a function that can modify a ProcessorConfig.
@@ -384,6 +387,13 @@ func WithRequirementsProviderFactory(factory func(k8.ResourceClient, xp.Environm
 	}
 }
 
+// WithInputValidatorFactory sets the InputValidator factory function, called once per PerformDiff run.
+func WithInputValidatorFactory(factory InputValidatorFactory) ProcessorOption {
+	return func(config *ProcessorConfig) {
+		config.Factories.InputValidator = factory
+	}
+}
+
 // WithFunctionProviderFactory sets the FunctionProvider factory function.
 func WithFunctionProviderFactory(factory func(xp.FunctionClient, logging.Logger) FunctionProvider) ProcessorOption {
 	return func(config *ProcessorConfig) {
@@ -464,5 +474,9 @@ func (c *ProcessorConfig) SetDefaultFactories() {
 		// This prevents container proliferation with --eventual-state (multiple iterations)
 		// and enables reuse when diffing multiple XRs with the same composition.
 		c.Factories.FunctionProvider = NewCachedFunctionProvider
+	}
+
+	if c.Factories.InputValidator == nil {
+		c.Factories.InputValidator = NewBundleInputValidator
 	}
 }
