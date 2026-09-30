@@ -1041,7 +1041,7 @@ func TestDefaultDiffProcessor_PerformDiff_Groups(t *testing.T) {
 						},
 					}
 				}),
-				WithDiffCalculatorFactory(func(k8.ApplyClient, xp.ResourceTreeClient, ResourceManager, logging.Logger, renderer.DiffOptions) DiffCalculator {
+				WithDiffCalculatorFactory(func(k8.ApplyClient, k8.AccessChecker, xp.ResourceTreeClient, ResourceManager, logging.Logger, renderer.DiffOptions, DryRunOn) DiffCalculator {
 					return &tu.MockDiffCalculator{
 						CalculateNonRemovalDiffsFn: func(_ context.Context, rendered *cmp.Unstructured, _ *un.Unstructured, _ render.CompositionOutputs) (map[string]*dt.ResourceDiff, map[string]bool, error) {
 							if rendered.GetName() == tt.failRender {

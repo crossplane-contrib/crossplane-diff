@@ -345,16 +345,6 @@ func runIntegrationTest(t *testing.T, testType DiffTestType, tt IntegrationTestC
 
 	logger := tu.TestLogger(t, true)
 
-	// Create AppContext from the test environment's config.
-	//
-	// The WRAPPER goes in, not the bare logger: AppContext is what builds the clients, so passing
-	// `logger` here left every client-originated advisory (the credential shortfall, for one) invisible
-	// to integration tests even though production binds the wrapper (main.go). Issue #488, item 5.
-	appCtx, err := NewAppContext(cfg, warnings)
-	if err != nil {
-		t.Fatalf("failed to create app context: %v", err)
-	}
-
 	// runOnce executes the command against the running cluster, leaving its output in stdout /
 	// stderr. Everything kong touches is rebuilt per call because Parse writes into the command
 	// struct, so a second run must not inherit the first one's parsed state.
@@ -376,6 +366,17 @@ func runIntegrationTest(t *testing.T, testType DiffTestType, tt IntegrationTestC
 		// stderr AND in structured output, rather than being silently dropped by the test logger.
 		warnings := dp.NewWarningLogger(logger, &stderr)
 		exitCode = &ExitCode{}
+
+		// Create AppContext from the test environment's config, per run like everything else, so a
+		// second run starts with cold client caches just as a second invocation of the CLI would.
+		//
+		// The WRAPPER goes in, not the bare logger: AppContext is what builds the clients, so passing
+		// `logger` here left every client-originated advisory (the credential shortfall, for one) invisible
+		// to integration tests even though production binds the wrapper (main.go). Issue #488, item 5.
+		appCtx, err := NewAppContext(cfg, warnings)
+		if err != nil {
+			t.Fatalf("failed to create app context: %v", err)
+		}
 
 		// Create a Kong context with stdout
 		parser, err := kong.New(cmd,
