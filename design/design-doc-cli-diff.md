@@ -205,12 +205,19 @@ test cases cover:
 - **Resources with generateName**: Tests that resources using Kubernetes generateName pattern are correctly diffed by
   matching based on owner references rather than exact names.
 - **New XR with generateName**: Verifies that new XRs using generateName show the appropriate placeholder in the diff
-  output.
+  output, including as the `xrs[]` group identity and the human-readable section header (an XR with no
+  `metadata.name` must not produce a nameless group).
 
 ### 4.7 Multiple Resource Handling
 
 - **Multiple XRs**: Tests processing multiple input files containing different XRs, ensuring that all changes are
   correctly identified and summarized.
+- **Overlapping inputs**: Verifies, through real renders, that an input identical to an earlier one is diffed once
+  with a warning; that the same object twice with different content fails both inputs; that a claim passed with its
+  backing XR, and a child XR passed with the parent that composes it, are rejected on the managed input; and that two
+  distinct XRs composing one fixed-name object fail as contention even when their renderings are byte-identical —
+  which depends on real renders carrying the controller reference. Unit tests cover the remaining kinds (disagreeing
+  renderings, a shared `generateName`, and a managed input's verdict superseding its own render failure). See §6.8.3.
 
 ### 4.8 Composition Selection
 
@@ -565,6 +572,8 @@ The `ProcessorConfig` structure provides configuration options:
 - `Logger`: Structured logger, propagated to all subcomponents.
 - `RenderFunc`: Renders a composition pipeline; defaults to the in-process engine.
 - `Factories`: Factory functions for creating subcomponents (used for testing and to swap caching strategies).
+  `Factories.InputValidator` (set with `WithInputValidatorFactory`, defaulting to `NewBundleInputValidator`) creates
+  the `InputValidator` for each `PerformDiff` run (see §6.7a).
 
 Note: `comp`'s `--namespace` filter and `--resource` filter are call-time parameters to `DiffComposition`, not
 processor-wide config; they describe what to include in a single impact analysis run, not how the processor itself
@@ -907,6 +916,37 @@ annotation is applied on every `GetFunctionsForComposition` call, including cach
 the env var works correctly regardless of when it is set relative to cache population. Any non-empty value the user
 has pre-set on a function package is preserved.
 
+### 6.7a InputValidator
+
+The `InputValidator` validates one `xr` run's input set (`PerformDiff`). It is created per run by an
+`InputValidatorFactory`, because it carries that run's state between its stages.
+
+```go
+type InputValidator interface {
+    // ToRender returns the inputs to render, in input order, with duplicates already dropped.
+    // An input with a non-nil Err was rejected before rendering and must not be rendered.
+    ToRender() []types.ValidatedInput
+    // RecordRender records the render of ToRender()[i]: every resource key it produced and its error.
+    RecordRender(i int, rendered map[string]bool, err error)
+    // Verdicts returns the final error for each group (indexed like ToRender()), or nil.
+    Verdicts(groups []dt.XRDiffGroup) []error
+    // RenderOverlaps returns the errors for renders that reach one resource irreconcilably.
+    RenderOverlaps(groups []dt.XRDiffGroup) []error
+}
+
+type InputValidatorFactory func(logger logging.Logger, inputs []*un.Unstructured) InputValidator
+```
+
+`ValidatedInput` (a resource and its pre-render rejection, if any) lives in `cmd/diff/types` rather than beside the
+interface, so `MockInputValidator` in `cmd/diff/testutils` can name it without an import cycle — the same reason
+`FindCompositesOptions` lives there.
+
+The only implementation, `bundleInputValidator` (`NewBundleInputValidator`, in `diffprocessor/input_validator.go`),
+treats the inputs as one change set; its rules are described under §6.8.3's grouped view. `PerformDiff` owns only the
+wiring: it renders what `ToRender` returns, records each render, and reports `Verdicts` and `RenderOverlaps` errors as
+group errors, `errors[]` entries and the returned error. The precedence of a managed-input verdict over that input's own
+render failure is the validator's, applied in `Verdicts`.
+
 ### 6.8 DiffRenderer and CompDiffRenderer
 
 The renderer layer formats diff results. It is split into two interfaces — one per subcommand — and each has a
@@ -1005,6 +1045,13 @@ The structured types are split across two files:
   can reference it without importing `renderer`, which would close an import cycle through `renderer`'s in-package
   tests. The pre-converted error (vs. a raw `error`) keeps the conversion — `NewOutputError`, which lives in
   `diffprocessor` — out of the renderer, avoiding a renderer→diffprocessor dependency.
+  The identity a group carries is the **effective** name — the one the render pipeline actually uses — not the raw
+  input's `metadata.name`. For an XR supplied with only `metadata.generateName` those differ: `SanitizeXR` synthesizes a
+  name, but on a deep copy, so the input stays nameless. `ObjectReference.Name` is `omitempty`, so a nameless identity
+  disappears from the wire entirely and two such XRs become indistinguishable. `PerformDiff` therefore resolves the
+  name through `renderName`, the helper `SanitizeXR` itself uses to synthesize it, and renders it the way the diff formatter does
+  (`<generateName>(generated)`) — the same string the XR carries in `changes[]`, so the grouped and flat views agree,
+  and no unpredictable synthetic hash reaches output.
 
 The output contract is defined by the JSON/YAML field names (the struct tags), not the Go type identifiers: the
 serialized shaping types are unexported (`compDiffWire`, `compositionDiffWire`, `xrImpactWire`, `xrDiffWire`) and
@@ -1018,6 +1065,49 @@ contract:
   XRs), `Changes []ChangeDetail` (flat list, one entry per non-equal resource across all XRs), optional
   `Errors []OutputError` (union), and `Xrs` (per-input-XR grouping, JSON key `xrs`). **`Changes` is deprecated** in
   favor of `Xrs` and will be removed in a future major release; `Summary` and `Errors` are retained.
+  `Summary` counts exactly what `Changes` lists. `Changes` is built by `flatChangeSet` as the union of every group's
+  changes, keeping one copy of a change identical to one already listed for that resource, so it is lossless on its own
+  terms rather than because the validator happens to reject differing renderings: two differing changes to one resource
+  would both be listed. Each `Xrs` entry is complete for its own input. Where two inputs' renders reach one resource
+  through one controller, it appears under each entry, so the `Xrs` summaries can sum to more than `Summary`: the flat
+  view counts distinct changes, the grouped view reports inputs.
+  **The input set is judged first.** `xr`'s inputs are one change set, and `PerformDiff` settles overlaps that come
+  from the inputs themselves before comparing renders. Identity is group, kind, namespace and name, independent of API
+  version; an input with only a `generateName` has none and is not judged. All three stages live in
+  `diffprocessor/input_validator.go`, behind the `InputValidator` `PerformDiff` drives (§6.7a). `checkInputs` runs before rendering: an input
+  semantically identical to an earlier one is dropped with a warning (a fat-fingered command line, or CI enumerating
+  one file twice, has one clear intent), and the same object twice with different content is an input error on both —
+  applying both leaves whichever is applied last, and input order (often a glob's) is not intent.
+  `rejectManagedInputs` runs after rendering and rejects an input another input manages, since applying both gives it
+  a second writer: an XR in another input's rendered key set (which, unlike its diffs, includes unchanged resources),
+  i.e. a nested XR supplied with its parent; and an XR bound to a claim input, read from either side of the binding —
+  the claim's `spec.resourceRef`, or the XR's `spec.claimRef` or `crossplane.io/claim-name`/`claim-namespace` labels —
+  in the raw input or the cluster copy its own diff carries. Crossplane's claim syncer applies the backing XR with
+  `ForceOwnership`, and a parent's composition applies its children the same way. That verdict replaces the managed
+  input's own render failure, which is moot and often a symptom of the same mistake. Rejected inputs fail
+  individually; unaffected inputs still get their diffs.
+  The remaining merge is lossless in every successful run, which is what `renderOverlapErrors` guarantees. A diff key
+  is `apiVersion/kind/namespace/name` with no owning-XR component, so two input XRs that render the same resource
+  produce the same key and the merge keeps only one. Whether that loses anything is decided by who would control the
+  resource, read from the rendered (or, for a removal, current) object's controller reference and compared by group,
+  kind and name — never UID, which a render synthesizes afresh for an XR that does not yet exist:
+    - **Different controllers — contention.** Crossplane's server-side apply refuses to add a second controller
+      reference, so the first XR to create the object keeps it and every other fails to reconcile it. No diff
+      predicts that, however alike the renderings.
+    - **One controller or none, identical renderings** (compared by diff type and `Clean` views, which
+      `cleanupForDiff` has stripped of `ownerReferences` and `uid`). One change reached twice: merged, not reported.
+    - **One controller or none, differing renderings — disagreement.** Defensive: the ordinary causes are rejected as
+      input errors first.
+    - **Two inputs sharing a `generateName` — indistinguishable**, checked first. Both render under one synthesized
+      placeholder name, so their resources collide here though the API server would name them apart; merging
+      identical renderings would report one XR's changes for two.
+  Each reported collision adds a global `OutputError` whose message states that kind's cause, and fails the run
+  (`ExitCodeToolError`). The check is format-independent and, per the "always render" contract above, the structured
+  document is still emitted, carrying the error. A collision whose every entry is `DiffTypeEqual` is not reported:
+  equal diffs are excluded from every rendered view, so the merge loses nothing observable.
+  Two overlaps are out of reach of this check, because they never produce two groups sharing a key: one XR rendering
+  the same object under two composition resource names (the per-XR diff map overwrites it; #505), and the same
+  object rendered at two API versions (two keys for one object; #506).
 - `xrDiffWire` — one entry in the `xrs[]` array, per input XR/claim in input order: an `xr` identity object, a
   `status` (`"changed"` / `"unchanged"` / `"error"` — the same `XRStatus` enum comp uses; `"filtered"` does not apply
   to `xr`), its own `summary`, its own `changes[]`, and (for a failed XR) its own `errors[]`.

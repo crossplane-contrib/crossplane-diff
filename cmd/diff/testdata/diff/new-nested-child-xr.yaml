@@ -1,0 +1,9 @@
+# The child XR that new-nested-xr.yaml's composition renders (named <parent>-child). Passed alongside
+# that parent it is an input error: the parent's composition writes it, so this would be a second writer.
+apiVersion: ns.nested.example.org/v1alpha1
+kind: XChildResource
+metadata:
+  name: test-parent-child
+  namespace: default
+spec:
+  childField: "parent-value"

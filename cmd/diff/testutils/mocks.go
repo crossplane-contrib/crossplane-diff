@@ -333,6 +333,52 @@ func (m *MockSchemaValidator) ValidateScopeConstraints(ctx context.Context, reso
 
 // endregion
 
+// region MockInputValidator
+
+// MockInputValidator Mock input validator, for driving PerformDiff's wiring directly.
+type MockInputValidator struct {
+	ToRenderFn       func() []types.ValidatedInput
+	RecordRenderFn   func(i int, rendered map[string]bool, err error)
+	VerdictsFn       func(groups []dt.XRDiffGroup) []error
+	RenderOverlapsFn func(groups []dt.XRDiffGroup) []error
+}
+
+// ToRender returns the inputs to render.
+func (m *MockInputValidator) ToRender() []types.ValidatedInput {
+	if m.ToRenderFn != nil {
+		return m.ToRenderFn()
+	}
+
+	return nil
+}
+
+// RecordRender records one render.
+func (m *MockInputValidator) RecordRender(i int, rendered map[string]bool, err error) {
+	if m.RecordRenderFn != nil {
+		m.RecordRenderFn(i, rendered, err)
+	}
+}
+
+// Verdicts returns each group's final error; by default, none.
+func (m *MockInputValidator) Verdicts(groups []dt.XRDiffGroup) []error {
+	if m.VerdictsFn != nil {
+		return m.VerdictsFn(groups)
+	}
+
+	return make([]error, len(groups))
+}
+
+// RenderOverlaps returns the render-overlap errors; by default, none.
+func (m *MockInputValidator) RenderOverlaps(groups []dt.XRDiffGroup) []error {
+	if m.RenderOverlapsFn != nil {
+		return m.RenderOverlapsFn(groups)
+	}
+
+	return nil
+}
+
+// endregion
+
 // region Kubernetes client mocks
 
 // ==============================================================================

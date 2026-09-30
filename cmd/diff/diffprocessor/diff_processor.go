@@ -223,45 +223,84 @@ func (p *DefaultDiffProcessor) PerformDiff(ctx context.Context, resources []*un.
 
 	var errs []error
 
-	for _, res := range resources {
-		resourceID := fmt.Sprintf("%s/%s", res.GetKind(), res.GetName())
+	// Overlapping inputs are settled in three stages by a per-run InputValidator; see input_validator.go.
+	// First, before rendering: the validator says what to render, and which inputs it already rejected.
+	validator := p.config.Factories.InputValidator(p.config.Logger, resources)
+	toRender := validator.ToRender()
+
+	for i, in := range toRender {
+		res := in.Resource
+
+		// Attribute the group to the name the XR is rendered under. A synthesized one (generateName
+		// only) is shown the way the diff formatter shows it, "<generateName>(generated)", so the
+		// grouped and flat views agree and no unpredictable hash is published (issue #477).
+		name, generated := renderName(res)
+		if generated {
+			name = dt.GeneratedDisplayName(name, res.GetGenerateName())
+		}
 
 		group := dt.XRDiffGroup{
 			XR: corev1.ObjectReference{
 				APIVersion: res.GetAPIVersion(),
 				Kind:       res.GetKind(),
-				Name:       res.GetName(),
+				Name:       name,
 				Namespace:  res.GetNamespace(),
 			},
+			NameGenerated: generated,
 		}
 
-		diffs, err := p.DiffSingleResource(ctx, res, compositionProvider)
-		if err != nil {
-			// Debug, not Info: this failure is already surfaced as an OutputError, which goes to
-			// stderr and into structured output. Raising it as a warning too would double-report it.
-			p.config.Logger.Debug("Failed to process resource",
-				"resource", resourceID,
-				"namespace", res.GetNamespace(),
-				"error", err)
-			errs = append(errs, errors.Wrapf(err, "unable to process resource %s", resourceID))
+		if in.Err == nil {
+			diffs, rendered, err := p.diffSingleResourceInternal(ctx, res, compositionProvider, nil, true, 0)
+			validator.RecordRender(i, rendered, err)
 
-			// Collect error for structured output. NewOutputError
-			// surfaces typed validation failures via
-			// OutputError.ValidationFailures when err wraps a
-			// SchemaValidationError that carries a structured Result.
-			// The same converted error goes to both the top-level union
-			// (outputErrors) and the per-group entry so consumers of
-			// either view see it.
-			outErr := NewOutputError(resourceID, err)
-			outputErrors = append(outputErrors, outErr)
-			group.Err = &outErr
-		} else {
-			// We don't emit partial results for a single XR: on success the
-			// whole diff tree is attached, on failure none of it.
-			group.Diffs = diffs
+			if err == nil {
+				// We don't emit partial results for a single XR: on success the
+				// whole diff tree is attached, on failure none of it.
+				group.Diffs = diffs
+			}
 		}
 
 		groups = append(groups, group)
+	}
+
+	// Second: each group's final error, including any input another input manages. Errors are only
+	// reported now, because the validator's verdict may supersede a render failure.
+	for i, err := range validator.Verdicts(groups) {
+		if err == nil {
+			continue
+		}
+
+		groups[i].Diffs = nil
+
+		res := toRender[i].Resource
+		resourceID := fmt.Sprintf("%s/%s", groups[i].XR.Kind, groups[i].XR.Name)
+
+		// Debug, not Info: this failure is already surfaced as an OutputError, which goes to
+		// stderr and into structured output. Raising it as a warning too would double-report it.
+		p.config.Logger.Debug("Failed to process resource",
+			"resource", resourceID,
+			"namespace", res.GetNamespace(),
+			"error", err)
+		errs = append(errs, errors.Wrapf(err, "unable to process resource %s", resourceID))
+
+		// Collect error for structured output. NewOutputError
+		// surfaces typed validation failures via
+		// OutputError.ValidationFailures when err wraps a
+		// SchemaValidationError that carries a structured Result.
+		// The same converted error goes to both the top-level union
+		// (outputErrors) and the per-group entry so consumers of
+		// either view see it.
+		outErr := NewOutputError(resourceID, err)
+		outputErrors = append(outputErrors, outErr)
+		groups[i].Err = &outErr
+	}
+
+	// Third: renders that reach one resource in ways no single diff can represent. Collected before the
+	// output is rendered so they reach errors[] and stderr like any other error; the output is still
+	// rendered, so structured output stays valid.
+	for _, err := range validator.RenderOverlaps(groups) {
+		errs = append(errs, err)
+		outputErrors = append(outputErrors, dt.OutputError{Message: err.Error()})
 	}
 
 	// Always render (even if only errors exist) to ensure valid structured output
@@ -1103,25 +1142,31 @@ func (p *DefaultDiffProcessor) SanitizeXR(res *un.Unstructured, resourceID strin
 	}
 
 	// Handle XRs with generateName but no name
-	if xr.GetName() == "" && xr.GetGenerateName() != "" {
-		// Synthesize a metadata.name in the same shape upstream's nameGenerator
-		// produces — "<generateName-with-dash><12 lowercase hex>" — so the
-		// binary's apiserver-style name validation accepts the XR AND the
-		// rendered XR name is shape-compatible with the composed-resource
-		// names the binary itself emits. The diff formatter then runs one
-		// detector (LooksLikeGeneratedName) over both to substitute
-		// "<generateName>(generated)" for display.
-		synthesizedName := dt.SynthesizeGeneratedName(xr.GetGenerateName())
+	if name, generated := renderName(res); generated {
 		p.config.Logger.Debug("Setting synthesized name for XR with generateName",
 			"generateName", xr.GetGenerateName(),
-			"synthesizedName", synthesizedName)
+			"synthesizedName", name)
 
 		xrCopy := xr.DeepCopy()
-		xrCopy.SetName(synthesizedName)
+		xrCopy.SetName(name)
 		xr = xrCopy
 	}
 
 	return xr, false, nil
+}
+
+// renderName returns the name an input XR is rendered under, and whether it was synthesized. That is
+// its own name; or, for an XR with only a generateName, one synthesized in the shape upstream's
+// nameGenerator produces — "<generateName-with-dash><12 lowercase hex>" — so the binary's
+// apiserver-style name validation accepts the XR AND the rendered XR name is shape-compatible with the
+// composed-resource names the binary itself emits. The diff formatter then runs one detector
+// (LooksLikeGeneratedName) over both to substitute "<generateName>(generated)" for display.
+func renderName(res *un.Unstructured) (string, bool) {
+	if name := res.GetName(); name != "" || res.GetGenerateName() == "" {
+		return name, false
+	}
+
+	return dt.SynthesizeGeneratedName(res.GetGenerateName()), true
 }
 
 // mergeUnstructured merges two unstructured objects.

@@ -1229,6 +1229,26 @@ Summary: 2 modified, 2 removed`,
 			expectedError:    false,
 			expectedExitCode: dp.ExitCodeDiffDetected,
 		},
+		// A generateName-only input next to an ordinary one is an ordinary invocation. The unnamed input
+		// has no identity, so input validation must not mistake it for the named XR's claim: an XR with
+		// no claimRef has an empty reference identity too, and the two must not match.
+		"GenerateNameInputAlongsideANamedInput": {
+			reason:       "A generateName-only input beside a named one is valid; both are diffed",
+			outputFormat: "json",
+			setupFiles: []string{
+				"testdata/diff/resources/xrd.yaml",
+				"testdata/diff/resources/composition.yaml",
+				"testdata/diff/resources/functions.yaml",
+			},
+			inputFiles:       []string{"testdata/diff/new-xr.yaml", "testdata/diff/generated-name-xr.yaml"},
+			expectedExitCode: dp.ExitCodeDiffDetected,
+			expectedStructuredOutput: tu.ExpectDiff().
+				WithSummary(4, 0, 0).
+				WithXRs(
+					tu.XR("XNopResource", "test-resource", "default").Status("changed").Summary(2, 0, 0),
+					tu.XR("XNopResource", "generated-xr-(generated)", "default").Status("changed").Summary(2, 0, 0),
+				),
+		},
 		"NewXRWithGenerateName": {
 			reason:       "Shows diff for new XR with generateName",
 			outputFormat: "json",
@@ -1247,9 +1267,95 @@ Summary: 2 modified, 2 removed`,
 				And().
 				WithAddedResource("XNopResource", "", "default").
 				WithNamePattern(`generated-xr-\(generated\)`).
-				WithField("spec.coolField", "new-value"),
+				WithField("spec.coolField", "new-value").
+				And().
+				// Issue #477: the grouped view must attribute these changes to a
+				// named XR. metadata.name is empty on the input, so the identity
+				// carries the effective (synthesized) name — the same one the
+				// changes above are keyed by.
+				WithXRs(
+					tu.XR("XNopResource", "generated-xr-(generated)", "default").
+						Status("changed").
+						Summary(2, 0, 0),
+				),
 			expectedError:    false,
 			expectedExitCode: dp.ExitCodeDiffDetected,
+		},
+		// Issue #476. The same file passed twice — a fat-fingered command line, or CI enumerating one
+		// file twice — has one clear intent. It is diffed once, with a warning, and the run succeeds.
+		"IdenticalDuplicateInputIsDeduplicated": {
+			reason:       "An input identical to an earlier one is diffed once, with a warning, not rejected",
+			outputFormat: "json",
+			setupFiles: []string{
+				"testdata/diff/resources/xrd.yaml",
+				"testdata/diff/resources/composition.yaml",
+				"testdata/diff/resources/functions.yaml",
+			},
+			inputFiles: []string{
+				"testdata/diff/new-xr.yaml",
+				"testdata/diff/new-xr.yaml",
+			},
+			expectedExitCode:       dp.ExitCodeDiffDetected,
+			expectedStderrContains: []string{"Ignoring a duplicate input: it is identical to an earlier one"},
+			expectedStructuredOutput: tu.ExpectDiff().
+				WithSummary(2, 0, 0).
+				WithXRs(tu.XR("XNopResource", "test-resource", "default").Status("changed").Summary(2, 0, 0)),
+		},
+		// The same object twice with different content fails loudly: applying both would leave whichever
+		// is applied last, and the order inputs are given in is not a statement of intent.
+		"SameObjectTwiceWithDifferentContentFails": {
+			reason: "One object given twice with different content is an input error on both inputs",
+			setupFiles: []string{
+				"testdata/diff/resources/xrd.yaml",
+				"testdata/diff/resources/composition.yaml",
+				"testdata/diff/resources/functions.yaml",
+			},
+			inputFiles: []string{
+				"testdata/diff/new-xr.yaml",
+				"testdata/diff/modified-xr.yaml",
+			},
+			expectedError:         true,
+			expectedErrorContains: "input 2 defines XNopResource/test-resource differently from input 1",
+			expectedExitCode:      dp.ExitCodeToolError,
+		},
+		// A child XR passed alongside the parent whose composition renders it: the parent's composition
+		// writes that child, so the child input would be a second writer. Rejected on the child; the
+		// parent's own diff is unaffected.
+		"InputComposedByAnotherInputIsRejected": {
+			reason: "An XR supplied alongside the input whose composition composes it is an input error",
+			setupFiles: []string{
+				"testdata/diff/resources/nested/parent-xrd.yaml",
+				"testdata/diff/resources/nested/child-xrd.yaml",
+				"testdata/diff/resources/nested/parent-composition.yaml",
+				"testdata/diff/resources/nested/child-composition.yaml",
+				"testdata/diff/resources/xdownstreamenvresource-xrd.yaml",
+				"testdata/diff/resources/functions.yaml",
+			},
+			inputFiles: []string{
+				"testdata/diff/new-nested-xr.yaml",
+				"testdata/diff/new-nested-child-xr.yaml",
+			},
+			expectedError: true,
+			expectedErrorContains: "XChildResource/test-parent-child is composed by input XParentResource/test-parent, " +
+				"whose composition writes it",
+			expectedExitCode: dp.ExitCodeToolError,
+		},
+		// Issue #476. Two distinct XRs whose composition gives one child a fixed name render the same
+		// object — here with byte-identical content. Crossplane gives it to whichever XR creates it first
+		// and the other fails to reconcile it, so the run must fail however alike the renderings are.
+		// This depends on real renders carrying the controller reference; unit tests build that by hand.
+		"TwoXRsComposingOneObjectContend": {
+			reason: "Two XRs that would both control one object fail, even when their renderings are identical",
+			setupFiles: []string{
+				"testdata/diff/resources/xrd.yaml",
+				"testdata/diff/resources/shared-child-composition.yaml",
+				"testdata/diff/resources/functions.yaml",
+			},
+			inputFiles:       []string{"testdata/diff/shared-child-xrs.yaml"},
+			expectedError:    true,
+			expectedExitCode: dp.ExitCodeToolError,
+			expectedErrorContains: `resource "ns.nop.example.org/v1alpha1/XDownstreamResource/default/shared-child" would be ` +
+				`controlled by more than one XR (XNopResource/shared-child-owner-a, XNopResource/shared-child-owner-b)`,
 		},
 		// Reproduces the PR #294 scenario: a net-new XR is diffed while the
 		// composed resource it would manage already exists in the cluster
@@ -1859,6 +1965,42 @@ Summary: 2 modified, 2 removed`,
 				WithFieldChange("spec.coolField", "existing-value", "modified-value"),
 			expectedError:    false,
 			expectedExitCode: dp.ExitCodeDiffDetected,
+		},
+		// A claim passed alongside its backing XR: Crossplane's claim controller writes that XR (a
+		// server-side apply with forced ownership, stamping claimRef and the claim labels), so the XR
+		// input would be a second writer. Rejected on the XR; the claim's diff still runs. The binding
+		// is read from the claim's cluster copy (spec.resourceRef) and from the XR's claim labels.
+		"ClaimPassedWithItsBackingXRIsRejected": {
+			reason: "A claim and the XR bound to it, passed together, is an input error on the XR",
+			setupFiles: []string{
+				"testdata/diff/resources/existing-namespace.yaml",
+				"testdata/diff/resources/claim-nested/parent-definition.yaml",
+				"testdata/diff/resources/claim-nested/child-definition.yaml",
+				"testdata/diff/resources/claim-nested/parent-composition.yaml",
+				"testdata/diff/resources/claim-nested/child-composition.yaml",
+				"testdata/diff/resources/functions.yaml",
+				"testdata/diff/resources/claim-nested/existing-claim.yaml",
+			},
+			crossplaneManagedResources: []HierarchicalOwnershipRelation{
+				{
+					OwnerFile: "testdata/diff/resources/claim-nested/existing-parent-xr.yaml",
+					OwnedFiles: map[string]*HierarchicalOwnershipRelation{
+						"testdata/diff/resources/claim-nested/existing-child-xr.yaml": {
+							OwnedFiles: map[string]*HierarchicalOwnershipRelation{
+								"testdata/diff/resources/claim-nested/existing-managed-resource.yaml": nil,
+							},
+						},
+					},
+				},
+			},
+			inputFiles: []string{
+				"testdata/diff/modified-claim-nested.yaml",
+				"testdata/diff/resources/claim-nested/existing-parent-xr.yaml",
+			},
+			expectedError: true,
+			expectedErrorContains: "XParentNopClaim/existing-parent-claim-82crv is the XR bound to claim " +
+				"ParentNopClaim/existing-parent-claim, which Crossplane's claim controller writes",
+			expectedExitCode: dp.ExitCodeToolError,
 		},
 		"ModifiedClaimWithNestedXRsShowsDiff": {
 			reason:       "Validates that modified Claims with nested XRs show proper diff (3 modified resources)",
