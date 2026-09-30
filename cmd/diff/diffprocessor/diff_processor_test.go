@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	xp "github.com/crossplane-contrib/crossplane-diff/cmd/diff/client/crossplane"
 	k8 "github.com/crossplane-contrib/crossplane-diff/cmd/diff/client/kubernetes"
@@ -4646,6 +4647,107 @@ func TestDefaultDiffProcessor_RenderToStableState_SchemaPlumbing(t *testing.T) {
 			if out.CompositeResource.Schema != tt.wantSchema {
 				t.Errorf("output.CompositeResource.Schema = %v, want %v",
 					out.CompositeResource.Schema, tt.wantSchema)
+			}
+		})
+	}
+}
+
+// recordingCleaner records the context Cleanup was called with, and that context's Err() at call time.
+type recordingCleaner struct {
+	err       error
+	called    bool
+	ctx       context.Context
+	ctxErrNow error
+}
+
+func (r *recordingCleaner) Cleanup(ctx context.Context) error {
+	r.called = true
+	r.ctx = ctx
+	r.ctxErrNow = ctx.Err()
+
+	return r.err
+}
+
+type cleanupDetachedCtxKey struct{}
+
+func TestCleanupDetached(t *testing.T) {
+	type want struct {
+		CtxErr error
+		Value  any
+	}
+
+	tests := map[string]struct {
+		reason        string
+		parent        func() (context.Context, context.CancelFunc)
+		cleanErr      error
+		want          want
+		checkDeadline bool
+	}{
+		"ParentCancelled": {
+			reason: "Cleanup must receive a live context even when the run context is already cancelled.",
+			parent: func() (context.Context, context.CancelFunc) {
+				ctx, cancel := context.WithCancel(context.Background())
+				cancel()
+
+				return ctx, cancel
+			},
+		},
+		"ParentDeadlineExpired": {
+			reason: "Cleanup must receive a live context even when the run's --timeout has expired.",
+			parent: func() (context.Context, context.CancelFunc) {
+				return context.WithDeadline(context.Background(), time.Now().Add(-time.Second))
+			},
+		},
+		"KeepsParentValues": {
+			reason: "Cleanup's context must keep the run context's values.",
+			parent: func() (context.Context, context.CancelFunc) {
+				return context.WithCancel(context.WithValue(context.Background(), cleanupDetachedCtxKey{}, "v"))
+			},
+			want: want{Value: "v"},
+		},
+		"BoundedByCleanupTimeout": {
+			reason: "Cleanup's context must carry a deadline no later than CleanupTimeout from now.",
+			parent: func() (context.Context, context.CancelFunc) {
+				return context.WithCancel(context.Background())
+			},
+			checkDeadline: true,
+		},
+		"ErrorIsSwallowed": {
+			reason: "A cleanup error must be logged, not panic or propagate.",
+			parent: func() (context.Context, context.CancelFunc) {
+				return context.WithCancel(context.Background())
+			},
+			cleanErr: errors.New("boom"),
+		},
+	}
+
+	for name, tt := range tests {
+		t.Run(name, func(t *testing.T) {
+			parent, cancel := tt.parent()
+			defer cancel()
+
+			c := &recordingCleaner{err: tt.cleanErr}
+
+			CleanupDetached(parent, c, logging.NewNopLogger())
+
+			if !c.called {
+				t.Fatalf("\n%s\nCleanupDetached(...): Cleanup was not called", tt.reason)
+			}
+
+			got := want{CtxErr: c.ctxErrNow, Value: c.ctx.Value(cleanupDetachedCtxKey{})}
+			if diff := gcmp.Diff(tt.want, got, cmpopts.EquateErrors()); diff != "" {
+				t.Errorf("\n%s\nCleanupDetached(...): -want, +got:\n%s", tt.reason, diff)
+			}
+
+			if tt.checkDeadline {
+				dl, ok := c.ctx.Deadline()
+				if !ok {
+					t.Fatalf("\n%s\nCleanupDetached(...): cleanup context has no deadline", tt.reason)
+				}
+
+				if limit := time.Now().Add(CleanupTimeout); dl.After(limit) {
+					t.Errorf("\n%s\nCleanupDetached(...): deadline %v is later than %v", tt.reason, dl, limit)
+				}
 			}
 		})
 	}

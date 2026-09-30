@@ -188,31 +188,27 @@ func (p *DefaultDiffProcessor) Cleanup(ctx context.Context) error {
 }
 
 // CleanupTimeout bounds how long releasing the processor's Docker resources may take. Cleanup is
-// attempted on a detached context (see cleanupBeforeRender), so this is what stops a slow or hung
-// Docker daemon from blocking a run indefinitely.
+// attempted on a context detached from the run's cancellation (see CleanupDetached), so this is what
+// stops a slow or hung Docker daemon from blocking a run indefinitely.
 const CleanupTimeout = 30 * time.Second
 
-// cleanupBeforeRender releases the processor's resources at the point where the diff work is finished
-// but output has not been emitted yet.
+// CleanupDetached releases c's resources on a context derived from ctx that keeps ctx's values but not
+// its cancellation or deadline, bounded instead by CleanupTimeout. Cleanup must still run when the
+// run's own context has expired (--timeout), since Docker calls on a dead context fail and leave
+// containers running; and it must not hang on a slow or wedged Docker daemon. A failure is logged,
+// not returned: releasing resources is best-effort and must not change the run's result.
 //
-// Cleanup can raise a user-facing advisory — leftover function containers — and an advisory only
-// reaches structured output if it is raised before the renderer reads the collected warnings. The
-// command layer also defers Cleanup, but a defer runs at command exit, i.e. after the renderer has
-// already serialized warnings[], which left that one advisory permanently absent from the
-// machine-readable half of the channel. Tearing down here makes the warning channel's contract uniform
-// for every advisory rather than having one accidental exception. The command's defer is still needed,
-// and still correct: it covers the paths that return before any rendering happens, and Cleanup is
-// idempotent, so the second call finds nothing to do.
-//
-// A detached context is used for the same reason the deferred call uses one: the command context may
-// already be cancelled (Ctrl+C, timeout), and Docker calls against a dead context fail immediately —
-// which would both leave containers running and report a leak that a live context would not have seen.
-func (p *DefaultDiffProcessor) cleanupBeforeRender() {
-	ctx, cancel := context.WithTimeout(context.Background(), CleanupTimeout)
+// Note that this does not make cleanup survive Ctrl+C: no signal handling exists, so an interrupt
+// kills the process before any cleanup runs (see #515).
+func CleanupDetached(ctx context.Context, c interface {
+	Cleanup(ctx context.Context) error
+}, logger logging.Logger,
+) {
+	cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), CleanupTimeout)
 	defer cancel()
 
-	if err := p.Cleanup(ctx); err != nil {
-		p.config.Logger.Debug("Failed to release processor resources before rendering", "error", err)
+	if err := c.Cleanup(cleanupCtx); err != nil {
+		logger.Debug("Failed to release processor resources", "error", err)
 	}
 }
 
@@ -333,11 +329,10 @@ func (p *DefaultDiffProcessor) PerformDiff(ctx context.Context, resources []*un.
 		outputErrors = append(outputErrors, dt.OutputError{Message: err.Error()})
 	}
 
-	// Release resources before rendering, so an advisory raised during teardown is still in the
-	// collected warnings when the renderer reads them. See cleanupBeforeRender.
-	//
-	//nolint:contextcheck // Detaching from ctx is the point: see cleanupBeforeRender.
-	p.cleanupBeforeRender()
+	// Release resources before rendering, so an advisory raised during teardown (leftover function
+	// containers) is still in warnings[] when the renderer reads it; the command's deferred Cleanup
+	// would run only after output has been emitted.
+	CleanupDetached(ctx, p, p.config.Logger)
 
 	// Always render (even if only errors exist) to ensure valid structured output
 	// The renderer will include errors in the structured output and write them to stderr

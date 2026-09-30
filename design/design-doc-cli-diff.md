@@ -1253,9 +1253,11 @@ renderer reads the collected slice. Teardown is the awkward case: `FunctionProvi
 the leftover-container advisory, and it was invoked solely from the command layer's `defer`, which runs
 at command exit — after `PerformDiff`/`DiffComposition` have already serialized `warnings[]`. That made
 one advisory permanently stderr-only, contradicting this section's own contract. Both processors
-therefore release resources immediately *before* rendering (`cleanupBeforeRender`), on a detached
-context with `CleanupTimeout` so an already-cancelled command context cannot make teardown fail fast
-and report a container leak that is not real. The command's `defer` remains, and remains necessary: it
+therefore release resources immediately *before* rendering (`CleanupDetached`), on a context that keeps
+the run context's values but drops its cancellation (`context.WithoutCancel`), bounded by
+`CleanupTimeout`, so an expired `--timeout` cannot make teardown fail fast and report a container leak
+that is not real. (Ctrl+C is not covered: there is no signal handling, so an interrupt skips cleanup
+entirely; see #515.) The command's `defer` remains, and remains necessary: it
 covers the paths that return before any rendering happens (load failure, initialization failure,
 cancellation). `Cleanup` is idempotent, so running in both places is safe — the second call finds
 nothing to remove and raises nothing.
