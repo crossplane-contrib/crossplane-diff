@@ -109,8 +109,7 @@ WARNING: Resource already belongs to another composite. Applying this diff will 
       "message": "Some function credential secrets could not be fetched from cluster",
       "context": {
         "composition": "xbuckets.example.org",
-        "attempted": "2",
-        "fetched": "1",
+        "missing": "crossplane-system/graph-creds",
         "hint": "Use --function-credentials to provide secrets that don't exist on cluster"
       }
     }
@@ -124,6 +123,22 @@ step fails, and appears in step with the work that produced it. Today they cover
 that belongs to a different composite (applying would take ownership), a nested XR whose composition
 could not be found (it will compose nothing), function credentials that could not be fetched (the
 render may not reflect reality), leftover function containers, and the deleting-XR case above.
+
+A warning identical to one already raised — same `message` **and** same `context` — is reported once,
+not once per occurrence. That matters for conditions that are a property of a composition rather than
+of an individual resource: an unfetchable credential secret on a composition affecting thirty XRs is
+one line and one `warnings[]` entry, not thirty. Warnings that genuinely differ per occurrence carry
+the distinguishing detail in `context` (the ownership warning names the resource, for instance) and so
+are still reported for every occurrence.
+
+Two things narrow when the credential warning fires:
+
+- It reports only the secrets still missing **after** `--function-credentials` is taken into account,
+  so supplying the absent secret yourself is not warned about.
+- Only a genuinely absent (`NotFound`) secret is a warning. If a referenced secret cannot be *read* —
+  RBAC denial, a transport failure, an undecodable payload — the run **fails** instead. The tool cannot
+  know whether that credential would have changed the render, and emitting a diff that might not
+  reflect reality is worse than refusing to emit one.
 
 ### Composition Diff - Analyze Impact of Composition Changes
 

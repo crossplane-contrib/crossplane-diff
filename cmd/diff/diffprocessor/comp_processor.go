@@ -79,8 +79,8 @@ type CompDiffProcessor interface {
 	// rendering any diffs (CLI input error). When `resources` is empty, behavior is unchanged.
 	DiffComposition(ctx context.Context, compositions []*un.Unstructured, namespace string, resources []k8stypes.NamespacedName) (bool, error)
 	Initialize(ctx context.Context) error
-	// Cleanup releases any resources held by the processor (e.g., Docker containers).
-	Cleanup(ctx context.Context) error
+	// Cleaner releases any resources held by the processor (e.g., Docker containers).
+	Cleaner
 }
 
 // DefaultCompDiffProcessor implements CompDiffProcessor.
@@ -271,6 +271,10 @@ func (p *DefaultCompDiffProcessor) DiffComposition(ctx context.Context, composit
 			}
 		}
 	}
+
+	// Release resources before draining advisories, so one raised during teardown (leftover function
+	// containers) is collected rather than arriving after the renderer has already read the slice.
+	CleanupDetached(ctx, p, p.config.Logger)
 
 	// Attach any advisories raised during the run. They have already reached stderr when raised; this
 	// carries them into structured output.

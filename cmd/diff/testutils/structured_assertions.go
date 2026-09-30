@@ -72,7 +72,9 @@ type ExpectedDiff struct {
 	resources []*ResourceExpectation
 	errors    []*ErrorExpectation
 	warnings  []*WarningExpectation
-	xrs       []*XRExpectation
+	// noWarnings asserts warnings[] is empty. Separate from len(warnings)==0, which means "no opinion".
+	noWarnings bool
+	xrs        []*XRExpectation
 }
 
 // WarningExpectation describes one expected entry in warnings[]. Matched by message substring rather
@@ -222,6 +224,14 @@ func (e *ExpectedDiff) WithWarning(messageContains string) *WarningExpectation {
 	e.warnings = append(e.warnings, w)
 
 	return w
+}
+
+// WithNoWarnings asserts that structured output carries no advisories at all. Distinct from simply
+// declaring no WithWarning expectations, which asserts nothing: this is how a test pins that a
+// condition the tool used to warn about is correctly silent.
+func (e *ExpectedDiff) WithNoWarnings() *ExpectedDiff {
+	e.noWarnings = true
+	return e
 }
 
 // WithWarningContext pins the expected context key/value pairs on the warning under construction.
@@ -590,6 +600,20 @@ func AssertStructuredDiff(t *testing.T, jsonOutput string, e DiffExpectation) {
 	// Check each warning expectation against output.Warnings.
 	for _, want := range expected.warnings {
 		assertWarningExpectation(t, output.Warnings, want)
+	}
+
+	// If the test pinned a specific number of warning expectations — or asserted there are none —
+	// verify no extras were emitted, mirroring the errors[] guard above. Without this, warning
+	// duplication is untestable: a regression that emits the same advisory once per XR still satisfies
+	// every find-first-match expectation. No expectations and no WithNoWarnings = no opinion.
+	if (len(expected.warnings) > 0 || expected.noWarnings) && len(output.Warnings) != len(expected.warnings) {
+		messages := make([]string, 0, len(output.Warnings))
+		for _, w := range output.Warnings {
+			messages = append(messages, w.Message)
+		}
+
+		t.Errorf("Expected %d warnings in structured output, got %d: %v",
+			len(expected.warnings), len(output.Warnings), messages)
 	}
 
 	// Check each xrs[] entry expectation.

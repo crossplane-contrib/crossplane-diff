@@ -25,6 +25,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	un "k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
+	k8stypes "k8s.io/apimachinery/pkg/types"
 
 	"github.com/crossplane/crossplane-runtime/v2/pkg/errors"
 	"github.com/crossplane/crossplane-runtime/v2/pkg/logging"
@@ -61,9 +62,9 @@ type DiffProcessor interface {
 	// Initialize loads required resources like CRDs and environment configs
 	Initialize(ctx context.Context) error
 
-	// Cleanup releases any resources held by the processor (e.g., Docker containers).
+	// Cleaner releases any resources held by the processor (e.g., Docker containers).
 	// Should be called when the processor is no longer needed.
-	Cleanup(ctx context.Context) error
+	Cleaner
 }
 
 // DefaultDiffProcessor implements DiffProcessor with modular components.
@@ -186,6 +187,34 @@ func (p *DefaultDiffProcessor) Cleanup(ctx context.Context) error {
 	return errors.Join(errs...)
 }
 
+// CleanupTimeout bounds how long releasing the processor's Docker resources may take. Cleanup is
+// attempted on a context detached from the run's cancellation (see CleanupDetached), so this is what
+// stops a slow or hung Docker daemon from blocking a run indefinitely.
+const CleanupTimeout = 30 * time.Second
+
+// Cleaner is anything holding resources that CleanupDetached can release. DiffProcessor,
+// CompDiffProcessor and FunctionProvider all embed it.
+type Cleaner interface {
+	Cleanup(ctx context.Context) error
+}
+
+// CleanupDetached releases c's resources on a context derived from ctx that keeps ctx's values but not
+// its cancellation or deadline, bounded instead by CleanupTimeout. Cleanup must still run when the
+// run's own context has expired (--timeout), since Docker calls on a dead context fail and leave
+// containers running; and it must not hang on a slow or wedged Docker daemon. A failure is logged,
+// not returned: releasing resources is best-effort and must not change the run's result.
+//
+// Note that this does not make cleanup survive Ctrl+C: no signal handling exists, so an interrupt
+// kills the process before any cleanup runs (see #515).
+func CleanupDetached(ctx context.Context, c Cleaner, logger logging.Logger) {
+	cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), CleanupTimeout)
+	defer cancel()
+
+	if err := c.Cleanup(cleanupCtx); err != nil {
+		logger.Debug("Failed to release processor resources", "error", err)
+	}
+}
+
 // initializeSchemaValidator initializes the schema validator with CRDs.
 func (p *DefaultDiffProcessor) initializeSchemaValidator(ctx context.Context) error {
 	// If the schema validator implements our interface with LoadCRDs, use it
@@ -302,6 +331,11 @@ func (p *DefaultDiffProcessor) PerformDiff(ctx context.Context, resources []*un.
 		errs = append(errs, err)
 		outputErrors = append(outputErrors, dt.OutputError{Message: err.Error()})
 	}
+
+	// Release resources before rendering, so an advisory raised during teardown (leftover function
+	// containers) is still in warnings[] when the renderer reads it; the command's deferred Cleanup
+	// would run only after output has been emitted.
+	CleanupDetached(ctx, p, p.config.Logger)
 
 	// Always render (even if only errors exist) to ensure valid structured output
 	// The renderer will include errors in the structured output and write them to stderr
@@ -1221,7 +1255,10 @@ func (p *DefaultDiffProcessor) RenderToStableState(
 	// downstream.
 	xr.Schema = xrSchema
 
-	functionCredentials := p.resolveFunctionCredentials(ctx, comp, resourceID)
+	functionCredentials, err := p.resolveFunctionCredentials(ctx, comp, resourceID)
+	if err != nil {
+		return render.CompositionOutputs{}, err
+	}
 
 	// Track required resources with deduplication
 	requiredResources := make(map[string]un.Unstructured)
@@ -1332,21 +1369,71 @@ func (p *DefaultDiffProcessor) resolveSchemaAndXRDForRender(ctx context.Context,
 	return xp.SchemaFromXRD(xrd), xrd
 }
 
-// resolveFunctionCredentials merges CLI-provided function credentials with
-// any credentials auto-fetched from the composition pipeline.
-func (p *DefaultDiffProcessor) resolveFunctionCredentials(ctx context.Context, comp *apiextensionsv1.Composition, resourceID string) []corev1.Secret {
-	autoFetched := p.fetchCompositionCredentials(ctx, comp)
-	merged := mergeCredentials(p.config.FunctionCredentials, autoFetched)
+// resolveFunctionCredentials merges CLI-provided function credentials with any credentials
+// auto-fetched from the composition pipeline, and raises the shortfall advisory for the credentials
+// that are still missing once both sources have been combined.
+//
+// The advisory is raised here rather than in the credential client because only this layer can see
+// both halves: the client knows which referenced secrets are absent from the cluster, and
+// config.FunctionCredentials says which of those the user already supplied. Warning before the merge
+// told a user who had correctly passed --function-credentials to go and do the thing they had just
+// done. Its context is keyed on the composition and not on resourceID, which is deliberate — the
+// condition is a property of the composition, so the identical advisory raised while processing each
+// of a composition's XRs collapses to one entry in the warning channel.
+func (p *DefaultDiffProcessor) resolveFunctionCredentials(ctx context.Context, comp *apiextensionsv1.Composition, resourceID string) ([]corev1.Secret, error) {
+	fetched, err := p.fetchCompositionCredentials(ctx, comp)
+	if err != nil {
+		return nil, err
+	}
+
+	merged := mergeCredentials(p.config.FunctionCredentials, fetched.Secrets)
+
+	if unsatisfied := unsatisfiedCredentials(fetched.Absent, merged); len(unsatisfied) > 0 {
+		// Every remaining secret is by construction one the user has not supplied, so the hint is
+		// actionable in every case that reaches here.
+		p.config.Logger.Info("Some function credential secrets could not be fetched from cluster",
+			"composition", comp.GetName(),
+			"missing", strings.Join(unsatisfied, ","),
+			"hint", "Use --function-credentials to provide secrets that don't exist on cluster")
+	}
 
 	if len(merged) > 0 {
 		p.config.Logger.Debug("Using function credentials for rendering",
 			"resource", resourceID,
 			"credentialCount", len(merged),
 			"cliProvided", len(p.config.FunctionCredentials),
-			"autoFetched", len(autoFetched))
+			"autoFetched", len(fetched.Secrets))
 	}
 
-	return merged
+	return merged, nil
+}
+
+// unsatisfiedCredentials returns the namespace/name keys of the absent secrets that the merged
+// credential set does not cover, sorted so the advisory's context is byte-stable across runs (which is
+// what lets identical advisories dedup). Keys are formed the same way mergeCredentials keys its map,
+// so a CLI-supplied secret matches an absent cluster secret exactly when they name the same object.
+func unsatisfiedCredentials(absent []k8stypes.NamespacedName, merged []corev1.Secret) []string {
+	if len(absent) == 0 {
+		return nil
+	}
+
+	supplied := make(map[string]struct{}, len(merged))
+	for _, cred := range merged {
+		supplied[fmt.Sprintf("%s/%s", cred.Namespace, cred.Name)] = struct{}{}
+	}
+
+	var unsatisfied []string
+
+	for _, ref := range absent {
+		key := fmt.Sprintf("%s/%s", ref.Namespace, ref.Name)
+		if _, ok := supplied[key]; !ok {
+			unsatisfied = append(unsatisfied, key)
+		}
+	}
+
+	sort.Strings(unsatisfied)
+
+	return unsatisfied
 }
 
 // stabilityResult holds the result of a stability check iteration.
@@ -1709,9 +1796,9 @@ func (p *DefaultDiffProcessor) applyXRDDefaults(ctx context.Context, xr *cmp.Uns
 
 // fetchCompositionCredentials delegates to the credential client to fetch credential secrets
 // referenced in a composition's pipeline steps from the cluster.
-func (p *DefaultDiffProcessor) fetchCompositionCredentials(ctx context.Context, comp *apiextensionsv1.Composition) []corev1.Secret {
+func (p *DefaultDiffProcessor) fetchCompositionCredentials(ctx context.Context, comp *apiextensionsv1.Composition) (types.CredentialFetchResult, error) {
 	if comp == nil || p.credentialClient == nil {
-		return nil
+		return types.CredentialFetchResult{}, nil
 	}
 
 	return p.credentialClient.FetchCompositionCredentials(ctx, comp)
