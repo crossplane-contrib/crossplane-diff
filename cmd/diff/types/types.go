@@ -29,6 +29,15 @@ import (
 // CompositionProvider is a function that provides a composition for a given resource.
 type CompositionProvider func(ctx context.Context, res *un.Unstructured) (*apiextensionsv1.Composition, error)
 
+// ValidatedInput is one input an input validator hands back for rendering: the resource, and the error
+// that rejected it before rendering, if any. Lives here (not in diffprocessor, beside the InputValidator
+// interface that returns it) so the validator's mock in cmd/diff/testutils can name it without an import
+// cycle.
+type ValidatedInput struct {
+	Resource *un.Unstructured
+	Err      error // non-nil if rejected before rendering
+}
+
 // FindCompositesOptions narrows what CompositionClient.FindComposites returns.
 // Lives here (not in the crossplane client package) so test mocks in cmd/diff/testutils
 // can implement the interface without creating an import cycle with cmd/diff/client/crossplane.

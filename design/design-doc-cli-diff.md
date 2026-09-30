@@ -925,7 +925,7 @@ The `InputValidator` validates one `xr` run's input set (`PerformDiff`). It is c
 type InputValidator interface {
     // ToRender returns the inputs to render, in input order, with duplicates already dropped.
     // An input with a non-nil Err was rejected before rendering and must not be rendered.
-    ToRender() []ValidatedInput
+    ToRender() []types.ValidatedInput
     // RecordRender records the render of ToRender()[i]: every resource key it produced and its error.
     RecordRender(i int, rendered map[string]bool, err error)
     // Verdicts returns the final error for each group (indexed like ToRender()), or nil.
@@ -936,6 +936,10 @@ type InputValidator interface {
 
 type InputValidatorFactory func(logger logging.Logger, inputs []*un.Unstructured) InputValidator
 ```
+
+`ValidatedInput` (a resource and its pre-render rejection, if any) lives in `cmd/diff/types` rather than beside the
+interface, so `MockInputValidator` in `cmd/diff/testutils` can name it without an import cycle — the same reason
+`FindCompositesOptions` lives there.
 
 The only implementation, `bundleInputValidator` (`NewBundleInputValidator`, in `diffprocessor/input_validator.go`),
 treats the inputs as one change set; its rules are described under §6.8.3's grouped view. `PerformDiff` owns only the

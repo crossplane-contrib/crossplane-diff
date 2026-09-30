@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	dt "github.com/crossplane-contrib/crossplane-diff/cmd/diff/renderer/types"
+	"github.com/crossplane-contrib/crossplane-diff/cmd/diff/types"
 	"k8s.io/apimachinery/pkg/api/equality"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	un "k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -31,7 +32,7 @@ import (
 type InputValidator interface {
 	// ToRender returns the inputs to render, in input order, with duplicates already dropped.
 	// An input with a non-nil Err was rejected before rendering and must not be rendered.
-	ToRender() []ValidatedInput
+	ToRender() []types.ValidatedInput
 	// RecordRender records the render of ToRender()[i]: every resource key it produced
 	// (including unchanged ones) and its error, if any.
 	RecordRender(i int, rendered map[string]bool, err error)
@@ -41,12 +42,6 @@ type InputValidator interface {
 	Verdicts(groups []dt.XRDiffGroup) []error
 	// RenderOverlaps returns the stage-3 errors.
 	RenderOverlaps(groups []dt.XRDiffGroup) []error
-}
-
-// ValidatedInput is one input InputValidator.ToRender hands back.
-type ValidatedInput struct {
-	Resource *un.Unstructured
-	Err      error // non-nil if rejected before rendering
 }
 
 // InputValidatorFactory creates the InputValidator for one run.
@@ -59,7 +54,7 @@ type InputValidatorFactory func(logger logging.Logger, inputs []*un.Unstructured
 type bundleInputValidator struct {
 	// checks are checkInputs' verdicts on the inputs to render (duplicates dropped), indexed like toRender.
 	checks   []inputCheck
-	toRender []ValidatedInput
+	toRender []types.ValidatedInput
 	// rendered and failed are, by index, each render's resource keys and each input's own failure
 	// (its pre-render rejection, or else its render error).
 	rendered []map[string]bool
@@ -77,7 +72,7 @@ func NewBundleInputValidator(logger logging.Logger, inputs []*un.Unstructured) I
 		}
 
 		v.checks = append(v.checks, in)
-		v.toRender = append(v.toRender, ValidatedInput{Resource: in.res, Err: in.err})
+		v.toRender = append(v.toRender, types.ValidatedInput{Resource: in.res, Err: in.err})
 		v.failed = append(v.failed, in.err)
 	}
 
@@ -87,7 +82,7 @@ func NewBundleInputValidator(logger logging.Logger, inputs []*un.Unstructured) I
 }
 
 // ToRender returns the non-duplicate inputs in input order; see InputValidator.
-func (v *bundleInputValidator) ToRender() []ValidatedInput {
+func (v *bundleInputValidator) ToRender() []types.ValidatedInput {
 	return v.toRender
 }
 

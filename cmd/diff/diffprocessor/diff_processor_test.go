@@ -12,6 +12,7 @@ import (
 	"github.com/crossplane-contrib/crossplane-diff/cmd/diff/renderer"
 	dt "github.com/crossplane-contrib/crossplane-diff/cmd/diff/renderer/types"
 	tu "github.com/crossplane-contrib/crossplane-diff/cmd/diff/testutils"
+	"github.com/crossplane-contrib/crossplane-diff/cmd/diff/types"
 	"github.com/crossplane/cli/v2/cmd/crossplane/common/resource"
 	"github.com/crossplane/cli/v2/cmd/crossplane/render"
 	v1 "github.com/crossplane/function-sdk-go/proto/v1"
@@ -805,46 +806,6 @@ func TestDefaultDiffProcessor_PerformDiff(t *testing.T) {
 // how the input validator's verdicts land, are asserted on the intermediate
 // []XRDiffGroup handoff by TestDefaultDiffProcessor_PerformDiff_Groups.
 
-// mockInputValidator is an InputValidator whose methods are function fields. It lives here rather than
-// in testutils beside the other mocks because its methods use ValidatedInput, which diffprocessor
-// defines and testutils cannot import.
-type mockInputValidator struct {
-	ToRenderFn       func() []ValidatedInput
-	RecordRenderFn   func(i int, rendered map[string]bool, err error)
-	VerdictsFn       func(groups []dt.XRDiffGroup) []error
-	RenderOverlapsFn func(groups []dt.XRDiffGroup) []error
-}
-
-func (m *mockInputValidator) ToRender() []ValidatedInput {
-	if m.ToRenderFn != nil {
-		return m.ToRenderFn()
-	}
-
-	return nil
-}
-
-func (m *mockInputValidator) RecordRender(i int, rendered map[string]bool, err error) {
-	if m.RecordRenderFn != nil {
-		m.RecordRenderFn(i, rendered, err)
-	}
-}
-
-func (m *mockInputValidator) Verdicts(groups []dt.XRDiffGroup) []error {
-	if m.VerdictsFn != nil {
-		return m.VerdictsFn(groups)
-	}
-
-	return make([]error, len(groups))
-}
-
-func (m *mockInputValidator) RenderOverlaps(groups []dt.XRDiffGroup) []error {
-	if m.RenderOverlapsFn != nil {
-		return m.RenderOverlapsFn(groups)
-	}
-
-	return nil
-}
-
 // TestDefaultDiffProcessor_PerformDiff_Groups pins how PerformDiff hands its groups to the renderer. With
 // a mock InputValidator it pins the wiring: only what ToRender returns is rendered, and an input it
 // rejected is not; every render is recorded; and each Verdicts and RenderOverlaps error lands as a group
@@ -940,7 +901,7 @@ func TestDefaultDiffProcessor_PerformDiff_Groups(t *testing.T) {
 	// validation is what a mock validator returns: ToRender's list, and Verdicts and RenderOverlaps
 	// errors. A nil validation means the real default validator.
 	type validation struct {
-		toRender []ValidatedInput
+		toRender []types.ValidatedInput
 		verdicts []error
 		overlaps []error
 	}
@@ -957,7 +918,7 @@ func TestDefaultDiffProcessor_PerformDiff_Groups(t *testing.T) {
 		"InputRejectedBeforeRenderingIsNotRendered": {
 			resources: []*un.Unstructured{xr("my-xr-1"), xr("my-xr-2")},
 			validator: &validation{
-				toRender: []ValidatedInput{{Resource: xr("my-xr-1")}, {Resource: xr("my-xr-2"), Err: errors.New("rejected")}},
+				toRender: []types.ValidatedInput{{Resource: xr("my-xr-1")}, {Resource: xr("my-xr-2"), Err: errors.New("rejected")}},
 				verdicts: []error{nil, errors.New("rejected")},
 			},
 			want: got{
@@ -972,7 +933,7 @@ func TestDefaultDiffProcessor_PerformDiff_Groups(t *testing.T) {
 		"VerdictReplacesAGroupsDiffs": {
 			resources: []*un.Unstructured{xr("my-xr-1"), xr("my-xr-2")},
 			validator: &validation{
-				toRender: []ValidatedInput{{Resource: xr("my-xr-1")}, {Resource: xr("my-xr-2")}},
+				toRender: []types.ValidatedInput{{Resource: xr("my-xr-1")}, {Resource: xr("my-xr-2")}},
 				verdicts: []error{nil, errors.New("verdict")},
 			},
 			want: got{
@@ -989,7 +950,7 @@ func TestDefaultDiffProcessor_PerformDiff_Groups(t *testing.T) {
 		"RenderOverlapsReachErrorsAndTheReturnedError": {
 			resources: []*un.Unstructured{xr("my-xr-1")},
 			validator: &validation{
-				toRender: []ValidatedInput{{Resource: xr("my-xr-1")}},
+				toRender: []types.ValidatedInput{{Resource: xr("my-xr-1")}},
 				overlaps: []error{errors.New("overlap")},
 			},
 			want: got{
@@ -1002,7 +963,7 @@ func TestDefaultDiffProcessor_PerformDiff_Groups(t *testing.T) {
 		// Only what ToRender returns is rendered: a duplicate it dropped yields no group.
 		"OnlyWhatToRenderReturnsIsRendered": {
 			resources: []*un.Unstructured{xr("my-xr-1"), xr("my-xr-1")},
-			validator: &validation{toRender: []ValidatedInput{{Resource: xr("my-xr-1")}}},
+			validator: &validation{toRender: []types.ValidatedInput{{Resource: xr("my-xr-1")}}},
 			want: got{
 				XRs:      []corev1.ObjectReference{ref("my-xr-1")},
 				Recorded: []recorded{{I: 0, Rendered: map[string]bool{sharedKey: true}}},
@@ -1012,7 +973,7 @@ func TestDefaultDiffProcessor_PerformDiff_Groups(t *testing.T) {
 		// returns it, which this mock does not.
 		"RecordRenderReceivesEachRender": {
 			resources:  []*un.Unstructured{xr("my-xr-1"), xr("my-xr-2")},
-			validator:  &validation{toRender: []ValidatedInput{{Resource: xr("my-xr-1")}, {Resource: xr("my-xr-2")}}},
+			validator:  &validation{toRender: []types.ValidatedInput{{Resource: xr("my-xr-1")}, {Resource: xr("my-xr-2")}}},
 			failRender: "my-xr-2",
 			want: got{
 				XRs: []corev1.ObjectReference{ref("my-xr-1"), ref("my-xr-2")},
@@ -1103,8 +1064,8 @@ func TestDefaultDiffProcessor_PerformDiff_Groups(t *testing.T) {
 
 			if v := tt.validator; v != nil {
 				opts = append(opts, WithInputValidatorFactory(func(logging.Logger, []*un.Unstructured) InputValidator {
-					return &mockInputValidator{
-						ToRenderFn: func() []ValidatedInput { return v.toRender },
+					return &tu.MockInputValidator{
+						ToRenderFn: func() []types.ValidatedInput { return v.toRender },
 						RecordRenderFn: func(i int, rendered map[string]bool, err error) {
 							gotRecorded = append(gotRecorded, recorded{I: i, Rendered: rendered, Err: errMessage(err)})
 						},
