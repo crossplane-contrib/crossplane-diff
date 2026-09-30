@@ -192,6 +192,12 @@ func (p *DefaultDiffProcessor) Cleanup(ctx context.Context) error {
 // stops a slow or hung Docker daemon from blocking a run indefinitely.
 const CleanupTimeout = 30 * time.Second
 
+// Cleaner is anything holding resources that CleanupDetached can release, such as the DiffProcessor
+// and CompDiffProcessor.
+type Cleaner interface {
+	Cleanup(ctx context.Context) error
+}
+
 // CleanupDetached releases c's resources on a context derived from ctx that keeps ctx's values but not
 // its cancellation or deadline, bounded instead by CleanupTimeout. Cleanup must still run when the
 // run's own context has expired (--timeout), since Docker calls on a dead context fail and leave
@@ -200,10 +206,7 @@ const CleanupTimeout = 30 * time.Second
 //
 // Note that this does not make cleanup survive Ctrl+C: no signal handling exists, so an interrupt
 // kills the process before any cleanup runs (see #515).
-func CleanupDetached(ctx context.Context, c interface {
-	Cleanup(ctx context.Context) error
-}, logger logging.Logger,
-) {
+func CleanupDetached(ctx context.Context, c Cleaner, logger logging.Logger) {
 	cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), CleanupTimeout)
 	defer cancel()
 
