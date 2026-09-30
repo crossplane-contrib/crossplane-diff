@@ -43,9 +43,9 @@ type FunctionProvider interface {
 	// GetFunctionsForComposition returns the functions needed to render a composition.
 	GetFunctionsForComposition(comp *apiextensionsv1.Composition) ([]pkgv1.Function, error)
 
-	// Cleanup stops and removes any resources created during function execution.
+	// Cleaner stops and removes any resources created during function execution.
 	// For providers that don't create resources (like DefaultFunctionProvider), this is a no-op.
-	Cleanup(ctx context.Context) error
+	Cleaner
 }
 
 // EnvDockerNetwork is the environment variable that specifies which Docker

@@ -514,8 +514,14 @@ type DiffProcessor interface {
     // Initialize loads required resources like CRDs.
     Initialize(ctx context.Context) error
 
-    // Cleanup releases resources held by the processor (in particular, Docker function containers
+    // Cleaner releases resources held by the processor (in particular, Docker function containers
     // started during rendering — without this they leak for the lifetime of the process).
+    Cleaner
+}
+
+// Cleaner is anything holding resources that CleanupDetached can release. DiffProcessor,
+// CompDiffProcessor and FunctionProvider all embed it.
+type Cleaner interface {
     Cleanup(ctx context.Context) error
 }
 ```
@@ -594,7 +600,7 @@ type CompDiffProcessor interface {
     DiffComposition(ctx context.Context, compositions []*un.Unstructured, namespace string, resources []k8stypes.NamespacedName) (bool, error)
 
     Initialize(ctx context.Context) error
-    Cleanup(ctx context.Context) error
+    Cleaner
 }
 ```
 
@@ -890,7 +896,7 @@ be expensive to spin up, so this layer governs how — and how aggressively — 
 // FunctionProvider resolves the function set used by a given composition.
 type FunctionProvider interface {
     GetFunctionsForComposition(comp *apiextensionsv1.Composition) ([]pkgv1.Function, error)
-    Cleanup(ctx context.Context) error
+    Cleaner
 }
 ```
 

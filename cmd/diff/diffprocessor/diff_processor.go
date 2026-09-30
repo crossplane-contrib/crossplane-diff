@@ -62,9 +62,9 @@ type DiffProcessor interface {
 	// Initialize loads required resources like CRDs and environment configs
 	Initialize(ctx context.Context) error
 
-	// Cleanup releases any resources held by the processor (e.g., Docker containers).
+	// Cleaner releases any resources held by the processor (e.g., Docker containers).
 	// Should be called when the processor is no longer needed.
-	Cleanup(ctx context.Context) error
+	Cleaner
 }
 
 // DefaultDiffProcessor implements DiffProcessor with modular components.
@@ -192,8 +192,8 @@ func (p *DefaultDiffProcessor) Cleanup(ctx context.Context) error {
 // stops a slow or hung Docker daemon from blocking a run indefinitely.
 const CleanupTimeout = 30 * time.Second
 
-// Cleaner is anything holding resources that CleanupDetached can release, such as the DiffProcessor
-// and CompDiffProcessor.
+// Cleaner is anything holding resources that CleanupDetached can release. DiffProcessor,
+// CompDiffProcessor and FunctionProvider all embed it.
 type Cleaner interface {
 	Cleanup(ctx context.Context) error
 }

@@ -79,8 +79,8 @@ type CompDiffProcessor interface {
 	// rendering any diffs (CLI input error). When `resources` is empty, behavior is unchanged.
 	DiffComposition(ctx context.Context, compositions []*un.Unstructured, namespace string, resources []k8stypes.NamespacedName) (bool, error)
 	Initialize(ctx context.Context) error
-	// Cleanup releases any resources held by the processor (e.g., Docker containers).
-	Cleanup(ctx context.Context) error
+	// Cleaner releases any resources held by the processor (e.g., Docker containers).
+	Cleaner
 }
 
 // DefaultCompDiffProcessor implements CompDiffProcessor.
