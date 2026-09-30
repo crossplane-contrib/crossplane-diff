@@ -674,10 +674,11 @@ func TestDefaultCompDiffProcessor_partitionXRsByUpdatePolicy(t *testing.T) {
 		xrs           []*un.Unstructured
 		wantKept      []string
 		wantDropped   []droppedWant
-		// wantRepointing is how many of wantKept would actually adopt the resulting revision. It equals
-		// len(wantKept) except where --include-manual keeps a Manual-policy XR, which stays pinned by
-		// its compositionRevisionRef (issue #479).
-		wantRepointing int
+		// wantRepointing names which of wantKept would actually adopt the resulting revision, and so
+		// are counted in RepointedComposites and seeded with its predicted name. It equals wantKept
+		// except where --include-manual keeps a Manual-policy XR, which stays pinned by its
+		// compositionRevisionRef (issue #479).
+		wantRepointing []string
 		wantErr        bool
 	}{
 		// AC2.5 (Manual side): --include-manual keeps Manual XRs...
@@ -690,10 +691,10 @@ func TestDefaultCompDiffProcessor_partitionXRsByUpdatePolicy(t *testing.T) {
 				tu.NewResource("example.org/v1", "XResource", "auto-xr").WithNamespace("default").
 					WithNestedField("Automatic", "spec", "crossplane", "compositionUpdatePolicy").Build(),
 			},
-			wantKept:    []string{"manual-xr", "auto-xr"},
-			wantDropped: nil,
+			wantKept:       []string{"manual-xr", "auto-xr"},
+			wantRepointing: []string{"auto-xr"},
+			wantDropped:    nil,
 			// ...but keeping the Manual XR for analysis does not unpin it: only auto-xr re-points.
-			wantRepointing: 1,
 		},
 		// A Manual XR kept only by --include-manual re-points not at all, so a run whose entire kept set
 		// is Manual reports zero repointed composites even though it renders one composite.
@@ -705,8 +706,8 @@ func TestDefaultCompDiffProcessor_partitionXRsByUpdatePolicy(t *testing.T) {
 					WithNestedField("Manual", "spec", "crossplane", "compositionUpdatePolicy").Build(),
 			},
 			wantKept:       []string{"manual-only"},
+			wantRepointing: nil,
 			wantDropped:    nil,
-			wantRepointing: 0,
 		},
 		// AC2.5 (selector side): ...but --include-manual does NOT re-include selector-mismatched
 		// Automatic XRs — they would never adopt the new revision.
@@ -720,10 +721,10 @@ func TestDefaultCompDiffProcessor_partitionXRsByUpdatePolicy(t *testing.T) {
 					WithNestedField("Automatic", "spec", "crossplane", "compositionUpdatePolicy").
 					WithCompositionRevisionSelector(xp.CrossplaneAPIExtGroupV2, map[string]string{"version": "0.0.1"}, nil).Build(),
 			},
-			wantKept:    []string{"manual-xr"},
-			wantDropped: []droppedWant{{name: "auto-mismatch", reason: renderer.FilterReasonRevisionSelectorMismatch}},
+			wantKept:       []string{"manual-xr"},
+			wantRepointing: nil,
+			wantDropped:    []droppedWant{{name: "auto-mismatch", reason: renderer.FilterReasonRevisionSelectorMismatch}},
 			// The only kept XR is the pinned Manual one, so nothing re-points.
-			wantRepointing: 0,
 		},
 		"IncludeManualFalse_FiltersManualXRs": {
 			includeManual: false,
@@ -735,8 +736,8 @@ func TestDefaultCompDiffProcessor_partitionXRsByUpdatePolicy(t *testing.T) {
 					WithNestedField("Automatic", "spec", "crossplane", "compositionUpdatePolicy").Build(),
 			},
 			wantKept:       []string{"auto-xr"},
+			wantRepointing: []string{"auto-xr"},
 			wantDropped:    []droppedWant{{name: "manual-xr", reason: renderer.FilterReasonManualPolicy}},
-			wantRepointing: 1,
 		},
 		// AC2.1: Automatic XR whose selector does not match the composition labels is dropped.
 		"AutomaticSelectorMismatch_Dropped": {
@@ -747,8 +748,9 @@ func TestDefaultCompDiffProcessor_partitionXRsByUpdatePolicy(t *testing.T) {
 					WithNestedField("Automatic", "spec", "crossplane", "compositionUpdatePolicy").
 					WithCompositionRevisionSelector(xp.CrossplaneAPIExtGroupV2, map[string]string{"version": "0.0.1"}, nil).Build(),
 			},
-			wantKept:    nil,
-			wantDropped: []droppedWant{{name: "selector-old", reason: renderer.FilterReasonRevisionSelectorMismatch}},
+			wantKept:       nil,
+			wantRepointing: nil,
+			wantDropped:    []droppedWant{{name: "selector-old", reason: renderer.FilterReasonRevisionSelectorMismatch}},
 		},
 		// AC2.2: Automatic XR whose selector matches the composition labels is kept.
 		"AutomaticSelectorMatch_Kept": {
@@ -760,8 +762,8 @@ func TestDefaultCompDiffProcessor_partitionXRsByUpdatePolicy(t *testing.T) {
 					WithCompositionRevisionSelector(xp.CrossplaneAPIExtGroupV2, map[string]string{"version": "0.0.2"}, nil).Build(),
 			},
 			wantKept:       []string{"selector-new"},
+			wantRepointing: []string{"selector-new"},
 			wantDropped:    nil,
-			wantRepointing: 1,
 		},
 		// A selector that keys on crossplane.io/composition-name (via Exists) matches because the
 		// composition's predicted revision labels include that stamped label (added by
@@ -778,8 +780,8 @@ func TestDefaultCompDiffProcessor_partitionXRsByUpdatePolicy(t *testing.T) {
 					}).Build(),
 			},
 			wantKept:       []string{"name-selector"},
+			wantRepointing: []string{"name-selector"},
 			wantDropped:    nil,
-			wantRepointing: 1,
 		},
 		// The hash label is stamped too, and is as predictable as the name — both derive from the
 		// exported Composition.Hash(). Before issue #474 it was omitted from the predicted label set on
@@ -796,8 +798,9 @@ func TestDefaultCompDiffProcessor_partitionXRsByUpdatePolicy(t *testing.T) {
 						{"key": xp.LabelCompositionHash, "operator": "Exists"},
 					}).Build(),
 			},
-			wantKept:    []string{"hash-selector"},
-			wantDropped: nil,
+			wantKept:       []string{"hash-selector"},
+			wantRepointing: []string{"hash-selector"},
+			wantDropped:    nil,
 		},
 		// AC2.3: Automatic XR with no selector is kept (unchanged from prior behavior).
 		"AutomaticNoSelector_Kept": {
@@ -809,8 +812,8 @@ func TestDefaultCompDiffProcessor_partitionXRsByUpdatePolicy(t *testing.T) {
 				tu.NewResource("example.org/v1", "XResource", "default-policy").WithNamespace("default").Build(),
 			},
 			wantKept:       []string{"no-selector", "default-policy"},
+			wantRepointing: []string{"no-selector", "default-policy"},
 			wantDropped:    nil,
-			wantRepointing: 2,
 		},
 		// AC2.4: Manual XR with a matching selector is still dropped by policy (reason manual_policy),
 		// not rescued by the selector match.
@@ -822,15 +825,17 @@ func TestDefaultCompDiffProcessor_partitionXRsByUpdatePolicy(t *testing.T) {
 					WithNestedField("Manual", "spec", "crossplane", "compositionUpdatePolicy").
 					WithCompositionRevisionSelector(xp.CrossplaneAPIExtGroupV2, map[string]string{"version": "0.0.2"}, nil).Build(),
 			},
-			wantKept:    nil,
-			wantDropped: []droppedWant{{name: "manual-match", reason: renderer.FilterReasonManualPolicy}},
+			wantKept:       nil,
+			wantRepointing: nil,
+			wantDropped:    []droppedWant{{name: "manual-match", reason: renderer.FilterReasonManualPolicy}},
 		},
 		"EmptyList_ReturnsEmpty": {
-			includeManual: false,
-			compLabels:    map[string]string{"version": "0.0.2"},
-			xrs:           []*un.Unstructured{},
-			wantKept:      nil,
-			wantDropped:   nil,
+			includeManual:  false,
+			compLabels:     map[string]string{"version": "0.0.2"},
+			xrs:            []*un.Unstructured{},
+			wantKept:       nil,
+			wantRepointing: nil,
+			wantDropped:    nil,
 		},
 		// A deleting XR is on Crossplane's teardown path and will never adopt the resulting revision,
 		// so it is dropped regardless of policy or selector (issue #452).
@@ -845,8 +850,8 @@ func TestDefaultCompDiffProcessor_partitionXRsByUpdatePolicy(t *testing.T) {
 					WithNestedField("Automatic", "spec", "crossplane", "compositionUpdatePolicy").Build(),
 			},
 			wantKept:       []string{"live-xr"},
+			wantRepointing: []string{"live-xr"},
 			wantDropped:    []droppedWant{{name: "deleting-xr", reason: renderer.FilterReasonDeleting}},
-			wantRepointing: 1,
 		},
 		// Deletion is evaluated before the policy rules and is not rescued by --include-manual: a
 		// deleting Manual XR is reported as deleting, not as manual_policy.
@@ -858,8 +863,9 @@ func TestDefaultCompDiffProcessor_partitionXRsByUpdatePolicy(t *testing.T) {
 					WithNestedField("Manual", "spec", "crossplane", "compositionUpdatePolicy").
 					WithDeletionTimestamp("2026-09-07T11:25:03Z").Build(),
 			},
-			wantKept:    nil,
-			wantDropped: []droppedWant{{name: "deleting-manual", reason: renderer.FilterReasonDeleting}},
+			wantKept:       nil,
+			wantRepointing: nil,
+			wantDropped:    []droppedWant{{name: "deleting-manual", reason: renderer.FilterReasonDeleting}},
 		},
 		// A matching compositionRevisionSelector does not rescue a deleting XR either.
 		"DeletingWithMatchingSelector_Dropped": {
@@ -871,8 +877,9 @@ func TestDefaultCompDiffProcessor_partitionXRsByUpdatePolicy(t *testing.T) {
 					WithCompositionRevisionSelector(xp.CrossplaneAPIExtGroupV2, map[string]string{"version": "0.0.2"}, nil).
 					WithDeletionTimestamp("2026-09-07T11:25:03Z").Build(),
 			},
-			wantKept:    nil,
-			wantDropped: []droppedWant{{name: "deleting-match", reason: renderer.FilterReasonDeleting}},
+			wantKept:       nil,
+			wantRepointing: nil,
+			wantDropped:    []droppedWant{{name: "deleting-match", reason: renderer.FilterReasonDeleting}},
 		},
 		// An explicit null deletionTimestamp is how round-tripped Kubernetes YAML spells "unset";
 		// it must not be mistaken for a deleting XR.
@@ -885,8 +892,8 @@ func TestDefaultCompDiffProcessor_partitionXRsByUpdatePolicy(t *testing.T) {
 					WithDeletionTimestamp(nil).Build(),
 			},
 			wantKept:       []string{"null-ts-xr"},
+			wantRepointing: []string{"null-ts-xr"},
 			wantDropped:    nil,
-			wantRepointing: 1,
 		},
 		// Composition with no labels: an Automatic XR with a non-empty selector cannot match, so it
 		// is dropped as a selector mismatch.
@@ -898,8 +905,9 @@ func TestDefaultCompDiffProcessor_partitionXRsByUpdatePolicy(t *testing.T) {
 					WithNestedField("Automatic", "spec", "crossplane", "compositionUpdatePolicy").
 					WithCompositionRevisionSelector(xp.CrossplaneAPIExtGroupV2, map[string]string{"version": "0.0.2"}, nil).Build(),
 			},
-			wantKept:    nil,
-			wantDropped: []droppedWant{{name: "selector-xr", reason: renderer.FilterReasonRevisionSelectorMismatch}},
+			wantKept:       nil,
+			wantRepointing: nil,
+			wantDropped:    []droppedWant{{name: "selector-xr", reason: renderer.FilterReasonRevisionSelectorMismatch}},
 		},
 	}
 
@@ -959,71 +967,16 @@ func TestDefaultCompDiffProcessor_partitionXRsByUpdatePolicy(t *testing.T) {
 				t.Errorf("dropped XRs mismatch (-want +got):\n%s", diff)
 			}
 
-			if diff := gcmp.Diff(tt.wantRepointing, repointing); diff != "" {
-				t.Errorf("repointing count mismatch (-want +got):\n%s", diff)
-			}
-		})
-	}
-}
+			var gotRepointing []string
 
-// TestRepointingXRs pins which of the evaluated composites actually adopt the resulting revision.
-// --include-manual asks for a pinned composite to be *evaluated*; it does not make it adopt anything,
-// because Crossplane keeps honouring its compositionRevisionRef. Two things ride on getting this right:
-// revisionImpact.repointedComposites, and — more importantly — that a pinned composite is never seeded,
-// since resolveCompositionFromRevisions reads a Manual composite's ref to decide what to render.
-func TestRepointingXRs(t *testing.T) {
-	automatic := tu.NewResource("example.org/v1", "XResource", "auto-xr").WithNamespace("default").
-		WithNestedField("Automatic", "spec", "crossplane", "compositionUpdatePolicy").Build()
-	manual := tu.NewResource("example.org/v1", "XResource", "manual-xr").WithNamespace("default").
-		WithNestedField("Manual", "spec", "crossplane", "compositionUpdatePolicy").Build()
-	// No policy set at all: Crossplane defaults to Automatic, so this re-points.
-	defaulted := tu.NewResource("example.org/v1", "XResource", "defaulted-xr").WithNamespace("default").Build()
-	malformed := tu.NewResource("example.org/v1", "XResource", "malformed-xr").WithNamespace("default").
-		WithNestedField(map[string]any{"nope": true}, "spec", "crossplane", "compositionUpdatePolicy").Build()
-
-	tests := map[string]struct {
-		xrs     []*un.Unstructured
-		want    []string
-		wantErr bool
-	}{
-		"AutomaticRepoints":            {xrs: []*un.Unstructured{automatic}, want: []string{"auto-xr"}},
-		"UnsetPolicyDefaultsToRepoint": {xrs: []*un.Unstructured{defaulted}, want: []string{"defaulted-xr"}},
-		"ManualDoesNotRepoint":         {xrs: []*un.Unstructured{manual}, want: nil},
-		"MixedKeepsOnlyAutomatic": {
-			xrs:  []*un.Unstructured{manual, automatic, defaulted},
-			want: []string{"auto-xr", "defaulted-xr"},
-		},
-		"MalformedPolicyIsAHardError": {xrs: []*un.Unstructured{malformed}, wantErr: true},
-	}
-
-	p := &DefaultCompDiffProcessor{config: ProcessorConfig{Logger: tu.TestLogger(t, false)}}
-
-	for name, tt := range tests {
-		t.Run(name, func(t *testing.T) {
-			got, err := p.repointingXRs(tt.xrs)
-
-			if tt.wantErr {
-				if err == nil {
-					t.Fatalf("repointingXRs() expected error, got nil")
-				}
-
-				return
-			}
-
-			if err != nil {
-				t.Fatalf("repointingXRs() unexpected error: %v", err)
-			}
-
-			names := make([]string, 0, len(got))
-
-			for _, xr := range tt.xrs {
-				if got[dt.MakeDiffKeyFromResource(xr)] {
-					names = append(names, xr.GetName())
+			for _, xr := range kept {
+				if repointing[dt.MakeDiffKeyFromResource(xr)] {
+					gotRepointing = append(gotRepointing, xr.GetName())
 				}
 			}
 
-			if diff := gcmp.Diff(tt.want, names, cmpopts.EquateEmpty()); diff != "" {
-				t.Errorf("repointingXRs() mismatch (-want +got):\n%s", diff)
+			if diff := gcmp.Diff(tt.wantRepointing, gotRepointing, cmpopts.EquateEmpty()); diff != "" {
+				t.Errorf("repointing XRs mismatch (-want +got):\n%s", diff)
 			}
 		})
 	}
@@ -1876,6 +1829,15 @@ func TestDefaultCompDiffProcessor_DiffComposition_ResourceMode(t *testing.T) {
 				for _, impact := range got.ImpactAnalysis {
 					impacts = append(impacts, fmt.Sprintf("%s %s", impact.Status, impact.Name))
 				}
+
+				// The predicted name's derivation is pinned by TestRevisionIdentity; this matrix only
+				// needs it present, since the composition's name is predictable in every case.
+				pred, err := predictRevision(metaOnlyComp)
+				if err != nil {
+					t.Fatalf("predictRevision: %v", err)
+				}
+
+				tt.want.RevisionImpact.PredictedRevisionName = pred.name
 
 				gotWant := want{
 					Skipped:        got.ImpactAnalysisSkipped,

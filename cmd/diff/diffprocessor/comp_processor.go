@@ -413,20 +413,15 @@ func (p *DefaultCompDiffProcessor) processSingleComposition(ctx context.Context,
 	// local (no renders), and every path below needs it: the composites that would adopt the new
 	// revision are exactly the ones that would re-point at it, and the ones that would not are a
 	// consequence of applying this composition in their own right.
-	keptXRs, droppedXRs, repointing, err := p.partitionXRsByUpdatePolicy(affectedXRs, newComp, pred)
-	if err != nil {
-		return nil, err
-	}
-
-	// Of the kept composites, the ones that actually re-point are those not pinned to a specific
-	// revision; only those are seeded below.
-	repointingXRs, err := p.repointingXRs(keptXRs)
+	// Only the re-pointing composites are seeded below: a Manual composite kept by --include-manual stays
+	// pinned, so seeding it would render it against a revision it never uses.
+	keptXRs, droppedXRs, repointingXRs, err := p.partitionXRsByUpdatePolicy(affectedXRs, newComp, pred)
 	if err != nil {
 		return nil, err
 	}
 
 	if comparison.changed() {
-		result.RevisionImpact.RepointedComposites = repointing
+		result.RevisionImpact.RepointedComposites = len(repointingXRs)
 	}
 
 	counts := countFilterReasons(droppedXRs)
@@ -435,7 +430,7 @@ func (p *DefaultCompDiffProcessor) processSingleComposition(ctx context.Context,
 		"composition", newComp.GetName(),
 		"originalCount", len(affectedXRs),
 		"keptCount", len(keptXRs),
-		"repointingCount", repointing,
+		"repointingCount", len(repointingXRs),
 		"droppedCount", len(droppedXRs),
 		"filteredByPolicy", counts.byPolicy,
 		"filteredBySelector", counts.bySelector,
@@ -914,21 +909,22 @@ type filteredXR struct {
 // which also cover exclusions unrelated to update policy (e.g. XRs being deleted). A malformed
 // compositionRevisionSelector is a hard error (accuracy over guessing).
 //
-// `repointing` counts the kept XRs that would genuinely re-point at the resulting revision, which is
-// not the same as len(kept): --include-manual keeps a Manual-policy XR for analysis even though it
+// `repointing` is the set of kept XRs (keyed by dt.MakeDiffKeyFromResource) that would genuinely
+// re-point at the resulting revision, which is not the same as the kept set: --include-manual keeps a Manual-policy XR for analysis even though it
 // stays pinned to whatever compositionRevisionRef already names. See classifyXR and issue #479.
-func (p *DefaultCompDiffProcessor) partitionXRsByUpdatePolicy(xrs []*un.Unstructured, newComp *un.Unstructured, pred predictedRevision) (kept []*un.Unstructured, dropped []filteredXR, repointing int, err error) {
+func (p *DefaultCompDiffProcessor) partitionXRsByUpdatePolicy(xrs []*un.Unstructured, newComp *un.Unstructured, pred predictedRevision) (kept []*un.Unstructured, dropped []filteredXR, repointing map[string]bool, err error) {
 	// The selector is matched against the label set the new revision would carry (composition labels
 	// plus the stamped crossplane.io/composition-name and crossplane.io/composition-hash), while
 	// mismatch messages display the user's own composition labels; see predictedRevisionLabels and
 	// xp.XRRevisionSelectorMatch.
 	targetLabels := predictedRevisionLabels(newComp, pred)
+	repointing = make(map[string]bool, len(xrs))
 	compLabels := newComp.GetLabels()
 
 	for _, xr := range xrs {
 		disposition, classifyErr := p.classifyXR(xr, targetLabels, compLabels)
 		if classifyErr != nil {
-			return nil, nil, 0, classifyErr
+			return nil, nil, nil, classifyErr
 		}
 
 		if disposition.filtered != nil {
@@ -939,7 +935,7 @@ func (p *DefaultCompDiffProcessor) partitionXRsByUpdatePolicy(xrs []*un.Unstruct
 		kept = append(kept, xr)
 
 		if !disposition.pinnedToRevision {
-			repointing++
+			repointing[dt.MakeDiffKeyFromResource(xr)] = true
 		}
 	}
 
@@ -1031,33 +1027,6 @@ func (p *DefaultCompDiffProcessor) classifyXR(xr *un.Unstructured, targetLabels,
 	}
 
 	return xrDisposition{}, nil
-}
-
-// repointingXRs returns the keys (dt.MakeDiffKeyFromResource) of the composites that would actually
-// re-point to the revision the diffed composition produces. That is the kept set minus those pinned to
-// a specific revision by a Manual compositionUpdatePolicy: --include-manual asks for such a composite
-// to be *evaluated*, which does not make it adopt anything — Crossplane keeps honouring its
-// compositionRevisionRef.
-//
-// A set rather than a slice so callers keep the kept set's original ordering, which the impact analysis
-// and its rendered output follow.
-func (p *DefaultCompDiffProcessor) repointingXRs(xrs []*un.Unstructured) (map[string]bool, error) {
-	repointing := make(map[string]bool, len(xrs))
-
-	for _, xr := range xrs {
-		policy, err := xp.XRUpdatePolicy(xr.Object, xr.GetAPIVersion())
-		if err != nil {
-			return nil, errors.Wrapf(err, "cannot read compositionUpdatePolicy for XR %q", xr.GetName())
-		}
-
-		if policy == compositionUpdatePolicyManual {
-			continue
-		}
-
-		repointing[dt.MakeDiffKeyFromResource(xr)] = true
-	}
-
-	return repointing, nil
 }
 
 // seedRepointingXRs returns the composites to render: a copy of each re-pointing composite with its

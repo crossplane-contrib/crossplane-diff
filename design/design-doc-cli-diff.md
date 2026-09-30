@@ -299,8 +299,8 @@ The `comp` subcommand has its own set of integration tests:
   Underneath it, `TestRevisionIdentity` pins the mirrored `<composition>-<hash[:7]>` derivation exactly, including
   upstream's `>=` truncation guards at both bounds (63 characters for the hash label value, 7 for the name suffix) and
   the `"unknown"` sentinel `Composition.Hash()` returns on a marshal error, which is shorter than either bound.
-  `TestRepointingXRs` and `TestSeedRepointingXRs` cover which composites are seeded (`Manual`-policy ones are not),
-  that input order survives, and that the supplied composites — the cluster's objects — are never mutated, an unseeded
+  `TestDefaultCompDiffProcessor_partitionXRsByUpdatePolicy` (its `wantRepointing`) and `TestSeedRepointingXRs` cover
+  which composites are seeded (`Manual`-policy ones are not), that input order survives, and that the supplied composites — the cluster's objects — are never mutated, an unseeded
   one being passed through rather than needlessly cloned. `TestSetCompositionRevisionRefName` pins that seeding
   overwrites an existing ref on either the v1 or the v2 path, preferring v2 when a pathological object carries both, and
   never *creates* a ref that isn't already present. `AutomaticSelectorOnCompositionHash_Kept` pins the other consumer of
