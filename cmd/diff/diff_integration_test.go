@@ -1301,9 +1301,12 @@ Summary: 2 modified, 2 removed`,
 			},
 			expectedExitCode:       dp.ExitCodeDiffDetected,
 			expectedStderrContains: []string{"Ignoring a duplicate input: it is identical to an earlier one"},
+			// The warning channel's contract is both halves: stderr above, and warnings[] here.
 			expectedStructuredOutput: tu.ExpectDiff().
 				WithSummary(2, 0, 0).
-				WithXRs(tu.XR("XNopResource", "test-resource", "default").Status("changed").Summary(2, 0, 0)),
+				WithXRs(tu.XR("XNopResource", "test-resource", "default").Status("changed").Summary(2, 0, 0)).
+				WithWarning("Ignoring a duplicate input: it is identical to an earlier one").
+				WithWarningContext(map[string]string{"resource": "XNopResource/test-resource", "input": "2", "duplicateOf": "1"}),
 		},
 		// The same object twice with different content fails loudly: applying both would leave whichever
 		// is applied last, and the order inputs are given in is not a statement of intent.
