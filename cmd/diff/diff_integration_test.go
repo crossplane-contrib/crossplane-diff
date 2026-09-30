@@ -2557,6 +2557,11 @@ Impact analysis skipped: this composition is identical to the cluster's, so appl
 				"Could not predict the name of the CompositionRevision",
 			},
 			expectedStructuredCompOutput: tu.ExpectCompDiff().
+				// The same advisory reaches warnings[] for machine consumers, keyed by composition so that two
+				// compositions declining to predict stay two warnings rather than being merged as duplicates.
+				WithWarning("Could not predict the name of the CompositionRevision").
+				WithWarningContext(map[string]string{"composition": "xnopresources.diff.example.org"}).
+				And().
 				WithComposition("xnopresources.diff.example.org").
 				// createsRevision stays true while the name is withheld: the annotation delta is real, and a
 				// stale annotation genuinely would be rewritten and mint a revision. Only the identity is
@@ -2597,6 +2602,8 @@ Impact analysis skipped: this composition is identical to the cluster's, so appl
 			outputFormat:     "json",
 			expectedExitCode: dp.ExitCodeDiffDetected,
 			expectedStructuredCompOutput: tu.ExpectCompDiff().
+				// The name was predictable, so the could-not-predict advisory must stay silent.
+				WithNoWarnings().
 				WithComposition("xrevisionrefs.diff.example.org").
 				WithRevisionImpact("metadata", true, 1).
 				// Matched by pattern, not literally: the suffix is the first 7 hex digits of the
