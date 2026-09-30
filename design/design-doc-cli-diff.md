@@ -888,8 +888,14 @@ apiserver reject the request on optimistic concurrency, and client-go's dynamic 
 `managedFields` populated. `DefaultDiffProcessor` already guarded the root XR against both; the nested-XR branch and
 composed resources had no equivalent.
 
-Two fields are restored from our side after a successful dry-run create:
+Three fields are restored from our side after a successful dry-run create:
 
+- **`ownerReferences`, whenever the rendered object had them.** Stripping them from the request is not the same as
+  dropping them from the desired state: the real apply creates the object with its rendered controller reference, and
+  render-overlap detection (`InputValidator`, §6.7a) reads that reference to name the XR that would control each
+  composed resource. Without the restoration, two XRs contending for one new object would be reported as merely
+  producing it differently. Any references the server returned (only a mutating webhook could have added one) are kept
+  after the rendered ones.
 - **Identity, when the request carried `generateName` and no `name`.** The apiserver runs `names.Generator` in
   `rest.BeforeCreate`, ahead of the dry-run short-circuit at the storage layer, so it invents a random name that would
   make the diff differ on every run. For a *named* resource the server's name is kept, so a mutating webhook that

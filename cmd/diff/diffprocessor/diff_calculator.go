@@ -595,10 +595,18 @@ func (c *DefaultDiffCalculator) classifyApplyFailure(ctx context.Context, desire
 	}
 }
 
-// mergeDryRunCreateResult combines the apiserver's view of a dry-run created object with the two
+// mergeDryRunCreateResult combines the apiserver's view of a dry-run created object with the three
 // things that must come from our side instead.
 //
-// BOTH restorations are currently LATENT — correct when reached, but not reachable on any path today.
+// Owner references are LIVE. sanitizeForDryRun strips them before sending, so the server hands back an
+// object with none, yet the real apply would create it with the rendered controller reference. The
+// desired object is read for more than display: render-overlap detection (controllerOf in
+// input_validator.go) names the XR that would control each composed resource from it, so without the
+// restoration two XRs contending for one new object are misreported as merely disagreeing about it.
+// Any references the server did return can only have been added by a mutating webhook, and are kept
+// after ours.
+//
+// The other two restorations are LATENT — correct when reached, but not reachable on any path today.
 // They are kept as guards because each protects against a genuinely wrong output if the surrounding
 // code changes, and neither costs anything. Do not read either as live behaviour.
 //
@@ -622,6 +630,10 @@ func (c *DefaultDiffCalculator) classifyApplyFailure(ctx context.Context, desire
 // visible in a diff is a rendering decision, tracked separately.
 func mergeDryRunCreateResult(rendered, sent, created *un.Unstructured) *un.Unstructured {
 	out := created.DeepCopy()
+
+	if refs := rendered.GetOwnerReferences(); len(refs) > 0 {
+		out.SetOwnerReferences(append(refs, out.GetOwnerReferences()...))
+	}
 
 	if sent.GetGenerateName() != "" && sent.GetName() == "" {
 		out.SetName("")

@@ -92,6 +92,11 @@ func TestDefaultDiffCalculator_CalculateDiff(t *testing.T) {
 		// hold this value. That field is never present in the rendered input, so it can only have come
 		// from the apiserver's response — which is the whole claim this feature makes.
 		wantServerField string
+
+		// wantControllerOf, when set, requires the DESIRED side of the diff to carry a controller owner
+		// reference naming this owner. Render-overlap detection reads it to attribute a composed resource
+		// to the XR that would control it, so an addition must not lose it to the dry-run round trip.
+		wantControllerOf string
 	}{
 		"ExistingResourceModified": {
 			setupMocks: func(t *testing.T) (k8.ApplyClient, xp.ResourceTreeClient, ResourceManager) {
@@ -259,6 +264,31 @@ func TestDefaultDiffCalculator_CalculateDiff(t *testing.T) {
 				DiffType:     dt.DiffTypeAdded,
 			},
 			wantServerField: "server-assigned",
+		},
+		"AdditionKeepsRenderedControllerReference": {
+			// sanitizeForDryRun strips ownerReferences from the request, and the fake echoes the request
+			// back, so the server's object carries none: exactly what a real apiserver returns. The real
+			// apply would create the object WITH its controller reference, so the desired side must too.
+			setupMocks: func(t *testing.T) (k8.ApplyClient, xp.ResourceTreeClient, ResourceManager) {
+				t.Helper()
+
+				applyClient := tu.NewMockApplyClient().WithSuccessfulDryRunCreate().Build()
+				resourceClient := tu.NewMockResourceClient().WithResourceNotFound().Build()
+				resourceManager := NewResourceManager(resourceClient, tu.NewMockDefinitionClient().Build(), tu.NewMockResourceTreeClient().Build(), tu.TestLogger(t, false))
+
+				return applyClient, tu.NewMockResourceTreeClient().Build(), resourceManager
+			},
+			composite: nil,
+			desired: tu.NewResource("example.org/v1", "TestResource", "new-resource").
+				WithSpecField("field", "value").
+				WithControllerReference("XR", ParentXRName, "example.org/v1", "parent-xr-uid").
+				Build(),
+			wantDiff: &dt.ResourceDiff{
+				Gvk:          schema.GroupVersionKind{Kind: "TestResource", Group: "example.org", Version: "v1"},
+				ResourceName: "new-resource",
+				DiffType:     dt.DiffTypeAdded,
+			},
+			wantControllerOf: ParentXRName,
 		},
 		"AdditionNotDryRunWhenDisabled": {
 			// --dry-run-on=existing reproduces the pre-#334 behaviour, and says so per-resource rather
@@ -940,6 +970,19 @@ func TestDefaultDiffCalculator_CalculateDiff(t *testing.T) {
 			// verified against the apiserver — not merely "we didn't check".
 			if d := gcmp.Diff(tt.wantDryRun, diff.DryRun); d != "" {
 				t.Errorf("DryRun mismatch (-want +got):\n%s", d)
+			}
+
+			if tt.wantControllerOf != "" {
+				if diff.Desired.Raw == nil {
+					t.Fatalf("expected a desired view carrying the controller reference, got no desired view at all")
+				}
+
+				switch ref := metav1.GetControllerOf(diff.Desired.Raw); {
+				case ref == nil:
+					t.Errorf("desired side has no controller reference: the dry-run round trip dropped the rendered one")
+				case ref.Name != tt.wantControllerOf:
+					t.Errorf("desired side's controller = %q, want %q", ref.Name, tt.wantControllerOf)
+				}
 			}
 
 			if tt.wantServerField != "" {
