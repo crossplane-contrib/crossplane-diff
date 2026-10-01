@@ -1085,8 +1085,13 @@ The tool returns different exit codes to indicate the result of the diff operati
 | 1 | Tool error - execution failed (e.g., cluster access issues, invalid input) |
 | 2 | Validation error - the cluster will not accept a resource: it failed local validation against its CRD/XRD schema, **or** the apiserver rejected it during the dry run (validating webhook, `ValidatingAdmissionPolicy`, `ResourceQuota`) |
 | 3 | Diff detected - differences were found between input and cluster state |
+| 130 / 143 | Interrupted - the run was stopped by SIGINT (Ctrl+C) or SIGTERM (128 + signal number); results are incomplete |
 
-Exit codes are ordered by severity. When processing multiple resources, the highest severity exit code is returned:
+An interrupt stops the run but still releases the function containers it started, and, once diffing has begun, `-o json`/`-o yaml`
+output is still written, with an `errors[]` entry saying the run was interrupted. An interruption outranks every other exit code.
+Cleanup is bounded at 30 seconds; a second Ctrl+C exits immediately, at the cost of possibly leaving containers behind.
+
+Exit codes 0-3 are ordered by severity. When processing multiple resources, the highest severity exit code is returned:
 
 ```bash
 # Example: Use exit codes in CI/CD

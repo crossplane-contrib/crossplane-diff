@@ -204,8 +204,9 @@ type Cleaner interface {
 // containers running; and it must not hang on a slow or wedged Docker daemon. A failure is logged,
 // not returned: releasing resources is best-effort and must not change the run's result.
 //
-// Note that this does not make cleanup survive Ctrl+C: no signal handling exists, so an interrupt
-// kills the process before any cleanup runs (see #515).
+// This is also what lets cleanup finish after Ctrl+C or SIGTERM: the first signal cancels the run's
+// context (see the command layer's run context) rather than killing the process, and a second signal
+// kills it, which is the way out if cleanup itself hangs.
 func CleanupDetached(ctx context.Context, c Cleaner, logger logging.Logger) {
 	cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), CleanupTimeout)
 	defer cancel()
@@ -336,6 +337,8 @@ func (p *DefaultDiffProcessor) PerformDiff(ctx context.Context, resources []*un.
 	// containers) is still in warnings[] when the renderer reads it; the command's deferred Cleanup
 	// would run only after output has been emitted.
 	CleanupDetached(ctx, p, p.config.Logger)
+
+	outputErrors = withInterruption(ctx, outputErrors)
 
 	// Always render (even if only errors exist) to ensure valid structured output
 	// The renderer will include errors in the structured output and write them to stderr
