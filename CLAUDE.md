@@ -411,6 +411,16 @@ Keep a small set of ANSI tests (~5-7) to smoke test visual output formatting.
 - Keep processors simple: inject dependencies rather than constructing them internally
 - Reuse injected instances (e.g., single `DiffProcessor` for all XRs) rather than creating new ones per operation
 
+### Don't Cite Requirements Specs in Code
+- Never refer to a `.requirements/` spec from code, comments, test names, fixtures, or docs. That means no IDs like
+  `R7`, `AC2.1` or `T3`, and no paths to a `REQUIREMENTS.md`.
+- Each spec numbers independently, so every one starts at `R1`/`AC1`, and specs are frozen once their feature ships. A
+  bare ID is therefore ambiguous (several specs use `AC3.1` for unrelated things) and goes stale as the code moves on
+  while the spec does not.
+- Write down the reason the ID stood for. If a comment reads fine with its leading label deleted, delete the label;
+  otherwise the comment was relying on the ID and needs the reason spelled out.
+- Issue and PR numbers (`#334`) are fine: they are globally unique and do not get renumbered.
+
 ### Backwards Compatibility
 - Support both Crossplane v1 and v2 API structures
 - Handle both `spec.compositionUpdatePolicy` (v1) and `spec.crossplane.compositionUpdatePolicy` (v2)

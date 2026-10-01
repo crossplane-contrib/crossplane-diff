@@ -460,37 +460,37 @@ func TestDefaultCompositionRevisionClient_GetLatestRevisionForComposition_Select
 		expectError  bool
 		errorPattern string
 	}{
-		"SelectorPinsOlderActiveRevision": { // AC3.1
+		"SelectorPinsOlderActiveRevision": {
 			reason:     "selector channel=active resolves to the active revision, not the newest overall",
 			revisions:  []*apiextensionsv1.CompositionRevision{active, preview},
 			selector:   mustSelector(map[string]string{"channel": "active"}),
 			expectName: "chan-comp-active",
 		},
-		"SelectorSelectsPreviewRevision": { // AC3.2
+		"SelectorSelectsPreviewRevision": {
 			reason:     "selector channel=preview resolves to the preview revision",
 			revisions:  []*apiextensionsv1.CompositionRevision{active, preview},
 			selector:   mustSelector(map[string]string{"channel": "preview"}),
 			expectName: "chan-comp-preview",
 		},
-		"WalkingTagSelectsNewestMatching": { // AC3.3
+		"WalkingTagSelectsNewestMatching": {
 			reason:     "selector major=v1 matches multiple revisions; newest matching wins",
 			revisions:  []*apiextensionsv1.CompositionRevision{v1old, v1new},
 			selector:   mustSelector(map[string]string{"major": "v1"}),
 			expectName: "chan-comp-v1new",
 		},
-		"EverythingSelectorSelectsNewestOverall": { // AC3.4
+		"EverythingSelectorSelectsNewestOverall": {
 			reason:     "labels.Everything() selects the newest revision overall",
 			revisions:  []*apiextensionsv1.CompositionRevision{active, preview},
 			selector:   labels.Everything(),
 			expectName: "chan-comp-preview",
 		},
-		"NilSelectorSelectsNewestOverall": { // AC3.4 (nil is the ergonomic "no restriction")
+		"NilSelectorSelectsNewestOverall": { // nil is the ergonomic "no restriction"
 			reason:     "a nil selector means no restriction and selects the newest revision overall",
 			revisions:  []*apiextensionsv1.CompositionRevision{active, preview},
 			selector:   nil,
 			expectName: "chan-comp-preview",
 		},
-		"NoRevisionMatchesSelector": { // AC3.5
+		"NoRevisionMatchesSelector": {
 			reason:       "a selector matching no revision is a hard error",
 			revisions:    []*apiextensionsv1.CompositionRevision{active, preview},
 			selector:     mustSelector(map[string]string{"channel": "nonexistent"}),

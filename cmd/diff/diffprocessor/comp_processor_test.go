@@ -681,7 +681,7 @@ func TestDefaultCompDiffProcessor_partitionXRsByUpdatePolicy(t *testing.T) {
 		wantRepointing []string
 		wantErr        bool
 	}{
-		// AC2.5 (Manual side): --include-manual keeps Manual XRs...
+		// Manual side: --include-manual keeps Manual XRs...
 		"IncludeManualTrue_KeepsManualXRs": {
 			includeManual: true,
 			compLabels:    map[string]string{"version": "0.0.2"},
@@ -709,7 +709,7 @@ func TestDefaultCompDiffProcessor_partitionXRsByUpdatePolicy(t *testing.T) {
 			wantRepointing: nil,
 			wantDropped:    nil,
 		},
-		// AC2.5 (selector side): ...but --include-manual does NOT re-include selector-mismatched
+		// Selector side: ...but --include-manual does NOT re-include selector-mismatched
 		// Automatic XRs — they would never adopt the new revision.
 		"IncludeManualTrue_StillDropsSelectorMismatchedAutomaticXRs": {
 			includeManual: true,
@@ -739,7 +739,7 @@ func TestDefaultCompDiffProcessor_partitionXRsByUpdatePolicy(t *testing.T) {
 			wantRepointing: []string{"auto-xr"},
 			wantDropped:    []droppedWant{{name: "manual-xr", reason: renderer.FilterReasonManualPolicy}},
 		},
-		// AC2.1: Automatic XR whose selector does not match the composition labels is dropped.
+		// Automatic XR whose selector does not match the composition labels is dropped.
 		"AutomaticSelectorMismatch_Dropped": {
 			includeManual: false,
 			compLabels:    map[string]string{"version": "0.0.2"},
@@ -752,7 +752,7 @@ func TestDefaultCompDiffProcessor_partitionXRsByUpdatePolicy(t *testing.T) {
 			wantRepointing: nil,
 			wantDropped:    []droppedWant{{name: "selector-old", reason: renderer.FilterReasonRevisionSelectorMismatch}},
 		},
-		// AC2.2: Automatic XR whose selector matches the composition labels is kept.
+		// Automatic XR whose selector matches the composition labels is kept.
 		"AutomaticSelectorMatch_Kept": {
 			includeManual: false,
 			compLabels:    map[string]string{"version": "0.0.2"},
@@ -802,7 +802,7 @@ func TestDefaultCompDiffProcessor_partitionXRsByUpdatePolicy(t *testing.T) {
 			wantRepointing: []string{"hash-selector"},
 			wantDropped:    nil,
 		},
-		// AC2.3: Automatic XR with no selector is kept (unchanged from prior behavior).
+		// Automatic XR with no selector is kept (unchanged from prior behavior).
 		"AutomaticNoSelector_Kept": {
 			includeManual: false,
 			compLabels:    map[string]string{"version": "0.0.2"},
@@ -815,7 +815,7 @@ func TestDefaultCompDiffProcessor_partitionXRsByUpdatePolicy(t *testing.T) {
 			wantRepointing: []string{"no-selector", "default-policy"},
 			wantDropped:    nil,
 		},
-		// AC2.4: Manual XR with a matching selector is still dropped by policy (reason manual_policy),
+		// Manual XR with a matching selector is still dropped by policy (reason manual_policy),
 		// not rescued by the selector match.
 		"ManualWithMatchingSelector_DroppedByPolicy": {
 			includeManual: false,
@@ -1856,7 +1856,7 @@ func TestDefaultCompDiffProcessor_DiffComposition_ResourceMode(t *testing.T) {
 	// RevisionSelectorMismatchSurfacedWithReasonAndCounts: an Automatic XR whose
 	// compositionRevisionSelector does not match the diffed composition's labels is surfaced as
 	// filtered with reason revision_selector_mismatch (and a detail hint), and counted in
-	// FilteredBySelector rather than FilteredByPolicy. (T3 / AC2.6, AC2.7, AC4.6)
+	// FilteredBySelector rather than FilteredByPolicy.
 	t.Run("RevisionSelectorMismatchSurfacedWithReasonAndCounts", func(t *testing.T) {
 		labeledComp := tu.NewComposition("test-comp").
 			WithCompositeTypeRef("example.org/v1", "XR").
