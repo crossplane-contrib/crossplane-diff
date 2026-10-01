@@ -30,6 +30,7 @@ func NewAppContext(config *rest.Config, logger logging.Logger) (*AppContext, err
 
 	k8c := k8.Clients{
 		Type:     tc,
+		Access:   k8.NewAccessClient(coreClients, tc, logger),
 		Apply:    k8.NewApplyClient(coreClients, tc, logger),
 		Resource: k8.NewResourceClient(coreClients, tc, logger),
 		Schema:   k8.NewSchemaClient(coreClients, tc, logger),

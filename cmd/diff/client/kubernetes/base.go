@@ -4,6 +4,7 @@ package kubernetes
 // Clients is an aggregation of all of our Kubernetes clients, used to pass them as a bundle,
 // typically for initialization where the consumer can select which ones they need.
 type Clients struct {
+	Access   AccessChecker
 	Apply    ApplyClient
 	Resource ResourceClient
 	Schema   SchemaClient

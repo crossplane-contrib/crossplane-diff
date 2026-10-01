@@ -34,6 +34,7 @@ flowchart TD
     subgraph "Client Layer"
         subgraph "Kubernetes Clients"
             APPLY[ApplyClient]
+            ACCSS[AccessChecker]
             RESRC[ResourceClient]
             SCHMA[SchemaClient]
             TCONV[TypeConverter]
@@ -63,6 +64,7 @@ flowchart TD
 
     %% Application Layer connections
     APP --> APPLY
+    APP --> ACCSS
     APP --> RESRC
     APP --> SCHMA
     APP --> TCONV
@@ -95,6 +97,9 @@ flowchart TD
     DIFFCALC --> RESMGR
     DIFFCALC --> TREE
     DIFFCALC --> APPLY
+    %% Consulted only after a dry run returns 403, to tell an RBAC denial
+    %% (degrade this resource) from an admission/quota refusal (report it).
+    DIFFCALC --> ACCSS
 
     SCHMVLD --> SCHMA
     SCHMVLD --> DEFN
@@ -113,6 +118,7 @@ flowchart TD
     
     %% Client Layer connections
     APPLY --> K8S
+    ACCSS --> K8S
     RESRC --> K8S
     SCHMA --> K8S
     TCONV --> K8S
@@ -135,5 +141,5 @@ flowchart TD
     class CMD,HELP commandLayer
     class APP,DPR,CDPR,LOAD applicationLayer
     class DIFFCALC,SCHMVLD,RESMGR,REQPRV,FNPRV,DIFFRND,CDIFFRND,DIFFFRM,RENDER domainLayer
-    class APPLY,RESRC,SCHMA,TCONV,COMP,CREV,DEFN,ENVT,FUNC,CRED,TREE clientLayer
+    class APPLY,ACCSS,RESRC,SCHMA,TCONV,COMP,CREV,DEFN,ENVT,FUNC,CRED,TREE clientLayer
     class K8S externalSystems

@@ -1,23 +1,38 @@
 classDiagram
     %% Kubernetes Clients
     class K8sClients {
+        +Access AccessChecker
         +Apply ApplyClient
         +Resource ResourceClient
         +Schema SchemaClient
         +Type TypeConverter
     }
-    
+
     class ApplyClient {
         <<interface>>
-        +DryRunApply(ctx, obj) (*Unstructured, error)
+        +DryRunApply(ctx, obj, fieldOwner) (*Unstructured, error)
+        +DryRunCreate(ctx, obj) (*Unstructured, error)
     }
-    
+
     class DefaultApplyClient {
         -dynamicClient dynamic.Interface
         -typeConverter TypeConverter
         -logger logging.Logger
     }
-    
+
+    class AccessChecker {
+        <<interface>>
+        +Can(ctx, gvk, namespace, verb) (bool, string, error)
+    }
+
+    class DefaultAccessClient {
+        -dynamicClient dynamic.Interface
+        -typeConverter TypeConverter
+        -logger logging.Logger
+        -cache map[accessCacheKey]accessDecision
+        -cacheMutex sync.RWMutex
+    }
+
     class ResourceClient {
         <<interface>>
         +GetResource(ctx, gvk, namespace, name) (*Unstructured, error)
@@ -138,14 +153,17 @@ classDiagram
     }
     
     DefaultApplyClient ..|> ApplyClient
+    DefaultAccessClient ..|> AccessChecker
     DefaultResourceClient ..|> ResourceClient
     DefaultSchemaClient ..|> SchemaClient
     DefaultTypeConverter ..|> TypeConverter
-    
+
     DefaultApplyClient --> TypeConverter
+    DefaultAccessClient --> TypeConverter
     DefaultResourceClient --> TypeConverter
     DefaultSchemaClient --> TypeConverter
-    
+
+    K8sClients --> AccessChecker
     K8sClients --> ApplyClient
     K8sClients --> ResourceClient
     K8sClients --> SchemaClient
