@@ -799,8 +799,10 @@ type CompDiffProcessor interface {
    predicted from the file as supplied, so the suffix may differ from the eventual one. The change is still detected;
    only the predicted value is imprecise.)
 4. **Diff each XR.** Delegate to the `xrProc` `DiffProcessor` via `DiffSingleResource`, supplying a
-   `CompositionProvider` that returns the proposed composition for the affected XR's GVK and the cluster's composition
-   otherwise (so nested XRs that use a different composition are diffed against their unchanged composition).
+   `CompositionProvider` that returns the proposed composition for the affected XR's GVK. All compositions passed in
+   one run are a single change set, so a nested XR whose type another input composition targets renders with that
+   input (an XR `compositionRef` narrows the choice by name; several inputs for one type with nothing to choose between
+   them is an error). Any other nested XR falls back to the cluster's composition.
 5. **Aggregate.** Produce a `CompDiffOutput` with composition-level changes, an `XRImpact` entry per XR, and an
    `AffectedResourcesSummary` (changed / unchanged / errored counts).
 

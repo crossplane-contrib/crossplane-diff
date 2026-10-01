@@ -4187,6 +4187,47 @@ Summary: 1 modified`,
 			expectedExitCode: dp.ExitCodeDiffDetected,
 			noColor:          true,
 		},
+		// Issue #514: every Composition passed to one `comp` run is one change set, so a nested XR
+		// whose type is composed by another input Composition renders with that input, not the cluster's.
+		"NestedXRUsesSiblingCLIComposition": {
+			reason: "Validates that a nested XR renders with a sibling CLI composition targeting its type",
+			setupFiles: []string{
+				"testdata/comp/resources/xrd.yaml",
+				"testdata/comp/resources/original-composition.yaml",
+				"testdata/comp/resources/functions.yaml",
+				"testdata/comp/resources/nested-xr/parent-xrd.yaml",
+				"testdata/comp/resources/nested-xr/parent-composition.yaml",
+			},
+			crossplaneManagedResources: []HierarchicalOwnershipRelation{
+				{
+					OwnerFile: "testdata/comp/resources/nested-xr/existing-parent-xr.yaml",
+					OwnedFiles: map[string]*HierarchicalOwnershipRelation{
+						"testdata/comp/resources/nested-xr/existing-parent-direct-downstream.yaml": nil,
+						"testdata/comp/resources/nested-xr/existing-nested-child-xr.yaml": {
+							OwnedFiles: map[string]*HierarchicalOwnershipRelation{
+								"testdata/comp/resources/nested-xr/existing-child-downstream.yaml": nil,
+							},
+						},
+					},
+				},
+			},
+			inputFiles: []string{
+				"testdata/comp/updated-parent-composition.yaml",
+				"testdata/comp/updated-composition.yaml",
+			},
+			namespace:        "default",
+			outputFormat:     "json",
+			expectedExitCode: dp.ExitCodeDiffDetected,
+			// The parent's impact must include the nested child's downstream as updated-composition.yaml
+			// renders it; with the cluster's child composition it would be unchanged.
+			expectedStructuredCompOutput: tu.ExpectCompDiff().
+				WithComposition("xparentresources.parent.diff.example.org").
+				WithCompositionModified().
+				WithXRImpact("XParentResource", "test-parent", "default", "changed").
+				WithDownstreamResource("modified", "XDownstreamResource", "test-parent-nested", "default").
+				WithFieldChange("spec.forProvider.configData", "child-config-value", "updated-child-config-value").
+				WithFieldChange("spec.forProvider.resourceTier", "basic", "premium"),
+		},
 		"CrossNamespaceResourceCollision": {
 			reason: "Validates that resources with the same name in different namespaces are correctly distinguished",
 			skip:   true,

@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"maps"
 	"os"
+	"strings"
 	"time"
 
 	xp "github.com/crossplane-contrib/crossplane-diff/cmd/diff/client/crossplane"
@@ -89,6 +90,11 @@ type DefaultCompDiffProcessor struct {
 	config            ProcessorConfig
 	xrProc            DiffProcessor
 	compDiffRenderer  renderer.CompDiffRenderer
+
+	// inputCompositions holds every Composition passed to the current DiffComposition call. They form
+	// one change set: a nested XR whose type one of them composes renders with it rather than with the
+	// cluster's version (#514).
+	inputCompositions []*apiextensionsv1.Composition
 }
 
 // NewCompDiffProcessor creates a new DefaultCompDiffProcessor.
@@ -178,6 +184,8 @@ func (p *DefaultCompDiffProcessor) DiffComposition(ctx context.Context, composit
 	if err != nil {
 		return false, err
 	}
+
+	p.inputCompositions = p.typedInputCompositions(compositions)
 
 	output := &renderer.CompDiffOutput{
 		Compositions: make([]renderer.CompositionDiff, 0, len(compositions)),
@@ -598,6 +606,21 @@ func (p *DefaultCompDiffProcessor) collectXRDiffs(ctx context.Context, xrs []*un
 			return cliComp, nil
 		}
 
+		// Check 3: Does another Composition passed in the same run target this resource's type? All
+		// inputs are one change set, so that input takes precedence over the cluster's version.
+		sibling, err := p.siblingInputComposition(res, cliComp.GetName())
+		if err != nil {
+			return nil, err
+		}
+
+		if sibling != nil {
+			p.config.Logger.Debug("Resource matches another input composition's type, using it",
+				"resource", resourceID,
+				"composition", sibling.GetName())
+
+			return sibling, nil
+		}
+
 		// This is a nested XR with a different type - look up its composition from the cluster
 		p.config.Logger.Debug("Resource does not match CLI composition type, looking up from cluster",
 			"resource", resourceID,
@@ -633,6 +656,80 @@ func (p *DefaultCompDiffProcessor) collectXRDiffs(ctx context.Context, xrs []*un
 	}
 
 	return results
+}
+
+// typedInputCompositions converts the run's input Compositions to typed, skipping non-Composition
+// objects. One that cannot be converted is skipped here; its own processing reports the failure.
+func (p *DefaultCompDiffProcessor) typedInputCompositions(compositions []*un.Unstructured) []*apiextensionsv1.Composition {
+	var typed []*apiextensionsv1.Composition
+
+	for _, comp := range compositions {
+		if comp.GetKind() != "Composition" {
+			continue
+		}
+
+		c := &apiextensionsv1.Composition{}
+		if err := runtime.DefaultUnstructuredConverter.FromUnstructured(comp.Object, c); err != nil {
+			p.config.Logger.Debug("Cannot convert input composition to typed", "composition", comp.GetName(), "error", err)
+			continue
+		}
+
+		typed = append(typed, c)
+	}
+
+	return typed
+}
+
+// siblingInputComposition returns the input Composition, other than the one named `current`, that
+// targets res's type, or nil when none does. If res names a composition via compositionRef, only an
+// input with that name applies. Several matching inputs with no compositionRef to choose between
+// them is an input error: which one Crossplane would use cannot be decided, and guessing would
+// misreport the diff.
+func (p *DefaultCompDiffProcessor) siblingInputComposition(res *un.Unstructured, current string) (*apiextensionsv1.Composition, error) {
+	gvk := res.GroupVersionKind()
+	apiVersion := gvk.GroupVersion().String()
+
+	refName := ""
+
+	for _, path := range [][]string{{"spec", "crossplane", "compositionRef", "name"}, {"spec", "compositionRef", "name"}} {
+		if name, found, _ := un.NestedString(res.Object, path...); found && name != "" {
+			refName = name
+			break
+		}
+	}
+
+	var candidates []*apiextensionsv1.Composition
+
+	for _, c := range p.inputCompositions {
+		if c.GetName() == current {
+			continue
+		}
+
+		if c.Spec.CompositeTypeRef.APIVersion != apiVersion || c.Spec.CompositeTypeRef.Kind != gvk.Kind {
+			continue
+		}
+
+		if refName != "" && c.GetName() != refName {
+			continue
+		}
+
+		candidates = append(candidates, c)
+	}
+
+	switch len(candidates) {
+	case 0:
+		return nil, nil
+	case 1:
+		return candidates[0], nil
+	default:
+		names := make([]string, 0, len(candidates))
+		for _, c := range candidates {
+			names = append(names, c.GetName())
+		}
+
+		return nil, errors.Errorf("cannot choose a composition for %s/%s: input compositions %s all target %s and it has no compositionRef naming one of them",
+			gvk.Kind, res.GetName(), strings.Join(names, ", "), gvk.String())
+	}
 }
 
 // compositionComparison is the result of comparing a proposed composition against its in-cluster
