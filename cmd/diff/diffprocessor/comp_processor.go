@@ -280,6 +280,10 @@ func (p *DefaultCompDiffProcessor) DiffComposition(ctx context.Context, composit
 	// carries them into structured output.
 	output.Warnings = p.collectedWarnings()
 
+	// Counted before the interruption entry is added: it is not an XR failure.
+	totalXRErrors := len(output.Errors)
+	output.Errors = withInterruption(ctx, output.Errors)
+
 	// Always render output (even if all compositions failed) to ensure valid structured output
 	// The renderer will include errors in the structured output and write them to stderr
 	if err := p.compDiffRenderer.RenderCompDiff(output); err != nil {
@@ -288,8 +292,6 @@ func (p *DefaultCompDiffProcessor) DiffComposition(ctx context.Context, composit
 
 	// Check for XR processing errors after rendering (so users see the output first).
 	// Return an error so CI/CD pipelines get a non-zero exit code when impact analysis failed.
-	totalXRErrors := len(output.Errors)
-
 	if totalXRErrors > 0 {
 		return hasDiffs, errors.Errorf("impact analysis failed for %d XR(s)", totalXRErrors)
 	}

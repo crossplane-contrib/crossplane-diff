@@ -190,13 +190,16 @@ func makeDefaultCompProc(c *CompCmd, kongCtx *kong.Context, appCtx *AppContext, 
 }
 
 // Run executes the composition diff command.
-func (c *CompCmd) Run(_ *kong.Context, log logging.Logger, appCtx *AppContext, proc dp.CompDiffProcessor, loader ld.Loader, exitCode *ExitCode) error {
+func (c *CompCmd) Run(_ *kong.Context, log logging.Logger, appCtx *AppContext, proc dp.CompDiffProcessor, loader ld.Loader, exitCode *ExitCode) (err error) {
 	ctx, cancel, err := initializeAppContext(c.Timeout, appCtx, log)
 	if err != nil {
 		exitCode.Code = dp.ExitCodeToolError
 		return err
 	}
 	defer cancel()
+
+	// An interrupted run reports the interruption, not the cancelled calls it caused.
+	defer func() { err = interruptedRunResult(ctx, err, exitCode) }()
 
 	// Covers paths that return before rendering; Cleanup is idempotent.
 	defer dp.CleanupDetached(ctx, proc, log)
