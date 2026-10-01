@@ -1545,9 +1545,12 @@ The label shown to a human is `WARNING`, not `INFO`, deliberately: an operator r
 `INFO: applying this diff will assume ownership` would under-weight it. The upstream *level* and the
 word presented to a user answer different questions.
 
-The CLI wraps the logger at *both* binding sites (`main()` and `verboseFlag.BeforeApply`). The
-`--verbose` flag rebinds the logger, so wrapping only in `main()` would silently drop the channel at
-exactly the verbosity where a user is asking for more output. `Info` is deliberately not forwarded to
+The CLI constructs the `WarningLogger` exactly once, in a memoized kong provider
+(`warningLoggerBindings` in `main.go`) that runs after flags are parsed and picks the wrapped logger
+from `--verbose` (a discarding logger by default, zap under `--verbose`). kong does not memoize
+providers itself, so the memo is load-bearing: without it each consumer would get its own instance and
+its own sink. The `logging.Logger` binding is derived from the `*WarningLogger` binding, so the two
+always resolve to the same instance. `Info` is deliberately not forwarded to
 the wrapped logger, so a `--verbose` run does not print each warning twice in two formats.
 
 **Identity and deduplication.** The sink keeps one entry per distinct `(message, context)` pair; a
