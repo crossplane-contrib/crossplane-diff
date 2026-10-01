@@ -687,11 +687,18 @@ func apiserverMessage(err error) string {
 // grounds that "for new resources we skip DryRunApply entirely so the rendered ownerRefs still
 // surface in the diff output". They never surface: cleanupForDiff (renderer/diff_formatter.go)
 // removes metadata.ownerReferences unconditionally from both sides of every comparison, ungated by
-// forVerdict. So dropping them costs nothing in output, while keeping them risks two real failures —
-// an empty owner UID, which the apiserver rejects outright, and
+// forVerdict. So dropping them from the REQUEST costs nothing in displayed output, while sending them
+// risks two real failures — an empty owner UID, which the apiserver rejects outright, and
 // OwnerReferencesPermissionEnforcement (enabled by default on OpenShift), which demands delete
 // permission on the owner. The SSA multi-controller hazard the original comment described is also
 // still avoided, since leaving ownerRefs out of an apply preserves whatever the cluster already has.
+//
+// That is a statement about the request only. The desired object's controller reference IS read
+// beyond display (render-overlap detection attributes each composed resource to its controlling XR),
+// so the reference must not be lost from the RESULT. For an existing resource the apply preserves the
+// cluster's; for an addition there is nothing to preserve, which is why mergeDryRunCreateResult
+// restores the rendered references after the round trip. Reading "costs nothing" as "ownerReferences
+// don't matter here" is the mistake that restoration fixed.
 //
 // managedFields matters for a different reason: client-go's dynamic Apply refuses any object that
 // has it populated ("cannot apply an object with managed fields already set"). diff_processor.go
