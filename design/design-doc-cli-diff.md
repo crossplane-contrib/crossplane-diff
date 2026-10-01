@@ -790,7 +790,12 @@ type CompDiffProcessor interface {
    `calculateCompositionDiff` establishes this with one more local comparison: the same mask-lifted view, with that
    single path (`renderer.PathLastAppliedConfiguration`) ignored. Ordering matters, because the annotation must stay in
    the comparison that decides `ChangeScope` — it is a real difference and Crossplane hashes it — and be excluded only
-   from this narrower question about identity. In that case `PredictedRevisionName` is omitted, the composites are
+   from this narrower question about identity. Before giving up on the name, `lastAppliedDescribes` checks whether the
+   cluster's annotation, parsed as JSON, is semantically the file minus that annotation (empty `annotations` treated as
+   absent, and only when the file does not carry the annotation itself). If so, a client-side apply recomputes the same
+   value, the patch is empty and kubectl writes nothing, and server-side apply leaves it alone — so the composition is
+   reported `ChangeScopeNone` with no revision created (issue #500). Otherwise the annotation is stale and a re-apply
+   genuinely rewrites it. In that case `PredictedRevisionName` is omitted, the composites are
    rendered unseeded (the pre-#474 behaviour), and a warning says so. The alternative — seeding a name the tool invented
    — would manufacture a downstream diff on a converged cluster for exactly the compositions this feature exists to
    serve. Note what is deliberately *not* claimed when the guard fires: `CreatesRevision` stays true. The delta is real,

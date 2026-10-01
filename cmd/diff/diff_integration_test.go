@@ -2919,6 +2919,29 @@ Impact analysis skipped: this composition is identical to the cluster's, so appl
 				WithDownstreamSummary(0, 1, 0).
 				WithDownstreamResource("modified", "XDownstreamResource", "test-resource", "default"),
 		},
+		// Issue #500: the same asymmetry, but the cluster's last-applied-configuration is the one a
+		// client-side `kubectl apply` of this very file would write. Re-applying it computes the same
+		// annotation, the patch is empty and kubectl writes nothing, so no CompositionRevision is created.
+		// The sibling above differs only in that its annotation is stale, which a re-apply does rewrite.
+		"CompositionReappliedWithKubectlCreatesNoRevision": {
+			reason: "A composition whose live last-applied-configuration already describes the file is unchanged, because re-applying it writes nothing",
+			setupFiles: []string{
+				"testdata/comp/resources/xrd.yaml",
+				"testdata/comp/resources/original-composition-kubectl-applied-current.yaml",
+				"testdata/comp/resources/functions.yaml",
+				"testdata/comp/resources/existing-xr-1.yaml",
+				"testdata/comp/resources/existing-downstream-1.yaml",
+			},
+			inputFiles:       []string{"testdata/comp/composition-no-changes.yaml"},
+			namespace:        "default",
+			outputFormat:     "json",
+			expectedExitCode: dp.ExitCodeSuccess,
+			expectedStructuredCompOutput: tu.ExpectCompDiff().
+				WithNoWarnings().
+				WithComposition("xnopresources.diff.example.org").
+				WithImpactAnalysisSkipped().
+				WithRevisionImpact("none", false, 0),
+		},
 		// Issue #474: the case that makes "creates a revision but renders identically" a claim to be
 		// verified rather than assumed. The composition edit is metadata-only — one added label, identical
 		// spec — so the CompositionRevision it mints carries a byte-identical spec. But the template reads
