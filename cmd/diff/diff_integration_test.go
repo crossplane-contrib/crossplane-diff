@@ -40,30 +40,40 @@ const (
 	CompositionDiffTest DiffTestType = "comp"
 )
 
+// fieldManagerApply is a manifest to server-side apply under a specific field manager.
+type fieldManagerApply struct {
+	file         string
+	fieldManager string
+}
+
 // IntegrationTestCase represents a common test case structure for both XR and composition diff tests.
 type IntegrationTestCase struct {
 	reason                     string // Description of what this test validates
 	setupFiles                 []string
 	deleteAfterSetup           []string                        // Files whose resources are deleted after setup; with a finalizer this leaves them Terminating
 	crossplaneManagedResources []HierarchicalOwnershipRelation // Resources applied via SSA with Crossplane field manager
-	inputFiles                 []string                        // Input files to diff (XR YAML files or Composition YAML files)
-	expectedOutput             string
-	expectedError              bool
-	expectedErrorContains      string
-	expectedStderrContains     []string // substrings that must appear on stderr (warnings, error lines)
-	expectedExitCode           int      // Expected exit code (0=success, 1=tool error, 2=schema validation, 3=diff detected)
-	noColor                    bool
-	namespace                  string        // For composition tests (optional)
-	xrdAPIVersion              XrdAPIVersion // For XR tests (optional)
-	ignorePaths                []string      // Paths to ignore in diffs
-	functionCredentials        string        // Path to function credentials file (optional)
-	eventualState              bool          // Enable eventual state simulation for XR or composition tests (optional)
-	timeout                    time.Duration // Custom timeout for this test (0 = use default)
-	resources                  []string      // For composition tests: --resource values; each entry passed as one --resource flag
-	resourcesCSV               string        // For composition tests: alternative single --resource=a,b style invocation
-	includeManual              bool          // For composition tests: pass --include-manual flag
-	analyzeUnchanged           bool          // For composition tests: pass the deprecated --analyze-unchanged flag
-	analyzeOn                  string        // For composition tests: pass --analyze-on=<value> (empty = rely on the default)
+	// fieldManagerApplies are server-side applied, in order, after setupFiles, each under its own
+	// field manager. Use it when a test depends on which manager owns a field: a plain Create
+	// records only the test client as owner, and the apiserver drops managedFields supplied on Create.
+	fieldManagerApplies    []fieldManagerApply
+	inputFiles             []string // Input files to diff (XR YAML files or Composition YAML files)
+	expectedOutput         string
+	expectedError          bool
+	expectedErrorContains  string
+	expectedStderrContains []string // substrings that must appear on stderr (warnings, error lines)
+	expectedExitCode       int      // Expected exit code (0=success, 1=tool error, 2=schema validation, 3=diff detected)
+	noColor                bool
+	namespace              string        // For composition tests (optional)
+	xrdAPIVersion          XrdAPIVersion // For XR tests (optional)
+	ignorePaths            []string      // Paths to ignore in diffs
+	functionCredentials    string        // Path to function credentials file (optional)
+	eventualState          bool          // Enable eventual state simulation for XR or composition tests (optional)
+	timeout                time.Duration // Custom timeout for this test (0 = use default)
+	resources              []string      // For composition tests: --resource values; each entry passed as one --resource flag
+	resourcesCSV           string        // For composition tests: alternative single --resource=a,b style invocation
+	includeManual          bool          // For composition tests: pass --include-manual flag
+	analyzeUnchanged       bool          // For composition tests: pass the deprecated --analyze-unchanged flag
+	analyzeOn              string        // For composition tests: pass --analyze-on=<value> (empty = rely on the default)
 	// dryRunOn passes --dry-run-on=<value> (empty = rely on the default, which is "all").
 	// The flag lives on CommonCmdFields, so it applies to both `xr` and `comp`.
 	dryRunOn string
@@ -223,6 +233,19 @@ func runIntegrationTest(t *testing.T, testType DiffTestType, tt IntegrationTestC
 	// Apply the setup resources
 	if err := applyResourcesFromFiles(ctx, k8sClient, tt.setupFiles); err != nil {
 		t.Fatalf("failed to setup resources: %v", err)
+	}
+
+	for _, a := range tt.fieldManagerApplies {
+		resources, err := readResourcesFromFile(a.file)
+		if err != nil {
+			t.Fatalf("failed to read %s: %v", a.file, err)
+		}
+
+		for _, r := range resources {
+			if err := applyResourceWithSSA(ctx, k8sClient, r, a.fieldManager); err != nil {
+				t.Fatalf("failed to setup field-managed resources: %v", err)
+			}
+		}
 	}
 
 	// Default to v2 API version for XR resources unless otherwise specified
@@ -1956,6 +1979,37 @@ Summary: 2 modified, 2 removed`,
 				WithAddedResource("XTestDefaultResource", "test-resource-with-defaults", "default").
 				WithField("spec.region", "us-east-1").
 				WithField("spec.size", "large"),
+			expectedError:    false,
+			expectedExitCode: dp.ExitCodeDiffDetected,
+		},
+		// #503: post-render CRD defaulting mutates composed resources in place, so the dry-run
+		// apply payload carries the locally-defaulted spec.forProvider.size: small. The question
+		// is whether that payload then claims the field away from the manager that set it to
+		// large, predicting a change real Crossplane (which never sends the field) would not make.
+		// The composition renders everything else identically, so any modification reported for
+		// the composed resource could only have come from the defaulted field.
+		"CRDDefaultedFieldOwnedByAnotherManagerIsNotReportedChanged": {
+			reason:       "A CRD-defaulted field the composition does not render keeps another manager's non-default value in the diff",
+			outputFormat: "json",
+			inputFiles:   []string{"testdata/diff/new-xr.yaml"},
+			setupFiles: []string{
+				"testdata/diff/resources/xrd.yaml",
+				"testdata/diff/resources/composition-with-crd-defaulted-downstream.yaml",
+				"testdata/diff/resources/functions.yaml",
+			},
+			fieldManagerApplies: []fieldManagerApply{
+				{
+					file:         "testdata/diff/resources/existing-defaulted-downstream-composed.yaml",
+					fieldManager: "apiextensions.crossplane.io/composed/2b9d3c4e-0000-4000-8000-000000000503",
+				},
+				{
+					file:         "testdata/diff/resources/existing-defaulted-downstream-other-manager.yaml",
+					fieldManager: "platform-operator",
+				},
+			},
+			expectedStructuredOutput: tu.ExpectDiff().
+				WithSummary(1, 0, 0).
+				WithAddedResource("XNopResource", "test-resource", "default"),
 			expectedError:    false,
 			expectedExitCode: dp.ExitCodeDiffDetected,
 		},
