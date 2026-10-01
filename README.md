@@ -109,8 +109,7 @@ WARNING: Resource already belongs to another composite. Applying this diff will 
       "message": "Some function credential secrets could not be fetched from cluster",
       "context": {
         "composition": "xbuckets.example.org",
-        "attempted": "2",
-        "fetched": "1",
+        "missing": "crossplane-system/graph-creds",
         "hint": "Use --function-credentials to provide secrets that don't exist on cluster"
       }
     }
@@ -123,7 +122,25 @@ are emitted when raised rather than at the end of the run, so a warning is still
 step fails, and appears in step with the work that produced it. Today they cover: a composed resource
 that belongs to a different composite (applying would take ownership), a nested XR whose composition
 could not be found (it will compose nothing), function credentials that could not be fetched (the
-render may not reflect reality), leftover function containers, and the deleting-XR case above.
+render may not reflect reality), leftover function containers, a CompositionRevision whose name could
+not be predicted (see `predictedRevisionName` under
+[Structured Output](#structured-output-jsonyaml)), and the deleting-XR case above.
+
+A warning identical to one already raised — same `message` **and** same `context` — is reported once,
+not once per occurrence. That matters for conditions that are a property of a composition rather than
+of an individual resource: an unfetchable credential secret on a composition affecting thirty XRs is
+one line and one `warnings[]` entry, not thirty. Warnings that genuinely differ per occurrence carry
+the distinguishing detail in `context` (the ownership warning names the resource, for instance) and so
+are still reported for every occurrence.
+
+Two things narrow when the credential warning fires:
+
+- It reports only the secrets still missing **after** `--function-credentials` is taken into account,
+  so supplying the absent secret yourself is not warned about.
+- Only a genuinely absent (`NotFound`) secret is a warning. If a referenced secret cannot be *read* —
+  RBAC denial, a transport failure, an undecodable payload — the run **fails** instead. The tool cannot
+  know whether that credential would have changed the render, and emitting a diff that might not
+  reflect reality is worse than refusing to emit one.
 
 ### Composition Diff - Analyze Impact of Composition Changes
 
@@ -176,7 +193,9 @@ crossplane-diff comp unchanged-composition.yaml --analyze-on=always
 # cost for a metadata-only edit. Note that such an edit still creates a new CompositionRevision that
 # Automatic composites re-point to, so this asserts none of your compositions can observe a revision's
 # identity (via the XR's compositionRevisionRef, or a compositionRevisionSelector matching revision
-# labels). Either way revisionImpact in JSON/YAML output reports the revision.
+# labels). Either way revisionImpact in JSON/YAML output names the revision it would create
+# (predictedRevisionName). Note that at the default setting the composites are rendered with that
+# revision seeded, so a template reading its name produces a real diff rather than a stale value.
 crossplane-diff comp updated-composition.yaml --analyze-on=spec-change
 
 # Collapse each changed composition to a single change-marker line (human output only;
@@ -244,7 +263,11 @@ Flags:
                                resources; see Prerequisites). Mutually exclusive with
                                --crossplane-image.
       --crossplane-image=IMAGE Override the full crossplane render image reference
-                               (e.g. for a private mirror). Mutually exclusive with
+                               (e.g. for a private mirror). Held to the same v2.3.4
+                               minimum when its tag is a semantic version; a
+                               reference with no comparable version (a digest, a
+                               floating tag, no tag at all) is accepted with a
+                               warning. Mutually exclusive with
                                --crossplane-version.
 ```
 
@@ -252,7 +275,7 @@ Flags:
 
 **Large composites**: `crossplane render` starts functions with the function-sdk-go default 4MB gRPC receive limit and does not apply the cluster's DeploymentRuntimeConfig. Very large XRs (many/large observed resources) can exceed this and fail with `ResourceExhausted: received message larger than max`. Set `--max-recv-message-size` (or `MAX_RECV_MESSAGE_SIZE`) to raise it; crossplane-diff injects the value as the `MAX_RECV_MESSAGE_SIZE` container env var. This only takes effect on functions whose image reads that variable.
 
-**Render version**: When neither `--crossplane-version` nor `--crossplane-image` is set, rendering uses the floating `xpkg.crossplane.io/crossplane/crossplane:stable` tag. Pin `--crossplane-version` for reproducible diffs or to hold a known-good version; `--crossplane-image` targets a mirrored/air-gapped registry. Only `--crossplane-version` is floor-checked against the v2.3.4 minimum — a full image reference carries no comparable version.
+**Render version**: When neither `--crossplane-version` nor `--crossplane-image` is set, rendering uses the floating `xpkg.crossplane.io/crossplane/crossplane:stable` tag. Pin `--crossplane-version` for reproducible diffs or to hold a known-good version; `--crossplane-image` targets a mirrored/air-gapped registry. Both are floor-checked against the v2.3.4 minimum as far as they can be: a pinned version always, and an image reference whenever its tag parses as a semantic version (so `…/crossplane:v2.3.3` is rejected). A reference that carries no comparable version — pinned by digest, tagged `stable` or `latest`, or with no tag at all — cannot be checked and is accepted with a warning rather than refused, since that is exactly the shape a private mirror or a digest pin takes. A bare `--crossplane-version 2.3.4` is accepted and normalized to the `v`-prefixed tag that upstream actually publishes.
 
 **Ignored Paths**: By default, `metadata.annotations[kubectl.kubernetes.io/last-applied-configuration]` is always hidden from the diff, since it is just a serialization of the object itself. Note that it is hidden from the *output* only: for `comp`, a composition differing solely in that annotation still counts as changed, because applying it creates a new CompositionRevision. Additional paths can be specified with `--ignore-paths`. This is useful for filtering out metadata added by tools like ArgoCD (e.g., tracking IDs, sync waves) that shouldn't affect diff results. The `--ignore-paths` flag applies uniformly across all output modes: the human diff, JSON, and YAML output all strip ignored fields, and summary counts are computed after ignore-filtering so a resource whose only changes are in ignored fields is not counted as modified.
 
@@ -338,7 +361,11 @@ Flags:
                                resources; see Prerequisites). Mutually exclusive with
                                --crossplane-image.
       --crossplane-image=IMAGE Override the full crossplane render image reference
-                               (e.g. for a private mirror). Mutually exclusive with
+                               (e.g. for a private mirror). Held to the same v2.3.4
+                               minimum when its tag is a semantic version; a
+                               reference with no comparable version (a digest, a
+                               floating tag, no tag at all) is accepted with a
+                               warning. Mutually exclusive with
                                --crossplane-version.
 ```
 
@@ -352,9 +379,18 @@ Flags:
 - `kubectl` configured to access your cluster
 - Appropriate RBAC permissions (see [Required Permissions](#required-permissions))
 - A `crossplane` render image/binary of **v2.3.4 or newer** (the tool renders via
-  `xpkg.crossplane.io/crossplane/crossplane:stable` by default, which already satisfies this). Older
-  images silently drop cluster-observed composed resources from the render pipeline, which produces
-  incorrect diffs (e.g. missing removals). If a locally cached `:stable` image predates v2.3.4, re-pull it.
+  `xpkg.crossplane.io/crossplane/crossplane:stable` by default, which satisfies this *when freshly
+  pulled* — see below). Older images silently drop cluster-observed composed resources from the
+  render pipeline. Because removal detection walks the live resource tree independently and marks
+  anything absent from the rendered set as removed, dropping observed resources produces
+  **spurious removals**: resources that exist and will keep existing are reported as going away.
+  An image older still — anything predating the `crossplane internal render` subcommand — fails
+  outright with `crossplane: error: unexpected argument internal`; `crossplane-diff` appends a
+  re-pull hint to that error.
+
+  A locally cached `:stable` does **not** refresh on its own: the render engine pulls the image only
+  when it is absent, so whatever was first pulled on a machine stays pinned there indefinitely. If
+  diffs show removals you cannot explain, run `docker pull xpkg.crossplane.io/crossplane/crossplane:stable`.
 
 ## How It Works
 
@@ -368,6 +404,22 @@ The tool performs the following steps:
 6. **Validate resources** against their schemas and enforce scope constraints
 7. **Calculate diffs** by comparing rendered resources against current cluster state
 8. **Display formatted output** showing what would change
+
+### Nested XRs and `--max-nested-depth`
+
+When a composed resource is itself a Composite Resource, the tool recurses into it and diffs its own composed
+resources too, so a single `xr` or `comp` invocation shows the whole tree.
+
+`--max-nested-depth` (default `10`) bounds that recursion: it is the number of levels of nesting permitted
+*below* the Composite Resource you named. A composed XR one level deeper than the bound fails the diff with
+`maximum nesting depth exceeded` rather than silently truncating the tree — an incomplete tree would report
+the omitted resources as unchanged, which is worse than an error. Raise the flag if you legitimately nest
+more deeply than the default. A composition cycle (XR-A composes XR-B, which composes XR-A) has no natural
+stopping point, so this bound is what makes it terminate.
+
+> **Note:** up to and including v0.10.0 the depth counter was never incremented, so `--max-nested-depth` had
+> no effect and a cyclic composition recursed until the process ran out of stack. If you had lowered the flag
+> expecting it to limit descent, it now actually does.
 
 ## Function Credentials
 
@@ -653,6 +705,53 @@ entry's `errors[]` (and also in the top-level `errors[]`).
 > `summary` and top-level `errors[]` remain. New consumers should read `xrs[]`;
 > existing consumers of `changes[]` keep working during the deprecation window.
 
+The aggregate `summary` counts exactly what `changes[]` lists: each distinct
+change once, however many of the XRs you supply reach it, so the same change
+reached through two inputs is listed and counted once. Each `xrs[]` entry
+is complete for its own input, so where two inputs' renders reach the same
+resource through one controller, it appears under each, and the `xrs[].summary`
+values can sum to more than the top-level `summary`.
+
+**When inputs overlap.** The XRs you pass are one change set, each rendered
+against the live cluster. `xr` checks the input set itself first:
+
+- **An input identical to an earlier one** — the same file passed twice, or CI
+  enumerating one file twice — is diffed once, with a warning. The intent is
+  clear, so the run is not failed.
+- **The same object twice with different content** fails both inputs. Applying
+  both would leave whichever is applied last, and the order inputs are given in
+  (often a glob's) is not a statement of intent. Pass only one of them.
+- **An input that another input manages** fails that input. A claim's backing XR
+  is written by Crossplane's claim controller, and a nested XR by its parent's
+  composition, so passing either alongside its manager would give it a second
+  writer. Pass the claim, or the parent, not the object it manages.
+
+Then, among what the inputs render, a change is identified by
+`apiVersion/kind/namespace/name`, which says nothing about which input produced
+it, so `xr` decides by who would control the resource in the cluster:
+
+- **The same resource reached through one controller, rendered identically**, is
+  one change reached twice. It is counted once.
+- **Two XRs that would both control it** — a shared `Namespace` or a fixed-name
+  object composed by two XRs — genuinely conflict. Crossplane gives the resource
+  to whichever XR creates it first, and the other fails to reconcile it, however
+  alike their renderings are. No diff predicts that, so the run fails.
+- **Renderings that differ** for one resource mean no single diff is correct for
+  both, so the run fails.
+- **Two XRs sharing a `metadata.generateName`** fail too. The API server would
+  give them different names, so in the cluster they would not collide; but they
+  have no names yet, and `xr` renders both under the same placeholder, so it
+  cannot tell their resources apart.
+
+A rejected input, or a failing overlap, is reported in `errors[]` (and on
+stderr) with the reason that applies, and `xr` exits with the tool error code,
+in every output format. Inputs that are unaffected still get their diffs, and
+the structured document is still written, so the error is machine-readable.
+
+An XR supplied with only `metadata.generateName` has no name yet; it appears
+throughout the output — including its `xrs[]` identity and its human-readable
+section header — as `<generateName>(generated)`.
+
 The human-readable (`diff`) output likewise groups by input XR when more than
 one is supplied: each XR gets a `=== Kind/name ===` section with its own diffs
 and summary, followed by an aggregate `Total: … across N XRs (…)` footer. A
@@ -675,7 +774,8 @@ single-XR invocation renders flat, exactly as before.
       "revisionImpact": {
         "changeScope": "spec",
         "createsRevision": true,
-        "repointedComposites": 4
+        "repointedComposites": 4,
+        "predictedRevisionName": "xbuckets.example.org-a1b2c3d"
       },
       "affectedResources": {
         "total": 6,
@@ -737,18 +837,49 @@ The structured output includes:
 - **Diff content**: for modifications, `diff.old` and `diff.new` carry the full current/desired resource objects (apiVersion/kind/metadata/spec/status, etc.) — not just the diffing subset. For additions/removals, the full resource object lives under `diff.spec` (the JSON key is literally `spec` but the value is the entire resource, not its spec subtree).
 - **Impact analysis** (comp only): which XRs are affected by composition changes and their status. When the composition
   change is smaller than `--analyze-on` asked to analyse — by default, a composition identical to its in-cluster
-  version — its composites are not evaluated and the entry carries `"impactAnalysisSkipped": true` alongside an empty
-  `impactAnalysis`, so a consumer can tell "not evaluated" from "no affected composites found". Raise `--analyze-on` to
-  evaluate them anyway.
+  version — its composites are not evaluated and the entry carries `"impactAnalysisSkipped": true`, so a consumer can
+  tell "not evaluated" from "no affected composites found". Raise `--analyze-on` to evaluate them anyway.
+
+  A skip withholds only the per-composite renders, and therefore only the changed/unchanged/errored verdict. Composites
+  excluded because they would not adopt the resulting revision (Manual update policy, a non-matching
+  `compositionRevisionSelector`, or being deleted) are identified without rendering anything, so they are still
+  reported: `affectedResources` keeps its `total` and its `filteredByPolicy` / `filteredBySelector` /
+  `filteredByDeletion` breakdown, and under `--resource` the named composites still appear in `impactAnalysis` as
+  `"status": "filtered"` entries with their `filterReason`. So `"impactAnalysisSkipped": true` does not imply
+  `impactAnalysis` is empty.
 - **Revision impact** (comp only): a `revisionImpact` object per composition, recording what applying it does to
   CompositionRevisions regardless of whether anything renders differently. It carries `changeScope` (`"none"`,
   `"metadata"` or `"spec"` — how much of the composition differs, in the terms Crossplane's `Composition.Hash()` uses,
   which covers labels and annotations as well as spec), `createsRevision` (whether applying the composition produces a
-  new CompositionRevision), and `repointedComposites` (how many composites would adopt that revision and reconcile as a
-  result — those not excluded by update policy, revision selector, or deletion). It is **always present**, including
-  when `impactAnalysisSkipped` is true: that is the point of it, and it is what keeps `--analyze-on` a cost knob rather
-  than a correctness mode. Note that a composite re-pointing to a new revision is not the same as its rendered output
-  changing; re-pointing alone usually renders identically.
+  new CompositionRevision), `repointedComposites` (how many composites would adopt that revision and reconcile as a
+  result), and `predictedRevisionName` (what that revision would be called). A composite is counted only if it genuinely re-points: it has an Automatic (or defaulted)
+  `compositionUpdatePolicy`, its `compositionRevisionSelector` (if any) selects the resulting revision, and it is not
+  being deleted. A Manual-policy composite is never counted, because it stays pinned by its `compositionRevisionRef` —
+  `--include-manual` keeps it in the analysis without making it adopt the new revision. Note too that a composite
+  re-pointing is not the same as its rendered output changing; re-pointing alone usually renders identically.
+
+  `revisionImpact` is present whenever the composition was compared, **including** when `impactAnalysisSkipped` is true:
+  that is the point of it, and it is what keeps `--analyze-on` a cost knob rather than a correctness mode. It is
+  **absent** for a composition that failed to process, whose `error` field says why — the comparison never completed, so
+  neither its scope nor whether it creates a revision was ever determined, and reporting `"changeScope": ""` with
+  `"createsRevision": false` would assert otherwise.
+- **Predicted revision name** (comp only): `revisionImpact.predictedRevisionName` is `<composition>-<hash[:7]>`, derived
+  from Crossplane's own `Composition.Hash()` — the same value the cluster would produce. Composites are **rendered with
+  it seeded onto their `compositionRevisionRef`**, so a composition template that reads the revision name (templates
+  receive the whole composite, with no field stripping) renders the value it would really get, and a change it causes is
+  detected rather than assumed away. The composites' own `compositionRevisionRef` diff is suppressed from the rendered
+  output, since `revisionImpact` already carries that fact once per composition rather than once per composite; a
+  composed resource deriving a value *from* the revision name is not suppressed, and is precisely the signal this
+  exists to surface.
+
+  The field is **absent when `createsRevision` is true** only if the name could not be predicted, which happens when the
+  composition differs from the cluster's copy by nothing but the `kubectl.kubernetes.io/last-applied-configuration`
+  annotation. A client-side `kubectl apply` derives that annotation's value from the file being applied rather than
+  leaving it alone, so its post-apply value — and therefore the hash and the name — depends on *how* you apply, not on
+  what you are applying. In that case nothing is seeded, a warning says so, and a revision-observing change would go
+  undetected; apply with `--server-side` (or via Argo/Flux) to make it predictable. For a composition applied
+  client-side *with* other edits the name is predicted from the file as supplied, so the suffix may differ from the
+  eventual one — the change is still detected, its predicted value is just imprecise.
 - **Masked changes** (comp only): `"maskedChangesOnly": true` says an absent `compositionChanges` does *not* mean the
   composition is unchanged — it differs only in fields excluded from the diff (your `--ignore-paths`, or the fields
   suppressed for readability). Applying it still creates a new CompositionRevision, which `revisionImpact` reports.
@@ -878,7 +1009,9 @@ case $? in
 esac
 ```
 
-**Revision churn does not set exit code 3.** For `comp`, exit code 3 means something renders differently: the composition's own diff is non-empty, or at least one composite's downstream resources change. A composition that only creates a new CompositionRevision without either — one differing solely in fields excluded from the diff, reported as `"maskedChangesOnly": true` — exits 0, so a GitOps loop re-applying the same manifests doesn't fail its diff gate on every run. A pipeline that *does* want to gate on revision churn reads `revisionImpact.createsRevision` from the structured output.
+**Revision churn does not set exit code 3.** For `comp`, exit code 3 means the composition's *displayed* diff is non-empty, or at least one composite's downstream resources change. Note the first of those: exit 3 does **not** imply that anything renders differently — a visible metadata-only edit (adding a label, say) shows a composition diff and so exits 3, even though every composite renders identically.
+
+Exit 0 therefore requires *both* an empty displayed diff and no composite reporting downstream changes. A composition that creates a new CompositionRevision can satisfy both — when its difference is confined to fields excluded from the diff (reported as `"maskedChangesOnly": true`), and, for such a composition, when its composites were also left unevaluated (reported as `"impactAnalysisSkipped": true`; see [`--analyze-on`](#composition-diff---analyze-impact-of-composition-changes)). Note that neither flag *causes* exit 0 on its own: a visible composition diff exits 3 whether or not the composites were evaluated. This is what keeps a GitOps loop re-applying the same manifests from failing its diff gate on every run. A pipeline that *does* want to gate on revision churn reads `revisionImpact.createsRevision` from the structured output.
 
 ## Guiding Principles
 

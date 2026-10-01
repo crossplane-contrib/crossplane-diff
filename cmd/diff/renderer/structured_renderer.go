@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"maps"
+	"reflect"
 	"slices"
 
 	dt "github.com/crossplane-contrib/crossplane-diff/cmd/diff/renderer/types"
@@ -72,7 +73,8 @@ type OutputError = dt.OutputError
 // StructuredDiffOutput represents the structured output format for diffs.
 // Note: Only JSON tags are used because sigs.k8s.io/yaml uses JSON tags for YAML serialization.
 type StructuredDiffOutput struct {
-	// Summary is the aggregate change count across every input XR.
+	// Summary counts exactly what Changes lists: each distinct change once, however many input XRs
+	// reach it. Per-input counts are on each Xrs entry; where inputs overlap those can sum to more.
 	Summary Summary `json:"summary"`
 
 	// Changes is the flat, ungrouped list of all resource changes across every
@@ -172,8 +174,13 @@ type CompositionDiff struct {
 	ImpactAnalysis    []XRImpact
 	// ImpactAnalysisSkipped records that the affected XRs were deliberately not evaluated, because
 	// the composition changed by less than --analyze-on asked to analyse. Distinguishes "we did not
-	// look" from "we looked and found no affected XRs", which are otherwise indistinguishable from an
-	// empty ImpactAnalysis.
+	// look" from "we looked and found no affected XRs", which would otherwise be indistinguishable.
+	//
+	// It does not mean ImpactAnalysis is empty. Composites excluded by update policy, revision
+	// selector or deletion are identified locally, with no render, so they are reported whether or not
+	// the analysis ran — in --resource mode as XRStatusFiltered entries here, and always via the
+	// AffectedResources filter counters (issue #478). What a skip suppresses is the renders, and
+	// therefore any changed/unchanged/errored verdict about the composites that were kept.
 	//
 	// Why the composites went unevaluated is not recoverable from this field alone — read
 	// RevisionImpact.ChangeScope alongside it. A "none" scope means no CompositionRevision is created
@@ -186,8 +193,9 @@ type CompositionDiff struct {
 	// renderer must not report it as unchanged.
 	MaskedChangesOnly bool
 	// RevisionImpact is what applying this composition does to CompositionRevisions, independent of
-	// whether anything renders differently. Always populated, including when the composites were not
-	// evaluated.
+	// whether anything renders differently. Populated whenever the comparison completed, including
+	// when the composites were not evaluated; left zero for a composition that failed to process,
+	// where nothing about it was established (see RevisionImpact.determined).
 	RevisionImpact RevisionImpact
 }
 
@@ -206,10 +214,41 @@ type RevisionImpact struct {
 	// CreatesRevision records whether applying this composition produces a new CompositionRevision.
 	CreatesRevision bool `json:"createsRevision"`
 	// RepointedComposites counts the composites that would adopt that revision and reconcile as a
-	// result — those not excluded by update policy, revision selector, or deletion. Note this counts
-	// composites that re-point, which is not the same as composites whose rendered output changes;
-	// re-pointing alone usually renders identically.
+	// result: those with an Automatic (or defaulted) compositionUpdatePolicy whose
+	// compositionRevisionSelector, if any, selects the resulting revision, and which are not being
+	// deleted. A Manual-policy composite is never counted — it is pinned by compositionRevisionRef, so
+	// --include-manual keeping it for analysis does not make it re-point (issue #479).
+	//
+	// Note this counts composites that re-point, which is not the same as composites whose rendered
+	// output changes; re-pointing alone usually renders identically.
 	RepointedComposites int `json:"repointedComposites"`
+	// PredictedRevisionName is what that revision would be called: "<composition>-<hash[:7]>", derived
+	// from Crossplane's own Composition.Hash(). When CreatesRevision is false it names the existing
+	// revision the composites already track, which is the same name by construction — an unchanged
+	// composition hashes to the same value.
+	//
+	// It is what makes a downstream change interpretable: a composed resource whose template reads the
+	// revision name shows a diff with no other visible cause, and this is the cause. The composites are
+	// rendered with this value seeded onto their compositionRevisionRef, so such a change is detected
+	// rather than assumed away.
+	//
+	// Absent with CreatesRevision true means the name could not be predicted, which happens when the
+	// composition differs from the cluster's only by kubectl's last-applied-configuration annotation:
+	// its post-apply value is a function of how the user applies rather than of the file, so the hash —
+	// and therefore the name — is unknowable. A warning says so, and nothing is seeded in that case, so
+	// a revision-observing change would go undetected. Note also that for a composition applied
+	// client-side *with* other edits the suffix is predicted from the file as supplied and so may differ
+	// from the eventual one; the change is still detected, its predicted value is just imprecise.
+	PredictedRevisionName string `json:"predictedRevisionName,omitempty"`
+}
+
+// determined reports whether the comparison that populates a RevisionImpact actually ran. ChangeScope
+// is set unconditionally alongside the other fields and every real scope is non-empty, so an empty
+// scope means nothing here was established. That is the case for a composition that failed to process:
+// serializing the zero value would put changeScope outside its documented enum and would assert
+// createsRevision: false, a positive claim about an apply the tool never evaluated (issue #479).
+func (i RevisionImpact) determined() bool {
+	return i.ChangeScope != ""
 }
 
 // HasChanges returns true if this composition diff has any changes, which is what drives
@@ -286,17 +325,21 @@ type compositionDiffWire struct {
 	CompositionChanges *ChangeDetail            `json:"compositionChanges,omitempty"`
 	AffectedResources  AffectedResourcesSummary `json:"affectedResources"`
 	ImpactAnalysis     []xrImpactWire           `json:"impactAnalysis"`
-	// ImpactAnalysisSkipped tells consumers the empty impactAnalysis means "not evaluated" rather
-	// than "no affected XRs found". Read revisionImpact.changeScope alongside it to tell "nothing
+	// ImpactAnalysisSkipped tells consumers that no changed/unchanged/errored verdict was reached for
+	// the composites that would adopt the resulting revision, rather than that none were found. It
+	// does not imply impactAnalysis is empty: composites excluded by update policy, revision selector
+	// or deletion are identified without rendering, so they are still reported here and in
+	// affectedResources (issue #478). Read revisionImpact.changeScope alongside it to tell "nothing
 	// could have changed" from "a revision is created but was not evaluated".
 	ImpactAnalysisSkipped bool `json:"impactAnalysisSkipped,omitempty"`
 	// MaskedChangesOnly tells consumers that an absent compositionChanges does not mean the
 	// composition is unchanged: it differs only in fields excluded from the diff.
 	MaskedChangesOnly bool `json:"maskedChangesOnly,omitempty"`
 	// RevisionImpact is what applying this composition does to CompositionRevisions, independent of
-	// whether anything renders differently. Always present, including when impactAnalysis was
-	// skipped — that is the point of it.
-	RevisionImpact RevisionImpact `json:"revisionImpact"`
+	// whether anything renders differently. Present whenever the comparison completed — including when
+	// impactAnalysis was skipped, which is the point of it — and absent for a composition that failed
+	// to process, where the `error` field says why nothing about the revision was determined.
+	RevisionImpact *RevisionImpact `json:"revisionImpact,omitempty"`
 }
 
 type xrImpactWire struct {
@@ -342,13 +385,16 @@ func (r *StructuredDiffRenderer) RenderDiffs(groups []dt.XRDiffGroup, errs []dt.
 		"errorCount", len(errs),
 		"warningCount", len(warnings))
 
-	// Flat, deprecated view: merge all groups' diffs.
-	summary, changes := buildChangeSet(flattenGroups(groups))
+	// Flat, deprecated view: every input's changes, one copy of each distinct change (see
+	// flatChangeSet). The summary counts exactly what changes[] lists.
+	summary, changes := flatChangeSet(groups)
 	output := StructuredDiffOutput{Summary: summary, Changes: changes}
 	output.Errors = errs
 	output.Warnings = warnings
 
-	// Grouped view: one entry per input XR, in input order.
+	// Grouped view: one entry per input XR, in input order, each complete for its input. Where inputs
+	// overlap, a shared resource appears under each, so the xrs[] summaries can sum to more than the
+	// top-level summary, which counts resources rather than inputs' views of them.
 	output.Xrs = buildXRGroups(groups)
 
 	var (
@@ -410,6 +456,47 @@ func buildChangeSet(diffs map[string]*dt.ResourceDiff) (Summary, []ChangeDetail)
 
 		summary.increment(diff.DiffType)
 		changes = append(changes, *resourceDiffToChangeDetail(diff))
+	}
+
+	return summary, changes
+}
+
+// flatChangeSet builds the deprecated flat view: every group's non-equal changes, in canonical order
+// (see diffSortFunc), keeping one copy of a change identical to one already listed for the same
+// resource. It is lossless on its own terms: two inputs that render one resource differently are both
+// listed, rather than one silently replacing the other in a map keyed by resource (issue #476). That
+// keeps the flat view correct whatever the input validator allows, including a validator that treats
+// inputs individually, where they may legitimately disagree about a resource. Identical renderings, the
+// same change reached twice, still count once.
+func flatChangeSet(groups []dt.XRDiffGroup) (Summary, []ChangeDetail) {
+	var all []*dt.ResourceDiff
+
+	for _, g := range groups {
+		for _, d := range g.Diffs {
+			if d.DiffType != dt.DiffTypeEqual {
+				all = append(all, d)
+			}
+		}
+	}
+
+	// Stable, so that differing changes to one resource stay in input order.
+	slices.SortStableFunc(all, diffSortFunc)
+
+	summary := Summary{}
+	changes := make([]ChangeDetail, 0, len(all))
+	listed := make(map[string][]ChangeDetail, len(all))
+
+	for _, d := range all {
+		change := *resourceDiffToChangeDetail(d)
+		key := d.GetDiffKey()
+
+		if slices.ContainsFunc(listed[key], func(c ChangeDetail) bool { return reflect.DeepEqual(c, change) }) {
+			continue
+		}
+
+		listed[key] = append(listed[key], change)
+		summary.increment(d.DiffType)
+		changes = append(changes, change)
 	}
 
 	return summary, changes

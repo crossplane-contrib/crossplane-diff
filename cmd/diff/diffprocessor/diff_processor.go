@@ -22,9 +22,11 @@ import (
 	clixrgen "github.com/crossplane/cli/v2/cmd/crossplane/xr"
 	clixr "github.com/crossplane/cli/v2/pkg/xr"
 	corev1 "k8s.io/api/core/v1"
+	extv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	un "k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
+	k8stypes "k8s.io/apimachinery/pkg/types"
 
 	"github.com/crossplane/crossplane-runtime/v2/pkg/errors"
 	"github.com/crossplane/crossplane-runtime/v2/pkg/logging"
@@ -61,9 +63,9 @@ type DiffProcessor interface {
 	// Initialize loads required resources like CRDs and environment configs
 	Initialize(ctx context.Context) error
 
-	// Cleanup releases any resources held by the processor (e.g., Docker containers).
+	// Cleaner releases any resources held by the processor (e.g., Docker containers).
 	// Should be called when the processor is no longer needed.
-	Cleanup(ctx context.Context) error
+	Cleaner
 }
 
 // DefaultDiffProcessor implements DiffProcessor with modular components.
@@ -72,6 +74,7 @@ type DefaultDiffProcessor struct {
 	credentialClient     xp.CredentialClient
 	defClient            xp.DefinitionClient
 	schemaClient         k8.SchemaClient
+	resourceClient       k8.ResourceClient
 	resourceManager      ResourceManager
 	config               ProcessorConfig
 	functionProvider     FunctionProvider
@@ -118,7 +121,7 @@ func NewDiffProcessor(k8cs k8.Clients, xpcs xp.Clients, opts ...ProcessorOption)
 
 	// Create components using factories
 	resourceManager := config.Factories.ResourceManager(k8cs.Resource, xpcs.Definition, xpcs.ResourceTree, config.Logger)
-	schemaValidator := config.Factories.SchemaValidator(k8cs.Schema, xpcs.Definition, config.Logger)
+	schemaValidator := config.Factories.SchemaValidator(k8cs.Schema, k8cs.Resource, xpcs.Definition, config.Logger)
 	requirementsProvider := config.Factories.RequirementsProvider(k8cs.Resource, xpcs.Environment, config.Logger)
 	diffCalculator := config.Factories.DiffCalculator(k8cs.Apply, xpcs.ResourceTree, resourceManager, config.Logger, diffOpts)
 	diffRenderer := config.Factories.DiffRenderer(config.Logger, diffOpts)
@@ -138,6 +141,7 @@ func NewDiffProcessor(k8cs k8.Clients, xpcs xp.Clients, opts ...ProcessorOption)
 		credentialClient:     xpcs.Credential,
 		defClient:            xpcs.Definition,
 		schemaClient:         k8cs.Schema,
+		resourceClient:       k8cs.Resource,
 		resourceManager:      resourceManager,
 		config:               config,
 		functionProvider:     functionProvider,
@@ -189,6 +193,34 @@ func (p *DefaultDiffProcessor) Cleanup(ctx context.Context) error {
 	return errors.Join(errs...)
 }
 
+// CleanupTimeout bounds how long releasing the processor's Docker resources may take. Cleanup is
+// attempted on a context detached from the run's cancellation (see CleanupDetached), so this is what
+// stops a slow or hung Docker daemon from blocking a run indefinitely.
+const CleanupTimeout = 30 * time.Second
+
+// Cleaner is anything holding resources that CleanupDetached can release. DiffProcessor,
+// CompDiffProcessor and FunctionProvider all embed it.
+type Cleaner interface {
+	Cleanup(ctx context.Context) error
+}
+
+// CleanupDetached releases c's resources on a context derived from ctx that keeps ctx's values but not
+// its cancellation or deadline, bounded instead by CleanupTimeout. Cleanup must still run when the
+// run's own context has expired (--timeout), since Docker calls on a dead context fail and leave
+// containers running; and it must not hang on a slow or wedged Docker daemon. A failure is logged,
+// not returned: releasing resources is best-effort and must not change the run's result.
+//
+// Note that this does not make cleanup survive Ctrl+C: no signal handling exists, so an interrupt
+// kills the process before any cleanup runs (see #515).
+func CleanupDetached(ctx context.Context, c Cleaner, logger logging.Logger) {
+	cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), CleanupTimeout)
+	defer cancel()
+
+	if err := c.Cleanup(cleanupCtx); err != nil {
+		logger.Debug("Failed to release processor resources", "error", err)
+	}
+}
+
 // initializeSchemaValidator initializes the schema validator with CRDs.
 func (p *DefaultDiffProcessor) initializeSchemaValidator(ctx context.Context) error {
 	// If the schema validator implements our interface with LoadCRDs, use it
@@ -226,46 +258,90 @@ func (p *DefaultDiffProcessor) PerformDiff(ctx context.Context, resources []*un.
 
 	var errs []error
 
-	for _, res := range resources {
-		resourceID := fmt.Sprintf("%s/%s", res.GetKind(), res.GetName())
+	// Overlapping inputs are settled in three stages by a per-run InputValidator; see input_validator.go.
+	// First, before rendering: the validator says what to render, and which inputs it already rejected.
+	validator := p.config.Factories.InputValidator(p.config.Logger, resources)
+	toRender := validator.ToRender()
+
+	for i, in := range toRender {
+		res := in.Resource
+
+		// Attribute the group to the name the XR is rendered under. A synthesized one (generateName
+		// only) is shown the way the diff formatter shows it, "<generateName>(generated)", so the
+		// grouped and flat views agree and no unpredictable hash is published (issue #477).
+		name, generated := renderName(res)
+		if generated {
+			name = dt.GeneratedDisplayName(name, res.GetGenerateName())
+		}
 
 		group := dt.XRDiffGroup{
 			XR: corev1.ObjectReference{
 				APIVersion: res.GetAPIVersion(),
 				Kind:       res.GetKind(),
-				Name:       res.GetName(),
+				Name:       name,
 				Namespace:  res.GetNamespace(),
 			},
+			NameGenerated: generated,
 		}
 
-		diffs, err := p.DiffSingleResource(ctx, res, compositionProvider)
-		if err != nil {
-			// Debug, not Info: this failure is already surfaced as an OutputError, which goes to
-			// stderr and into structured output. Raising it as a warning too would double-report it.
-			p.config.Logger.Debug("Failed to process resource",
-				"resource", resourceID,
-				"namespace", res.GetNamespace(),
-				"error", err)
-			errs = append(errs, errors.Wrapf(err, "unable to process resource %s", resourceID))
+		if in.Err == nil {
+			diffs, rendered, err := p.diffSingleResourceInternal(ctx, res, compositionProvider, nil, true, 0)
+			validator.RecordRender(i, rendered, err)
 
-			// Collect error for structured output. NewOutputError
-			// surfaces typed validation failures via
-			// OutputError.ValidationFailures when err wraps a
-			// SchemaValidationError that carries a structured Result.
-			// The same converted error goes to both the top-level union
-			// (outputErrors) and the per-group entry so consumers of
-			// either view see it.
-			outErr := NewOutputError(resourceID, err)
-			outputErrors = append(outputErrors, outErr)
-			group.Err = &outErr
-		} else {
-			// We don't emit partial results for a single XR: on success the
-			// whole diff tree is attached, on failure none of it.
-			group.Diffs = diffs
+			if err == nil {
+				// We don't emit partial results for a single XR: on success the
+				// whole diff tree is attached, on failure none of it.
+				group.Diffs = diffs
+			}
 		}
 
 		groups = append(groups, group)
 	}
+
+	// Second: each group's final error, including any input another input manages. Errors are only
+	// reported now, because the validator's verdict may supersede a render failure.
+	for i, err := range validator.Verdicts(groups) {
+		if err == nil {
+			continue
+		}
+
+		groups[i].Diffs = nil
+
+		res := toRender[i].Resource
+		resourceID := fmt.Sprintf("%s/%s", groups[i].XR.Kind, groups[i].XR.Name)
+
+		// Debug, not Info: this failure is already surfaced as an OutputError, which goes to
+		// stderr and into structured output. Raising it as a warning too would double-report it.
+		p.config.Logger.Debug("Failed to process resource",
+			"resource", resourceID,
+			"namespace", res.GetNamespace(),
+			"error", err)
+		errs = append(errs, errors.Wrapf(err, "unable to process resource %s", resourceID))
+
+		// Collect error for structured output. NewOutputError
+		// surfaces typed validation failures via
+		// OutputError.ValidationFailures when err wraps a
+		// SchemaValidationError that carries a structured Result.
+		// The same converted error goes to both the top-level union
+		// (outputErrors) and the per-group entry so consumers of
+		// either view see it.
+		outErr := NewOutputError(resourceID, err)
+		outputErrors = append(outputErrors, outErr)
+		groups[i].Err = &outErr
+	}
+
+	// Third: renders that reach one resource in ways no single diff can represent. Collected before the
+	// output is rendered so they reach errors[] and stderr like any other error; the output is still
+	// rendered, so structured output stays valid.
+	for _, err := range validator.RenderOverlaps(groups) {
+		errs = append(errs, err)
+		outputErrors = append(outputErrors, dt.OutputError{Message: err.Error()})
+	}
+
+	// Release resources before rendering, so an advisory raised during teardown (leftover function
+	// containers) is still in warnings[] when the renderer reads it; the command's deferred Cleanup
+	// would run only after output has been emitted.
+	CleanupDetached(ctx, p, p.config.Logger)
 
 	// Always render (even if only errors exist) to ensure valid structured output
 	// The renderer will include errors in the structured output and write them to stderr
@@ -307,14 +383,16 @@ func (p *DefaultDiffProcessor) PerformDiff(ctx context.Context, resources []*un.
 // The compositionProvider function is called to obtain the composition to use for rendering.
 // This is the public method for top-level XR diffing, which enables removal detection.
 func (p *DefaultDiffProcessor) DiffSingleResource(ctx context.Context, res *un.Unstructured, compositionProvider types.CompositionProvider) (map[string]*dt.ResourceDiff, error) {
-	diffs, _, err := p.diffSingleResourceInternal(ctx, res, compositionProvider, nil, true)
+	diffs, _, err := p.diffSingleResourceInternal(ctx, res, compositionProvider, nil, true, 0)
 	return diffs, err
 }
 
 // diffSingleResourceInternal is the internal implementation that allows control over removal detection.
 // parentXR should be nil for root XRs, and the parent XR for nested XRs.
 // detectRemovals should be true for top-level XRs and false for nested XRs (which don't own their composed resources).
-func (p *DefaultDiffProcessor) diffSingleResourceInternal(ctx context.Context, res *un.Unstructured, compositionProvider types.CompositionProvider, parentXR *cmp.Unstructured, detectRemovals bool) (map[string]*dt.ResourceDiff, map[string]bool, error) {
+// depth is the nesting depth of res itself: 0 for the XR the user named, 1 for an XR composed by it,
+// and so on. It must be threaded through the recursion for MaxNestedDepth to bound it at all.
+func (p *DefaultDiffProcessor) diffSingleResourceInternal(ctx context.Context, res *un.Unstructured, compositionProvider types.CompositionProvider, parentXR *cmp.Unstructured, detectRemovals bool, depth int) (map[string]*dt.ResourceDiff, map[string]bool, error) {
 	resourceID := fmt.Sprintf("%s/%s", res.GetKind(), res.GetName())
 	p.config.Logger.Debug("Processing resource", "resource", resourceID, "namespace", res.GetNamespace())
 
@@ -396,7 +474,10 @@ func (p *DefaultDiffProcessor) diffSingleResourceInternal(ctx context.Context, r
 	// Fetch observed resources for use in rendering (needed for getComposedResource template function)
 	// and for function-sequencer to know which resources already exist in the cluster)
 	if observedResources == nil && existingXRFromCluster != nil {
-		observedResources = p.fetchObservedResourcesFromClusterXR(ctx, existingXRFromCluster, resourceID)
+		observedResources, err = p.fetchObservedResourcesFromClusterXR(ctx, existingXRFromCluster, resourceID)
+		if err != nil {
+			return nil, nil, err
+		}
 	}
 
 	// Perform iterative rendering with requirements resolution.
@@ -418,11 +499,10 @@ func (p *DefaultDiffProcessor) diffSingleResourceInternal(ctx context.Context, r
 		return nil, nil, err
 	}
 
-	// Clean up namespaces from cluster-scoped resources
-	// Crossplane PR #6812 fixed issue #6782 by making render propagate namespaces from XR to all
-	// composed resources, but it doesn't check if resources are cluster-scoped. This cleanup
-	// removes namespaces from cluster-scoped resources. See removeNamespacesFromClusterScopedResources
-	// for details on the upstream fix needed.
+	// Render stamps the XR's namespace onto every composed resource of a
+	// namespaced XR. Production rejects a cluster-scoped one at that point, but
+	// render's scope check is a stub that cannot, so undo the stamp here. See
+	// removeNamespacesFromClusterScopedResources for why.
 	if err := p.removeNamespacesFromClusterScopedResources(ctx, desired.ComposedResources); err != nil {
 		p.config.Logger.Debug("Failed to clean up namespaces from cluster-scoped resources", "resource", resourceID, "error", err)
 		return nil, nil, errors.Wrap(err, "cannot clean up namespaces from cluster-scoped resources")
@@ -484,7 +564,8 @@ func (p *DefaultDiffProcessor) diffSingleResourceInternal(ctx context.Context, r
 		}
 	}
 
-	nestedDiffs, nestedRenderedResources, err := p.ProcessNestedXRs(ctx, desired.ComposedResources, compositionProvider, resourceID, existingXR, observedResources, 1)
+	// Anything composed by this XR sits one level deeper than it does.
+	nestedDiffs, nestedRenderedResources, err := p.ProcessNestedXRs(ctx, desired.ComposedResources, compositionProvider, resourceID, existingXR, observedResources, depth+1)
 	if err != nil {
 		p.config.Logger.Debug("Error processing nested XRs", "resource", resourceID, "error", err)
 		return nil, nil, errors.Wrap(err, "cannot process nested XRs")
@@ -567,26 +648,32 @@ func (p *DefaultDiffProcessor) warnIfDeleting(existingXRFromCluster *un.Unstruct
 // We must use the cluster XR (not the input XR) because the XRM client uses spec.resourceRefs
 // to find children. The input XR doesn't have resourceRefs, but the cluster XR does.
 // This ensures that function-sequencer and other functions that check observed resources work correctly.
-func (p *DefaultDiffProcessor) fetchObservedResourcesFromClusterXR(ctx context.Context, existingXRFromCluster *un.Unstructured, resourceID string) []cpd.Unstructured {
+//
+// A failure here is fatal. Downstream, an empty observed set is indistinguishable from "this XR
+// genuinely has no composed resources yet", so continuing with one would report every existing
+// composed resource as a creation — a silently wrong diff, which "Accuracy Above All Else"
+// forbids. resolveBackingXRForClaim already fails on exactly this condition for a Claim's backing
+// XR; the two paths must agree.
+func (p *DefaultDiffProcessor) fetchObservedResourcesFromClusterXR(ctx context.Context, existingXRFromCluster *un.Unstructured, resourceID string) ([]cpd.Unstructured, error) {
 	clusterXR := cmp.New()
 	if err := runtime.DefaultUnstructuredConverter.FromUnstructured(existingXRFromCluster.Object, clusterXR); err != nil {
 		p.config.Logger.Debug("Could not convert cluster XR for observed resources fetch",
 			"resource", resourceID,
 			"error", err)
 
-		return nil
+		return nil, errors.Wrapf(err, "cannot convert cluster XR %q to composite", existingXRFromCluster.GetName())
 	}
 
 	observedResources, err := p.resourceManager.FetchObservedResources(ctx, clusterXR)
 	if err != nil {
-		p.config.Logger.Debug("Could not fetch observed resources (continuing with empty list)",
+		p.config.Logger.Debug("Could not fetch observed resources",
 			"resource", resourceID,
 			"error", err)
 
-		return nil
+		return nil, errors.Wrapf(err, "cannot fetch observed resources for XR %q", existingXRFromCluster.GetName())
 	}
 
-	return observedResources
+	return observedResources, nil
 }
 
 // backingXRInfo holds information about a Claim's backing XR.
@@ -940,6 +1027,10 @@ func preserveNestedXRIdentity(nestedXR, existingNestedXR *un.Unstructured) {
 // its own composition pipeline to get the full tree of diffs. It preserves the identity
 // of existing nested XRs to ensure accurate diff calculation.
 // observedResources should contain the observed resources from the parent XR's resource tree.
+// depth is the nesting depth of composedResources themselves: 1 for the resources composed by the
+// XR the user named, 2 for their children, and so on. MaxNestedDepth is therefore the number of
+// levels of nesting permitted below the root, and descending past it is an error rather than a
+// silent truncation of the tree.
 func (p *DefaultDiffProcessor) ProcessNestedXRs(
 	ctx context.Context,
 	composedResources []cpd.Unstructured,
@@ -949,15 +1040,6 @@ func (p *DefaultDiffProcessor) ProcessNestedXRs(
 	observedResources []cpd.Unstructured,
 	depth int,
 ) (map[string]*dt.ResourceDiff, map[string]bool, error) {
-	if depth > p.config.MaxNestedDepth {
-		p.config.Logger.Debug("Maximum nesting depth exceeded",
-			"parentResource", parentResourceID,
-			"depth", depth,
-			"maxDepth", p.config.MaxNestedDepth)
-
-		return nil, nil, errors.New("maximum nesting depth exceeded")
-	}
-
 	p.config.Logger.Debug("Processing nested XRs",
 		"parentResource", parentResourceID,
 		"composedResourceCount", len(composedResources),
@@ -979,6 +1061,25 @@ func (p *DefaultDiffProcessor) ProcessNestedXRs(
 		}
 
 		nestedResourceID := fmt.Sprintf("%s/%s (nested depth %d)", nestedXR.GetKind(), nestedXR.GetName(), depth)
+
+		// Enforce the bound only once we know there is genuinely an XR to descend
+		// into. Checking on entry instead would reject a tree that is exactly
+		// MaxNestedDepth levels deep, because the deepest XR still reaches here
+		// (with an empty or all-managed composedResources) one level too far down.
+		//
+		// A composition cycle (XR-A composes XR-B composes XR-A) has no natural
+		// stopping point, so this is the only thing standing between it and an
+		// exhausted goroutine stack.
+		if depth > p.config.MaxNestedDepth {
+			p.config.Logger.Debug("Maximum nesting depth exceeded",
+				"parentResource", parentResourceID,
+				"nestedXR", nestedResourceID,
+				"depth", depth,
+				"maxDepth", p.config.MaxNestedDepth)
+
+			return nil, nil, errors.Errorf("maximum nesting depth exceeded: %s is nested %d levels deep, but --max-nested-depth is %d", nestedResourceID, depth, p.config.MaxNestedDepth)
+		}
+
 		p.config.Logger.Debug("Found nested XR, processing recursively",
 			"nestedXR", nestedResourceID,
 			"parentXR", parentResourceID,
@@ -1023,7 +1124,7 @@ func (p *DefaultDiffProcessor) ProcessNestedXRs(
 		// Pass parentXR so nested XR can have correct composite label
 		// Use detectRemovals=false for nested XRs since they don't own their composed resources
 		// (resources are owned by the top-level parent XR in Crossplane's ownership model)
-		nestedDiffs, nestedRenderedResources, err := p.diffSingleResourceInternal(ctx, nestedXR, compositionProvider, parentXR, false)
+		nestedDiffs, nestedRenderedResources, err := p.diffSingleResourceInternal(ctx, nestedXR, compositionProvider, parentXR, false, depth)
 		if err != nil {
 			// Check if the error is due to missing composition
 			// Note: It's valid to have an XRD in Crossplane without a composition attached to it.
@@ -1081,25 +1182,31 @@ func (p *DefaultDiffProcessor) SanitizeXR(res *un.Unstructured, resourceID strin
 	}
 
 	// Handle XRs with generateName but no name
-	if xr.GetName() == "" && xr.GetGenerateName() != "" {
-		// Synthesize a metadata.name in the same shape upstream's nameGenerator
-		// produces — "<generateName-with-dash><12 lowercase hex>" — so the
-		// binary's apiserver-style name validation accepts the XR AND the
-		// rendered XR name is shape-compatible with the composed-resource
-		// names the binary itself emits. The diff formatter then runs one
-		// detector (LooksLikeGeneratedName) over both to substitute
-		// "<generateName>(generated)" for display.
-		synthesizedName := dt.SynthesizeGeneratedName(xr.GetGenerateName())
+	if name, generated := renderName(res); generated {
 		p.config.Logger.Debug("Setting synthesized name for XR with generateName",
 			"generateName", xr.GetGenerateName(),
-			"synthesizedName", synthesizedName)
+			"synthesizedName", name)
 
 		xrCopy := xr.DeepCopy()
-		xrCopy.SetName(synthesizedName)
+		xrCopy.SetName(name)
 		xr = xrCopy
 	}
 
 	return xr, false, nil
+}
+
+// renderName returns the name an input XR is rendered under, and whether it was synthesized. That is
+// its own name; or, for an XR with only a generateName, one synthesized in the shape upstream's
+// nameGenerator produces — "<generateName-with-dash><12 lowercase hex>" — so the binary's
+// apiserver-style name validation accepts the XR AND the rendered XR name is shape-compatible with the
+// composed-resource names the binary itself emits. The diff formatter then runs one detector
+// (LooksLikeGeneratedName) over both to substitute "<generateName>(generated)" for display.
+func renderName(res *un.Unstructured) (string, bool) {
+	if name := res.GetName(); name != "" || res.GetGenerateName() == "" {
+		return name, false
+	}
+
+	return dt.SynthesizeGeneratedName(res.GetGenerateName()), true
 }
 
 // mergeUnstructured merges two unstructured objects.
@@ -1154,7 +1261,10 @@ func (p *DefaultDiffProcessor) RenderToStableState(
 	// downstream.
 	xr.Schema = xrSchema
 
-	functionCredentials := p.resolveFunctionCredentials(ctx, comp, resourceID)
+	functionCredentials, err := p.resolveFunctionCredentials(ctx, comp, resourceID)
+	if err != nil {
+		return render.CompositionOutputs{}, err
+	}
 
 	// Track required resources with deduplication
 	requiredResources := make(map[string]un.Unstructured)
@@ -1265,21 +1375,71 @@ func (p *DefaultDiffProcessor) resolveSchemaAndXRDForRender(ctx context.Context,
 	return xp.SchemaFromXRD(xrd), xrd
 }
 
-// resolveFunctionCredentials merges CLI-provided function credentials with
-// any credentials auto-fetched from the composition pipeline.
-func (p *DefaultDiffProcessor) resolveFunctionCredentials(ctx context.Context, comp *apiextensionsv1.Composition, resourceID string) []corev1.Secret {
-	autoFetched := p.fetchCompositionCredentials(ctx, comp)
-	merged := mergeCredentials(p.config.FunctionCredentials, autoFetched)
+// resolveFunctionCredentials merges CLI-provided function credentials with any credentials
+// auto-fetched from the composition pipeline, and raises the shortfall advisory for the credentials
+// that are still missing once both sources have been combined.
+//
+// The advisory is raised here rather than in the credential client because only this layer can see
+// both halves: the client knows which referenced secrets are absent from the cluster, and
+// config.FunctionCredentials says which of those the user already supplied. Warning before the merge
+// told a user who had correctly passed --function-credentials to go and do the thing they had just
+// done. Its context is keyed on the composition and not on resourceID, which is deliberate — the
+// condition is a property of the composition, so the identical advisory raised while processing each
+// of a composition's XRs collapses to one entry in the warning channel.
+func (p *DefaultDiffProcessor) resolveFunctionCredentials(ctx context.Context, comp *apiextensionsv1.Composition, resourceID string) ([]corev1.Secret, error) {
+	fetched, err := p.fetchCompositionCredentials(ctx, comp)
+	if err != nil {
+		return nil, err
+	}
+
+	merged := mergeCredentials(p.config.FunctionCredentials, fetched.Secrets)
+
+	if unsatisfied := unsatisfiedCredentials(fetched.Absent, merged); len(unsatisfied) > 0 {
+		// Every remaining secret is by construction one the user has not supplied, so the hint is
+		// actionable in every case that reaches here.
+		p.config.Logger.Info("Some function credential secrets could not be fetched from cluster",
+			"composition", comp.GetName(),
+			"missing", strings.Join(unsatisfied, ","),
+			"hint", "Use --function-credentials to provide secrets that don't exist on cluster")
+	}
 
 	if len(merged) > 0 {
 		p.config.Logger.Debug("Using function credentials for rendering",
 			"resource", resourceID,
 			"credentialCount", len(merged),
 			"cliProvided", len(p.config.FunctionCredentials),
-			"autoFetched", len(autoFetched))
+			"autoFetched", len(fetched.Secrets))
 	}
 
-	return merged
+	return merged, nil
+}
+
+// unsatisfiedCredentials returns the namespace/name keys of the absent secrets that the merged
+// credential set does not cover, sorted so the advisory's context is byte-stable across runs (which is
+// what lets identical advisories dedup). Keys are formed the same way mergeCredentials keys its map,
+// so a CLI-supplied secret matches an absent cluster secret exactly when they name the same object.
+func unsatisfiedCredentials(absent []k8stypes.NamespacedName, merged []corev1.Secret) []string {
+	if len(absent) == 0 {
+		return nil
+	}
+
+	supplied := make(map[string]struct{}, len(merged))
+	for _, cred := range merged {
+		supplied[fmt.Sprintf("%s/%s", cred.Namespace, cred.Name)] = struct{}{}
+	}
+
+	var unsatisfied []string
+
+	for _, ref := range absent {
+		key := fmt.Sprintf("%s/%s", ref.Namespace, ref.Name)
+		if _, ok := supplied[key]; !ok {
+			unsatisfied = append(unsatisfied, key)
+		}
+	}
+
+	sort.Strings(unsatisfied)
+
+	return unsatisfied
 }
 
 // stabilityResult holds the result of a stability check iteration.
@@ -1469,36 +1629,42 @@ func mergeObservedResources(existing, newResources []cpd.Unstructured) []cpd.Uns
 
 // removeNamespacesFromClusterScopedResources removes namespaces from cluster-scoped resources.
 //
-// TEMPORARY WORKAROUND: This function exists because Crossplane's render command blindly propagates
-// namespaces from the XR to ALL composed resources without checking if they are cluster-scoped.
-// This was introduced in PR #6812 (https://github.com/crossplane/crossplane/pull/6812) which fixed
-// issue #6782 by adding namespace propagation to SetComposedResourceMetadata.
+// WORKAROUND for an upstream gap. A namespaced XR that composes a cluster-scoped
+// resource comes back from render with the XR's namespace stamped onto that
+// resource, which would otherwise show up as a spurious diff.
 //
-// UPSTREAM FIX NEEDED in github.com/crossplane/crossplane/v2:
-// File: cmd/crank/render/render.go
-// Function: SetComposedResourceMetadata (around line 445)
-// Issue: Lines 455-457 blindly set cd.SetNamespace(xr.GetNamespace()) without checking resource scope
+// Rendering runs through `crossplane internal render`, which builds the *same*
+// composer production uses (`composite.NewFunctionComposer`, from
+// crossplane's internal/render/composite). Two pieces of that shared path
+// matter here:
 //
-// Proposed Solution:
-// 1. Extend RenderInputs to accept XRDs (similar to how RequiredResources is passed)
-// 2. Pass XRDs through to SetComposedResourceMetadata (modify function signature)
-// 3. Look up the composed resource's GVK in the XRDs to determine if it's cluster-scoped
-// 4. Only call cd.SetNamespace(xr.GetNamespace()) if the resource is namespaced
+//   - `composite.RenderComposedResourceMetadata` propagates unconditionally:
+//     `if xr.GetNamespace() != "" { cd.SetNamespace(xr.GetNamespace()) }`.
+//   - `FunctionComposer.Compose` guards that separately — for a namespaced XR it
+//     calls `client.IsObjectNamespaced(cd)` and rejects a cluster-scoped composed
+//     resource outright (errFmtNamespacedXRClusterResource).
 //
-// Example fix in SetComposedResourceMetadata:
+// Production is therefore correct: the guard fires against a real API server.
+// Under render it cannot, because render's in-memory client
+// (crossplane's internal/render.InMemoryClient) implements
+// `IsObjectNamespaced` as an unconditional `return true, nil` — it has no
+// cluster to ask. Every composed resource looks namespaced, so nothing is
+// rejected and the namespace stamp stands.
 //
-//	if xr.GetNamespace() != "" {
-//	    // Look up cd's GVK in XRDs to check scope
-//	    if isNamespaced(cd.GetObjectKind().GroupVersionKind(), xrds) {
-//	        cd.SetNamespace(xr.GetNamespace())
-//	    }
-//	}
+// So the gap is not "render propagates namespaces blindly" — it's that render's
+// scope oracle is a stub, leaving an existing upstream guard inert. Fixing it
+// upstream needs a scope answer render can actually compute offline; the shape
+// of that (an injectable resolver vs. passing XRDs through RenderInputs) is an
+// upstream design decision, and `internal/render` is not importable from here
+// in any case. Note the stub's `true` default may well be deliberate for the
+// offline case.
 //
-// Once upstream is fixed, this function can be removed along with its call site at line 270.
+// We can answer it, because we do have a cluster: resolveResourceScope consults
+// the discovery API. Hence this post-pass, which reverses the stamp for
+// resources discovery reports as cluster-scoped.
 //
-// NOTE: render is an offline tool with no cluster access, so it needs XRDs passed explicitly.
-// ExtraResources/RequiredResources are only available to composition functions, not to the
-// core render logic, so a new mechanism is needed to pass schema information.
+// Remove this function and its call site in diffSingleResourceInternal once
+// render can determine scope itself.
 func (p *DefaultDiffProcessor) removeNamespacesFromClusterScopedResources(ctx context.Context, composedResources []cpd.Unstructured) error {
 	for i := range composedResources {
 		resource := &un.Unstructured{Object: composedResources[i].UnstructuredContent()}
@@ -1513,17 +1679,16 @@ func (p *DefaultDiffProcessor) removeNamespacesFromClusterScopedResources(ctx co
 			resourceID = fmt.Sprintf("%s/%s*", resource.GetKind(), resource.GetGenerateName())
 		}
 
-		// Check if resource is cluster-scoped
-		// We must be able to determine scope to proceed - if we can't get the CRD,
-		// validation will fail anyway, so fail fast with a clear error message.
+		// Check if resource is cluster-scoped. Prefer discovery because built-in
+		// Kubernetes resources like Secret and Namespace do not have CRDs.
 		gvk := resource.GroupVersionKind()
 
-		crd, err := p.schemaClient.GetCRD(ctx, gvk)
+		scope, err := resolveResourceScope(ctx, p.resourceClient, p.schemaClient, p.config.Logger, gvk)
 		if err != nil {
-			return errors.Wrapf(err, "cannot determine scope for resource %s (GVK %s): CRD not found", resourceID, gvk.String())
+			return errors.Wrapf(err, "cannot determine scope for resource %s (GVK %s)", resourceID, gvk.String())
 		}
 
-		if crd.Spec.Scope == "Cluster" {
+		if scope == extv1.ClusterScoped {
 			p.config.Logger.Debug("Removing namespace from cluster-scoped resource",
 				"resource", resourceID,
 				"gvk", gvk.String(),
@@ -1637,9 +1802,9 @@ func (p *DefaultDiffProcessor) applyXRDDefaults(ctx context.Context, xr *cmp.Uns
 
 // fetchCompositionCredentials delegates to the credential client to fetch credential secrets
 // referenced in a composition's pipeline steps from the cluster.
-func (p *DefaultDiffProcessor) fetchCompositionCredentials(ctx context.Context, comp *apiextensionsv1.Composition) []corev1.Secret {
+func (p *DefaultDiffProcessor) fetchCompositionCredentials(ctx context.Context, comp *apiextensionsv1.Composition) (types.CredentialFetchResult, error) {
 	if comp == nil || p.credentialClient == nil {
-		return nil
+		return types.CredentialFetchResult{}, nil
 	}
 
 	return p.credentialClient.FetchCompositionCredentials(ctx, comp)

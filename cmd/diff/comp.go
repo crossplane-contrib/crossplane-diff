@@ -17,9 +17,6 @@ limitations under the License.
 package main
 
 import (
-	"context"
-	"time"
-
 	"github.com/alecthomas/kong"
 	dp "github.com/crossplane-contrib/crossplane-diff/cmd/diff/diffprocessor"
 	"github.com/crossplane-contrib/crossplane-diff/cmd/diff/ref"
@@ -176,6 +173,11 @@ func makeDefaultCompProc(c *CompCmd, kongCtx *kong.Context, appCtx *AppContext, 
 		dp.WithIncludeManual(c.IncludeManual),
 		dp.WithMinimizeComposition(c.MinimizeComposition),
 		dp.WithAnalyzeOn(c.analyzeOn()),
+		// comp seeds each re-pointing composite with the predicted CompositionRevision name before
+		// rendering, so the ref the renderer sees is tool-authored and is suppressed from display. Set
+		// here rather than inside NewCompDiffProcessor because the downstream diffs are computed by
+		// xrProc below, and both processors must agree — which this shared opts slice guarantees.
+		dp.WithSeededRevisionRef(true),
 		dp.WithStdout(kongCtx.Stdout),
 		dp.WithStderr(kongCtx.Stderr),
 	)
@@ -196,20 +198,8 @@ func (c *CompCmd) Run(_ *kong.Context, log logging.Logger, appCtx *AppContext, p
 	}
 	defer cancel()
 
-	// Cleanup any resources held by the processor (e.g., Docker containers)
-	defer func() {
-		// Use background context with timeout for cleanup instead of the command context.
-		// The command context may be cancelled (user Ctrl+C, timeout, etc.), which would cause
-		// Docker API calls to fail immediately, leaving containers running. By using a background
-		// context, we ensure cleanup completes even after cancellation, but we add a timeout to
-		// prevent cleanup from blocking indefinitely if the Docker daemon is slow or hung.
-		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 30*time.Second)
-		defer cleanupCancel()
-
-		if err := proc.Cleanup(cleanupCtx); err != nil {
-			log.Debug("Failed to cleanup processor resources", "error", err)
-		}
-	}()
+	// Covers paths that return before rendering; Cleanup is idempotent.
+	defer dp.CleanupDetached(ctx, proc, log)
 
 	err = proc.Initialize(ctx)
 	if err != nil {

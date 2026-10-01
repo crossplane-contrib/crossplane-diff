@@ -18,14 +18,18 @@ package diffprocessor
 
 import (
 	"context"
+	"io"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
 
 	"github.com/crossplane/cli/v2/cmd/crossplane/render"
 	renderv1alpha1 "github.com/crossplane/cli/v2/proto/render/v1alpha1"
+	gcmp "github.com/google/go-cmp/cmp"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
+	"github.com/crossplane/crossplane-runtime/v2/pkg/errors"
 	"github.com/crossplane/crossplane-runtime/v2/pkg/logging"
 	ucomposite "github.com/crossplane/crossplane-runtime/v2/pkg/resource/unstructured/composite"
 
@@ -613,4 +617,205 @@ func equalStartCall(a, b struct {
 	}
 
 	return true
+}
+
+// TestNewEngineRenderFn_ResolvedRenderImage asserts that the render-backend
+// selector arguments reach the engine, and reach it in a form that is actually
+// pullable. Before RenderImage() existed there was nothing to assert against:
+// the selected image disappeared into upstream's unexported
+// crossplaneImageFromFlags, so a caller that dropped the pin entirely looked
+// identical to one that honoured it (crossplane-diff#488).
+func TestNewEngineRenderFn_ResolvedRenderImage(t *testing.T) {
+	stable := render.DefaultCrossplaneImage + ":stable"
+
+	tests := map[string]struct {
+		binaryPath string
+		version    string
+		image      string
+		want       string
+	}{
+		"NoSelectorResolvesStable": {
+			want: stable,
+		},
+		"VersionPinResolvesVersionedTag": {
+			version: "v2.4.0",
+			want:    render.DefaultCrossplaneImage + ":v2.4.0",
+		},
+		// Upstream formats the version into the tag verbatim and publishes only
+		// v-prefixed tags, so the bare form ValidateMinRenderVersion accepts has
+		// to be normalized before it gets here or it becomes an unpullable
+		// reference.
+		"BareVersionPinIsNormalized": {
+			version: "2.3.4",
+			want:    render.DefaultCrossplaneImage + ":v2.3.4",
+		},
+		"NonSemverVersionPinPassesThrough": {
+			version: "stable",
+			want:    stable,
+		},
+		"ImageOverrideResolvesVerbatim": {
+			image: "example.com/mirror/crossplane:v2.4.0",
+			want:  "example.com/mirror/crossplane:v2.4.0",
+		},
+		// The local engine pulls nothing.
+		"BinaryPathResolvesNoImage": {
+			binaryPath: "/usr/local/bin/crossplane",
+			want:       "",
+		},
+	}
+
+	for name, tt := range tests {
+		t.Run(name, func(t *testing.T) {
+			e := NewEngineRenderFn(logging.NewNopLogger(), tt.binaryPath, tt.version, tt.image)
+
+			if diff := gcmp.Diff(tt.want, e.RenderImage()); diff != "" {
+				t.Errorf("RenderImage() mismatch (-want +got):\n%s", diff)
+			}
+		})
+	}
+}
+
+// TestNewEngineRenderFn_UncomparableImageWarns asserts that an image reference
+// whose version cannot be compared against MinCrossplaneRenderVersion draws an
+// advisory rather than silence. Refusing such a reference would break the
+// private-mirror and digest-pinning cases --crossplane-image exists to serve, so
+// a warning is the only thing left that keeps the floor visible.
+func TestNewEngineRenderFn_UncomparableImageWarns(t *testing.T) {
+	tests := map[string]struct {
+		version     string
+		image       string
+		wantWarning bool
+	}{
+		"UncomparableImageWarns": {
+			image:       "internal-mirror/crossplane",
+			wantWarning: true,
+		},
+		"ComparableImageStaysQuiet": {
+			image:       "internal-mirror/crossplane:v2.4.1",
+			wantWarning: false,
+		},
+		// The engine's own :stable default is not the user handing us an
+		// uncomparable reference, and warning on it would fire on every default
+		// invocation.
+		"NoSelectorStaysQuiet": {
+			wantWarning: false,
+		},
+		"VersionPinStaysQuiet": {
+			version:     "v2.4.0",
+			wantWarning: false,
+		},
+	}
+
+	for name, tt := range tests {
+		t.Run(name, func(t *testing.T) {
+			warnings := NewWarningLogger(logging.NewNopLogger(), io.Discard)
+
+			NewEngineRenderFn(warnings, "", tt.version, tt.image)
+
+			got := warnings.Warnings()
+
+			if !tt.wantWarning {
+				if len(got) != 0 {
+					t.Fatalf("warnings = %v, want none", got)
+				}
+
+				return
+			}
+
+			if len(got) != 1 {
+				t.Fatalf("warnings = %v, want exactly 1", got)
+			}
+
+			if !strings.Contains(got[0].Message, tt.image) {
+				t.Errorf("warning = %q, want it to name the image %q", got[0].Message, tt.image)
+			}
+		})
+	}
+}
+
+// TestEngineRenderFn_StaleRenderImageHint asserts that the one render failure
+// shape that is purely an environment problem — a render backend so old it has
+// no `crossplane internal render` subcommand, which is what a never-refreshed
+// local `:stable` image degrades into — carries remediation instead of leaving
+// the user with a bare kong usage error. The hint must augment the original
+// error, never replace or soften it.
+func TestEngineRenderFn_StaleRenderImageHint(t *testing.T) {
+	// The verbatim shape upstream surfaces: the container's stderr, wrapped.
+	staleErr := errors.New("crossplane internal render in Docker returned error with output: crossplane: error: unexpected argument internal")
+
+	tests := map[string]struct {
+		image string
+		// renderErr is what the engine returns alongside a nil response.
+		renderErr error
+		// wantHintFor, when non-empty, must appear in the final error, as must
+		// MinCrossplaneRenderVersion.
+		wantHintFor string
+	}{
+		"StaleDockerImageGetsHint": {
+			image:       "xpkg.crossplane.io/crossplane/crossplane:stable",
+			renderErr:   staleErr,
+			wantHintFor: "xpkg.crossplane.io/crossplane/crossplane:stable",
+		},
+		"StaleLocalBinaryGetsHint": {
+			image:       "",
+			renderErr:   errors.New("crossplane: error: unexpected argument internal"),
+			wantHintFor: MinCrossplaneRenderVersion,
+		},
+		// Narrowness matters more than coverage here: misattributing an ordinary
+		// pipeline or connectivity failure to a stale image would send users to
+		// fix the wrong thing.
+		"UnrelatedRenderFailureGetsNoHint": {
+			image:     "xpkg.crossplane.io/crossplane/crossplane:stable",
+			renderErr: errors.New("cannot connect to the Docker daemon"),
+		},
+		"UnrelatedUnexpectedArgumentGetsNoHint": {
+			image:     "xpkg.crossplane.io/crossplane/crossplane:stable",
+			renderErr: errors.New("crossplane: error: unexpected argument render"),
+		},
+	}
+
+	for name, tt := range tests {
+		t.Run(name, func(t *testing.T) {
+			ctx := t.Context()
+
+			mock := &render.MockEngine{
+				MockRender: func(_ context.Context, _ *renderv1alpha1.RenderRequest) (*renderv1alpha1.RenderResponse, error) {
+					return nil, tt.renderErr
+				},
+			}
+
+			var startCalls, stopCalls int32
+
+			e := newTestRenderFn(mock, &startCalls, &stopCalls)
+			e.image = tt.image
+
+			_, err := e.Render(ctx, logging.NewNopLogger(), minimalRenderInputs())
+			if err == nil {
+				t.Fatalf("Render() = nil error, want the render failure surfaced")
+			}
+
+			// Whatever else happens, the original failure must survive intact.
+			if !errors.Is(err, tt.renderErr) {
+				t.Errorf("Render() error = %v, want it to wrap the engine error", err)
+			}
+
+			if !strings.Contains(err.Error(), tt.renderErr.Error()) {
+				t.Errorf("Render() error = %q, want it to contain the engine message %q", err.Error(), tt.renderErr.Error())
+			}
+
+			if tt.wantHintFor == "" {
+				if strings.Contains(err.Error(), MinCrossplaneRenderVersion) {
+					t.Errorf("Render() error = %q, want no stale-image hint", err.Error())
+				}
+
+				return
+			}
+
+			for _, want := range []string{tt.wantHintFor, MinCrossplaneRenderVersion} {
+				if !strings.Contains(err.Error(), want) {
+					t.Errorf("Render() error = %q, want it to contain %q", err.Error(), want)
+				}
+			}
+		})
+	}
 }

@@ -78,6 +78,14 @@ classDiagram
         +Cleanup(ctx) error
     }
 
+    class InputValidator {
+        <<interface>>
+        +ToRender() []ValidatedInput
+        +RecordRender(i, rendered, err)
+        +Verdicts(groups) []error
+        +RenderOverlaps(groups) []error
+    }
+
     class DiffRenderer {
         <<interface>>
         +RenderDiffs(diffs, errs) error
@@ -138,6 +146,7 @@ classDiagram
     DiffProcessor --> SchemaValidator
     DiffProcessor --> ResourceManager
     DiffProcessor --> FunctionProvider
+    DiffProcessor --> InputValidator
     DiffProcessor --> DiffRenderer
     CompDiffProcessor --> CompDiffRenderer
 

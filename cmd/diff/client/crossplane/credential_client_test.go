@@ -7,6 +7,11 @@ import (
 	tu "github.com/crossplane-contrib/crossplane-diff/cmd/diff/testutils"
 	"github.com/google/go-cmp/cmp"
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/runtime/schema"
+	k8stypes "k8s.io/apimachinery/pkg/types"
+
+	"github.com/crossplane/crossplane-runtime/v2/pkg/errors"
 
 	apiextensionsv1 "github.com/crossplane/crossplane/apis/v2/apiextensions/v1"
 )
@@ -44,11 +49,14 @@ func TestDefaultCredentialClient_FetchCompositionCredentials(t *testing.T) {
 		composition  *apiextensionsv1.Composition
 		mockResource tu.MockResourceClient
 		wantSecrets  []corev1.Secret
-		// wantAdvisory asserts whether a user-facing advisory is raised (via logger.Info, which the
-		// CLI surfaces as a WARNING line and a structured warnings[] entry). It must fire exactly when
-		// some credentials could not be fetched: the render then proceeds without them, so the diff may
-		// not reflect what the cluster would produce, and a silent success would hide that.
-		wantAdvisory bool
+		// wantAbsent is the set of referenced secrets reported as absent from the cluster. The client
+		// reports the fact rather than warning about it: whether an absent secret is a problem depends on
+		// whether the caller supplied it via --function-credentials, which only the caller can see.
+		wantAbsent []k8stypes.NamespacedName
+		// wantErr is a substring of the expected error. A failure that is NOT a NotFound means the
+		// credential may exist and be relevant but could not be read; rendering without it would emit a
+		// diff that silently does not reflect reality, so the fetch fails rather than degrading.
+		wantErr string
 	}{
 		"NonPipelineMode": {
 			reason: "Should return nil for non-pipeline compositions",
@@ -96,8 +104,8 @@ func TestDefaultCredentialClient_FetchCompositionCredentials(t *testing.T) {
 				Build(),
 			wantSecrets: []corev1.Secret{secret1, secret3},
 		},
-		"CredentialNotFoundSkipped": {
-			reason: "Should skip credentials that cannot be fetched (e.g., runtime-injected)",
+		"CredentialNotFoundReported": {
+			reason: "Should report, not fail on, credentials absent from the cluster (e.g., runtime-injected)",
 			composition: tu.NewComposition("test-comp").
 				WithCompositeTypeRef("example.org/v1", "XR").
 				WithPipelineMode().
@@ -107,11 +115,11 @@ func TestDefaultCredentialClient_FetchCompositionCredentials(t *testing.T) {
 			mockResource: *tu.NewMockResourceClient().
 				WithResourceNotFound().
 				Build(),
-			wantSecrets:  nil,
-			wantAdvisory: true,
+			wantSecrets: nil,
+			wantAbsent:  []k8stypes.NamespacedName{{Namespace: "crossplane-system", Name: "missing-secret"}},
 		},
 		"MixedFetchResults": {
-			reason: "Should return only successfully fetched credentials",
+			reason: "Should return successfully fetched credentials and report the absent one",
 			composition: tu.NewComposition("test-comp").
 				WithCompositeTypeRef("example.org/v1", "XR").
 				WithPipelineMode().
@@ -120,12 +128,55 @@ func TestDefaultCredentialClient_FetchCompositionCredentials(t *testing.T) {
 				WithPipelineStep("step2", "function-two", nil,
 					tu.WithCredentials("creds2", "ns2", "missing")).
 				Build(),
-			// Only "secret1" is in the map; "missing" will return error
+			// Only "secret1" is in the map; "missing" yields NotFound
 			mockResource: *tu.NewMockResourceClient().
 				WithResourcesExist(secret1Builder.Build()).
 				Build(),
-			wantSecrets:  []corev1.Secret{secret1},
-			wantAdvisory: true,
+			wantSecrets: []corev1.Secret{secret1},
+			wantAbsent:  []k8stypes.NamespacedName{{Namespace: "ns2", Name: "missing"}},
+		},
+		"SameAbsentSecretReferencedTwiceReportedOnce": {
+			reason: "One absent secret referenced from two steps is one shortfall, not two",
+			composition: tu.NewComposition("test-comp").
+				WithCompositeTypeRef("example.org/v1", "XR").
+				WithPipelineMode().
+				WithPipelineStep("step1", "function-one", nil,
+					tu.WithCredentials("creds1", "ns1", "shared-missing")).
+				WithPipelineStep("step2", "function-two", nil,
+					tu.WithCredentials("creds2", "ns1", "shared-missing")).
+				Build(),
+			mockResource: *tu.NewMockResourceClient().
+				WithResourceNotFound().
+				Build(),
+			wantSecrets: nil,
+			wantAbsent:  []k8stypes.NamespacedName{{Namespace: "ns1", Name: "shared-missing"}},
+		},
+		"ForbiddenFails": {
+			reason: "RBAC denial leaves the credential state unknown, so the fetch must fail rather than render without it",
+			composition: tu.NewComposition("test-comp").
+				WithCompositeTypeRef("example.org/v1", "XR").
+				WithPipelineMode().
+				WithPipelineStep("step1", "function-test", nil,
+					tu.WithCredentials("creds", "crossplane-system", "forbidden-secret")).
+				Build(),
+			mockResource: *tu.NewMockResourceClient().
+				WithGetResourceError(apierrors.NewForbidden(
+					schema.GroupResource{Resource: "secrets"}, "forbidden-secret", errors.New("nope"))).
+				Build(),
+			wantErr: `cannot read function credential secret crossplane-system/forbidden-secret referenced by pipeline step "step1"`,
+		},
+		"TransportFailureFails": {
+			reason: "A transport error is equally unknowable; degrading to a warning would emit a possibly-wrong diff",
+			composition: tu.NewComposition("test-comp").
+				WithCompositeTypeRef("example.org/v1", "XR").
+				WithPipelineMode().
+				WithPipelineStep("step1", "function-test", nil,
+					tu.WithCredentials("creds", "ns1", "secret1")).
+				Build(),
+			mockResource: *tu.NewMockResourceClient().
+				WithGetResourceError(errors.New("connection refused")).
+				Build(),
+			wantErr: "connection refused",
 		},
 		"MultipleCredentialsInSameStep": {
 			reason: "Should fetch multiple credentials from the same pipeline step",
@@ -152,9 +203,37 @@ func TestDefaultCredentialClient_FetchCompositionCredentials(t *testing.T) {
 				logger:         logger,
 			}
 
-			got := c.FetchCompositionCredentials(ctx, tt.composition)
+			result, err := c.FetchCompositionCredentials(ctx, tt.composition)
 
-			assertCredentialAdvisory(t, tt.reason, logger.Advisories(), tt.wantAdvisory)
+			switch {
+			case tt.wantErr != "":
+				if err == nil {
+					t.Fatalf("\n%s\nFetchCompositionCredentials(): expected an error containing %q, got nil",
+						tt.reason, tt.wantErr)
+				}
+
+				if !strings.Contains(err.Error(), tt.wantErr) {
+					t.Fatalf("\n%s\nFetchCompositionCredentials(): error %q does not contain %q",
+						tt.reason, err.Error(), tt.wantErr)
+				}
+
+				return
+			case err != nil:
+				t.Fatalf("\n%s\nFetchCompositionCredentials(): unexpected error: %v", tt.reason, err)
+			}
+
+			// The client reports shortfalls as data and raises no advisory of its own: the advisory lives
+			// in resolveFunctionCredentials, which is the only layer that knows what --function-credentials
+			// already supplied. Warning here would fire at users who had already solved the problem.
+			if advisories := logger.Advisories(); len(advisories) != 0 {
+				t.Errorf("\n%s\nexpected no advisory from the credential client, got %v", tt.reason, advisories)
+			}
+
+			if diff := cmp.Diff(tt.wantAbsent, result.Absent); diff != "" {
+				t.Errorf("\n%s\nFetchCompositionCredentials() absent mismatch (-want +got):\n%s", tt.reason, diff)
+			}
+
+			got := result.Secrets
 
 			// Compare counts first
 			if len(got) != len(tt.wantSecrets) {
@@ -185,26 +264,4 @@ func TestDefaultCredentialClient_FetchCompositionCredentials(t *testing.T) {
 			}
 		})
 	}
-}
-
-// assertCredentialAdvisory checks whether the shortfall advisory was raised, and that it names the
-// escape hatch — a user who sees it needs to know --function-credentials exists.
-func assertCredentialAdvisory(t *testing.T, reason string, advisories []string, want bool) {
-	t.Helper()
-
-	if !want {
-		if len(advisories) != 0 {
-			t.Errorf("\n%s\nexpected no advisory, got %v", reason, advisories)
-		}
-
-		return
-	}
-
-	for _, a := range advisories {
-		if strings.Contains(a, "could not be fetched") {
-			return
-		}
-	}
-
-	t.Errorf("\n%s\nexpected an advisory about credentials that could not be fetched, got %v", reason, advisories)
 }

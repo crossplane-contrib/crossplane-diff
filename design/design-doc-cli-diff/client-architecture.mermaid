@@ -86,7 +86,7 @@ classDiagram
 
     class CredentialClient {
         <<interface>>
-        +FetchCompositionCredentials(ctx, comp) []corev1.Secret
+        +FetchCompositionCredentials(ctx, comp) (CredentialFetchResult, error)
     }
 
     class CompositionClient {

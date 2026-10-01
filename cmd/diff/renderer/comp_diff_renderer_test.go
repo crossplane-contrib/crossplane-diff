@@ -192,6 +192,61 @@ func sharedCompDiffFixtures() []testCompDiffFixture {
 				}
 			},
 		},
+		{
+			// Issue #479: a composition that failed to process never completed the comparison, so nothing
+			// about its revision impact was determined. Serializing the zero value would put changeScope
+			// outside its "none"/"metadata"/"spec" enum and assert createsRevision: false about an apply
+			// the tool never evaluated. The object is omitted instead; a composition that *was* compared
+			// keeps it, including when the composites went unevaluated.
+			name: "FailedCompositionOmitsRevisionImpact",
+			output: &CompDiffOutput{
+				Compositions: []CompositionDiff{
+					{
+						Name:                  "compared.example.org",
+						ImpactAnalysisSkipped: true,
+						RevisionImpact:        RevisionImpact{ChangeScope: "metadata", CreatesRevision: true, RepointedComposites: 1},
+						ImpactAnalysis:        []XRImpact{},
+					},
+					{
+						Name:           "broken.example.org",
+						Error:          errors.New("cannot calculate composition diff"),
+						ImpactAnalysis: []XRImpact{},
+					},
+				},
+			},
+			validate: func(t *testing.T, format OutputFormat, result string) {
+				t.Helper()
+
+				if format != OutputFormatJSON {
+					// YAML shares the JSON tags, so absence of the key is the whole assertion here.
+					if strings.Count(result, "revisionImpact:") != 1 {
+						t.Errorf("expected exactly one revisionImpact block in YAML, got:\n%s", result)
+					}
+
+					return
+				}
+
+				var parsed compDiffWire
+				if err := json.Unmarshal([]byte(result), &parsed); err != nil {
+					t.Fatalf("Failed to parse JSON: %v", err)
+				}
+
+				if len(parsed.Compositions) != 2 {
+					t.Fatalf("expected 2 compositions, got %d", len(parsed.Compositions))
+				}
+
+				compared, broken := parsed.Compositions[0], parsed.Compositions[1]
+
+				want := &RevisionImpact{ChangeScope: "metadata", CreatesRevision: true, RepointedComposites: 1}
+				if diff := gcmp.Diff(want, compared.RevisionImpact); diff != "" {
+					t.Errorf("compared composition revisionImpact mismatch (-want +got):\n%s", diff)
+				}
+
+				if broken.RevisionImpact != nil {
+					t.Errorf("failed composition should omit revisionImpact, got %+v", *broken.RevisionImpact)
+				}
+			},
+		},
 	}
 }
 
@@ -391,6 +446,100 @@ func TestDefaultCompDiffRenderer_RenderCompDiff(t *testing.T) {
 
 				if strings.Contains(result, "Summary: 1 modified") {
 					t.Errorf("expected no composition Summary footer when minimized, got: %q", result)
+				}
+			},
+		},
+		// Issue #478: which composites would not adopt the resulting revision is settled locally, with no
+		// render, so a skipped impact analysis must still report it. What the skip withholds is the
+		// changed/unchanged/errored summary — that verdict needed the renders it did not run.
+		"SkippedAnalysisStillReportsFilteredComposites": {
+			output: &CompDiffOutput{
+				Compositions: []CompositionDiff{{
+					Name:                  "test-comp",
+					ImpactAnalysisSkipped: true,
+					RevisionImpact:        RevisionImpact{ChangeScope: "metadata", CreatesRevision: true, RepointedComposites: 1},
+					AffectedResources:     AffectedResourcesSummary{Total: 3, FilteredByPolicy: 1, FilteredByDeletion: 1},
+					ImpactAnalysis:        []XRImpact{},
+				}},
+			},
+			colorize: false,
+			validate: func(t *testing.T, result string) {
+				t.Helper()
+
+				for _, want := range []string{
+					"Impact analysis skipped",
+					"2 of 3 XR(s) using composition test-comp would not adopt this revision",
+					"1 with Manual update policy (use --include-manual to see them)",
+					"1 being deleted",
+				} {
+					if !strings.Contains(result, want) {
+						t.Errorf("expected %q in output, got:\n%s", want, result)
+					}
+				}
+
+				// The kept composites went unevaluated, so no per-status verdict may be printed for them.
+				for _, unwanted := range []string{"=== Affected Composite Resources ===", "=== Impact Analysis ==="} {
+					if strings.Contains(result, unwanted) {
+						t.Errorf("did not expect %q for a skipped composition, got:\n%s", unwanted, result)
+					}
+				}
+			},
+		},
+		// In --resource mode the filtered composites reach ImpactAnalysis, so the skip path names them
+		// individually with their reason and detail — the affordance issue #457 shipped, which the skip
+		// used to discard.
+		"SkippedAnalysisNamesFilteredCompositesInResourceMode": {
+			output: &CompDiffOutput{
+				Compositions: []CompositionDiff{{
+					Name:                  "test-comp",
+					ImpactAnalysisSkipped: true,
+					RevisionImpact:        RevisionImpact{ChangeScope: "metadata", CreatesRevision: true},
+					AffectedResources:     AffectedResourcesSummary{Total: 1, FilteredByDeletion: 1},
+					ImpactAnalysis: []XRImpact{{
+						ObjectReference: corev1.ObjectReference{APIVersion: "example.org/v1", Kind: "XR", Name: "my-deleting-xr", Namespace: "default"},
+						Status:          XRStatusFiltered,
+						FilterReason:    FilterReasonDeleting,
+						FilterDetail:    "deletionTimestamp: 2026-09-07T11:25:03Z",
+					}},
+				}},
+			},
+			colorize: false,
+			validate: func(t *testing.T, result string) {
+				t.Helper()
+
+				for _, want := range []string{
+					"Impact analysis skipped",
+					"1 of 1 XR(s) using composition test-comp would not adopt this revision",
+					"XR/my-deleting-xr",
+					"filtered: being deleted (deletionTimestamp: 2026-09-07T11:25:03Z)",
+				} {
+					if !strings.Contains(result, want) {
+						t.Errorf("expected %q in output, got:\n%s", want, result)
+					}
+				}
+			},
+		},
+		// Nothing was filtered, so the skip note stands alone — no "0 of 0" line.
+		"SkippedAnalysisWithNothingFilteredSaysNoMore": {
+			output: &CompDiffOutput{
+				Compositions: []CompositionDiff{{
+					Name:                  "test-comp",
+					ImpactAnalysisSkipped: true,
+					RevisionImpact:        RevisionImpact{ChangeScope: "none"},
+					AffectedResources:     AffectedResourcesSummary{Total: 2},
+					ImpactAnalysis:        []XRImpact{},
+				}},
+			},
+			colorize: false,
+			validate: func(t *testing.T, result string) {
+				t.Helper()
+
+				if !strings.Contains(result, "Impact analysis skipped") {
+					t.Errorf("expected the skip note, got:\n%s", result)
+				}
+
+				if strings.Contains(result, "would not adopt this revision") {
+					t.Errorf("did not expect a filtered-composites line when nothing was filtered, got:\n%s", result)
 				}
 			},
 		},
@@ -882,6 +1031,234 @@ func Test_allFilteredMessage(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			if diff := gcmp.Diff(tt.want, allFilteredMessage("test-comp", tt.summary)); diff != "" {
 				t.Errorf("allFilteredMessage() mismatch (-want +got):\n%s", diff)
+			}
+		})
+	}
+}
+
+// TestSkippedMessage pins the distinction the two skip reasons must keep. An identical composition
+// creates no CompositionRevision and so genuinely cannot affect anything — a guarantee. A
+// metadata-only change under --analyze-on=spec-change does create one and simply was not evaluated —
+// an absence of information. Reporting the first for the second case would assert something the tool
+// never established, which is the whole reason skippedMessage branches at all.
+func TestSkippedMessage(t *testing.T) {
+	tests := map[string]struct {
+		impact RevisionImpact
+		// wantContains are substrings that must appear; wantOmits must not.
+		wantContains []string
+		wantOmits    []string
+	}{
+		"IdenticalCompositionMakesTheStrongClaim": {
+			impact: RevisionImpact{ChangeScope: "none", CreatesRevision: false},
+			wantContains: []string{
+				"identical to the cluster's",
+				"creates no new CompositionRevision",
+				"no composite resource could change",
+				"--analyze-on=always",
+			},
+			// Must not hedge: for this case the tool really does know nothing can change.
+			wantOmits: []string{"was not evaluated", "not predictable"},
+		},
+		"MetadataOnlyChangeMakesOnlyTheWeakClaim": {
+			impact: RevisionImpact{
+				ChangeScope:           "metadata",
+				CreatesRevision:       true,
+				RepointedComposites:   2,
+				PredictedRevisionName: "xbuckets.example.org-abc1234",
+			},
+			wantContains: []string{
+				"still creates a new CompositionRevision",
+				"2 composites would adopt",
+				"whether that changes any rendered output was not evaluated",
+				"--analyze-on=any-change",
+			},
+			wantOmits: []string{
+				// Must never claim nothing could change, nor that the composition is identical.
+				"no composite resource could change",
+				"identical to the cluster's",
+				// The hash suffix stays out of human output; see revisionImpactMessage.
+				"abc1234",
+			},
+		},
+		"SingleCompositeIsNotPluralized": {
+			impact: RevisionImpact{
+				ChangeScope:         "metadata",
+				CreatesRevision:     true,
+				RepointedComposites: 1,
+			},
+			wantContains: []string{"1 composite would adopt"},
+			wantOmits:    []string{"1 composites"},
+		},
+	}
+
+	for name, tt := range tests {
+		t.Run(name, func(t *testing.T) {
+			got := skippedMessage(tt.impact)
+
+			for _, want := range tt.wantContains {
+				if !strings.Contains(got, want) {
+					t.Errorf("skippedMessage() missing %q, got:\n%s", want, got)
+				}
+			}
+
+			for _, omit := range tt.wantOmits {
+				if strings.Contains(got, omit) {
+					t.Errorf("skippedMessage() must not contain %q, got:\n%s", omit, got)
+				}
+			}
+		})
+	}
+}
+
+// TestRevisionImpactMessage covers the line emitted when the composites *were* evaluated. It exists to
+// make a downstream change interpretable — a composed resource templating on the revision name
+// otherwise shows a diff with no visible cause — so the name has to be in it, and it must stay silent
+// when there is no revision to name.
+func TestRevisionImpactMessage(t *testing.T) {
+	tests := map[string]struct {
+		impact       RevisionImpact
+		want         string
+		wantContains []string
+		wantOmits    []string
+	}{
+		"NoRevisionSaysNothing": {
+			impact: RevisionImpact{ChangeScope: "none", CreatesRevision: false},
+			want:   "",
+		},
+		"ReportsTheChurnWithoutTheHash": {
+			impact: RevisionImpact{
+				ChangeScope:           "spec",
+				CreatesRevision:       true,
+				RepointedComposites:   3,
+				PredictedRevisionName: "xbuckets.example.org-abc1234",
+			},
+			wantContains: []string{
+				"creates a new CompositionRevision",
+				"3 composites would adopt",
+			},
+			// The name is available on the impact but must stay out of human stdout, which would
+			// otherwise churn on every composition edit. Structured output carries it instead.
+			wantOmits: []string{"abc1234"},
+		},
+		"ZeroAdoptingCompositesSaysNothing": {
+			// The line's only job is explaining a downstream diff that a template reading the revision
+			// name would cause. Nothing adopts this revision, so there is no such diff, and the sections
+			// around it already report the composition as changed.
+			impact: RevisionImpact{
+				ChangeScope:           "spec",
+				CreatesRevision:       true,
+				PredictedRevisionName: "xbuckets.example.org-abc1234",
+			},
+			want: "",
+		},
+		"UnpredictableNameReadsIdentically": {
+			// Nothing was seeded here, so a revision-observing change would go undetected — but that is
+			// said on stderr as a warning, which is the channel for "this could not be checked". The
+			// stdout line reports the same churn either way, so it needs no variant.
+			impact:       RevisionImpact{ChangeScope: "metadata", CreatesRevision: true, RepointedComposites: 1},
+			wantContains: []string{"creates a new CompositionRevision", "1 composite would adopt"},
+			wantOmits:    []string{"not predictable"},
+		},
+	}
+
+	for name, tt := range tests {
+		t.Run(name, func(t *testing.T) {
+			got := revisionImpactMessage(tt.impact)
+
+			if len(tt.wantContains) == 0 {
+				if diff := gcmp.Diff(tt.want, got); diff != "" {
+					t.Errorf("revisionImpactMessage() mismatch (-want +got):\n%s", diff)
+				}
+
+				return
+			}
+
+			for _, want := range tt.wantContains {
+				if !strings.Contains(got, want) {
+					t.Errorf("revisionImpactMessage() missing %q, got:\n%s", want, got)
+				}
+			}
+
+			for _, omit := range tt.wantOmits {
+				if strings.Contains(got, omit) {
+					t.Errorf("revisionImpactMessage() must not contain %q, got:\n%s", omit, got)
+				}
+			}
+		})
+	}
+}
+
+// TestRenderCompDiff_RevisionImpactLine checks the wiring, which the message unit tests above cannot:
+// that the line reaches stdout for an evaluated composition, and that a skipped one reports the churn
+// exactly once rather than twice (skippedMessage carries its own sentence, and both would be emitted if
+// the early-continue were removed). It also pins that the hash never reaches stdout by either route.
+func TestRenderCompDiff_RevisionImpactLine(t *testing.T) {
+	impact := RevisionImpact{
+		ChangeScope:           "metadata",
+		CreatesRevision:       true,
+		RepointedComposites:   1,
+		PredictedRevisionName: "xbuckets.example.org-abc1234",
+	}
+
+	tests := map[string]struct {
+		comp CompositionDiff
+		// wantCount is how many times the churn is reported: "composite would adopt" appears in both
+		// revisionImpactMessage and skippedMessage, so it counts either route.
+		wantCount int
+	}{
+		"EvaluatedCompositionReportsChurnOnce": {
+			comp: CompositionDiff{
+				Name:              "xbuckets.example.org",
+				RevisionImpact:    impact,
+				AffectedResources: AffectedResourcesSummary{Total: 1, Unchanged: 1},
+				ImpactAnalysis: []XRImpact{{
+					ObjectReference: corev1.ObjectReference{Kind: "XBucket", Name: "test-xr"},
+					Status:          XRStatusUnchanged,
+				}},
+			},
+			wantCount: 1,
+		},
+		"SkippedCompositionReportsChurnOnce": {
+			comp: CompositionDiff{
+				Name:                  "xbuckets.example.org",
+				RevisionImpact:        impact,
+				ImpactAnalysisSkipped: true,
+			},
+			wantCount: 1,
+		},
+		"UnchangedCompositionReportsChurnNever": {
+			comp: CompositionDiff{
+				Name:           "xbuckets.example.org",
+				RevisionImpact: RevisionImpact{ChangeScope: "none", CreatesRevision: false},
+			},
+			wantCount: 0,
+		},
+	}
+
+	for name, tt := range tests {
+		t.Run(name, func(t *testing.T) {
+			var stdout, stderr bytes.Buffer
+
+			opts := DefaultDiffOptions()
+			opts.Stdout = &stdout
+			opts.Stderr = &stderr
+			opts.UseColors = false
+
+			r := NewDefaultCompDiffRenderer(tu.TestLogger(t, false), NewDiffRenderer(tu.TestLogger(t, false), opts), opts)
+
+			if err := r.RenderCompDiff(&CompDiffOutput{Compositions: []CompositionDiff{tt.comp}}); err != nil {
+				t.Fatalf("RenderCompDiff() unexpected error: %v", err)
+			}
+
+			if got := strings.Count(stdout.String(), "composite would adopt"); got != tt.wantCount {
+				t.Errorf("RenderCompDiff() reported the revision churn %d times, want %d; output:\n%s",
+					got, tt.wantCount, stdout.String())
+			}
+
+			// The predicted name's hash suffix must never reach human stdout by any route; it lives in
+			// structured output, where churning on a composition edit costs nobody anything.
+			if strings.Contains(stdout.String(), "abc1234") {
+				t.Errorf("RenderCompDiff() leaked the revision hash into human output:\n%s", stdout.String())
 			}
 		})
 	}

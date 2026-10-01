@@ -208,6 +208,141 @@ func TestWarningLogger_ConcurrentInfo(t *testing.T) {
 	}
 }
 
+// TestWarningLogger_Dedup covers the sink's identity rule: a warning byte-identical to one already
+// raised — same message AND same context pairs — tells the user nothing they have not already been
+// told, so it is collapsed in BOTH channels. Conversely, a warning whose context differs in any pair
+// is a distinct occurrence and must still fire every time; the ownership-theft advisory in
+// resource_manager.go depends on that, since it is raised once per composed resource with the
+// resource's identity in its context.
+func TestWarningLogger_Dedup(t *testing.T) {
+	type call struct {
+		msg string
+		kv  []any
+	}
+
+	tests := map[string]struct {
+		reason string
+		// derive, when non-empty, raises every call through a logger derived with these pairs, so the
+		// dedup identity is exercised against WithValues-accumulated context too.
+		derive       []any
+		calls        []call
+		wantStderr   string
+		wantWarnings []dt.OutputWarning
+	}{
+		"IdenticalNoContextCollapses": {
+			reason: "The same bare message repeated adds nothing, so only the first survives",
+			calls: []call{
+				{msg: "leftover containers"},
+				{msg: "leftover containers"},
+				{msg: "leftover containers"},
+			},
+			wantStderr:   "WARNING: leftover containers\n",
+			wantWarnings: []dt.OutputWarning{{Message: "leftover containers"}},
+		},
+		"IdenticalMessageAndContextCollapses": {
+			reason: "The per-composition credential advisory repeats once per XR; all copies are identical",
+			calls: []call{
+				{msg: "credentials missing", kv: []any{"composition", "xbuckets.example.org", "missing", "ns/a"}},
+				{msg: "credentials missing", kv: []any{"composition", "xbuckets.example.org", "missing", "ns/a"}},
+			},
+			wantStderr: "WARNING: credentials missing (composition=xbuckets.example.org, missing=ns/a)\n",
+			wantWarnings: []dt.OutputWarning{{
+				Message: "credentials missing",
+				Context: map[string]string{"composition": "xbuckets.example.org", "missing": "ns/a"},
+			}},
+		},
+		"ContextPairOrderDoesNotDefeatDedup": {
+			reason: "Context is a map, so the same pairs supplied in a different call order are the same warning",
+			calls: []call{
+				{msg: "credentials missing", kv: []any{"composition", "c", "missing", "ns/a"}},
+				{msg: "credentials missing", kv: []any{"missing", "ns/a", "composition", "c"}},
+			},
+			wantStderr: "WARNING: credentials missing (composition=c, missing=ns/a)\n",
+			wantWarnings: []dt.OutputWarning{{
+				Message: "credentials missing",
+				Context: map[string]string{"composition": "c", "missing": "ns/a"},
+			}},
+		},
+		"SameMessageDifferentContextBothFire": {
+			reason: "The ownership advisory is per composed resource; collapsing it would hide resources",
+			calls: []call{
+				{msg: "assuming ownership", kv: []any{"resource", "Bucket/one"}},
+				{msg: "assuming ownership", kv: []any{"resource", "Bucket/two"}},
+			},
+			wantStderr: "WARNING: assuming ownership (resource=Bucket/one)\n" +
+				"WARNING: assuming ownership (resource=Bucket/two)\n",
+			wantWarnings: []dt.OutputWarning{
+				{Message: "assuming ownership", Context: map[string]string{"resource": "Bucket/one"}},
+				{Message: "assuming ownership", Context: map[string]string{"resource": "Bucket/two"}},
+			},
+		},
+		"SameContextDifferentMessageBothFire": {
+			reason: "Two different advisories about one resource are two facts",
+			calls: []call{
+				{msg: "first advisory", kv: []any{"resource", "Bucket/one"}},
+				{msg: "second advisory", kv: []any{"resource", "Bucket/one"}},
+			},
+			wantStderr: "WARNING: first advisory (resource=Bucket/one)\n" +
+				"WARNING: second advisory (resource=Bucket/one)\n",
+			wantWarnings: []dt.OutputWarning{
+				{Message: "first advisory", Context: map[string]string{"resource": "Bucket/one"}},
+				{Message: "second advisory", Context: map[string]string{"resource": "Bucket/one"}},
+			},
+		},
+		"ContextSplitCannotForgeAMatch": {
+			reason: "A value containing the key/value separator must not collide with a differently split pair",
+			calls: []call{
+				{msg: "advisory", kv: []any{"a", "b=c"}},
+				{msg: "advisory", kv: []any{"a=b", "c"}},
+			},
+			wantStderr: "WARNING: advisory (a=b=c)\n" +
+				"WARNING: advisory (a=b=c)\n",
+			wantWarnings: []dt.OutputWarning{
+				{Message: "advisory", Context: map[string]string{"a": "b=c"}},
+				{Message: "advisory", Context: map[string]string{"a=b": "c"}},
+			},
+		},
+		"DerivedLoggersShareTheDedupIdentity": {
+			reason: "Warnings raised through derived loggers land in one sink, so identity spans them",
+			derive: []any{"composition", "xbuckets.example.org"},
+			calls: []call{
+				{msg: "credentials missing"},
+				{msg: "credentials missing"},
+			},
+			wantStderr: "WARNING: credentials missing (composition=xbuckets.example.org)\n",
+			wantWarnings: []dt.OutputWarning{{
+				Message: "credentials missing",
+				Context: map[string]string{"composition": "xbuckets.example.org"},
+			}},
+		},
+	}
+
+	for name, tt := range tests {
+		t.Run(name, func(t *testing.T) {
+			var stderr bytes.Buffer
+
+			wl := NewWarningLogger(&recordingLogger{}, &stderr)
+
+			var raiser logging.Logger = wl
+			if len(tt.derive) > 0 {
+				raiser = wl.WithValues(tt.derive...)
+			}
+
+			for _, c := range tt.calls {
+				raiser.Info(c.msg, c.kv...)
+			}
+
+			if diff := gcmp.Diff(tt.wantStderr, stderr.String()); diff != "" {
+				t.Errorf("\n%s\nstderr mismatch (-want +got):\n%s", tt.reason, diff)
+			}
+
+			if diff := gcmp.Diff(tt.wantWarnings, wl.Warnings()); diff != "" {
+				t.Errorf("\n%s\nwarnings mismatch (-want +got):\n%s", tt.reason, diff)
+			}
+		})
+	}
+}
+
 // TestWarningLogger_NilStderr confirms the collector still works with no human sink, which is how a
 // caller that only wants structured output can use it.
 func TestWarningLogger_NilStderr(t *testing.T) {

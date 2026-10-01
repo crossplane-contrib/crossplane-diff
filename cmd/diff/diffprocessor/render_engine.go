@@ -18,9 +18,11 @@ package diffprocessor
 
 import (
 	"context"
+	"fmt"
 	"maps"
 	"os"
 	"slices"
+	"strings"
 	"sync"
 
 	"github.com/crossplane/cli/v2/cmd/crossplane/render"
@@ -93,6 +95,11 @@ type EngineRenderFn struct {
 	mu    sync.Mutex
 	log   logging.Logger
 
+	// image is the fully-resolved render image reference the engine will pull,
+	// or "" when a local binary backend was selected. Written once at
+	// construction and never mutated, so it is read without holding mu.
+	image string
+
 	// startRuntimes / stopRuntimes are seams for testing. They default to the
 	// real render package functions.
 	startRuntimes func(ctx context.Context, log logging.Logger, fns []pkgv1.Function) (*render.FunctionAddresses, error)
@@ -124,6 +131,22 @@ type EngineRenderFn struct {
 // both halves of the "crossplane-diff inside a container" case
 // (crossplane/cli#75). For the local engine the flag is a no-op.
 func NewEngineRenderFn(log logging.Logger, binaryPath, version, image string) *EngineRenderFn {
+	// Normalize before the value reaches EngineFlags: upstream formats it into
+	// the tag verbatim and only v-prefixed tags are published, so the bare form
+	// ValidateMinRenderVersion accepts would otherwise pass validation and then
+	// fail at pull time. This is the single EngineFlags construction site, so
+	// normalizing here also covers callers that set the version programmatically
+	// via WithCrossplaneVersion rather than through the CLI flag.
+	version = NormalizeRenderVersion(version)
+
+	// A full image reference is floor-checked at the CLI boundary only as far as
+	// its tag permits; when it carries no comparable version there is nothing to
+	// check, and the user should hear that rather than assume the minimum was
+	// enforced. Advisory only — an unverifiable reference is not an invalid one.
+	if w := UncomparableRenderImageWarning(image); w != "" {
+		log.Info(w)
+	}
+
 	return &EngineRenderFn{
 		engine: render.NewEngineFromFlags(&render.EngineFlags{
 			CrossplaneBinary:        binaryPath,
@@ -131,9 +154,37 @@ func NewEngineRenderFn(log logging.Logger, binaryPath, version, image string) *E
 			CrossplaneImage:         image,
 			CrossplaneDockerNetwork: os.Getenv(EnvDockerNetwork),
 		}, log),
+		image:         resolveRenderImage(binaryPath, version, image),
 		log:           log,
 		startRuntimes: render.StartFunctionRuntimes,
 		stopRuntimes:  render.StopFunctionRuntimes,
+	}
+}
+
+// RenderImage returns the fully-resolved render image reference the engine will
+// pull, or "" when a local crossplane binary was selected instead. It exists so
+// callers — and tests — can observe which backend a processor actually ended up
+// with; the upstream Engine interface exposes no accessor for it, so before this
+// the selector arguments vanished at the boundary and dropping them entirely was
+// undetectable (crossplane-diff#488).
+func (e *EngineRenderFn) RenderImage() string {
+	return e.image
+}
+
+// resolveRenderImage mirrors the upstream render package's unexported
+// crossplaneImageFromFlags. Keep the two in sync: the same inputs must produce
+// the same reference, or RenderImage() misreports what actually ran.
+func resolveRenderImage(binaryPath, version, image string) string {
+	switch {
+	case binaryPath != "":
+		// The local engine runs a binary; it pulls nothing.
+		return ""
+	case image != "":
+		return image
+	case version != "":
+		return render.DefaultCrossplaneImage + ":" + version
+	default:
+		return render.DefaultCrossplaneImage + ":stable"
 	}
 }
 
@@ -238,7 +289,15 @@ func (e *EngineRenderFn) Render(ctx context.Context, log logging.Logger, in Rend
 			return render.CompositionOutputs{}, errors.New("render engine returned nil response with no error")
 		}
 
-		return render.CompositionOutputs{}, errors.Wrap(renderErr, "cannot render")
+		outErr := errors.Wrap(renderErr, "cannot render")
+
+		// Augment, never replace: the hint rides along with the original
+		// failure (and everything it wraps) rather than standing in for it.
+		if hint := e.staleRenderBackendHint(renderErr); hint != "" {
+			outErr = errors.Errorf("%w; %s", outErr, hint)
+		}
+
+		return render.CompositionOutputs{}, outErr
 	}
 
 	out, err := render.ParseCompositeResponse(rsp.GetComposite())
@@ -251,6 +310,39 @@ func (e *EngineRenderFn) Render(ctx context.Context, log logging.Logger, in Rend
 	}
 
 	return out, nil
+}
+
+// errStaleRenderBackend is the kong usage error a crossplane CLI predating
+// v2.3.x emits when asked to run `crossplane internal render`: the `internal`
+// command did not exist, so it is rejected as a stray positional argument.
+//
+// Matching this phrase is deliberately narrow. It can only originate from a CLI
+// that does not know the `internal` verb, so it cannot be produced by a
+// composition, pipeline, or connectivity failure against a current backend — the
+// failures a misattributed hint would send a user chasing the wrong thing for.
+const errStaleRenderBackend = "unexpected argument internal"
+
+// staleRenderBackendHint returns remediation text when err carries the signature
+// of a render backend older than `crossplane internal render`, or "" when it does
+// not.
+//
+// This shape is otherwise a dead end for the user: a bare kong usage error naming
+// an argument they never passed, with nothing connecting it to a render image
+// that has quietly gone stale. Upstream pulls the render image only when it is
+// absent, so a locally cached :stable tag is frozen at whatever was first pulled
+// — for however long that machine lives.
+func (e *EngineRenderFn) staleRenderBackendHint(err error) string {
+	if err == nil || !strings.Contains(err.Error(), errStaleRenderBackend) {
+		return ""
+	}
+
+	if e.image == "" {
+		return fmt.Sprintf("the crossplane render binary does not support `crossplane internal render`, so it predates %s, the minimum this tool supports; point --crossplane-render-binary at a newer binary",
+			MinCrossplaneRenderVersion)
+	}
+
+	return fmt.Sprintf("the cached render image %q does not support `crossplane internal render`, so it predates %s, the minimum this tool supports; re-pull it with `docker pull %s`",
+		e.image, MinCrossplaneRenderVersion, e.image)
 }
 
 // Cleanup stops every function runtime started across the engine's lifetime

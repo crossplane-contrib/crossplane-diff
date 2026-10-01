@@ -42,7 +42,7 @@ sequenceDiagram
             DP->>FnProv: GetFunctionsForComposition(comp)
             FnProv-->>DP: []Function
             DP->>ResMgr: FetchCurrentObject(ctx, xr) / FetchObservedResources(ctx, xr)
-            ResMgr-->>DP: existing XR + observed composed resources
+            ResMgr-->>DP: existing XR + observed composed resources (fetch failure is fatal)
 
             DP->>DP: RenderToStableState(ctx, xr, comp, fns, id, observed, eventualState)
             loop Until requirements stabilise (or steady state under --eventual-state)
@@ -58,7 +58,8 @@ sequenceDiagram
 
             DP->>DP: removeNamespacesFromClusterScopedResources(...)
             opt Nested XRs present
-                DP->>DP: Recurse via diffSingleResourceInternal (subject to --max-nested-depth)
+                DP->>DP: ProcessNestedXRs(..., depth+1)
+                DP->>DP: Recurse via diffSingleResourceInternal (err if depth > --max-nested-depth)
             end
             DP->>Validator: ValidateResources / ValidateScopeConstraints
             Validator-->>DP: ok / err

@@ -1,0 +1,165 @@
+# CRDs for the XCycleA/XCycleB XRDs in testdata/diff/resources/cycle/xrds.yaml. envtest has no
+# Crossplane controller to generate them from the XRDs, so they are declared statically.
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: xcycleas.ns.cycle.example.org
+spec:
+  group: ns.cycle.example.org
+  names:
+    kind: XCycleA
+    plural: xcycleas
+    singular: xcyclea
+  scope: Namespaced
+  versions:
+    - name: v1alpha1
+      served: true
+      storage: true
+      schema:
+        openAPIV3Schema:
+          type: object
+          properties:
+            spec:
+              type: object
+              properties:
+                cycleField:
+                  type: string
+                # spec.crossplane subtree is populated by the v2 composite
+                # reconciler; declared here so dry-run apply doesn't reject
+                # the rendered XR with "field not declared in schema".
+                crossplane:
+                  type: object
+                  properties:
+                    compositionRef:
+                      type: object
+                      properties:
+                        name: { type: string }
+                    compositionRevisionRef:
+                      type: object
+                      properties:
+                        name: { type: string }
+                    compositionSelector:
+                      type: object
+                      properties:
+                        matchLabels:
+                          type: object
+                          additionalProperties: { type: string }
+                    compositionUpdatePolicy: { type: string }
+                    resourceRefs:
+                      type: array
+                      items:
+                        type: object
+                        properties:
+                          apiVersion: { type: string }
+                          kind: { type: string }
+                          name: { type: string }
+                          namespace: { type: string }
+            status:
+              type: object
+              properties:
+                conditions:
+                  type: array
+                  items:
+                    type: object
+                    properties:
+                      lastTransitionTime:
+                        type: string
+                        format: date-time
+                      observedGeneration:
+                        type: integer
+                        format: int64
+                      message:
+                        type: string
+                      reason:
+                        type: string
+                      status:
+                        type: string
+                      type:
+                        type: string
+                    required:
+                      - lastTransitionTime
+                      - reason
+                      - status
+                      - type
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: xcyclebs.ns.cycle.example.org
+spec:
+  group: ns.cycle.example.org
+  names:
+    kind: XCycleB
+    plural: xcyclebs
+    singular: xcycleb
+  scope: Namespaced
+  versions:
+    - name: v1alpha1
+      served: true
+      storage: true
+      schema:
+        openAPIV3Schema:
+          type: object
+          properties:
+            spec:
+              type: object
+              properties:
+                cycleField:
+                  type: string
+                # spec.crossplane subtree is populated by the v2 composite
+                # reconciler; declared here so dry-run apply doesn't reject
+                # the rendered XR with "field not declared in schema".
+                crossplane:
+                  type: object
+                  properties:
+                    compositionRef:
+                      type: object
+                      properties:
+                        name: { type: string }
+                    compositionRevisionRef:
+                      type: object
+                      properties:
+                        name: { type: string }
+                    compositionSelector:
+                      type: object
+                      properties:
+                        matchLabels:
+                          type: object
+                          additionalProperties: { type: string }
+                    compositionUpdatePolicy: { type: string }
+                    resourceRefs:
+                      type: array
+                      items:
+                        type: object
+                        properties:
+                          apiVersion: { type: string }
+                          kind: { type: string }
+                          name: { type: string }
+                          namespace: { type: string }
+            status:
+              type: object
+              properties:
+                conditions:
+                  type: array
+                  items:
+                    type: object
+                    properties:
+                      lastTransitionTime:
+                        type: string
+                        format: date-time
+                      observedGeneration:
+                        type: integer
+                        format: int64
+                      message:
+                        type: string
+                      reason:
+                        type: string
+                      status:
+                        type: string
+                      type:
+                        type: string
+                    required:
+                      - lastTransitionTime
+                      - reason
+                      - status
+                      - type

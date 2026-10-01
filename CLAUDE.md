@@ -356,15 +356,25 @@ For semantic validation of diff output, prefer structured JSON assertions over A
 - Provide clearer error messages (e.g., `spec.forProvider.configData: expected 'old', got 'new'`)
 - Support array indexing via k8s jsonpath syntax (e.g., `spec.pipeline[0].functionRef.name`)
 
-The test helpers in `cmd/diff/testutils/structured_assertions.go` provide a fluent builder API:
+The test helpers in `cmd/diff/testutils/structured_assertions.go` provide a fluent builder API. **Do not
+climb back to the root just to finish a chain**: `AssertStructuredDiff` / `AssertStructuredCompDiff` accept
+any builder in the chain, so end the expression wherever the last expectation lands. Use `And()` (and the
+`AndXR()` / `AndComp()` / `AndComposition(name)` variants) only when you have a *sibling* to add and
+genuinely need to step back up.
 
 ```go
 // XR diff assertions
 tu.AssertStructuredDiff(t, jsonOutput, tu.ExpectDiff().
-    WithSummary(1, 0, 0).  // added, modified, removed
-    WithAddedResource("XNopResource", "test-resource", "default").
+    WithSummary(1, 1, 0).  // added, modified, removed
+    WithAddedResource("XDownstreamResource", "test-resource", "default").
     WithField("spec.forProvider.configData", "new-value").
-    And())
+    And().  // step back up to add a second resource
+    WithModifiedResource("XNopResource", "test-resource", "default").
+    WithFieldChange("spec.coolField", "existing-value", "modified-value").
+    And().
+    // Advisory-channel warnings (the warnings[] payload), matched on a message substring
+    WithWarning("being deleted in the cluster").
+    WithWarningContext(map[string]string{"resource": "XNopResource/test-resource"}))
 
 // Composition diff assertions with downstream field-level changes
 tu.AssertStructuredCompDiff(t, jsonOutput, tu.ExpectCompDiff().
@@ -380,9 +390,11 @@ tu.AssertStructuredCompDiff(t, jsonOutput, tu.ExpectCompDiff().
     WithFieldRemoved("spec.deprecatedSetting", "old-value").  // Field was removed
     // Use bracket notation for keys with dots (like Kubernetes annotations)
     WithFieldValuePattern("metadata.annotations['example.org/ref']", `resource-[a-z0-9]+`).
-    AndXR().
-    AndComp().
-    And())
+    // A second composition in the same invocation: AndComposition starts its expectations from
+    // wherever the previous chain ended, so no climb back to ExpectCompDiff is needed.
+    AndComposition("xbuckets-v2.example.org").
+    WithCompositionModified().
+    WithXRImpact("XBucket", "v2-xr", "", "changed"))
 ```
 
 **When to use which approach:**

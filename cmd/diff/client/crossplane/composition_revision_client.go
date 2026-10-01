@@ -17,9 +17,15 @@ import (
 	apiextensionsv1 "github.com/crossplane/crossplane/apis/v2/apiextensions/v1"
 )
 
+// Aliases rather than literals so these cannot drift from the values Crossplane's revision-creation
+// controller actually stamps (NewCompositionRevision), which is the behaviour every use of them here
+// is predicting or matching against.
 const (
 	// LabelCompositionName is the label key for the composition name on CompositionRevisions.
-	LabelCompositionName = "crossplane.io/composition-name"
+	LabelCompositionName = apiextensionsv1.LabelCompositionName
+	// LabelCompositionHash is the label key for the composition hash on CompositionRevisions. The
+	// value is the composition hash truncated to 63 characters, Kubernetes' limit on a label value.
+	LabelCompositionHash = apiextensionsv1.LabelCompositionHash
 )
 
 // CompositionRevisionClient handles operations related to CompositionRevisions.

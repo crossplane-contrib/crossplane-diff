@@ -296,7 +296,7 @@ go-test:
 
 # go-lint lints Go code.
 go-lint:
-  ARG GOLANGCI_LINT_VERSION=v2.13.2
+  ARG GOLANGCI_LINT_VERSION=v2.14.0
   FROM +go-modules
   # This cache is private because golangci-lint doesn't support concurrent runs.
   CACHE --id go-lint --sharing private /root/.cache/golangci-lint
@@ -323,7 +323,7 @@ envtest-setup:
 
 # kubectl-setup is used by other targets to setup kubectl.
 kubectl-setup:
-  ARG KUBECTL_VERSION=v1.37.0
+  ARG KUBECTL_VERSION=v1.37.1
   ARG NATIVEPLATFORM
   ARG TARGETOS
   ARG TARGETARCH
@@ -403,7 +403,7 @@ ci-artifacts:
 
 # ci-codeql-setup sets up CodeQL for the ci-codeql target.
 ci-codeql-setup:
-  ARG CODEQL_VERSION=2.27.0
+  ARG CODEQL_VERSION=2.27.1
   FROM curlimages/curl:8.22.0
   RUN curl -fsSL https://github.com/github/codeql-action/releases/download/codeql-bundle-v${CODEQL_VERSION}/codeql-bundle-linux64.tar.gz|tar zx
   SAVE ARTIFACT codeql

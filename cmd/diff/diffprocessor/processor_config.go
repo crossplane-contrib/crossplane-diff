@@ -87,6 +87,16 @@ type ProcessorConfig struct {
 	// IncludeManual determines whether to include XRs with Manual update policy in composition diffs
 	IncludeManual bool
 
+	// SeededRevisionRef records that this operation seeds each re-pointing composite with the name of
+	// the CompositionRevision the diffed composition would produce, so the ref that reaches the
+	// renderer is tool-authored rather than cluster-read. Only comp does that, so only comp sets it
+	// (see makeDefaultCompProc); it reaches renderer.DiffOptions via GetDiffOptions, which is why it
+	// lives here rather than being decided inside the composition processor — the downstream diffs are
+	// computed by the *XR* processor comp delegates to, so both must agree.
+	//
+	// It is not a user-facing knob and no flag sets it. See renderer.DiffOptions.SeededRevisionRef.
+	SeededRevisionRef bool
+
 	// MinimizeComposition collapses composition changes to a single marker line per
 	// composition, omitting the full YAML diff body. Human renderer only; structured
 	// output always includes full compositionChanges.
@@ -177,7 +187,7 @@ type ComponentFactories struct {
 	ResourceManager func(client k8.ResourceClient, defClient xp.DefinitionClient, treeClient xp.ResourceTreeClient, logger logging.Logger) ResourceManager
 
 	// SchemaValidator creates a SchemaValidator
-	SchemaValidator func(schema k8.SchemaClient, def xp.DefinitionClient, logger logging.Logger) SchemaValidator
+	SchemaValidator func(schema k8.SchemaClient, resource k8.ResourceClient, def xp.DefinitionClient, logger logging.Logger) SchemaValidator
 
 	// DiffCalculator creates a DiffCalculator
 	DiffCalculator func(apply k8.ApplyClient, tree xp.ResourceTreeClient, resourceManager ResourceManager, logger logging.Logger, diffOptions renderer.DiffOptions) DiffCalculator
@@ -193,6 +203,9 @@ type ComponentFactories struct {
 
 	// FunctionProvider creates a FunctionProvider
 	FunctionProvider func(fnClient xp.FunctionClient, logger logging.Logger) FunctionProvider
+
+	// InputValidator creates the InputValidator for one PerformDiff run
+	InputValidator InputValidatorFactory
 }
 
 // ProcessorOption defines a function that can modify a ProcessorConfig.
@@ -230,6 +243,15 @@ func WithMaxNestedDepth(depth int) ProcessorOption {
 func WithIncludeManual(includeManual bool) ProcessorOption {
 	return func(config *ProcessorConfig) {
 		config.IncludeManual = includeManual
+	}
+}
+
+// WithSeededRevisionRef records that this operation seeds composites with the predicted
+// CompositionRevision name, so the renderer suppresses the tool-authored ref from the displayed diff.
+// See ProcessorConfig.SeededRevisionRef; only the comp command passes this.
+func WithSeededRevisionRef(seeded bool) ProcessorOption {
+	return func(config *ProcessorConfig) {
+		config.SeededRevisionRef = seeded
 	}
 }
 
@@ -371,7 +393,7 @@ func WithResourceManagerFactory(factory func(k8.ResourceClient, xp.DefinitionCli
 }
 
 // WithSchemaValidatorFactory sets the SchemaValidator factory function.
-func WithSchemaValidatorFactory(factory func(k8.SchemaClient, xp.DefinitionClient, logging.Logger) SchemaValidator) ProcessorOption {
+func WithSchemaValidatorFactory(factory func(k8.SchemaClient, k8.ResourceClient, xp.DefinitionClient, logging.Logger) SchemaValidator) ProcessorOption {
 	return func(config *ProcessorConfig) {
 		config.Factories.SchemaValidator = factory
 	}
@@ -398,6 +420,13 @@ func WithRequirementsProviderFactory(factory func(k8.ResourceClient, xp.Environm
 	}
 }
 
+// WithInputValidatorFactory sets the InputValidator factory function, called once per PerformDiff run.
+func WithInputValidatorFactory(factory InputValidatorFactory) ProcessorOption {
+	return func(config *ProcessorConfig) {
+		config.Factories.InputValidator = factory
+	}
+}
+
 // WithFunctionProviderFactory sets the FunctionProvider factory function.
 func WithFunctionProviderFactory(factory func(xp.FunctionClient, logging.Logger) FunctionProvider) ProcessorOption {
 	return func(config *ProcessorConfig) {
@@ -411,6 +440,7 @@ func (c *ProcessorConfig) GetDiffOptions() renderer.DiffOptions {
 	opts.UseColors = c.Colorize
 	opts.Compact = c.Compact
 	opts.MinimizeComposition = c.MinimizeComposition
+	opts.SeededRevisionRef = c.SeededRevisionRef
 
 	opts.IgnorePaths = c.IgnorePaths
 	if c.OutputFormat != "" {
@@ -478,5 +508,9 @@ func (c *ProcessorConfig) SetDefaultFactories() {
 		// This prevents container proliferation with --eventual-state (multiple iterations)
 		// and enables reuse when diffing multiple XRs with the same composition.
 		c.Factories.FunctionProvider = NewCachedFunctionProvider
+	}
+
+	if c.Factories.InputValidator == nil {
+		c.Factories.InputValidator = NewBundleInputValidator
 	}
 }

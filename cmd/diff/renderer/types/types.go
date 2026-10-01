@@ -35,9 +35,14 @@ import (
 // DiffRenderer mock — can reference it without importing renderer, which would
 // close an import cycle through renderer's in-package tests.
 type XRDiffGroup struct {
-	XR    corev1.ObjectReference
-	Diffs map[string]*ResourceDiff
-	Err   *OutputError
+	XR corev1.ObjectReference
+	// NameGenerated is true when the input XR had only a generateName, so XR.Name — and the name
+	// its render used — is a placeholder this tool synthesized, not one the API server would assign.
+	// Two such XRs sharing a generateName are distinct in the cluster but indistinguishable here; see
+	// the diff processor's render-overlap check.
+	NameGenerated bool
+	Diffs         map[string]*ResourceDiff
+	Err           *OutputError
 }
 
 // ResourceViews holds the two representations of a single resource involved in

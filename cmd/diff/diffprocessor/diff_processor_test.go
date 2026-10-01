@@ -3,25 +3,30 @@ package diffprocessor
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	xp "github.com/crossplane-contrib/crossplane-diff/cmd/diff/client/crossplane"
 	k8 "github.com/crossplane-contrib/crossplane-diff/cmd/diff/client/kubernetes"
 	"github.com/crossplane-contrib/crossplane-diff/cmd/diff/renderer"
 	dt "github.com/crossplane-contrib/crossplane-diff/cmd/diff/renderer/types"
 	tu "github.com/crossplane-contrib/crossplane-diff/cmd/diff/testutils"
+	"github.com/crossplane-contrib/crossplane-diff/cmd/diff/types"
 	"github.com/crossplane/cli/v2/cmd/crossplane/common/resource"
 	"github.com/crossplane/cli/v2/cmd/crossplane/render"
 	v1 "github.com/crossplane/function-sdk-go/proto/v1"
 	gcmp "github.com/google/go-cmp/cmp"
+	"github.com/google/go-cmp/cmp/cmpopts"
 	"github.com/sergi/go-diff/diffmatchpatch"
 	corev1 "k8s.io/api/core/v1"
 	extv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	un "k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	k8stypes "k8s.io/apimachinery/pkg/types"
 
 	"github.com/crossplane/crossplane-runtime/v2/pkg/errors"
 	"github.com/crossplane/crossplane-runtime/v2/pkg/logging"
@@ -62,6 +67,158 @@ func (m *mockResourceManagerForSpecMerge) UpdateOwnerRefs(_ context.Context, _ *
 
 func (m *mockResourceManagerForSpecMerge) FetchObservedResources(_ context.Context, _ *cmp.Unstructured) ([]cpd.Unstructured, error) {
 	return nil, nil
+}
+
+func TestDefaultDiffProcessor_removeNamespacesFromClusterScopedResources(t *testing.T) {
+	secretGVK := schema.GroupVersionKind{Version: "v1", Kind: "Secret"}
+	namespaceGVK := schema.GroupVersionKind{Version: "v1", Kind: "Namespace"}
+
+	clusterCRD := makeCRD("clusterthings.example.org", "ClusterThing", "example.org", "v1")
+	clusterCRD.Spec.Scope = extv1.ClusterScoped
+
+	// Built-in kinds have no CRD, so a GetCRD call means the discovery path
+	// was skipped. Cases relying on discovery use this to catch that.
+	noCRDs := func() *tu.MockSchemaClient {
+		return tu.NewMockSchemaClient().
+			WithGetCRD(func(_ context.Context, gvk schema.GroupVersionKind) (*extv1.CustomResourceDefinition, error) {
+				return nil, errors.Errorf("GetCRD should not be called for %s when discovery resolves scope", gvk.String())
+			}).
+			Build()
+	}
+
+	tests := map[string]struct {
+		reason        string
+		setupResource func() *tu.MockResourceClient
+		setupSchema   func() *tu.MockSchemaClient
+		resources     []cpd.Unstructured
+		wantNamespace []string
+		wantErr       bool
+		wantErrMsg    string
+	}{
+		"BuiltInNamespacedResourceKeepsNamespace": {
+			reason: "A namespaced built-in has no CRD; discovery reports it namespaced so its namespace is preserved.",
+			setupResource: func() *tu.MockResourceClient {
+				return tu.NewMockResourceClient().WithNamespacedResource(secretGVK).Build()
+			},
+			setupSchema: noCRDs,
+			resources: []cpd.Unstructured{
+				*tu.NewResource("v1", "Secret", "creds").InNamespace("default").BuildUComposed(),
+			},
+			wantNamespace: []string{"default"},
+		},
+		"BuiltInClusterScopedResourceLosesNamespace": {
+			reason: "A cluster-scoped built-in has no CRD; discovery reports it cluster-scoped so render's namespace is stripped.",
+			setupResource: func() *tu.MockResourceClient {
+				return tu.NewMockResourceClient().WithClusterScopedResource(namespaceGVK).Build()
+			},
+			setupSchema: noCRDs,
+			resources: []cpd.Unstructured{
+				*tu.NewResource("v1", "Namespace", "generated").InNamespace("default").BuildUComposed(),
+			},
+			wantNamespace: []string{""},
+		},
+		"MixedScopesResolveIndependently": {
+			reason: "Each resource's scope is resolved on its own; a cluster-scoped sibling does not affect a namespaced one.",
+			setupResource: func() *tu.MockResourceClient {
+				return tu.NewMockResourceClient().
+					WithNamespacedResource(secretGVK).
+					WithClusterScopedResource(namespaceGVK).
+					Build()
+			},
+			setupSchema: noCRDs,
+			resources: []cpd.Unstructured{
+				*tu.NewResource("v1", "Secret", "creds").InNamespace("default").BuildUComposed(),
+				*tu.NewResource("v1", "Namespace", "generated").InNamespace("default").BuildUComposed(),
+			},
+			wantNamespace: []string{"default", ""},
+		},
+		"FallsBackToCRDWhenDiscoveryFails": {
+			reason: "When discovery cannot resolve a custom kind, the CRD supplies the scope.",
+			setupResource: func() *tu.MockResourceClient {
+				// No scopes configured, so IsNamespacedResource errors.
+				return tu.NewMockResourceClient().Build()
+			},
+			setupSchema: func() *tu.MockSchemaClient {
+				return tu.NewMockSchemaClient().
+					WithFoundCRD("example.org", "ClusterThing", clusterCRD).
+					Build()
+			},
+			resources: []cpd.Unstructured{
+				*tu.NewResource("example.org/v1", "ClusterThing", "thing").InNamespace("default").BuildUComposed(),
+			},
+			wantNamespace: []string{""},
+		},
+		"ErrorsWhenNeitherDiscoveryNorCRDResolvesScope": {
+			reason: "Scope must be known to proceed; an unresolvable kind fails the diff rather than guessing.",
+			setupResource: func() *tu.MockResourceClient {
+				return tu.NewMockResourceClient().Build()
+			},
+			setupSchema: func() *tu.MockSchemaClient {
+				return tu.NewMockSchemaClient().
+					WithGetCRD(func(_ context.Context, _ schema.GroupVersionKind) (*extv1.CustomResourceDefinition, error) {
+						return nil, errors.New("CRD not found")
+					}).
+					Build()
+			},
+			resources: []cpd.Unstructured{
+				*tu.NewResource("example.org/v1", "ClusterThing", "thing").InNamespace("default").BuildUComposed(),
+			},
+			wantErr:    true,
+			wantErrMsg: "cannot determine scope for resource ClusterThing/thing",
+		},
+		"ResourceWithoutNamespaceIsSkipped": {
+			reason: "A resource render left unnamespaced needs no scope lookup at all.",
+			setupResource: func() *tu.MockResourceClient {
+				// Any scope lookup would error, proving none happened.
+				return tu.NewMockResourceClient().Build()
+			},
+			setupSchema: noCRDs,
+			resources: []cpd.Unstructured{
+				*tu.NewResource("example.org/v1", "ClusterThing", "thing").BuildUComposed(),
+			},
+			wantNamespace: []string{""},
+		},
+	}
+
+	for name, tt := range tests {
+		t.Run(name, func(t *testing.T) {
+			processor := &DefaultDiffProcessor{
+				resourceClient: tt.setupResource(),
+				schemaClient:   tt.setupSchema(),
+				config: ProcessorConfig{
+					Logger: tu.TestLogger(t, false),
+				},
+			}
+
+			err := processor.removeNamespacesFromClusterScopedResources(t.Context(), tt.resources)
+
+			if tt.wantErr {
+				if err == nil {
+					t.Fatalf("\n%s\nremoveNamespacesFromClusterScopedResources(): expected error but got none", tt.reason)
+				}
+
+				if tt.wantErrMsg != "" && !strings.Contains(err.Error(), tt.wantErrMsg) {
+					t.Errorf("\n%s\nremoveNamespacesFromClusterScopedResources(): error %q doesn't contain %q",
+						tt.reason, err.Error(), tt.wantErrMsg)
+				}
+
+				return
+			}
+
+			if err != nil {
+				t.Fatalf("\n%s\nremoveNamespacesFromClusterScopedResources(): unexpected error: %v", tt.reason, err)
+			}
+
+			got := make([]string, len(tt.resources))
+			for i := range tt.resources {
+				got[i] = (&un.Unstructured{Object: tt.resources[i].UnstructuredContent()}).GetNamespace()
+			}
+
+			if diff := gcmp.Diff(tt.wantNamespace, got); diff != "" {
+				t.Errorf("\n%s\nremoveNamespacesFromClusterScopedResources(): -want namespaces, +got:\n%s", tt.reason, diff)
+			}
+		})
+	}
 }
 
 // testProcessorOptions returns sensible default options for tests.
@@ -415,7 +572,7 @@ func TestDefaultDiffProcessor_PerformDiff(t *testing.T) {
 					}, nil
 				}),
 				// Override the schema validator factory to use a simple validator
-				WithSchemaValidatorFactory(func(k8.SchemaClient, xp.DefinitionClient, logging.Logger) SchemaValidator {
+				WithSchemaValidatorFactory(func(k8.SchemaClient, k8.ResourceClient, xp.DefinitionClient, logging.Logger) SchemaValidator {
 					return &tu.MockSchemaValidator{
 						ValidateResourcesFn: func(context.Context, *un.Unstructured, []cpd.Unstructured) error {
 							return nil
@@ -561,7 +718,13 @@ func TestDefaultDiffProcessor_PerformDiff(t *testing.T) {
 					Function: tu.NewMockFunctionClient().
 						WithSuccessfulFunctionsFetch(functions).
 						Build(),
-					ResourceTree: tu.NewMockResourceTreeClient().Build(),
+					// resource1 exists in the cluster, so its observed resources
+					// are fetched before validation runs. That fetch has to
+					// succeed for this case to reach the validation failure it is
+					// actually about.
+					ResourceTree: tu.NewMockResourceTreeClient().
+						WithEmptyResourceTree().
+						Build(),
 				}
 
 				return k8sClients, xpClients
@@ -582,7 +745,7 @@ func TestDefaultDiffProcessor_PerformDiff(t *testing.T) {
 					}, nil
 				}),
 				// Override with a validator that fails
-				WithSchemaValidatorFactory(func(_ k8.SchemaClient, _ xp.DefinitionClient, _ logging.Logger) SchemaValidator {
+				WithSchemaValidatorFactory(func(_ k8.SchemaClient, _ k8.ResourceClient, _ xp.DefinitionClient, _ logging.Logger) SchemaValidator {
 					return &tu.MockSchemaValidator{
 						ValidateResourcesFn: func(context.Context, *un.Unstructured, []cpd.Unstructured) error {
 							return errors.New("validation error")
@@ -643,8 +806,412 @@ func TestDefaultDiffProcessor_PerformDiff(t *testing.T) {
 // Note: PerformDiff's per-XR grouping structure is verified end-to-end (real
 // renderer, real JSON) by TestDiffIntegration/MultipleXRsGroupedByInputXR, and
 // the per-group xrs[] shape — including errored groups — by
-// TestStructuredDiffRenderer_GroupsByXR, so there is no separate unit test
-// asserting the intermediate []XRDiffGroup handoff.
+// TestStructuredDiffRenderer_GroupsByXR. The identity each group carries, and
+// how the input validator's verdicts land, are asserted on the intermediate
+// []XRDiffGroup handoff by TestDefaultDiffProcessor_PerformDiff_Groups.
+
+// TestDefaultDiffProcessor_PerformDiff_Groups pins how PerformDiff hands its groups to the renderer. With
+// a mock InputValidator it pins the wiring: only what ToRender returns is rendered, and an input it
+// rejected is not; every render is recorded; and each Verdicts and RenderOverlaps error lands as a group
+// error (replacing that group's diffs), in errors[], and on the returned error. With the real default
+// validator it pins what PerformDiff itself decides: the group identity of a generateName-only XR (issue
+// #477), and the NameGenerated mark the overlap check relies on. The validation rules themselves are
+// tested directly in input_validator_test.go and end to end in diff_integration_test.go; add rule cases
+// there, not here.
+func TestDefaultDiffProcessor_PerformDiff_Groups(t *testing.T) {
+	ctx := t.Context()
+
+	composition := tu.NewComposition("test-comp").
+		WithCompositeTypeRef(testGroup+"/"+testAPIVersion, testKind).
+		WithPipelineMode().
+		WithPipelineStep("step1", "function-test", nil).
+		Build()
+
+	functions := []pkgv1.Function{{ObjectMeta: metav1.ObjectMeta{Name: "function-test"}}}
+
+	xrd := tu.NewXRD(testXRDName, testGroup, testKind).
+		WithPlural(testPlural).
+		WithSingular(testSingular).
+		BuildAsUnstructured()
+
+	// sharedKey is returned by the diff calculator for every input XR, so two
+	// inputs collide on it.
+	const sharedKey = "example.org/v1/Bucket/default/shared"
+
+	// bucket is the shared resource as one input XR's render produces it, controlled by the XR named
+	// controller, with spec.value set to value. renderedBy only varies the controller reference's UID,
+	// the way a render synthesizes a fresh UID for an XR that does not exist yet. Clean mirrors
+	// cleanupForDiff, which strips ownerReferences (and uid) before anything is compared or displayed.
+	bucket := func(controller, value, renderedBy string) *dt.ResourceDiff {
+		desired := tu.NewResource("example.org/v1", "Bucket", "shared").
+			InNamespace("default").
+			WithSpecField("value", value).
+			WithControllerReference(testKind, controller, testGroup+"/"+testAPIVersion, "uid-rendered-by-"+renderedBy).
+			Build()
+		clean := desired.DeepCopy()
+		clean.SetOwnerReferences(nil)
+
+		return &dt.ResourceDiff{
+			Gvk:          schema.GroupVersionKind{Group: "example.org", Version: "v1", Kind: "Bucket"},
+			Namespace:    "default",
+			ResourceName: "shared",
+			DiffType:     dt.DiffTypeModified,
+			Desired:      dt.ResourceViews{Raw: desired, Clean: clean},
+		}
+	}
+
+	xr := func(name string) *un.Unstructured {
+		return tu.NewResource(testGroup+"/"+testAPIVersion, testKind, name).WithSpecField("coolField", name).Build()
+	}
+
+	ref := func(name string) corev1.ObjectReference {
+		return corev1.ObjectReference{APIVersion: testGroup + "/" + testAPIVersion, Kind: testKind, Name: name}
+	}
+
+	// recorded is one RecordRender call.
+	type recorded struct {
+		I        int
+		Rendered map[string]bool
+		Err      string
+	}
+
+	// got is the whole handoff, asserted as one value: the group identities in
+	// input order, each errored group's message by name, the global (union)
+	// error list the renderer was given, the error PerformDiff returned, and
+	// (with a mock validator) the renders it recorded.
+	type got struct {
+		XRs        []corev1.ObjectReference
+		GroupErrs  map[string]string
+		GlobalErrs []string
+		Err        string
+		Recorded   []recorded
+	}
+
+	const (
+		generatedErr = `cannot combine diffs: inputs XR1/gen-xr-(generated), XR1/gen-xr-(generated) both produce resource ` +
+			`"example.org/v1/Bucket/default/shared" only because crossplane-diff gives XRs that share a generateName the ` +
+			`same placeholder name; the API server would name them differently, so they cannot be told apart here — diff ` +
+			`them separately`
+
+		// renderFailedErr is how a render failure reaches RecordRender: wrapped by the render path.
+		renderFailedErr = "cannot calculate diffs for composed resources: render failed"
+	)
+
+	genXR := tu.NewResource(testGroup+"/"+testAPIVersion, testKind, "").
+		WithGenerateName("gen-xr-").
+		WithSpecField("coolField", "value").
+		Build()
+
+	// validation is what a mock validator returns: ToRender's list, and Verdicts and RenderOverlaps
+	// errors. A nil validation means the real default validator.
+	type validation struct {
+		toRender []types.ValidatedInput
+		verdicts []error
+		overlaps []error
+	}
+
+	tests := map[string]struct {
+		resources []*un.Unstructured
+		validator *validation
+		// failRender names an input XR whose render fails.
+		failRender string
+		want       got
+	}{
+		// An input ToRender already rejected is not rendered; its verdict is a group error, in errors[],
+		// and on the returned error.
+		"InputRejectedBeforeRenderingIsNotRendered": {
+			resources: []*un.Unstructured{xr("my-xr-1"), xr("my-xr-2")},
+			validator: &validation{
+				toRender: []types.ValidatedInput{{Resource: xr("my-xr-1")}, {Resource: xr("my-xr-2"), Err: errors.New("rejected")}},
+				verdicts: []error{nil, errors.New("rejected")},
+			},
+			want: got{
+				XRs:        []corev1.ObjectReference{ref("my-xr-1"), ref("my-xr-2")},
+				GroupErrs:  map[string]string{"my-xr-2": "rejected"},
+				GlobalErrs: []string{"rejected"},
+				Err:        "unable to process resource XR1/my-xr-2: rejected",
+				Recorded:   []recorded{{I: 0, Rendered: map[string]bool{sharedKey: true}}},
+			},
+		},
+		// A Verdicts error on a group that rendered fine replaces its diffs.
+		"VerdictReplacesAGroupsDiffs": {
+			resources: []*un.Unstructured{xr("my-xr-1"), xr("my-xr-2")},
+			validator: &validation{
+				toRender: []types.ValidatedInput{{Resource: xr("my-xr-1")}, {Resource: xr("my-xr-2")}},
+				verdicts: []error{nil, errors.New("verdict")},
+			},
+			want: got{
+				XRs:        []corev1.ObjectReference{ref("my-xr-1"), ref("my-xr-2")},
+				GroupErrs:  map[string]string{"my-xr-2": "verdict"},
+				GlobalErrs: []string{"verdict"},
+				Err:        "unable to process resource XR1/my-xr-2: verdict",
+				Recorded: []recorded{
+					{I: 0, Rendered: map[string]bool{sharedKey: true}},
+					{I: 1, Rendered: map[string]bool{sharedKey: true}},
+				},
+			},
+		},
+		"RenderOverlapsReachErrorsAndTheReturnedError": {
+			resources: []*un.Unstructured{xr("my-xr-1")},
+			validator: &validation{
+				toRender: []types.ValidatedInput{{Resource: xr("my-xr-1")}},
+				overlaps: []error{errors.New("overlap")},
+			},
+			want: got{
+				XRs:        []corev1.ObjectReference{ref("my-xr-1")},
+				GlobalErrs: []string{"overlap"},
+				Err:        "overlap",
+				Recorded:   []recorded{{I: 0, Rendered: map[string]bool{sharedKey: true}}},
+			},
+		},
+		// Only what ToRender returns is rendered: a duplicate it dropped yields no group.
+		"OnlyWhatToRenderReturnsIsRendered": {
+			resources: []*un.Unstructured{xr("my-xr-1"), xr("my-xr-1")},
+			validator: &validation{toRender: []types.ValidatedInput{{Resource: xr("my-xr-1")}}},
+			want: got{
+				XRs:      []corev1.ObjectReference{ref("my-xr-1")},
+				Recorded: []recorded{{I: 0, Rendered: map[string]bool{sharedKey: true}}},
+			},
+		},
+		// RecordRender sees each render's keys and its error; the error is reported only if Verdicts
+		// returns it, which this mock does not.
+		"RecordRenderReceivesEachRender": {
+			resources:  []*un.Unstructured{xr("my-xr-1"), xr("my-xr-2")},
+			validator:  &validation{toRender: []types.ValidatedInput{{Resource: xr("my-xr-1")}, {Resource: xr("my-xr-2")}}},
+			failRender: "my-xr-2",
+			want: got{
+				XRs: []corev1.ObjectReference{ref("my-xr-1"), ref("my-xr-2")},
+				Recorded: []recorded{
+					{I: 0, Rendered: map[string]bool{sharedKey: true}},
+					{I: 1, Err: renderFailedErr},
+				},
+			},
+		},
+		// Issue #477: the name used for rendering is synthesized from
+		// generateName inside SanitizeXR, so the identity must carry that
+		// effective name rather than the input's empty metadata.name.
+		"GenerateNameOnlyXR": {
+			resources: []*un.Unstructured{genXR},
+			want:      got{XRs: []corev1.ObjectReference{ref("gen-xr-(generated)")}},
+		},
+		// PerformDiff marks a group whose name it synthesized, which is the only way the overlap check
+		// can tell two generateName-only inputs apart from one XR reached twice. Without it these
+		// identical renderings would merge, reporting one XR's changes for two.
+		"SharedGenerateNameReachesTheOverlapCheck": {
+			resources: []*un.Unstructured{genXR, genXR.DeepCopy()},
+			want: got{
+				XRs:        []corev1.ObjectReference{ref("gen-xr-(generated)"), ref("gen-xr-(generated)")},
+				GlobalErrs: []string{generatedErr},
+				Err:        generatedErr,
+			},
+		},
+	}
+
+	for name, tt := range tests {
+		t.Run(name, func(t *testing.T) {
+			k8sClients := k8.Clients{
+				Apply:    tu.NewMockApplyClient().WithSuccessfulDryRun().Build(),
+				Resource: tu.NewMockResourceClient().Build(),
+				Schema: tu.NewMockSchemaClient().
+					WithNoResourcesRequiringCRDs().
+					WithSuccessfulCRDByNameFetch(testCRDName, makeTestCRD(testCRDName, testKind, testGroup, testAPIVersion)).
+					Build(),
+				Type: tu.NewMockTypeConverter().Build(),
+			}
+			xpClients := xp.Clients{
+				Composition:  tu.NewMockCompositionClient().WithSuccessfulCompositionMatch(composition).Build(),
+				Credential:   &tu.MockCredentialClient{},
+				Definition:   tu.NewMockDefinitionClient().WithXRDForXR(xrd).Build(),
+				Environment:  tu.NewMockEnvironmentClient().WithNoEnvironmentConfigs().Build(),
+				Function:     tu.NewMockFunctionClient().WithSuccessfulFunctionsFetch(functions).Build(),
+				ResourceTree: tu.NewMockResourceTreeClient().WithEmptyResourceTree().Build(),
+			}
+
+			var (
+				gotGroups   []dt.XRDiffGroup
+				gotErrs     []dt.OutputError
+				gotRecorded []recorded
+			)
+
+			opts := append(testProcessorOptions(t),
+				WithSchemaValidatorFactory(func(k8.SchemaClient, k8.ResourceClient, xp.DefinitionClient, logging.Logger) SchemaValidator {
+					return &tu.MockSchemaValidator{
+						ValidateResourcesFn: func(context.Context, *un.Unstructured, []cpd.Unstructured) error {
+							return nil
+						},
+					}
+				}),
+				WithDiffCalculatorFactory(func(k8.ApplyClient, xp.ResourceTreeClient, ResourceManager, logging.Logger, renderer.DiffOptions) DiffCalculator {
+					return &tu.MockDiffCalculator{
+						CalculateNonRemovalDiffsFn: func(_ context.Context, rendered *cmp.Unstructured, _ *un.Unstructured, _ render.CompositionOutputs) (map[string]*dt.ResourceDiff, map[string]bool, error) {
+							if rendered.GetName() == tt.failRender {
+								return nil, nil, errors.New("render failed")
+							}
+
+							diff := bucket("parent", "same", rendered.GetName())
+
+							return map[string]*dt.ResourceDiff{sharedKey: diff}, map[string]bool{sharedKey: true}, nil
+						},
+					}
+				}),
+				WithDiffRendererFactory(func(logging.Logger, renderer.DiffOptions) renderer.DiffRenderer {
+					return &tu.MockDiffRenderer{
+						RenderDiffsFn: func(groups []dt.XRDiffGroup, errs []dt.OutputError, _ []dt.OutputWarning) error {
+							gotGroups = groups
+							gotErrs = errs
+
+							return nil
+						},
+					}
+				}),
+			)
+
+			if v := tt.validator; v != nil {
+				opts = append(opts, WithInputValidatorFactory(func(logging.Logger, []*un.Unstructured) InputValidator {
+					return &tu.MockInputValidator{
+						ToRenderFn: func() []types.ValidatedInput { return v.toRender },
+						RecordRenderFn: func(i int, rendered map[string]bool, err error) {
+							gotRecorded = append(gotRecorded, recorded{I: i, Rendered: rendered, Err: errMessage(err)})
+						},
+						VerdictsFn: func(groups []dt.XRDiffGroup) []error {
+							if v.verdicts == nil {
+								return make([]error, len(groups))
+							}
+
+							return v.verdicts
+						},
+						RenderOverlapsFn: func([]dt.XRDiffGroup) []error { return v.overlaps },
+					}
+				}))
+			}
+
+			processor := NewDiffProcessor(k8sClients, xpClients, opts...)
+
+			_, err := processor.PerformDiff(ctx, tt.resources, func(ctx context.Context, res *un.Unstructured) (*apiextensionsv1.Composition, error) {
+				return xpClients.Composition.FindMatchingComposition(ctx, res)
+			})
+
+			result := got{Recorded: gotRecorded}
+
+			for _, g := range gotGroups {
+				result.XRs = append(result.XRs, g.XR)
+
+				if g.Err == nil {
+					continue
+				}
+
+				if g.Diffs != nil {
+					t.Errorf("group %s/%s carries an error and diffs; an errored input must emit no partial result", g.XR.Kind, g.XR.Name)
+				}
+
+				if result.GroupErrs == nil {
+					result.GroupErrs = map[string]string{}
+				}
+
+				result.GroupErrs[g.XR.Name] = g.Err.Message
+			}
+
+			for _, e := range gotErrs {
+				result.GlobalErrs = append(result.GlobalErrs, e.Message)
+			}
+
+			if err != nil {
+				result.Err = err.Error()
+			}
+
+			if diff := gcmp.Diff(tt.want, result); diff != "" {
+				t.Errorf("PerformDiff(...) group handoff: -want, +got:\n%s", diff)
+			}
+		})
+	}
+}
+
+// TestDefaultDiffProcessor_PerformDiff_LateWarningsReachStructuredOutput pins the warning channel's
+// contract for advisories that can only be discovered during teardown. The leftover-function-container
+// advisory is raised from FunctionProvider.Cleanup, which used to run in the command layer's defer —
+// i.e. after the renderer had already consumed and serialized the warning slice — so it reached stderr
+// but was structurally absent from warnings[], contradicting the README. PerformDiff therefore tears
+// down before rendering, and this test fails if that ordering is lost.
+func TestDefaultDiffProcessor_PerformDiff_LateWarningsReachStructuredOutput(t *testing.T) {
+	ctx := t.Context()
+
+	const advisory = "Some containers could not be cleaned up"
+
+	var stdout, stderr bytes.Buffer
+
+	warnings := NewWarningLogger(tu.TestLogger(t, false), &stderr)
+
+	k8sClients := k8.Clients{
+		Apply:    tu.NewMockApplyClient().Build(),
+		Resource: tu.NewMockResourceClient().Build(),
+		Schema:   tu.NewMockSchemaClient().Build(),
+		Type:     tu.NewMockTypeConverter().Build(),
+	}
+
+	// The XR's own diff fails (no matching composition), which additionally pins the README's claim
+	// that a warning is still reported when a later step fails — the advisory has to survive alongside
+	// errors[], not instead of it.
+	xpClients := xp.Clients{
+		Composition:  tu.NewMockCompositionClient().WithNoMatchingComposition().Build(),
+		Credential:   &tu.MockCredentialClient{},
+		Definition:   tu.NewMockDefinitionClient().Build(),
+		Environment:  tu.NewMockEnvironmentClient().WithNoEnvironmentConfigs().Build(),
+		Function:     tu.NewMockFunctionClient().Build(),
+		ResourceTree: tu.NewMockResourceTreeClient().Build(),
+	}
+
+	processor := NewDiffProcessor(k8sClients, xpClients,
+		append(testProcessorOptions(t),
+			WithLogger(warnings),
+			WithWarnings(warnings),
+			WithOutputFormat(renderer.OutputFormatJSON),
+			WithStdout(&stdout),
+			WithStderr(&stderr),
+			// Stands in for CachedFunctionProvider.Cleanup raising its advisory when a container could
+			// not be removed; the point under test is WHEN cleanup runs, not how it detects leftovers.
+			WithFunctionProviderFactory(func(_ xp.FunctionClient, logger logging.Logger) FunctionProvider {
+				return &tu.MockFunctionProvider{
+					CleanupFn: func(context.Context) error {
+						logger.Info(advisory, "errors", 1)
+						return nil
+					},
+				}
+			}),
+		)...,
+	)
+
+	resource := tu.NewResource("example.org/v1", "XR1", "my-xr-1").
+		WithSpecField("coolField", "test-value-1").
+		Build()
+
+	if _, err := processor.PerformDiff(ctx, []*un.Unstructured{resource}, xpClients.Composition.FindMatchingComposition); err == nil {
+		t.Fatal("PerformDiff(): expected the XR's diff to fail, got nil")
+	}
+
+	if !strings.Contains(stderr.String(), advisory) {
+		t.Errorf("teardown advisory should reach stderr, got:\n%s", stderr.String())
+	}
+
+	// Decoded via the wire contract rather than the renderer's own struct: what matters is that a
+	// machine consumer reading warnings[] out of the JSON sees the advisory.
+	var got struct {
+		Warnings []dt.OutputWarning `json:"warnings"`
+		Errors   []dt.OutputError   `json:"errors"`
+	}
+
+	if err := json.Unmarshal(stdout.Bytes(), &got); err != nil {
+		t.Fatalf("cannot parse structured output %q: %v", stdout.String(), err)
+	}
+
+	want := []dt.OutputWarning{{Message: advisory, Context: map[string]string{"errors": "1"}}}
+	if diff := gcmp.Diff(want, got.Warnings); diff != "" {
+		t.Errorf("structured warnings[] mismatch (-want +got):\n%s", diff)
+	}
+
+	if len(got.Errors) != 1 {
+		t.Errorf("expected the XR's failure to still be reported in errors[], got %v", got.Errors)
+	}
+}
 
 // TestDefaultDiffProcessor_PerformDiff_StderrErrorOutput verifies that when
 // resource processing fails, detailed errors are written to stderr for human visibility.
@@ -1945,8 +2512,119 @@ func TestDefaultDiffProcessor_ProcessNestedXRs(t *testing.T) {
 		}).
 		Build()
 
+	// Fixtures for the nesting-depth cases below. They form a composition cycle:
+	// an XChildResource composes an XCycleResource, which composes an
+	// XChildResource, and so on without end.
+	const cycleGroup = "nested.example.org"
+
+	cycleBXR := tu.NewResource(cycleGroup+"/v1alpha1", "XCycleResource", "test-cycle-b").
+		WithSpecField("childField", "cycle-value").
+		WithCompositionResourceName("cycle-xr").
+		Build()
+
+	cycleAGVK := schema.GroupVersionKind{Group: cycleGroup, Version: "v1alpha1", Kind: "XChildResource"}
+	cycleBGVK := schema.GroupVersionKind{Group: cycleGroup, Version: "v1alpha1", Kind: "XCycleResource"}
+
+	cycleAXRDUn := tu.NewXRD("xchildresources."+cycleGroup, cycleGroup, "XChildResource").
+		WithVersion("v1alpha1", true, true).
+		BuildAsUnstructured()
+	cycleBXRDUn := tu.NewXRD("xcycleresources."+cycleGroup, cycleGroup, "XCycleResource").
+		WithVersion("v1alpha1", true, true).
+		BuildAsUnstructured()
+
+	cycleACRD := tu.NewCRD("xchildresources."+cycleGroup, cycleGroup, "XChildResource").
+		WithListKind("XChildResourceList").
+		WithPlural("xchildresources").
+		WithSingular("xchildresource").
+		WithVersion("v1alpha1", true, true).
+		WithStandardSchema("childField").
+		Build()
+	cycleBCRD := tu.NewCRD("xcycleresources."+cycleGroup, cycleGroup, "XCycleResource").
+		WithListKind("XCycleResourceList").
+		WithPlural("xcycleresources").
+		WithSingular("xcycleresource").
+		WithVersion("v1alpha1", true, true).
+		WithStandardSchema("childField").
+		Build()
+
+	// cycleRenderFunc renders the cycle described above. renderCap breaks the
+	// cycle after that many renders so that a processor which fails to bound
+	// recursion reports a failed assertion instead of exhausting the goroutine
+	// stack and taking down the whole test binary. Passing a renderCap of 0
+	// yields a tree exactly one level deep (the XR renders no nested XR).
+	cycleRenderFunc := func(renderCap int) func(context.Context, logging.Logger, RenderInputs) (render.CompositionOutputs, error) {
+		renders := 0
+
+		return func(_ context.Context, _ logging.Logger, in RenderInputs) (render.CompositionOutputs, error) {
+			renders++
+			out := render.CompositionOutputs{CompositeResource: in.CompositeResource}
+
+			if renders > renderCap {
+				return out, nil
+			}
+
+			next := cycleBXR
+			if in.CompositeResource.GetKind() == cycleBGVK.Kind {
+				next = childXR
+			}
+
+			out.ComposedResources = []cpd.Unstructured{{Unstructured: *next}}
+
+			return out, nil
+		}
+	}
+
+	// cycleClients wires both XR kinds of the cycle so each is recognised as an
+	// XR and can have its XRD defaults applied.
+	cycleClients := func() (xp.Clients, k8.Clients) {
+		functions := []pkgv1.Function{
+			{ObjectMeta: metav1.ObjectMeta{Name: "function-go-templating"}},
+		}
+
+		xpClients := xp.Clients{
+			Composition: tu.NewMockCompositionClient().
+				WithComposition(childComposition).
+				Build(),
+			Credential: &tu.MockCredentialClient{},
+			Definition: tu.NewMockDefinitionClient().
+				WithXRDForGVK(cycleAGVK, cycleAXRDUn).
+				WithXRDForGVK(cycleBGVK, cycleBXRDUn).
+				Build(),
+			Environment: tu.NewMockEnvironmentClient().
+				WithNoEnvironmentConfigs().
+				Build(),
+			Function: tu.NewMockFunctionClient().
+				WithSuccessfulFunctionsFetch(functions).
+				Build(),
+			ResourceTree: tu.NewMockResourceTreeClient().Build(),
+		}
+
+		k8sClients := k8.Clients{
+			Apply:    tu.NewMockApplyClient().Build(),
+			Resource: tu.NewMockResourceClient().Build(),
+			Schema: tu.NewMockSchemaClient().
+				WithFoundCRD(cycleGroup, cycleAGVK.Kind, cycleACRD).
+				WithFoundCRD(cycleGroup, cycleBGVK.Kind, cycleBCRD).
+				WithGetCRDByName(func(name string) (*extv1.CustomResourceDefinition, error) {
+					switch name {
+					case cycleACRD.Name:
+						return cycleACRD, nil
+					case cycleBCRD.Name:
+						return cycleBCRD, nil
+					default:
+						return nil, errors.Errorf("CRD with name %s not found", name)
+					}
+				}).
+				Build(),
+			Type: tu.NewMockTypeConverter().Build(),
+		}
+
+		return xpClients, k8sClients
+	}
+
 	tests := map[string]struct {
 		setupMocks        func() (xp.Clients, k8.Clients)
+		extraOpts         []ProcessorOption
 		composedResources []cpd.Unstructured
 		parentResourceID  string
 		depth             int
@@ -2082,6 +2760,57 @@ func TestDefaultDiffProcessor_ProcessNestedXRs(t *testing.T) {
 			wantDiffCount:    0,
 			wantErr:          true,
 			wantErrContain:   "maximum nesting depth exceeded",
+		},
+		// A composition cycle must be bounded by MaxNestedDepth rather than by
+		// running out of nested XRs (which never happens). Regression test for
+		// the depth counter never being incremented across the recursive
+		// re-entry through diffSingleResourceInternal.
+		"CyclicCompositionTerminatesWithDepthError": {
+			setupMocks: cycleClients,
+			extraOpts: []ProcessorOption{
+				WithRenderFunc(cycleRenderFunc(64)),
+			},
+			composedResources: []cpd.Unstructured{
+				{Unstructured: *childXR},
+			},
+			parentResourceID: "XParentResource/test-parent",
+			depth:            1,
+			wantDiffCount:    0,
+			wantErr:          true,
+			wantErrContain:   "maximum nesting depth exceeded",
+		},
+		// --max-nested-depth N means "N levels of nesting below the root", so
+		// with N=1 a second level of nesting must be refused.
+		"MaxNestedDepthOneRefusesSecondLevel": {
+			setupMocks: cycleClients,
+			extraOpts: []ProcessorOption{
+				WithMaxNestedDepth(1),
+				WithRenderFunc(cycleRenderFunc(64)),
+			},
+			composedResources: []cpd.Unstructured{
+				{Unstructured: *childXR},
+			},
+			parentResourceID: "XParentResource/test-parent",
+			depth:            1,
+			wantDiffCount:    0,
+			wantErr:          true,
+			wantErrContain:   "maximum nesting depth exceeded",
+		},
+		// ...and the boundary is inclusive: N=1 must still process the first
+		// level of nesting without complaining that the bound was exceeded.
+		"MaxNestedDepthOneAllowsFirstLevel": {
+			setupMocks: cycleClients,
+			extraOpts: []ProcessorOption{
+				WithMaxNestedDepth(1),
+				WithRenderFunc(cycleRenderFunc(0)),
+			},
+			composedResources: []cpd.Unstructured{
+				{Unstructured: *childXR},
+			},
+			parentResourceID: "XParentResource/test-parent",
+			depth:            1,
+			wantDiffCount:    1,
+			wantErr:          false,
 		},
 		"MixedXRAndManagedResourcesProcessesOnlyXRs": {
 			setupMocks: func() (xp.Clients, k8.Clients) {
@@ -2281,7 +3010,7 @@ func TestDefaultDiffProcessor_ProcessNestedXRs(t *testing.T) {
 			// Create processor with behavior defaults + custom options
 			baseOpts := testProcessorOptions(t)
 			customOpts := []ProcessorOption{
-				WithSchemaValidatorFactory(func(k8.SchemaClient, xp.DefinitionClient, logging.Logger) SchemaValidator {
+				WithSchemaValidatorFactory(func(k8.SchemaClient, k8.ResourceClient, xp.DefinitionClient, logging.Logger) SchemaValidator {
 					return &tu.MockSchemaValidator{
 						ValidateResourcesFn: func(context.Context, *un.Unstructured, []cpd.Unstructured) error {
 							return nil
@@ -2309,6 +3038,7 @@ func TestDefaultDiffProcessor_ProcessNestedXRs(t *testing.T) {
 				}),
 			}
 			baseOpts = append(baseOpts, customOpts...)
+			baseOpts = append(baseOpts, tt.extraOpts...)
 			processor := NewDiffProcessor(k8sClients, xpClients, baseOpts...).(*DefaultDiffProcessor)
 
 			// Initialize if needed
@@ -2577,7 +3307,7 @@ func TestDefaultDiffProcessor_DiffSingleResource_WithObservedResources(t *testin
 			verifyObservedPassed: true,
 			wantErr:              false,
 		},
-		"ContinuesWhenFetchObservedResourcesFails": {
+		"FailedObservedResourceFetchIsFatal": {
 			setupMocks: func() (k8.Clients, xp.Clients) {
 				// Create XRD
 				xrdUnstructured := tu.NewXRD("xrs.example.org", "example.org", "XR").
@@ -2647,10 +3377,107 @@ func TestDefaultDiffProcessor_DiffSingleResource_WithObservedResources(t *testin
 				return k8sClients, xpClients
 			},
 			wantObservedInRender: true,
-			wantObservedCount:    0, // Should pass empty list when fetch fails
+			wantObservedCount:    0,
 			verifyObservedPassed: true,
-			wantErr:              true,                       // Should return partial error so user knows removal detection failed
-			wantErrContain:       "cannot get resource tree", // The resource tree error is now surfaced
+			wantErr:              true,
+			// The observed-resource fetch is the first thing to touch the tree
+			// client, so it is what surfaces the failure.
+			wantErrContain: "cannot fetch observed resources for XR",
+		},
+		// A *transient* failure must be fatal too. Removal detection queries the
+		// resource tree a second time, so a failure confined to the observed
+		// fetch used to be swallowed entirely: the diff was computed as though
+		// the cluster held nothing, reporting every existing composed resource
+		// as an addition, with no error and no warning.
+		"TransientObservedResourceFetchFailureIsFatal": {
+			setupMocks: func() (k8.Clients, xp.Clients) {
+				resourceTree := &resource.Resource{
+					Unstructured: *xr,
+					Children: []*resource.Resource{
+						{Unstructured: *observedBucket},
+						{Unstructured: *observedUser},
+					},
+				}
+
+				xrdUnstructured := tu.NewXRD("xrs.example.org", "example.org", "XR").
+					WithPlural("xrs").
+					WithSingular("xr").
+					WithVersion("v1", true, true).
+					WithSchema(&extv1.JSONSchemaProps{
+						Type: "object",
+						Properties: map[string]extv1.JSONSchemaProps{
+							"spec":   {Type: "object"},
+							"status": {Type: "object"},
+						},
+					}).
+					BuildAsUnstructured()
+
+				xrCRD := tu.NewCRD("xrs.example.org", "example.org", "XR").
+					WithListKind("XRList").
+					WithPlural("xrs").
+					WithSingular("xr").
+					WithVersion("v1", true, true).
+					WithStandardSchema("field").
+					Build()
+
+				k8sClients := k8.Clients{
+					Apply: tu.NewMockApplyClient().
+						WithSuccessfulDryRun().
+						Build(),
+					Resource: tu.NewMockResourceClient().
+						WithResourcesExist(xr).
+						Build(),
+					Schema: tu.NewMockSchemaClient().
+						WithNoResourcesRequiringCRDs().
+						WithGetCRD(func(_ context.Context, gvk schema.GroupVersionKind) (*extv1.CustomResourceDefinition, error) {
+							if gvk.Group == "example.org" && gvk.Kind == "XR" {
+								return xrCRD, nil
+							}
+
+							return nil, errors.Errorf("CRD not found for %v", gvk)
+						}).
+						WithSuccessfulCRDByNameFetch("xrs.example.org", xrCRD).
+						Build(),
+					Type: tu.NewMockTypeConverter().Build(),
+				}
+
+				// Fail only the first tree lookup (the observed-resource fetch);
+				// every later one succeeds, as a transient API error would.
+				treeCalls := 0
+
+				xpClients := xp.Clients{
+					Composition: tu.NewMockCompositionClient().
+						WithSuccessfulCompositionMatch(composition).
+						Build(),
+					Credential: &tu.MockCredentialClient{},
+					Definition: tu.NewMockDefinitionClient().
+						WithXRDForXR(xrdUnstructured).
+						Build(),
+					Environment: tu.NewMockEnvironmentClient().
+						WithNoEnvironmentConfigs().
+						Build(),
+					Function: tu.NewMockFunctionClient().
+						WithSuccessfulFunctionsFetch(functions).
+						Build(),
+					ResourceTree: tu.NewMockResourceTreeClient().
+						WithGetResourceTree(func(_ context.Context, _ *un.Unstructured) (*resource.Resource, error) {
+							treeCalls++
+							if treeCalls == 1 {
+								return nil, errors.New("etcdserver: request timed out")
+							}
+
+							return resourceTree, nil
+						}).
+						Build(),
+				}
+
+				return k8sClients, xpClients
+			},
+			wantObservedInRender: true,
+			wantObservedCount:    0,
+			verifyObservedPassed: true,
+			wantErr:              true,
+			wantErrContain:       "cannot fetch observed resources for XR",
 		},
 	}
 
@@ -2676,7 +3503,7 @@ func TestDefaultDiffProcessor_DiffSingleResource_WithObservedResources(t *testin
 						ComposedResources: []cpd.Unstructured{},
 					}, nil
 				}),
-				WithSchemaValidatorFactory(func(k8.SchemaClient, xp.DefinitionClient, logging.Logger) SchemaValidator {
+				WithSchemaValidatorFactory(func(k8.SchemaClient, k8.ResourceClient, xp.DefinitionClient, logging.Logger) SchemaValidator {
 					return &tu.MockSchemaValidator{
 						ValidateResourcesFn: func(context.Context, *un.Unstructured, []cpd.Unstructured) error {
 							return nil
@@ -3556,64 +4383,190 @@ func TestMergeCredentials(t *testing.T) {
 	}
 }
 
-func TestFetchCompositionCredentials(t *testing.T) {
-	// This tests that fetchCompositionCredentials correctly delegates to the CredentialClient.
-	// The detailed credential fetching logic is tested in credential_client_test.go.
-	var azureCredentials corev1.Secret
-	tu.NewResource("v1", "Secret", "azure-credentials").
+// TestResolveFunctionCredentials covers the credential resolution seam: delegation to the
+// CredentialClient (whose own fetch logic is tested in credential_client_test.go), the merge with
+// CLI-supplied credentials, and — the part that matters to a user — exactly when the shortfall advisory
+// fires. The advisory must describe the state AFTER the merge: a user who supplied the absent secret
+// with --function-credentials has already solved the problem and must not be told to solve it.
+func TestResolveFunctionCredentials(t *testing.T) {
+	var clusterSecret corev1.Secret
+	tu.NewResource("v1", "Secret", "cluster-credentials").
 		InNamespace("crossplane-system").
-		BuildTyped(&azureCredentials)
+		BuildTyped(&clusterSecret)
+
+	var suppliedSecret corev1.Secret
+	tu.NewResource("v1", "Secret", "absent-credentials").
+		InNamespace("crossplane-system").
+		BuildTyped(&suppliedSecret)
+
+	absentRef := k8stypes.NamespacedName{Namespace: "crossplane-system", Name: "absent-credentials"}
+	otherAbsentRef := k8stypes.NamespacedName{Namespace: "ns2", Name: "other-credentials"}
+
+	composition := tu.NewComposition("test-comp").
+		WithCompositeTypeRef("example.org/v1", "XR1").
+		WithPipelineMode().
+		WithPipelineStep("step1", "function-msgraph", nil,
+			tu.WithCredentials("azure-creds", "crossplane-system", "cluster-credentials")).
+		Build()
+
+	const (
+		advisoryMsg  = "Some function credential secrets could not be fetched from cluster"
+		advisoryHint = "Use --function-credentials to provide secrets that don't exist on cluster"
+	)
 
 	tests := map[string]struct {
-		composition     *apiextensionsv1.Composition
-		mockCredentials []corev1.Secret
-		wantSecrets     int
+		reason string
+		// composition is passed straight through; nil exercises the delegation guard.
+		composition *apiextensionsv1.Composition
+		// calls is how many times resolveFunctionCredentials runs, standing in for the per-XR repeat:
+		// RenderToStableState resolves credentials once per XR, so a composition affecting many XRs
+		// resolves many times against identical inputs.
+		calls          int
+		cliCredentials []corev1.Secret
+		fetchResult    types.CredentialFetchResult
+		fetchErr       error
+		wantMerged     []string
+		wantAdvisories []dt.OutputWarning
+		wantErr        string
 	}{
-		"NilComposition": {
-			composition:     nil,
-			mockCredentials: nil,
-			wantSecrets:     0,
+		"NilCompositionResolvesNothing": {
+			reason:      "A nil composition has no pipeline to inspect, so nothing is fetched or warned about",
+			composition: nil,
 		},
 		"DelegatesToCredentialClient": {
-			composition: tu.NewComposition("test-comp").
-				WithCompositeTypeRef("example.org/v1", "XR1").
-				WithPipelineMode().
-				WithPipelineStep("step1", "function-msgraph", nil,
-					tu.WithCredentials("azure-creds", "crossplane-system", "azure-credentials")).
-				Build(),
-			mockCredentials: []corev1.Secret{azureCredentials},
-			wantSecrets:     1,
+			reason:      "Secrets the client fetched from the cluster are returned for rendering",
+			composition: composition,
+			fetchResult: types.CredentialFetchResult{Secrets: []corev1.Secret{clusterSecret}},
+			wantMerged:  []string{"crossplane-system/cluster-credentials"},
 		},
-		"ReturnsEmptyWhenNoCredentials": {
-			composition: tu.NewComposition("test-comp").
-				WithCompositeTypeRef("example.org/v1", "XR1").
-				WithPipelineMode().
-				WithPipelineStep("step1", "function-test", nil).
-				Build(),
-			mockCredentials: nil,
-			wantSecrets:     0,
+		"AbsentAndNotSuppliedWarns": {
+			reason:      "A shortfall the user has not covered is exactly what the advisory exists to report",
+			composition: composition,
+			fetchResult: types.CredentialFetchResult{
+				Secrets: []corev1.Secret{clusterSecret},
+				Absent:  []k8stypes.NamespacedName{absentRef},
+			},
+			wantMerged: []string{"crossplane-system/cluster-credentials"},
+			wantAdvisories: []dt.OutputWarning{{
+				Message: advisoryMsg,
+				Context: map[string]string{
+					"composition": "test-comp",
+					"missing":     "crossplane-system/absent-credentials",
+					"hint":        advisoryHint,
+				},
+			}},
+		},
+		"AbsentButSuppliedViaCLIDoesNotWarn": {
+			reason:         "The user passed --function-credentials for the very secret the cluster lacks; warning would tell them to do what they just did",
+			composition:    composition,
+			cliCredentials: []corev1.Secret{suppliedSecret},
+			fetchResult: types.CredentialFetchResult{
+				Secrets: []corev1.Secret{clusterSecret},
+				Absent:  []k8stypes.NamespacedName{absentRef},
+			},
+			wantMerged: []string{"crossplane-system/absent-credentials", "crossplane-system/cluster-credentials"},
+		},
+		"PartiallySuppliedWarnsOnlyAboutTheRemainder": {
+			reason:         "Naming the secrets that are still missing is what makes the advisory actionable",
+			composition:    composition,
+			cliCredentials: []corev1.Secret{suppliedSecret},
+			fetchResult: types.CredentialFetchResult{
+				Absent: []k8stypes.NamespacedName{otherAbsentRef, absentRef},
+			},
+			wantMerged: []string{"crossplane-system/absent-credentials"},
+			wantAdvisories: []dt.OutputWarning{{
+				Message: advisoryMsg,
+				Context: map[string]string{
+					"composition": "test-comp",
+					"missing":     "ns2/other-credentials",
+					"hint":        advisoryHint,
+				},
+			}},
+		},
+		"RepeatedResolutionWarnsOnce": {
+			reason:      "The shortfall is a property of the composition, so thirty affected XRs must not produce thirty identical warnings",
+			composition: composition,
+			calls:       3,
+			fetchResult: types.CredentialFetchResult{
+				Absent: []k8stypes.NamespacedName{absentRef},
+			},
+			wantAdvisories: []dt.OutputWarning{{
+				Message: advisoryMsg,
+				Context: map[string]string{
+					"composition": "test-comp",
+					"missing":     "crossplane-system/absent-credentials",
+					"hint":        advisoryHint,
+				},
+			}},
+		},
+		"FetchErrorPropagates": {
+			reason:      "A credential that could not be read leaves the diff possibly wrong, so the failure must not be degraded to an advisory",
+			composition: composition,
+			fetchErr:    errors.New("secrets is forbidden"),
+			wantErr:     "secrets is forbidden",
 		},
 	}
 
 	for name, tc := range tests {
 		t.Run(name, func(t *testing.T) {
 			credentialClient := &tu.MockCredentialClient{
-				FetchCompositionCredentialsFn: func(_ context.Context, _ *apiextensionsv1.Composition) []corev1.Secret {
-					return tc.mockCredentials
+				FetchCompositionCredentialsFn: func(_ context.Context, _ *apiextensionsv1.Composition) (types.CredentialFetchResult, error) {
+					return tc.fetchResult, tc.fetchErr
 				},
 			}
+
+			// A real WarningLogger, so the assertion covers the whole advisory channel — message,
+			// machine-readable context, and the sink's dedup — rather than just "an Info happened".
+			var stderr bytes.Buffer
+
+			warnings := NewWarningLogger(tu.TestLogger(t, false), &stderr)
 
 			processor := &DefaultDiffProcessor{
 				credentialClient: credentialClient,
 				config: ProcessorConfig{
-					Logger: tu.TestLogger(t, false),
+					Logger:              warnings,
+					FunctionCredentials: tc.cliCredentials,
 				},
 			}
 
-			secrets := processor.fetchCompositionCredentials(t.Context(), tc.composition)
+			calls := max(tc.calls, 1)
 
-			if len(secrets) != tc.wantSecrets {
-				t.Errorf("fetchCompositionCredentials() returned %d secrets, want %d", len(secrets), tc.wantSecrets)
+			var (
+				merged []corev1.Secret
+				err    error
+			)
+
+			for range calls {
+				merged, err = processor.resolveFunctionCredentials(t.Context(), tc.composition, "XR1/my-xr")
+			}
+
+			if tc.wantErr != "" {
+				if err == nil {
+					t.Fatalf("\n%s\nresolveFunctionCredentials(): expected error containing %q, got nil", tc.reason, tc.wantErr)
+				}
+
+				if !strings.Contains(err.Error(), tc.wantErr) {
+					t.Fatalf("\n%s\nresolveFunctionCredentials(): error %q does not contain %q", tc.reason, err.Error(), tc.wantErr)
+				}
+
+				return
+			}
+
+			if err != nil {
+				t.Fatalf("\n%s\nresolveFunctionCredentials(): unexpected error: %v", tc.reason, err)
+			}
+
+			gotMerged := make([]string, 0, len(merged))
+			for _, s := range merged {
+				gotMerged = append(gotMerged, s.Namespace+"/"+s.Name)
+			}
+
+			if diff := gcmp.Diff(tc.wantMerged, gotMerged, cmpopts.EquateEmpty()); diff != "" {
+				t.Errorf("\n%s\nmerged credentials mismatch (-want +got):\n%s", tc.reason, diff)
+			}
+
+			if diff := gcmp.Diff(tc.wantAdvisories, warnings.Warnings()); diff != "" {
+				t.Errorf("\n%s\nadvisories mismatch (-want +got):\n%s", tc.reason, diff)
 			}
 		})
 	}
@@ -3694,6 +4647,107 @@ func TestDefaultDiffProcessor_RenderToStableState_SchemaPlumbing(t *testing.T) {
 			if out.CompositeResource.Schema != tt.wantSchema {
 				t.Errorf("output.CompositeResource.Schema = %v, want %v",
 					out.CompositeResource.Schema, tt.wantSchema)
+			}
+		})
+	}
+}
+
+// recordingCleaner records the context Cleanup was called with, and that context's Err() at call time.
+type recordingCleaner struct {
+	err       error
+	called    bool
+	ctx       context.Context
+	ctxErrNow error
+}
+
+func (r *recordingCleaner) Cleanup(ctx context.Context) error {
+	r.called = true
+	r.ctx = ctx
+	r.ctxErrNow = ctx.Err()
+
+	return r.err
+}
+
+type cleanupDetachedCtxKey struct{}
+
+func TestCleanupDetached(t *testing.T) {
+	type want struct {
+		CtxErr error
+		Value  any
+	}
+
+	tests := map[string]struct {
+		reason        string
+		parent        func() (context.Context, context.CancelFunc)
+		cleanErr      error
+		want          want
+		checkDeadline bool
+	}{
+		"ParentCancelled": {
+			reason: "Cleanup must receive a live context even when the run context is already cancelled.",
+			parent: func() (context.Context, context.CancelFunc) {
+				ctx, cancel := context.WithCancel(context.Background())
+				cancel()
+
+				return ctx, cancel
+			},
+		},
+		"ParentDeadlineExpired": {
+			reason: "Cleanup must receive a live context even when the run's --timeout has expired.",
+			parent: func() (context.Context, context.CancelFunc) {
+				return context.WithDeadline(context.Background(), time.Now().Add(-time.Second))
+			},
+		},
+		"KeepsParentValues": {
+			reason: "Cleanup's context must keep the run context's values.",
+			parent: func() (context.Context, context.CancelFunc) {
+				return context.WithCancel(context.WithValue(context.Background(), cleanupDetachedCtxKey{}, "v"))
+			},
+			want: want{Value: "v"},
+		},
+		"BoundedByCleanupTimeout": {
+			reason: "Cleanup's context must carry a deadline no later than CleanupTimeout from now.",
+			parent: func() (context.Context, context.CancelFunc) {
+				return context.WithCancel(context.Background())
+			},
+			checkDeadline: true,
+		},
+		"ErrorIsSwallowed": {
+			reason: "A cleanup error must be logged, not panic or propagate.",
+			parent: func() (context.Context, context.CancelFunc) {
+				return context.WithCancel(context.Background())
+			},
+			cleanErr: errors.New("boom"),
+		},
+	}
+
+	for name, tt := range tests {
+		t.Run(name, func(t *testing.T) {
+			parent, cancel := tt.parent()
+			defer cancel()
+
+			c := &recordingCleaner{err: tt.cleanErr}
+
+			CleanupDetached(parent, c, logging.NewNopLogger())
+
+			if !c.called {
+				t.Fatalf("\n%s\nCleanupDetached(...): Cleanup was not called", tt.reason)
+			}
+
+			got := want{CtxErr: c.ctxErrNow, Value: c.ctx.Value(cleanupDetachedCtxKey{})}
+			if diff := gcmp.Diff(tt.want, got, cmpopts.EquateErrors()); diff != "" {
+				t.Errorf("\n%s\nCleanupDetached(...): -want, +got:\n%s", tt.reason, diff)
+			}
+
+			if tt.checkDeadline {
+				dl, ok := c.ctx.Deadline()
+				if !ok {
+					t.Fatalf("\n%s\nCleanupDetached(...): cleanup context has no deadline", tt.reason)
+				}
+
+				if limit := time.Now().Add(CleanupTimeout); dl.After(limit) {
+					t.Errorf("\n%s\nCleanupDetached(...): deadline %v is later than %v", tt.reason, dl, limit)
+				}
 			}
 		})
 	}

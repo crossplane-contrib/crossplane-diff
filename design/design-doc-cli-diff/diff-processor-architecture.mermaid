@@ -49,13 +49,19 @@ classDiagram
         +MaxRenderIterations int
         +IncludeManual bool
         +EventualState bool
+        +AnalyzeOn AnalyzeOn
+        +MinimizeComposition bool
+        +SeededRevisionRef bool
         +IgnorePaths []string
         +FunctionCredentials []corev1.Secret
         +FunctionRegistryOverride string
         +CrossplaneRenderBinary string
+        +CrossplaneVersion string
+        +CrossplaneImage string
         +Stdout io.Writer
         +Stderr io.Writer
         +Logger logging.Logger
+        +Warnings *WarningLogger
         +RenderFunc RenderFn
         +Factories ComponentFactories
     }
@@ -68,6 +74,7 @@ classDiagram
         +CompDiffRenderer
         +RequirementsProvider
         +FunctionProvider
+        +InputValidator
     }
 
     class SchemaValidator {
@@ -96,6 +103,14 @@ classDiagram
         <<interface>>
         +GetFunctionsForComposition(comp) ([]Function, error)
         +Cleanup(ctx) error
+    }
+
+    class InputValidator {
+        <<interface>>
+        +ToRender() []ValidatedInput
+        +RecordRender(i, rendered, err)
+        +Verdicts(groups) []error
+        +RenderOverlaps(groups) []error
     }
 
     class RequirementsProvider {
@@ -128,6 +143,7 @@ classDiagram
     DefaultDiffProcessor --> ResourceManager
     DefaultDiffProcessor --> RequirementsProvider
     DefaultDiffProcessor --> FunctionProvider
+    DefaultDiffProcessor --> InputValidator : one per PerformDiff
     DefaultDiffProcessor --> DiffRenderer
     DefaultCompDiffProcessor --> CompDiffRenderer
 

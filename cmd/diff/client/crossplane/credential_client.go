@@ -4,10 +4,14 @@ import (
 	"context"
 
 	"github.com/crossplane-contrib/crossplane-diff/cmd/diff/client/kubernetes"
+	"github.com/crossplane-contrib/crossplane-diff/cmd/diff/types"
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	k8stypes "k8s.io/apimachinery/pkg/types"
 
+	"github.com/crossplane/crossplane-runtime/v2/pkg/errors"
 	"github.com/crossplane/crossplane-runtime/v2/pkg/logging"
 
 	apiextensionsv1 "github.com/crossplane/crossplane/apis/v2/apiextensions/v1"
@@ -15,10 +19,12 @@ import (
 
 // CredentialClient handles fetching credentials referenced by composition pipelines.
 type CredentialClient interface {
-	// FetchCompositionCredentials extracts credential refs from a composition's pipeline steps
-	// and fetches the referenced secrets from the cluster. Secrets that cannot be fetched
-	// are silently skipped (they may be injected at runtime, e.g., workload identity).
-	FetchCompositionCredentials(ctx context.Context, comp *apiextensionsv1.Composition) []corev1.Secret
+	// FetchCompositionCredentials extracts credential refs from a composition's pipeline steps and
+	// fetches the referenced secrets from the cluster. Secrets that do not exist are reported in the
+	// result's Absent list rather than failing the fetch: they may be injected at runtime (e.g.
+	// workload identity) or supplied by the caller via --function-credentials. Any other failure to
+	// read a referenced secret is returned as an error.
+	FetchCompositionCredentials(ctx context.Context, comp *apiextensionsv1.Composition) (types.CredentialFetchResult, error)
 }
 
 // DefaultCredentialClient implements CredentialClient.
@@ -39,12 +45,18 @@ func NewCredentialClient(resourceClient kubernetes.ResourceClient, logger loggin
 // and fetches the referenced secrets from the cluster. This enables functions to receive
 // credentials for authentication (e.g., Azure Workload Identity for function-msgraph).
 //
-// Secrets that cannot be fetched are silently skipped since they may be:
-// - Injected at runtime by the cluster (e.g., workload identity)
-// - Provided via CLI --function-credentials flag.
-func (c *DefaultCredentialClient) FetchCompositionCredentials(ctx context.Context, comp *apiextensionsv1.Composition) []corev1.Secret {
+// A referenced secret that does not exist is recorded in the result's Absent list and the fetch
+// continues, because an absent secret is a condition the caller may legitimately have handled: it may
+// be injected at runtime by the cluster (e.g. workload identity) or supplied via the CLI's
+// --function-credentials flag.
+//
+// Every other failure is returned as an error. A Forbidden, a transport failure or an unconvertible
+// payload means the secret may well exist and be relevant but could not be read, so rendering without
+// it would produce a diff that silently does not reflect what the cluster would do. Per the project's
+// accuracy-first stance that is a failure, not an advisory.
+func (c *DefaultCredentialClient) FetchCompositionCredentials(ctx context.Context, comp *apiextensionsv1.Composition) (types.CredentialFetchResult, error) {
 	if comp.Spec.Mode != apiextensionsv1.CompositionModePipeline {
-		return nil
+		return types.CredentialFetchResult{}, nil
 	}
 
 	secretGVK := schema.GroupVersionKind{
@@ -53,10 +65,10 @@ func (c *DefaultCredentialClient) FetchCompositionCredentials(ctx context.Contex
 		Kind:    "Secret",
 	}
 
-	var secrets []corev1.Secret
+	var result types.CredentialFetchResult
 
-	// Track unique credential references we attempted to fetch (for logging)
-	var attempted, fetched int
+	// A composition may reference one secret from several steps; report each absent secret once.
+	absentSeen := map[k8stypes.NamespacedName]struct{}{}
 
 	for _, step := range comp.Spec.Pipeline {
 		for _, cred := range step.Credentials {
@@ -64,56 +76,47 @@ func (c *DefaultCredentialClient) FetchCompositionCredentials(ctx context.Contex
 				continue
 			}
 
-			attempted++
+			ref := k8stypes.NamespacedName{Namespace: cred.SecretRef.Namespace, Name: cred.SecretRef.Name}
 
 			c.logger.Debug("Fetching function credential secret",
 				"step", step.Step,
 				"credentialName", cred.Name,
-				"secretRef", cred.SecretRef.Namespace+"/"+cred.SecretRef.Name)
+				"secretRef", ref.String())
 
-			secretUnstructured, err := c.resourceClient.GetResource(ctx, secretGVK, cred.SecretRef.Namespace, cred.SecretRef.Name)
-			if err != nil {
-				c.logger.Debug("Could not fetch function credential secret, skipping",
+			secretUnstructured, err := c.resourceClient.GetResource(ctx, secretGVK, ref.Namespace, ref.Name)
+
+			switch {
+			case apierrors.IsNotFound(err):
+				c.logger.Debug("Function credential secret does not exist on cluster",
 					"step", step.Step,
 					"credentialName", cred.Name,
-					"secretRef", cred.SecretRef.Namespace+"/"+cred.SecretRef.Name,
-					"error", err)
+					"secretRef", ref.String())
+
+				if _, dup := absentSeen[ref]; !dup {
+					absentSeen[ref] = struct{}{}
+					result.Absent = append(result.Absent, ref)
+				}
 
 				continue
+			case err != nil:
+				return types.CredentialFetchResult{}, errors.Wrapf(err,
+					"cannot read function credential secret %s referenced by pipeline step %q", ref, step.Step)
 			}
 
 			secret := corev1.Secret{}
 			if err := runtime.DefaultUnstructuredConverter.FromUnstructured(secretUnstructured.Object, &secret); err != nil {
-				c.logger.Debug("Could not convert secret to corev1.Secret, skipping",
-					"step", step.Step,
-					"credentialName", cred.Name,
-					"error", err)
-
-				continue
+				return types.CredentialFetchResult{}, errors.Wrapf(err,
+					"cannot decode function credential secret %s referenced by pipeline step %q", ref, step.Step)
 			}
 
-			secrets = append(secrets, secret)
-			fetched++
+			result.Secrets = append(result.Secrets, secret)
 		}
 	}
 
-	// Log summary based on what happened:
-	// - No credentials referenced: no log (nothing to fetch)
-	// - All credentials fetched successfully: debug log
-	// - Some credentials couldn't be fetched: info log (user should know)
-	if attempted > 0 {
-		if fetched == attempted {
-			c.logger.Debug("Fetched all function credential secrets from cluster",
-				"composition", comp.GetName(),
-				"count", fetched)
-		} else {
-			c.logger.Info("Some function credential secrets could not be fetched from cluster",
-				"composition", comp.GetName(),
-				"attempted", attempted,
-				"fetched", fetched,
-				"hint", "Use --function-credentials to provide secrets that don't exist on cluster")
-		}
-	}
+	c.logger.Debug("Fetched function credential secrets from cluster",
+		"composition", comp.GetName(),
+		"fetched", len(result.Secrets),
+		"absent", len(result.Absent))
 
-	return secrets
+	return result, nil
 }

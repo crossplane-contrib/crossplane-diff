@@ -72,16 +72,24 @@ type ExpectedDiff struct {
 	resources []*ResourceExpectation
 	errors    []*ErrorExpectation
 	warnings  []*WarningExpectation
-	xrs       []*XRExpectation
+	// noWarnings asserts warnings[] is empty. Separate from len(warnings)==0, which means "no opinion".
+	noWarnings bool
+	xrs        []*XRExpectation
 }
 
-// WarningExpectation describes one expected entry in warnings[]. Matched by message substring rather
-// than exact equality, since warning prose is not a stable contract; context keys are asserted
-// exactly, because those ARE what a machine consumer reads.
-type WarningExpectation struct {
-	parent          *ExpectedDiff
+// warningMatch describes one expected entry in warnings[], shared by the xr and comp builders. Matched
+// by message substring rather than exact equality, since warning prose is not a stable contract;
+// context keys are asserted exactly, because those ARE what a machine consumer reads.
+type warningMatch struct {
 	messageContains string
 	context         map[string]string
+}
+
+// WarningExpectation describes one expected entry in an xr diff's warnings[].
+type WarningExpectation struct {
+	warningMatch
+
+	parent *ExpectedDiff
 }
 
 func (w *WarningExpectation) expectation() *ExpectedDiff { return w.parent }
@@ -216,12 +224,20 @@ func (f *FieldErrorExpectation) expectation() *ExpectedDiff { return f.parent.pa
 // substring. Chain WithWarningContext to pin the machine-readable context pairs.
 func (e *ExpectedDiff) WithWarning(messageContains string) *WarningExpectation {
 	w := &WarningExpectation{
-		parent:          e,
-		messageContains: messageContains,
+		parent:       e,
+		warningMatch: warningMatch{messageContains: messageContains},
 	}
 	e.warnings = append(e.warnings, w)
 
 	return w
+}
+
+// WithNoWarnings asserts that structured output carries no advisories at all. Distinct from simply
+// declaring no WithWarning expectations, which asserts nothing: this is how a test pins that a
+// condition the tool used to warn about is correctly silent.
+func (e *ExpectedDiff) WithNoWarnings() *ExpectedDiff {
+	e.noWarnings = true
+	return e
 }
 
 // WithWarningContext pins the expected context key/value pairs on the warning under construction.
@@ -587,18 +603,41 @@ func AssertStructuredDiff(t *testing.T, jsonOutput string, e DiffExpectation) {
 		t.Errorf("Expected %d errors in structured output, got %d", len(expected.errors), len(output.Errors))
 	}
 
-	// Check each warning expectation against output.Warnings.
-	for _, want := range expected.warnings {
-		assertWarningExpectation(t, output.Warnings, want)
+	wantWarnings := make([]warningMatch, 0, len(expected.warnings))
+	for _, w := range expected.warnings {
+		wantWarnings = append(wantWarnings, w.warningMatch)
 	}
+
+	assertWarnings(t, output.Warnings, wantWarnings, expected.noWarnings)
 
 	// Check each xrs[] entry expectation.
 	assertXRExpectations(t, output.Xrs, expected.xrs)
 }
 
+// assertWarnings checks each expectation against got, then — if the test pinned any expectations, or
+// asserted there are none — verifies no extras were emitted, mirroring the errors[] guard. Without the
+// count check, warning duplication is untestable: a regression that emits the same advisory once per
+// XR still satisfies every find-first-match expectation. No expectations and no noWarnings = no opinion.
+func assertWarnings(t *testing.T, got []OutputWarning, want []warningMatch, noWarnings bool) {
+	t.Helper()
+
+	for _, w := range want {
+		assertWarningExpectation(t, got, w)
+	}
+
+	if (len(want) > 0 || noWarnings) && len(got) != len(want) {
+		messages := make([]string, 0, len(got))
+		for _, w := range got {
+			messages = append(messages, w.Message)
+		}
+
+		t.Errorf("Expected %d warnings in structured output, got %d: %v", len(want), len(got), messages)
+	}
+}
+
 // assertWarningExpectation finds a warning whose message contains want's substring and, when the
 // expectation pins one, compares its context map exactly.
-func assertWarningExpectation(t *testing.T, got []OutputWarning, want *WarningExpectation) {
+func assertWarningExpectation(t *testing.T, got []OutputWarning, want warningMatch) {
 	t.Helper()
 
 	for _, w := range got {
@@ -712,11 +751,32 @@ func assertChangeFields(t *testing.T, prefix string, found *ChangeDetail, expect
 
 // assertXRExpectations validates xrs[] entry expectations against the actual
 // grouped output.
+//
+// Each expectation consumes the entry it matches, so two expectations can never
+// both resolve to the same entry, and the entry count is pinned once the test
+// has an opinion on xrs[] at all. Without those guards a duplicated identity —
+// exactly the symptom of issue #477 — satisfied every expectation that matched
+// it and went unnoticed (issue #488).
 func assertXRExpectations(t *testing.T, actual []XRDiffWire, expected []*XRExpectation) {
 	t.Helper()
 
+	if len(expected) == 0 {
+		return
+	}
+
+	if len(actual) != len(expected) {
+		actualXRs := make([]string, 0, len(actual))
+		for _, x := range actual {
+			actualXRs = append(actualXRs, fmt.Sprintf("%s/%s (ns=%s)", x.XR.Kind, x.XR.Name, x.XR.Namespace))
+		}
+
+		t.Errorf("Expected %d xrs[] entries, got %d: %v", len(expected), len(actual), actualXRs)
+	}
+
+	used := make([]bool, len(actual))
+
 	for _, want := range expected {
-		got := findMatchingXR(actual, want)
+		got := findMatchingXR(actual, used, want)
 		if got == nil {
 			actualXRs := make([]string, 0, len(actual))
 			for _, x := range actual {
@@ -745,6 +805,12 @@ func assertXRExpectations(t *testing.T, actual []XRDiffWire, expected []*XRExpec
 
 		assertResourceExpectations(t, label, got.Changes, want.changes)
 
+		// Pin the entry's change count too, so a change the test did not ask
+		// for cannot hide inside a matched entry.
+		if len(want.changes) > 0 && len(got.Changes) != len(want.changes) {
+			t.Errorf("xr %s: expected %d changes, got %d", label, len(want.changes), len(got.Changes))
+		}
+
 		for _, id := range want.errorIDs {
 			if findMatchingError(got.Errors, id) == nil {
 				t.Errorf("xr %s: expected error with resourceID %q not found in entry errors", label, id)
@@ -753,10 +819,17 @@ func assertXRExpectations(t *testing.T, actual []XRDiffWire, expected []*XRExpec
 	}
 }
 
-// findMatchingXR locates the xrs[] entry matching an XRExpectation by
-// kind/namespace and (unless anyName / a name pattern is used) exact name.
-func findMatchingXR(actual []XRDiffWire, want *XRExpectation) *XRDiffWire {
+// findMatchingXR locates the first not-yet-consumed xrs[] entry matching an
+// XRExpectation by kind/namespace and (unless anyName / a name pattern is used)
+// exact name, marking it consumed in used. Consuming matters because identities
+// need not be unique: without it, N expectations could all be satisfied by one
+// entry (or by N byte-identical ones).
+func findMatchingXR(actual []XRDiffWire, used []bool, want *XRExpectation) *XRDiffWire {
 	for i := range actual {
+		if used[i] {
+			continue
+		}
+
 		x := &actual[i]
 
 		if x.XR.Kind != want.kind || x.XR.Namespace != want.namespace {
@@ -765,14 +838,17 @@ func findMatchingXR(actual []XRDiffWire, want *XRExpectation) *XRDiffWire {
 
 		switch {
 		case want.anyName:
-			return x
 		case want.namePattern != nil:
-			if want.namePattern.MatchString(x.XR.Name) {
-				return x
+			if !want.namePattern.MatchString(x.XR.Name) {
+				continue
 			}
-		case x.XR.Name == want.name:
-			return x
+		case x.XR.Name != want.name:
+			continue
 		}
+
+		used[i] = true
+
+		return x
 	}
 
 	return nil
@@ -1026,6 +1102,7 @@ func convertBracketNotation(path string) string {
 type StructuredCompDiffOutput struct {
 	Compositions []CompositionDiffWire `json:"compositions"`
 	Errors       []OutputError         `json:"errors,omitempty"`
+	Warnings     []OutputWarning       `json:"warnings,omitempty"`
 }
 
 // OutputError mirrors dt.OutputError.
@@ -1070,9 +1147,10 @@ type CompositionDiffWire struct {
 
 // RevisionImpactWire mirrors renderer.RevisionImpact.
 type RevisionImpactWire struct {
-	ChangeScope         string `json:"changeScope"`
-	CreatesRevision     bool   `json:"createsRevision"`
-	RepointedComposites int    `json:"repointedComposites"`
+	ChangeScope           string `json:"changeScope"`
+	CreatesRevision       bool   `json:"createsRevision"`
+	RepointedComposites   int    `json:"repointedComposites"`
+	PredictedRevisionName string `json:"predictedRevisionName,omitempty"`
 }
 
 // AffectedResourcesSummary mirrors renderer.AffectedResourcesSummary.
@@ -1125,9 +1203,50 @@ type CompDiffExpectation interface {
 // ExpectedCompDiff is a fluent builder for test expectations on composition diff output.
 type ExpectedCompDiff struct {
 	compositions []*CompositionExpectation
+	warnings     []*CompWarningExpectation
+	// noWarnings asserts warnings[] is empty. Separate from len(warnings)==0, which means "no opinion".
+	noWarnings bool
 }
 
 func (e *ExpectedCompDiff) compExpectation() *ExpectedCompDiff { return e }
+
+// CompWarningExpectation describes one expected entry in a comp diff's warnings[].
+type CompWarningExpectation struct {
+	warningMatch
+
+	parent *ExpectedCompDiff
+}
+
+func (w *CompWarningExpectation) compExpectation() *ExpectedCompDiff { return w.parent }
+
+// WithWarning asserts that structured output carries a warning whose message contains the supplied
+// substring. Chain WithWarningContext to pin the machine-readable context pairs.
+func (e *ExpectedCompDiff) WithWarning(messageContains string) *CompWarningExpectation {
+	w := &CompWarningExpectation{
+		parent:       e,
+		warningMatch: warningMatch{messageContains: messageContains},
+	}
+	e.warnings = append(e.warnings, w)
+
+	return w
+}
+
+// WithNoWarnings asserts that structured output carries no advisories at all. Distinct from simply
+// declaring no WithWarning expectations, which asserts nothing: this is how a test pins that a
+// condition the tool warns about elsewhere is correctly silent here.
+func (e *ExpectedCompDiff) WithNoWarnings() *ExpectedCompDiff {
+	e.noWarnings = true
+	return e
+}
+
+// WithWarningContext pins the expected context key/value pairs on the warning under construction.
+func (w *CompWarningExpectation) WithWarningContext(context map[string]string) *CompWarningExpectation {
+	w.context = context
+	return w
+}
+
+// And returns to the parent builder.
+func (w *CompWarningExpectation) And() *ExpectedCompDiff { return w.parent }
 
 // CompositionExpectation defines expectations for a single composition in the diff.
 type CompositionExpectation struct {
@@ -1146,6 +1265,10 @@ type CompositionExpectation struct {
 	impactAnalysisSkipped *bool
 	// revisionImpact, when set, asserts what applying the composition does to CompositionRevisions.
 	revisionImpact *expectedRevisionImpact
+	// predictedRevisionName, when set, asserts revisionImpact.predictedRevisionName. Set independently
+	// of revisionImpact so a case can assert the name alone, and because the name is usually matched by
+	// pattern (its suffix is a content hash) while the rest are exact.
+	predictedRevisionName *expectedPredictedRevisionName
 }
 
 // expectedRevisionImpact is the expected revisionImpact object for a composition.
@@ -1153,6 +1276,17 @@ type expectedRevisionImpact struct {
 	changeScope         string
 	createsRevision     bool
 	repointedComposites int
+}
+
+// expectedPredictedRevisionName is the expected revisionImpact.predictedRevisionName. A pattern rather
+// than a literal because the name's suffix is the first 7 hex digits of the composition's hash, so
+// pinning it exactly would make every fixture edit a test failure. The derivation itself is pinned
+// exactly by the revisionIdentity unit test, which is where that belongs.
+//
+// An empty pattern asserts the field is absent, which is a meaningful outcome in its own right: the
+// name was not predictable.
+type expectedPredictedRevisionName struct {
+	pattern string
 }
 
 func (c *CompositionExpectation) compExpectation() *ExpectedCompDiff { return c.parent }
@@ -1166,6 +1300,7 @@ type XRImpactExpectation struct {
 	anyNameAllowed      bool
 	status              string // "changed", "unchanged", "error", "filtered"
 	filterReason        string // "manual_policy", "revision_selector_mismatch", "deleting"; only checked when set
+	errorContains       string // substring of an "error" impact's Error; only checked when set
 	downstreamSummary   *expectedSummary
 	downstreamResources []*DownstreamResourceExpectation
 }
@@ -1232,6 +1367,23 @@ func (c *CompositionExpectation) WithRevisionImpact(changeScope string, createsR
 	return c
 }
 
+// WithPredictedRevisionNamePattern asserts that revisionImpact.predictedRevisionName matches pattern
+// (an unanchored regexp unless the pattern anchors itself). Use for the usual case, where the name's
+// hash suffix is not worth pinning in an end-to-end test.
+func (c *CompositionExpectation) WithPredictedRevisionNamePattern(pattern string) *CompositionExpectation {
+	c.predictedRevisionName = &expectedPredictedRevisionName{pattern: pattern}
+
+	return c
+}
+
+// WithoutPredictedRevisionName asserts that revisionImpact carries no predictedRevisionName — i.e. the
+// revision's identity could not be predicted. Distinct from simply not asserting on the field.
+func (c *CompositionExpectation) WithoutPredictedRevisionName() *CompositionExpectation {
+	c.predictedRevisionName = &expectedPredictedRevisionName{pattern: ""}
+
+	return c
+}
+
 // WithCompositionModified asserts that the composition itself is modified.
 func (c *CompositionExpectation) WithCompositionModified() *CompositionExpectation {
 	c.compositionChangeType = dt.DiffTypeWordModified
@@ -1277,6 +1429,13 @@ func (x *XRImpactExpectation) WithAnyName() *XRImpactExpectation {
 // "revision_selector_mismatch", or "deleting"). Only asserted when set.
 func (x *XRImpactExpectation) WithFilterReason(reason string) *XRImpactExpectation {
 	x.filterReason = reason
+	return x
+}
+
+// WithErrorContaining pins a substring of an "error" XR impact's Error, so a test can assert why
+// the composite failed rather than only that it did. Only asserted when set.
+func (x *XRImpactExpectation) WithErrorContaining(s string) *XRImpactExpectation {
+	x.errorContains = s
 	return x
 }
 
@@ -1424,6 +1583,13 @@ func AssertStructuredCompDiff(t *testing.T, jsonOutput string, e CompDiffExpecta
 		t.Fatalf("Failed to parse structured comp output: %v\nOutput was:\n%s", err, jsonOutput)
 	}
 
+	wantWarnings := make([]warningMatch, 0, len(expected.warnings))
+	for _, w := range expected.warnings {
+		wantWarnings = append(wantWarnings, w.warningMatch)
+	}
+
+	assertWarnings(t, output.Warnings, wantWarnings, expected.noWarnings)
+
 	// Check each composition expectation
 	for _, expectComp := range expected.compositions {
 		found := findMatchingComposition(output.Compositions, expectComp.name)
@@ -1489,6 +1655,29 @@ func AssertStructuredCompDiff(t *testing.T, jsonOutput string, e CompDiffExpecta
 			}
 		}
 
+		if want := expectComp.predictedRevisionName; want != nil {
+			got := found.RevisionImpact.PredictedRevisionName
+
+			switch want.pattern {
+			case "":
+				if got != "" {
+					t.Errorf("Composition %s: RevisionImpact.PredictedRevisionName: expected absent, got %q",
+						expectComp.name, got)
+				}
+			default:
+				matched, err := regexp.MatchString(want.pattern, got)
+
+				switch {
+				case err != nil:
+					t.Errorf("Composition %s: RevisionImpact.PredictedRevisionName: invalid pattern %q: %v",
+						expectComp.name, want.pattern, err)
+				case !matched:
+					t.Errorf("Composition %s: RevisionImpact.PredictedRevisionName: %q does not match pattern %q",
+						expectComp.name, got, want.pattern)
+				}
+			}
+		}
+
 		// Check composition changes
 		if expectComp.compositionChangeType != "" {
 			if found.CompositionChanges == nil {
@@ -1542,6 +1731,12 @@ func AssertStructuredCompDiff(t *testing.T, jsonOutput string, e CompDiffExpecta
 			if expectXR.filterReason != "" && foundXR.FilterReason != expectXR.filterReason {
 				t.Errorf("Composition %s: XR %s/%s: expected filterReason %s, got %s",
 					expectComp.name, expectXR.kind, expectXR.name, expectXR.filterReason, foundXR.FilterReason)
+			}
+
+			// Check error message if specified
+			if expectXR.errorContains != "" && !strings.Contains(foundXR.Error, expectXR.errorContains) {
+				t.Errorf("Composition %s: XR %s/%s: expected error containing %q, got %q",
+					expectComp.name, expectXR.kind, expectXR.name, expectXR.errorContains, foundXR.Error)
 			}
 
 			// Check downstream summary if specified
