@@ -710,8 +710,8 @@ func TestDiffIntegration(t *testing.T) {
 		// and "the defaults are absent" could be satisfied by the feature being broken. Together they
 		// pin the flag as the thing that decides.
 		//
-		// This is also AC-R12's assertion that `existing` reproduces the pre-#334 behaviour, which is
-		// why the fields are asserted absent rather than merely unasserted.
+		// This also pins that `existing` reproduces the behaviour from before additions were dry-run
+		// (#334), which is why the fields are asserted absent rather than merely unasserted.
 		"BuiltInResourceAdditionSkipsApiserverWhenDryRunOnExisting": {
 			reason:       "With --dry-run-on=existing an added built-in resource is not sent to the apiserver, so its diff carries no server-side defaults and reports skipReason disabled",
 			outputFormat: "json",
@@ -741,7 +741,7 @@ func TestDiffIntegration(t *testing.T) {
 			expectedError:    false,
 			expectedExitCode: dp.ExitCodeDiffDetected,
 		},
-		// R6.2: a status authored by the composition pipeline must survive the apiserver round-trip.
+		// A status authored by the composition pipeline must survive the apiserver round-trip.
 		// XStatusResource declares the status subresource, so the apiserver strips status from the
 		// dry-run create and returns an object without one; the value below can therefore only come
 		// from the calculator re-attaching what was rendered. Every other composed kind in this
@@ -751,7 +751,7 @@ func TestDiffIntegration(t *testing.T) {
 		// works, but nothing renders it. See skipReason.
 		"AddedResourceRetainsCompositionAuthoredStatus": {
 			skip: true,
-			skipReason: "R6.2's re-attached status cannot be observed in any output, so this assertion " +
+			skipReason: "The re-attached status cannot be observed in any output, so this assertion " +
 				"cannot pass and could not be made to fail by breaking the production code it targets. " +
 				"cleanupForDiff (renderer/diff_formatter.go) deletes metadata.status unconditionally from " +
 				"both sides of every diff, in the same block that deletes ownerReferences — the strip whose " +
@@ -784,7 +784,7 @@ func TestDiffIntegration(t *testing.T) {
 			expectedError:    false,
 			expectedExitCode: dp.ExitCodeDiffDetected,
 		},
-		// R6.1: the apiserver runs names.Generator in rest.BeforeCreate, ahead of the dry-run
+		// The apiserver runs names.Generator in rest.BeforeCreate, ahead of the dry-run
 		// short-circuit at the storage layer, so it mints a real random name even for a request it
 		// never persists. Unless that identity is restored, a generateName addition's diff differs on
 		// every invocation — which only a repeated run can detect, hence assertDeterministicAcrossRuns.
@@ -816,7 +816,7 @@ func TestDiffIntegration(t *testing.T) {
 			expectedError:    false,
 			expectedExitCode: dp.ExitCodeDiffDetected,
 		},
-		// R8, addition half. A ValidatingAdmissionPolicy is the instrument rather than a CEL
+		// Cluster rejection of an ADDITION. A ValidatingAdmissionPolicy is the instrument rather than a CEL
 		// x-kubernetes-validations rule on the CRD, because crossplane-diff evaluates CEL rules
 		// locally before the diff calculator runs: a CEL rule would reject the resource without the
 		// apiserver ever being consulted, so the test would pass on code that never dry-ran anything.
@@ -845,7 +845,7 @@ func TestDiffIntegration(t *testing.T) {
 				WithFieldError("admission", "").
 				WithMessageContaining("this cluster refuses that configData value"),
 		},
-		// R8, modification half — the deliberate behaviour change. The identical cluster fact used to
+		// Cluster rejection of a MODIFICATION — the deliberate behaviour change. The identical cluster fact used to
 		// surface as a plain tool error (exit 1) for an existing resource while an addition's rejection
 		// would have been exit 2, i.e. the same rejection reported in two different tiers depending
 		// only on whether the resource happened to exist. This pins the reclassification.
@@ -1455,8 +1455,8 @@ Summary: 2 modified, 2 removed`,
 			expectedStructuredOutput: tu.ExpectDiff().
 				WithSummary(0, 0, 2).
 				WithRemovedResource("XDownstreamResource", "resource-to-be-removed", "default").
-				// AC-R7, removal half. A removal has no desired state to preview, so it can never
-				// carry a dryRun object; WithDryRunPerformed asserts exactly that absence. The method
+				// dryRun must be absent on a removal. A removal has no desired state to preview, so it can
+				// never carry a dryRun object, and one appearing would wrongly mark it unverified; WithDryRunPerformed asserts exactly that absence. The method
 				// name reads oddly here — nothing was dry run — but the claim it makes ("no dryRun
 				// object is present") is the right one, and having a second spelling for the same
 				// assertion would be worse.
@@ -4305,7 +4305,7 @@ Summary: 2 modified`,
 				WithXRImpact("XNopResource", "sequencer-gating-test", "default", "changed").
 				WithDownstreamSummary(1, 0, 0).
 				WithDownstreamResource("added", "XDownstreamResource", "0-stage0-resource", "default").
-				// AC-R7 for `comp`, absence half: a downstream addition that reached the apiserver
+				// dryRun absence through `comp`: a downstream addition that reached the apiserver
 				// carries no dryRun object. Piggy-backed on an existing case rather than given its
 				// own envtest instance, since it is a pure additional assertion.
 				WithDryRunPerformed().
@@ -4393,7 +4393,7 @@ Summary: 2 modified`,
 				WithField("spec.forProvider.configData", "updated-existing-value"),
 			expectedError: false,
 		},
-		// AC-R7 for `comp`, presence half. dryRun lives on ChangeDetail, which `xr` reaches via
+		// dryRun presence through `comp`. dryRun lives on ChangeDetail, which `xr` reaches via
 		// changes[] and `comp` via impactAnalysis[].downstreamChanges.changes[] — one shared wire
 		// shape, but only an assertion through the comp renderer proves comp actually populates it.
 		// The composed resource is deliberately absent from the setup so the impact is an ADDITION,

@@ -4,7 +4,7 @@
 # user-authored output rather than a stale read of the cluster. The composed kind here
 # (XStatusResource) declares the status subresource, so the apiserver strips status from the dry-run
 # create and returns an object with none — which means the status below can only reach the `+++`
-# diff if the calculator re-attaches it (crossplane-diff#334, R6.2).
+# diff if the calculator re-attaches it (crossplane-diff#334).
 apiVersion: apiextensions.crossplane.io/v1
 kind: Composition
 metadata:
