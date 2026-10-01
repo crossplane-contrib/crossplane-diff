@@ -1013,8 +1013,11 @@ type ResourceManager interface {
     UpdateOwnerRefs(ctx context.Context, parent *un.Unstructured, child *un.Unstructured)
 
     // FetchObservedResources walks the live resource tree under an XR and returns the composed
-    // resources observed in the cluster. Used to preserve the identity of nested XRs across
-    // re-renders (so re-rendering doesn't appear to "create" a child XR that already exists).
+    // resources that XR controls: those carrying crossplane.io/composition-resource-name whose
+    // controller reference, if any, is the XR itself. A nested XR's own children are excluded; they
+    // belong to the nested XR's observed set, assembled when it is rendered. Used to preserve the
+    // identity of nested XRs across re-renders (so re-rendering doesn't appear to "create" a child
+    // XR that already exists). The scoping is mandatory, not tidiness: see §9.5.4.
     FetchObservedResources(ctx context.Context, xr *cmp.Unstructured) ([]cpd.Unstructured, error)
 }
 ```
@@ -1207,8 +1210,9 @@ type DiffRenderer interface {
     // RenderDiffs writes diffs grouped by input XR, plus the top-level (union) errors. The output
     // writer is held by the renderer (configured at construction time), not passed in per call, so
     // the same interface can serve human-readable and structured renderers without leaking
-    // io.Writer.
-    RenderDiffs(groups []dt.XRDiffGroup, errs []dt.OutputError) error
+    // io.Writer. warnings is for structured output only: each warning already went to stderr when
+    // it was raised, so the human renderer ignores it.
+    RenderDiffs(groups []dt.XRDiffGroup, errs []dt.OutputError, warnings []dt.OutputWarning) error
 }
 
 // CompDiffRenderer handles rendering composition diffs.
@@ -1830,6 +1834,10 @@ crossplane-diff comp updated-composition.yaml --resource production/my-xr --reso
 # Also include XRs whose update policy is Manual
 crossplane-diff comp updated-composition.yaml --include-manual
 
+# Collapse each changed composition's own diff to a single change-marker line, keeping the affected
+# XRs and their downstream diffs (human-readable output only; JSON/YAML keeps full detail)
+crossplane-diff comp updated-composition.yaml --minimize-composition
+
 # Evaluate affected composites even for a composition identical to the cluster's (skipped by
 # default, since it would render nothing differently)
 crossplane-diff comp unchanged-composition.yaml --analyze-on=always
@@ -2093,6 +2101,15 @@ This shared functionality:
 - Identifies composed resources with the same logic as other commands
 - Uses the same parent-child relationship model
 - Enables accurate identification of resources to be removed
+
+The tree is not handed to render as-is. A tree walk descends into nested XRs, so it also reaches their children
+(the top XR's grandchildren), which are controlled by the nested XR rather than the one being rendered. The render
+binary from v2.3.4 onwards rejects any observed resource whose controller reference names a different XR ("has a
+controller ref but is not controlled by the XR"). So `FetchObservedResources` keeps only resources the rendered XR
+controls (`extractComposedResourcesFromTree`). This couples the observed set to the minimum render version
+(`MinCrossplaneRenderVersion`): an unscoped set would fail the render of any existing XR whose nested XRs already have composed
+resources in the cluster. Removal detection
+is unaffected, because it does its own unfiltered tree walk and never consumes the observed set.
 
 #### 9.5.5 Benefits of Component Reuse
 

@@ -1,7 +1,7 @@
 classDiagram
     class DiffRenderer {
         <<interface>>
-        +RenderDiffs(diffs, errs) error
+        +RenderDiffs(groups, errs, warnings) error
     }
 
     class CompDiffRenderer {
@@ -12,13 +12,13 @@ classDiagram
     class DefaultDiffRenderer {
         -logger logging.Logger
         -diffOpts DiffOptions
-        +RenderDiffs(diffs, errs) error
+        +RenderDiffs(groups, errs, warnings) error
     }
 
     class StructuredDiffRenderer {
         -logger logging.Logger
         -opts DiffOptions
-        +RenderDiffs(diffs, errs) error
+        +RenderDiffs(groups, errs, warnings) error
     }
 
     class DefaultCompDiffRenderer {
