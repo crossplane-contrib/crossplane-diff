@@ -138,7 +138,10 @@ not once per occurrence. That matters for conditions that are a property of a co
 of an individual resource: an unfetchable credential secret on a composition affecting thirty XRs is
 one line and one `warnings[]` entry, not thirty. Warnings that genuinely differ per occurrence carry
 the distinguishing detail in `context` (the ownership warning names the resource, for instance) and so
-are still reported for every occurrence.
+are still reported for every occurrence. The unverified-addition warning sits in between: its `context`
+is the GVK, the namespace and the cluster's cause, but deliberately not the resource, so forty
+unverifiable ConfigMaps in one namespace are one warning, while a second, different cause is a second
+warning. Which resources were affected is in each change's `dryRun` object.
 
 Two things narrow when the credential warning fires:
 
@@ -527,7 +530,7 @@ On the same API groups. The `create` verb authorizes the dry-run create behind `
 - **Defaults on built-in Kubernetes types.** For CRD-backed types the tool already applies the CRD's `default:` values locally before diffing, so those have never been missing. A built-in type (a `ConfigMap`, a `Deployment`) has no CRD to read them from, so its defaults — `spec.strategy.type`, `spec.template.spec.restartPolicy`, `imagePullPolicy`, and so on — only appear once the apiserver has seen the object.
 - **Mutating admission output, for any type.** Nothing local can predict what a mutating webhook will do.
 
-Unlike `patch`, this one **degrades per-resource rather than failing the run**. A resource that could not be verified falls back to the rendered output and is marked in structured output with a `dryRun` object saying why (see [Structured Output](#structured-output-jsonyaml)); each distinct reason raises one warning per GVK + namespace, not one per resource. The reasons are:
+Unlike `patch`, this one **degrades per-resource rather than failing the run**. A resource that could not be verified falls back to the rendered output and is marked in structured output with a `dryRun` object saying why (see [Structured Output](#structured-output-jsonyaml)); each raises one warning per GVK + namespace + distinct cause, not one per resource, and a second, different cause in the same namespace is reported too rather than hidden behind the first. The reasons are:
 
 | `dryRun.skipReason` | Cause |
 |---------------------|-------|

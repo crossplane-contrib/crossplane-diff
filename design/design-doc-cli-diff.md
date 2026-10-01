@@ -907,8 +907,12 @@ Three fields are restored from our side after a successful dry-run create:
 #### 6.3.3 Degrade, report, or fail
 
 An addition that could not be verified falls back to the rendered object and carries a `DryRunInfo` saying why; the
-calculator also raises one warning per GVK + namespace + reason (mutex-guarded, since one calculator instance serves
-every XR in a run), so a composition rendering forty new resources of one kind says so once. A resource the cluster
+calculator also raises a warning whose context is the GVK, the namespace and the cause, and leaves deduplication to
+`WarningLogger`, which already collapses warnings identical in message and context. A composition rendering forty new
+resources of one kind therefore says so once, and a second, distinct cause in the same namespace is a second warning
+rather than being hidden behind the first. The calculator keeps no dedup state of its own. The cause is the apiserver's
+own `Status().Message`, not the wrapped error, because `ApplyClient` wraps with the resource's name: as a cause, that
+would make every resource a distinct warning. `DryRunInfo.Detail` carries the same value. A resource the cluster
 *refuses* is a finding, not a degradation, and becomes a `SchemaValidationError` via `NewAdmissionRejectionError` —
 exit code 2, with a `ResourceValidationFailure` whose single `FieldValidationError` has `Type: "admission"`. The
 classification is by status class only, never by message text:

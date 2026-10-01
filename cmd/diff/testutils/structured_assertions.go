@@ -696,19 +696,32 @@ func assertWarnings(t *testing.T, got []OutputWarning, want []warningMatch, noWa
 }
 
 // assertWarningExpectation finds a warning whose message contains want's substring and, when the
-// expectation pins one, compares its context map exactly.
+// expectation pins one, whose context map is exactly want's.
+//
+// Both conditions select the warning; context is not merely checked against the first message match.
+// Several warnings legitimately share a message and differ only in context (one degraded-dry-run
+// warning per GVK + namespace + cause, say), and an expectation for any one of them has to be able to
+// find it rather than being compared against whichever happened to be raised first.
 func assertWarningExpectation(t *testing.T, got []OutputWarning, want warningMatch) {
 	t.Helper()
+
+	var contextsSeen []map[string]string
 
 	for _, w := range got {
 		if !strings.Contains(w.Message, want.messageContains) {
 			continue
 		}
 
-		if want.context != nil && !reflect.DeepEqual(want.context, w.Context) {
-			t.Errorf("warning %q context mismatch: expected %v, got %v",
-				want.messageContains, want.context, w.Context)
+		if want.context == nil || reflect.DeepEqual(want.context, w.Context) {
+			return
 		}
+
+		contextsSeen = append(contextsSeen, w.Context)
+	}
+
+	if len(contextsSeen) > 0 {
+		t.Errorf("warning %q context mismatch: expected %v, got only %v",
+			want.messageContains, want.context, contextsSeen)
 
 		return
 	}

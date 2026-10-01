@@ -1931,68 +1931,157 @@ func TestDefaultDiffCalculator_preserveExistingResourceIdentity(t *testing.T) {
 	}
 }
 
-// TestDefaultDiffCalculator_DegradationWarnsOncePerGroup covers AC-R9: a degraded dry run raises a
-// user-facing advisory, and raises it once per GVK + namespace + reason rather than once per
-// resource. A composition rendering forty new resources of one kind must not produce forty identical
-// warnings.
+// TestDefaultDiffCalculator_DegradationWarnings covers how degraded dry runs surface as warnings: one
+// per GVK + namespace + distinct cause, with no cause ever dropped.
 //
-// This is a property of a calculator INSTANCE across calls, which is why it cannot be a row in the
-// per-call table above: a single calculator is reused for every resource in a run, and that reuse is
-// exactly what the deduplication depends on.
-func TestDefaultDiffCalculator_DegradationWarnsOncePerGroup(t *testing.T) {
-	ctx := t.Context()
-
-	forbidden := func(context.Context, *un.Unstructured) (*un.Unstructured, error) {
-		return nil, apierrors.NewForbidden(schema.GroupResource{Group: "example.org", Resource: "testresources"}, "", errors.New("nope"))
+// It runs through a real WarningLogger because that is where the deduplication happens. The calculator
+// holds no dedup state; it relies on WarningLogger collapsing warnings identical in message and context.
+// A capturing stub would record every Info call and could not tell whether production output repeats.
+//
+// Each case is a property the calculator has to get right for that dedup to work. The mock wraps its
+// error exactly as DefaultApplyClient.DryRunCreate does, naming the resource, because that wrapper is
+// what made every resource's warning unique when err.Error() was used as the cause.
+func TestDefaultDiffCalculator_DegradationWarnings(t *testing.T) {
+	// wrapLikeApplyClient reproduces DefaultApplyClient.DryRunCreate's wrapping, resource name included.
+	wrapLikeApplyClient := func(obj *un.Unstructured, err error) error {
+		return errors.Wrapf(err, "failed to dry-run create resource %s/%s", obj.GetKind(), obj.GetName())
 	}
 
-	// Three resources of one kind in one namespace, plus one of the same kind in another namespace and
-	// one of a different kind. Correct behaviour is three advisories, not five.
-	desired := []*un.Unstructured{
-		tu.NewResource("example.org/v1", "TestResource", "a").WithSpecField("f", "1").Build(),
-		tu.NewResource("example.org/v1", "TestResource", "b").WithSpecField("f", "2").Build(),
-		tu.NewResource("example.org/v1", "TestResource", "c").WithSpecField("f", "3").Build(),
-		tu.NewResource("example.org/v1", "OtherResource", "d").WithSpecField("f", "4").Build(),
+	resource := func(kind, name, namespace string) *un.Unstructured {
+		r := tu.NewResource("example.org/v1", kind, name).WithSpecField("f", name).Build()
+		r.SetNamespace(namespace)
+
+		return r
 	}
-	desired[0].SetNamespace("ns-a")
-	desired[1].SetNamespace("ns-a")
-	desired[2].SetNamespace("ns-b")
-	desired[3].SetNamespace("ns-a")
 
-	logger := tu.NewAdvisoryCapturingLogger(t)
-
-	calculator := NewDiffCalculator(
-		tu.NewMockApplyClient().WithDryRunCreate(forbidden).Build(),
-		tu.NewMockAccessChecker().WithDenied("no create").Build(),
-		tu.NewMockResourceTreeClient().Build(),
-		NewResourceManager(
-			tu.NewMockResourceClient().WithResourceNotFound().Build(),
-			tu.NewMockDefinitionClient().Build(),
-			tu.NewMockResourceTreeClient().Build(),
-			tu.TestLogger(t, false),
-		),
-		logger,
-		renderer.DefaultDiffOptions(),
-		DryRunOnAll,
+	const (
+		forbiddenMsg     = "skipped apiserver verification of added resources: not authorized to create them, so their diffs omit server-side defaulting and admission"
+		namespaceMsg     = "skipped apiserver verification of added resources: their namespace does not exist yet, so their diffs omit server-side defaulting and admission"
+		webhookMsg       = "skipped apiserver verification of added resources: the cluster could not complete admission"
+		testResourceGVK  = "example.org/v1, Kind=TestResource"
+		otherResourceGVK = "example.org/v1, Kind=OtherResource"
 	)
 
-	for _, d := range desired {
-		diff, err := calculator.CalculateDiff(ctx, nil, d)
-		if err != nil {
-			t.Fatalf("CalculateDiff(%s/%s) unexpected error: %v", d.GetKind(), d.GetName(), err)
-		}
+	tests := map[string]struct {
+		reason        string
+		desired       []*un.Unstructured
+		dryRunCreate  func(context.Context, *un.Unstructured) (*un.Unstructured, error)
+		accessChecker k8.AccessChecker
+		want          []dt.OutputWarning
+		// wantDetails is each resource's dryRun.detail, in input order. It must carry the same cause as
+		// the warning and no resource name, or a summary derived from it (#516) would split per resource.
+		wantDetails []string
+	}{
+		"ForbiddenCollapsesPerGVKAndNamespace": {
+			reason: "Four denied additions across three GVK+namespace groups raise three warnings, not four.",
+			desired: []*un.Unstructured{
+				resource("TestResource", "a", "ns-a"),
+				resource("TestResource", "b", "ns-a"),
+				resource("TestResource", "c", "ns-b"),
+				resource("OtherResource", "d", "ns-a"),
+			},
+			dryRunCreate: func(_ context.Context, obj *un.Unstructured) (*un.Unstructured, error) {
+				return nil, wrapLikeApplyClient(obj, apierrors.NewForbidden(schema.GroupResource{Group: "example.org", Resource: "testresources"}, obj.GetName(), errors.New("nope")))
+			},
+			accessChecker: tu.NewMockAccessChecker().WithDenied("no create").Build(),
+			want: []dt.OutputWarning{
+				{Message: forbiddenMsg, Context: map[string]string{"gvk": testResourceGVK, "namespace": "ns-a", "reason": "no create"}},
+				{Message: forbiddenMsg, Context: map[string]string{"gvk": testResourceGVK, "namespace": "ns-b", "reason": "no create"}},
+				{Message: forbiddenMsg, Context: map[string]string{"gvk": otherResourceGVK, "namespace": "ns-a", "reason": "no create"}},
+			},
+			wantDetails: []string{"no create", "no create", "no create", "no create"},
+		},
+		"ResourceNamedWrapperDoesNotDefeatDedup": {
+			reason: "The cause is the apiserver's own message, not the wrapped error that names each resource. With err.Error() as the cause, three resources in one namespace would raise three warnings.",
+			desired: []*un.Unstructured{
+				resource("TestResource", "a", "ns-a"),
+				resource("TestResource", "b", "ns-a"),
+				resource("TestResource", "c", "ns-a"),
+			},
+			dryRunCreate: func(_ context.Context, obj *un.Unstructured) (*un.Unstructured, error) {
+				return nil, wrapLikeApplyClient(obj, apierrors.NewNotFound(schema.GroupResource{Resource: "namespaces"}, obj.GetNamespace()))
+			},
+			want: []dt.OutputWarning{
+				{Message: namespaceMsg, Context: map[string]string{"gvk": testResourceGVK, "namespace": "ns-a", "cause": `namespaces "ns-a" not found`}},
+			},
+			wantDetails: []string{`namespaces "ns-a" not found`, `namespaces "ns-a" not found`, `namespaces "ns-a" not found`},
+		},
+		"DistinctCausesAreAllKept": {
+			reason: "Two different apiserver causes in one GVK+namespace group are two warnings. A dedup keyed on reason alone would keep whichever came first and silently drop the other, and the text renderer has no other way to show it.",
+			desired: []*un.Unstructured{
+				resource("TestResource", "a", "ns-a"),
+				resource("TestResource", "b", "ns-a"),
+				resource("TestResource", "c", "ns-a"),
+			},
+			dryRunCreate: func(_ context.Context, obj *un.Unstructured) (*un.Unstructured, error) {
+				webhook := "policy.example.org"
+				if obj.GetName() == "b" {
+					webhook = "quota.example.org"
+				}
 
-		// Every degraded resource must carry the typed field; the advisory is the human channel and
-		// cannot substitute for it, because a warning has no resource anchor.
-		if diff.DryRun == nil || diff.DryRun.SkipReason != dt.DryRunSkipForbidden {
-			t.Errorf("%s/%s: expected dryRun.skipReason=forbidden, got %+v", d.GetKind(), d.GetName(), diff.DryRun)
-		}
+				return nil, wrapLikeApplyClient(obj, apierrors.NewInternalError(errors.Errorf("failed calling webhook %q: connection refused", webhook)))
+			},
+			want: []dt.OutputWarning{
+				{Message: webhookMsg, Context: map[string]string{"gvk": testResourceGVK, "namespace": "ns-a", "cause": `Internal error occurred: failed calling webhook "policy.example.org": connection refused`}},
+				{Message: webhookMsg, Context: map[string]string{"gvk": testResourceGVK, "namespace": "ns-a", "cause": `Internal error occurred: failed calling webhook "quota.example.org": connection refused`}},
+			},
+			wantDetails: []string{
+				`Internal error occurred: failed calling webhook "policy.example.org": connection refused`,
+				`Internal error occurred: failed calling webhook "quota.example.org": connection refused`,
+				`Internal error occurred: failed calling webhook "policy.example.org": connection refused`,
+			},
+		},
 	}
 
-	// 3 = (TestResource, ns-a), (TestResource, ns-b), (OtherResource, ns-a).
-	if got := len(logger.Advisories()); got != 3 {
-		t.Errorf("got %d advisories for 4 degraded resources across 3 GVK+namespace groups, want 3: %v",
-			got, logger.Advisories())
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			warnings := NewWarningLogger(tu.TestLogger(t, false), nil)
+
+			accessChecker := tc.accessChecker
+			if accessChecker == nil {
+				accessChecker = tu.NewMockAccessChecker().Build()
+			}
+
+			calculator := NewDiffCalculator(
+				tu.NewMockApplyClient().WithDryRunCreate(tc.dryRunCreate).Build(),
+				accessChecker,
+				tu.NewMockResourceTreeClient().Build(),
+				NewResourceManager(
+					tu.NewMockResourceClient().WithResourceNotFound().Build(),
+					tu.NewMockDefinitionClient().Build(),
+					tu.NewMockResourceTreeClient().Build(),
+					tu.TestLogger(t, false),
+				),
+				warnings,
+				renderer.DefaultDiffOptions(),
+				DryRunOnAll,
+			)
+
+			gotDetails := make([]string, 0, len(tc.desired))
+
+			for _, d := range tc.desired {
+				diff, err := calculator.CalculateDiff(t.Context(), nil, d)
+				if err != nil {
+					t.Fatalf("\n%s\nCalculateDiff(%s/%s) unexpected error: %v", tc.reason, d.GetKind(), d.GetName(), err)
+				}
+
+				// Every degraded resource must carry the typed field; the warning is the human channel and
+				// cannot substitute for it, because a warning has no resource anchor.
+				if diff.DryRun == nil {
+					t.Fatalf("\n%s\n%s/%s: expected a dryRun report, got none", tc.reason, d.GetKind(), d.GetName())
+				}
+
+				gotDetails = append(gotDetails, diff.DryRun.Detail)
+			}
+
+			if d := gcmp.Diff(tc.want, warnings.Warnings()); d != "" {
+				t.Errorf("\n%s\nwarnings mismatch (-want +got):\n%s", tc.reason, d)
+			}
+
+			if d := gcmp.Diff(tc.wantDetails, gotDetails); d != "" {
+				t.Errorf("\n%s\ndryRun.detail mismatch (-want +got):\n%s", tc.reason, d)
+			}
+		})
 	}
 }
 

@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"maps"
-	"sync"
 
 	xp "github.com/crossplane-contrib/crossplane-diff/cmd/diff/client/crossplane"
 	k8 "github.com/crossplane-contrib/crossplane-diff/cmd/diff/client/kubernetes"
@@ -50,13 +49,6 @@ type DefaultDiffCalculator struct {
 	logger          logging.Logger
 	diffOptions     renderer.DiffOptions
 	dryRunOn        DryRunOn
-
-	// warned deduplicates the user-facing warnings raised when a resource could not be verified
-	// against the apiserver. A composition rendering forty new resources of one kind should say so
-	// once, not forty times. Keyed by GVK + namespace + reason, and mutex-guarded because a single
-	// calculator instance is reused across every XR in a run.
-	warnedMu sync.Mutex
-	warned   map[string]bool
 }
 
 // SetDiffOptions updates the diff options used by the calculator.
@@ -74,7 +66,6 @@ func NewDiffCalculator(apply k8.ApplyClient, access k8.AccessChecker, tree xp.Re
 		logger:          logger,
 		diffOptions:     diffOptions,
 		dryRunOn:        dryRunOn,
-		warned:          make(map[string]bool),
 	}
 }
 
@@ -499,11 +490,11 @@ func (c *DefaultDiffCalculator) dryRunCreateAddition(ctx context.Context, desire
 		// would break a supported workflow to report something that may not be true by the time it
 		// matters. TestDiffConcurrentDirectory diffs 21 XRs into a namespace that is never created and
 		// is exactly this case.
-		c.warnOnce(desired, dt.DryRunSkipNamespaceNotFound,
-			"skipped apiserver verification of added resources: their namespace does not exist yet, so their diffs omit server-side defaulting and admission",
-			"gvk", desired.GroupVersionKind().String(), "namespace", desired.GetNamespace(), "cause", err.Error())
+		cause := apiserverMessage(err)
+		c.warnUnverified("skipped apiserver verification of added resources: their namespace does not exist yet, so their diffs omit server-side defaulting and admission",
+			desired, "cause", cause)
 
-		return desired, &dt.DryRunInfo{SkipReason: dt.DryRunSkipNamespaceNotFound, Detail: err.Error()}, nil
+		return desired, &dt.DryRunInfo{SkipReason: dt.DryRunSkipNamespaceNotFound, Detail: cause}, nil
 
 	case apierrors.IsInvalid(err):
 		return nil, nil, NewAdmissionRejectionError(resourceID, desired, err)
@@ -518,11 +509,11 @@ func (c *DefaultDiffCalculator) dryRunCreateAddition(ctx context.Context, desire
 		// The apiserver could not complete the admission chain — classically an unreachable webhook
 		// with failurePolicy: Fail. We cannot know what it would have done, so we must not present
 		// rendered output as though it were verified.
-		c.warnOnce(desired, dt.DryRunSkipWebhookUnavailable,
-			"skipped apiserver verification of added resources: the cluster could not complete admission",
-			"gvk", desired.GroupVersionKind().String(), "namespace", desired.GetNamespace(), "cause", err.Error())
+		cause := apiserverMessage(err)
+		c.warnUnverified("skipped apiserver verification of added resources: the cluster could not complete admission",
+			desired, "cause", cause)
 
-		return desired, &dt.DryRunInfo{SkipReason: dt.DryRunSkipWebhookUnavailable, Detail: err.Error()}, nil
+		return desired, &dt.DryRunInfo{SkipReason: dt.DryRunSkipWebhookUnavailable, Detail: cause}, nil
 
 	default:
 		return nil, nil, errors.Wrapf(err, "cannot dry-run create %s", resourceID)
@@ -545,9 +536,8 @@ func (c *DefaultDiffCalculator) resolveForbiddenCreate(ctx context.Context, desi
 		return nil, nil, errors.Wrapf(createErr, "cannot dry-run create %s, and cannot determine whether that was an authorization denial (%v)", resourceID, ssarErr)
 
 	case !allowed:
-		c.warnOnce(desired, dt.DryRunSkipForbidden,
-			"skipped apiserver verification of added resources: not authorized to create them, so their diffs omit server-side defaulting and admission",
-			"gvk", desired.GroupVersionKind().String(), "namespace", desired.GetNamespace(), "reason", reason)
+		c.warnUnverified("skipped apiserver verification of added resources: not authorized to create them, so their diffs omit server-side defaulting and admission",
+			desired, "reason", reason)
 
 		return desired, &dt.DryRunInfo{SkipReason: dt.DryRunSkipForbidden, Detail: reason}, nil
 
@@ -647,34 +637,42 @@ func mergeDryRunCreateResult(rendered, sent, created *un.Unstructured) *un.Unstr
 	return out
 }
 
-// warnOnce raises a user-facing warning about a resource that could not be verified against the
-// apiserver, at most once per GVK + namespace + reason.
+// warnUnverified raises a user-facing warning that an added resource could not be verified against
+// the apiserver.
 //
-// c.logger is the CLI's *WarningLogger in production (ProcessorConfig.Warnings documents that it is
-// the same value Logger is set to), so Info both writes a line to stderr and collects the warning
-// for structured output. The typed DryRunInfo on the diff is the machine-readable half and is NOT
-// interchangeable with this: warnings carry no resource anchor, so they cannot tell a pipeline which
-// additions were degraded.
-func (c *DefaultDiffCalculator) warnOnce(obj *un.Unstructured, reason dt.DryRunSkipReason, msg string, keysAndValues ...any) {
-	key := fmt.Sprintf("%s|%s|%s", obj.GroupVersionKind(), obj.GetNamespace(), reason)
+// It holds no dedup state of its own, deliberately. c.logger is the CLI's *WarningLogger in production
+// (ProcessorConfig.Warnings documents that it is the same value Logger is set to), and that already
+// collapses a warning identical in message AND context to one raised before. The context here is GVK,
+// namespace, and the cause, so forty unverifiable ConfigMaps in one namespace raise one warning, while
+// a second, different cause in the same namespace raises a second one. That last part is the point: a
+// cause is only ever shown to a human through this warning (the text renderer does not show
+// DryRunInfo), so a dedup that keyed on anything coarser than the cause would silently hide every
+// cause after the first.
+//
+// That only works if no context value names the resource, or every resource would be a distinct
+// warning. Callers pass apiserverMessage(err), not err.Error(), for exactly that reason.
+//
+// The typed DryRunInfo on the diff is the machine-readable half and is NOT interchangeable with this:
+// warnings carry no resource anchor, so they cannot tell a pipeline which additions were degraded.
+func (c *DefaultDiffCalculator) warnUnverified(msg string, obj *un.Unstructured, causeKey, cause string) {
+	c.logger.Info(msg, "gvk", obj.GroupVersionKind().String(), "namespace", obj.GetNamespace(), causeKey, cause)
+}
 
-	c.warnedMu.Lock()
+// apiserverMessage returns the apiserver's own message for a dry-run failure, without the
+// "failed to dry-run create resource <Kind>/<name>" wrapping ApplyClient adds. The wrapping names the
+// resource, which is useful in an error but wrong in a cause: it would make every resource's cause
+// unique, so warnings could never be deduplicated and a cause could never be grouped. Status().Message
+// carries no resource name.
+//
+// It is only called from branches selected by an apierrors predicate (IsNotFound, IsInternalError,
+// ...), and every one of those finds the APIStatus through errors.As, so the status is always present
+// here.
+func apiserverMessage(err error) string {
+	var status apierrors.APIStatus
 
-	// Tolerate a struct-literal construction (tests) that skipped NewDiffCalculator; writing to a nil
-	// map would panic.
-	if c.warned == nil {
-		c.warned = make(map[string]bool)
-	}
+	_ = errors.As(err, &status)
 
-	if c.warned[key] {
-		c.warnedMu.Unlock()
-		return
-	}
-
-	c.warned[key] = true
-	c.warnedMu.Unlock()
-
-	c.logger.Info(msg, keysAndValues...)
+	return status.Status().Message
 }
 
 // sanitizeForDryRun returns a deep copy of obj with the server-owned metadata removed, ready to send

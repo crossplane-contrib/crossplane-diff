@@ -645,7 +645,26 @@ func TestDiffIntegration(t *testing.T) {
 				WithDryRunSkipped("namespaceNotFound", "nonexistent-namespace").
 				And().
 				WithAddedResource("XDownstreamResource", "test-resource", "nonexistent-namespace").
-				WithDryRunSkipped("namespaceNotFound", "nonexistent-namespace"),
+				WithDryRunSkipped("namespaceNotFound", "nonexistent-namespace").
+				And().
+				// One warning per GVK, and each cause exactly the apiserver's message. Through the REAL
+				// ApplyClient, whose error is wrapped with "failed to dry-run create resource <Kind>/<name>":
+				// if that wrapper leaked into the cause, every resource would be a distinct warning and
+				// WarningLogger could never collapse them. The unit test mirrors the wrapping by hand; this
+				// pins it against the client that actually produces it.
+				WithWarning("their namespace does not exist yet").
+				WithWarningContext(map[string]string{
+					"gvk":       "ns.diff.example.org/v1alpha1, Kind=XNopResource",
+					"namespace": "nonexistent-namespace",
+					"cause":     `namespaces "nonexistent-namespace" not found`,
+				}).
+				And().
+				WithWarning("their namespace does not exist yet").
+				WithWarningContext(map[string]string{
+					"gvk":       "ns.nop.example.org/v1alpha1, Kind=XDownstreamResource",
+					"namespace": "nonexistent-namespace",
+					"cause":     `namespaces "nonexistent-namespace" not found`,
+				}),
 			expectedError:    false,
 			expectedExitCode: dp.ExitCodeDiffDetected,
 		},
