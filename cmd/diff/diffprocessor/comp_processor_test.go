@@ -1376,6 +1376,53 @@ func TestDefaultCompDiffProcessor_collectXRDiffs_NestedXRCompositionLookup(t *te
 	}
 }
 
+// TestDefaultCompDiffProcessor_siblingInputComposition verifies how a nested XR is matched against
+// the other Compositions passed in the same run (#514).
+func TestDefaultCompDiffProcessor_siblingInputComposition(t *testing.T) {
+	parent := tu.NewComposition("parent").WithCompositeTypeRef("parent.example.org/v1", "XParent").Build()
+	childA := tu.NewComposition("child-a").WithCompositeTypeRef("child.example.org/v1", "XChild").Build()
+	childB := tu.NewComposition("child-b").WithCompositeTypeRef("child.example.org/v1", "XChild").Build()
+
+	nested := tu.NewResource("child.example.org/v1", "XChild", "nested").Build()
+	nestedRefB := tu.NewResource("child.example.org/v1", "XChild", "nested").
+		WithSpecField("crossplane", map[string]any{"compositionRef": map[string]any{"name": "child-b"}}).Build()
+	nestedRefOther := tu.NewResource("child.example.org/v1", "XChild", "nested").
+		WithSpecField("compositionRef", map[string]any{"name": "cluster-only"}).Build()
+
+	tests := map[string]struct {
+		inputs   []*apiextensionsv1.Composition
+		res      *un.Unstructured
+		wantName string // empty means no sibling applies
+		wantErr  bool
+	}{
+		"NoSiblingTargetsType":        {inputs: []*apiextensionsv1.Composition{parent}, res: nested},
+		"SingleSiblingTargetsType":    {inputs: []*apiextensionsv1.Composition{parent, childA}, res: nested, wantName: "child-a"},
+		"CompositionRefPicksSibling":  {inputs: []*apiextensionsv1.Composition{parent, childA, childB}, res: nestedRefB, wantName: "child-b"},
+		"CompositionRefNamesNoInput":  {inputs: []*apiextensionsv1.Composition{parent, childA}, res: nestedRefOther},
+		"AmbiguousSiblingsAreAnError": {inputs: []*apiextensionsv1.Composition{parent, childA, childB}, res: nested, wantErr: true},
+	}
+
+	for name, tt := range tests {
+		t.Run(name, func(t *testing.T) {
+			p := &DefaultCompDiffProcessor{inputCompositions: tt.inputs}
+
+			got, err := p.siblingInputComposition(tt.res, "parent")
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("siblingInputComposition() error = %v, wantErr %v", err, tt.wantErr)
+			}
+
+			gotName := ""
+			if got != nil {
+				gotName = got.GetName()
+			}
+
+			if gotName != tt.wantName {
+				t.Errorf("siblingInputComposition() = %q, want %q", gotName, tt.wantName)
+			}
+		})
+	}
+}
+
 // TestDefaultCompDiffProcessor_DiffComposition_StderrErrorOutput verifies that when
 // XR processing fails, detailed errors are written to stderr for human visibility.
 // This tests the WithStderr option and the stderr error output path.
