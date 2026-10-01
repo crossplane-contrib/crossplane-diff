@@ -270,6 +270,8 @@ func (c *DefaultDiffCalculator) CalculateNonRemovalDiffs(ctx context.Context, xr
 	diffs[key] = xrDiff
 
 	// Then calculate diffs for all composed resources
+	seen := make(map[string]string) // version-independent identity -> description of its first rendering
+
 	for _, d := range desired.ComposedResources {
 		un := &un.Unstructured{Object: d.UnstructuredContent()}
 
@@ -293,6 +295,25 @@ func (c *DefaultDiffCalculator) CalculateNonRemovalDiffs(ctx context.Context, xr
 				"apiVersion", apiVersion)
 
 			continue
+		}
+
+		// One object rendered more than once by this XR — under two composition resource names, or at two
+		// API versions (served versions are views of one stored object, so identity ignores the version) —
+		// would collapse to one diff, or to two diffs for one object. Crossplane applies every rendering
+		// with the same field manager, in random order, so no single diff predicts the outcome. Fail it.
+		if id := identityOf(un); id != "" {
+			resName := un.GetAnnotations()["crossplane.io/composition-resource-name"]
+			rendering := fmt.Sprintf("%s (apiVersion %s, composition resource name %q)", resourceID, apiVersion, resName)
+
+			if prev, dup := seen[id]; dup {
+				errs = append(errs, errors.Errorf("cannot calculate diff for XR %s: the composition renders the same "+
+					"object twice, as %s and as %s; Crossplane applies both, in no fixed order, so no single diff "+
+					"predicts the result", xrName, prev, rendering))
+
+				continue
+			}
+
+			seen[id] = rendering
 		}
 
 		// For new XRs (xrDiff.Current.Raw is nil) fall back to the input XR as the

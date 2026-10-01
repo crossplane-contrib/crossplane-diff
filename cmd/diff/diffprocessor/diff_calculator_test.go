@@ -1041,6 +1041,7 @@ func TestDefaultDiffCalculator_CalculateDiffs(t *testing.T) {
 		renderedOut   render.CompositionOutputs
 		expectedDiffs map[string]dt.DiffType // Map of expected keys and their diff types
 		wantErr       bool
+		wantErrSubstr string // when set, the error must contain it
 	}{
 		"XRAndComposedResourceModifications": {
 			setupMocks: func(t *testing.T) (k8.ApplyClient, xp.ResourceTreeClient, ResourceManager) {
@@ -1261,6 +1262,69 @@ func TestDefaultDiffCalculator_CalculateDiffs(t *testing.T) {
 			},
 			wantErr: false,
 		},
+		"SameObjectUnderTwoResourceNamesFails": {
+			setupMocks: func(t *testing.T) (k8.ApplyClient, xp.ResourceTreeClient, ResourceManager) {
+				t.Helper()
+
+				resourceClient := tu.NewMockResourceClient().
+					WithResourcesExist(existingXR, existingComposed).
+					WithResourcesFoundByLabel([]*un.Unstructured{existingComposed}, "crossplane.io/composite", "test-xr").
+					Build()
+
+				return tu.NewMockApplyClient().WithSuccessfulDryRun().Build(),
+					tu.NewMockResourceTreeClient().WithEmptyResourceTree().Build(),
+					NewResourceManager(resourceClient, tu.NewMockDefinitionClient().Build(), tu.NewMockResourceTreeClient().Build(), tu.TestLogger(t, false))
+			},
+			inputXR: modifiedXr,
+			renderedOut: render.CompositionOutputs{
+				CompositeResource: renderedXR,
+				// Crossplane applies both, in random order, so no single diff predicts the outcome.
+				ComposedResources: []cpd.Unstructured{
+					*composedResource1,
+					*tu.NewResource("example.org/v1", "Composed", "cpd-1").
+						WithCompositeOwner("test-xr").
+						WithCompositionResourceName("resource-2").
+						WithSpecField("field", "other-value").
+						BuildUComposed(),
+				},
+			},
+			wantErr: true,
+			wantErrSubstr: `the composition renders the same object twice, as Composed/cpd-1 (apiVersion example.org/v1, ` +
+				`composition resource name "resource-1") and as Composed/cpd-1 (apiVersion example.org/v1, ` +
+				`composition resource name "resource-2")`,
+		},
+		"SameObjectAtTwoAPIVersionsFails": {
+			setupMocks: func(t *testing.T) (k8.ApplyClient, xp.ResourceTreeClient, ResourceManager) {
+				t.Helper()
+
+				resourceClient := tu.NewMockResourceClient().
+					WithResourcesExist(existingXR, existingComposed).
+					WithResourcesFoundByLabel([]*un.Unstructured{existingComposed}, "crossplane.io/composite", "test-xr").
+					Build()
+
+				return tu.NewMockApplyClient().WithSuccessfulDryRun().Build(),
+					tu.NewMockResourceTreeClient().WithEmptyResourceTree().Build(),
+					NewResourceManager(resourceClient, tu.NewMockDefinitionClient().Build(), tu.NewMockResourceTreeClient().Build(), tu.TestLogger(t, false))
+			},
+			inputXR: modifiedXr,
+			renderedOut: render.CompositionOutputs{
+				CompositeResource: renderedXR,
+				// Served versions are views of one stored object, so these are the same resource
+				// despite their different diff keys.
+				ComposedResources: []cpd.Unstructured{
+					*composedResource1,
+					*tu.NewResource("example.org/v1beta1", "Composed", "cpd-1").
+						WithCompositeOwner("test-xr").
+						WithCompositionResourceName("resource-2").
+						WithSpecField("field", "new-value").
+						BuildUComposed(),
+				},
+			},
+			wantErr: true,
+			wantErrSubstr: `the composition renders the same object twice, as Composed/cpd-1 (apiVersion example.org/v1, ` +
+				`composition resource name "resource-1") and as Composed/cpd-1 (apiVersion example.org/v1beta1, ` +
+				`composition resource name "resource-2")`,
+		},
 	}
 
 	for name, tt := range tests {
@@ -1289,6 +1353,8 @@ func TestDefaultDiffCalculator_CalculateDiffs(t *testing.T) {
 			if tt.wantErr {
 				if err == nil {
 					t.Errorf("CalculateDiffs() expected error but got none")
+				} else if !strings.Contains(err.Error(), tt.wantErrSubstr) {
+					t.Errorf("CalculateDiffs() error %q does not contain %q", err, tt.wantErrSubstr)
 				}
 
 				return

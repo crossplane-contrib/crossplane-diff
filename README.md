@@ -800,6 +800,14 @@ it, so `xr` decides by who would control the resource in the cluster:
   have no names yet, and `xr` renders both under the same placeholder, so it
   cannot tell their resources apart.
 
+These checks treat one object rendered at two API versions (say `v1beta1` and
+`v1`) as the same resource, as the API server does.
+
+Within a single XR, a composition that renders the same object twice — under
+two composition resource names, or at two API versions — fails that XR, in both
+`xr` and `comp`: Crossplane applies both renderings in no fixed order, so no
+single diff predicts the result.
+
 A rejected input, or a failing overlap, is reported in `errors[]` (and on
 stderr) with the reason that applies, and `xr` exits with the tool error code,
 in every output format. Inputs that are unaffected still get their diffs, and
