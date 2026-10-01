@@ -479,6 +479,22 @@ func TestDefaultCompDiffProcessor_calculateCompositionDiff(t *testing.T) {
 			BuildAsUnstructured()
 	}
 
+	// lastAppliedFor is the last-applied-configuration a client-side `kubectl apply` of c writes: c minus
+	// the annotation, JSON-encoded, keeping the emptied annotations map as kubectl does.
+	lastAppliedFor := func(c *un.Unstructured) string {
+		obj := c.DeepCopy()
+		annotations := obj.GetAnnotations()
+		delete(annotations, "kubectl.kubernetes.io/last-applied-configuration")
+		_ = un.SetNestedStringMap(obj.Object, annotations, "metadata", "annotations")
+
+		b, err := json.Marshal(obj.Object)
+		if err != nil {
+			t.Fatalf("cannot encode last-applied-configuration: %v", err)
+		}
+
+		return string(b)
+	}
+
 	type want struct {
 		hasDiff bool
 		scope   ChangeScope
@@ -539,6 +555,38 @@ func TestDefaultCompDiffProcessor_calculateCompositionDiff(t *testing.T) {
 			},
 			ignorePaths: []string{"metadata.annotations[kubectl.kubernetes.io/last-applied-configuration]"},
 			want:        want{hasDiff: false, scope: ChangeScopeMetadata, revisionNamePredictable: false},
+		},
+		// Issue #500: the cluster's annotation is the one a client-side apply of this very file writes, so
+		// re-applying it produces an empty patch and kubectl writes nothing. No revision is created.
+		"LastAppliedConfigurationDescribesFile_Unchanged": {
+			input: compWithLabels(map[string]string{"version": "0.0.1"}),
+			clusterAnnotations: map[string]string{
+				"kubectl.kubernetes.io/last-applied-configuration": lastAppliedFor(compWithLabels(map[string]string{"version": "0.0.1"})),
+			},
+			want: want{hasDiff: false, scope: ChangeScopeNone, revisionNamePredictable: true},
+		},
+		// A file that carries the annotation itself would have it written verbatim under server-side
+		// apply, so the outcome again depends on the apply mode, even though the cluster's value describes
+		// the file.
+		"LastAppliedConfigurationInFile_StillChanged": {
+			input: tu.NewComposition("test-composition").
+				WithCompositeTypeRef("example.org/v1", "XResource").
+				WithPipelineMode().
+				WithLabels(map[string]string{"version": "0.0.1"}).
+				WithAnnotations(map[string]string{"kubectl.kubernetes.io/last-applied-configuration": `{}`}).
+				BuildAsUnstructured(),
+			clusterAnnotations: map[string]string{
+				"kubectl.kubernetes.io/last-applied-configuration": lastAppliedFor(compWithLabels(map[string]string{"version": "0.0.1"})),
+			},
+			want: want{hasDiff: false, scope: ChangeScopeMetadata, revisionNamePredictable: false},
+		},
+		// A value that is not JSON was not written by kubectl, so what applying does is unknown.
+		"LastAppliedConfigurationUnparseable_StillChanged": {
+			input: compWithLabels(map[string]string{"version": "0.0.1"}),
+			clusterAnnotations: map[string]string{
+				"kubectl.kubernetes.io/last-applied-configuration": `not json`,
+			},
+			want: want{hasDiff: false, scope: ChangeScopeMetadata, revisionNamePredictable: false},
 		},
 		// The discriminator for the guard: the cluster copy carries the kubectl annotation AND the
 		// compositions genuinely differ. The annotation is no longer the *sole* delta, so the hash

@@ -672,6 +672,10 @@ type compositionComparison struct {
 	// rewritten, minting one. What is unknowable is the identity, so we decline to seed it and say so
 	// rather than seed a name we invented — which, for a template reading the name, would manufacture
 	// a downstream diff on a converged cluster. See issue #474.
+	//
+	// The exception is a live annotation that already describes the file: applying it then writes
+	// nothing, so the composition is reported unchanged rather than unpredictable. See
+	// lastAppliedDescribes and issue #500.
 	revisionNamePredictable bool
 }
 
@@ -787,6 +791,14 @@ func (p *DefaultCompDiffProcessor) calculateCompositionDiff(ctx context.Context,
 		}
 
 		revisionNamePredictable = withoutLastApplied.DiffType != dt.DiffTypeEqual
+
+		// The annotation is the sole delta. If the cluster's copy of it already describes this exact
+		// file, applying the file is a no-op under either apply mode, so it is not a change at all. See
+		// lastAppliedDescribes.
+		if !revisionNamePredictable && lastAppliedDescribes(originalCompUnstructured, newCompUnstructured) {
+			scope = ChangeScopeNone
+			revisionNamePredictable = true
+		}
 	}
 
 	p.config.Logger.Debug("No displayable changes in composition",
@@ -795,6 +807,59 @@ func (p *DefaultCompDiffProcessor) calculateCompositionDiff(ctx context.Context,
 		"revisionNamePredictable", revisionNamePredictable)
 
 	return compositionComparison{diff: nil, scope: scope, revisionNamePredictable: revisionNamePredictable}, nil
+}
+
+// lastAppliedDescribes reports whether the cluster object's kubectl last-applied-configuration is
+// semantically the proposed file, in which case applying the file writes nothing (issue #500).
+//
+// A client-side `kubectl apply` sets that annotation to the file minus the annotation, JSON-encoded
+// (kubectl's GetModifiedConfiguration), so the value is a function of the file alone: if the live value
+// already equals it, the three-way patch is empty and kubectl issues no request. Server-side apply leaves
+// an annotation the file does not mention untouched. Either way nothing changes, so no
+// CompositionRevision is created. Equal maps encode to equal JSON, so semantic equality suffices.
+//
+// Only a file that does not carry the annotation itself qualifies: one that does (say, a fetched object
+// checked into git) would have it written verbatim under server-side apply, so its outcome again depends
+// on the apply mode. kubectl keeps the emptied annotations map in what it encodes, so an empty
+// annotations map is treated as absent on both sides. Neither object is mutated.
+func lastAppliedDescribes(original, proposed *un.Unstructured) bool {
+	if original == nil {
+		return false
+	}
+
+	if _, ok := proposed.GetAnnotations()[corev1.LastAppliedConfigAnnotation]; ok {
+		return false
+	}
+
+	live, ok := original.GetAnnotations()[corev1.LastAppliedConfigAnnotation]
+	if !ok {
+		return false
+	}
+
+	lastApplied := &un.Unstructured{}
+	if err := lastApplied.UnmarshalJSON([]byte(live)); err != nil {
+		// Not something kubectl wrote, so we cannot say what applying would do; keep the difference.
+		return false
+	}
+
+	return equality.Semantic.DeepEqual(withoutLastApplied(lastApplied).Object, withoutLastApplied(proposed).Object)
+}
+
+// withoutLastApplied returns a copy of obj without kubectl's last-applied-configuration annotation,
+// dropping the annotations map entirely if that leaves it empty.
+func withoutLastApplied(obj *un.Unstructured) *un.Unstructured {
+	out := obj.DeepCopy()
+
+	annotations := out.GetAnnotations()
+	delete(annotations, corev1.LastAppliedConfigAnnotation)
+
+	if len(annotations) == 0 {
+		un.RemoveNestedField(out.Object, "metadata", "annotations")
+	} else {
+		out.SetAnnotations(annotations)
+	}
+
+	return out
 }
 
 // compositionChangeScope classifies how much of a composition differs from its in-cluster version,
