@@ -415,6 +415,17 @@ func TestRenderOverlapErrors(t *testing.T) {
 		}
 	}
 
+	// atV1beta1 re-expresses a bucket diff at example.org/v1beta1, the same object at another served version.
+	const betaKey = "example.org/v1beta1/Bucket/default/shared"
+
+	atV1beta1 := func(d *dt.ResourceDiff) *dt.ResourceDiff {
+		d.Gvk.Version = "v1beta1"
+		d.Desired.Raw.SetAPIVersion("example.org/v1beta1")
+		d.Desired.Clean.SetAPIVersion("example.org/v1beta1")
+
+		return d
+	}
+
 	group := func(name string, diffs map[string]*dt.ResourceDiff) dt.XRDiffGroup {
 		return dt.XRDiffGroup{XR: corev1.ObjectReference{APIVersion: "example.org/v1", Kind: "XR", Name: name}, Diffs: diffs}
 	}
@@ -509,6 +520,27 @@ func TestRenderOverlapErrors(t *testing.T) {
 			groups: generated(sharing("g-(generated)", "h-(generated)")(func(int) *dt.ResourceDiff {
 				return bucket(dt.DiffTypeModified, "parent", "u", "v")
 			})),
+		},
+		"OneObjectAtTwoVersionsContends": {
+			reason: "Served versions are views of one stored object, so different diff keys do not make different objects.",
+			groups: []dt.XRDiffGroup{
+				group("a", map[string]*dt.ResourceDiff{key: bucket(dt.DiffTypeModified, "a", "u", "v")}),
+				group("b", map[string]*dt.ResourceDiff{betaKey: atV1beta1(bucket(dt.DiffTypeModified, "b", "u", "v"))}),
+			},
+			want: []string{`cannot combine diffs: resource "example.org/v1/Bucket/default/shared" (also rendered as ` +
+				`"example.org/v1beta1/Bucket/default/shared") would be controlled by more than one XR (XR/a, XR/b); ` +
+				`Crossplane gives it to whichever of them creates it first, and the other fails to reconcile it, so no ` +
+				`diff predicts applying these inputs together — diff them separately`},
+		},
+		"OneObjectAtTwoVersionsDisagrees": {
+			reason: "Renderings at different versions differ in shape, so even one controller cannot merge them.",
+			groups: []dt.XRDiffGroup{
+				group("a", map[string]*dt.ResourceDiff{key: bucket(dt.DiffTypeModified, "parent", "u", "v")}),
+				group("b", map[string]*dt.ResourceDiff{betaKey: atV1beta1(bucket(dt.DiffTypeModified, "parent", "u", "v"))}),
+			},
+			want: []string{`cannot combine diffs: inputs XR/a, XR/b both produce resource ` +
+				`"example.org/v1/Bucket/default/shared" (also rendered as "example.org/v1beta1/Bucket/default/shared"), ` +
+				`but differently, so no single diff is correct for both — diff them separately`},
 		},
 		"OverlapsAreReportedInKeyOrder": {
 			reason: "Map iteration is unordered; the reported errors must not be.",

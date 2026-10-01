@@ -265,8 +265,13 @@ func knownForms(g dt.XRDiffGroup, res *un.Unstructured) []*un.Unstructured {
 	return forms
 }
 
-// renderOverlapErrors reports the resource keys produced by more than one input's render that no single
-// diff can truthfully represent, most-significant cause first per key and ordered by key.
+// renderOverlapErrors reports the resources produced by more than one input's render that no single
+// diff can truthfully represent, most-significant cause first per resource and ordered by identity.
+//
+// Resources are matched on their version-independent identity (group, kind, namespace, name), not on the
+// diff key: served versions are views of one stored object, so one object rendered at two API versions
+// produces two keys yet is still contested. Renderings at different versions are never identical, so such
+// an overlap lands on contention or disagreement.
 //
 // A diff key carries no owning-input component (see dt.MakeDiffKey), so any view that merges the groups
 // into one map — the deprecated flat changes[] — keeps only one entry per key. Whether that loses
@@ -287,27 +292,39 @@ func knownForms(g dt.XRDiffGroup, res *un.Unstructured) []*un.Unstructured {
 //
 // A key whose every entry is DiffTypeEqual is not reported: equal diffs appear in no rendered view.
 func renderOverlapErrors(groups []dt.XRDiffGroup) []error {
-	byKey := make(map[string][]int) // key -> groups producing it, in input order
+	byID := make(map[string][]overlapProducer) // identity -> its renderings, in input order
 
 	for i, g := range groups {
+		keys := make([]string, 0, len(g.Diffs))
 		for key := range g.Diffs {
-			byKey[key] = append(byKey[key], i)
-		}
-	}
-
-	keys := make([]string, 0, len(byKey))
-	for key, gs := range byKey {
-		if len(gs) > 1 {
 			keys = append(keys, key)
 		}
+
+		sort.Strings(keys) // one input may render an identity under two keys; order them stably
+
+		for _, key := range keys {
+			id := diffKeyIdentity(key)
+			if id == "" {
+				id = key // not a parseable key; fall back to comparing it exactly
+			}
+
+			byID[id] = append(byID[id], overlapProducer{group: i, key: key})
+		}
 	}
 
-	sort.Strings(keys)
+	ids := make([]string, 0, len(byID))
+	for id, ps := range byID {
+		if len(ps) > 1 {
+			ids = append(ids, id)
+		}
+	}
+
+	sort.Strings(ids)
 
 	var errs []error
 
-	for _, key := range keys {
-		if err := renderOverlapError(groups, key, byKey[key]); err != nil {
+	for _, id := range ids {
+		if err := renderOverlapError(groups, byID[id]); err != nil {
 			errs = append(errs, err)
 		}
 	}
@@ -315,7 +332,14 @@ func renderOverlapErrors(groups []dt.XRDiffGroup) []error {
 	return errs
 }
 
-func renderOverlapError(groups []dt.XRDiffGroup, key string, producers []int) error {
+// overlapProducer is one rendering of an overlapping resource: the input group that produced it and the
+// diff key it produced it under. One object reached at two API versions has two keys.
+type overlapProducer struct {
+	group int
+	key   string
+}
+
+func renderOverlapError(groups []dt.XRDiffGroup, producers []overlapProducer) error {
 	inputs := make([]string, 0, len(producers))
 
 	var (
@@ -325,16 +349,30 @@ func renderOverlapError(groups []dt.XRDiffGroup, key string, producers []int) er
 		sharedPlaceholder = false
 		placeholders      = make(map[string]bool)
 		seenController    = make(map[string]bool)
-		first             = groups[producers[0]].Diffs[key]
+		seenGroup         = make(map[int]bool)
+		keys              []string
+		seenKey           = make(map[string]bool)
+		first             = groups[producers[0].group].Diffs[producers[0].key]
 	)
 
-	for _, i := range producers {
-		g, d := groups[i], groups[i].Diffs[key]
-		inputs = append(inputs, fmt.Sprintf("%s/%s", g.XR.Kind, g.XR.Name))
+	for _, p := range producers {
+		g, d := groups[p.group], groups[p.group].Diffs[p.key]
 
-		if g.NameGenerated {
-			sharedPlaceholder = sharedPlaceholder || placeholders[g.XR.Name]
-			placeholders[g.XR.Name] = true
+		if !seenKey[p.key] {
+			seenKey[p.key] = true
+			keys = append(keys, p.key)
+		}
+
+		// The same input may reach the object again at another version. Its rendering still counts, but it
+		// is neither a second input nor a second placeholder.
+		if !seenGroup[p.group] {
+			seenGroup[p.group] = true
+			inputs = append(inputs, fmt.Sprintf("%s/%s", g.XR.Kind, g.XR.Name))
+
+			if g.NameGenerated {
+				sharedPlaceholder = sharedPlaceholder || placeholders[g.XR.Name]
+				placeholders[g.XR.Name] = true
+			}
 		}
 
 		// A nil entry is not expected; treat it as observable and as matching nothing, so a malformed
@@ -355,21 +393,31 @@ func renderOverlapError(groups []dt.XRDiffGroup, key string, producers []int) er
 
 	sort.Strings(controllers)
 
+	key := fmt.Sprintf("%q", keys[0])
+	if len(keys) > 1 {
+		others := make([]string, 0, len(keys)-1)
+		for _, k := range keys[1:] {
+			others = append(others, fmt.Sprintf("%q", k))
+		}
+
+		key += " (also rendered as " + strings.Join(others, ", ") + ")"
+	}
+
 	switch {
 	case allEqual:
 		return nil
 	case sharedPlaceholder:
-		return errors.Errorf("cannot combine diffs: inputs %s both produce resource %q only because crossplane-diff "+
+		return errors.Errorf("cannot combine diffs: inputs %s both produce resource %s only because crossplane-diff "+
 			"gives XRs that share a generateName the same placeholder name; the API server would name them "+
 			"differently, so they cannot be told apart here — diff them separately", strings.Join(inputs, ", "), key)
 	case len(controllers) > 1:
-		return errors.Errorf("cannot combine diffs: resource %q would be controlled by more than one XR (%s); "+
+		return errors.Errorf("cannot combine diffs: resource %s would be controlled by more than one XR (%s); "+
 			"Crossplane gives it to whichever of them creates it first, and the other fails to reconcile it, "+
 			"so no diff predicts applying these inputs together — diff them separately", key, strings.Join(controllers, ", "))
 	case identical:
 		return nil
 	default:
-		return errors.Errorf("cannot combine diffs: inputs %s both produce resource %q, but differently, so no "+
+		return errors.Errorf("cannot combine diffs: inputs %s both produce resource %s, but differently, so no "+
 			"single diff is correct for both — diff them separately", strings.Join(inputs, ", "), key)
 	}
 }

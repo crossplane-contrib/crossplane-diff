@@ -1379,9 +1379,14 @@ contract:
   (`ExitCodeToolError`). The check is format-independent and, per the "always render" contract above, the structured
   document is still emitted, carrying the error. A collision whose every entry is `DiffTypeEqual` is not reported:
   equal diffs are excluded from every rendered view, so the merge loses nothing observable.
-  Two overlaps are out of reach of this check, because they never produce two groups sharing a key: one XR rendering
-  the same object under two composition resource names (the per-XR diff map overwrites it; #505), and the same
-  object rendered at two API versions (two keys for one object; #506).
+  Entries are matched on the resource's version-independent identity (group, kind, namespace, name), not on the
+  diff key itself: served versions are views of one stored object, so two XRs rendering it at two API versions
+  produce two keys yet still contend (#506). Renderings at different versions never compare identical, so such an
+  overlap lands on contention or disagreement. The overlap within one XR — its composition rendering the same
+  object twice, under two composition resource names or at two API versions — never reaches this check, because
+  the per-XR diff map would collapse or split it; `CalculateNonRemovalDiffs` fails that XR instead (#505), since
+  Crossplane applies both renderings with one field manager in no fixed order and no single diff predicts the
+  result. Because `comp` diffs each affected XR through the same calculator, it fails such an XR too.
 - `xrDiffWire` — one entry in the `xrs[]` array, per input XR/claim in input order: an `xr` identity object, a
   `status` (`"changed"` / `"unchanged"` / `"error"` — the same `XRStatus` enum comp uses; `"filtered"` does not apply
   to `xr`), its own `summary`, its own `changes[]`, and (for a failed XR) its own `errors[]`.
