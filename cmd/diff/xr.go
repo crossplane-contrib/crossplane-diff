@@ -96,7 +96,7 @@ func makeDefaultXRLoader(c *XRCmd) (ld.Loader, error) {
 }
 
 // Run executes the XR diff command.
-func (c *XRCmd) Run(_ *kong.Context, log logging.Logger, appCtx *AppContext, proc dp.DiffProcessor, loader ld.Loader, exitCode *ExitCode) error {
+func (c *XRCmd) Run(_ *kong.Context, log logging.Logger, appCtx *AppContext, proc dp.DiffProcessor, loader ld.Loader, exitCode *ExitCode) (err error) {
 	// the rest config here is provided by a function in main.go that's only invoked for commands that request it
 	// in their arguments.  that means we won't get "can't find kubeconfig" errors for cases where the config isn't asked for.
 
@@ -113,6 +113,9 @@ func (c *XRCmd) Run(_ *kong.Context, log logging.Logger, appCtx *AppContext, pro
 		return err
 	}
 	defer cancel()
+
+	// An interrupted run reports the interruption, not the cancelled calls it caused.
+	defer func() { err = interruptedRunResult(ctx, err, exitCode) }()
 
 	// Covers paths that return before rendering; Cleanup is idempotent.
 	defer dp.CleanupDetached(ctx, proc, log)

@@ -1573,8 +1573,13 @@ one advisory permanently stderr-only, contradicting this section's own contract.
 therefore release resources immediately *before* rendering (`CleanupDetached`), on a context that keeps
 the run context's values but drops its cancellation (`context.WithoutCancel`), bounded by
 `CleanupTimeout`, so an expired `--timeout` cannot make teardown fail fast and report a container leak
-that is not real. (Ctrl+C is not covered: there is no signal handling, so an interrupt skips cleanup
-entirely; see #515.) The command's `defer` remains, and remains necessary: it
+that is not real. The same detachment is what makes teardown survive Ctrl+C (#515): the command
+layer's run context (`newRunContext` in `cmd_utils.go`) turns the first SIGINT or SIGTERM into a
+cancellation whose cause is a `*diffprocessor.InterruptedError`, then unregisters its handler so a
+second signal kills the process (the way out if teardown itself hangs). The cancelled run still
+renders: both processors append an `errors[]` entry saying the run was interrupted, and the command
+reports the interruption in place of the cancelled calls it caused, exiting `128 + signal` (130 for
+SIGINT, 143 for SIGTERM), which outranks every other exit code. The command's `defer` remains, and remains necessary: it
 covers the paths that return before any rendering happens (load failure, initialization failure,
 cancellation). `Cleanup` is idempotent, so running in both places is safe — the second call finds
 nothing to remove and raises nothing.

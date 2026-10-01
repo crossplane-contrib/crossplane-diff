@@ -18,6 +18,10 @@ package main
 
 import (
 	"context"
+	"os"
+	"os/signal"
+	"sync"
+	"syscall"
 	"time"
 
 	dp "github.com/crossplane-contrib/crossplane-diff/cmd/diff/diffprocessor"
@@ -30,9 +34,76 @@ import (
 	"github.com/crossplane/crossplane-runtime/v2/pkg/logging"
 )
 
-// initializeAppContext initializes the application context with timeout and error handling.
+// signalSource registers and unregisters signal delivery; it exists so tests can deliver signals without
+// signalling the test process.
+type signalSource struct {
+	notify func(c chan<- os.Signal, sig ...os.Signal)
+	stop   func(c chan<- os.Signal)
+}
+
+// osSignals is the real signal source.
+var osSignals = signalSource{notify: signal.Notify, stop: signal.Stop} //nolint:gochecknoglobals // stateless adapter over os/signal
+
+// newRunContext returns the run's context: cancelled when timeout expires, when the returned cancel is
+// called, or when the process receives SIGINT or SIGTERM. Without this, Go's default handling of those
+// signals kills the process outright and no deferred cleanup runs, leaking function containers.
+//
+// An interrupt cancels the context with an *diffprocessor.InterruptedError as its cause, and then
+// unregisters the handler, so a second signal falls back to Go's default and kills the process. That
+// is the way out if cleanup hangs (it is bounded only by diffprocessor.CleanupTimeout).
+func newRunContext(timeout time.Duration, signals signalSource) (context.Context, context.CancelFunc) {
+	runCtx, cancelRun := context.WithCancelCause(context.Background())
+
+	sigCh := make(chan os.Signal, 1)
+	signals.notify(sigCh, os.Interrupt, syscall.SIGTERM)
+
+	var stopOnce sync.Once
+
+	stop := func() { stopOnce.Do(func() { signals.stop(sigCh) }) }
+
+	done := make(chan struct{})
+
+	go func() {
+		select {
+		case sig := <-sigCh:
+			stop()
+			cancelRun(&dp.InterruptedError{Signal: sig})
+		case <-done:
+		}
+	}()
+
+	ctx, cancelTimeout := context.WithTimeout(runCtx, timeout)
+
+	var cancelOnce sync.Once
+
+	return ctx, func() {
+		cancelOnce.Do(func() {
+			stop()
+			close(done)
+			cancelTimeout()
+			cancelRun(context.Canceled)
+		})
+	}
+}
+
+// interruptedRunResult reports an interrupted run as such: when ctx was cancelled by a signal it
+// returns the interruption as the run's error and sets the matching exit code, replacing whatever the
+// run produced (mostly the cancelled calls the interruption caused). Otherwise err is returned as is.
+func interruptedRunResult(ctx context.Context, err error, exitCode *ExitCode) error {
+	ie := dp.InterruptCause(ctx)
+	if ie == nil {
+		return err
+	}
+
+	exitCode.Code = dp.DetermineExitCode(ie, false)
+
+	return ie
+}
+
+// initializeAppContext initializes the application context with timeout, signal handling (see
+// newRunContext) and error handling.
 func initializeAppContext(timeout time.Duration, appCtx *AppContext, log logging.Logger) (context.Context, context.CancelFunc, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	ctx, cancel := newRunContext(timeout, osSignals)
 	if err := appCtx.Initialize(ctx, log); err != nil {
 		cancel()
 		return nil, nil, errors.Wrap(err, "cannot initialize client")
