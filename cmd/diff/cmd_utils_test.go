@@ -25,60 +25,16 @@ import (
 	dp "github.com/crossplane-contrib/crossplane-diff/cmd/diff/diffprocessor"
 )
 
-func TestNewRunContext(t *testing.T) {
-	type want struct {
-		err         error
-		interrupted bool
-	}
-
-	tests := map[string]struct {
-		timeout time.Duration
-		// act cancels whatever the case is about: the parent stands in for the signal context.
-		act  func(cancelParent, cancelRun context.CancelFunc)
-		want want
-	}{
-		"SignalCancelsAsAnInterruption": {
-			timeout: time.Hour,
-			act:     func(cancelParent, _ context.CancelFunc) { cancelParent() },
-			want:    want{err: context.Canceled, interrupted: true},
-		},
-		"TimeoutIsNotAnInterruption": {
-			timeout: time.Millisecond,
-			act:     func(_, _ context.CancelFunc) {},
-			want:    want{err: context.DeadlineExceeded},
-		},
-		"OwnCancelIsNotAnInterruption": {
-			timeout: time.Hour,
-			act:     func(_, cancelRun context.CancelFunc) { cancelRun() },
-			want:    want{err: context.Canceled},
-		},
-	}
-
-	for name, tt := range tests {
-		t.Run(name, func(t *testing.T) {
-			parent, cancelParent := context.WithCancel(context.Background())
-			defer cancelParent()
-
-			ctx, cancel := newRunContext(parent, tt.timeout)
-			defer cancel()
-
-			tt.act(cancelParent, cancel)
-			<-ctx.Done()
-
-			if !errors.Is(ctx.Err(), tt.want.err) {
-				t.Errorf("ctx.Err() = %v, want %v", ctx.Err(), tt.want.err)
-			}
-
-			if got := dp.Interrupted(ctx); got != tt.want.interrupted {
-				t.Errorf("Interrupted() = %v, want %v", got, tt.want.interrupted)
-			}
-		})
-	}
-}
-
 func TestInterruptedRunResult(t *testing.T) {
-	interrupted, cancelInterrupted := context.WithCancelCause(context.Background())
-	cancelInterrupted(dp.ErrInterrupted)
+	// The run context is a timeout context on the signal context, as in initializeAppContext; each case
+	// is evaluated before the run's own cancel, as it is in Run.
+	parent, cancelParent := context.WithCancel(context.Background())
+	interrupted, cancelInterrupted := context.WithTimeout(parent, time.Hour)
+	defer cancelInterrupted()
+	cancelParent()
+
+	timedOut, cancelTimedOut := context.WithTimeout(context.Background(), 0)
+	defer cancelTimedOut()
 
 	tests := map[string]struct {
 		ctx      context.Context
@@ -100,17 +56,19 @@ func TestInterruptedRunResult(t *testing.T) {
 			wantErr:  "run interrupted by signal; results are incomplete",
 			wantCode: dp.ExitCodeInterrupted,
 		},
-		"NotInterruptedLeavesResultAlone": {
+		"TimeoutIsNotAnInterruption": {
+			ctx:      timedOut,
+			err:      errors.New("unable to process one or more resources: context deadline exceeded"),
+			code:     dp.ExitCodeToolError,
+			wantErr:  "unable to process one or more resources: context deadline exceeded",
+			wantCode: dp.ExitCodeToolError,
+		},
+		"CompletedRunLeavesResultAlone": {
 			ctx:      context.Background(),
 			err:      errors.New("boom"),
 			code:     dp.ExitCodeToolError,
 			wantErr:  "boom",
 			wantCode: dp.ExitCodeToolError,
-		},
-		"NotInterruptedSuccess": {
-			ctx:      context.Background(),
-			code:     dp.ExitCodeSuccess,
-			wantCode: dp.ExitCodeSuccess,
 		},
 	}
 

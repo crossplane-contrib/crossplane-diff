@@ -30,26 +30,11 @@ import (
 	"github.com/crossplane/crossplane-runtime/v2/pkg/logging"
 )
 
-// newRunContext returns the run's context: cancelled when timeout expires, when the returned cancel is
-// called, or when parent is. parent is the signal context main() gets from SetupSignalHandler, so its
-// cancellation means SIGINT or SIGTERM arrived; the run context then carries diffprocessor.ErrInterrupted
-// as its cause, which is what tells an interrupt apart from an expired --timeout.
-func newRunContext(parent context.Context, timeout time.Duration) (context.Context, context.CancelFunc) {
-	runCtx, cancelRun := context.WithCancelCause(context.WithoutCancel(parent))
-	stop := context.AfterFunc(parent, func() { cancelRun(dp.ErrInterrupted) })
-
-	ctx, cancelTimeout := context.WithTimeout(runCtx, timeout)
-
-	return ctx, func() {
-		stop()
-		cancelTimeout()
-		cancelRun(context.Canceled)
-	}
-}
-
-// interruptedRunResult reports an interrupted run as such: when ctx was cancelled by a signal it
-// returns the interruption as the run's error and sets the matching exit code, replacing whatever the
-// run produced (mostly the cancelled calls the interruption caused). Otherwise err is returned as is.
+// interruptedRunResult reports an interrupted run as such: when the run was interrupted (see
+// diffprocessor.Interrupted) it returns the interruption as the run's error and sets the matching exit
+// code, replacing whatever the run produced (mostly the cancelled calls the interruption caused).
+// Otherwise err is returned as is. It must be called before the run's own cancel, which would
+// otherwise read as an interrupt.
 func interruptedRunResult(ctx context.Context, err error, exitCode *ExitCode) error {
 	if !dp.Interrupted(ctx) {
 		return err
@@ -60,10 +45,11 @@ func interruptedRunResult(ctx context.Context, err error, exitCode *ExitCode) er
 	return dp.ErrInterrupted
 }
 
-// initializeAppContext initializes the application context with timeout, signal handling (see
-// newRunContext) and error handling.
-func initializeAppContext(parent context.Context, timeout time.Duration, appCtx *AppContext, log logging.Logger) (context.Context, context.CancelFunc, error) {
-	ctx, cancel := newRunContext(parent, timeout)
+// initializeAppContext initializes the application context with timeout and error handling. sigCtx is
+// the signal context main() gets from SetupSignalHandler: a SIGINT or SIGTERM cancels it, and with it
+// the run context, so the run stops and its deferred cleanup still runs.
+func initializeAppContext(sigCtx context.Context, timeout time.Duration, appCtx *AppContext, log logging.Logger) (context.Context, context.CancelFunc, error) {
+	ctx, cancel := context.WithTimeout(sigCtx, timeout)
 	if err := appCtx.Initialize(ctx, log); err != nil {
 		cancel()
 		return nil, nil, errors.Wrap(err, "cannot initialize client")

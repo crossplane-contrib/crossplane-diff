@@ -46,14 +46,16 @@ const (
 	ExitCodeInterrupted = 130
 )
 
-// ErrInterrupted is the cancellation cause of a run stopped by a signal. Work in flight fails with
-// context.Canceled; this error is what records why, so the run can report the interruption rather
-// than the cancelled calls it caused.
+// ErrInterrupted is the error an interrupted run reports, in errors[] and on stderr, in place of the
+// cancelled calls the interruption caused.
 var ErrInterrupted = errors.New("run interrupted by signal; results are incomplete")
 
-// Interrupted reports whether ctx (or an ancestor of it) was cancelled with ErrInterrupted.
+// Interrupted reports whether the run context ctx was cancelled by a signal. The run context is a
+// timeout context on the signal context, so an expired --timeout yields context.DeadlineExceeded and a
+// signal yields context.Canceled. The run's own cancel also yields Canceled, but only fires once the run
+// is over, so callers must evaluate this before it.
 func Interrupted(ctx context.Context) bool {
-	return errors.Is(context.Cause(ctx), ErrInterrupted)
+	return errors.Is(ctx.Err(), context.Canceled)
 }
 
 // withInterruption appends an entry saying the run was interrupted when ctx was cancelled by a signal,

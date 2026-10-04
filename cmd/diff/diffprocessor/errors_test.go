@@ -21,6 +21,7 @@ import (
 	"errors"
 	"fmt"
 	"testing"
+	"time"
 
 	dt "github.com/crossplane-contrib/crossplane-diff/cmd/diff/renderer/types"
 	pkgvalidate "github.com/crossplane/cli/v2/pkg/validate"
@@ -829,42 +830,15 @@ func TestDetermineExitCode(t *testing.T) {
 	}
 }
 
-func TestInterrupted(t *testing.T) {
-	interrupted, cancel := context.WithCancelCause(context.Background())
-	cancel(ErrInterrupted)
-
-	cancelled, cancelPlain := context.WithCancel(context.Background())
-	cancelPlain()
-
-	child, cancelChild := context.WithTimeout(interrupted, 0)
-	defer cancelChild()
-
-	tests := map[string]struct {
-		ctx  context.Context
-		want bool
-	}{
-		"Interrupted":       {ctx: interrupted, want: true},
-		"PlainCancellation": {ctx: cancelled},
-		"Live":              {ctx: context.Background()},
-		// A deadline on a context derived from an interrupted one still reports the interruption.
-		"DerivedContext": {ctx: child, want: true},
-	}
-
-	for name, tt := range tests {
-		t.Run(name, func(t *testing.T) {
-			if got := Interrupted(tt.ctx); got != tt.want {
-				t.Errorf("Interrupted() = %v, want %v", got, tt.want)
-			}
-		})
-	}
-}
-
 func TestWithInterruption(t *testing.T) {
-	interrupted, cancel := context.WithCancelCause(context.Background())
-	cancel(ErrInterrupted)
+	// A signal cancels the parent (the signal context); --timeout expires the run context's deadline.
+	parent, cancelParent := context.WithCancel(context.Background())
+	interrupted, cancelInterrupted := context.WithTimeout(parent, time.Hour)
+	defer cancelInterrupted()
+	cancelParent()
 
-	cancelled, cancelPlain := context.WithCancel(context.Background())
-	cancelPlain()
+	timedOut, cancelTimedOut := context.WithTimeout(context.Background(), 0)
+	defer cancelTimedOut()
 
 	existing := []dt.OutputError{{ResourceID: "XR/a", Message: "context canceled"}}
 
@@ -882,8 +856,8 @@ func TestWithInterruption(t *testing.T) {
 			ctx:  interrupted,
 			want: []dt.OutputError{{Message: "run interrupted by signal; results are incomplete"}},
 		},
-		"PlainCancellationUnchanged": {ctx: cancelled, errs: existing, want: existing},
-		"LiveUnchanged":              {ctx: context.Background(), errs: existing, want: existing},
+		"TimedOutUnchanged": {ctx: timedOut, errs: existing, want: existing},
+		"LiveUnchanged":     {ctx: context.Background(), errs: existing, want: existing},
 	}
 
 	for name, tt := range tests {

@@ -1585,9 +1585,10 @@ the run context's values but drops its cancellation (`context.WithoutCancel`), b
 `CleanupTimeout`, so an expired `--timeout` cannot make teardown fail fast and report a container leak
 that is not real. The same detachment is what makes teardown survive Ctrl+C (#515): `main()` calls
 controller-runtime's `signals.SetupSignalHandler()` once and passes its context down as the parent of
-the run context (`newRunContext` in `cmd_utils.go`). The first SIGINT or SIGTERM cancels that parent,
-and the run context then carries `diffprocessor.ErrInterrupted` as its cause, which is how an
-interrupt is told apart from an expired `--timeout`. The cancelled run still renders: both processors
+the run's timeout context (`initializeAppContext` in `cmd_utils.go`). The first SIGINT or SIGTERM
+cancels that parent, so the run context fails with `context.Canceled`, while an expired `--timeout`
+fails with `context.DeadlineExceeded`; that is how the two are told apart (`diffprocessor.Interrupted`,
+evaluated before the run's own cancel, which also yields `Canceled`). The cancelled run still renders: both processors
 append an `errors[]` entry saying the run was interrupted, and the command reports the interruption in
 place of the cancelled calls it caused, exiting 130, which outranks every other exit code. A second
 signal makes the handler exit immediately with code 1, which may leave function containers behind;

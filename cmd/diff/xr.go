@@ -116,7 +116,8 @@ func (c *XRCmd) Run(sigCtx context.Context, _ *kong.Context, log logging.Logger,
 	}
 	defer cancel()
 
-	// An interrupted run reports the interruption, not the cancelled calls it caused.
+	// An interrupted run reports the interruption, not the cancelled calls it caused. Registered after
+	// cancel, so it runs before it: the run's own cancel must not read as an interrupt.
 	defer func() { err = interruptedRunResult(ctx, err, exitCode) }()
 
 	// Covers paths that return before rendering; Cleanup is idempotent.
