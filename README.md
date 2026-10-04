@@ -1098,7 +1098,9 @@ The tool returns different exit codes to indicate the result of the diff operati
 
 An interrupt stops the run but still releases the function containers it started, and, once diffing has begun, `-o json`/`-o yaml`
 output is still written, with an `errors[]` entry saying the run was interrupted. An interruption outranks every other exit code.
-Cleanup is bounded at 30 seconds; a second Ctrl+C exits immediately, at the cost of possibly leaving containers behind.
+Cleanup is bounded at 30 seconds. A second Ctrl+C skips the wait: it makes one forced removal of the run's function
+containers (capped at 2 seconds), prints a `docker rm -f …` line for any it could not confirm removed, and exits with
+the same 130/143. A third Ctrl+C kills the process immediately.
 
 Exit codes 0-3 are ordered by severity. When processing multiple resources, the highest severity exit code is returned:
 

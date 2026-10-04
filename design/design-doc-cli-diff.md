@@ -1585,8 +1585,14 @@ the run context's values but drops its cancellation (`context.WithoutCancel`), b
 `CleanupTimeout`, so an expired `--timeout` cannot make teardown fail fast and report a container leak
 that is not real. The same detachment is what makes teardown survive Ctrl+C (#515): the command
 layer's run context (`newRunContext` in `cmd_utils.go`) turns the first SIGINT or SIGTERM into a
-cancellation whose cause is a `*diffprocessor.InterruptedError`, then unregisters its handler so a
-second signal kills the process (the way out if teardown itself hangs). The cancelled run still
+cancellation whose cause is a `*diffprocessor.InterruptedError`. A second signal unregisters the
+handler and skips the graceful wait: one concurrent forced removal of the containers the run's
+`CachedFunctionProvider` named (reached through the `ContainerTracker` interface, so the provider's
+own list is the only registry), capped by `ForcedCleanupTimeout` (2s) even if Docker ignores
+cancellation. It prints a `docker rm -f` line for any container it could not confirm removed, then
+exits with the interrupt code. Because the handler is gone by then, a third signal is Go's default
+kill, so a hung daemon can never trap the user. Leaks no handler can catch (SIGKILL, OOM, upstream
+render-pipeline defects) are tracked in #525. The cancelled run still
 renders: both processors append an `errors[]` entry saying the run was interrupted, and the command
 reports the interruption in place of the cancelled calls it caused, exiting `128 + signal` (130 for
 SIGINT, 143 for SIGTERM), which outranks every other exit code. The command's `defer` remains, and remains necessary: it

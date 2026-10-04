@@ -107,7 +107,7 @@ func (c *XRCmd) Run(_ *kong.Context, log logging.Logger, appCtx *AppContext, pro
 	// TODO:  diff against upgraded schema that isn't applied yet
 	// TODO:  diff against upgraded composition that isn't applied yet
 	// TODO:  diff against upgraded composition version that is already available
-	ctx, cancel, err := initializeAppContext(c.Timeout, appCtx, log)
+	ctx, cancel, err := initializeAppContext(c.Timeout, appCtx, log, proc)
 	if err != nil {
 		exitCode.Code = dp.ExitCodeToolError
 		return err

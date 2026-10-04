@@ -191,7 +191,7 @@ func makeDefaultCompProc(c *CompCmd, kongCtx *kong.Context, appCtx *AppContext, 
 
 // Run executes the composition diff command.
 func (c *CompCmd) Run(_ *kong.Context, log logging.Logger, appCtx *AppContext, proc dp.CompDiffProcessor, loader ld.Loader, exitCode *ExitCode) (err error) {
-	ctx, cancel, err := initializeAppContext(c.Timeout, appCtx, log)
+	ctx, cancel, err := initializeAppContext(c.Timeout, appCtx, log, proc)
 	if err != nil {
 		exitCode.Code = dp.ExitCodeToolError
 		return err

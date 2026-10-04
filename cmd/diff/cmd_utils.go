@@ -18,8 +18,11 @@ package main
 
 import (
 	"context"
+	"fmt"
+	"io"
 	"os"
 	"os/signal"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -48,10 +51,14 @@ var osSignals = signalSource{notify: signal.Notify, stop: signal.Stop} //nolint:
 // called, or when the process receives SIGINT or SIGTERM. Without this, Go's default handling of those
 // signals kills the process outright and no deferred cleanup runs, leaking function containers.
 //
-// An interrupt cancels the context with an *diffprocessor.InterruptedError as its cause, and then
-// unregisters the handler, so a second signal falls back to Go's default and kills the process. That
-// is the way out if cleanup hangs (it is bounded only by diffprocessor.CleanupTimeout).
-func newRunContext(timeout time.Duration, signals signalSource) (context.Context, context.CancelFunc) {
+// Signals escalate:
+//  1. The first cancels the context with an *diffprocessor.InterruptedError as its cause; the run
+//     stops and graceful cleanup runs (bounded by diffprocessor.CleanupTimeout).
+//  2. The second unregisters the handler and calls onForce with that signal, which is expected to
+//     make a short forced removal of the run's containers and exit.
+//  3. Because the handler is already unregistered, a third gets Go's default handling and kills the
+//     process, so a hung forced removal can never trap the user.
+func newRunContext(timeout time.Duration, signals signalSource, onForce func(os.Signal)) (context.Context, context.CancelFunc) {
 	runCtx, cancelRun := context.WithCancelCause(context.Background())
 
 	sigCh := make(chan os.Signal, 1)
@@ -66,8 +73,15 @@ func newRunContext(timeout time.Duration, signals signalSource) (context.Context
 	go func() {
 		select {
 		case sig := <-sigCh:
-			stop()
 			cancelRun(&dp.InterruptedError{Signal: sig})
+		case <-done:
+			return
+		}
+
+		select {
+		case sig := <-sigCh:
+			stop()
+			onForce(sig)
 		case <-done:
 		}
 	}()
@@ -86,6 +100,24 @@ func newRunContext(timeout time.Duration, signals signalSource) (context.Context
 	}
 }
 
+// forceCleanup is the second interrupt's response: one forced removal of names, capped at
+// diffprocessor.ForcedCleanupTimeout, reporting to w any container it could not confirm removed along
+// with a command that removes them. It returns the exit code for sig.
+func forceCleanup(sig os.Signal, names []string, remove dp.ContainerRemover, w io.Writer) int {
+	_, _ = fmt.Fprintln(w, "Interrupted again: skipping graceful cleanup.")
+
+	if len(names) > 0 {
+		_, _ = fmt.Fprintf(w, "Forcibly removing %d function container(s)...\n", len(names))
+
+		if left := dp.ForceRemoveContainers(names, remove); len(left) > 0 {
+			_, _ = fmt.Fprintf(w, "Could not confirm removal of %d function container(s). Remove them with:\n  docker rm -f %s\n",
+				len(left), strings.Join(left, " "))
+		}
+	}
+
+	return (&dp.InterruptedError{Signal: sig}).ExitCode()
+}
+
 // interruptedRunResult reports an interrupted run as such: when ctx was cancelled by a signal it
 // returns the interruption as the run's error and sets the matching exit code, replacing whatever the
 // run produced (mostly the cancelled calls the interruption caused). Otherwise err is returned as is.
@@ -101,9 +133,12 @@ func interruptedRunResult(ctx context.Context, err error, exitCode *ExitCode) er
 }
 
 // initializeAppContext initializes the application context with timeout, signal handling (see
-// newRunContext) and error handling.
-func initializeAppContext(timeout time.Duration, appCtx *AppContext, log logging.Logger) (context.Context, context.CancelFunc, error) {
-	ctx, cancel := newRunContext(timeout, osSignals)
+// newRunContext) and error handling. proc is the run's processor; a second interrupt force-removes the
+// function containers it reports (see diffprocessor.ContainerNamesOf).
+func initializeAppContext(timeout time.Duration, appCtx *AppContext, log logging.Logger, proc dp.Cleaner) (context.Context, context.CancelFunc, error) {
+	ctx, cancel := newRunContext(timeout, osSignals, func(sig os.Signal) {
+		os.Exit(forceCleanup(sig, dp.ContainerNamesOf(proc), dp.DockerContainerRemover(), os.Stderr))
+	})
 	if err := appCtx.Initialize(ctx, log); err != nil {
 		cancel()
 		return nil, nil, errors.Wrap(err, "cannot initialize client")

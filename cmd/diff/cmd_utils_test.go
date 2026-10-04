@@ -20,6 +20,7 @@ import (
 	"context"
 	"errors"
 	"os"
+	"strings"
 	"sync"
 	"syscall"
 	"testing"
@@ -72,53 +73,74 @@ func TestNewRunContext(t *testing.T) {
 		Registered  []os.Signal
 		Err         string
 		Interrupted *dp.InterruptedError
-		Stopped     bool
+		// Forced is the signal handed to the forced-cleanup path, if it ran.
+		Forced os.Signal
+		// StoppedBeforeForce reports whether the handler was unregistered before the forced path
+		// started, which is what makes a third signal Go's default hard kill.
+		StoppedBeforeForce bool
+		Stops              int
 	}
 
 	tests := map[string]struct {
-		timeout time.Duration
-		// act drives the context; it returns once the context's fate is decided.
-		act  func(t *testing.T, f *fakeSignals, ctx context.Context, cancel context.CancelFunc)
-		want want
+		signals []os.Signal
+		// forceHangs makes the forced path never return, like a wedged Docker daemon.
+		forceHangs bool
+		timeout    time.Duration
+		cancel     bool
+		want       want
 	}{
-		"FirstSignalCancelsAndRestoresDefaultHandling": {
-			// Stopping the handler after the first signal is what lets a second Ctrl+C kill the
-			// process with Go's default behaviour if cleanup hangs.
+		"OneSignalCancelsGracefullyAndKeepsTheHandler": {
+			// The handler stays registered so that a second signal reaches the forced path rather
+			// than killing the process and leaking the containers.
+			signals: []os.Signal{syscall.SIGINT},
 			timeout: time.Hour,
-			act: func(t *testing.T, f *fakeSignals, ctx context.Context, _ context.CancelFunc) {
-				t.Helper()
-				f.ch <- syscall.SIGINT
-				<-ctx.Done()
-				<-f.stopped
-			},
 			want: want{
 				Registered:  []os.Signal{os.Interrupt, syscall.SIGTERM},
 				Err:         context.Canceled.Error(),
 				Interrupted: &dp.InterruptedError{Signal: syscall.SIGINT},
-				Stopped:     true,
 			},
 		},
-		"SIGTERMCancels": {
+		"SecondSignalForcesCleanup": {
+			signals: []os.Signal{syscall.SIGINT, syscall.SIGINT},
 			timeout: time.Hour,
-			act: func(t *testing.T, f *fakeSignals, ctx context.Context, _ context.CancelFunc) {
-				t.Helper()
-				f.ch <- syscall.SIGTERM
-				<-ctx.Done()
-				<-f.stopped
-			},
 			want: want{
-				Registered:  []os.Signal{os.Interrupt, syscall.SIGTERM},
-				Err:         context.Canceled.Error(),
-				Interrupted: &dp.InterruptedError{Signal: syscall.SIGTERM},
-				Stopped:     true,
+				Registered:         []os.Signal{os.Interrupt, syscall.SIGTERM},
+				Err:                context.Canceled.Error(),
+				Interrupted:        &dp.InterruptedError{Signal: syscall.SIGINT},
+				Forced:             syscall.SIGINT,
+				StoppedBeforeForce: true,
+				Stops:              1,
+			},
+		},
+		"SecondSIGTERMForcesCleanupWithItsSignal": {
+			signals: []os.Signal{syscall.SIGINT, syscall.SIGTERM},
+			timeout: time.Hour,
+			want: want{
+				Registered:         []os.Signal{os.Interrupt, syscall.SIGTERM},
+				Err:                context.Canceled.Error(),
+				Interrupted:        &dp.InterruptedError{Signal: syscall.SIGINT},
+				Forced:             syscall.SIGTERM,
+				StoppedBeforeForce: true,
+				Stops:              1,
+			},
+		},
+		"ThirdSignalIsTheDefaultKillEvenIfForcedCleanupHangs": {
+			// The handler is unregistered before the forced path starts, so even while it hangs a
+			// third signal is no longer caught: Go's default handling kills the process.
+			signals:    []os.Signal{syscall.SIGINT, syscall.SIGINT},
+			forceHangs: true,
+			timeout:    time.Hour,
+			want: want{
+				Registered:         []os.Signal{os.Interrupt, syscall.SIGTERM},
+				Err:                context.Canceled.Error(),
+				Interrupted:        &dp.InterruptedError{Signal: syscall.SIGINT},
+				Forced:             syscall.SIGINT,
+				StoppedBeforeForce: true,
+				Stops:              1,
 			},
 		},
 		"TimeoutIsNotAnInterruption": {
 			timeout: time.Millisecond,
-			act: func(t *testing.T, _ *fakeSignals, ctx context.Context, _ context.CancelFunc) {
-				t.Helper()
-				<-ctx.Done()
-			},
 			want: want{
 				Registered: []os.Signal{os.Interrupt, syscall.SIGTERM},
 				Err:        context.DeadlineExceeded.Error(),
@@ -126,15 +148,11 @@ func TestNewRunContext(t *testing.T) {
 		},
 		"CancelUnregistersTheHandler": {
 			timeout: time.Hour,
-			act: func(t *testing.T, f *fakeSignals, _ context.Context, cancel context.CancelFunc) {
-				t.Helper()
-				cancel()
-				<-f.stopped
-			},
+			cancel:  true,
 			want: want{
 				Registered: []os.Signal{os.Interrupt, syscall.SIGTERM},
 				Err:        context.Canceled.Error(),
-				Stopped:    true,
+				Stops:      1,
 			},
 		},
 	}
@@ -143,20 +161,143 @@ func TestNewRunContext(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			f := newFakeSignals()
 
-			ctx, cancel := newRunContext(tt.timeout, f.source())
-			defer cancel()
+			var (
+				forced             os.Signal
+				stoppedBeforeForce bool
+			)
 
-			tt.act(t, f, ctx, cancel)
+			forceStarted := make(chan struct{})
+			release := make(chan struct{})
+			defer close(release)
+
+			onForce := func(sig os.Signal) {
+				forced = sig
+				stoppedBeforeForce = f.stopCount() > 0
+
+				close(forceStarted)
+
+				if tt.forceHangs {
+					<-release
+				}
+			}
+
+			ctx, cancel := newRunContext(tt.timeout, f.source(), onForce)
+
+			for i, sig := range tt.signals {
+				f.ch <- sig
+
+				if i == 0 {
+					<-ctx.Done()
+				}
+			}
+
+			if len(tt.signals) > 1 {
+				<-forceStarted
+			}
+
+			if tt.cancel {
+				cancel()
+			}
+
+			<-ctx.Done()
 
 			got := want{
-				Registered:  f.registered,
-				Err:         ctx.Err().Error(),
-				Interrupted: dp.InterruptCause(ctx),
-				Stopped:     f.stopCount() > 0,
+				Registered:         f.registered,
+				Err:                ctx.Err().Error(),
+				Interrupted:        dp.InterruptCause(ctx),
+				Forced:             forced,
+				StoppedBeforeForce: stoppedBeforeForce,
+				Stops:              f.stopCount(),
 			}
 
 			if diff := cmp.Diff(tt.want, got); diff != "" {
 				t.Errorf("newRunContext() -want +got:\n%s", diff)
+			}
+
+			if !tt.forceHangs {
+				cancel()
+			}
+		})
+	}
+}
+
+func TestForceCleanup(t *testing.T) {
+	removeOK := func(context.Context, string) error { return nil }
+	hang := func(ctx context.Context, _ string) error {
+		<-ctx.Done()
+		// Ignore cancellation, like a remover stuck on a wedged daemon socket.
+		select {}
+	}
+	failFor := func(bad string) dp.ContainerRemover {
+		return func(_ context.Context, name string) error {
+			if name == bad {
+				return errors.New("daemon said no")
+			}
+
+			return nil
+		}
+	}
+
+	tests := map[string]struct {
+		sig      os.Signal
+		names    []string
+		remove   dp.ContainerRemover
+		wantCode int
+		wantOut  string
+	}{
+		"NothingToRemove": {
+			sig:      syscall.SIGINT,
+			remove:   removeOK,
+			wantCode: 130,
+			wantOut:  "Interrupted again: skipping graceful cleanup.\n",
+		},
+		"AllRemoved": {
+			sig:      syscall.SIGTERM,
+			names:    []string{"fn-a", "fn-b"},
+			remove:   removeOK,
+			wantCode: 143,
+			wantOut: "Interrupted again: skipping graceful cleanup.\n" +
+				"Forcibly removing 2 function container(s)...\n",
+		},
+		"SomeUnconfirmed": {
+			sig:      syscall.SIGINT,
+			names:    []string{"fn-a", "fn-b", "fn-c"},
+			remove:   failFor("fn-b"),
+			wantCode: 130,
+			wantOut: "Interrupted again: skipping graceful cleanup.\n" +
+				"Forcibly removing 3 function container(s)...\n" +
+				"Could not confirm removal of 1 function container(s). Remove them with:\n" +
+				"  docker rm -f fn-b\n",
+		},
+		"HungRemoverIsCapped": {
+			sig:      syscall.SIGINT,
+			names:    []string{"fn-a", "fn-b"},
+			remove:   hang,
+			wantCode: 130,
+			wantOut: "Interrupted again: skipping graceful cleanup.\n" +
+				"Forcibly removing 2 function container(s)...\n" +
+				"Could not confirm removal of 2 function container(s). Remove them with:\n" +
+				"  docker rm -f fn-a fn-b\n",
+		},
+	}
+
+	for name, tt := range tests {
+		t.Run(name, func(t *testing.T) {
+			var out strings.Builder
+
+			start := time.Now()
+			code := forceCleanup(tt.sig, tt.names, tt.remove, &out)
+
+			if elapsed := time.Since(start); elapsed > dp.ForcedCleanupTimeout+time.Second {
+				t.Errorf("forceCleanup took %s, want at most about %s", elapsed, dp.ForcedCleanupTimeout)
+			}
+
+			if code != tt.wantCode {
+				t.Errorf("exit code = %d, want %d", code, tt.wantCode)
+			}
+
+			if diff := cmp.Diff(tt.wantOut, out.String()); diff != "" {
+				t.Errorf("stderr -want +got:\n%s", diff)
 			}
 		})
 	}
@@ -165,7 +306,7 @@ func TestNewRunContext(t *testing.T) {
 func TestNewRunContextCancelIsIdempotent(t *testing.T) {
 	f := newFakeSignals()
 
-	_, cancel := newRunContext(time.Hour, f.source())
+	_, cancel := newRunContext(time.Hour, f.source(), func(os.Signal) {})
 	cancel()
 	cancel()
 

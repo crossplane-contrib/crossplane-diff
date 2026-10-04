@@ -22,9 +22,12 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"slices"
 	"strings"
+	"sync"
 	"time"
 
+	cerrdefs "github.com/containerd/errdefs"
 	xp "github.com/crossplane-contrib/crossplane-diff/cmd/diff/client/crossplane"
 	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/api/types/filters"
@@ -97,8 +100,9 @@ func (p *DefaultFunctionProvider) Cleanup(_ context.Context) error {
 type CachedFunctionProvider struct {
 	fnClient       xp.FunctionClient
 	cache          map[string][]pkgv1.Function
-	containerNames []string // Track container names for cleanup
-	instanceID     string   // Unique identifier for this provider instance
+	namesMu        sync.Mutex // guards containerNames, which a second interrupt reads from the signal goroutine
+	containerNames []string   // Track container names for cleanup
+	instanceID     string     // Unique identifier for this provider instance
 	logger         logging.Logger
 }
 
@@ -170,7 +174,9 @@ func (p *CachedFunctionProvider) GetFunctionsForComposition(comp *apiextensionsv
 		fn.Annotations["render.crossplane.io/runtime-docker-cleanup"] = "Orphan"
 
 		// Track container name for cleanup
+		p.namesMu.Lock()
 		p.containerNames = append(p.containerNames, containerName)
+		p.namesMu.Unlock()
 	}
 
 	// Cache for future calls
@@ -181,13 +187,14 @@ func (p *CachedFunctionProvider) GetFunctionsForComposition(comp *apiextensionsv
 
 // Cleanup stops and removes Docker containers created during function execution.
 func (p *CachedFunctionProvider) Cleanup(ctx context.Context) error {
-	if len(p.containerNames) == 0 {
+	names := p.ContainerNames()
+	if len(names) == 0 {
 		p.logger.Debug("No containers to clean up")
 		return nil
 	}
 
 	// Debug, not Info: routine lifecycle. The failure case below is the part worth warning about.
-	p.logger.Debug("Cleaning up function containers", "count", len(p.containerNames))
+	p.logger.Debug("Cleaning up function containers", "count", len(names))
 
 	// Create Docker client
 	cli, err := client.NewClientWithOpts(client.FromEnv, client.WithAPIVersionNegotiation())
@@ -204,7 +211,7 @@ func (p *CachedFunctionProvider) Cleanup(ctx context.Context) error {
 
 	var errs []error
 
-	for _, containerName := range p.containerNames {
+	for _, containerName := range names {
 		// List containers matching this name
 		filterArgs := filters.NewArgs()
 		filterArgs.Add("name", fmt.Sprintf("^%s$", containerName))
@@ -249,6 +256,105 @@ func (p *CachedFunctionProvider) Cleanup(ctx context.Context) error {
 	}
 
 	return nil
+}
+
+// ContainerNames returns the names of the function containers this provider has named for the run.
+func (p *CachedFunctionProvider) ContainerNames() []string {
+	p.namesMu.Lock()
+	defer p.namesMu.Unlock()
+
+	return slices.Clone(p.containerNames)
+}
+
+// ContainerTracker is implemented by whatever knows the names of the function containers a run has
+// started: CachedFunctionProvider, and the wrappers and processors that hold one.
+type ContainerTracker interface {
+	ContainerNames() []string
+}
+
+// ContainerNamesOf returns the function container names v tracks, or nil when it tracks none.
+func ContainerNamesOf(v any) []string {
+	if t, ok := v.(ContainerTracker); ok {
+		return t.ContainerNames()
+	}
+
+	return nil
+}
+
+// ForcedCleanupTimeout caps the forced removal a second interrupt triggers. It is deliberately short:
+// the user has already declined to wait for graceful cleanup (CleanupTimeout).
+const ForcedCleanupTimeout = 2 * time.Second
+
+// ContainerRemover force-removes one container by name. It returns nil when the container is gone,
+// including when it did not exist.
+type ContainerRemover func(ctx context.Context, name string) error
+
+// DockerContainerRemover returns a ContainerRemover that force-removes containers through the Docker
+// API, creating the client on first use.
+func DockerContainerRemover() ContainerRemover {
+	var (
+		once   sync.Once
+		cli    *client.Client
+		cliErr error
+	)
+
+	return func(ctx context.Context, name string) error {
+		once.Do(func() {
+			cli, cliErr = client.NewClientWithOpts(client.FromEnv, client.WithAPIVersionNegotiation())
+		})
+
+		if cliErr != nil {
+			return cliErr
+		}
+
+		err := cli.ContainerRemove(ctx, name, container.RemoveOptions{Force: true})
+		if cerrdefs.IsNotFound(err) {
+			return nil
+		}
+
+		return err
+	}
+}
+
+// ForceRemoveContainers makes one concurrent, best-effort attempt to remove every named container and
+// returns, in input order, those it could not confirm removed. It never blocks past
+// ForcedCleanupTimeout, even if remove ignores its context: removals still in flight at the cap are
+// abandoned and reported unconfirmed.
+func ForceRemoveContainers(names []string, remove ContainerRemover) []string {
+	ctx, cancel := context.WithTimeout(context.Background(), ForcedCleanupTimeout)
+	defer cancel()
+
+	type result struct {
+		i       int
+		removed bool
+	}
+
+	results := make(chan result, len(names)) // buffered so abandoned removals never block
+	for i, name := range names {
+		go func() { results <- result{i: i, removed: remove(ctx, name) == nil} }()
+	}
+
+	removed := make([]bool, len(names))
+
+collect:
+	for range names {
+		select {
+		case r := <-results:
+			removed[r.i] = r.removed
+		case <-ctx.Done():
+			break collect
+		}
+	}
+
+	var unconfirmed []string
+
+	for i, name := range names {
+		if !removed[i] {
+			unconfirmed = append(unconfirmed, name)
+		}
+	}
+
+	return unconfirmed
 }
 
 // maxContainerNameLength is the maximum length for Docker container names.
@@ -356,6 +462,11 @@ func (p *RegistryOverrideFunctionProvider) GetFunctionsForComposition(comp *apie
 // Cleanup delegates to the wrapped provider.
 func (p *RegistryOverrideFunctionProvider) Cleanup(ctx context.Context) error {
 	return p.inner.Cleanup(ctx)
+}
+
+// ContainerNames forwards to the wrapped provider.
+func (p *RegistryOverrideFunctionProvider) ContainerNames() []string {
+	return ContainerNamesOf(p.inner)
 }
 
 // replaceRegistry replaces the registry portion of an OCI package reference,

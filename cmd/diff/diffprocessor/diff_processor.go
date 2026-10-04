@@ -170,6 +170,11 @@ func (p *DefaultDiffProcessor) Initialize(ctx context.Context) error {
 	return nil
 }
 
+// ContainerNames returns the function containers its function provider has started.
+func (p *DefaultDiffProcessor) ContainerNames() []string {
+	return ContainerNamesOf(p.functionProvider)
+}
+
 // Cleanup releases any resources held by the processor.
 // This includes stopping and removing any Docker containers created for function execution.
 func (p *DefaultDiffProcessor) Cleanup(ctx context.Context) error {
@@ -205,8 +210,8 @@ type Cleaner interface {
 // not returned: releasing resources is best-effort and must not change the run's result.
 //
 // This is also what lets cleanup finish after Ctrl+C or SIGTERM: the first signal cancels the run's
-// context (see the command layer's run context) rather than killing the process, and a second signal
-// kills it, which is the way out if cleanup itself hangs.
+// context (see the command layer's run context) rather than killing the process. A second signal
+// abandons this wait in favour of a short forced removal (see ForceRemoveContainers).
 func CleanupDetached(ctx context.Context, c Cleaner, logger logging.Logger) {
 	cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), CleanupTimeout)
 	defer cancel()
