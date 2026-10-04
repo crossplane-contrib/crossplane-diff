@@ -18,6 +18,7 @@ limitations under the License.
 package main
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"time"
@@ -31,6 +32,7 @@ import (
 	"k8s.io/client-go/rest"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
+	"sigs.k8s.io/controller-runtime/pkg/manager/signals"
 
 	"github.com/crossplane/crossplane-runtime/v2/pkg/logging"
 )
@@ -203,6 +205,11 @@ func main() {
 	warnings := dp.NewWarningLogger(logging.NewNopLogger(), os.Stderr)
 	exitCode := &ExitCode{Code: dp.ExitCodeSuccess} // Default to success
 
+	// The one and only call: SetupSignalHandler panics if called twice. The first SIGINT/SIGTERM
+	// cancels sigCtx, which stops the run and lets cleanup release its function containers; a second
+	// exits immediately with code 1, which may leave containers behind.
+	sigCtx := signals.SetupSignalHandler()
+
 	ctx := kong.Parse(&cli{},
 		kong.Name("crossplane-diff"),
 		kong.Description("A command line tool for diffing  Crossplane resources."),
@@ -211,6 +218,7 @@ func main() {
 		kong.BindTo(warnings, (*logging.Logger)(nil)),
 		kong.Bind(warnings),
 		kong.Bind(exitCode), // Bind exit code state
+		kong.BindTo(sigCtx, (*context.Context)(nil)),
 		// Providers are resolved lazily when dependencies are needed.
 		// kubecfg.Provide depends on kubecfg.Provider (bound in CommonCmdFields.BeforeApply)
 		// provideAppContext depends on *rest.Config and logging.Logger

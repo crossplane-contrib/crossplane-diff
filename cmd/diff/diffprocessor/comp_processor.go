@@ -159,11 +159,6 @@ func (p *DefaultCompDiffProcessor) Cleanup(ctx context.Context) error {
 	return p.xrProc.Cleanup(ctx)
 }
 
-// ContainerNames returns the function containers its XR processor has started.
-func (p *DefaultCompDiffProcessor) ContainerNames() []string {
-	return ContainerNamesOf(p.xrProc)
-}
-
 // DiffComposition processes composition changes and shows impact on existing XRs.
 // Returns (hasDiffs, error) where hasDiffs indicates if any differences were detected.
 func (p *DefaultCompDiffProcessor) DiffComposition(ctx context.Context, compositions []*un.Unstructured, namespace string, resources []k8stypes.NamespacedName) (bool, error) {

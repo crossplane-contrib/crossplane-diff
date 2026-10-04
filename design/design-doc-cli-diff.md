@@ -1583,19 +1583,15 @@ one advisory permanently stderr-only, contradicting this section's own contract.
 therefore release resources immediately *before* rendering (`CleanupDetached`), on a context that keeps
 the run context's values but drops its cancellation (`context.WithoutCancel`), bounded by
 `CleanupTimeout`, so an expired `--timeout` cannot make teardown fail fast and report a container leak
-that is not real. The same detachment is what makes teardown survive Ctrl+C (#515): the command
-layer's run context (`newRunContext` in `cmd_utils.go`) turns the first SIGINT or SIGTERM into a
-cancellation whose cause is a `*diffprocessor.InterruptedError`. A second signal unregisters the
-handler and skips the graceful wait: one concurrent forced removal of the containers the run's
-`CachedFunctionProvider` named (reached through the `ContainerTracker` interface, so the provider's
-own list is the only registry), capped by `ForcedCleanupTimeout` (2s) even if Docker ignores
-cancellation. It prints a `docker rm -f` line for any container it could not confirm removed, then
-exits with the interrupt code. Because the handler is gone by then, a third signal is Go's default
-kill, so a hung daemon can never trap the user. Leaks no handler can catch (SIGKILL, OOM, upstream
-render-pipeline defects) are tracked in #525. The cancelled run still
-renders: both processors append an `errors[]` entry saying the run was interrupted, and the command
-reports the interruption in place of the cancelled calls it caused, exiting `128 + signal` (130 for
-SIGINT, 143 for SIGTERM), which outranks every other exit code. The command's `defer` remains, and remains necessary: it
+that is not real. The same detachment is what makes teardown survive Ctrl+C (#515): `main()` calls
+controller-runtime's `signals.SetupSignalHandler()` once and passes its context down as the parent of
+the run context (`newRunContext` in `cmd_utils.go`). The first SIGINT or SIGTERM cancels that parent,
+and the run context then carries `diffprocessor.ErrInterrupted` as its cause, which is how an
+interrupt is told apart from an expired `--timeout`. The cancelled run still renders: both processors
+append an `errors[]` entry saying the run was interrupted, and the command reports the interruption in
+place of the cancelled calls it caused, exiting 130, which outranks every other exit code. A second
+signal makes the handler exit immediately with code 1, which may leave function containers behind;
+reaping containers whose owning run died is tracked in #525. The command's `defer` remains, and remains necessary: it
 covers the paths that return before any rendering happens (load failure, initialization failure,
 cancellation). `Cleanup` is idempotent, so running in both places is safe — the second call finds
 nothing to remove and raises nothing.

@@ -1094,13 +1094,12 @@ The tool returns different exit codes to indicate the result of the diff operati
 | 1 | Tool error - execution failed (e.g., cluster access issues, invalid input) |
 | 2 | Validation error - the cluster will not accept a resource: it failed local validation against its CRD/XRD schema, **or** the apiserver rejected it during the dry run (validating webhook, `ValidatingAdmissionPolicy`, `ResourceQuota`) |
 | 3 | Diff detected - differences were found between input and cluster state |
-| 130 / 143 | Interrupted - the run was stopped by SIGINT (Ctrl+C) or SIGTERM (128 + signal number); results are incomplete |
+| 130 | Interrupted - the run was stopped by SIGINT (Ctrl+C) or SIGTERM; results are incomplete |
 
-An interrupt stops the run but still releases the function containers it started, and, once diffing has begun, `-o json`/`-o yaml`
-output is still written, with an `errors[]` entry saying the run was interrupted. An interruption outranks every other exit code.
-Cleanup is bounded at 30 seconds. A second Ctrl+C skips the wait: it makes one forced removal of the run's function
-containers (capped at 2 seconds), prints a `docker rm -f …` line for any it could not confirm removed, and exits with
-the same 130/143. A third Ctrl+C kills the process immediately.
+An interrupt stops the run but still releases the function containers it started (cleanup is bounded at 30 seconds),
+and, once diffing has begun, `-o json`/`-o yaml` output is still written, with an `errors[]` entry saying the run was
+interrupted. An interruption outranks every other exit code. A second Ctrl+C exits immediately with code 1 and may leave
+function containers behind; reaping containers whose owning run died is tracked in #525.
 
 Exit codes 0-3 are ordered by severity. When processing multiple resources, the highest severity exit code is returned:
 

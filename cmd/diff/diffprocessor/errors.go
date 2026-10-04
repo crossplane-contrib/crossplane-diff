@@ -20,8 +20,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"os"
-	"syscall"
 
 	dt "github.com/crossplane-contrib/crossplane-diff/cmd/diff/renderer/types"
 	pkgvalidate "github.com/crossplane/cli/v2/pkg/validate"
@@ -42,50 +40,30 @@ const (
 	// ExitCodeDiffDetected indicates that differences were detected.
 	ExitCodeDiffDetected = 3
 
-	// ExitCodeInterrupted is the exit code of a run interrupted by SIGINT (Ctrl+C), following the shell
-	// convention of 128 plus the signal number. A run interrupted by another signal exits with 128 plus
-	// that signal's number (143 for SIGTERM); see InterruptedError.ExitCode.
-	ExitCodeInterrupted = 128 + int(syscall.SIGINT)
+	// ExitCodeInterrupted indicates the run was cancelled by SIGINT (Ctrl+C) or SIGTERM. It is 130 by
+	// the shell convention for SIGINT (128 + 2); the signal handler does not report which signal
+	// arrived, so SIGTERM uses the same code.
+	ExitCodeInterrupted = 130
 )
 
-// InterruptedError is the cancellation cause of a run stopped by a signal. Work in flight fails with
+// ErrInterrupted is the cancellation cause of a run stopped by a signal. Work in flight fails with
 // context.Canceled; this error is what records why, so the run can report the interruption rather
 // than the cancelled calls it caused.
-type InterruptedError struct {
-	Signal os.Signal
-}
+var ErrInterrupted = errors.New("run interrupted by signal; results are incomplete")
 
-func (e *InterruptedError) Error() string {
-	return fmt.Sprintf("run interrupted by signal (%s); results are incomplete", e.Signal)
-}
-
-// ExitCode returns 128 plus the signal number, or ExitCodeInterrupted when the signal has no number.
-func (e *InterruptedError) ExitCode() int {
-	if s, ok := e.Signal.(syscall.Signal); ok {
-		return 128 + int(s)
-	}
-
-	return ExitCodeInterrupted
+// Interrupted reports whether ctx (or an ancestor of it) was cancelled with ErrInterrupted.
+func Interrupted(ctx context.Context) bool {
+	return errors.Is(context.Cause(ctx), ErrInterrupted)
 }
 
 // withInterruption appends an entry saying the run was interrupted when ctx was cancelled by a signal,
 // so an interrupted run's output says so instead of listing only the cancelled calls it caused.
 func withInterruption(ctx context.Context, errs []dt.OutputError) []dt.OutputError {
-	if ie := InterruptCause(ctx); ie != nil {
-		return append(errs, dt.OutputError{Message: ie.Error()})
+	if Interrupted(ctx) {
+		return append(errs, dt.OutputError{Message: ErrInterrupted.Error()})
 	}
 
 	return errs
-}
-
-// InterruptCause returns the InterruptedError that cancelled ctx (or an ancestor of it), or nil when
-// ctx is live or was cancelled for any other reason.
-func InterruptCause(ctx context.Context) *InterruptedError {
-	if ie, ok := errors.AsType[*InterruptedError](context.Cause(ctx)); ok {
-		return ie
-	}
-
-	return nil
 }
 
 // SchemaValidationError indicates schema validation failed.
@@ -371,12 +349,12 @@ func isOnlySchemaValidationErrors(err error) bool {
 }
 
 // DetermineExitCode determines the appropriate exit code based on the error and diff status.
-// Priority: interrupted (128+signal) > tool error (1) > schema validation error (2) > diff detected (3) >
+// Priority: interrupted (130) > tool error (1) > schema validation error (2) > diff detected (3) >
 // success (0). An interruption outranks everything because the other errors of an interrupted run are
 // mostly the cancelled calls it caused.
 func DetermineExitCode(err error, hasDiffs bool) int {
-	if interrupted, ok := errors.AsType[*InterruptedError](err); ok {
-		return interrupted.ExitCode()
+	if errors.Is(err, ErrInterrupted) {
+		return ExitCodeInterrupted
 	}
 
 	if err != nil {

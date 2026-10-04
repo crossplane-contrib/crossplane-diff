@@ -20,7 +20,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"syscall"
 	"testing"
 
 	dt "github.com/crossplane-contrib/crossplane-diff/cmd/diff/renderer/types"
@@ -731,23 +730,18 @@ func TestDetermineExitCode(t *testing.T) {
 			hasDiffs: false,
 			want:     ExitCodeSchemaValidation,
 		},
-		"InterruptedBySIGINT": {
-			// An interrupted run is neither a success, a diff, nor an ordinary tool
-			// failure: it exits with the shell convention 128+signal.
-			err:      &InterruptedError{Signal: syscall.SIGINT},
+		"Interrupted": {
+			// An interrupted run is neither a success, a diff, nor an ordinary tool failure.
+			err:      ErrInterrupted,
 			hasDiffs: true,
-			want:     130,
-		},
-		"InterruptedBySIGTERM": {
-			err:  &InterruptedError{Signal: syscall.SIGTERM},
-			want: 143,
+			want:     ExitCodeInterrupted,
 		},
 		"InterruptionOutranksOtherErrors": {
 			// Once interrupted, the per-resource failures are the interruption's
 			// fallout (cancelled calls), so they must not mask it.
 			err: errors.Join(
 				&SchemaValidationError{Message: "validation failed"},
-				fmt.Errorf("wrapped: %w", &InterruptedError{Signal: syscall.SIGINT}),
+				fmt.Errorf("wrapped: %w", ErrInterrupted),
 			),
 			want: ExitCodeInterrupted,
 		},
@@ -835,9 +829,9 @@ func TestDetermineExitCode(t *testing.T) {
 	}
 }
 
-func TestInterruptCause(t *testing.T) {
+func TestInterrupted(t *testing.T) {
 	interrupted, cancel := context.WithCancelCause(context.Background())
-	cancel(&InterruptedError{Signal: syscall.SIGTERM})
+	cancel(ErrInterrupted)
 
 	cancelled, cancelPlain := context.WithCancel(context.Background())
 	cancelPlain()
@@ -847,34 +841,27 @@ func TestInterruptCause(t *testing.T) {
 
 	tests := map[string]struct {
 		ctx  context.Context
-		want *InterruptedError
+		want bool
 	}{
-		"Interrupted":       {ctx: interrupted, want: &InterruptedError{Signal: syscall.SIGTERM}},
-		"PlainCancellation": {ctx: cancelled, want: nil},
-		"Live":              {ctx: context.Background(), want: nil},
+		"Interrupted":       {ctx: interrupted, want: true},
+		"PlainCancellation": {ctx: cancelled},
+		"Live":              {ctx: context.Background()},
 		// A deadline on a context derived from an interrupted one still reports the interruption.
-		"DerivedContext": {ctx: child, want: &InterruptedError{Signal: syscall.SIGTERM}},
+		"DerivedContext": {ctx: child, want: true},
 	}
 
 	for name, tt := range tests {
 		t.Run(name, func(t *testing.T) {
-			if diff := gcmp.Diff(tt.want, InterruptCause(tt.ctx)); diff != "" {
-				t.Errorf("InterruptCause() -want +got:\n%s", diff)
+			if got := Interrupted(tt.ctx); got != tt.want {
+				t.Errorf("Interrupted() = %v, want %v", got, tt.want)
 			}
 		})
 	}
 }
 
-func TestInterruptedErrorMessage(t *testing.T) {
-	want := "run interrupted by signal (interrupt); results are incomplete"
-	if got := (&InterruptedError{Signal: syscall.SIGINT}).Error(); got != want {
-		t.Errorf("Error() = %q, want %q", got, want)
-	}
-}
-
 func TestWithInterruption(t *testing.T) {
 	interrupted, cancel := context.WithCancelCause(context.Background())
-	cancel(&InterruptedError{Signal: syscall.SIGINT})
+	cancel(ErrInterrupted)
 
 	cancelled, cancelPlain := context.WithCancel(context.Background())
 	cancelPlain()
@@ -889,11 +876,11 @@ func TestWithInterruption(t *testing.T) {
 		"InterruptedAppends": {
 			ctx:  interrupted,
 			errs: existing,
-			want: append(append([]dt.OutputError{}, existing...), dt.OutputError{Message: "run interrupted by signal (interrupt); results are incomplete"}),
+			want: append(append([]dt.OutputError{}, existing...), dt.OutputError{Message: "run interrupted by signal; results are incomplete"}),
 		},
 		"InterruptedWithNoOtherErrors": {
 			ctx:  interrupted,
-			want: []dt.OutputError{{Message: "run interrupted by signal (interrupt); results are incomplete"}},
+			want: []dt.OutputError{{Message: "run interrupted by signal; results are incomplete"}},
 		},
 		"PlainCancellationUnchanged": {ctx: cancelled, errs: existing, want: existing},
 		"LiveUnchanged":              {ctx: context.Background(), errs: existing, want: existing},

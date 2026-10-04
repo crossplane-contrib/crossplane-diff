@@ -383,6 +383,7 @@ func runIntegrationTest(t *testing.T, testType DiffTestType, tt IntegrationTestC
 			kong.Writers(&stdout, &stderr),
 			kong.Bind(appCtx),
 			kong.Bind(exitCode),
+			kong.BindTo(context.Background(), (*context.Context)(nil)),
 			kong.Bind(warnings),
 			kong.BindTo(warnings, (*logging.Logger)(nil)),
 		)

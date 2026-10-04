@@ -17,6 +17,8 @@ limitations under the License.
 package main
 
 import (
+	"context"
+
 	"github.com/alecthomas/kong"
 	dp "github.com/crossplane-contrib/crossplane-diff/cmd/diff/diffprocessor"
 	"github.com/crossplane-contrib/crossplane-diff/cmd/diff/ref"
@@ -190,8 +192,8 @@ func makeDefaultCompProc(c *CompCmd, kongCtx *kong.Context, appCtx *AppContext, 
 }
 
 // Run executes the composition diff command.
-func (c *CompCmd) Run(_ *kong.Context, log logging.Logger, appCtx *AppContext, proc dp.CompDiffProcessor, loader ld.Loader, exitCode *ExitCode) (err error) {
-	ctx, cancel, err := initializeAppContext(c.Timeout, appCtx, log, proc)
+func (c *CompCmd) Run(sigCtx context.Context, _ *kong.Context, log logging.Logger, appCtx *AppContext, proc dp.CompDiffProcessor, loader ld.Loader, exitCode *ExitCode) (err error) {
+	ctx, cancel, err := initializeAppContext(sigCtx, c.Timeout, appCtx, log)
 	if err != nil {
 		exitCode.Code = dp.ExitCodeToolError
 		return err

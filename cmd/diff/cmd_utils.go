@@ -18,13 +18,6 @@ package main
 
 import (
 	"context"
-	"fmt"
-	"io"
-	"os"
-	"os/signal"
-	"strings"
-	"sync"
-	"syscall"
 	"time"
 
 	dp "github.com/crossplane-contrib/crossplane-diff/cmd/diff/diffprocessor"
@@ -37,108 +30,40 @@ import (
 	"github.com/crossplane/crossplane-runtime/v2/pkg/logging"
 )
 
-// signalSource registers and unregisters signal delivery; it exists so tests can deliver signals without
-// signalling the test process.
-type signalSource struct {
-	notify func(c chan<- os.Signal, sig ...os.Signal)
-	stop   func(c chan<- os.Signal)
-}
-
-// osSignals is the real signal source.
-var osSignals = signalSource{notify: signal.Notify, stop: signal.Stop} //nolint:gochecknoglobals // stateless adapter over os/signal
-
 // newRunContext returns the run's context: cancelled when timeout expires, when the returned cancel is
-// called, or when the process receives SIGINT or SIGTERM. Without this, Go's default handling of those
-// signals kills the process outright and no deferred cleanup runs, leaking function containers.
-//
-// Signals escalate:
-//  1. The first cancels the context with an *diffprocessor.InterruptedError as its cause; the run
-//     stops and graceful cleanup runs (bounded by diffprocessor.CleanupTimeout).
-//  2. The second unregisters the handler and calls onForce with that signal, which is expected to
-//     make a short forced removal of the run's containers and exit.
-//  3. Because the handler is already unregistered, a third gets Go's default handling and kills the
-//     process, so a hung forced removal can never trap the user.
-func newRunContext(timeout time.Duration, signals signalSource, onForce func(os.Signal)) (context.Context, context.CancelFunc) {
-	runCtx, cancelRun := context.WithCancelCause(context.Background())
-
-	sigCh := make(chan os.Signal, 1)
-	signals.notify(sigCh, os.Interrupt, syscall.SIGTERM)
-
-	var stopOnce sync.Once
-
-	stop := func() { stopOnce.Do(func() { signals.stop(sigCh) }) }
-
-	done := make(chan struct{})
-
-	go func() {
-		select {
-		case sig := <-sigCh:
-			cancelRun(&dp.InterruptedError{Signal: sig})
-		case <-done:
-			return
-		}
-
-		select {
-		case sig := <-sigCh:
-			stop()
-			onForce(sig)
-		case <-done:
-		}
-	}()
+// called, or when parent is. parent is the signal context main() gets from SetupSignalHandler, so its
+// cancellation means SIGINT or SIGTERM arrived; the run context then carries diffprocessor.ErrInterrupted
+// as its cause, which is what tells an interrupt apart from an expired --timeout.
+func newRunContext(parent context.Context, timeout time.Duration) (context.Context, context.CancelFunc) {
+	runCtx, cancelRun := context.WithCancelCause(context.WithoutCancel(parent))
+	stop := context.AfterFunc(parent, func() { cancelRun(dp.ErrInterrupted) })
 
 	ctx, cancelTimeout := context.WithTimeout(runCtx, timeout)
 
-	var cancelOnce sync.Once
-
 	return ctx, func() {
-		cancelOnce.Do(func() {
-			stop()
-			close(done)
-			cancelTimeout()
-			cancelRun(context.Canceled)
-		})
+		stop()
+		cancelTimeout()
+		cancelRun(context.Canceled)
 	}
-}
-
-// forceCleanup is the second interrupt's response: one forced removal of names, capped at
-// diffprocessor.ForcedCleanupTimeout, reporting to w any container it could not confirm removed along
-// with a command that removes them. It returns the exit code for sig.
-func forceCleanup(sig os.Signal, names []string, remove dp.ContainerRemover, w io.Writer) int {
-	_, _ = fmt.Fprintln(w, "Interrupted again: skipping graceful cleanup.")
-
-	if len(names) > 0 {
-		_, _ = fmt.Fprintf(w, "Forcibly removing %d function container(s)...\n", len(names))
-
-		if left := dp.ForceRemoveContainers(names, remove); len(left) > 0 {
-			_, _ = fmt.Fprintf(w, "Could not confirm removal of %d function container(s). Remove them with:\n  docker rm -f %s\n",
-				len(left), strings.Join(left, " "))
-		}
-	}
-
-	return (&dp.InterruptedError{Signal: sig}).ExitCode()
 }
 
 // interruptedRunResult reports an interrupted run as such: when ctx was cancelled by a signal it
 // returns the interruption as the run's error and sets the matching exit code, replacing whatever the
 // run produced (mostly the cancelled calls the interruption caused). Otherwise err is returned as is.
 func interruptedRunResult(ctx context.Context, err error, exitCode *ExitCode) error {
-	ie := dp.InterruptCause(ctx)
-	if ie == nil {
+	if !dp.Interrupted(ctx) {
 		return err
 	}
 
-	exitCode.Code = dp.DetermineExitCode(ie, false)
+	exitCode.Code = dp.ExitCodeInterrupted
 
-	return ie
+	return dp.ErrInterrupted
 }
 
 // initializeAppContext initializes the application context with timeout, signal handling (see
-// newRunContext) and error handling. proc is the run's processor; a second interrupt force-removes the
-// function containers it reports (see diffprocessor.ContainerNamesOf).
-func initializeAppContext(timeout time.Duration, appCtx *AppContext, log logging.Logger, proc dp.Cleaner) (context.Context, context.CancelFunc, error) {
-	ctx, cancel := newRunContext(timeout, osSignals, func(sig os.Signal) {
-		os.Exit(forceCleanup(sig, dp.ContainerNamesOf(proc), dp.DockerContainerRemover(), os.Stderr))
-	})
+// newRunContext) and error handling.
+func initializeAppContext(parent context.Context, timeout time.Duration, appCtx *AppContext, log logging.Logger) (context.Context, context.CancelFunc, error) {
+	ctx, cancel := newRunContext(parent, timeout)
 	if err := appCtx.Initialize(ctx, log); err != nil {
 		cancel()
 		return nil, nil, errors.Wrap(err, "cannot initialize client")

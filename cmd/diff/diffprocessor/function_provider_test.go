@@ -17,14 +17,10 @@ limitations under the License.
 package diffprocessor
 
 import (
-	"context"
-	"errors"
 	"strings"
 	"testing"
-	"time"
 
 	tu "github.com/crossplane-contrib/crossplane-diff/cmd/diff/testutils"
-	gcmp "github.com/google/go-cmp/cmp"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	apiextensionsv1 "github.com/crossplane/crossplane/apis/v2/apiextensions/v1"
@@ -671,128 +667,6 @@ func TestGenerateContainerName(t *testing.T) {
 			got := generateContainerName(tt.pkg, testInstanceID)
 			if got != tt.want {
 				t.Errorf("generateContainerName(%q, %q) = %q, want %q", tt.pkg, testInstanceID, got, tt.want)
-			}
-		})
-	}
-}
-
-func TestContainerNamesOf(t *testing.T) {
-	functions := []pkgv1.Function{{
-		ObjectMeta: metav1.ObjectMeta{Name: "function-test"},
-		Spec: pkgv1.FunctionSpec{PackageSpec: pkgv1.PackageSpec{
-			Package: "xpkg.io/crossplane/function-go-templating:v0.11.0",
-		}},
-	}}
-	comp := &apiextensionsv1.Composition{ObjectMeta: metav1.ObjectMeta{Name: "test-composition"}}
-
-	newCached := func(t *testing.T) FunctionProvider {
-		t.Helper()
-
-		p := NewCachedFunctionProvider(tu.NewMockFunctionClient().WithSuccessfulFunctionsFetch(functions).Build(), tu.TestLogger(t, false))
-		if _, err := p.GetFunctionsForComposition(comp); err != nil {
-			t.Fatalf("GetFunctionsForComposition() error = %v", err)
-		}
-
-		return p
-	}
-
-	const prefix = "function-go-templating-v0.11.0-comp-"
-
-	tests := map[string]struct {
-		of        func(t *testing.T) any
-		wantCount int
-	}{
-		"CachedProviderTracksStartedContainers": {
-			of:        func(t *testing.T) any { t.Helper(); return newCached(t) },
-			wantCount: 1,
-		},
-		"RegistryOverrideForwards": {
-			of: func(t *testing.T) any {
-				t.Helper()
-				return NewRegistryOverrideFunctionProvider(newCached(t), "registry.example.com", tu.TestLogger(t, false))
-			},
-			wantCount: 1,
-		},
-		"DefaultProviderHasNone": {
-			of: func(t *testing.T) any {
-				t.Helper()
-				return NewDefaultFunctionProvider(tu.NewMockFunctionClient().Build(), tu.TestLogger(t, false))
-			},
-		},
-		"DiffProcessorForwardsItsProvider": {
-			of: func(t *testing.T) any {
-				t.Helper()
-				return &DefaultDiffProcessor{functionProvider: newCached(t)}
-			},
-			wantCount: 1,
-		},
-		"CompProcessorForwardsItsXRProcessor": {
-			of: func(t *testing.T) any {
-				t.Helper()
-				return &DefaultCompDiffProcessor{xrProc: &DefaultDiffProcessor{functionProvider: newCached(t)}}
-			},
-			wantCount: 1,
-		},
-		"UntrackedValue": {of: func(*testing.T) any { return struct{}{} }},
-	}
-
-	for name, tt := range tests {
-		t.Run(name, func(t *testing.T) {
-			got := ContainerNamesOf(tt.of(t))
-			if len(got) != tt.wantCount {
-				t.Fatalf("ContainerNamesOf() = %v, want %d name(s)", got, tt.wantCount)
-			}
-
-			for _, n := range got {
-				if !strings.HasPrefix(n, prefix) {
-					t.Errorf("container name %q, want prefix %q", n, prefix)
-				}
-			}
-		})
-	}
-}
-
-func TestForceRemoveContainers(t *testing.T) {
-	tests := map[string]struct {
-		names  []string
-		remove ContainerRemover
-		want   []string
-	}{
-		"AllRemoved": {
-			names:  []string{"a", "b"},
-			remove: func(context.Context, string) error { return nil },
-		},
-		"FailuresAreUnconfirmedInInputOrder": {
-			names: []string{"a", "b", "c"},
-			remove: func(_ context.Context, n string) error {
-				if n == "a" || n == "c" {
-					return errors.New("no")
-				}
-
-				return nil
-			},
-			want: []string{"a", "c"},
-		},
-		"HungRemoverIsCapped": {
-			names: []string{"a", "b"},
-			remove: func(context.Context, string) error {
-				select {} // never returns, even when its context is cancelled
-			},
-			want: []string{"a", "b"},
-		},
-	}
-
-	for name, tt := range tests {
-		t.Run(name, func(t *testing.T) {
-			start := time.Now()
-			got := ForceRemoveContainers(tt.names, tt.remove)
-
-			if elapsed := time.Since(start); elapsed > ForcedCleanupTimeout+time.Second {
-				t.Errorf("ForceRemoveContainers took %s, want at most about %s", elapsed, ForcedCleanupTimeout)
-			}
-
-			if diff := gcmp.Diff(tt.want, got); diff != "" {
-				t.Errorf("ForceRemoveContainers() -want +got:\n%s", diff)
 			}
 		})
 	}

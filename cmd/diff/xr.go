@@ -17,6 +17,8 @@ limitations under the License.
 package main
 
 import (
+	"context"
+
 	"github.com/alecthomas/kong"
 	dp "github.com/crossplane-contrib/crossplane-diff/cmd/diff/diffprocessor"
 	ld "github.com/crossplane/cli/v2/cmd/crossplane/common/load"
@@ -96,7 +98,7 @@ func makeDefaultXRLoader(c *XRCmd) (ld.Loader, error) {
 }
 
 // Run executes the XR diff command.
-func (c *XRCmd) Run(_ *kong.Context, log logging.Logger, appCtx *AppContext, proc dp.DiffProcessor, loader ld.Loader, exitCode *ExitCode) (err error) {
+func (c *XRCmd) Run(sigCtx context.Context, _ *kong.Context, log logging.Logger, appCtx *AppContext, proc dp.DiffProcessor, loader ld.Loader, exitCode *ExitCode) (err error) {
 	// the rest config here is provided by a function in main.go that's only invoked for commands that request it
 	// in their arguments.  that means we won't get "can't find kubeconfig" errors for cases where the config isn't asked for.
 
@@ -107,7 +109,7 @@ func (c *XRCmd) Run(_ *kong.Context, log logging.Logger, appCtx *AppContext, pro
 	// TODO:  diff against upgraded schema that isn't applied yet
 	// TODO:  diff against upgraded composition that isn't applied yet
 	// TODO:  diff against upgraded composition version that is already available
-	ctx, cancel, err := initializeAppContext(c.Timeout, appCtx, log, proc)
+	ctx, cancel, err := initializeAppContext(sigCtx, c.Timeout, appCtx, log)
 	if err != nil {
 		exitCode.Code = dp.ExitCodeToolError
 		return err
