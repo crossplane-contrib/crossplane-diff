@@ -507,6 +507,8 @@ The tool reads from the cluster to gather definitions and current state, and rou
 - **Resources that already exist** are server-side applied (`patch`).
 - **Additions** are created (`create`), which is what `--dry-run-on=all` (the default) does. Server-side apply cannot serve this path: it is a PUT-shaped request to a named path, and an addition that relies on `metadata.generateName` has no name yet.
 
+Either request carries exactly what the composition rendered (or, for the XR, your manifest plus what rendering adds to it), never defaults the tool predicted itself. Under server-side apply every field in a request claims ownership of it, so sending a locally predicted default would report a field another manager owns as about to change when applying would leave it alone. The apiserver applies the defaults itself.
+
 Although nothing is ever persisted, the apiserver authorizes a dry run exactly as it would the real request, so read-only access is **not** sufficient.
 
 ### Read-only (`get`, `list`, `watch`)
@@ -527,10 +529,10 @@ This one is not optional and does not degrade. An existing resource's diff depen
 
 On the same API groups. The `create` verb authorizes the dry-run create behind `--dry-run-on=all`, which is what makes a `+++` diff show the resource as the *apiserver* would store it rather than as the render pipeline emitted it. Two things are only visible this way:
 
-- **Defaults on built-in Kubernetes types.** For CRD-backed types the tool already applies the CRD's `default:` values locally before diffing, so those have never been missing. A built-in type (a `ConfigMap`, a `Deployment`) has no CRD to read them from, so its defaults — `spec.strategy.type`, `spec.template.spec.restartPolicy`, `imagePullPolicy`, and so on — only appear once the apiserver has seen the object.
+- **Defaults on built-in Kubernetes types.** For CRD-backed types the CRD's `default:` values appear either way: from the apiserver, or — where the dry run is skipped or degrades — predicted locally from the CRD. A built-in type (a `ConfigMap`, a `Deployment`) has no CRD to read them from, so its defaults — `spec.strategy.type`, `spec.template.spec.restartPolicy`, `imagePullPolicy`, and so on — only appear once the apiserver has seen the object.
 - **Mutating admission output, for any type.** Nothing local can predict what a mutating webhook will do.
 
-Unlike `patch`, this one **degrades per-resource rather than failing the run**. A resource that could not be verified falls back to the rendered output and is marked in structured output with a `dryRun` object saying why (see [Structured Output](#structured-output-jsonyaml)); each raises one warning per GVK + namespace + distinct cause, not one per resource, and a second, different cause in the same namespace is reported too rather than hidden behind the first. The reasons are:
+Unlike `patch`, this one **degrades per-resource rather than failing the run**. A resource that could not be verified falls back to the rendered output, with its CRD's `default:` values predicted locally, and is marked in structured output with a `dryRun` object saying why (see [Structured Output](#structured-output-jsonyaml)); each raises one warning per GVK + namespace + distinct cause, not one per resource, and a second, different cause in the same namespace is reported too rather than hidden behind the first. The reasons are:
 
 | `dryRun.skipReason` | Cause |
 |---------------------|-------|

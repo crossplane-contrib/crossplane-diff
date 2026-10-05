@@ -58,6 +58,11 @@ classDiagram
         +CalculateRemovedResourceDiffs(ctx, xr, rendered) (map[string]*ResourceDiff, error)
     }
 
+    class SchemaDefaulter {
+        <<interface>>
+        +Default(ctx, obj) (*Unstructured, error)
+    }
+
     class ResourceManager {
         <<interface>>
         +FetchCurrentObject(ctx, composite, desired) (*Unstructured, bool, error)
@@ -148,6 +153,7 @@ classDiagram
     DiffProcessor --> FunctionProvider
     DiffProcessor --> InputValidator
     DiffProcessor --> DiffRenderer
+    DiffCalculator --> SchemaDefaulter
     CompDiffProcessor --> CompDiffRenderer
 
     AppContext --> KubernetesClients

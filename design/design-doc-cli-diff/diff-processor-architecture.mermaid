@@ -69,6 +69,7 @@ classDiagram
     class ComponentFactories {
         +ResourceManager
         +SchemaValidator
+        +SchemaDefaulter
         +DiffCalculator
         +DiffRenderer
         +CompDiffRenderer
@@ -82,6 +83,11 @@ classDiagram
         +ValidateResources(ctx, xr, composed) error
         +EnsureComposedResourceCRDs(ctx, resources) error
         +ValidateScopeConstraints(ctx, resource, ns, isClaimRoot) error
+    }
+
+    class SchemaDefaulter {
+        <<interface>>
+        +Default(ctx, obj) (*Unstructured, error)
     }
 
     class DiffCalculator {
@@ -150,3 +156,4 @@ classDiagram
     ProcessorConfig --> ComponentFactories
 
     DiffCalculator --> ResourceManager
+    DiffCalculator --> SchemaDefaulter : additions without a dry run
