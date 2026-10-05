@@ -1997,17 +1997,17 @@ func TestDefaultDiffCalculator_preserveExistingResourceIdentity(t *testing.T) {
 	}
 }
 
-// TestDefaultDiffCalculator_DegradationWarnings covers how degraded dry runs surface as warnings: one
-// per GVK + namespace + distinct cause, with no cause ever dropped.
+// TestDefaultDiffCalculator_DegradedDryRunDetail covers what a degraded dry run records on the diff,
+// which is everything the renderer's summary of unverified additions is built from: one warning per
+// GVK + namespace + distinct cause, counting its resources (see renderer.dryRunWarnings).
 //
-// It runs through a real WarningLogger because that is where the deduplication happens. The calculator
-// holds no dedup state; it relies on WarningLogger collapsing warnings identical in message and context.
-// A capturing stub would record every Info call and could not tell whether production output repeats.
+// For that grouping to work, dryRun.detail must be the cause and nothing else. The mock wraps its error
+// exactly as DefaultApplyClient.DryRunCreate does, naming the resource, because that wrapper is what
+// made every resource's cause unique when err.Error() was used.
 //
-// Each case is a property the calculator has to get right for that dedup to work. The mock wraps its
-// error exactly as DefaultApplyClient.DryRunCreate does, naming the resource, because that wrapper is
-// what made every resource's warning unique when err.Error() was used as the cause.
-func TestDefaultDiffCalculator_DegradationWarnings(t *testing.T) {
+// It also pins that the calculator raises no warning of its own. It runs through a real WarningLogger
+// so that a regression which warned from here again, duplicating the renderer's summary, is caught.
+func TestDefaultDiffCalculator_DegradedDryRunDetail(t *testing.T) {
 	// wrapLikeApplyClient reproduces DefaultApplyClient.DryRunCreate's wrapping, resource name included.
 	wrapLikeApplyClient := func(obj *un.Unstructured, err error) error {
 		return errors.Wrapf(err, "failed to dry-run create resource %s/%s", obj.GetKind(), obj.GetName())
@@ -2020,26 +2020,19 @@ func TestDefaultDiffCalculator_DegradationWarnings(t *testing.T) {
 		return r
 	}
 
-	const (
-		forbiddenMsg     = "skipped apiserver verification of added resources: not authorized to create them, so their diffs omit server-side defaulting and admission"
-		namespaceMsg     = "skipped apiserver verification of added resources: their namespace does not exist yet, so their diffs omit server-side defaulting and admission"
-		webhookMsg       = "skipped apiserver verification of added resources: the cluster could not complete admission"
-		testResourceGVK  = "example.org/v1, Kind=TestResource"
-		otherResourceGVK = "example.org/v1, Kind=OtherResource"
-	)
-
 	tests := map[string]struct {
 		reason        string
 		desired       []*un.Unstructured
 		dryRunCreate  func(context.Context, *un.Unstructured) (*un.Unstructured, error)
 		accessChecker k8.AccessChecker
-		want          []dt.OutputWarning
-		// wantDetails is each resource's dryRun.detail, in input order. It must carry the same cause as
-		// the warning and no resource name, or a summary derived from it (#516) would split per resource.
+		// wantReason is every resource's dryRun.skipReason.
+		wantReason dt.DryRunSkipReason
+		// wantDetails is each resource's dryRun.detail, in input order. It must carry the cause and no
+		// resource name, or the summary derived from it would split per resource.
 		wantDetails []string
 	}{
-		"ForbiddenCollapsesPerGVKAndNamespace": {
-			reason: "Four denied additions across three GVK+namespace groups raise three warnings, not four.",
+		"ForbiddenCarriesTheAuthorizerReason": {
+			reason: "Denied additions across several GVK+namespace groups each carry the authorizer's reason, not the 403.",
 			desired: []*un.Unstructured{
 				resource("TestResource", "a", "ns-a"),
 				resource("TestResource", "b", "ns-a"),
@@ -2050,15 +2043,11 @@ func TestDefaultDiffCalculator_DegradationWarnings(t *testing.T) {
 				return nil, wrapLikeApplyClient(obj, apierrors.NewForbidden(schema.GroupResource{Group: "example.org", Resource: "testresources"}, obj.GetName(), errors.New("nope")))
 			},
 			accessChecker: tu.NewMockAccessChecker().WithDenied("no create").Build(),
-			want: []dt.OutputWarning{
-				{Message: forbiddenMsg, Context: map[string]string{"gvk": testResourceGVK, "namespace": "ns-a", "reason": "no create"}},
-				{Message: forbiddenMsg, Context: map[string]string{"gvk": testResourceGVK, "namespace": "ns-b", "reason": "no create"}},
-				{Message: forbiddenMsg, Context: map[string]string{"gvk": otherResourceGVK, "namespace": "ns-a", "reason": "no create"}},
-			},
-			wantDetails: []string{"no create", "no create", "no create", "no create"},
+			wantReason:    dt.DryRunSkipForbidden,
+			wantDetails:   []string{"no create", "no create", "no create", "no create"},
 		},
-		"ResourceNamedWrapperDoesNotDefeatDedup": {
-			reason: "The cause is the apiserver's own message, not the wrapped error that names each resource. With err.Error() as the cause, three resources in one namespace would raise three warnings.",
+		"ResourceNamedWrapperDoesNotLeakIntoTheCause": {
+			reason: "The cause is the apiserver's own message, not the wrapped error that names each resource. With err.Error() as the cause, three resources in one namespace would be summarised as three warnings.",
 			desired: []*un.Unstructured{
 				resource("TestResource", "a", "ns-a"),
 				resource("TestResource", "b", "ns-a"),
@@ -2067,13 +2056,11 @@ func TestDefaultDiffCalculator_DegradationWarnings(t *testing.T) {
 			dryRunCreate: func(_ context.Context, obj *un.Unstructured) (*un.Unstructured, error) {
 				return nil, wrapLikeApplyClient(obj, apierrors.NewNotFound(schema.GroupResource{Resource: "namespaces"}, obj.GetNamespace()))
 			},
-			want: []dt.OutputWarning{
-				{Message: namespaceMsg, Context: map[string]string{"gvk": testResourceGVK, "namespace": "ns-a", "cause": `namespaces "ns-a" not found`}},
-			},
+			wantReason:  dt.DryRunSkipNamespaceNotFound,
 			wantDetails: []string{`namespaces "ns-a" not found`, `namespaces "ns-a" not found`, `namespaces "ns-a" not found`},
 		},
 		"DistinctCausesAreAllKept": {
-			reason: "Two different apiserver causes in one GVK+namespace group are two warnings. A dedup keyed on reason alone would keep whichever came first and silently drop the other, and the text renderer has no other way to show it.",
+			reason: "Two different apiserver causes in one GVK+namespace group are recorded as two causes, so the summary can keep both rather than whichever came first.",
 			desired: []*un.Unstructured{
 				resource("TestResource", "a", "ns-a"),
 				resource("TestResource", "b", "ns-a"),
@@ -2087,10 +2074,7 @@ func TestDefaultDiffCalculator_DegradationWarnings(t *testing.T) {
 
 				return nil, wrapLikeApplyClient(obj, apierrors.NewInternalError(errors.Errorf("failed calling webhook %q: connection refused", webhook)))
 			},
-			want: []dt.OutputWarning{
-				{Message: webhookMsg, Context: map[string]string{"gvk": testResourceGVK, "namespace": "ns-a", "cause": `Internal error occurred: failed calling webhook "policy.example.org": connection refused`}},
-				{Message: webhookMsg, Context: map[string]string{"gvk": testResourceGVK, "namespace": "ns-a", "cause": `Internal error occurred: failed calling webhook "quota.example.org": connection refused`}},
-			},
+			wantReason: dt.DryRunSkipWebhookUnavailable,
 			wantDetails: []string{
 				`Internal error occurred: failed calling webhook "policy.example.org": connection refused`,
 				`Internal error occurred: failed calling webhook "quota.example.org": connection refused`,
@@ -2131,17 +2115,21 @@ func TestDefaultDiffCalculator_DegradationWarnings(t *testing.T) {
 					t.Fatalf("\n%s\nCalculateDiff(%s/%s) unexpected error: %v", tc.reason, d.GetKind(), d.GetName(), err)
 				}
 
-				// Every degraded resource must carry the typed field; the warning is the human channel and
-				// cannot substitute for it, because a warning has no resource anchor.
+				// Every degraded resource must carry the typed field: it is both the machine-readable record
+				// and what the human-facing summary is derived from.
 				if diff.DryRun == nil {
 					t.Fatalf("\n%s\n%s/%s: expected a dryRun report, got none", tc.reason, d.GetKind(), d.GetName())
+				}
+
+				if diff.DryRun.SkipReason != tc.wantReason {
+					t.Errorf("\n%s\n%s/%s: dryRun.skipReason = %q, want %q", tc.reason, d.GetKind(), d.GetName(), diff.DryRun.SkipReason, tc.wantReason)
 				}
 
 				gotDetails = append(gotDetails, diff.DryRun.Detail)
 			}
 
-			if d := gcmp.Diff(tc.want, warnings.Warnings()); d != "" {
-				t.Errorf("\n%s\nwarnings mismatch (-want +got):\n%s", tc.reason, d)
+			if got := warnings.Warnings(); got != nil {
+				t.Errorf("\n%s\nthe calculator raised warnings, but the renderer summarises degraded dry runs: %v", tc.reason, got)
 			}
 
 			if d := gcmp.Diff(tc.wantDetails, gotDetails); d != "" {

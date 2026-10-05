@@ -33,6 +33,7 @@ import (
 	gcmp "github.com/google/go-cmp/cmp"
 	"github.com/google/go-cmp/cmp/cmpopts"
 	un "k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	k8stypes "k8s.io/apimachinery/pkg/types"
 
 	"github.com/crossplane/crossplane-runtime/v2/pkg/logging"
@@ -1427,6 +1428,10 @@ func TestDefaultCompDiffProcessor_collectXRDiffs_NestedXRCompositionLookup(t *te
 // TestDefaultCompDiffProcessor_DiffComposition_StderrErrorOutput verifies that when
 // XR processing fails, detailed errors are written to stderr for human visibility.
 // This tests the WithStderr option and the stderr error output path.
+//
+// It also pins that a failed XR's additions that could not be verified against the apiserver are
+// still summarised there. Its diffs are dropped, so without being carried to the renderer the summary
+// would silently lose them.
 func TestDefaultCompDiffProcessor_DiffComposition_StderrErrorOutput(t *testing.T) {
 	ctx := t.Context()
 
@@ -1456,11 +1461,21 @@ func TestDefaultCompDiffProcessor_DiffComposition_StderrErrorOutput(t *testing.T
 		ResourceTree: tu.NewMockResourceTreeClient().Build(),
 	}
 
-	// Create mock XR processor that fails for one XR
+	// unverified is an addition fail-xr computed before failing, whose dry-run create was skipped.
+	unverified := &dt.ResourceDiff{
+		Gvk:          schema.GroupVersionKind{Group: "example.org", Version: "v1", Kind: "Bucket"},
+		Namespace:    "missing",
+		ResourceName: "fail-xr-bucket",
+		DiffType:     dt.DiffTypeAdded,
+		DryRun:       &dt.DryRunInfo{SkipReason: dt.DryRunSkipNamespaceNotFound, Detail: `namespaces "missing" not found`},
+	}
+
+	// Create mock XR processor that fails for one XR, returning what it had computed before failing,
+	// as DiffSingleResource does.
 	mockXRProc := &tu.MockDiffProcessor{
 		DiffSingleResourceFn: func(_ context.Context, res *un.Unstructured, _ types.CompositionProvider) (map[string]*dt.ResourceDiff, error) {
 			if res.GetName() == "fail-xr" {
-				return nil, fmt.Errorf("render pipeline failed: function timeout")
+				return map[string]*dt.ResourceDiff{unverified.GetDiffKey(): unverified}, fmt.Errorf("render pipeline failed: function timeout")
 			}
 
 			return make(map[string]*dt.ResourceDiff), nil
@@ -1510,6 +1525,13 @@ func TestDefaultCompDiffProcessor_DiffComposition_StderrErrorOutput(t *testing.T
 
 	if !strings.Contains(stderrOutput, "render pipeline failed") {
 		t.Errorf("Expected stderr to contain error message 'render pipeline failed', got: %q", stderrOutput)
+	}
+
+	const wantSummary = `WARNING: skipped apiserver verification of added resources: their namespace does not exist yet, ` +
+		`so their diffs omit server-side defaulting and admission ` +
+		`(cause=namespaces "missing" not found, count=1, gvk=example.org/v1, Kind=Bucket, namespace=missing)`
+	if !strings.Contains(stderrOutput, wantSummary) {
+		t.Errorf("Expected stderr to summarise the failed XR's unverified addition as %q, got: %q", wantSummary, stderrOutput)
 	}
 }
 

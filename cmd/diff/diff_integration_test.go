@@ -665,14 +665,14 @@ func TestDiffIntegration(t *testing.T) {
 				And().
 				// One warning per GVK, and each cause exactly the apiserver's message. Through the REAL
 				// ApplyClient, whose error is wrapped with "failed to dry-run create resource <Kind>/<name>":
-				// if that wrapper leaked into the cause, every resource would be a distinct warning and
-				// WarningLogger could never collapse them. The unit test mirrors the wrapping by hand; this
-				// pins it against the client that actually produces it.
+				// if that wrapper leaked into the cause, every resource would be a distinct warning. The unit
+				// test mirrors the wrapping by hand; this pins it against the client that actually produces it.
 				WithWarning("their namespace does not exist yet").
 				WithWarningContext(map[string]string{
 					"gvk":       "ns.diff.example.org/v1alpha1, Kind=XNopResource",
 					"namespace": "nonexistent-namespace",
 					"cause":     `namespaces "nonexistent-namespace" not found`,
+					"count":     "1",
 				}).
 				And().
 				WithWarning("their namespace does not exist yet").
@@ -680,9 +680,75 @@ func TestDiffIntegration(t *testing.T) {
 					"gvk":       "ns.nop.example.org/v1alpha1, Kind=XDownstreamResource",
 					"namespace": "nonexistent-namespace",
 					"cause":     `namespaces "nonexistent-namespace" not found`,
+					"count":     "1",
 				}),
 			expectedError:    false,
 			expectedExitCode: dp.ExitCodeDiffDetected,
+		},
+		// Human-readable output shows no dryRun at all, so stderr is the only place a person learns that
+		// additions went unverified, and how many. Two inputs into one missing namespace share each GVK's
+		// warning rather than raising one per resource.
+		"UnverifiedAdditionsAcrossInputsAreCountedInOneWarning": {
+			reason: "In text mode, additions that could not be verified are summarised on stderr once per GVK + namespace + cause, with a count of the resources behind it",
+			inputFiles: []string{
+				"testdata/diff/new-xr-missing-namespace.yaml",
+				"testdata/diff/new-xr-missing-namespace-second.yaml",
+			},
+			setupFiles: []string{
+				"testdata/diff/resources/xrd.yaml",
+				"testdata/diff/resources/composition.yaml",
+				"testdata/diff/resources/functions.yaml",
+			},
+			noColor: true,
+			expectedStderrContains: []string{
+				`WARNING: skipped apiserver verification of added resources: their namespace does not exist yet, so their diffs omit server-side defaulting and admission ` +
+					`(cause=namespaces "nonexistent-namespace" not found, count=2, gvk=ns.diff.example.org/v1alpha1, Kind=XNopResource, namespace=nonexistent-namespace)`,
+				`WARNING: skipped apiserver verification of added resources: their namespace does not exist yet, so their diffs omit server-side defaulting and admission ` +
+					`(cause=namespaces "nonexistent-namespace" not found, count=2, gvk=ns.nop.example.org/v1alpha1, Kind=XDownstreamResource, namespace=nonexistent-namespace)`,
+			},
+			expectedOutput:   "+++ XDownstreamResource/second-resource",
+			expectedError:    false,
+			expectedExitCode: dp.ExitCodeDiffDetected,
+		},
+		// A failed XR emits no diffs, but what it learned before failing is not news it may swallow: the
+		// additions it could not verify are still summarised, in warnings[] and on stderr. The cycle fails
+		// at --max-nested-depth after diffing every level, so the count covers each level of the tree:
+		// XCycleA at depths 0, 2, ..., 10 and XCycleB at depths 1, 3, ..., 11.
+		"FailedXRStillReportsItsUnverifiedAdditions": {
+			reason:       "An XR that fails after diffing additions it could not verify still has those additions summarised as warnings",
+			outputFormat: "json",
+			setupFiles: []string{
+				"testdata/diff/resources/cycle/xrds.yaml",
+				"testdata/diff/resources/cycle/compositions.yaml",
+				"testdata/diff/resources/functions.yaml",
+			},
+			inputFiles:    []string{"testdata/diff/new-cycle-xr-missing-namespace.yaml"},
+			expectedError: true,
+			expectedStderrContains: []string{
+				`WARNING: skipped apiserver verification of added resources: their namespace does not exist yet, so their diffs omit server-side defaulting and admission ` +
+					`(cause=namespaces "nonexistent-namespace" not found, count=6, gvk=ns.cycle.example.org/v1alpha1, Kind=XCycleA, namespace=nonexistent-namespace)`,
+			},
+			expectedExitCode: dp.ExitCodeToolError,
+			expectedStructuredOutput: tu.ExpectDiff().
+				WithSummary(0, 0, 0).
+				WithError("XCycleA/test-cycle").
+				WithMessageContaining("maximum nesting depth exceeded").
+				AndError().
+				WithWarning("their namespace does not exist yet").
+				WithWarningContext(map[string]string{
+					"gvk":       "ns.cycle.example.org/v1alpha1, Kind=XCycleA",
+					"namespace": "nonexistent-namespace",
+					"cause":     `namespaces "nonexistent-namespace" not found`,
+					"count":     "6",
+				}).
+				And().
+				WithWarning("their namespace does not exist yet").
+				WithWarningContext(map[string]string{
+					"gvk":       "ns.cycle.example.org/v1alpha1, Kind=XCycleB",
+					"namespace": "nonexistent-namespace",
+					"cause":     `namespaces "nonexistent-namespace" not found`,
+					"count":     "6",
+				}),
 		},
 		"BuiltInResourceAdditionPicksUpApiserverDefaults": {
 			// The choice of a built-in type is what makes this test non-vacuous. applyCRDDefaults
@@ -4531,6 +4597,44 @@ Summary: 2 modified`,
 				WithDownstreamResource("added", "XDownstreamResource", "test-resource", "default").
 				WithDryRunSkipped("disabled", "").
 				WithField("spec.forProvider.configData", "updated-existing-value"),
+			expectedError: false,
+		},
+		// The unverified-addition warning through `comp`: one run-wide summary in the top-level
+		// warnings[], counting the downstream additions behind it, rather than one per composition.
+		// A cluster-scoped XR is what lets the composition reach a namespace that does not exist.
+		"CompDownstreamAdditionsInMissingNamespaceAreCountedInOneWarning": {
+			reason:       "`comp` summarises downstream additions it could not verify as one warning per GVK + namespace + cause, with a count",
+			outputFormat: "json",
+			setupFiles: []string{
+				"testdata/diff/resources/cluster-xrd.yaml",
+				"testdata/comp/resources/unverified-cluster-composition.yaml",
+				"testdata/comp/resources/functions.yaml",
+				"testdata/comp/resources/existing-unverified-cluster-xr.yaml",
+			},
+			inputFiles:       []string{"testdata/comp/updated-unverified-cluster-composition.yaml"},
+			expectedExitCode: dp.ExitCodeDiffDetected,
+			expectedStderrContains: []string{
+				`WARNING: skipped apiserver verification of added resources: their namespace does not exist yet, so their diffs omit server-side defaulting and admission ` +
+					`(cause=namespaces "nonexistent-namespace" not found, count=2, gvk=/v1, Kind=ConfigMap, namespace=nonexistent-namespace)`,
+			},
+			expectedStructuredCompOutput: tu.ExpectCompDiff().
+				WithWarning("their namespace does not exist yet").
+				WithWarningContext(map[string]string{
+					"gvk":       "/v1, Kind=ConfigMap",
+					"namespace": "nonexistent-namespace",
+					"cause":     `namespaces "nonexistent-namespace" not found`,
+					"count":     "2",
+				}).
+				And().
+				WithComposition("xnopresources-unverified.diff.example.org").
+				WithCompositionModified().
+				WithXRImpact("XNopResource", "unverified-xr", "", "changed").
+				WithDownstreamSummary(2, 0, 0).
+				WithDownstreamResource("added", "ConfigMap", "unverified-xr-first", "nonexistent-namespace").
+				WithDryRunSkipped("namespaceNotFound", "nonexistent-namespace").
+				AndXR().
+				WithDownstreamResource("added", "ConfigMap", "unverified-xr-second", "nonexistent-namespace").
+				WithDryRunSkipped("namespaceNotFound", "nonexistent-namespace"),
 			expectedError: false,
 		},
 		// --resource flag tests (issue #321)

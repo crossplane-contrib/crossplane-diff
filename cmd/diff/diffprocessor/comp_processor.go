@@ -49,6 +49,9 @@ type XRDiffResult struct {
 	// Error contains any error that occurred while processing this XR.
 	// nil means processing was successful.
 	Error error
+	// DroppedUnverified is set only alongside Error: the unverified additions among the diffs computed
+	// before the failure. See unverifiedDiffs.
+	DroppedUnverified map[string]*dt.ResourceDiff
 }
 
 // HasChanges returns true if this XR has downstream resource changes.
@@ -620,10 +623,12 @@ func (p *DefaultCompDiffProcessor) collectXRDiffs(ctx context.Context, xrs []*un
 		if err != nil {
 			p.config.Logger.Debug("Failed to process resource", "resource", resourceID, "error", err)
 
-			// Store the error in the result
+			// Store the error in the result. The diffs computed before the failure are not a result,
+			// but the unverified additions among them are kept for the dry-run summary.
 			results[resourceID] = &XRDiffResult{
-				Diffs: make(map[string]*dt.ResourceDiff),
-				Error: errors.Wrapf(err, "unable to process resource %s", resourceID),
+				Diffs:             make(map[string]*dt.ResourceDiff),
+				Error:             errors.Wrapf(err, "unable to process resource %s", resourceID),
+				DroppedUnverified: unverifiedDiffs(diffs),
 			}
 		} else {
 			// Store successful result with diffs
@@ -1184,6 +1189,7 @@ func (p *DefaultCompDiffProcessor) buildImpactAnalysis(xrs []*un.Unstructured, r
 		case result != nil && result.HasError():
 			impact.Status = renderer.XRStatusError
 			impact.Error = result.Error
+			impact.DroppedUnverified = result.DroppedUnverified
 			summary.WithErrors++
 		case result != nil && result.HasChanges():
 			impact.Status = renderer.XRStatusChanged

@@ -274,6 +274,10 @@ The integration test cases cover:
   `WithFieldError` builder chain to pin specific GVKs, namespaces, statuses, error types (`schema`, `cel`,
   `unknownField`, `defaulting`), and field paths. Message wording is intentionally not asserted so apimachinery
   upgrades can shift phrasing without breaking tests.
+- **Unverified-Addition Summary**: Additions whose dry-run create was skipped are summarised as one counted warning
+  per GVK + namespace + cause, asserted with `WithWarning` / `WithWarningContext` (including `count`) and on stderr —
+  across several `xr` inputs, through `comp` as one run-wide summary, and for an XR that fails after diffing such
+  additions (`FailedXRStillReportsItsUnverifiedAdditions`), whose dropped diffs must not take the warning with them.
 
 ### 4.11 Composition Diff Scenarios
 
@@ -928,13 +932,12 @@ Three fields are restored from our side after a successful dry-run create:
 
 #### 6.3.3 Degrade, report, or fail
 
-An addition that could not be verified falls back to the rendered object and carries a `DryRunInfo` saying why; the
-calculator also raises a warning whose context is the GVK, the namespace and the cause, and leaves deduplication to
-`WarningLogger`, which already collapses warnings identical in message and context. A composition rendering forty new
-resources of one kind therefore says so once, and a second, distinct cause in the same namespace is a second warning
-rather than being hidden behind the first. The calculator keeps no dedup state of its own. The cause is the apiserver's
-own `Status().Message`, not the wrapped error, because `ApplyClient` wraps with the resource's name: as a cause, that
-would make every resource a distinct warning. `DryRunInfo.Detail` carries the same value. A resource the cluster
+An addition that could not be verified falls back to the rendered object and carries a `DryRunInfo` saying why. The
+calculator raises no warning about it: what to tell a human, and how to group it, is a presentation decision, so the
+renderers derive the summary from the `DryRunInfo` on the diffs (§6.8.1 Interfaces, *Summary of unverified
+additions*). `DryRunInfo.Detail` is the apiserver's own
+`Status().Message`, not the wrapped error, because `ApplyClient` wraps with the resource's name: as a cause, that
+would make every resource's summary a distinct warning. A resource the cluster
 *refuses* is a finding, not a degradation, and becomes a `SchemaValidationError` via `NewAdmissionRejectionError` —
 exit code 2, with a `ResourceValidationFailure` whose single `FieldValidationError` has `Type: "admission"`. The
 classification is by status class only, never by message text:
@@ -1235,7 +1238,9 @@ type DiffRenderer interface {
     // writer is held by the renderer (configured at construction time), not passed in per call, so
     // the same interface can serve human-readable and structured renderers without leaking
     // io.Writer. warnings is for structured output only: each warning already went to stderr when
-    // it was raised, so the human renderer ignores it.
+    // it was raised, so the human renderer ignores it. The one warning derived here instead, the
+    // summary of unverified additions, goes to stderr from every renderer and is appended to
+    // warnings[] by the structured one.
     RenderDiffs(groups []dt.XRDiffGroup, errs []dt.OutputError, warnings []dt.OutputWarning) error
 }
 
@@ -1252,6 +1257,28 @@ failure); the processor builds them in `PerformDiff`, one per input, in input or
 renderer renders per-XR sections when more than one XR is present (a single XR, and the
 composition renderer's identity-less internal reuse, render as a flat block); the structured
 renderer emits both the deprecated flat `changes[]` and the grouped `xrs[]`.
+
+**Summary of unverified additions.** Every renderer derives one kind of warning itself rather than
+receiving it: the advisory that added resources could not be verified against the apiserver (§6.3.3).
+`dryRunWarnings` (`renderer/dry_run_warnings.go`) groups the diffs' `DryRunInfo` by GVK, namespace,
+skip reason and `Detail`, and emits one `OutputWarning` per group with `gvk`, `namespace`, the detail
+(under `cause`, or `reason` for `forbidden`) and `count`, the number of distinct resources behind it,
+in `Context`. Grouping on the detail is what keeps every distinct cause visible: the text renderer
+shows no `DryRunInfo`, so the summary is a human's only view of it. `disabled` is not summarised —
+the user chose `--dry-run-on=existing`. The summaries are sorted (diffs arrive in map order), so they
+change the order of `warnings[]`: they come after the warnings raised during the run, grouped, and on
+stderr just before any errors. For `comp` there is one run-wide summary, across every composition,
+because `warnings[]` is top-level; the human comp renderer reuses `DefaultDiffRenderer` per
+composition with identity-less groups, so `DefaultDiffRenderer` summarises identity-bearing groups
+only and leaves the run-wide summary to `DefaultCompDiffRenderer`.
+
+A failed XR emits no diffs, so the summary would silently lose the additions it could not verify
+before failing. They are carried instead: `diffSingleResourceInternal`, `ProcessNestedXRs` and
+`DiffSingleResource` return the diffs computed so far alongside an error (not as a result), and the
+processors keep only those carrying a `DryRunInfo` (`unverifiedDiffs`) on the failed XR's entry —
+`XRDiffGroup.DroppedUnverified` for `xr`, `XRImpact.DroppedUnverified` for `comp`. Neither is ever
+rendered as a diff; the summariser reads them alongside `Diffs`. This covers both a render that
+failed and one whose diffs `InputValidator`'s verdict replaced.
 
 Implementations:
 
@@ -1496,7 +1523,7 @@ contract:
   keeps the emitted JSON self-describing, so a consumer reading a `dryRun` object need not know that mere presence
   implies degradation, and it leaves room to emit the struct unconditionally later without a schema break.
 
-  The warning raised alongside it (§6.3.3) is the human channel and does not replace this one: an `OutputWarning` has no
+  The warning summarised from it (§6.8.1 Interfaces) is the human channel and does not replace this one: an `OutputWarning` has no
   resource anchor, so it cannot tell a pipeline *which* additions were degraded.
 - `OutputWarning` — non-fatal advisory envelope, carried on both XR and comp diff outputs as
   `warnings[]`. Carries a `Message` plus an optional `Context map[string]string` holding the log
@@ -1512,7 +1539,8 @@ contract:
   render time. Emitting at render time would lose any warning raised during a run that fails before
   rendering, and would report warnings out of chronological order with the work that produced them.
   `DiffRenderer.RenderDiffs` therefore takes warnings for structured output only; the human renderer
-  ignores the parameter.
+  ignores the parameter. The exception is the summary of unverified additions, which can only be built
+  once the diffs exist and is derived by the renderers themselves (§6.8.1 Interfaces).
 - `OutputError` — error envelope used by both XR and comp diff outputs. Carries:
     - `ResourceID`: which user-supplied input the diff was processing (one entry per batched run)
     - `Message`: human-readable error string

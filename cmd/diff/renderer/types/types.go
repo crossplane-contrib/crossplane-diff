@@ -43,6 +43,13 @@ type XRDiffGroup struct {
 	NameGenerated bool
 	Diffs         map[string]*ResourceDiff
 	Err           *OutputError
+
+	// DroppedUnverified is set only for a failed XR. It holds the diffs computed before the failure
+	// that carry a DryRunInfo — additions whose desired state could not be verified against the
+	// apiserver. Diffs is dropped for a failed XR, since no partial result is emitted, so without this
+	// the renderer's summary of unverified additions would silently lose them. It is never rendered as
+	// a diff.
+	DroppedUnverified map[string]*ResourceDiff
 }
 
 // ResourceViews holds the two representations of a single resource involved in

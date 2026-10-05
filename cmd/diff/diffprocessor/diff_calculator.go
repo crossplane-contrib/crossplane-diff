@@ -511,11 +511,7 @@ func (c *DefaultDiffCalculator) dryRunCreateAddition(ctx context.Context, desire
 		// would break a supported workflow to report something that may not be true by the time it
 		// matters. TestDiffConcurrentDirectory diffs 21 XRs into a namespace that is never created and
 		// is exactly this case.
-		cause := apiserverMessage(err)
-		c.warnUnverified("skipped apiserver verification of added resources: their namespace does not exist yet, so their diffs omit server-side defaulting and admission",
-			desired, "cause", cause)
-
-		return desired, &dt.DryRunInfo{SkipReason: dt.DryRunSkipNamespaceNotFound, Detail: cause}, nil
+		return desired, &dt.DryRunInfo{SkipReason: dt.DryRunSkipNamespaceNotFound, Detail: apiserverMessage(err)}, nil
 
 	case apierrors.IsInvalid(err):
 		return nil, nil, NewAdmissionRejectionError(resourceID, desired, err)
@@ -530,11 +526,7 @@ func (c *DefaultDiffCalculator) dryRunCreateAddition(ctx context.Context, desire
 		// The apiserver could not complete the admission chain — classically an unreachable webhook
 		// with failurePolicy: Fail. We cannot know what it would have done, so we must not present
 		// rendered output as though it were verified.
-		cause := apiserverMessage(err)
-		c.warnUnverified("skipped apiserver verification of added resources: the cluster could not complete admission",
-			desired, "cause", cause)
-
-		return desired, &dt.DryRunInfo{SkipReason: dt.DryRunSkipWebhookUnavailable, Detail: cause}, nil
+		return desired, &dt.DryRunInfo{SkipReason: dt.DryRunSkipWebhookUnavailable, Detail: apiserverMessage(err)}, nil
 
 	default:
 		return nil, nil, errors.Wrapf(err, "cannot dry-run create %s", resourceID)
@@ -557,9 +549,6 @@ func (c *DefaultDiffCalculator) resolveForbiddenCreate(ctx context.Context, desi
 		return nil, nil, errors.Wrapf(createErr, "cannot dry-run create %s, and cannot determine whether that was an authorization denial (%v)", resourceID, ssarErr)
 
 	case !allowed:
-		c.warnUnverified("skipped apiserver verification of added resources: not authorized to create them, so their diffs omit server-side defaulting and admission",
-			desired, "reason", reason)
-
 		return desired, &dt.DryRunInfo{SkipReason: dt.DryRunSkipForbidden, Detail: reason}, nil
 
 	default:
@@ -658,32 +647,11 @@ func mergeDryRunCreateResult(rendered, sent, created *un.Unstructured) *un.Unstr
 	return out
 }
 
-// warnUnverified raises a user-facing warning that an added resource could not be verified against
-// the apiserver.
-//
-// It holds no dedup state of its own, deliberately. c.logger is the CLI's *WarningLogger in production
-// (ProcessorConfig.Warnings documents that it is the same value Logger is set to), and that already
-// collapses a warning identical in message AND context to one raised before. The context here is GVK,
-// namespace, and the cause, so forty unverifiable ConfigMaps in one namespace raise one warning, while
-// a second, different cause in the same namespace raises a second one. That last part is the point: a
-// cause is only ever shown to a human through this warning (the text renderer does not show
-// DryRunInfo), so a dedup that keyed on anything coarser than the cause would silently hide every
-// cause after the first.
-//
-// That only works if no context value names the resource, or every resource would be a distinct
-// warning. Callers pass apiserverMessage(err), not err.Error(), for exactly that reason.
-//
-// The typed DryRunInfo on the diff is the machine-readable half and is NOT interchangeable with this:
-// warnings carry no resource anchor, so they cannot tell a pipeline which additions were degraded.
-func (c *DefaultDiffCalculator) warnUnverified(msg string, obj *un.Unstructured, causeKey, cause string) {
-	c.logger.Info(msg, "gvk", obj.GroupVersionKind().String(), "namespace", obj.GetNamespace(), causeKey, cause)
-}
-
 // apiserverMessage returns the apiserver's own message for a dry-run failure, without the
 // "failed to dry-run create resource <Kind>/<name>" wrapping ApplyClient adds. The wrapping names the
 // resource, which is useful in an error but wrong in a cause: it would make every resource's cause
-// unique, so warnings could never be deduplicated and a cause could never be grouped. Status().Message
-// carries no resource name.
+// unique, so the renderer's summary of unverified additions (one warning per GVK + namespace + cause)
+// would split into one warning per resource. Status().Message carries no resource name.
 //
 // It is only called from branches selected by an apierrors predicate (IsNotFound, IsInternalError,
 // ...), and every one of those finds the APIStatus through errors.As, so the status is always present
