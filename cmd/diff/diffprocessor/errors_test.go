@@ -17,9 +17,11 @@ limitations under the License.
 package diffprocessor
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"testing"
+	"time"
 
 	dt "github.com/crossplane-contrib/crossplane-diff/cmd/diff/renderer/types"
 	pkgvalidate "github.com/crossplane/cli/v2/pkg/validate"
@@ -729,6 +731,21 @@ func TestDetermineExitCode(t *testing.T) {
 			hasDiffs: false,
 			want:     ExitCodeSchemaValidation,
 		},
+		"Interrupted": {
+			// An interrupted run is neither a success, a diff, nor an ordinary tool failure.
+			err:      ErrInterrupted,
+			hasDiffs: true,
+			want:     ExitCodeInterrupted,
+		},
+		"InterruptionOutranksOtherErrors": {
+			// Once interrupted, the per-resource failures are the interruption's
+			// fallout (cancelled calls), so they must not mask it.
+			err: errors.Join(
+				&SchemaValidationError{Message: "validation failed"},
+				fmt.Errorf("wrapped: %w", ErrInterrupted),
+			),
+			want: ExitCodeInterrupted,
+		},
 		"AdmissionRejectionIsAValidationError": {
 			// An apiserver dry-run rejection routes to exit 2, not 1. This is the
 			// behaviour change from crossplane-diff#334: before it, the same webhook
@@ -808,6 +825,45 @@ func TestDetermineExitCode(t *testing.T) {
 			got := DetermineExitCode(tc.err, tc.hasDiffs)
 			if got != tc.want {
 				t.Errorf("DetermineExitCode() = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestWithInterruption(t *testing.T) {
+	// A signal cancels the parent (the signal context); --timeout expires the run context's deadline.
+	parent, cancelParent := context.WithCancel(context.Background())
+	interrupted, cancelInterrupted := context.WithTimeout(parent, time.Hour)
+	defer cancelInterrupted()
+	cancelParent()
+
+	timedOut, cancelTimedOut := context.WithTimeout(context.Background(), 0)
+	defer cancelTimedOut()
+
+	existing := []dt.OutputError{{ResourceID: "XR/a", Message: "context canceled"}}
+
+	tests := map[string]struct {
+		ctx  context.Context
+		errs []dt.OutputError
+		want []dt.OutputError
+	}{
+		"InterruptedAppends": {
+			ctx:  interrupted,
+			errs: existing,
+			want: append(append([]dt.OutputError{}, existing...), dt.OutputError{Message: "run interrupted by signal; results are incomplete"}),
+		},
+		"InterruptedWithNoOtherErrors": {
+			ctx:  interrupted,
+			want: []dt.OutputError{{Message: "run interrupted by signal; results are incomplete"}},
+		},
+		"TimedOutUnchanged": {ctx: timedOut, errs: existing, want: existing},
+		"LiveUnchanged":     {ctx: context.Background(), errs: existing, want: existing},
+	}
+
+	for name, tt := range tests {
+		t.Run(name, func(t *testing.T) {
+			if diff := gcmp.Diff(tt.want, withInterruption(tt.ctx, tt.errs)); diff != "" {
+				t.Errorf("withInterruption() -want +got:\n%s", diff)
 			}
 		})
 	}

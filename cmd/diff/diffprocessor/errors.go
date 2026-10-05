@@ -17,6 +17,7 @@ limitations under the License.
 package diffprocessor
 
 import (
+	"context"
 	"errors"
 	"fmt"
 
@@ -38,7 +39,34 @@ const (
 
 	// ExitCodeDiffDetected indicates that differences were detected.
 	ExitCodeDiffDetected = 3
+
+	// ExitCodeInterrupted indicates the run was cancelled by SIGINT (Ctrl+C) or SIGTERM. It is 130 by
+	// the shell convention for SIGINT (128 + 2); the signal handler does not report which signal
+	// arrived, so SIGTERM uses the same code.
+	ExitCodeInterrupted = 130
 )
+
+// ErrInterrupted is the error an interrupted run reports, in errors[] and on stderr, in place of the
+// cancelled calls the interruption caused.
+var ErrInterrupted = errors.New("run interrupted by signal; results are incomplete")
+
+// Interrupted reports whether the run context ctx was cancelled by a signal. The run context is a
+// timeout context on the signal context, so an expired --timeout yields context.DeadlineExceeded and a
+// signal yields context.Canceled. The run's own cancel also yields Canceled, but only fires once the run
+// is over, so callers must evaluate this before it.
+func Interrupted(ctx context.Context) bool {
+	return errors.Is(ctx.Err(), context.Canceled)
+}
+
+// withInterruption appends an entry saying the run was interrupted when ctx was cancelled by a signal,
+// so an interrupted run's output says so instead of listing only the cancelled calls it caused.
+func withInterruption(ctx context.Context, errs []dt.OutputError) []dt.OutputError {
+	if Interrupted(ctx) {
+		return append(errs, dt.OutputError{Message: ErrInterrupted.Error()})
+	}
+
+	return errs
+}
 
 // SchemaValidationError indicates schema validation failed.
 // Used to distinguish validation errors from other tool errors for exit
@@ -323,8 +351,14 @@ func isOnlySchemaValidationErrors(err error) bool {
 }
 
 // DetermineExitCode determines the appropriate exit code based on the error and diff status.
-// Priority: tool error (1) > schema validation error (2) > diff detected (3) > success (0).
+// Priority: interrupted (130) > tool error (1) > schema validation error (2) > diff detected (3) >
+// success (0). An interruption outranks everything because the other errors of an interrupted run are
+// mostly the cancelled calls it caused.
 func DetermineExitCode(err error, hasDiffs bool) int {
+	if errors.Is(err, ErrInterrupted) {
+		return ExitCodeInterrupted
+	}
+
 	if err != nil {
 		// If ALL errors are schema validation errors, return schema validation exit code.
 		// If there are ANY non-schema-validation errors (tool errors), return tool error exit code.

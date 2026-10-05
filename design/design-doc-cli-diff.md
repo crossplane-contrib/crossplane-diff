@@ -1583,8 +1583,16 @@ one advisory permanently stderr-only, contradicting this section's own contract.
 therefore release resources immediately *before* rendering (`CleanupDetached`), on a context that keeps
 the run context's values but drops its cancellation (`context.WithoutCancel`), bounded by
 `CleanupTimeout`, so an expired `--timeout` cannot make teardown fail fast and report a container leak
-that is not real. (Ctrl+C is not covered: there is no signal handling, so an interrupt skips cleanup
-entirely; see #515.) The command's `defer` remains, and remains necessary: it
+that is not real. The same detachment is what makes teardown survive Ctrl+C (#515): `main()` calls
+controller-runtime's `signals.SetupSignalHandler()` once and passes its context down as the parent of
+the run's timeout context (`initializeAppContext` in `cmd_utils.go`). The first SIGINT or SIGTERM
+cancels that parent, so the run context fails with `context.Canceled`, while an expired `--timeout`
+fails with `context.DeadlineExceeded`; that is how the two are told apart (`diffprocessor.Interrupted`,
+evaluated before the run's own cancel, which also yields `Canceled`). The cancelled run still renders: both processors
+append an `errors[]` entry saying the run was interrupted, and the command reports the interruption in
+place of the cancelled calls it caused, exiting 130, which outranks every other exit code. A second
+signal makes the handler exit immediately with code 1, which may leave function containers behind;
+reaping containers whose owning run died is tracked in #525. The command's `defer` remains, and remains necessary: it
 covers the paths that return before any rendering happens (load failure, initialization failure,
 cancellation). `Cleanup` is idempotent, so running in both places is safe — the second call finds
 nothing to remove and raises nothing.
