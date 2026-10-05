@@ -1398,7 +1398,7 @@ func TestDefaultCompDiffProcessor_collectXRDiffs_NestedXRCompositionLookup(t *te
 				},
 			}
 
-			_ = processor.collectXRDiffs(ctx, tt.xrs, tt.cliComposition)
+			_ = processor.collectXRDiffs(ctx, tt.xrs, tt.cliComposition, nil, "")
 
 			// Verify the composition requests
 			if len(*compositionRequests) < 2 {

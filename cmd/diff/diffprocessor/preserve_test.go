@@ -386,6 +386,141 @@ func TestSetCompositionRevisionRefName(t *testing.T) {
 	}
 }
 
+// TestCopyCompositionRevisionRef covers how a rendered composite inherits the cluster's
+// compositionRevisionRef. Crossplane's composite reconciler writes that field and an apply that omits
+// it leaves it in place, so a composite whose input says nothing about it must render with the
+// cluster's value. The load-bearing behaviour is the refusal: a ref already on the target — the user's
+// own pin, or a value the caller seeded — always wins.
+func TestCopyCompositionRevisionRef(t *testing.T) {
+	tests := []struct {
+		name   string
+		source *un.Unstructured
+		target *un.Unstructured
+		// wantCopied is whether a ref was copied.
+		wantCopied bool
+		// wantSpec is the target's whole spec afterwards, so an unintended write anywhere else is caught.
+		wantSpec map[string]any
+	}{
+		{
+			name: "V2RefIsCopiedToV2Path",
+			source: tu.NewResource("v1", "Resource", "source").
+				WithNestedField(map[string]any{"name": "cluster-revision"}, "spec", "crossplane", "compositionRevisionRef").
+				Build(),
+			target: tu.NewResource("v1", "Resource", "target").
+				WithNestedField("Manual", "spec", "crossplane", "compositionUpdatePolicy").
+				Build(),
+			wantCopied: true,
+			wantSpec: map[string]any{
+				"crossplane": map[string]any{
+					"compositionUpdatePolicy": "Manual",
+					"compositionRevisionRef":  map[string]any{"name": "cluster-revision"},
+				},
+			},
+		},
+		{
+			name: "V1RefIsCopiedToV1Path",
+			source: tu.NewResource("v1", "Resource", "source").
+				WithNestedField(map[string]any{"name": "cluster-revision"}, "spec", "compositionRevisionRef").
+				Build(),
+			target: tu.NewResource("v1", "Resource", "target").
+				WithSpecField("coolField", "cool-value").
+				Build(),
+			wantCopied: true,
+			wantSpec: map[string]any{
+				"coolField":              "cool-value",
+				"compositionRevisionRef": map[string]any{"name": "cluster-revision"},
+			},
+		},
+		{
+			name: "BothPathsAreCopiedWhenTheSourceCarriesBoth",
+			// Pathological, but the render must then see what the cluster object holds at whichever path
+			// the composition client reads.
+			source: tu.NewResource("v1", "Resource", "source").
+				WithNestedField(map[string]any{"name": "cluster-v1"}, "spec", "compositionRevisionRef").
+				WithNestedField(map[string]any{"name": "cluster-v2"}, "spec", "crossplane", "compositionRevisionRef").
+				Build(),
+			target:     tu.NewResource("v1", "Resource", "target").Build(),
+			wantCopied: true,
+			wantSpec: map[string]any{
+				"compositionRevisionRef": map[string]any{"name": "cluster-v1"},
+				"crossplane":             map[string]any{"compositionRevisionRef": map[string]any{"name": "cluster-v2"}},
+			},
+		},
+		{
+			name: "TargetRefAtTheSamePathWins",
+			// The user's own pin: pointing a Manual composite at a different revision must keep working.
+			source: tu.NewResource("v1", "Resource", "source").
+				WithNestedField(map[string]any{"name": "cluster-revision"}, "spec", "crossplane", "compositionRevisionRef").
+				Build(),
+			target: tu.NewResource("v1", "Resource", "target").
+				WithNestedField(map[string]any{"name": "user-revision"}, "spec", "crossplane", "compositionRevisionRef").
+				Build(),
+			wantCopied: false,
+			wantSpec: map[string]any{
+				"crossplane": map[string]any{"compositionRevisionRef": map[string]any{"name": "user-revision"}},
+			},
+		},
+		{
+			name: "TargetRefAtTheOtherPathWins",
+			// A ref at either path is an opinion about the field, so the cluster's is not layered on top.
+			source: tu.NewResource("v1", "Resource", "source").
+				WithNestedField(map[string]any{"name": "cluster-revision"}, "spec", "crossplane", "compositionRevisionRef").
+				Build(),
+			target: tu.NewResource("v1", "Resource", "target").
+				WithNestedField(map[string]any{"name": "user-revision"}, "spec", "compositionRevisionRef").
+				Build(),
+			wantCopied: false,
+			wantSpec:   map[string]any{"compositionRevisionRef": map[string]any{"name": "user-revision"}},
+		},
+		{
+			name: "NoOpWhenSourceHasNoRef",
+			source: tu.NewResource("v1", "Resource", "source").
+				WithNestedField(map[string]any{"name": "my-composition"}, "spec", "crossplane", "compositionRef").
+				Build(),
+			target: tu.NewResource("v1", "Resource", "target").
+				WithSpecField("coolField", "cool-value").
+				Build(),
+			wantCopied: false,
+			wantSpec:   map[string]any{"coolField": "cool-value"},
+		},
+		{
+			name: "MalformedSourceRefIsNotCopied",
+			// Not an object, so not something Crossplane wrote; the composition client rejects it on read.
+			source: tu.NewResource("v1", "Resource", "source").
+				WithNestedField("not-an-object", "spec", "crossplane", "compositionRevisionRef").
+				Build(),
+			target:     tu.NewResource("v1", "Resource", "target").Build(),
+			wantCopied: false,
+			wantSpec:   nil,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			sourceBefore := tt.source.DeepCopy()
+
+			if got := CopyCompositionRevisionRef(tt.source, tt.target); got != tt.wantCopied {
+				t.Errorf("CopyCompositionRevisionRef() = %t, want %t", got, tt.wantCopied)
+			}
+
+			spec, _, _ := un.NestedMap(tt.target.Object, "spec")
+			if diff := cmp.Diff(tt.wantSpec, spec); diff != "" {
+				t.Errorf("target spec mismatch (-want +got):\n%s", diff)
+			}
+
+			// The copy must be deep: the source is the cluster's object, and later writes to the render
+			// input (comp seeding a predicted name, say) must not reach it.
+			if spec != nil {
+				_ = SetCompositionRevisionRefName(tt.target, "mutated")
+			}
+
+			if diff := cmp.Diff(sourceBefore.Object, tt.source.Object); diff != "" {
+				t.Errorf("source was mutated (-before +after):\n%s", diff)
+			}
+		})
+	}
+}
+
 func TestCopyCompositionRef_V2PreservesOtherCrossplaneFields(t *testing.T) {
 	source := tu.NewResource("v1", "Resource", "source").
 		WithNestedField(map[string]any{"name": "my-composition"}, "spec", "crossplane", "compositionRef").

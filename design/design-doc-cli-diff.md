@@ -236,6 +236,14 @@ test cases cover:
 - **Composition Selection by Label Selector**: Verifies that compositions can be selected using label selectors.
 - **Ambiguous Composition Selection**: Tests that appropriate errors are returned when composition selection is
   ambiguous.
+- **Inherited `compositionRevisionRef`**: An existing XR whose input omits `compositionRevisionRef` renders with the
+  cluster copy's ref, because an apply that omits a field leaves it in place (issue #499).
+  `ExistingXROmittingRevisionRefRendersWithClusterRef` pins that a composition propagating the revision name shows no
+  spurious change, and `V2ManualPolicyOmittedRevisionRefStaysPinned` / `V1ManualPolicyOmittedRevisionRefStaysPinned`
+  that a `Manual` composite stays on the revision it is pinned to (v1 and v2 paths) rather than being rendered against
+  the latest one. A ref in the input still wins, which `V2ManualRevisionUpgradeDiff` / `V1ManualRevisionUpgradeDiff`
+  pin. `TestCopyCompositionRevisionRef` covers the copy: both paths, the input's ref at either path winning, and that it
+  is deep.
 
 ### 4.9 Claim Handling
 
@@ -322,6 +330,10 @@ The `comp` subcommand has its own set of integration tests:
   annotation is the *sole* delta), and end-to-end by `CompositionAppliedWithKubectlEvaluatesXRs` (evaluated, at the
   default) and `AnalyzeOnSpecChangeSkipsMetadataOnlyChange` (skipped, under `--analyze-on=spec-change`), which both
   assert `predictedRevisionName` absent with `createsRevision` still true; the former also asserts the warning on stderr.
+  For claims, whose rendered ref is the backing XR's, `ClaimRevisionNamePropagatesToComposedResource` is the
+  counterpart of the flagship (an Automatic claim carrying no ref of its own renders with the predicted name), and
+  `ClaimRendersWithBackingXRRevisionWhenNothingIsSeeded` pins that with nothing seeded the backing XR's current ref is
+  what renders (issue #498). See §4.13.
 - **Human Revision Messages**: `TestSkippedMessage` and `TestRevisionImpactMessage` close a previously-zero-coverage gap.
   `TestSkippedMessage` pins the strong-vs-weak claim distinction the two skip paths must keep apart (see §6.2 step 3a) —
   which had no coverage at all, so forcing the strong claim for both cases previously passed the whole suite.
@@ -344,7 +356,8 @@ The `comp` subcommand has its own set of integration tests:
 ### 4.12 Nested XRs and Eventual State
 
 - **Nested XR Recursion**: Tests that composed XRs are themselves diffed, with identity preserved across renders by
-  fetching observed state.
+  fetching observed state. `NestedXRInheritsClusterRevisionRef` pins that the preserved identity includes the cluster
+  copy's `compositionRevisionRef`, which a parent's output never carries (issue #499).
 - **`--max-nested-depth`**: Verifies the recursion limit short-circuits cleanly — that a cyclic composition terminates
   with a "maximum nesting depth exceeded" error instead of exhausting the stack, that `--max-nested-depth 1` refuses a
   second level of nesting, and that it still accepts a tree exactly one level deep (the bound is inclusive). The unit
@@ -363,6 +376,12 @@ The `comp` subcommand has its own set of integration tests:
   synthesised dummy XR.
 - **`crossplane.io/composite` Label**: Confirms that diffing a Claim does not show spurious changes to the composite
   label, since Crossplane uses the XR name there even when rendering from a Claim.
+- **Backing XR's `compositionRevisionRef`**: A claim renders from its backing XR, so the revision ref a template sees
+  is the backing XR's, kept whatever the update policy unless the claim carries its own (issue #498). Under `comp` an
+  Automatic claim that would re-point renders with the predicted revision name instead, applied to the backing XR's
+  existing ref and never creating one. `TestDefaultDiffProcessor_resolveBackingXRForClaim_CompositionRevisionRef` covers
+  the merge rules, including that a seed recorded for one resource does not reach another; the integration cases are
+  listed under §4.11's revision seeding.
 
 These comprehensive test cases ensure that both subcommands function correctly across the full range of Crossplane
 resource types and composition patterns. The implementation described in the following sections is designed to satisfy
@@ -574,6 +593,25 @@ A `CompositionProvider` is `func(ctx, *Unstructured) (*apiextensionsv1.Compositi
 provider that looks up matching compositions in the cluster; the `comp` subcommand passes one backed by the updated
 composition file under test, so the same per-XR diff machinery serves both flows.
 
+Before the provider is called, `diffSingleResourceInternal` (via `inheritClusterState`) fetches the composite's cluster
+copy and, when the input carries no `compositionRevisionRef` at either the v1 (`spec.compositionRevisionRef`) or v2
+(`spec.crossplane.compositionRevisionRef`) path, copies the cluster's onto both the render input and the object the
+composition is resolved from (`CopyCompositionRevisionRef`; the supplied object itself is never mutated). Crossplane's
+composite reconciler writes that field and an apply that omits it leaves it in place, while `crossplane render` does no
+revision selection, so without the copy a template reading the revision name renders nothing, and a `Manual` composite
+is resolved to the latest revision instead of the one it is pinned to. Doing it before resolution is what makes the
+composition client's `Manual && hasRevisionRef` branch see the pin. A ref in the input always wins, so pinning a
+`Manual` composite to a different revision still works and is still shown. The same fetch runs for nested XRs under the
+identity `preserveNestedXRIdentity` restored, so they inherit their cluster copy's ref too (issue #499).
+
+For a claim, the composite rendered is the backing XR with the claim's spec merged in (`buildMergedSpec`). The backing
+XR's `compositionRevisionRef` is kept whatever the update policy unless the claim carries its own (issue #498): under
+Automatic it is the revision the backing XR tracks now, which is what renders absent any re-pointing. The one exception
+is `comp`, which records on the call's context (`withSeededRevision`, keyed to the root composite so nothing else
+rendered under it picks the value up) the predicted revision a re-pointing claim adopts; `buildMergedSpec` points the
+backing XR's existing ref at that name, never creating one (see §6.2). A context value rather than a parameter keeps it
+off the `DiffProcessor` interface, which no other caller would use.
+
 The `DefaultDiffProcessor` uses several subcomponents:
 
 - `fnProvider`: Resolves the function set for a given composition (see §6.6)
@@ -770,6 +808,13 @@ type CompDiffProcessor interface {
    already present — an existing ref is the only case with a stale value to correct, and its presence proves the path is
    one the composite's schema accepts, where inventing a path could fail validation for a composite that renders fine
    today. A composite not yet tracking a revision therefore keeps rendering no ref at all, exactly as before.
+
+   A claim needs one more step, because the ref its render reads is its backing XR's, which only the `DiffProcessor`
+   fetches. A claim carrying a ref of its own (Crossplane's claim syncer propagates the backing XR's back to it under
+   Automatic) is seeded like any composite. One that carries none has nothing to seed, so `collectXRDiffs` also records
+   the predicted name on the context of each re-pointing composite's diff (`withSeededRevision`), and `buildMergedSpec`
+   applies it to the backing XR's existing ref (§6.1, issue #498). The same rules hold: only re-pointing composites, so
+   never a `Manual` one, and never a ref the backing XR lacks.
 
    The name is the one thing this tool mirrors from upstream rather than calling: the `<composition>-<hash[:7]>`
    derivation lives in `NewCompositionRevision`, inside an `internal/` package, while the hash it consumes comes from
@@ -1673,15 +1718,19 @@ The client layer provides interfaces to interact with Kubernetes and Crossplane 
 2. The `Loader` loads resources from files or stdin.
 3. `DiffProcessor.Initialize` loads required schemas.
 4. For each input XR or claim:
-    - The `DiffProcessor` resolves the matching composition (or, for `comp`, the proposed one supplied via the
-      `CompositionProvider`).
+    - The `DiffProcessor` fetches the input's cluster copy, if any, for its UID and — when the input omits it — its
+      `compositionRevisionRef`, which an apply would leave in place (§6.1, issue #499).
+    - It resolves the matching composition (or, for `comp`, the proposed one supplied via the `CompositionProvider`).
+      The inherited ref takes part, so a `Manual` composite resolves to the revision it is pinned to.
     - For claim inputs, `resolveBackingXRForClaim` fetches the backing XR from the cluster if it exists; if the claim
       is brand new, `synthesizeDummyBackingXRForNewClaim` produces a synthetic backing XR via upstream's
       `ConvertClaimToXR` helper. The synthesized XR uses the XRD's authoritative `spec.names.kind`, pins the XR name to
       the claim's name (cleaner diff output than the upstream default suffix), and carries a synthesized `spec.claimRef`
       plus the claim's annotations and `crossplane.io/claim-name` / `crossplane.io/claim-namespace` labels. Rendering
       then proceeds from the (real or synthesized) backing XR with merged Claim spec, producing composed resources with
-      correct `crossplane.io/composite` labels.
+      correct `crossplane.io/composite` labels. The merge keeps the backing XR's `compositionRevisionRef` unless the
+      claim carries one, whatever the update policy; under `comp` a re-pointing claim's is pointed at the predicted
+      revision instead (§6.1, issue #498).
     - If the XR already exists in the cluster, `ResourceManager.FetchObservedResources` walks its resource tree to
       assemble the observed set that render is given. A failure here is fatal: downstream an empty observed set is
       indistinguishable from "this XR genuinely has no composed resources yet", so continuing would report every
@@ -1741,8 +1790,9 @@ The client layer provides interfaces to interact with Kubernetes and Crossplane 
     - Seed the predicted revision name onto a copy of every composite that would actually re-point — the kept set minus
       those pinned by a `Manual` `compositionUpdatePolicy`, which adopt nothing — so that a composition template reading
       `.observed.composite.resource.spec.crossplane.compositionRevisionRef.name` renders the value it would really get
-      rather than the stale one. Skipped, with a warning, when the name is not predictable (§6.2 step 3a). The seeded ref
-      itself is suppressed from the *displayed* diff (§6.8.2); anything derived from it is not.
+      rather than the stale one. A claim with no ref of its own gets the name through the diff's context instead, and
+      it is applied to its backing XR's ref (§6.2). Skipped, with a warning, when the name is not predictable (§6.2
+      step 3a). The seeded ref itself is suppressed from the *displayed* diff (§6.8.2); anything derived from it is not.
     - For each remaining XR, run the XR diff workflow above, using a `CompositionProvider` that returns the proposed
       composition for the affected XR's GVK and the cluster's composition for any nested XRs of a different kind.
 4. Aggregate per-XR results into a `CompDiffOutput` (composition diff + `XRImpact` list +

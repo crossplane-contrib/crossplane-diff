@@ -398,8 +398,12 @@ func (p *DefaultDiffProcessor) diffSingleResourceInternal(ctx context.Context, r
 		return nil, nil, err
 	}
 
+	// Fetched before the composition is resolved, because the cluster copy's compositionRevisionRef
+	// decides that for a Manual composite whose input omits the ref.
+	existingXRFromCluster, resForComposition := p.inheritClusterState(ctx, res, xr, resourceID)
+
 	// Get the composition using the provided function
-	comp, err := compositionProvider(ctx, res)
+	comp, err := compositionProvider(ctx, resForComposition)
 	if err != nil {
 		p.config.Logger.Debug("Failed to get composition", "resource", resourceID, "namespace", res.GetNamespace(), "error", err)
 		return nil, nil, errors.Wrap(err, "cannot get composition")
@@ -422,27 +426,6 @@ func (p *DefaultDiffProcessor) diffSingleResourceInternal(ctx context.Context, r
 	if err != nil {
 		p.config.Logger.Debug("Failed to apply XRD defaults", "resource", resourceID, "error", err)
 		return nil, nil, errors.Wrap(err, "cannot apply XRD defaults")
-	}
-
-	// Fetch the existing XR from the cluster to populate UID and other cluster-specific fields.
-	// This ensures that when composition functions set owner references on nested resources,
-	// they use the correct UID from the cluster, preventing duplicate owner reference errors.
-	existingXRFromCluster, isNew, err := p.resourceManager.FetchCurrentObject(ctx, nil, xr.GetUnstructured())
-	switch {
-	case err == nil && !isNew && existingXRFromCluster != nil:
-		// Preserve cluster-specific fields from the existing XR
-		xr.SetUID(existingXRFromCluster.GetUID())
-		xr.SetResourceVersion(existingXRFromCluster.GetResourceVersion())
-		p.config.Logger.Debug("Populated XR with cluster UID before rendering",
-			"resource", resourceID,
-			"uid", existingXRFromCluster.GetUID())
-	case isNew:
-		p.config.Logger.Debug("XR is new (will render without UID)", "resource", resourceID)
-	default:
-		// Error fetching
-		p.config.Logger.Debug("Error fetching XR from cluster (will render without UID)",
-			"resource", resourceID,
-			"error", err)
 	}
 
 	p.warnIfDeleting(existingXRFromCluster, parentXR, resourceID)
@@ -608,6 +591,55 @@ func (p *DefaultDiffProcessor) diffSingleResourceInternal(ctx context.Context, r
 		"nestedDiffCount", len(nestedDiffs))
 
 	return diffs, renderedResources, nil
+}
+
+// inheritClusterState fetches the cluster's copy of the XR being diffed and carries onto xr, the render
+// input, the state Crossplane maintains on it that the input cannot be expected to repeat. It returns
+// the cluster copy (nil if the XR is new or could not be fetched) and the object to resolve the
+// composition from.
+//
+// The UID is carried so that when composition functions set owner references on nested resources, they
+// use the cluster's, preventing duplicate owner reference errors.
+//
+// So is compositionRevisionRef, when the input has none. Crossplane's composite reconciler writes it and
+// applying an input that omits it leaves it in place, so the render must see it too: a template may read
+// the revision name, and a Manual composite stays on the revision it is pinned to — which is why the
+// composition must be resolved from an object carrying it. res itself is never mutated (comp passes the
+// cluster's own objects, which it still reads for identity afterwards), so that object is res unless the
+// ref was inherited, in which case a copy carrying it. This covers nested XRs as well, which are looked up
+// here under the identity preserveNestedXRIdentity restored. See issue #499.
+func (p *DefaultDiffProcessor) inheritClusterState(ctx context.Context, res *un.Unstructured, xr *cmp.Unstructured, resourceID string) (existing, resForComposition *un.Unstructured) {
+	existing, isNew, err := p.resourceManager.FetchCurrentObject(ctx, nil, xr.GetUnstructured())
+
+	switch {
+	case err == nil && !isNew && existing != nil:
+		xr.SetUID(existing.GetUID())
+		xr.SetResourceVersion(existing.GetResourceVersion())
+		p.config.Logger.Debug("Populated XR with cluster UID before rendering",
+			"resource", resourceID,
+			"uid", existing.GetUID())
+
+		if !CopyCompositionRevisionRef(existing, xr.GetUnstructured()) {
+			return existing, res
+		}
+
+		resForComposition = res.DeepCopy()
+		CopyCompositionRevisionRef(existing, resForComposition)
+
+		p.config.Logger.Debug("Inherited compositionRevisionRef from the cluster's copy of the XR",
+			"resource", resourceID)
+
+		return existing, resForComposition
+	case isNew:
+		p.config.Logger.Debug("XR is new (will render without UID)", "resource", resourceID)
+	default:
+		p.config.Logger.Debug("Error fetching XR from cluster (will render without UID)",
+			"resource", resourceID,
+			"error", err)
+	}
+
+	// Nothing to inherit from. The fetch result is still returned as-is, as the callers' nil checks expect.
+	return existing, res
 }
 
 // warnIfDeleting raises a warning when the cluster copy of a top-level XR is being deleted.
@@ -790,7 +822,7 @@ func (p *DefaultDiffProcessor) resolveBackingXRForClaim(ctx context.Context, exi
 	// Merge the Claim's spec into the backing XR's spec
 	// This applies the user's spec changes while preserving only Crossplane-managed fields
 	// and avoiding preservation of deprecated fields that the user removed.
-	if err := mergeClaimSpecIntoBackingXR(xr, xrForRendering, name); err != nil {
+	if err := mergeClaimSpecIntoBackingXR(xr, xrForRendering, name, seededRevisionFor(ctx, xr.GetUnstructured())); err != nil {
 		return result, err
 	}
 
@@ -810,8 +842,9 @@ func (p *DefaultDiffProcessor) resolveBackingXRForClaim(ctx context.Context, exi
 // 1. Start with ALL fields from the Claim's spec (user's source of truth)
 // 2. Preserve Crossplane-managed fields from backing XR (claimRef, resourceRefs)
 // 3. Preserve optional fields from backing XR only if NOT provided in Claim
-// 4. Handle compositionRevisionRef based on update policy (Manual vs Automatic).
-func mergeClaimSpecIntoBackingXR(claim, xrForRendering *cmp.Unstructured, backingXRName string) error {
+// 4. Preserve the backing XR's compositionRevisionRef if the Claim has none, pointed at
+// seededRevision when comp is seeding this Claim with one (see buildMergedSpec).
+func mergeClaimSpecIntoBackingXR(claim, xrForRendering *cmp.Unstructured, backingXRName, seededRevision string) error {
 	claimSpec, hasClaimSpec, _ := un.NestedFieldCopy(claim.Object, "spec")
 	if !hasClaimSpec || claimSpec == nil {
 		return nil
@@ -830,10 +863,7 @@ func mergeClaimSpecIntoBackingXR(claim, xrForRendering *cmp.Unstructured, backin
 	}
 
 	// Build merged spec using field-filtered copying
-	mergedSpec, err := buildMergedSpec(claimSpecMap, xrSpecMap, xrForRendering)
-	if err != nil {
-		return err
-	}
+	mergedSpec := buildMergedSpec(claimSpecMap, xrSpecMap, seededRevision)
 
 	if err := un.SetNestedField(xrForRendering.Object, mergedSpec, "spec"); err != nil {
 		return errors.Wrapf(err, "cannot set merged spec on backing XR %q", backingXRName)
@@ -847,8 +877,8 @@ func mergeClaimSpecIntoBackingXR(claim, xrForRendering *cmp.Unstructured, backin
 // - All user-provided fields from the Claim (ensuring removed fields are gone)
 // - Crossplane-managed fields preserved from the XR (claimRef, resourceRefs)
 // - Optional fields from XR only if NOT provided in Claim
-// - compositionRevisionRef based on update policy.
-func buildMergedSpec(claimSpecMap, xrSpecMap map[string]any, xrForRendering *cmp.Unstructured) (map[string]any, error) {
+// - compositionRevisionRef from the XR only if NOT provided in Claim, pointed at seededRevision if set.
+func buildMergedSpec(claimSpecMap, xrSpecMap map[string]any, seededRevision string) map[string]any {
 	// Start with the Claim's spec as the base (this ensures removed fields are gone)
 	mergedSpec := make(map[string]any)
 	maps.Copy(mergedSpec, claimSpecMap)
@@ -877,24 +907,66 @@ func buildMergedSpec(claimSpecMap, xrSpecMap map[string]any, xrForRendering *cmp
 		}
 	}
 
-	// Handle compositionRevisionRef specially based on update policy.
-	// With Manual policy, users pin to a specific revision, so we preserve it from the backing XR.
-	// With Automatic policy, Crossplane manages the revision, so we don't preserve it
-	// (allowing Crossplane to select the latest revision).
+	// Preserve compositionRevisionRef from the backing XR if the Claim has none, whatever the update
+	// policy. Crossplane's composite reconciler writes it, and crossplane render does no revision
+	// selection, so leaving it out does not render the latest revision — it renders none, and a template
+	// reading the revision name sees nothing. Under Manual the ref pins the revision; under Automatic it
+	// is the one the backing XR tracks now. See issue #498.
+	//
+	// The exception is a Claim comp is seeding with the revision the diffed composition would mint: it
+	// re-points there, so rendering the current one would miss any change a template reading the name
+	// makes. comp records that name only for a Claim that would re-point, never a Manual one, which stays
+	// pinned. It only ever overwrites a ref the backing XR already has, for the reason
+	// SetCompositionRevisionRefName gives, and a Claim carrying its own ref was seeded on the Claim itself.
 	if _, existsInClaim := claimSpecMap[fieldCompositionRevisionRef]; !existsInClaim {
-		updatePolicy, err := xp.XRUpdatePolicy(xrForRendering.Object, xrForRendering.GetAPIVersion())
-		if err != nil {
-			return nil, errors.Wrap(err, "cannot read compositionUpdatePolicy from backing XR")
-		}
-
-		if updatePolicy == compositionUpdatePolicyManual {
-			if val, exists := xrSpecMap[fieldCompositionRevisionRef]; exists {
-				mergedSpec[fieldCompositionRevisionRef] = val
+		if val, exists := xrSpecMap[fieldCompositionRevisionRef]; exists {
+			if ref, isMap := val.(map[string]any); isMap && seededRevision != "" {
+				ref = maps.Clone(ref)
+				ref["name"] = seededRevision
+				val = ref
 			}
+
+			mergedSpec[fieldCompositionRevisionRef] = val
 		}
 	}
 
-	return mergedSpec, nil
+	return mergedSpec
+}
+
+// seededRevisionKey is the context key under which comp records the CompositionRevision it is seeding
+// one root composite with. See withSeededRevision.
+type seededRevisionKey struct{}
+
+// seededRevision is the value stored under seededRevisionKey.
+type seededRevision struct {
+	// resource identifies the composite the seed was recorded for (dt.MakeDiffKeyFromResource).
+	resource string
+	// name is the CompositionRevision's name.
+	name string
+}
+
+// withSeededRevision records on ctx that comp is rendering res as though it had re-pointed at the
+// CompositionRevision called name.
+//
+// comp normally seeds that name onto the composite's own compositionRevisionRef before rendering it
+// (see seedRepointingXRs). A Claim usually carries no ref of its own to seed, though: the one rendered
+// is its backing XR's, which only DiffSingleResource fetches. So the name travels with the call instead,
+// for buildMergedSpec to apply. A context value rather than a parameter keeps it off the DiffProcessor
+// interface, which every caller but comp would have to pass an empty value through. It is keyed to res,
+// so nothing else rendered under the same context — a nested XR, say — picks it up.
+func withSeededRevision(ctx context.Context, res *un.Unstructured, name string) context.Context {
+	return context.WithValue(ctx, seededRevisionKey{}, seededRevision{resource: dt.MakeDiffKeyFromResource(res), name: name})
+}
+
+// seededRevisionFor returns the CompositionRevision name comp recorded on ctx for res, or "" if it
+// recorded none for it.
+func seededRevisionFor(ctx context.Context, res *un.Unstructured) string {
+	seed, ok := ctx.Value(seededRevisionKey{}).(seededRevision)
+	if !ok || seed.resource != dt.MakeDiffKeyFromResource(res) {
+		return ""
+	}
+
+	return seed.name
 }
 
 // synthesizeDummyBackingXRForNewClaim creates a synthetic backing XR for a new claim that doesn't
@@ -1003,6 +1075,10 @@ func findExistingNestedXR(nestedXR *un.Unstructured, observedResources []cpd.Uns
 
 // preserveNestedXRIdentity updates the nested XR to preserve the identity of an existing XR
 // by copying its name, generateName, UID, Crossplane labels, and compositionRef.
+//
+// Its compositionRevisionRef is inherited too, but by diffSingleResourceInternal, which looks the nested
+// XR up under the name restored here before resolving its composition — the same step every composite
+// goes through, root or nested.
 func preserveNestedXRIdentity(nestedXR, existingNestedXR *un.Unstructured) {
 	// Preserve the actual cluster name and UID
 	nestedXR.SetName(existingNestedXR.GetName())

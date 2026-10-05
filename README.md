@@ -98,6 +98,14 @@ the comparison is against a resource that is going away. `comp` takes the opposi
 excludes such composites from impact analysis entirely, since a deleting composite can never adopt
 the composition change being diffed.
 
+Crossplane, not you, writes an XR's `compositionRevisionRef`, so your manifest normally leaves it
+out — and applying a manifest that leaves a field out does not remove it. `xr` therefore renders an
+existing XR (or nested XR) whose input omits `compositionRevisionRef` with the ref the cluster copy
+holds. A composite with a `Manual` update policy is accordingly rendered against the revision it is
+pinned to, not the latest one; set `compositionRevisionRef` in your input to preview moving it to a
+different revision. A claim is rendered from its backing XR, and keeps that XR's ref unless the claim
+sets its own.
+
 ### Warnings
 
 Some conditions are worth telling you about without invalidating the diff or stopping the run. These

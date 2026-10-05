@@ -37,12 +37,14 @@ sequenceDiagram
         Note over DP, DiffCalc: per-XR body. DiffSingleResource(ctx, xr, compositionProvider). Driven once per input XR (xr) or once per affected XR (comp).
         loop For each XR being diffed
             DP->>DP: SanitizeXR(res)
-            DP->>CompClient: compositionProvider(ctx, res)
+            DP->>ResMgr: FetchCurrentObject(ctx, xr)
+            ResMgr-->>DP: existing XR (its UID, plus its compositionRevisionRef when the input has none)
+            DP->>CompClient: compositionProvider(ctx, res + inherited compositionRevisionRef)
             CompClient-->>DP: *Composition (cluster's, or proposed under comp)
             DP->>FnProv: GetFunctionsForComposition(comp)
             FnProv-->>DP: []Function
-            DP->>ResMgr: FetchCurrentObject(ctx, xr) / FetchObservedResources(ctx, xr)
-            ResMgr-->>DP: existing XR + observed composed resources (fetch failure is fatal)
+            DP->>ResMgr: FetchObservedResources(ctx, xr)
+            ResMgr-->>DP: observed composed resources (fetch failure is fatal)
 
             DP->>DP: RenderToStableState(ctx, xr, comp, fns, id, observed, eventualState)
             loop Until requirements stabilise (or steady state under --eventual-state)

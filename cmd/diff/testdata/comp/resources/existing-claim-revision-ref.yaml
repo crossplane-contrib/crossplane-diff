@@ -1,0 +1,18 @@
+# A Claim at the default (Automatic) update policy that does not itself carry a compositionRevisionRef,
+# bound to existing-claim-revision-ref-xr.yaml, which does. The ref lives on the backing XR, so it is
+# only there to render if the backing XR's ref survives merging this claim's spec into it (issue #498);
+# and since this claim has none, comp has nothing on it to seed with the revision it would re-point to.
+apiVersion: diff.example.org/v1alpha1
+kind: NopClaim
+metadata:
+  name: revision-ref-claim
+  namespace: test-namespace
+spec:
+  coolField: revision-ref-claim-value
+  compositeDeletePolicy: Background
+  compositionRef:
+    name: xrevisionrefclaims.diff.example.org
+  resourceRef:
+    apiVersion: diff.example.org/v1alpha1
+    kind: XNop
+    name: revision-ref-claim-xr

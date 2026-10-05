@@ -57,10 +57,7 @@ func CopyLabels(source, target *un.Unstructured, keys ...string) {
 // reading the revision name renders the value it would really get. Only ever applied to composites
 // that would genuinely re-point; see issue #474.
 func SetCompositionRevisionRefName(target *un.Unstructured, name string) bool {
-	for _, path := range [][]string{
-		{"spec", "crossplane", "compositionRevisionRef"},
-		{"spec", "compositionRevisionRef"},
-	} {
+	for _, path := range compositionRevisionRefPaths() {
 		if _, found, err := un.NestedMap(target.Object, path...); err != nil || !found {
 			continue
 		}
@@ -75,6 +72,58 @@ func SetCompositionRevisionRefName(target *un.Unstructured, name string) bool {
 	}
 
 	return false
+}
+
+// compositionRevisionRefPaths returns the v2 and v1 homes of a composite's compositionRevisionRef, in
+// the order nestedCrossplaneString reads them.
+func compositionRevisionRefPaths() [][]string {
+	return [][]string{
+		{"spec", "crossplane", "compositionRevisionRef"},
+		{"spec", "compositionRevisionRef"},
+	}
+}
+
+// CopyCompositionRevisionRef copies source's compositionRevisionRef onto target, returning whether it
+// did. It copies only when target carries no ref at either path, and writes each ref source has to the
+// same path it has it at, so the v1 (spec.compositionRevisionRef) and v2
+// (spec.crossplane.compositionRevisionRef) layouts are both preserved as the cluster holds them.
+//
+// source is the cluster's copy of the composite. Crossplane's composite reconciler sets the ref, and an
+// apply that omits a field leaves it in place, so a composite whose input says nothing about the ref
+// keeps the cluster's — and crossplane render does no revision selection to fill it in. Without the
+// copy, a template reading the revision name renders nothing, and the composition client resolves a
+// Manual composite to the latest revision rather than the one it is pinned to. See issue #499.
+//
+// A ref already on target always wins: it is either the user's own (pinning a Manual composite to a
+// different revision must keep working, and keep being shown) or one comp seeded. The copy is deep, so
+// later writes to target never reach source.
+func CopyCompositionRevisionRef(source, target *un.Unstructured) bool {
+	for _, path := range compositionRevisionRefPaths() {
+		if _, found, _ := un.NestedFieldNoCopy(target.Object, path...); found {
+			return false
+		}
+	}
+
+	copied := false
+
+	for _, path := range compositionRevisionRefPaths() {
+		// NestedMap deep-copies. A value that is not an object is not something Crossplane wrote, and the
+		// composition client rejects it on read, so it is not propagated.
+		ref, found, err := un.NestedMap(source.Object, path...)
+		if err != nil || !found {
+			continue
+		}
+
+		if err := un.SetNestedMap(target.Object, ref, path...); err != nil {
+			// Only reachable if target has a non-object on the way to path (spec.crossplane: "x", say),
+			// which the composite's schema would reject anyway; leave it for validation to report.
+			continue
+		}
+
+		copied = true
+	}
+
+	return copied
 }
 
 // CopyCompositionRef copies compositionRef from source to target.

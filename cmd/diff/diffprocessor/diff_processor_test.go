@@ -25,6 +25,7 @@ import (
 	extv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	un "k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	k8stypes "k8s.io/apimachinery/pkg/types"
 
@@ -4066,111 +4067,106 @@ func TestDefaultDiffProcessor_resolveBackingXRForClaim_SpecMerge(t *testing.T) {
 // TestDefaultDiffProcessor_resolveBackingXRForClaim_CompositionRevisionRef tests the compositionRevisionRef
 // preservation logic based on the compositionUpdatePolicy field.
 func TestDefaultDiffProcessor_resolveBackingXRForClaim_CompositionRevisionRef(t *testing.T) {
-	ctx := t.Context()
+	backingXRRef := map[string]any{"name": "my-composition-rev-1"}
 
 	tests := map[string]struct {
-		claimSpec                  map[string]any
-		backingXRSpec              map[string]any
-		compositionUpdatePolicy    string // "Automatic" or "Manual"
-		compositionUpdatePolicyV2  bool   // true to use v2 path (spec.crossplane.compositionUpdatePolicy)
-		expectRevisionRefPreserved bool
-		description                string
+		claimSpec                 map[string]any
+		backingXRSpec             map[string]any
+		compositionUpdatePolicy   string // "Automatic", "Manual", or "" for the default
+		compositionUpdatePolicyV2 bool   // true to use v2 path (spec.crossplane.compositionUpdatePolicy)
+		// seededRevision, when set, is the revision comp records it is seeding this claim with.
+		seededRevision string
+		// seededFor overrides which resource seededRevision is recorded for; the claim by default.
+		seededFor *un.Unstructured
+		// wantRevisionRef is the backing XR's spec.compositionRevisionRef after the merge; nil = absent.
+		wantRevisionRef map[string]any
+		description     string
 	}{
 		"PreserveCompositionRevisionRefWithManualPolicy": {
-			claimSpec: map[string]any{
-				"activeField": "value",
-			},
-			backingXRSpec: map[string]any{
-				"activeField": "value",
-				"claimRef": map[string]any{
-					"name": "claim",
-				},
-				"compositionRevisionRef": map[string]any{
-					"name": "my-composition-rev-1",
-				},
-			},
-			compositionUpdatePolicy:    "Manual",
-			compositionUpdatePolicyV2:  false, // v1 path
-			expectRevisionRefPreserved: true,
-			description:                "compositionRevisionRef should be preserved when update policy is Manual (v1 path)",
+			claimSpec:               map[string]any{"activeField": "value"},
+			backingXRSpec:           map[string]any{"activeField": "value", "claimRef": map[string]any{"name": "claim"}, "compositionRevisionRef": backingXRRef},
+			compositionUpdatePolicy: "Manual",
+			wantRevisionRef:         backingXRRef,
+			description:             "compositionRevisionRef should be preserved when update policy is Manual (v1 path)",
 		},
 		"PreserveCompositionRevisionRefWithManualPolicyV2": {
-			claimSpec: map[string]any{
-				"activeField": "value",
-			},
-			backingXRSpec: map[string]any{
-				"activeField": "value",
-				"claimRef": map[string]any{
-					"name": "claim",
-				},
-				"compositionRevisionRef": map[string]any{
-					"name": "my-composition-rev-1",
-				},
-			},
-			compositionUpdatePolicy:    "Manual",
-			compositionUpdatePolicyV2:  true, // v2 path
-			expectRevisionRefPreserved: true,
-			description:                "compositionRevisionRef should be preserved when update policy is Manual (v2 path)",
+			claimSpec:                 map[string]any{"activeField": "value"},
+			backingXRSpec:             map[string]any{"activeField": "value", "claimRef": map[string]any{"name": "claim"}, "compositionRevisionRef": backingXRRef},
+			compositionUpdatePolicy:   "Manual",
+			compositionUpdatePolicyV2: true,
+			wantRevisionRef:           backingXRRef,
+			description:               "compositionRevisionRef should be preserved when update policy is Manual (v2 path)",
 		},
-		"DoNotPreserveCompositionRevisionRefWithAutomaticPolicy": {
-			claimSpec: map[string]any{
-				"activeField": "value",
-			},
-			backingXRSpec: map[string]any{
-				"activeField": "value",
-				"claimRef": map[string]any{
-					"name": "claim",
-				},
-				"compositionRevisionRef": map[string]any{
-					"name": "my-composition-rev-1",
-				},
-			},
-			compositionUpdatePolicy:    "Automatic",
-			compositionUpdatePolicyV2:  false,
-			expectRevisionRefPreserved: false,
-			description:                "compositionRevisionRef should NOT be preserved when update policy is Automatic",
+		"PreserveCompositionRevisionRefWithAutomaticPolicy": {
+			// Issue #498. Under Automatic, Crossplane re-selects the revision, but crossplane render
+			// performs no selection: dropping the field does not pick the latest revision, it just
+			// leaves a template reading the revision name with nothing to read. Absent a revision being
+			// seeded, the one the backing XR tracks now is the one it renders against.
+			claimSpec:               map[string]any{"activeField": "value"},
+			backingXRSpec:           map[string]any{"activeField": "value", "claimRef": map[string]any{"name": "claim"}, "compositionRevisionRef": backingXRRef},
+			compositionUpdatePolicy: "Automatic",
+			wantRevisionRef:         backingXRRef,
+			description:             "compositionRevisionRef should be preserved when update policy is Automatic",
 		},
-		"DoNotPreserveCompositionRevisionRefWithDefaultPolicy": {
-			claimSpec: map[string]any{
-				"activeField": "value",
-			},
-			backingXRSpec: map[string]any{
-				"activeField": "value",
-				"claimRef": map[string]any{
-					"name": "claim",
-				},
-				"compositionRevisionRef": map[string]any{
-					"name": "my-composition-rev-1",
-				},
-			},
-			compositionUpdatePolicy:    "", // Empty means default (Automatic)
-			expectRevisionRefPreserved: false,
-			description:                "compositionRevisionRef should NOT be preserved when update policy defaults to Automatic",
+		"PreserveCompositionRevisionRefWithDefaultPolicy": {
+			claimSpec:       map[string]any{"activeField": "value"},
+			backingXRSpec:   map[string]any{"activeField": "value", "claimRef": map[string]any{"name": "claim"}, "compositionRevisionRef": backingXRRef},
+			wantRevisionRef: backingXRRef,
+			description:     "compositionRevisionRef should be preserved when update policy defaults to Automatic",
 		},
 		"ClaimCanOverrideCompositionRevisionRef": {
-			claimSpec: map[string]any{
-				"activeField": "value",
-				"compositionRevisionRef": map[string]any{
-					"name": "my-composition-rev-2",
-				},
-			},
-			backingXRSpec: map[string]any{
-				"activeField": "value",
-				"claimRef": map[string]any{
-					"name": "claim",
-				},
-				"compositionRevisionRef": map[string]any{
-					"name": "my-composition-rev-1",
-				},
-			},
-			compositionUpdatePolicy:    "Manual",
-			expectRevisionRefPreserved: true, // But from Claim, not backing XR
-			description:                "Claim can override compositionRevisionRef even with Manual policy",
+			claimSpec:               map[string]any{"activeField": "value", "compositionRevisionRef": map[string]any{"name": "my-composition-rev-2"}},
+			backingXRSpec:           map[string]any{"activeField": "value", "claimRef": map[string]any{"name": "claim"}, "compositionRevisionRef": backingXRRef},
+			compositionUpdatePolicy: "Manual",
+			wantRevisionRef:         map[string]any{"name": "my-composition-rev-2"},
+			description:             "Claim can override compositionRevisionRef even with Manual policy",
+		},
+		"SeededRevisionRepointsTheBackingXRsRef": {
+			// comp, for an Automatic claim that would re-point at the revision the diffed composition
+			// mints. Keeping the backing XR's ref would render the stale revision's name: a missed change.
+			claimSpec:               map[string]any{"activeField": "value"},
+			backingXRSpec:           map[string]any{"activeField": "value", "claimRef": map[string]any{"name": "claim"}, "compositionRevisionRef": backingXRRef},
+			compositionUpdatePolicy: "Automatic",
+			seededRevision:          "my-composition-rev-2",
+			wantRevisionRef:         map[string]any{"name": "my-composition-rev-2"},
+			description:             "a seeded revision should replace the backing XR's ref",
+		},
+		"SeededRevisionNeverCreatesARef": {
+			// A backing XR not yet tracking a revision gives no evidence its schema accepts the field, so
+			// the seed is not written — the same rule comp applies to the composites it seeds directly.
+			claimSpec:               map[string]any{"activeField": "value"},
+			backingXRSpec:           map[string]any{"activeField": "value", "claimRef": map[string]any{"name": "claim"}},
+			compositionUpdatePolicy: "Automatic",
+			seededRevision:          "my-composition-rev-2",
+			wantRevisionRef:         nil,
+			description:             "a seeded revision should not create a ref the backing XR lacks",
+		},
+		"ClaimRefWinsOverSeededRevision": {
+			// A claim carrying its own ref is seeded on the claim itself, so this value already is the seed.
+			claimSpec:               map[string]any{"activeField": "value", "compositionRevisionRef": map[string]any{"name": "claim-revision"}},
+			backingXRSpec:           map[string]any{"activeField": "value", "claimRef": map[string]any{"name": "claim"}, "compositionRevisionRef": backingXRRef},
+			compositionUpdatePolicy: "Automatic",
+			seededRevision:          "my-composition-rev-2",
+			wantRevisionRef:         map[string]any{"name": "claim-revision"},
+			description:             "the claim's own ref should win over a seeded revision",
+		},
+		"SeededRevisionForAnotherResourceIsIgnored": {
+			// The seed is recorded for one composite, and must not leak to anything else rendered under
+			// the same context — a claim composed further down the tree, say.
+			claimSpec:               map[string]any{"activeField": "value"},
+			backingXRSpec:           map[string]any{"activeField": "value", "claimRef": map[string]any{"name": "claim"}, "compositionRevisionRef": backingXRRef},
+			compositionUpdatePolicy: "Automatic",
+			seededRevision:          "my-composition-rev-2",
+			seededFor:               tu.NewResource("example.org/v1", "TestClaim", "another-claim").InNamespace("default").Build(),
+			wantRevisionRef:         backingXRRef,
+			description:             "a revision seeded for another resource should not apply",
 		},
 	}
 
 	for name, tt := range tests {
 		t.Run(name, func(t *testing.T) {
+			ctx := t.Context()
+
 			// Create the existing claim as it would be fetched from cluster
 			// This claim has resourceRef pointing to the backing XR
 			existingClaimFromCluster := tu.NewResource("example.org/v1", "TestClaim", "test-claim").
@@ -4185,11 +4181,11 @@ func TestDefaultDiffProcessor_resolveBackingXRForClaim_CompositionRevisionRef(t 
 				t.Fatalf("Failed to set resourceRef: %v", err)
 			}
 
-			// Create backing XR with spec
+			// Create backing XR with spec. Deep-copied because the cases share backingXRRef.
 			backingXR := tu.NewResource("example.org/v1", "XTest", "test-claim-abc123").
 				InNamespace("default").
 				Build()
-			if err := un.SetNestedField(backingXR.Object, tt.backingXRSpec, "spec"); err != nil {
+			if err := un.SetNestedField(backingXR.Object, runtime.DeepCopyJSON(tt.backingXRSpec), "spec"); err != nil {
 				t.Fatalf("Failed to set backing XR spec: %v", err)
 			}
 
@@ -4211,8 +4207,17 @@ func TestDefaultDiffProcessor_resolveBackingXRForClaim_CompositionRevisionRef(t 
 			updatedClaim := tu.NewResource("example.org/v1", "TestClaim", "test-claim").
 				InNamespace("default").
 				Build()
-			if err := un.SetNestedField(updatedClaim.Object, tt.claimSpec, "spec"); err != nil {
+			if err := un.SetNestedField(updatedClaim.Object, runtime.DeepCopyJSON(tt.claimSpec), "spec"); err != nil {
 				t.Fatalf("Failed to set updated claim spec: %v", err)
+			}
+
+			if tt.seededRevision != "" {
+				seededFor := updatedClaim
+				if tt.seededFor != nil {
+					seededFor = tt.seededFor
+				}
+
+				ctx = withSeededRevision(ctx, seededFor, tt.seededRevision)
 			}
 
 			// Create mock clients
@@ -4251,23 +4256,17 @@ func TestDefaultDiffProcessor_resolveBackingXRForClaim_CompositionRevisionRef(t 
 				t.Fatalf("resolveBackingXRForClaim() returned nil xrForRendering")
 			}
 
-			// Check if compositionRevisionRef is in the merged spec
-			_, found, _ := un.NestedFieldCopy(result.xrForRendering.Object, "spec", "compositionRevisionRef")
-
-			if tt.expectRevisionRefPreserved && !found {
-				t.Errorf("resolveBackingXRForClaim() compositionRevisionRef should be preserved but was not. Test: %s", tt.description)
+			gotRevisionRef, _, _ := un.NestedMap(result.xrForRendering.Object, "spec", "compositionRevisionRef")
+			if diff := gcmp.Diff(tt.wantRevisionRef, gotRevisionRef); diff != "" {
+				t.Errorf("resolveBackingXRForClaim(): %s: compositionRevisionRef mismatch (-want +got):\n%s", tt.description, diff)
 			}
 
-			if !tt.expectRevisionRefPreserved && found {
-				t.Errorf("resolveBackingXRForClaim() compositionRevisionRef should NOT be preserved but was. Test: %s", tt.description)
-			}
+			// The backing XR is the cluster's object; seeding the render must not write through to it.
+			wantClusterRef, _ := tt.backingXRSpec["compositionRevisionRef"].(map[string]any)
+			clusterRef, _, _ := un.NestedMap(backingXR.Object, "spec", "compositionRevisionRef")
 
-			// Special case: verify Claim value takes precedence when Claim provides compositionRevisionRef
-			if claimRevRef, hasClaimRef := tt.claimSpec["compositionRevisionRef"]; hasClaimRef && found {
-				gotRevRef, _, _ := un.NestedFieldCopy(result.xrForRendering.Object, "spec", "compositionRevisionRef")
-				if diff := gcmp.Diff(claimRevRef, gotRevRef); diff != "" {
-					t.Errorf("resolveBackingXRForClaim() compositionRevisionRef should match Claim value (-want +got):\n%s", diff)
-				}
+			if diff := gcmp.Diff(wantClusterRef, clusterRef); diff != "" {
+				t.Errorf("resolveBackingXRForClaim() mutated the cluster's backing XR (-want +got):\n%s", diff)
 			}
 		})
 	}

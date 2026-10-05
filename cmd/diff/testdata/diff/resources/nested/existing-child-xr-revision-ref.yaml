@@ -1,0 +1,14 @@
+# The existing child XR, as Crossplane's composite reconciler leaves it: tracking a
+# CompositionRevision. The suffix is deliberately not a real hash, so the composed resource's value
+# can only match it if the render inherited this ref.
+apiVersion: ns.nested.example.org/v1alpha1
+kind: XChildResource
+metadata:
+  name: test-parent-child
+  namespace: default
+spec:
+  childField: "existing-value"
+  crossplane:
+    compositionUpdatePolicy: Automatic
+    compositionRevisionRef:
+      name: xchildresources.nested.example.org-current
