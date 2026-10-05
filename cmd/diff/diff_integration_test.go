@@ -693,12 +693,11 @@ func TestDiffIntegration(t *testing.T) {
 			expectedExitCode: dp.ExitCodeDiffDetected,
 		},
 		"BuiltInResourceAdditionPicksUpApiserverDefaults": {
-			// The choice of a built-in type is what makes this test non-vacuous. applyCRDDefaults
-			// (schema_validator.go) already applies CRD-derived `default:` values to the XR and to every
-			// composed resource before the diff calculator runs, so a CRD-backed resource's defaults show up
-			// in a `+++` diff with no apiserver involvement — see XRDDefaultsAppliedBeforeRendering. Deployment
-			// has no CRD, so IsCRDRequired is false, applyCRDDefaults skips it, and the fields asserted below
-			// can ONLY have come from round-tripping the addition through the apiserver.
+			// The choice of a built-in type keeps this test non-vacuous whatever crossplane-diff defaults
+			// locally. SchemaDefaulter (schema_defaulter.go) predicts CRD-derived `default:` values for an
+			// addition that gets no apiserver result, and skips anything without a CRD. Deployment has no
+			// CRD, so IsCRDRequired is false, and the fields asserted below can ONLY have come from
+			// round-tripping the addition through the apiserver.
 			//
 			// Every asserted default is string-valued on purpose: assertChangeFields compares with
 			// reflect.DeepEqual against JSON-decoded values, so a numeric default (revisionHistoryLimit: 10)
@@ -1965,6 +1964,36 @@ Summary: 2 modified, 2 removed`,
 			expectedError:    false,
 			expectedExitCode: dp.ExitCodeDiffDetected,
 		},
+		// #503, for a claim. A claim is diffed as the claim itself, so its dry-run payload must carry
+		// none of the defaults its CRD declares for fields the manifest omits.
+		"XRDDefaultedFieldOnClaimOwnedByAnotherManagerIsNotReportedChanged": {
+			reason:       "An XRD-defaulted field the claim manifest omits keeps another manager's non-default value in the diff",
+			outputFormat: "json",
+			setupFiles: []string{
+				"testdata/diff/resources/existing-namespace.yaml",
+				"testdata/diff/resources/claim-xrd.yaml",
+				"testdata/diff/resources/claim-composition.yaml",
+				"testdata/diff/resources/claim-composition-revision.yaml",
+				"testdata/diff/resources/functions.yaml",
+				"testdata/diff/resources/existing-claim.yaml",
+				"testdata/diff/resources/existing-claim-downstream-resource.yaml",
+			},
+			fieldManagerApplies: []fieldManagerApply{
+				{file: "testdata/diff/resources/existing-claim-defaulted-fields-other-manager.yaml", fieldManager: "platform-operator"},
+			},
+			inputFiles: []string{"testdata/diff/modified-claim-omitting-defaulted-fields.yaml"},
+			expectedStructuredOutput: tu.ExpectDiff().
+				WithSummary(0, 2, 0).
+				WithModifiedResource("NopClaim", "test-claim", "existing-namespace").
+				WithFieldChange("spec.coolField", "existing-value", "modified-value").
+				WithFieldChange("spec.compositeDeletePolicy", "Foreground", "Foreground").
+				WithFieldChange("spec.compositionUpdatePolicy", "Manual", "Manual").
+				And().
+				WithModifiedResource("XDownstreamResource", "test-claim-82crv", "").
+				WithFieldChange("spec.forProvider.configData", "existing-value", "modified-value"),
+			expectedError:    false,
+			expectedExitCode: dp.ExitCodeDiffDetected,
+		},
 		"XRDDefaultsAppliedBeforeRendering": {
 			reason:       "Validates that XRD defaults are applied to XR before rendering",
 			outputFormat: "json",
@@ -2009,6 +2038,73 @@ Summary: 2 modified, 2 removed`,
 			},
 			expectedStructuredOutput: tu.ExpectDiff().
 				WithSummary(1, 0, 0).
+				WithAddedResource("XNopResource", "test-resource", "default"),
+			expectedError:    false,
+			expectedExitCode: dp.ExitCodeDiffDetected,
+		},
+		// #503, for the XR itself. applyXRDDefaults defaults the XR before rendering, and must: the
+		// composition has to see the spec Crossplane would. But the XR's own dry-run apply payload must
+		// not carry those defaults, or it claims spec.region from the manager that set it to eu-west-1
+		// and reports a change applying the manifest would not make. Nothing is composed, so the XR is
+		// the only thing that could be reported changed.
+		"XRDDefaultedFieldOwnedByAnotherManagerIsNotReportedChanged": {
+			reason:       "An XRD-defaulted field the XR manifest omits keeps another manager's non-default value in the diff",
+			outputFormat: "json",
+			inputFiles:   []string{"testdata/diff/xr-with-missing-defaults.yaml"},
+			setupFiles: []string{
+				"testdata/diff/resources/xrd-with-defaults.yaml",
+				"testdata/diff/resources/composition-with-defaults.yaml",
+				"testdata/diff/resources/functions.yaml",
+			},
+			fieldManagerApplies: []fieldManagerApply{
+				{file: "testdata/diff/xr-with-missing-defaults.yaml", fieldManager: "kubectl"},
+				{file: "testdata/diff/resources/existing-xr-with-defaults-other-manager.yaml", fieldManager: "platform-operator"},
+			},
+			expectedStructuredOutput: tu.ExpectDiff().WithSummary(0, 0, 0),
+			expectedError:            false,
+			expectedExitCode:         dp.ExitCodeSuccess,
+		},
+		// With no apiserver result for an addition, its defaults have to be predicted locally. These
+		// pin that keeping local defaults out of dry-run payloads did not also take them out of the
+		// additions that are never sent: an XRD default on the XR, and a CRD default on a composed
+		// resource.
+		"XRDDefaultsShownForAddedXRWithoutDryRun": {
+			reason:       "With --dry-run-on=existing an added XR still shows the defaults its XRD declares",
+			outputFormat: "json",
+			dryRunOn:     "existing",
+			inputFiles:   []string{"testdata/diff/xr-with-missing-defaults.yaml"},
+			setupFiles: []string{
+				"testdata/diff/resources/xrd-with-defaults.yaml",
+				"testdata/diff/resources/composition-with-defaults.yaml",
+				"testdata/diff/resources/functions.yaml",
+			},
+			expectedStructuredOutput: tu.ExpectDiff().
+				WithSummary(1, 0, 0).
+				WithAddedResource("XTestDefaultResource", "test-resource-with-defaults", "default").
+				WithDryRunSkipped("disabled", "").
+				WithField("spec.region", "us-east-1").
+				WithField("spec.size", "large").
+				WithField("spec.tags.environment", "development"),
+			expectedError:    false,
+			expectedExitCode: dp.ExitCodeDiffDetected,
+		},
+		"CRDDefaultsShownForAddedComposedResourceWithoutDryRun": {
+			reason:       "With --dry-run-on=existing an added composed resource still shows the defaults its CRD declares",
+			outputFormat: "json",
+			dryRunOn:     "existing",
+			inputFiles:   []string{"testdata/diff/new-xr.yaml"},
+			setupFiles: []string{
+				"testdata/diff/resources/xrd.yaml",
+				"testdata/diff/resources/composition-with-crd-defaulted-downstream.yaml",
+				"testdata/diff/resources/functions.yaml",
+			},
+			expectedStructuredOutput: tu.ExpectDiff().
+				WithSummary(2, 0, 0).
+				WithAddedResource("XDefaultedDownstreamResource", "test-resource-defaulted", "default").
+				WithDryRunSkipped("disabled", "").
+				WithField("spec.forProvider.size", "small").
+				WithField("spec.forProvider.configData", "new-value").
+				And().
 				WithAddedResource("XNopResource", "test-resource", "default"),
 			expectedError:    false,
 			expectedExitCode: dp.ExitCodeDiffDetected,
@@ -2127,6 +2223,44 @@ Summary: 2 modified, 2 removed`,
 				WithSummary(0, 3, 0).
 				WithModifiedResource("XChildResource", "test-parent-child", "default").
 				WithFieldChange("spec.childField", "existing-value", "modified-value").
+				And().
+				WithModifiedResource("XDownstreamResource", "test-parent-child-managed", "default").
+				WithFieldChange("spec.forProvider.configData", "existing-value", "modified-value").
+				And().
+				WithModifiedResource("XParentResource", "test-parent", "default").
+				WithFieldChange("spec.parentField", "existing-value", "modified-value"),
+			expectedError:    false,
+			expectedExitCode: dp.ExitCodeDiffDetected,
+		},
+		// #503, for a nested XR. Its diff is computed from its own render, which ran on the XR after
+		// its own applyXRDDefaults, so that render carries spec.tier: standard although the parent's
+		// composition never sets it. Sending it would claim spec.tier from the manager that set it to
+		// premium.
+		"XRDDefaultedFieldOnNestedXROwnedByAnotherManagerIsNotReportedChanged": {
+			reason:       "An XRD-defaulted field a parent composition omits from a nested XR keeps another manager's non-default value in the diff",
+			outputFormat: "json",
+			setupFiles: []string{
+				"testdata/diff/resources/nested/parent-xrd.yaml",
+				"testdata/diff/resources/nested/child-xrd.yaml",
+				"testdata/diff/resources/nested/parent-composition.yaml",
+				"testdata/diff/resources/nested/parent-composition-revision.yaml",
+				"testdata/diff/resources/nested/child-composition.yaml",
+				"testdata/diff/resources/nested/child-composition-revision.yaml",
+				"testdata/diff/resources/xdownstreamenvresource-xrd.yaml",
+				"testdata/diff/resources/functions.yaml",
+				"testdata/diff/resources/nested/existing-parent-xr.yaml",
+				"testdata/diff/resources/nested/existing-child-xr.yaml",
+				"testdata/diff/resources/nested/existing-managed-resource.yaml",
+			},
+			fieldManagerApplies: []fieldManagerApply{
+				{file: "testdata/diff/resources/nested/existing-child-xr-tier-other-manager.yaml", fieldManager: "platform-operator"},
+			},
+			inputFiles: []string{"testdata/diff/modified-nested-xr.yaml"},
+			expectedStructuredOutput: tu.ExpectDiff().
+				WithSummary(0, 3, 0).
+				WithModifiedResource("XChildResource", "test-parent-child", "default").
+				WithFieldChange("spec.childField", "existing-value", "modified-value").
+				WithFieldChange("spec.tier", "premium", "premium").
 				And().
 				WithModifiedResource("XDownstreamResource", "test-parent-child-managed", "default").
 				WithFieldChange("spec.forProvider.configData", "existing-value", "modified-value").

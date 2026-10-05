@@ -122,7 +122,8 @@ func NewDiffProcessor(k8cs k8.Clients, xpcs xp.Clients, opts ...ProcessorOption)
 	resourceManager := config.Factories.ResourceManager(k8cs.Resource, xpcs.Definition, xpcs.ResourceTree, config.Logger)
 	schemaValidator := config.Factories.SchemaValidator(k8cs.Schema, k8cs.Resource, xpcs.Definition, config.Logger)
 	requirementsProvider := config.Factories.RequirementsProvider(k8cs.Resource, xpcs.Environment, config.Logger)
-	diffCalculator := config.Factories.DiffCalculator(k8cs.Apply, k8cs.Access, xpcs.ResourceTree, resourceManager, config.Logger, diffOpts, config.DryRunOn)
+	schemaDefaulter := config.Factories.SchemaDefaulter(k8cs.Schema)
+	diffCalculator := config.Factories.DiffCalculator(k8cs.Apply, k8cs.Access, xpcs.ResourceTree, resourceManager, config.Logger, diffOpts, config.DryRunOn, schemaDefaulter)
 	diffRenderer := config.Factories.DiffRenderer(config.Logger, diffOpts)
 
 	functionProvider := config.Factories.FunctionProvider(xpcs.Function, config.Logger)
@@ -417,12 +418,18 @@ func (p *DefaultDiffProcessor) diffSingleResourceInternal(ctx context.Context, r
 	// Note: Serialization mutex prevents concurrent Docker operations.
 	// In e2e tests, named Docker containers (via annotations) reuse containers across renders.
 
-	// Apply XRD defaults before rendering
+	// Apply XRD defaults before rendering, so the composition sees the spec Crossplane would. The XR's
+	// own dry-run payload must not carry them (see withoutLocalDefaults), so keep the XR from either
+	// side of the defaulting.
+	undefaultedXR := xr.DeepCopy()
+
 	err = p.applyXRDDefaults(ctx, xr, resourceID)
 	if err != nil {
 		p.config.Logger.Debug("Failed to apply XRD defaults", "resource", resourceID, "error", err)
 		return nil, nil, errors.Wrap(err, "cannot apply XRD defaults")
 	}
+
+	defaultedXR := xr.DeepCopy()
 
 	// Fetch the existing XR from the cluster to populate UID and other cluster-specific fields.
 	// This ensures that when composition functions set owner references on nested resources,
@@ -515,9 +522,16 @@ func (p *DefaultDiffProcessor) diffSingleResourceInternal(ctx context.Context, r
 	p.config.Logger.Debug("Calculating diffs", "resource", resourceID)
 
 	// Use the merged XR (input + rendered metadata) for diff calculation
-	// This ensures Claims get the generated XR name and other metadata from rendering
+	// This ensures Claims get the generated XR name and other metadata from rendering.
+	//
+	// The merged XR is built from the XRD-defaulted XR, and becomes the XR's dry-run apply payload.
+	// Leave the XRD defaults out of it: a field in a server-side apply claims ownership, so a default
+	// the manifest never set would take over a value another manager owns (#503). The apiserver
+	// applies its own defaults to what it is sent.
+	xrPayload := withoutLocalDefaults(xrUnstructured, defaultedXR.GetUnstructured(), undefaultedXR.GetUnstructured())
+
 	mergedXR := cmp.New()
-	if err = runtime.DefaultUnstructuredConverter.FromUnstructured(xrUnstructured.UnstructuredContent(), mergedXR); err != nil {
+	if err = runtime.DefaultUnstructuredConverter.FromUnstructured(xrPayload.UnstructuredContent(), mergedXR); err != nil {
 		p.config.Logger.Debug("Failed to convert merged XR", "resource", resourceID, "error", err)
 		return nil, nil, errors.Wrap(err, "cannot convert merged XR")
 	}

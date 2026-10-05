@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
@@ -1866,6 +1867,27 @@ func (b *CRDBuilder) WithStringFieldSchema(fieldName string) *CRDBuilder {
 			},
 			"status": {
 				Type: "object",
+			},
+		},
+	}
+
+	return b.WithSchema(schema)
+}
+
+// WithDefaultedStringFieldSchema adds a schema whose spec has a single string field carrying a
+// `default:` value, for exercising CRD defaulting.
+func (b *CRDBuilder) WithDefaultedStringFieldSchema(fieldName, defaultValue string) *CRDBuilder {
+	schema := &extv1.JSONSchemaProps{
+		Type: "object",
+		Properties: map[string]extv1.JSONSchemaProps{
+			"spec": {
+				Type: "object",
+				Properties: map[string]extv1.JSONSchemaProps{
+					fieldName: {
+						Type:    "string",
+						Default: &extv1.JSON{Raw: []byte(strconv.Quote(defaultValue))},
+					},
+				},
 			},
 		},
 	}

@@ -23,6 +23,9 @@ spec:
               properties:
                 childField:
                   type: string
+                tier:
+                  type: string
+                  default: standard
                 # spec.crossplane subtree is populated by the v2 composite
                 # reconciler.
                 crossplane:

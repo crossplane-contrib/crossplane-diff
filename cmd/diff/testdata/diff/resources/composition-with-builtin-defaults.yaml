@@ -3,11 +3,10 @@
 # This fixture exists to exercise the apiserver round-trip for additions (issue #334), and the
 # choice of a built-in type is load-bearing rather than incidental.
 #
-# DefaultSchemaValidator.applyCRDDefaults already applies CRD-derived `default:` values to the XR
-# and to every composed resource before the diff calculator runs, so a CRD-backed composed resource
-# shows its defaults in a `+++` diff with no apiserver involvement at all. Deployment has no CRD, so
-# IsCRDRequired is false and applyCRDDefaults skips it — which makes it the smallest resource whose
-# defaulted fields can only come from the apiserver.
+# SchemaDefaulter predicts CRD-derived `default:` values locally for an addition that gets no
+# apiserver result, so a CRD-backed composed resource can show its defaults in a `+++` diff with no
+# apiserver involvement. Deployment has no CRD, so IsCRDRequired is false and SchemaDefaulter skips
+# it — which makes it the smallest resource whose defaulted fields can only come from the apiserver.
 #
 # The Deployment deliberately sets only the fields a caller must set (selector, template, one
 # container). Everything asserted in the corresponding test — spec.strategy.type,

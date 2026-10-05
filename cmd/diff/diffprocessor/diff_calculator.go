@@ -49,6 +49,7 @@ type DefaultDiffCalculator struct {
 	logger          logging.Logger
 	diffOptions     renderer.DiffOptions
 	dryRunOn        DryRunOn
+	defaulter       SchemaDefaulter
 }
 
 // SetDiffOptions updates the diff options used by the calculator.
@@ -56,8 +57,9 @@ func (c *DefaultDiffCalculator) SetDiffOptions(options renderer.DiffOptions) {
 	c.diffOptions = options
 }
 
-// NewDiffCalculator creates a new DefaultDiffCalculator.
-func NewDiffCalculator(apply k8.ApplyClient, access k8.AccessChecker, tree xp.ResourceTreeClient, resourceManager ResourceManager, logger logging.Logger, diffOptions renderer.DiffOptions, dryRunOn DryRunOn) DiffCalculator {
+// NewDiffCalculator creates a new DefaultDiffCalculator. defaulter predicts CRD defaults for the
+// additions that get no apiserver result; see dryRunCreateAddition.
+func NewDiffCalculator(apply k8.ApplyClient, access k8.AccessChecker, tree xp.ResourceTreeClient, resourceManager ResourceManager, logger logging.Logger, diffOptions renderer.DiffOptions, dryRunOn DryRunOn, defaulter SchemaDefaulter) DiffCalculator {
 	return &DefaultDiffCalculator{
 		treeClient:      tree,
 		applyClient:     apply,
@@ -66,6 +68,7 @@ func NewDiffCalculator(apply k8.ApplyClient, access k8.AccessChecker, tree xp.Re
 		logger:          logger,
 		diffOptions:     diffOptions,
 		dryRunOn:        dryRunOn,
+		defaulter:       defaulter,
 	}
 }
 
@@ -456,19 +459,18 @@ func (c *DefaultDiffCalculator) CalculateRemovedResourceDiffs(ctx context.Contex
 // dry-run creating it.
 //
 // On success it returns the apiserver's view of the object, which is the whole point: server-side
-// defaulting and mutating admission are invisible to the render pipeline, and for a built-in type
-// they are invisible to the schema validator's applyCRDDefaults too, since that skips anything
-// without a CRD.
+// defaulting and mutating admission are invisible to the render pipeline. The rendered object is sent
+// as it is, with no locally predicted defaults, because the apiserver applies its own.
 //
-// When the dry run could not be performed it returns the rendered object unchanged plus a
-// DryRunInfo saying why, rather than failing: a missing permission or an unreachable webhook is a
-// property of the environment, not a finding about the resource, and an addition has a reasonable
-// lower-fidelity fallback. It returns an error only when the cluster actually refused the resource
-// (a real finding, routed to the schema-validation exit-code tier) or when something is wrong that
-// we must not paper over.
+// When the dry run could not be performed it returns the rendered object with locally predicted CRD
+// defaults (see predictLocally) plus a DryRunInfo saying why, rather than failing: a missing
+// permission or an unreachable webhook is a property of the environment, not a finding about the
+// resource, and an addition has a reasonable lower-fidelity fallback. It returns an error only when
+// the cluster actually refused the resource (a real finding, routed to the schema-validation
+// exit-code tier) or when something is wrong that we must not paper over.
 func (c *DefaultDiffCalculator) dryRunCreateAddition(ctx context.Context, desired *un.Unstructured, resourceID string) (*un.Unstructured, *dt.DryRunInfo, error) {
 	if c.dryRunOn == DryRunOnExisting {
-		return desired, &dt.DryRunInfo{SkipReason: dt.DryRunSkipDisabled}, nil
+		return c.predictLocally(ctx, desired, resourceID, &dt.DryRunInfo{SkipReason: dt.DryRunSkipDisabled})
 	}
 
 	createDesired := sanitizeForDryRun(desired)
@@ -515,7 +517,7 @@ func (c *DefaultDiffCalculator) dryRunCreateAddition(ctx context.Context, desire
 		c.warnUnverified("skipped apiserver verification of added resources: their namespace does not exist yet, so their diffs omit server-side defaulting and admission",
 			desired, "cause", cause)
 
-		return desired, &dt.DryRunInfo{SkipReason: dt.DryRunSkipNamespaceNotFound, Detail: cause}, nil
+		return c.predictLocally(ctx, desired, resourceID, &dt.DryRunInfo{SkipReason: dt.DryRunSkipNamespaceNotFound, Detail: cause})
 
 	case apierrors.IsInvalid(err):
 		return nil, nil, NewAdmissionRejectionError(resourceID, desired, err)
@@ -534,11 +536,25 @@ func (c *DefaultDiffCalculator) dryRunCreateAddition(ctx context.Context, desire
 		c.warnUnverified("skipped apiserver verification of added resources: the cluster could not complete admission",
 			desired, "cause", cause)
 
-		return desired, &dt.DryRunInfo{SkipReason: dt.DryRunSkipWebhookUnavailable, Detail: cause}, nil
+		return c.predictLocally(ctx, desired, resourceID, &dt.DryRunInfo{SkipReason: dt.DryRunSkipWebhookUnavailable, Detail: cause})
 
 	default:
 		return nil, nil, errors.Wrapf(err, "cannot dry-run create %s", resourceID)
 	}
+}
+
+// predictLocally is what an addition shows when it got no apiserver result: the rendered object with
+// the CRD defaults the apiserver would have applied, predicted locally, and the DryRunInfo saying why
+// the apiserver was not asked. The prediction is never sent anywhere, so unlike a dry-run payload it
+// cannot claim fields. It covers CRD `default:` values only; see SchemaDefaulter for what it misses,
+// including pruning (#527) and multi-version conversion (#528).
+func (c *DefaultDiffCalculator) predictLocally(ctx context.Context, desired *un.Unstructured, resourceID string, info *dt.DryRunInfo) (*un.Unstructured, *dt.DryRunInfo, error) {
+	predicted, err := c.defaulter.Default(ctx, desired)
+	if err != nil {
+		return nil, nil, errors.Wrapf(err, "cannot predict defaults for %s", resourceID)
+	}
+
+	return predicted, info, nil
 }
 
 // resolveForbiddenCreate asks the authorizer whether a Forbidden from a dry-run create was an
@@ -560,7 +576,7 @@ func (c *DefaultDiffCalculator) resolveForbiddenCreate(ctx context.Context, desi
 		c.warnUnverified("skipped apiserver verification of added resources: not authorized to create them, so their diffs omit server-side defaulting and admission",
 			desired, "reason", reason)
 
-		return desired, &dt.DryRunInfo{SkipReason: dt.DryRunSkipForbidden, Detail: reason}, nil
+		return c.predictLocally(ctx, desired, resourceID, &dt.DryRunInfo{SkipReason: dt.DryRunSkipForbidden, Detail: reason})
 
 	default:
 		// Authorized to create, yet refused: admission or quota. A real finding.

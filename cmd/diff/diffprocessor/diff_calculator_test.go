@@ -97,6 +97,13 @@ func TestDefaultDiffCalculator_CalculateDiff(t *testing.T) {
 		// reference naming this owner. Render-overlap detection reads it to attribute a composed resource
 		// to the XR that would control it, so an addition must not lose it to the dry-run round trip.
 		wantControllerOf string
+
+		// wantLocallyDefaulted says whether the DESIRED side carries the marker field every case's
+		// SchemaDefaulter adds. It must be set exactly when no apiserver result exists — an addition
+		// that was not dry-run created — and never otherwise: a locally defaulted field in a dry-run
+		// payload claims ownership of it (#503), and the fake apply clients echo their payload, so a
+		// defaulted payload would surface here.
+		wantLocallyDefaulted bool
 	}{
 		"ExistingResourceModified": {
 			setupMocks: func(t *testing.T) (k8.ApplyClient, xp.ResourceTreeClient, ResourceManager) {
@@ -311,7 +318,8 @@ func TestDefaultDiffCalculator_CalculateDiff(t *testing.T) {
 				ResourceName: "new-resource",
 				DiffType:     dt.DiffTypeAdded,
 			},
-			wantDryRun: &dt.DryRunInfo{SkipReason: dt.DryRunSkipDisabled},
+			wantLocallyDefaulted: true,
+			wantDryRun:           &dt.DryRunInfo{SkipReason: dt.DryRunSkipDisabled},
 		},
 		"AdditionForbiddenByRBACDegrades": {
 			// Forbidden + authorizer says we may NOT create: a property of our credentials, not a finding
@@ -338,7 +346,8 @@ func TestDefaultDiffCalculator_CalculateDiff(t *testing.T) {
 				ResourceName: "new-resource",
 				DiffType:     dt.DiffTypeAdded,
 			},
-			wantDryRun: &dt.DryRunInfo{SkipReason: dt.DryRunSkipForbidden, Detail: "no create on testresources"},
+			wantLocallyDefaulted: true,
+			wantDryRun:           &dt.DryRunInfo{SkipReason: dt.DryRunSkipForbidden, Detail: "no create on testresources"},
 		},
 		"AdditionForbiddenWhileAuthorizedIsARejection": {
 			// Forbidden + authorizer says we MAY create: the refusal came from admission, quota, or a
@@ -416,6 +425,7 @@ func TestDefaultDiffCalculator_CalculateDiff(t *testing.T) {
 				ResourceName: "new-resource",
 				DiffType:     dt.DiffTypeAdded,
 			},
+			wantLocallyDefaulted: true,
 			wantDryRun: &dt.DryRunInfo{
 				SkipReason: dt.DryRunSkipWebhookUnavailable,
 				Detail:     `Internal error occurred: failed calling webhook "policy.example.org": connection refused`,
@@ -542,6 +552,7 @@ func TestDefaultDiffCalculator_CalculateDiff(t *testing.T) {
 				ResourceName: "new-resource",
 				DiffType:     dt.DiffTypeAdded,
 			},
+			wantLocallyDefaulted: true,
 			wantDryRun: &dt.DryRunInfo{
 				SkipReason: dt.DryRunSkipNamespaceNotFound,
 				Detail:     `namespaces "does-not-exist" not found`,
@@ -907,6 +918,7 @@ func TestDefaultDiffCalculator_CalculateDiff(t *testing.T) {
 				logger,
 				renderer.DefaultDiffOptions(),
 				tt.dryRunOn,
+				markerDefaulter(),
 			)
 
 			// Call the function under test
@@ -985,6 +997,13 @@ func TestDefaultDiffCalculator_CalculateDiff(t *testing.T) {
 				}
 			}
 
+			if diff.Desired.Raw != nil {
+				_, got, _ := un.NestedString(diff.Desired.Raw.Object, "spec", locallyDefaultedField)
+				if got != tt.wantLocallyDefaulted {
+					t.Errorf("desired side carries the locally defaulted field: %v, want %v", got, tt.wantLocallyDefaulted)
+				}
+			}
+
 			if tt.wantServerField != "" {
 				if diff.Desired.Raw == nil {
 					t.Fatalf("expected the apiserver's object on the desired side, got no desired view at all")
@@ -1002,6 +1021,20 @@ func TestDefaultDiffCalculator_CalculateDiff(t *testing.T) {
 			}
 		})
 	}
+}
+
+// locallyDefaultedField is the spec field markerDefaulter adds.
+const locallyDefaultedField = "locallyDefaulted"
+
+// markerDefaulter is a SchemaDefaulter that adds spec.locallyDefaulted, so a case can tell whether a
+// diff's desired side was locally defaulted.
+func markerDefaulter() SchemaDefaulter {
+	return &tu.MockSchemaDefaulter{DefaultFn: func(_ context.Context, obj *un.Unstructured) (*un.Unstructured, error) {
+		out := obj.DeepCopy()
+		err := un.SetNestedField(out.Object, "predicted", "spec", locallyDefaultedField)
+
+		return out, err
+	}}
 }
 
 func TestDefaultDiffCalculator_CalculateDiffs(t *testing.T) {
@@ -1343,6 +1376,7 @@ func TestDefaultDiffCalculator_CalculateDiffs(t *testing.T) {
 				logger,
 				renderer.DefaultDiffOptions(),
 				DryRunOnAll,
+				&tu.MockSchemaDefaulter{},
 			)
 
 			// Call the function under test
@@ -1525,6 +1559,7 @@ func TestDefaultDiffCalculator_CalculateRemovedResourceDiffs(t *testing.T) {
 				logger,
 				renderer.DefaultDiffOptions(),
 				DryRunOnAll,
+				&tu.MockSchemaDefaulter{},
 			)
 
 			// Call the method under test
@@ -2121,6 +2156,7 @@ func TestDefaultDiffCalculator_DegradationWarnings(t *testing.T) {
 				warnings,
 				renderer.DefaultDiffOptions(),
 				DryRunOnAll,
+				&tu.MockSchemaDefaulter{},
 			)
 
 			gotDetails := make([]string, 0, len(tc.desired))
