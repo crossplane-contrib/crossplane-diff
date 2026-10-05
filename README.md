@@ -131,7 +131,8 @@ could not be found (it will compose nothing), function credentials that could no
 render may not reflect reality), leftover function containers, a CompositionRevision whose name could
 not be predicted (see `predictedRevisionName` under
 [Structured Output](#structured-output-jsonyaml)), an added resource that could not be verified against the
-apiserver (see [Required Permissions](#required-permissions)), and the deleting-XR case above.
+apiserver (see [Required Permissions](#required-permissions)), a composed resource the XR still references
+but which no longer exists in the cluster (see below), and the deleting-XR case above.
 
 A warning identical to one already raised — same `message` **and** same `context` — is reported once,
 not once per occurrence. That matters for conditions that are a property of a composition rather than
@@ -151,6 +152,14 @@ Two things narrow when the credential warning fires:
   RBAC denial, a transport failure, an undecodable payload — the run **fails** instead. The tool cannot
   know whether that credential would have changed the render, and emitting a diff that might not
   reflect reality is worse than refusing to emit one.
+
+The same split applies to the composed resources an existing XR references. One that is `NotFound`
+(deleted out of band since the XR recorded it) is genuinely absent, so it is left out of the observed
+state the render is given and a warning names it; a composition that still produces it will show it as
+an addition. One that cannot be *read* — RBAC denial, a timeout, a transport failure — fails that XR's
+diff, naming the resource and the cause: the resource may well exist, and reporting it as an addition
+would be a confidently wrong answer. This applies to `xr` and to every XR `comp` analyzes; with several
+XRs, the others are still diffed.
 
 ### Composition Diff - Analyze Impact of Composition Changes
 
