@@ -282,8 +282,8 @@ func TestDiffCompositionWithClaims(t *testing.T) {
 				// Golden file shows for ClusterNopResource:
 				//   spec.forProvider.fields.configData: claim-value-1 → updated-claim-value-1
 				//   spec.forProvider.fields.resourceTier: basic → premium
-				// Golden file shows for NopClaimDiffResource (the Claim):
-				//   spec.compositionUpdatePolicy: Automatic (added field)
+				// The Claim itself is unchanged. Its manifest omits spec.compositionUpdatePolicy, which the
+				// XR's CRD defaults but the claim's does not, so applying it adds nothing (#503).
 				AssertStructuredCompDiff(t, jsonOutput, tu.ExpectCompDiff().
 					WithComposition("xnopclaimdiffresources.claimdiff.example.org").
 					WithCompositionModified().         // Composition itself is modified
@@ -298,11 +298,11 @@ func TestDiffCompositionWithClaims(t *testing.T) {
 					WithFieldChange("spec.forProvider.fields.resourceTier", "basic", "premium").
 					AndXR().
 					AndComp().
-					// Claim impact - downstream includes both the claim and the backing XR's composed resources
+					// Claim impact - downstream is the backing XR's composed resource; the claim is unchanged
 					WithXRImpact("NopClaimDiffResource", "test-comp-claim", "default", "changed").
-					WithDownstreamSummary(0, 2, 0). // Claim + ClusterNopResource modified
-					WithDownstreamResource("modified", "NopClaimDiffResource", "test-comp-claim", "default").
-					WithFieldAdded("spec.compositionUpdatePolicy", "Automatic").
+					WithDownstreamSummary(0, 1, 0). // ClusterNopResource modified
+					WithDownstreamResource("modified", "ClusterNopResource", "", "").
+					WithAnyName().
 					AndXR().
 					AndComp())
 

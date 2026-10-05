@@ -45,7 +45,6 @@
     compositionRevisionRef:
       name: parent-nop-claim-composition-7c02fc0
 -   parentField: existing-parent-value
-+   compositionUpdatePolicy: Automatic
 +   parentField: modified-parent-value
     resourceRef:
       apiVersion: claimnested.diff.example.org/v1alpha1
