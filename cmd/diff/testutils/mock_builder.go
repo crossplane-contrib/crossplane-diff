@@ -1324,10 +1324,7 @@ func (b *MockResourceTreeClientBuilder) WithSuccessfulResourceTreeFetch(resource
 // WithEmptyResourceTree sets GetResourceTree to return just the root with no children.
 func (b *MockResourceTreeClientBuilder) WithEmptyResourceTree() *MockResourceTreeClientBuilder {
 	return b.WithGetResourceTree(func(_ context.Context, root *un.Unstructured) (*resource.Resource, error) {
-		return &resource.Resource{
-			Unstructured: *root.DeepCopy(),
-			Children:     []*resource.Resource{},
-		}, nil
+		return NewTreeNode(root).Build(), nil
 	})
 }
 
@@ -1346,27 +1343,50 @@ func (b *MockResourceTreeClientBuilder) WithResourceTreeFromXRAndComposed(xr *un
 			return nil, errors.Errorf("unexpected resource %s/%s", root.GetKind(), root.GetName())
 		}
 
-		// Create the resource tree with the XR as root
-		resourceTree := &resource.Resource{
-			Unstructured: *xr.DeepCopy(),
-			Children:     make([]*resource.Resource, 0, len(composed)),
-		}
-
-		// Add composed resources as children
+		// Create the resource tree with the XR as root and the composed resources as its children
+		children := make([]*TreeNodeBuilder, 0, len(composed))
 		for _, comp := range composed {
-			resourceTree.Children = append(resourceTree.Children, &resource.Resource{
-				Unstructured: *comp.DeepCopy(),
-				Children:     []*resource.Resource{},
-			})
+			children = append(children, NewTreeNode(comp))
 		}
 
-		return resourceTree, nil
+		return NewTreeNode(xr).WithChildren(children...).Build(), nil
 	})
 }
 
 // Build returns the built mock.
 func (b *MockResourceTreeClientBuilder) Build() *MockResourceTreeClient {
 	return b.mock
+}
+
+// TreeNodeBuilder builds a resource-tree node, the shape a ResourceTreeClient returns.
+type TreeNodeBuilder struct {
+	node *resource.Resource
+}
+
+// NewTreeNode starts a tree node holding a deep copy of obj, so the caller's object is never shared
+// with, or mutated through, the tree.
+func NewTreeNode(obj *un.Unstructured) *TreeNodeBuilder {
+	return &TreeNodeBuilder{node: &resource.Resource{Unstructured: *obj.DeepCopy()}}
+}
+
+// WithChildren appends the given nodes as children of this one.
+func (b *TreeNodeBuilder) WithChildren(children ...*TreeNodeBuilder) *TreeNodeBuilder {
+	for _, c := range children {
+		b.node.Children = append(b.node.Children, c.Build())
+	}
+
+	return b
+}
+
+// WithError records err on the node, as upstream's tree client does for a node it could not fetch.
+func (b *TreeNodeBuilder) WithError(err error) *TreeNodeBuilder {
+	b.node.Error = err
+	return b
+}
+
+// Build returns the built node.
+func (b *TreeNodeBuilder) Build() *resource.Resource {
+	return b.node
 }
 
 // endregion
