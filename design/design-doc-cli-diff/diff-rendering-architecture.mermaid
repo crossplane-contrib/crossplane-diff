@@ -45,7 +45,6 @@ classDiagram
         +NameGenerated bool
         +Diffs map[string]*ResourceDiff
         +Err *OutputError
-        +DroppedUnverified map[string]*ResourceDiff
     }
 
     class OutputFormat {
@@ -136,7 +135,6 @@ classDiagram
         +FilterDetail string
         +Error error
         +Diffs map[string]*ResourceDiff
-        +DroppedUnverified map[string]*ResourceDiff
     }
 
     class XRStatus {

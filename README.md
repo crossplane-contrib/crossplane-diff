@@ -147,8 +147,11 @@ and distinct cluster cause, with `context` carrying `gvk`, `namespace`, the caus
 `reason` for an authorization denial) and `count`, the number of resources behind it as a string. So
 forty unverifiable ConfigMaps in one namespace are one warning with `"count": "40"`, while a second,
 different cause is a second warning rather than being hidden behind the first. Which resources were
-affected is in each change's `dryRun` object. An XR that fails after diffing such additions emits no
-diffs, but its unverified additions are still counted. For `comp` the summary is run-wide, in the
+affected is in each change's `dryRun` object. A failed XR's diffs are withheld, so no summary is shown
+for it: the summary says how far to trust the diffs that are shown, and the XR's error is reported in
+`errors[]` and on stderr; re-running after fixing it gives the full summary. (Before this was derived
+from the diffs, a failed XR's warning could appear incidentally, because it was raised mid-calculation.)
+For `comp` the summary is run-wide, in the
 top-level `warnings[]`, not per composition.
 
 Because the summary is built at the end, these warnings follow all the others: on stderr they are written

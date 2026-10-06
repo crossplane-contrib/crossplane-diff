@@ -319,10 +319,6 @@ type XRImpact struct {
 	FilterDetail string
 	Error        error                       // store actual error, not string
 	Diffs        map[string]*dt.ResourceDiff // downstream diffs (nil if unchanged/error)
-	// DroppedUnverified is set only for an XR that failed: the diffs it computed before failing whose
-	// desired state could not be verified against the apiserver. They feed the run-wide summary of
-	// unverified additions and are never rendered as diffs. See dt.XRDiffGroup.DroppedUnverified.
-	DroppedUnverified map[string]*dt.ResourceDiff
 }
 
 // --- JSON Output Types (used by StructuredCompDiffRenderer) ---

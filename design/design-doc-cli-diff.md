@@ -276,8 +276,7 @@ The integration test cases cover:
   upgrades can shift phrasing without breaking tests.
 - **Unverified-Addition Summary**: Additions whose dry-run create was skipped are summarised as one counted warning
   per GVK + namespace + cause, asserted with `WithWarning` / `WithWarningContext` (including `count`) and on stderr —
-  across several `xr` inputs, through `comp` as one run-wide summary, and for an XR that fails after diffing such
-  additions (`FailedXRStillReportsItsUnverifiedAdditions`), whose dropped diffs must not take the warning with them.
+  across several `xr` inputs, and through `comp` as one run-wide summary.
 
 ### 4.11 Composition Diff Scenarios
 
@@ -1272,13 +1271,13 @@ because `warnings[]` is top-level; the human comp renderer reuses `DefaultDiffRe
 composition with identity-less groups, so `DefaultDiffRenderer` summarises identity-bearing groups
 only and leaves the run-wide summary to `DefaultCompDiffRenderer`.
 
-A failed XR emits no diffs, so the summary would silently lose the additions it could not verify
-before failing. They are carried instead: `diffSingleResourceInternal`, `ProcessNestedXRs` and
-`DiffSingleResource` return the diffs computed so far alongside an error (not as a result), and the
-processors keep only those carrying a `DryRunInfo` (`unverifiedDiffs`) on the failed XR's entry —
-`XRDiffGroup.DroppedUnverified` for `xr`, `XRImpact.DroppedUnverified` for `comp`. Neither is ever
-rendered as a diff; the summariser reads them alongside `Diffs`. This covers both a render that
-failed and one whose diffs `InputValidator`'s verdict replaced.
+A failed XR's diffs are withheld, so no dry-run summary is shown for it: the summary says how far to
+trust the diffs that are shown, and the XR's error is reported in `errors[]` and on stderr;
+re-running after fixing it gives the full summary. This differs from the calculator-raised warning it
+replaces, which appeared for a failed XR only incidentally, because it fired mid-calculation. Carrying
+a failed XR's unverified additions through to the renderer was considered and rejected: it would have
+forced a "partial diffs alongside an error" contract onto `DiffProcessor.DiffSingleResource`, and the
+resulting count would be meaningless, since it depends on how far the XR got before failing.
 
 Implementations:
 

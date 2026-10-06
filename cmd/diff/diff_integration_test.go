@@ -710,46 +710,6 @@ func TestDiffIntegration(t *testing.T) {
 			expectedError:    false,
 			expectedExitCode: dp.ExitCodeDiffDetected,
 		},
-		// A failed XR emits no diffs, but what it learned before failing is not news it may swallow: the
-		// additions it could not verify are still summarised, in warnings[] and on stderr. The cycle fails
-		// at --max-nested-depth after diffing every level, so the count covers each level of the tree:
-		// XCycleA at depths 0, 2, ..., 10 and XCycleB at depths 1, 3, ..., 11.
-		"FailedXRStillReportsItsUnverifiedAdditions": {
-			reason:       "An XR that fails after diffing additions it could not verify still has those additions summarised as warnings",
-			outputFormat: "json",
-			setupFiles: []string{
-				"testdata/diff/resources/cycle/xrds.yaml",
-				"testdata/diff/resources/cycle/compositions.yaml",
-				"testdata/diff/resources/functions.yaml",
-			},
-			inputFiles:    []string{"testdata/diff/new-cycle-xr-missing-namespace.yaml"},
-			expectedError: true,
-			expectedStderrContains: []string{
-				`WARNING: skipped apiserver verification of added resources: their namespace does not exist yet, so their diffs omit server-side defaulting and admission ` +
-					`(cause=namespaces "nonexistent-namespace" not found, count=6, gvk=ns.cycle.example.org/v1alpha1, Kind=XCycleA, namespace=nonexistent-namespace)`,
-			},
-			expectedExitCode: dp.ExitCodeToolError,
-			expectedStructuredOutput: tu.ExpectDiff().
-				WithSummary(0, 0, 0).
-				WithError("XCycleA/test-cycle").
-				WithMessageContaining("maximum nesting depth exceeded").
-				AndError().
-				WithWarning("their namespace does not exist yet").
-				WithWarningContext(map[string]string{
-					"gvk":       "ns.cycle.example.org/v1alpha1, Kind=XCycleA",
-					"namespace": "nonexistent-namespace",
-					"cause":     `namespaces "nonexistent-namespace" not found`,
-					"count":     "6",
-				}).
-				And().
-				WithWarning("their namespace does not exist yet").
-				WithWarningContext(map[string]string{
-					"gvk":       "ns.cycle.example.org/v1alpha1, Kind=XCycleB",
-					"namespace": "nonexistent-namespace",
-					"cause":     `namespaces "nonexistent-namespace" not found`,
-					"count":     "6",
-				}),
-		},
 		"BuiltInResourceAdditionPicksUpApiserverDefaults": {
 			// The choice of a built-in type is what makes this test non-vacuous. applyCRDDefaults
 			// (schema_validator.go) already applies CRD-derived `default:` values to the XR and to every

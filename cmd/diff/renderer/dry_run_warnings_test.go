@@ -147,8 +147,8 @@ func TestDryRunWarnings(t *testing.T) {
 
 // TestRenderers_EmitDryRunWarnings covers every entry point a command renders through. Each derives the
 // summary from what it is handed, writes it to stderr in every output mode, and adds it to warnings[] in
-// structured modes after the warnings raised during the run. It must also cover an XR that failed: its
-// diffs are dropped, but the resources it could not verify are not news it may swallow.
+// structured modes after the warnings raised during the run. The summary spans inputs, so two XRs'
+// additions are counted together; a failed XR shows no diffs and contributes nothing.
 func TestRenderers_EmitDryRunWarnings(t *testing.T) {
 	raised := dt.OutputWarning{Message: "raised during the run"}
 	summary := dt.OutputWarning{
@@ -156,16 +156,13 @@ func TestRenderers_EmitDryRunWarnings(t *testing.T) {
 		Context: map[string]string{"gvk": testResourceGVK, "namespace": "ns-a", "cause": "gone", "count": "2"},
 	}
 
-	succeeded := unverifiedAddition("TestResource", "a", "ns-a", dt.DryRunSkipNamespaceNotFound, "gone")
-	failed := unverifiedAddition("TestResource", "b", "ns-a", dt.DryRunSkipNamespaceNotFound, "gone")
+	first := unverifiedAddition("TestResource", "a", "ns-a", dt.DryRunSkipNamespaceNotFound, "gone")
+	second := unverifiedAddition("TestResource", "b", "ns-a", dt.DryRunSkipNamespaceNotFound, "gone")
 
 	xrGroups := []dt.XRDiffGroup{
-		{XR: corev1.ObjectReference{Kind: "XR", Name: "ok"}, Diffs: diffMap(succeeded)},
-		{
-			XR:                corev1.ObjectReference{Kind: "XR", Name: "broken"},
-			Err:               &dt.OutputError{ResourceID: "XR/broken", Message: "boom"},
-			DroppedUnverified: diffMap(failed),
-		},
+		{XR: corev1.ObjectReference{Kind: "XR", Name: "one"}, Diffs: diffMap(first)},
+		{XR: corev1.ObjectReference{Kind: "XR", Name: "two"}, Diffs: diffMap(second)},
+		{XR: corev1.ObjectReference{Kind: "XR", Name: "broken"}, Err: &dt.OutputError{ResourceID: "XR/broken", Message: "boom"}},
 	}
 
 	compOutput := func() *CompDiffOutput {
@@ -173,8 +170,9 @@ func TestRenderers_EmitDryRunWarnings(t *testing.T) {
 			Compositions: []CompositionDiff{{
 				Name: "xrs.example.org",
 				ImpactAnalysis: []XRImpact{
-					{ObjectReference: corev1.ObjectReference{Kind: "XR", Name: "ok"}, Status: XRStatusChanged, Diffs: diffMap(succeeded)},
-					{ObjectReference: corev1.ObjectReference{Kind: "XR", Name: "broken"}, Status: XRStatusError, DroppedUnverified: diffMap(failed)},
+					{ObjectReference: corev1.ObjectReference{Kind: "XR", Name: "one"}, Status: XRStatusChanged, Diffs: diffMap(first)},
+					{ObjectReference: corev1.ObjectReference{Kind: "XR", Name: "two"}, Status: XRStatusChanged, Diffs: diffMap(second)},
+					{ObjectReference: corev1.ObjectReference{Kind: "XR", Name: "broken"}, Status: XRStatusError},
 				},
 			}},
 			Warnings: []dt.OutputWarning{raised},

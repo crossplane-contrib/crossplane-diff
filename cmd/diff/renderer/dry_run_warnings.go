@@ -125,25 +125,28 @@ func dryRunWarnings(diffSets ...map[string]*dt.ResourceDiff) []dt.OutputWarning 
 	return warnings
 }
 
-// xrDryRunWarnings is dryRunWarnings over everything an xr run computed: each input's diffs, and the
-// unverified diffs of any input that failed (see XRDiffGroup.DroppedUnverified).
+// xrDryRunWarnings is dryRunWarnings over the diffs an xr run emits, across every input.
+//
+// A failed input's diffs are withheld, so nothing is summarised for it: the summary says how far to
+// trust the diffs that are shown, and a failed input shows none. Its error is reported instead.
 func xrDryRunWarnings(groups []dt.XRDiffGroup) []dt.OutputWarning {
-	sets := make([]map[string]*dt.ResourceDiff, 0, 2*len(groups))
+	sets := make([]map[string]*dt.ResourceDiff, 0, len(groups))
 	for _, g := range groups {
-		sets = append(sets, g.Diffs, g.DroppedUnverified)
+		sets = append(sets, g.Diffs)
 	}
 
 	return dryRunWarnings(sets...)
 }
 
-// compDryRunWarnings is dryRunWarnings over everything a comp run computed, across every composition:
-// one run-wide summary rather than one per composition, matching where warnings[] lives.
+// compDryRunWarnings is dryRunWarnings over the downstream diffs a comp run emits, across every
+// composition: one run-wide summary rather than one per composition, matching where warnings[] lives.
+// As for xr, a failed XR's diffs are withheld and so are not summarised.
 func compDryRunWarnings(output *CompDiffOutput) []dt.OutputWarning {
 	var sets []map[string]*dt.ResourceDiff
 
 	for _, comp := range output.Compositions {
 		for _, impact := range comp.ImpactAnalysis {
-			sets = append(sets, impact.Diffs, impact.DroppedUnverified)
+			sets = append(sets, impact.Diffs)
 		}
 	}
 

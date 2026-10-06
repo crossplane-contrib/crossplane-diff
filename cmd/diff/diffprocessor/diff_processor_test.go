@@ -5,8 +5,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"maps"
-	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -862,18 +860,6 @@ func TestDefaultDiffProcessor_PerformDiff_Groups(t *testing.T) {
 		}
 	}
 
-	// unverified is an addition the input XR named xrName renders whose dry-run create was skipped, so
-	// it carries a DryRunInfo. Its key is distinct per XR.
-	unverified := func(xrName string) *dt.ResourceDiff {
-		return &dt.ResourceDiff{
-			Gvk:          schema.GroupVersionKind{Group: "example.org", Version: "v1", Kind: "Bucket"},
-			Namespace:    "missing",
-			ResourceName: xrName + "-new",
-			DiffType:     dt.DiffTypeAdded,
-			DryRun:       &dt.DryRunInfo{SkipReason: dt.DryRunSkipNamespaceNotFound, Detail: `namespaces "missing" not found`},
-		}
-	}
-
 	xr := func(name string) *un.Unstructured {
 		return tu.NewResource(testGroup+"/"+testAPIVersion, testKind, name).WithSpecField("coolField", name).Build()
 	}
@@ -892,12 +878,10 @@ func TestDefaultDiffProcessor_PerformDiff_Groups(t *testing.T) {
 	// got is the whole handoff, asserted as one value: the group identities in
 	// input order, each errored group's message by name, the global (union)
 	// error list the renderer was given, the error PerformDiff returned, and
-	// (with a mock validator) the renders it recorded. Unverified holds, by name, the keys of each
-	// errored group's DroppedUnverified.
+	// (with a mock validator) the renders it recorded.
 	type got struct {
 		XRs        []corev1.ObjectReference
 		GroupErrs  map[string]string
-		Unverified map[string][]string
 		GlobalErrs []string
 		Err        string
 		Recorded   []recorded
@@ -931,46 +915,8 @@ func TestDefaultDiffProcessor_PerformDiff_Groups(t *testing.T) {
 		validator *validation
 		// failRender names an input XR whose render fails.
 		failRender string
-		// withUnverified makes every render also produce an unverified addition (see unverified). A
-		// failing render returns it alongside its error, as the real calculator returns what it had
-		// computed before the failure.
-		withUnverified bool
-		want           got
+		want       got
 	}{
-		// A failed XR emits no diffs, but the additions it could not verify must still reach the
-		// renderer's summary, so they ride on its group.
-		"FailedRenderKeepsItsUnverifiedAdditions": {
-			resources:      []*un.Unstructured{xr("my-xr-1"), xr("my-xr-2")},
-			failRender:     "my-xr-2",
-			withUnverified: true,
-			want: got{
-				XRs:        []corev1.ObjectReference{ref("my-xr-1"), ref("my-xr-2")},
-				GroupErrs:  map[string]string{"my-xr-2": renderFailedErr},
-				Unverified: map[string][]string{"my-xr-2": {unverified("my-xr-2").GetDiffKey()}},
-				GlobalErrs: []string{renderFailedErr},
-				Err:        "unable to process resource XR1/my-xr-2: " + renderFailedErr,
-			},
-		},
-		// The same holds when a verdict replaces the diffs of a render that succeeded.
-		"VerdictKeepsTheUnverifiedAdditionsOfTheDiffsItReplaces": {
-			resources: []*un.Unstructured{xr("my-xr-1"), xr("my-xr-2")},
-			validator: &validation{
-				toRender: []types.ValidatedInput{{Resource: xr("my-xr-1")}, {Resource: xr("my-xr-2")}},
-				verdicts: []error{nil, errors.New("verdict")},
-			},
-			withUnverified: true,
-			want: got{
-				XRs:        []corev1.ObjectReference{ref("my-xr-1"), ref("my-xr-2")},
-				GroupErrs:  map[string]string{"my-xr-2": "verdict"},
-				Unverified: map[string][]string{"my-xr-2": {unverified("my-xr-2").GetDiffKey()}},
-				GlobalErrs: []string{"verdict"},
-				Err:        "unable to process resource XR1/my-xr-2: verdict",
-				Recorded: []recorded{
-					{I: 0, Rendered: map[string]bool{sharedKey: true}},
-					{I: 1, Rendered: map[string]bool{sharedKey: true}},
-				},
-			},
-		},
 		// An input ToRender already rejected is not rendered; its verdict is a group error, in errors[],
 		// and on the returned error.
 		"InputRejectedBeforeRenderingIsNotRendered": {
@@ -1098,20 +1044,13 @@ func TestDefaultDiffProcessor_PerformDiff_Groups(t *testing.T) {
 				WithDiffCalculatorFactory(func(k8.ApplyClient, k8.AccessChecker, xp.ResourceTreeClient, ResourceManager, logging.Logger, renderer.DiffOptions, DryRunOn) DiffCalculator {
 					return &tu.MockDiffCalculator{
 						CalculateNonRemovalDiffsFn: func(_ context.Context, rendered *cmp.Unstructured, _ *un.Unstructured, _ render.CompositionOutputs) (map[string]*dt.ResourceDiff, map[string]bool, error) {
-							diffs := map[string]*dt.ResourceDiff{}
-
-							if tt.withUnverified {
-								u := unverified(rendered.GetName())
-								diffs[u.GetDiffKey()] = u
-							}
-
 							if rendered.GetName() == tt.failRender {
-								return diffs, nil, errors.New("render failed")
+								return nil, nil, errors.New("render failed")
 							}
 
-							diffs[sharedKey] = bucket("parent", "same", rendered.GetName())
+							diff := bucket("parent", "same", rendered.GetName())
 
-							return diffs, map[string]bool{sharedKey: true}, nil
+							return map[string]*dt.ResourceDiff{sharedKey: diff}, map[string]bool{sharedKey: true}, nil
 						},
 					}
 				}),
@@ -1170,14 +1109,6 @@ func TestDefaultDiffProcessor_PerformDiff_Groups(t *testing.T) {
 				}
 
 				result.GroupErrs[g.XR.Name] = g.Err.Message
-
-				if len(g.DroppedUnverified) > 0 {
-					if result.Unverified == nil {
-						result.Unverified = map[string][]string{}
-					}
-
-					result.Unverified[g.XR.Name] = slices.Sorted(maps.Keys(g.DroppedUnverified))
-				}
 			}
 
 			for _, e := range gotErrs {
@@ -2844,11 +2775,9 @@ func TestDefaultDiffProcessor_ProcessNestedXRs(t *testing.T) {
 			},
 			parentResourceID: "XParentResource/test-parent",
 			depth:            1,
-			// The diffs computed before the depth error come back with it, so a failed XR's unverified
-			// additions can still be reported. They are not a result.
-			wantDiffCount:  2,
-			wantErr:        true,
-			wantErrContain: "maximum nesting depth exceeded",
+			wantDiffCount:    0,
+			wantErr:          true,
+			wantErrContain:   "maximum nesting depth exceeded",
 		},
 		// --max-nested-depth N means "N levels of nesting below the root", so
 		// with N=1 a second level of nesting must be refused.
@@ -2863,7 +2792,7 @@ func TestDefaultDiffProcessor_ProcessNestedXRs(t *testing.T) {
 			},
 			parentResourceID: "XParentResource/test-parent",
 			depth:            1,
-			wantDiffCount:    1, // the first level's, returned with the error
+			wantDiffCount:    0,
 			wantErr:          true,
 			wantErrContain:   "maximum nesting depth exceeded",
 		},
