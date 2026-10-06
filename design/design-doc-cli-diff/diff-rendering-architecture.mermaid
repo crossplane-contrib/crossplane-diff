@@ -34,6 +34,19 @@ classDiagram
         +RenderCompDiff(output) error
     }
 
+    class dryRunWarnings {
+        <<function>>
+        +dryRunWarnings(diffSets) []OutputWarning
+        one per GVK + namespace + reason + detail, with count
+    }
+
+    class XRDiffGroup {
+        +XR ObjectReference
+        +NameGenerated bool
+        +Diffs map[string]*ResourceDiff
+        +Err *OutputError
+    }
+
     class OutputFormat {
         <<enumeration>>
         OutputFormatDiff
@@ -213,6 +226,7 @@ classDiagram
         DryRunSkipDisabled
         DryRunSkipForbidden
         DryRunSkipWebhookUnavailable
+        DryRunSkipNamespaceNotFound
     }
 
     DefaultDiffRenderer ..|> DiffRenderer
@@ -225,6 +239,16 @@ classDiagram
     StructuredDiffRenderer --> StructuredDiffOutput
     StructuredCompDiffRenderer --> CompDiffOutput
     DefaultCompDiffRenderer --> DiffRenderer
+
+    DiffRenderer ..> XRDiffGroup
+    XRDiffGroup --> ResourceDiff
+    XRDiffGroup --> OutputError
+    DefaultDiffRenderer ..> dryRunWarnings
+    StructuredDiffRenderer ..> dryRunWarnings
+    DefaultCompDiffRenderer ..> dryRunWarnings
+    StructuredCompDiffRenderer ..> dryRunWarnings
+    dryRunWarnings ..> DryRunInfo
+    dryRunWarnings ..> OutputWarning
 
     StructuredDiffOutput --> Summary
     StructuredDiffOutput --> ChangeDetail
