@@ -205,6 +205,12 @@ The integration test cases cover:
   server-side apply their setup objects under named managers (`fieldManagerApplies`) rather than creating them, since
   a plain create records only the test client and the apiserver drops `managedFields` supplied on create. Companion
   cases under `--dry-run-on=existing` pin that additions still show their CRD and XRD defaults, predicted locally.
+- **Claims Defaulted With Their Own CRD**: A new claim omitting every defaulted field shows its own CRD's defaults (a
+  user default and `compositeDeletePolicy`, never `compositionUpdatePolicy`), whether the apiserver applies them on
+  dry-run create or the lenient `Defaulter` predicts them under `--dry-run-on=existing`; and the composed resource,
+  which renders the XR's `tier` and `compositionUpdatePolicy`, shows that render saw the XR CRD's defaults. The
+  `claimnested` CRD fixtures mirror what Crossplane's `pkg/xcrd` generates for each, which is what makes the case
+  sensitive to defaulting a claim with its XR's CRD.
 
 ### 4.2 Environment Configuration Testing
 
@@ -1786,8 +1792,8 @@ The client layer provides interfaces to interact with Kubernetes and Crossplane 
     - The processor keeps three views of the XR. The **authored** XR is the input as written, plus a synthesized name
       for a `generateName`-only XR and, for a nested XR, its cluster identity; it is never modified, and it is what is
       validated and dry-run applied (for a claim, the claim itself). The **render** XR is the effective XR — the
-      authored XR carrying its cluster copy's UID, or for a claim its backing XR, never the claim — defaulted by the
-      strict `Defaulter` (§6.5a); it is what render consumes. The **predicted** view is a lenient-defaulted copy of an
+      authored XR carrying its cluster copy's UID, or for a claim its backing XR — defaulted by the strict
+      `Defaulter` (§6.5a) with the XR's CRD; it is what render consumes. The **predicted** view is a lenient-defaulted copy of an
       addition, used only where no apiserver result exists (§6.3.3). The UID matters because render keeps an input UID
       and checks observed resources' controller references against it. Nothing render adds to the XR is carried into
       the payload: render adds only `resourceRefs` and `status`, both of which `cleanupForDiff` strips.
@@ -1799,9 +1805,13 @@ The client layer provides interfaces to interact with Kubernetes and Crossplane 
       then proceeds from the (real or synthesized) backing XR with merged Claim spec, defaulted with the XR's CRD,
       producing composed resources with correct `crossplane.io/composite` labels. `buildMergedSpec` rebuilds the
       backing XR's spec from the claim's plus a few preserved fields, so it is this defaulting that restores the XR's
-      defaults. The claim is never defaulted with its XR's CRD: the two CRDs differ (a claim's declares
-      `compositionUpdatePolicy` with no default, for one), so doing so would put fields in the claim's payload that
-      applying the claim never adds.
+      defaults. Only the XR that render consumes is defaulted with the XR's CRD. The claim is defaulted with its
+      own CRD: by the apiserver on a dry run, or by the lenient `Defaulter` when an addition is predicted locally.
+      That CRD carries the XRD's user schema defaults (crossplane-runtime `pkg/xcrd`, `genCrdVersion`, crd.go:206)
+      plus the claim-only machinery defaults of `CompositeResourceClaimSpecProps` (schemas.go:209), so it differs
+      from the XR's (`CompositeResourceSpecProps`, schemas.go:75): only the XR's CRD defaults
+      `compositionUpdatePolicy`, and only the claim's defaults `compositeDeletePolicy`. Defaulting a claim with its
+      XR's CRD would therefore put fields in its payload that applying the claim never adds.
     - If the XR already exists in the cluster, `ResourceManager.FetchObservedResources` walks its resource tree to
       assemble the observed set that render is given. A failure here is fatal: downstream an empty observed set is
       indistinguishable from "this XR genuinely has no composed resources yet", so continuing would report every

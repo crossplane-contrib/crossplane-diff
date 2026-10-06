@@ -4767,7 +4767,7 @@ func TestEffectiveXR(t *testing.T) {
 			want:     tu.NewResource("example.org/v1", "XR", "my-xr").WithUID("cluster-uid").WithSpecField("field", "authored").Build(),
 		},
 		"ClaimIsComposedAsItsBackingXR": {
-			reason:   "Crossplane composes a claim's backing XR, so that, never the claim, is what gets defaulted with the XR's CRD.",
+			reason:   "Crossplane composes a claim's backing XR, so that is what render consumes and what gets defaulted with the XR's CRD; the claim keeps its own CRD's defaulting.",
 			authored: claim,
 			existing: tu.NewResource("example.org/v1", "Claim", "my-claim").WithNamespace("ns").WithUID("claim-uid").Build(),
 			backing:  backingXRInfo{xrForRendering: backing},

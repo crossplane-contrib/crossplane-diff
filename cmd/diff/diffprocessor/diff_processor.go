@@ -938,9 +938,13 @@ func (p *DefaultDiffProcessor) synthesizeDummyBackingXRForNewClaim(ctx context.C
 // effectiveXR returns the XR Crossplane would compose for authored, before defaulting.
 //
 // For a Claim that is its backing XR (see resolveBackingXRForClaim), never the Claim: Crossplane
-// composes the backing XR, and the Claim's CRD and its XR's differ, so a Claim must not be defaulted
-// with its XR's CRD. Otherwise it is a copy of authored carrying the UID of the XR's cluster copy, if
-// it has one. Render keeps an input UID (crossplane internal/render/composite.Render), so that UID
+// composes the backing XR, and only the XR that render consumes is defaulted with the XR's CRD. A
+// Claim is defaulted with its own CRD, by the apiserver on a dry run or by the lenient Defaulter when
+// an addition is predicted locally. That CRD carries the XRD's user schema defaults (crossplane-runtime
+// pkg/xcrd crd.go:206) plus the claim-only machinery defaults of CompositeResourceClaimSpecProps
+// (schemas.go:209), so it differs from the XR's (CompositeResourceSpecProps, schemas.go:75): only the
+// XR's defaults compositionUpdatePolicy, only the claim's defaults compositeDeletePolicy. Otherwise it
+// is a copy of authored carrying the UID of the XR's cluster copy, if it has one. Render keeps an input UID (crossplane internal/render/composite.Render), so that UID
 // reaches what composition functions observe and the owner references of composed resources, rather
 // than a fake one derived from the XR's name.
 func effectiveXR(authored *cmp.Unstructured, existing *un.Unstructured, backing backingXRInfo) *un.Unstructured {
