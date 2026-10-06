@@ -15,12 +15,14 @@ import (
 
 	tu "github.com/crossplane-contrib/crossplane-diff/cmd/diff/testutils"
 	gyaml "gopkg.in/yaml.v3"
+	extv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	un "k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/util/yaml"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/envtest"
 
 	"github.com/crossplane/crossplane-runtime/v2/pkg/errors"
 	"github.com/crossplane/crossplane-runtime/v2/pkg/logging"
@@ -434,6 +436,80 @@ func readResourcesFromFile(path string) ([]*un.Unstructured, error) {
 	}
 
 	return resources, nil
+}
+
+// xrdCRDName is the CRD that defines CompositeResourceDefinitions. It must be among the plain CRDs.
+const xrdCRDName = "compositeresourcedefinitions.apiextensions.crossplane.io"
+
+// envtestCRDs returns every CRD an integration test's apiserver must serve: the plain CRDs under crdDirs,
+// plus the CRDs Crossplane generates from each XRD that setupFiles declare. In a real cluster an XR's or a
+// claim's CRD exists only because its XRD does, and Crossplane generates it; deriving them here the same
+// way keeps test CRDs from drifting away from what a cluster would serve.
+//
+// A CRD declared twice is an error rather than a silent overwrite (envtest would install the later copy over
+// the earlier one). Most likely it is a hand-written copy of a CRD that is now generated, which must go.
+func envtestCRDs(crdDirs, setupFiles []string) ([]*extv1.CustomResourceDefinition, error) {
+	opts := envtest.CRDInstallOptions{Paths: crdDirs, ErrorIfPathMissing: true}
+	if err := envtest.ReadCRDFiles(&opts); err != nil {
+		return nil, fmt.Errorf("cannot read CRDs from %v: %w", crdDirs, err)
+	}
+
+	var xrdCRD *extv1.CustomResourceDefinition
+
+	// Keyed by both CRD name and kind.group: two CRDs of different names that serve the same kind
+	// collide just as surely (the apiserver never establishes the second).
+	sources := make(map[string]string, 2*len(opts.CRDs))
+	for _, crd := range opts.CRDs {
+		source := fmt.Sprintf("a CRD file under %v", crdDirs)
+		sources[crd.GetName()] = source
+		sources[crd.Spec.Names.Kind+"."+crd.Spec.Group] = source
+
+		if crd.GetName() == xrdCRDName {
+			xrdCRD = crd
+		}
+	}
+
+	if xrdCRD == nil {
+		return nil, fmt.Errorf("no CRD %q under %v; run `earthly +fetch-crossplane-cluster`", xrdCRDName, crdDirs)
+	}
+
+	crds := opts.CRDs
+
+	for _, path := range setupFiles {
+		resources, err := readResourcesFromFile(path)
+		if err != nil {
+			return nil, err
+		}
+
+		for _, r := range resources {
+			if r.GroupVersionKind().GroupKind() != xpextv1.CompositeResourceDefinitionGroupVersionKind.GroupKind() {
+				continue
+			}
+
+			generated, err := tu.CRDsForXRD(r, xrdCRD)
+			if err != nil {
+				return nil, fmt.Errorf("%s: %w", path, err)
+			}
+
+			for _, crd := range generated {
+				source := fmt.Sprintf("XRD %q in %s", r.GetName(), path)
+
+				for _, key := range []string{crd.GetName(), crd.Spec.Names.Kind + "." + crd.Spec.Group} {
+					if existing, ok := sources[key]; ok {
+						return nil, fmt.Errorf("CRD %q (%s) is generated from %s but %s also declares it; "+
+							"a generated CRD must not also be hand-written or generated twice",
+							crd.GetName(), key, source, existing)
+					}
+
+					sources[key] = source
+				}
+
+				crds = append(crds, crd)
+			}
+		}
+	}
+
+	return crds, nil
 }
 
 // createResources creates all resources in the cluster

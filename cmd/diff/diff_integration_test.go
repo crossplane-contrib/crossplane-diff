@@ -177,15 +177,21 @@ func runIntegrationTest(t *testing.T, testType DiffTestType, tt IntegrationTestC
 
 	thisDir := filepath.Dir(thisFile)
 
+	// Plain CRDs (Crossplane's own, and stand-ins for managed resources) are read from these
+	// directories. XR and claim CRDs are not: they are generated from the XRDs the test applies.
 	crdPaths := []string{
 		filepath.Join(thisDir, "..", "..", "cluster", "main", "crds"),
 		filepath.Join(thisDir, "testdata", string(testType), "crds"),
 	}
 
+	crds, err := envtestCRDs(crdPaths, tt.setupFiles)
+	if err != nil {
+		t.Fatalf("failed to assemble CRDs for the test environment: %v", err)
+	}
+
 	testEnv := &envtest.Environment{
-		CRDDirectoryPaths:     crdPaths,
-		ErrorIfCRDPathMissing: true,
-		Scheme:                scheme,
+		CRDs:   crds,
+		Scheme: scheme,
 		// Note: Leaving ControlPlane unset (nil) allows envtest to create its own control plane
 		// with random ports, which enables parallel test execution without port conflicts.
 		// Each test gets its own isolated API server and etcd instance on random available ports.
@@ -2361,8 +2367,7 @@ Summary: 2 modified, 2 removed`,
 			outputFormat: "json",
 			setupFiles: []string{
 				"testdata/diff/resources/existing-namespace.yaml",
-				// NOTE: CRDs for parent/child Claims/XRs are auto-loaded from testdata/diff/crds/
-				// XRDs for parent and child Claims
+				// XRDs for parent and child Claims (the harness generates their XR and Claim CRDs)
 				"testdata/diff/resources/claim-nested/parent-definition.yaml",
 				"testdata/diff/resources/claim-nested/child-definition.yaml",
 				// Compositions for parent and child
