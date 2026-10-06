@@ -4,6 +4,7 @@ metadata:
   name: test-api-version-api-resource
   namespace: default
   annotations:
+    crossplane.io/composition-resource-name: api-migrate-resource
     gotemplating.fn.crossplane.io/composition-resource-name: api-migrate-resource
   labels:
     crossplane.io/composite: test-api-version

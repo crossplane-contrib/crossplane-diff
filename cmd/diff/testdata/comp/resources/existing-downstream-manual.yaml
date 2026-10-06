@@ -6,6 +6,7 @@ metadata:
   labels:
     crossplane.io/composite: manual-resource
   annotations:
+    crossplane.io/composition-resource-name: nop-resource
     gotemplating.fn.crossplane.io/composition-resource-name: nop-resource
 spec:
   forProvider:

@@ -2220,7 +2220,7 @@ Summary: 2 modified, 2 removed`,
 			// the v1beta2 resource, Kubernetes finds the v1beta1 resource and returns it auto-converted
 			// to v1beta2. From Kubernetes' perspective, the resource exists as both versions simultaneously,
 			// so there's no apiVersion field change to show in the diff. The important thing is that the
-			// resource is matched (shown as ~~~, not ---/+++), preventing delete/recreate operations.
+			// resource is matched (unchanged, not ---/+++), preventing delete/recreate operations.
 			reason:       "Validates XR upgrading composition revision that changes resource API version shows as update not remove/add",
 			outputFormat: "json",
 			setupFiles: []string{
@@ -2235,11 +2235,11 @@ Summary: 2 modified, 2 removed`,
 				"testdata/diff/resources/existing-api-version-downstream-v1beta1.yaml",
 			},
 			inputFiles: []string{"testdata/diff/modified-api-version-xr-rev2.yaml"},
-			// Key assertion: both resources are MODIFIED (not added/removed), proving API version migration works
+			// Key assertion: nothing is added or removed, proving API version migration works. The
+			// XApiMigrateResource is stored identically at either version, so it renders unchanged; an
+			// unmatched one would be a +++ addition plus a --- removal. Only the XR's revision ref changes.
 			expectedStructuredOutput: tu.ExpectDiff().
-				WithSummary(0, 2, 0).
-				WithModifiedResource("XApiMigrateResource", "test-api-version-xr-api-resource", "default").
-				And().
+				WithSummary(0, 1, 0).
 				WithModifiedResource("XNopResource", "test-api-version-xr", "default"),
 			expectedError:    false,
 			expectedExitCode: dp.ExitCodeDiffDetected,
@@ -2703,7 +2703,7 @@ Summary: 2 resources with changes
   kind: XDownstreamResource
   metadata:
     annotations:
-+     crossplane.io/composition-resource-name: nop-resource
+      crossplane.io/composition-resource-name: nop-resource
       gotemplating.fn.crossplane.io/composition-resource-name: nop-resource
     labels:
       crossplane.io/composite: another-resource
@@ -2722,7 +2722,7 @@ Summary: 2 resources with changes
   kind: XDownstreamResource
   metadata:
     annotations:
-+     crossplane.io/composition-resource-name: nop-resource
+      crossplane.io/composition-resource-name: nop-resource
       gotemplating.fn.crossplane.io/composition-resource-name: nop-resource
     labels:
       crossplane.io/composite: test-resource
@@ -2896,8 +2896,9 @@ Impact analysis skipped: this composition is identical to the cluster's, so appl
 		// defaultProcessorOptions does not fold the annotation into --ignore-paths, and that the
 		// display-only suppression does not leak into the change verdict.
 		//
-		// The downstream modification reported here is the same fixture artifact
-		// UnchangedCompositionAnalyzeUnchangedEvaluatesXRs documents, not an effect of the annotation.
+		// The evaluated composite renders unchanged, because the new revision's spec is identical, so
+		// nothing renders differently and the exit code is 0 (as with AnalyzeOnSpecChangeSkipsMetadataOnlyChange).
+		// What proves evaluation is that the composite is counted, rather than impact analysis being skipped.
 		"CompositionAppliedWithKubectlEvaluatesXRs": {
 			reason: "A composition differing only in kubectl's last-applied-configuration still counts as changed, because applying it creates a new CompositionRevision",
 			setupFiles: []string{
@@ -2910,7 +2911,7 @@ Impact analysis skipped: this composition is identical to the cluster's, so appl
 			inputFiles:       []string{"testdata/comp/composition-no-changes.yaml"},
 			namespace:        "default",
 			outputFormat:     "json",
-			expectedExitCode: dp.ExitCodeDiffDetected,
+			expectedExitCode: dp.ExitCodeSuccess,
 			expectedStderrContains: []string{
 				// Issue #474: the composites are still evaluated, but they are rendered with their existing
 				// compositionRevisionRef, because the name of the revision this would create cannot be
@@ -2930,10 +2931,8 @@ Impact analysis skipped: this composition is identical to the cluster's, so appl
 				// unknowable, which is why the guard makes the weak claim rather than "no revision".
 				WithRevisionImpact("metadata", true, 1).
 				WithoutPredictedRevisionName().
-				WithAffectedResources(1, 1, 0, 0).
-				WithXRImpact("XNopResource", "test-resource", "default", "changed").
-				WithDownstreamSummary(0, 1, 0).
-				WithDownstreamResource("modified", "XDownstreamResource", "test-resource", "default"),
+				WithAffectedResources(1, 0, 1, 0).
+				WithXRImpact("XNopResource", "test-resource", "default", "unchanged"),
 		},
 		// Issue #500: the same asymmetry, but the cluster's last-applied-configuration is the one a
 		// client-side `kubectl apply` of this very file would write. Re-applying it computes the same
@@ -3034,10 +3033,11 @@ Impact analysis skipped: this composition is identical to the cluster's, so appl
 				WithoutPredictedRevisionName(),
 		},
 		// The same setup with --analyze-unchanged evaluates the XRs after all (the pre-edit
-		// convergence-baseline workflow). Note what it reports: a downstream modification even though
-		// the composition is byte-identical to the cluster's. That delta is not caused by this
-		// composition — it is exactly the class of finding the default skip keeps out of the "impact of
-		// your composition change" report, and why opting in is explicit.
+		// convergence-baseline workflow). Here the composed resource has drifted out of band, so the
+		// evaluation reports a downstream modification even though the composition is byte-identical
+		// to the cluster's. That delta is not caused by this composition — it is exactly the class of
+		// finding the default skip keeps out of the "impact of your composition change" report, and why
+		// opting in is explicit.
 		"UnchangedCompositionAnalyzeUnchangedEvaluatesXRs": {
 			reason: "--analyze-unchanged evaluates affected XRs even though the composition is unchanged, surfacing deltas not caused by it",
 			setupFiles: []string{
@@ -3045,7 +3045,7 @@ Impact analysis skipped: this composition is identical to the cluster's, so appl
 				"testdata/comp/resources/original-composition.yaml",
 				"testdata/comp/resources/functions.yaml",
 				"testdata/comp/resources/existing-xr-1.yaml",
-				"testdata/comp/resources/existing-downstream-1.yaml",
+				"testdata/comp/resources/existing-downstream-drifted.yaml",
 			},
 			inputFiles:       []string{"testdata/comp/composition-no-changes.yaml"},
 			namespace:        "default",
@@ -3057,7 +3057,8 @@ Impact analysis skipped: this composition is identical to the cluster's, so appl
 				WithAffectedResources(1, 1, 0, 0).
 				WithXRImpact("XNopResource", "test-resource", "default", "changed").
 				WithDownstreamSummary(0, 1, 0).
-				WithDownstreamResource("modified", "XDownstreamResource", "test-resource", "default"),
+				WithDownstreamResource("modified", "XDownstreamResource", "test-resource", "default").
+				WithFieldChange("spec.forProvider.configData", "drifted-value", "existing-value"),
 		},
 		"CompositionDiffCustomNamespace": {
 			reason: "Validates composition diff with custom namespace",
@@ -3139,7 +3140,7 @@ Summary: 1 resource with changes
   kind: XDownstreamResource
   metadata:
     annotations:
-+     crossplane.io/composition-resource-name: nop-resource
+      crossplane.io/composition-resource-name: nop-resource
       gotemplating.fn.crossplane.io/composition-resource-name: nop-resource
     labels:
       crossplane.io/composite: custom-namespace-resource
@@ -3287,7 +3288,7 @@ Summary: 2 resources with changes
   kind: XDownstreamResource
   metadata:
     annotations:
-+     crossplane.io/composition-resource-name: nop-resource
+      crossplane.io/composition-resource-name: nop-resource
       gotemplating.fn.crossplane.io/composition-resource-name: nop-resource
     labels:
       crossplane.io/composite: another-resource
@@ -3306,7 +3307,7 @@ Summary: 2 resources with changes
   kind: XDownstreamResource
   metadata:
     annotations:
-+     crossplane.io/composition-resource-name: nop-resource
+      crossplane.io/composition-resource-name: nop-resource
       gotemplating.fn.crossplane.io/composition-resource-name: nop-resource
     labels:
       crossplane.io/composite: test-resource
@@ -3413,7 +3414,7 @@ Summary: 1 resource with changes
   kind: XDownstreamResource
   metadata:
     annotations:
-+     crossplane.io/composition-resource-name: nop-resource
+      crossplane.io/composition-resource-name: nop-resource
       gotemplating.fn.crossplane.io/composition-resource-name: nop-resource
     labels:
       crossplane.io/composite: test-resource
@@ -3440,8 +3441,10 @@ Summary: 1 modified`,
 			// the v1beta2 resource, Kubernetes finds the v1beta1 resource and returns it auto-converted
 			// to v1beta2. From Kubernetes' perspective, the resource exists as both versions simultaneously,
 			// so there's no apiVersion field change to show in the diff. The important thing is that the
-			// resource is matched (shown as ~~~, not ---/+++), preventing delete/recreate operations.
-			// The composition diff itself WILL show the template change from v1beta1 to v1beta2.
+			// resource is matched, preventing delete/recreate operations: since the stored object is
+			// identical at either version it renders unchanged, where an unmatched one would show as a
+			// +++ addition and a --- removal. The composition diff itself WILL show the template change
+			// from v1beta1 to v1beta2.
 			reason: "Validates composition upgrade that changes resource API version shows as update not remove/add",
 			setupFiles: []string{
 				"testdata/comp/resources/xrd.yaml",
@@ -3502,30 +3505,14 @@ Applying this composition creates a new CompositionRevision, which 1 composite w
 
 === Affected Composite Resources ===
 
-  ⚠ XNopResource/test-api-version (namespace: default)
+  ✓ XNopResource/test-api-version (namespace: default)
 
-Summary: 1 resource with changes
+Summary: 1 resource unchanged
 
 === Impact Analysis ===
 
-~~~ XApiMigrateResource/test-api-version-api-resource
-  apiVersion: comp.example.org/v1beta2
-  kind: XApiMigrateResource
-  metadata:
-    annotations:
-+     crossplane.io/composition-resource-name: api-migrate-resource
-      gotemplating.fn.crossplane.io/composition-resource-name: api-migrate-resource
-    labels:
-      crossplane.io/composite: test-api-version
-    name: test-api-version-api-resource
-    namespace: default
-  spec:
-    forProvider:
-      configData: test-value
-
----
-
-Summary: 1 modified`,
+All composite resources are up-to-date. No downstream resource changes detected.
+`,
 			expectedError:    false,
 			expectedExitCode: dp.ExitCodeDiffDetected,
 			noColor:          true,
@@ -3916,7 +3903,7 @@ Summary: 2 resources with changes
   kind: XDownstreamResource
   metadata:
     annotations:
-+     crossplane.io/composition-resource-name: nop-resource
+      crossplane.io/composition-resource-name: nop-resource
       gotemplating.fn.crossplane.io/composition-resource-name: nop-resource
     labels:
       crossplane.io/claim-name: test-claim-1
@@ -3936,7 +3923,7 @@ Summary: 2 resources with changes
   kind: XDownstreamResource
   metadata:
     annotations:
-+     crossplane.io/composition-resource-name: nop-resource
+      crossplane.io/composition-resource-name: nop-resource
       gotemplating.fn.crossplane.io/composition-resource-name: nop-resource
     labels:
       crossplane.io/claim-name: test-claim-2
@@ -4122,7 +4109,7 @@ Summary: 1 resource with changes
   kind: XDownstreamResource
   metadata:
     annotations:
-+     crossplane.io/composition-resource-name: nop-resource
+      crossplane.io/composition-resource-name: nop-resource
       gotemplating.fn.crossplane.io/composition-resource-name: nop-resource
     labels:
       crossplane.io/composite: sha256-test-resource

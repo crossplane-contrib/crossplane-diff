@@ -3,8 +3,11 @@ apiVersion: ns.nop.example.org/v1alpha1
 kind: XDownstreamResource
 metadata:
   name: test-parent-child-managed
+  labels:
+    crossplane.io/composite: test-parent
   namespace: default
   annotations:
+    crossplane.io/composition-resource-name: managed-resource
     gotemplating.fn.crossplane.io/composition-resource-name: managed-resource
 spec:
   forProvider:
