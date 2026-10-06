@@ -29,6 +29,8 @@ Before you begin, ensure you have the following tools installed:
 2. **Generate required manifests**:
    ```bash
    earthly +generate --CROSSPLANE_IMAGE_TAG=main
+   # Only needed for e2e tests. Unit and integration tests install Crossplane's CRDs from the
+   # github.com/crossplane/crossplane/v2 module that go.mod pins.
    earthly +fetch-crossplane-cluster --CROSSPLANE_IMAGE_TAG=main
    ```
 

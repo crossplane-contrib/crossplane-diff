@@ -31,7 +31,8 @@ go tool cover -func=/tmp/coverage.out
 # Pre-PR checks: linting, tests, generation (requires long timeout, can take several minutes)
 earthly -P +reviewable
 
-# Fetch Crossplane cluster CRDs (required after Crossplane API changes or for integration tests)
+# Fetch Crossplane's cluster directory into cluster/<tag>. Only e2e needs it: unit and integration tests
+# install Crossplane's CRDs from the github.com/crossplane/crossplane/v2 module go.mod pins.
 earthly +fetch-crossplane-cluster --CROSSPLANE_IMAGE_TAG=main
 
 # Tidy go modules
@@ -293,6 +294,9 @@ same: for every XRD a test case's `setupFiles` declare, `envtestCRDs` (in `cmd/d
 - `testdata/{diff,comp}/crds/` holds only plain CRDs that no XRD defines (managed-resource stand-ins such as
   `XDownstreamResource`). The harness fails if a CRD there is also generated from an XRD, so a hand-written copy of a
   generated CRD can't linger.
+- Crossplane's own CRDs (Composition, XRD, Function, …) come from the `github.com/crossplane/crossplane/v2` module at
+  the version go.mod pins (`testutils.CrossplaneCRDsDir`), not from `cluster/<tag>`. They therefore match the xcrd and
+  other Crossplane code under test, and unit and integration tests need no `earthly +fetch-crossplane-cluster`.
 
 e2e tests need none of this: they run real Crossplane, which generates the CRDs itself.
 
