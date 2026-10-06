@@ -544,6 +544,12 @@ func TestDiffIntegration(t *testing.T) {
 +   namespace: default
 + spec:
 +   coolField: new-value
+`),
+				// The XR's generated CRD defaults spec.crossplane.compositionUpdatePolicy, and the payload
+				// carries spec.crossplane (render's resourceRefs), so the dry run adds the default. That is
+				// #503's spurious line, exactly as e2e's v2-namespaced/new-xr shows it; #538 removes it.
+				tu.Green(`+   crossplane:
++     compositionUpdatePolicy: Automatic
 `), `
 ---
 `,
@@ -956,6 +962,8 @@ func TestDiffIntegration(t *testing.T) {
   spec:
 ` + tu.Red("-   coolField: existing-value") + `
 ` + tu.Green("+   coolField: modified-value") + `
+    crossplane:
+      compositionUpdatePolicy: Automatic
 
 ---
 
@@ -3840,6 +3848,9 @@ Summary: 2 modified
 			// Updated composition that will be diffed
 			inputFiles: []string{"testdata/comp/updated-claim-composition.yaml"},
 			namespace:  "test-namespace",
+			// Each NopClaim shows "+ compositionUpdatePolicy: Automatic": the claim is defaulted with its
+			// XR's CRD, which defaults the policy, while its own generated CRD does not. That is #503,
+			// exactly as e2e's comp-claim/existing-claim shows it; #538 removes it.
 			expectedOutput: `
 === Composition Changes ===
 
@@ -3894,6 +3905,42 @@ Summary: 2 resources with changes
 
 === Impact Analysis ===
 
+~~~ NopClaim/test-claim-1
+  apiVersion: diff.example.org/v1alpha1
+  kind: NopClaim
+  metadata:
+    name: test-claim-1
+    namespace: test-namespace
+  spec:
+    compositeDeletePolicy: Background
+    compositionRef:
+      name: nopclaims.diff.example.org
++   compositionUpdatePolicy: Automatic
+    coolField: claim-value-1
+    resourceRef:
+      apiVersion: diff.example.org/v1alpha1
+      kind: XNop
+      name: test-claim-1-xr
+
+---
+~~~ NopClaim/test-claim-2
+  apiVersion: diff.example.org/v1alpha1
+  kind: NopClaim
+  metadata:
+    name: test-claim-2
+    namespace: test-namespace
+  spec:
+    compositeDeletePolicy: Background
+    compositionRef:
+      name: nopclaims.diff.example.org
++   compositionUpdatePolicy: Automatic
+    coolField: claim-value-2
+    resourceRef:
+      apiVersion: diff.example.org/v1alpha1
+      kind: XNop
+      name: test-claim-2-xr
+
+---
 ~~~ XDownstreamResource/test-claim-1-xr
   apiVersion: nop.example.org/v1alpha1
   kind: XDownstreamResource
@@ -3935,7 +3982,7 @@ Summary: 2 resources with changes
 
 ---
 
-Summary: 2 modified`,
+Summary: 4 modified`,
 			expectedError:    false,
 			expectedExitCode: dp.ExitCodeDiffDetected,
 			noColor:          true,
