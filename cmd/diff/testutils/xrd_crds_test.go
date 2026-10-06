@@ -11,8 +11,8 @@ import (
 	"sigs.k8s.io/yaml"
 )
 
-// The XRD CRD fetched by `earthly +fetch-crossplane-cluster`, the same file the integration suite installs.
-const xrdCRDFile = "../../../cluster/main/crds/apiextensions.crossplane.io_compositeresourcedefinitions.yaml"
+// The XRD CRD's file in CrossplaneCRDsDir, the same file the integration suite installs.
+const xrdCRDFile = "apiextensions.crossplane.io_compositeresourcedefinitions.yaml"
 
 // policyField is where a generated CRD declares one of Crossplane's policy fields, and the default it
 // declares there. A zero value means the CRD does not declare the field at all.
@@ -258,9 +258,9 @@ spec:
 func loadXRDCRD(t *testing.T) *extv1.CustomResourceDefinition {
 	t.Helper()
 
-	data, err := os.ReadFile(filepath.FromSlash(xrdCRDFile))
+	data, err := os.ReadFile(filepath.Join(CrossplaneCRDsDir(t), xrdCRDFile))
 	if err != nil {
-		t.Fatalf("cannot read the XRD CRD (run `earthly +fetch-crossplane-cluster`): %v", err)
+		t.Fatalf("cannot read the XRD CRD: %v", err)
 	}
 
 	crd := &extv1.CustomResourceDefinition{}

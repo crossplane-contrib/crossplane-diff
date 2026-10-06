@@ -177,10 +177,11 @@ func runIntegrationTest(t *testing.T, testType DiffTestType, tt IntegrationTestC
 
 	thisDir := filepath.Dir(thisFile)
 
-	// Plain CRDs (Crossplane's own, and stand-ins for managed resources) are read from these
-	// directories. XR and claim CRDs are not: they are generated from the XRDs the test applies.
+	// Plain CRDs are read from these directories: Crossplane's own, from the crossplane module go.mod
+	// pins (so they match the xcrd and other Crossplane code under test), and stand-ins for managed
+	// resources. XR and claim CRDs are not: they are generated from the XRDs the test applies.
 	crdPaths := []string{
-		filepath.Join(thisDir, "..", "..", "cluster", "main", "crds"),
+		tu.CrossplaneCRDsDir(t),
 		filepath.Join(thisDir, "testdata", string(testType), "crds"),
 	}
 

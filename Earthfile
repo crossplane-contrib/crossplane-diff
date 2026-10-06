@@ -266,18 +266,15 @@ go-build-e2e:
   RUN go test -c -o e2e ./test/e2e
   SAVE ARTIFACT e2e
 
-# go-test runs Go unit tests.
+# go-test runs Go unit and integration tests. They install Crossplane's CRDs from the
+# github.com/crossplane/crossplane/v2 module go.mod pins, which +go-modules downloads, so unlike
+# +e2e they need no +fetch-crossplane-cluster.
 go-test:
   ARG KUBE_VERSION=1.30.3
-  ARG CROSSPLANE_IMAGE_TAG=main
-  BUILD +fetch-crossplane-cluster
-  BUILD +patch-crds
   FROM +go-modules
   DO github.com/earthly/lib+INSTALL_DIND
   CACHE --id go-build --sharing shared /root/.cache/go-build
   COPY --dir cmd/ internal/ .
-  # Fetch the cluster directory from the crossplane repo at the specified tag
-  COPY (+fetch-crossplane-cluster/${CROSSPLANE_IMAGE_TAG} --CROSSPLANE_IMAGE_TAG=${CROSSPLANE_IMAGE_TAG}) cluster/${CROSSPLANE_IMAGE_TAG}
   COPY --dir +envtest-setup/envtest /usr/local/kubebuilder/bin
   # a bit dirty but preload the cache with the images we use in IT (found in functions.yaml and functions-sha256.yaml)
   # Note: functions-sha256.yaml uses digest reference for function-go-templating which resolves to the same image as :v0.11.0

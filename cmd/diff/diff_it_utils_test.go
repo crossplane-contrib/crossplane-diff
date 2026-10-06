@@ -470,7 +470,7 @@ func envtestCRDs(crdDirs, setupFiles []string) ([]*extv1.CustomResourceDefinitio
 	}
 
 	if xrdCRD == nil {
-		return nil, fmt.Errorf("no CRD %q under %v; run `earthly +fetch-crossplane-cluster`", xrdCRDName, crdDirs)
+		return nil, fmt.Errorf("no CRD %q under %v", xrdCRDName, crdDirs)
 	}
 
 	crds := opts.CRDs
