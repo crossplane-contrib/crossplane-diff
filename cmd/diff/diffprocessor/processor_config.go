@@ -207,6 +207,10 @@ type ComponentFactories struct {
 	// SchemaValidator creates a SchemaValidator
 	SchemaValidator func(schema k8.SchemaClient, resource k8.ResourceClient, def xp.DefinitionClient, logger logging.Logger) SchemaValidator
 
+	// Defaulter creates a Defaulter with the given policy. The processor makes two: a strict one for the
+	// XR it renders, and a lenient one the DiffCalculator uses to predict additions.
+	Defaulter func(schema k8.SchemaClient, def xp.DefinitionClient, policy DefaultingPolicy) Defaulter
+
 	// DiffCalculator creates a DiffCalculator
 	DiffCalculator func(apply k8.ApplyClient, access k8.AccessChecker, tree xp.ResourceTreeClient, resourceManager ResourceManager, logger logging.Logger, diffOptions renderer.DiffOptions, dryRunOn DryRunOn) DiffCalculator
 
@@ -419,6 +423,13 @@ func WithSchemaValidatorFactory(factory func(k8.SchemaClient, k8.ResourceClient,
 	}
 }
 
+// WithDefaulterFactory sets the Defaulter factory function.
+func WithDefaulterFactory(factory func(k8.SchemaClient, xp.DefinitionClient, DefaultingPolicy) Defaulter) ProcessorOption {
+	return func(config *ProcessorConfig) {
+		config.Factories.Defaulter = factory
+	}
+}
+
 // WithDiffCalculatorFactory sets the DiffCalculator factory function.
 func WithDiffCalculatorFactory(factory func(k8.ApplyClient, k8.AccessChecker, xp.ResourceTreeClient, ResourceManager, logging.Logger, renderer.DiffOptions, DryRunOn) DiffCalculator) ProcessorOption {
 	return func(config *ProcessorConfig) {
@@ -487,6 +498,10 @@ func (c *ProcessorConfig) SetDefaultFactories() {
 
 	if c.Factories.SchemaValidator == nil {
 		c.Factories.SchemaValidator = NewSchemaValidator
+	}
+
+	if c.Factories.Defaulter == nil {
+		c.Factories.Defaulter = NewDefaulter
 	}
 
 	if c.Factories.DiffCalculator == nil {
