@@ -1,13 +1,9 @@
 package testutils
 
 import (
-	"bytes"
-	"encoding/json"
 	"os"
-	"os/exec"
 	"path/filepath"
-	"strings"
-	"sync"
+	"runtime"
 	"testing"
 
 	clicrd "github.com/crossplane/cli/v2/cmd/crossplane/common/crd"
@@ -67,62 +63,27 @@ func CRDsForXRD(xrd *un.Unstructured, xrdCRD *extv1.CustomResourceDefinition) ([
 	return crds, nil
 }
 
-// crossplaneModule is the module whose CRDs the tests install. go.mod pins it, along with the xcrd that
-// generates XR CRDs and the rest of Crossplane's code, so the CRDs match the code that consumes them.
-const crossplaneModule = "github.com/crossplane/crossplane/v2"
+// pinnedCrossplaneCRDsTarget is the Earthly target that writes the directory PinnedCrossplaneCRDsDir returns.
+const pinnedCrossplaneCRDsTarget = "earthly +fetch-crossplane-crds-gomod"
 
-// crossplaneCRDsDir resolves crossplaneModule once per test binary. Tests run in parallel and each asks for
-// the directory, so a process-wide sync.OnceValues keeps the `go` invocation to one.
-//
-//nolint:gochecknoglobals // A once-per-process cache of an immutable lookup; it must be shared to be a cache.
-var crossplaneCRDsDir = sync.OnceValues(func() (string, error) {
-	// `go mod download -json <path>` with no version resolves the version go.mod's build list selects,
-	// fetches it into the module cache only if it is missing, and reports where it lives.
-	cmd := exec.Command("go", "mod", "download", "-json", crossplaneModule)
-
-	var stderr bytes.Buffer
-
-	cmd.Stderr = &stderr
-
-	out, err := cmd.Output()
-	if err != nil {
-		return "", errors.Wrapf(err, "cannot resolve %s with `go mod download -json %s` (is the go command on PATH, "+
-			"and the module reachable or already in the module cache?): %s", crossplaneModule, crossplaneModule,
-			strings.TrimSpace(stderr.String()))
-	}
-
-	// The go command emits these keys capitalized (Version, Dir, Error); encoding/json matches keys
-	// case-insensitively, so the repo's camelCase tags still decode them.
-	var mod struct {
-		Version string `json:"version"`
-		Dir     string `json:"dir"`
-		Error   string `json:"error"`
-	}
-	if err := json.Unmarshal(out, &mod); err != nil {
-		return "", errors.Wrapf(err, "cannot parse `go mod download -json %s` output %q", crossplaneModule, out)
-	}
-
-	if mod.Error != "" {
-		return "", errors.Errorf("cannot download %s: %s", crossplaneModule, mod.Error)
-	}
-
-	dir := filepath.Join(mod.Dir, "cluster", "crds")
-	if info, err := os.Stat(dir); err != nil || !info.IsDir() {
-		return "", errors.Errorf("%s %s has no CRD directory at %s", crossplaneModule, mod.Version, dir)
-	}
-
-	return dir, nil
-})
-
-// CrossplaneCRDsDir returns the directory of Crossplane's own CRDs (Compositions, XRDs, Functions, …) in the
-// github.com/crossplane/crossplane/v2 module at the version go.mod pins. It fails the test if the module
-// cannot be resolved. The lookup runs once per test binary, so calling this from every test is cheap.
-func CrossplaneCRDsDir(tb testing.TB) string {
+// PinnedCrossplaneCRDsDir returns the directory of Crossplane's own CRDs (Compositions, XRDs, Functions, …) at the
+// version of github.com/crossplane/crossplane/v2 that go.mod pins, so they match the xcrd and the rest of the
+// Crossplane code under test. `earthly +fetch-crossplane-crds-gomod` writes them to cluster/gomod/crds at the
+// repository root. They are located from this source file rather than the working directory, and the test fails
+// with the target to run if they are missing.
+func PinnedCrossplaneCRDsDir(tb testing.TB) string {
 	tb.Helper()
 
-	dir, err := crossplaneCRDsDir()
-	if err != nil {
-		tb.Fatalf("cannot locate Crossplane's CRDs: %v", err)
+	_, thisFile, _, ok := runtime.Caller(0)
+	if !ok {
+		tb.Fatal("cannot locate Crossplane's CRDs: runtime.Caller gave no file for testutils")
+	}
+
+	// This file is cmd/diff/testutils/xrd_crds.go, three levels below the repository root.
+	dir := filepath.Join(filepath.Dir(thisFile), "..", "..", "..", "cluster", "gomod", "crds")
+	if info, err := os.Stat(dir); err != nil || !info.IsDir() {
+		tb.Fatalf("Crossplane's CRDs are not at %s; run `%s` to fetch the version go.mod pins",
+			dir, pinnedCrossplaneCRDsTarget)
 	}
 
 	return dir

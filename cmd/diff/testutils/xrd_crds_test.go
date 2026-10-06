@@ -11,7 +11,7 @@ import (
 	"sigs.k8s.io/yaml"
 )
 
-// The XRD CRD's file in CrossplaneCRDsDir, the same file the integration suite installs.
+// The XRD CRD's file in PinnedCrossplaneCRDsDir, the same file the integration suite installs.
 const xrdCRDFile = "apiextensions.crossplane.io_compositeresourcedefinitions.yaml"
 
 // policyField is where a generated CRD declares one of Crossplane's policy fields, and the default it
@@ -258,7 +258,7 @@ spec:
 func loadXRDCRD(t *testing.T) *extv1.CustomResourceDefinition {
 	t.Helper()
 
-	data, err := os.ReadFile(filepath.Join(CrossplaneCRDsDir(t), xrdCRDFile))
+	data, err := os.ReadFile(filepath.Join(PinnedCrossplaneCRDsDir(t), xrdCRDFile))
 	if err != nil {
 		t.Fatalf("cannot read the XRD CRD: %v", err)
 	}
