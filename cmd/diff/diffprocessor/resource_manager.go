@@ -35,6 +35,9 @@ type ResourceManager interface {
 	FetchObservedResources(ctx context.Context, xr *cmp.Unstructured) ([]cpd.Unstructured, error)
 }
 
+// treeNodeNotFoundWarning is raised when a composed resource recorded on its XR no longer exists.
+const treeNodeNotFoundWarning = "A composed resource referenced by its XR was not found in the cluster (it may have been deleted out of band); it is omitted from the observed resources"
+
 // DefaultResourceManager implements ResourceManager interface.
 type DefaultResourceManager struct {
 	client     k8.ResourceClient
@@ -615,7 +618,10 @@ func (m *DefaultResourceManager) FetchObservedResources(ctx context.Context, xr 
 	}
 
 	// Extract composed resources from the tree, scoped to those this XR controls.
-	observed := extractComposedResourcesFromTree(tree, xr.GetUID())
+	observed, err := m.extractComposedResourcesFromTree(tree, xr.GetUID())
+	if err != nil {
+		return nil, err
+	}
 
 	m.logger.Debug("Fetched observed composed resources",
 		"xr", xr.GetName(),
@@ -639,13 +645,48 @@ func (m *DefaultResourceManager) FetchObservedResources(ctx context.Context, xr 
 // controller-ref UID does not match the XR being rendered ("has a controller ref but is not
 // controlled by the XR"), so each render level must only receive the resources it controls.
 // Nested XRs are rendered separately (with their own observed set) during recursive processing.
-func extractComposedResourcesFromTree(tree *resource.Resource, xrUID k8stypes.UID) []cpd.Unstructured {
+//
+// The upstream tree client never fails as a whole: it records each node's fetch error on the node
+// and leaves that node's object holding only the GVK, name and namespace it was referenced by. Such
+// a node has no annotations, so without an explicit check it would be dropped exactly like a
+// resource that is legitimately not composed, and the diff would then report a resource that exists
+// as an addition. So every node's error is checked before the filters above:
+//   - NotFound on a descendant means the resource really is absent (deleted out of band since the
+//     XR recorded it). Omitting it is the correct observed state, so it is skipped with a warning.
+//   - Any other error (Forbidden, a timeout, a transport failure) means its state is unknown, so the
+//     whole extraction fails rather than return an observed set that is confidently wrong.
+//   - An error on the root fails the extraction whatever its type. The root is the XR handed to the
+//     tree client rather than one it fetched, so an error there means the tree as a whole is not
+//     usable, and skipping it would leave an empty observed set — the same silent wrong answer.
+func (m *DefaultResourceManager) extractComposedResourcesFromTree(tree *resource.Resource, xrUID k8stypes.UID) ([]cpd.Unstructured, error) {
+	if tree.Error != nil {
+		return nil, errors.Wrapf(tree.Error, "cannot load XR %s into its resource tree", m.treeNodeID(tree))
+	}
+
 	var resources []cpd.Unstructured
 
 	// Recursively collect composed resources from the tree
-	var collectResources func(node *resource.Resource)
+	var collectResources func(node *resource.Resource) error
 
-	collectResources = func(node *resource.Resource) {
+	collectResources = func(node *resource.Resource) error {
+		if node.Error != nil {
+			if !apierrors.IsNotFound(node.Error) {
+				return errors.Wrapf(node.Error, "cannot fetch composed resource %s from the cluster", m.treeNodeID(node))
+			}
+
+			// Info is the advisory level per logging.Logger's own contract, so this reaches the user via
+			// stderr and structured output rather than being buried in --verbose tracing. See WarningLogger.
+			// The context deliberately omits the XR: a nested XR's grandchild is walked once for the top
+			// XR and again for the nested XR, and identical warnings collapse into one.
+			m.logger.Info(treeNodeNotFoundWarning,
+				"resource", fmt.Sprintf("%s/%s", node.Unstructured.GetKind(), node.Unstructured.GetName()),
+				"namespace", node.Unstructured.GetNamespace(),
+			)
+
+			// A node that could not be fetched has no children to walk.
+			return nil
+		}
+
 		// Only include resources that have the composition-resource-name annotation
 		// (this filters out the root XR and non-composed resources)
 		if _, hasAnno := node.Unstructured.GetAnnotations()["crossplane.io/composition-resource-name"]; hasAnno {
@@ -662,14 +703,27 @@ func extractComposedResourcesFromTree(tree *resource.Resource, xrUID k8stypes.UI
 
 		// Recursively process children
 		for _, child := range node.Children {
-			collectResources(child)
+			if err := collectResources(child); err != nil {
+				return err
+			}
 		}
+
+		return nil
 	}
 
 	// Start from root's children to avoid including the XR itself
 	for _, child := range tree.Children {
-		collectResources(child)
+		if err := collectResources(child); err != nil {
+			return nil, err
+		}
 	}
 
-	return resources
+	return resources, nil
+}
+
+// treeNodeID identifies a resource-tree node in an error. Upstream keeps the GVK, name and namespace
+// on a node even when fetching it failed, so this is meaningful for exactly the nodes that need it.
+func (m *DefaultResourceManager) treeNodeID(node *resource.Resource) string {
+	u := &node.Unstructured
+	return m.createResourceID(u.GroupVersionKind(), u.GetNamespace(), u.GetName(), "")
 }

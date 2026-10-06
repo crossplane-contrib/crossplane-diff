@@ -1081,6 +1081,45 @@ Summary: 2 modified`,
 			expectedError:    false,
 			expectedExitCode: dp.ExitCodeDiffDetected,
 		},
+		// Issue #495: the XR still references a composed resource that was deleted out of band. The
+		// resource tree records that child as NotFound, which is tolerated: the resource really is
+		// gone, so it is neither observed nor a removal — but the user is told. The other per-node
+		// errors (Forbidden, transport) are fatal; envtest grants the harness everything, so those are
+		// covered by the FetchObservedResources unit tests instead.
+		"ComposedResourceDeletedOutOfBandWarns": {
+			reason:       "xr against an XR whose resourceRefs name a deleted composed resource omits it from observed state and warns",
+			outputFormat: "json",
+			crossplaneManagedResources: []HierarchicalOwnershipRelation{
+				{
+					OwnerFile: "testdata/diff/resources/existing-xr.yaml",
+					OwnedFiles: map[string]*HierarchicalOwnershipRelation{
+						"testdata/diff/resources/removal-test-ns-downstream-resource1.yaml": nil,
+						"testdata/diff/resources/removal-test-ns-downstream-resource2.yaml": nil,
+					},
+				},
+			},
+			setupFiles: []string{
+				"testdata/diff/resources/xrd.yaml",
+				"testdata/diff/resources/removal-test-composition.yaml",
+				"testdata/diff/resources/removal-test-composition-revision.yaml",
+				"testdata/diff/resources/functions.yaml",
+			},
+			deleteAfterSetup: []string{"testdata/diff/resources/removal-test-ns-downstream-resource2.yaml"},
+			inputFiles:       []string{"testdata/diff/unmodified-xr.yaml"},
+			expectedStructuredOutput: tu.ExpectDiff().
+				WithSummary(0, 0, 0).
+				WithWarning("was not found in the cluster").
+				WithWarningContext(map[string]string{
+					"resource":  "XDownstreamResource/resource-to-be-removed",
+					"namespace": "default",
+				}),
+			expectedStderrContains: []string{
+				"WARNING: A composed resource referenced by its XR was not found in the cluster",
+				"resource=XDownstreamResource/resource-to-be-removed",
+			},
+			expectedError:    false,
+			expectedExitCode: dp.ExitCodeSuccess,
+		},
 		"EnvironmentConfigIncorporation": {
 			reason:       "Validates EnvironmentConfig (v1beta1) incorporation in diff",
 			outputFormat: "json",
@@ -2812,6 +2851,43 @@ Summary: 2 modified`,
 				WithFilteredByDeletion(1).
 				WithXRImpact("XNopResource", "deleting-resource", "default", "filtered").
 				WithFilterReason("deleting"),
+		},
+		// Issue #495, `comp` side: impact analysis renders each affected XR through the same observed-
+		// resource fetch as `xr`, so a composed resource deleted out of band is tolerated with the same
+		// warning. Being genuinely absent, it is then reported as something the XR will create.
+		"CompositionDiffComposedResourceDeletedOutOfBandWarns": {
+			reason: "comp against an XR whose resourceRefs name a deleted composed resource warns and reports it as an addition",
+			setupFiles: []string{
+				"testdata/comp/resources/xrd.yaml",
+				"testdata/comp/resources/original-composition.yaml",
+				"testdata/comp/resources/functions.yaml",
+			},
+			crossplaneManagedResources: []HierarchicalOwnershipRelation{
+				{
+					OwnerFile: "testdata/comp/resources/existing-xr-1.yaml",
+					OwnedFiles: map[string]*HierarchicalOwnershipRelation{
+						"testdata/comp/resources/existing-downstream-1.yaml": nil,
+					},
+				},
+			},
+			deleteAfterSetup: []string{"testdata/comp/resources/existing-downstream-1.yaml"},
+			inputFiles:       []string{"testdata/comp/updated-composition.yaml"},
+			namespace:        "default",
+			outputFormat:     "json",
+			expectedExitCode: dp.ExitCodeDiffDetected,
+			expectedStructuredCompOutput: tu.ExpectCompDiff().
+				WithWarning("was not found in the cluster").
+				WithWarningContext(map[string]string{
+					"resource":  "XDownstreamResource/test-resource",
+					"namespace": "default",
+				}).
+				And().
+				WithComposition("xnopresources.diff.example.org").
+				WithCompositionModified().
+				WithAffectedResources(1, 1, 0, 0).
+				WithXRImpact("XNopResource", "test-resource", "default", "changed").
+				WithDownstreamSummary(1, 0, 0).
+				WithDownstreamResource("added", "XDownstreamResource", "test-resource", "default"),
 		},
 		"CompositionDiffIgnorePaths": {
 			reason: "Validates that ArgoCD annotations are ignored in composition diffs",

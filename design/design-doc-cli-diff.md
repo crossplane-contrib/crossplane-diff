@@ -224,6 +224,9 @@ The integration test cases cover:
   shown in the diff output.
 - **Hierarchical Resource Relationships**: Verifies that parent-child relationships between resources are correctly
   understood, including cascading removal of child resources when a parent would be removed.
+- **Composed Resource Deleted Out of Band**: Verifies, for both `xr` and `comp`, that a composed resource the XR still
+  references but which no longer exists is left out of the observed state with a warning, rather than silently dropped.
+  The fatal case (a child that cannot be read) is unit-tested only, since envtest grants the harness every permission.
 
 ### 4.6 Resource Naming Patterns
 
@@ -1036,7 +1039,9 @@ type ResourceManager interface {
     // controller reference, if any, is the XR itself. A nested XR's own children are excluded; they
     // belong to the nested XR's observed set, assembled when it is rendered. Used to preserve the
     // identity of nested XRs across re-renders (so re-rendering doesn't appear to "create" a child
-    // XR that already exists). The scoping is mandatory, not tidiness: see §9.5.4.
+    // XR that already exists). The scoping is mandatory, not tidiness: see §9.5.4. Per-node fetch
+    // errors recorded on the tree are not ignored: a NotFound child is skipped with a warning, and
+    // any other node error (or any error on the root) fails the call; see §9.5.4.
     FetchObservedResources(ctx context.Context, xr *cmp.Unstructured) ([]cpd.Unstructured, error)
 }
 ```
@@ -2145,6 +2150,27 @@ controls (`extractComposedResourcesFromTree`). This couples the observed set to 
 (`MinCrossplaneRenderVersion`): an unscoped set would fail the render of any existing XR whose nested XRs already have composed
 resources in the cluster. Removal detection
 is unaffected, because it does its own unfiltered tree walk and never consumes the observed set.
+
+The upstream tree client never fails as a whole: `GetResourceTree` always returns the tree, and a child whose fetch
+failed is recorded as a node carrying an `Error` and an object holding only the GVK, name and namespace it was
+referenced by. Lacking the composition-resource-name annotation, such a node would otherwise be filtered out exactly
+like a resource that is legitimately not composed, and the diff would report a resource that exists as an addition
+(#495). `extractComposedResourcesFromTree` therefore checks each node's error before filtering:
+
+- `NotFound` on a descendant (matched with `apierrors.IsNotFound`, so through wrapping) means the resource really is
+  absent, typically deleted out of band. It is skipped and a warning naming it is raised through the advisory channel.
+  The warning's context omits the XR, so a nested XR's grandchild, walked once for the top XR and again for the nested
+  XR, collapses into one warning.
+- Any other node error (Forbidden, timeout, transport) fails `FetchObservedResources` with an error naming the
+  resource and wrapping the cause. Callers already treat that as fatal for the XR; for `comp`, and for `xr` with several
+  inputs, the other XRs are still diffed.
+- An error on the root fails it whatever the type, `NotFound` included. The root is the XR handed to the tree client,
+  not something it fetched, so an error there means the tree is unusable, and skipping it would leave the empty
+  observed set this whole check exists to rule out.
+
+The removal walk does not repeat the check. It runs only for an XR whose observed set was fetched first from the same
+live tree, so a non-`NotFound` node error has already failed the diff, and a `NotFound` node is correctly not a
+removal: the resource is already gone.
 
 #### 9.5.5 Benefits of Component Reuse
 

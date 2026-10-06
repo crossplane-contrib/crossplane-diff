@@ -3126,13 +3126,10 @@ func TestDefaultDiffProcessor_DiffSingleResource_WithObservedResources(t *testin
 		"ObservedResourcesFetchedAndPassedToRender": {
 			setupMocks: func() (k8.Clients, xp.Clients) {
 				// Create resource tree with observed composed resources
-				resourceTree := &resource.Resource{
-					Unstructured: *xr,
-					Children: []*resource.Resource{
-						{Unstructured: *observedBucket},
-						{Unstructured: *observedUser},
-					},
-				}
+				resourceTree := tu.NewTreeNode(xr).WithChildren(
+					tu.NewTreeNode(observedBucket),
+					tu.NewTreeNode(observedUser),
+				).Build()
 
 				// Create XRD
 				xrdUnstructured := tu.NewXRD("xrs.example.org", "example.org", "XR").
@@ -3230,10 +3227,7 @@ func TestDefaultDiffProcessor_DiffSingleResource_WithObservedResources(t *testin
 		"EmptyObservedResourcesWhenTreeEmpty": {
 			setupMocks: func() (k8.Clients, xp.Clients) {
 				// Create empty resource tree
-				emptyTree := &resource.Resource{
-					Unstructured: *xr,
-					Children:     []*resource.Resource{},
-				}
+				emptyTree := tu.NewTreeNode(xr).Build()
 
 				// Create XRD
 				xrdUnstructured := tu.NewXRD("xrs.example.org", "example.org", "XR").
@@ -3391,13 +3385,10 @@ func TestDefaultDiffProcessor_DiffSingleResource_WithObservedResources(t *testin
 		// as an addition, with no error and no warning.
 		"TransientObservedResourceFetchFailureIsFatal": {
 			setupMocks: func() (k8.Clients, xp.Clients) {
-				resourceTree := &resource.Resource{
-					Unstructured: *xr,
-					Children: []*resource.Resource{
-						{Unstructured: *observedBucket},
-						{Unstructured: *observedUser},
-					},
-				}
+				resourceTree := tu.NewTreeNode(xr).WithChildren(
+					tu.NewTreeNode(observedBucket),
+					tu.NewTreeNode(observedUser),
+				).Build()
 
 				xrdUnstructured := tu.NewXRD("xrs.example.org", "example.org", "XR").
 					WithPlural("xrs").
