@@ -2141,6 +2141,33 @@ Summary: 2 modified, 2 removed`,
 			expectedError:    false,
 			expectedExitCode: dp.ExitCodeDiffDetected,
 		},
+		// The sibling of XRDDefaultsAppliedBeforeRendering, whose composition renders nothing, so it checks
+		// only the XR's dry run. Here a composition reads the composite's defaulted fields into a composed
+		// resource: a user default (spec.region) for a v2 and a legacy XR, and for the legacy XR also the
+		// machinery default spec.compositionUpdatePolicy. Rendering an undefaulted XR writes "<no value>".
+		"XRDDefaultsReachTheRender": {
+			reason:       "Validates that a composition observes an XR's CRD defaults, for both a v2 and a legacy XR",
+			outputFormat: "json",
+			setupFiles: []string{
+				"testdata/diff/resources/rendered-defaults/definitions.yaml",
+				"testdata/diff/resources/functions.yaml",
+			},
+			inputFiles: []string{"testdata/diff/new-rendered-defaults-xrs.yaml"},
+			expectedStructuredOutput: tu.ExpectDiff().
+				WithSummary(4, 0, 0).
+				WithAddedResource("XRegionalDatabase", "modern-database", "default").
+				WithField("spec.region", "us-east-1").
+				And().
+				WithAddedResource("XLegacyRegionalDatabase", "legacy-database", "").
+				WithField("spec.region", "eu-west-1").
+				And().
+				WithAddedResource("XDownstreamResource", "modern-database", "default").
+				WithField("spec.forProvider.configData", "us-east-1/large").
+				And().
+				WithAddedResource("XDownstreamResource", "legacy-database", "").
+				WithField("spec.forProvider.configData", "eu-west-1/small/Automatic"),
+			expectedExitCode: dp.ExitCodeDiffDetected,
+		},
 		// #503: a composed resource's dry-run apply payload must be exactly what the composition
 		// rendered. If it carried a locally-defaulted spec.forProvider.size: small, the apply would
 		// claim the field away from the manager that set it to large, predicting a change real

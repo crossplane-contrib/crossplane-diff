@@ -1,0 +1,16 @@
+# New composites that set only size, leaving region and compositionUpdatePolicy to their CRDs'
+# defaults; see resources/rendered-defaults/definitions.yaml.
+apiVersion: rendered-defaults.diff.example.org/v1alpha1
+kind: XRegionalDatabase
+metadata:
+  name: modern-database
+  namespace: default
+spec:
+  size: large
+---
+apiVersion: rendered-defaults.diff.example.org/v1alpha1
+kind: XLegacyRegionalDatabase
+metadata:
+  name: legacy-database
+spec:
+  size: small

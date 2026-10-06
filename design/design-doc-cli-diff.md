@@ -205,6 +205,11 @@ The integration test cases cover:
   server-side apply their setup objects under named managers (`fieldManagerApplies`) rather than creating them, since
   a plain create records only the test client and the apiserver drops `managedFields` supplied on create. Companion
   cases under `--dry-run-on=existing` pin that additions still show their CRD and XRD defaults, predicted locally.
+- **XR Defaults Reach the Render**: `XRDDefaultsReachTheRender` has a composition read a v2 XR's and a legacy XR's
+  defaulted fields (a user default, and the legacy XR's `spec.compositionUpdatePolicy`) into composed resources, so an
+  undefaulted render input shows up as `<no value>`. `XRDDefaultsAppliedBeforeRendering`'s composition renders
+  nothing, so it pins only the XR's own dry run. A new v2 XR's `spec.crossplane.compositionUpdatePolicy` is not
+  asserted: its CRD defaults the policy only inside an existing `spec.crossplane`, which a new XR's manifest lacks.
 - **Claims Defaulted With Their Own CRD**: A new claim omitting every defaulted field shows its own CRD's defaults (a
   user default and `compositeDeletePolicy`, never `compositionUpdatePolicy`), whether the apiserver applies them on
   dry-run create or the lenient `Defaulter` predicts them under `--dry-run-on=existing`; and the composed resource,
