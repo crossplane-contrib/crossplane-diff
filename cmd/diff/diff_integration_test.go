@@ -574,14 +574,6 @@ func TestDiffIntegration(t *testing.T) {
 			}, ""),
 			expectedError:    false,
 			expectedExitCode: dp.ExitCodeDiffDetected,
-			// Skipped until #538 lands: main's dry-run payload carries render's spec.crossplane.resourceRefs,
-			// so the apiserver defaults spec.crossplane.compositionUpdatePolicy onto the new v2 XR, which a
-			// real apply of the authored XR would not store. The expected output above is the correct one;
-			// #538 sends the authored XR and removes this skip.
-			skip: true,
-			skipReason: "Skipped until #538 lands: main's dry-run payload carries render's `spec.crossplane.resourceRefs`, " +
-				"so the apiserver defaults `spec.crossplane.compositionUpdatePolicy` onto a new v2 XR, which a real apply " +
-				"of the authored XR would not store. #538 sends the authored XR and removes this skip.",
 		},
 		"AutomaticNamespacePropagation": {
 			reason:       "Validates automatic namespace propagation for namespaced managed resources",
@@ -4183,13 +4175,6 @@ Summary: 2 modified
 			// Updated composition that will be diffed
 			inputFiles: []string{"testdata/comp/updated-claim-composition.yaml"},
 			namespace:  "test-namespace",
-			// Skipped until #538 lands: main defaults a Claim with its XR's CRD (#503), so the dry run
-			// reports a false "+ compositionUpdatePolicy: Automatic" on each existing Claim. The expected
-			// output below is the correct one; #538 fixes the defaulting and removes this skip.
-			skip: true,
-			skipReason: "Skipped until #538 lands: main defaults a Claim with its XR's CRD (#503), so the dry-run " +
-				"reports a false `+ compositionUpdatePolicy: Automatic` on each existing Claim. The generated Claim " +
-				"CRD (#540) no longer hides it behind a wrong default. #538 fixes the defaulting and removes this skip.",
 			expectedOutput: `
 === Composition Changes ===
 
