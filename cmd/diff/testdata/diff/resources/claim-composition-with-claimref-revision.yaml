@@ -8,7 +8,7 @@ spec:
   revision: 1
   compositeTypeRef:
     apiVersion: diff.example.org/v1alpha1
-    kind: XNopResource
+    kind: XNopClaim
   mode: Pipeline
   pipeline:
     - step: generate-resources

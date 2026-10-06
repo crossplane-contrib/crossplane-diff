@@ -1,12 +1,12 @@
 apiVersion: apiextensions.crossplane.io/v1
 kind: CompositeResourceDefinition
 metadata:
-  name: xnopresources.diff.example.org
+  name: xnopclaims.diff.example.org
 spec:
   group: diff.example.org
   names:
-    kind: XNopResource
-    plural: xnopresources
+    kind: XNopClaim
+    plural: xnopclaims
   claimNames:
     kind: NopClaim
     plural: nopclaims
@@ -23,6 +23,9 @@ spec:
               properties:
                 coolField:
                   type: string
+                tier:
+                  type: string
+                  default: standard
                 publishConnectionDetailsTo:
                   type: object
                   properties:

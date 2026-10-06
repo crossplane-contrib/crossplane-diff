@@ -208,9 +208,9 @@ The integration test cases cover:
 - **Claims Defaulted With Their Own CRD**: A new claim omitting every defaulted field shows its own CRD's defaults (a
   user default and `compositeDeletePolicy`, never `compositionUpdatePolicy`), whether the apiserver applies them on
   dry-run create or the lenient `Defaulter` predicts them under `--dry-run-on=existing`; and the composed resource,
-  which renders the XR's `tier` and `compositionUpdatePolicy`, shows that render saw the XR CRD's defaults. The
-  `claimnested` CRD fixtures mirror what Crossplane's `pkg/xcrd` generates for each, which is what makes the case
-  sensitive to defaulting a claim with its XR's CRD.
+  which renders the XR's `tier` and `compositionUpdatePolicy`, shows that render saw the XR CRD's defaults. Both
+  CRDs are generated from the XRD fixture with `pkg/xcrd`, so they differ exactly as a cluster's do, which is what
+  makes these cases, and the existing claim cases, sensitive to defaulting a claim with its XR's CRD.
 
 ### 4.2 Environment Configuration Testing
 

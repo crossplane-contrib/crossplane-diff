@@ -1990,10 +1990,14 @@ Summary: 2 modified, 2 removed`,
 				"testdata/diff/resources/functions.yaml",
 			},
 			inputFiles: []string{"testdata/diff/new-claim.yaml"},
+			// The claim is defaulted with its own CRD (generated from claim-xrd.yaml), which shares the XRD's
+			// user default spec.tier with the XR's CRD but, unlike it, does not default compositionUpdatePolicy.
 			expectedStructuredOutput: tu.ExpectDiff().
 				WithSummary(2, 0, 0).
 				WithAddedResource("NopClaim", "test-claim", "existing-namespace").
 				WithField("spec.coolField", "new-value").
+				WithField("spec.tier", "standard").
+				WithFieldAbsent("spec.compositionUpdatePolicy").
 				And().
 				WithAddedResource("XDownstreamResource", "test-claim", "").
 				WithField("spec.forProvider.configData", "new-value"),
