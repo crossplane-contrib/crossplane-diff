@@ -1,0 +1,10 @@
+# A different field manager (a user or another controller) sets the CRD-defaulted field to a
+# non-default value on the composed resource Crossplane already manages.
+apiVersion: ns.nop.example.org/v1alpha1
+kind: XDefaultedDownstreamResource
+metadata:
+  name: test-resource-defaulted
+  namespace: default
+spec:
+  forProvider:
+    size: large

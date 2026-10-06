@@ -44,7 +44,6 @@
     compositionRevisionRef:
       name: xnopclaims.claim.diff.example.org-XXXXXXX
 -   coolField: existing-value
-+   compositionUpdatePolicy: Automatic
 +   coolField: modified-value
 +   parameters:
 +     config:

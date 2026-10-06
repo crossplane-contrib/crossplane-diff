@@ -8,7 +8,6 @@
 +   compositeDeletePolicy: Background
 +   compositionRef:
 +     name: xnopclaims.claim.diff.example.org
-+   compositionUpdatePolicy: Automatic
 +   coolField: new-value
 
 ---

@@ -33,7 +33,6 @@
 +   compositeDeletePolicy: Background
 +   compositionRef:
 +     name: parent-nop-claim-composition
-+   compositionUpdatePolicy: Automatic
 +   parentField: new-parent-value
 
 ---
