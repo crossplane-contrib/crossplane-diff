@@ -2076,6 +2076,58 @@ Summary: 2 modified, 2 removed`,
 			expectedError:    false,
 			expectedExitCode: dp.ExitCodeDiffDetected,
 		},
+		// A claim is defaulted with its own CRD, never its XR's; only the XR that render consumes gets
+		// the XR CRD's defaults. The claimnested CRDs mirror what Crossplane generates: both carry the
+		// XRD's user default spec.tier, only the claim's defaults spec.compositeDeletePolicy, and only
+		// the XR's defaults spec.compositionUpdatePolicy. The composition writes the render input's
+		// tier and policy into the composed resource, so each case pins all three views at once: the
+		// claim's payload, its predicted or apiserver-defaulted form, and the render input.
+		"NewClaimIsDefaultedWithItsOwnCRDWhenDryRunCreated": {
+			reason:       "A new claim shows its own CRD's defaults, from the apiserver, and render sees its XR's",
+			outputFormat: "json",
+			setupFiles: []string{
+				"testdata/diff/resources/claim-nested/parent-definition.yaml",
+				"testdata/diff/resources/claim-nested/parent-defaults-composition.yaml",
+				"testdata/diff/resources/functions.yaml",
+			},
+			inputFiles: []string{"testdata/diff/new-parent-claim-omitting-defaulted-fields.yaml"},
+			expectedStructuredOutput: tu.ExpectDiff().
+				WithSummary(2, 0, 0).
+				WithAddedResource("ParentNopClaim", "new-parent-claim", "default").
+				WithDryRunPerformed().
+				WithField("spec.tier", "standard").
+				WithField("spec.compositeDeletePolicy", "Background").
+				WithFieldAbsent("spec.compositionUpdatePolicy").
+				And().
+				WithAddedResource("XDownstreamResource", "new-parent-claim-defaults", "").
+				WithField("spec.forProvider.configData", "standard/Automatic"),
+			expectedError:    false,
+			expectedExitCode: dp.ExitCodeDiffDetected,
+		},
+		"NewClaimIsPredictedWithItsOwnCRDsDefaultsWithoutDryRun": {
+			reason:       "With --dry-run-on=existing a new claim is predicted with its own CRD's defaults, not its XR's",
+			outputFormat: "json",
+			dryRunOn:     "existing",
+			setupFiles: []string{
+				"testdata/diff/resources/claim-nested/parent-definition.yaml",
+				"testdata/diff/resources/claim-nested/parent-defaults-composition.yaml",
+				"testdata/diff/resources/functions.yaml",
+			},
+			inputFiles: []string{"testdata/diff/new-parent-claim-omitting-defaulted-fields.yaml"},
+			expectedStructuredOutput: tu.ExpectDiff().
+				WithSummary(2, 0, 0).
+				WithAddedResource("ParentNopClaim", "new-parent-claim", "default").
+				WithDryRunSkipped("disabled", "").
+				WithField("spec.tier", "standard").
+				WithField("spec.compositeDeletePolicy", "Background").
+				WithFieldAbsent("spec.compositionUpdatePolicy").
+				And().
+				WithAddedResource("XDownstreamResource", "new-parent-claim-defaults", "").
+				WithDryRunSkipped("disabled", "").
+				WithField("spec.forProvider.configData", "standard/Automatic"),
+			expectedError:    false,
+			expectedExitCode: dp.ExitCodeDiffDetected,
+		},
 		"XRDDefaultsAppliedBeforeRendering": {
 			reason:       "Validates that XRD defaults are applied to XR before rendering",
 			outputFormat: "json",
