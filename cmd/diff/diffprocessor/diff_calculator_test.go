@@ -2188,7 +2188,6 @@ func TestCalculateNonRemovalDiffs_NilCompositeResource(t *testing.T) {
 	_, _, err := calculator.CalculateNonRemovalDiffs(
 		t.Context(),
 		xr,
-		nil,
 		render.CompositionOutputs{CompositeResource: nil},
 	)
 	if err == nil {

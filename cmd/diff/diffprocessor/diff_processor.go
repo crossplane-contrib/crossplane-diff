@@ -517,13 +517,7 @@ func (p *DefaultDiffProcessor) diffSingleResourceInternal(ctx context.Context, r
 	// Calculate diffs (without removal detection)
 	p.config.Logger.Debug("Calculating diffs", "resource", resourceID, "composedCount", len(desired.ComposedResources))
 
-	// Convert parentXR to unstructured for the diff calculator
-	var parentComposite *un.Unstructured
-	if parentXR != nil {
-		parentComposite = parentXR.GetUnstructured()
-	}
-
-	diffs, renderedResources, err := p.diffCalculator.CalculateNonRemovalDiffs(ctx, xrPayload, parentComposite, desired)
+	diffs, renderedResources, err := p.diffCalculator.CalculateNonRemovalDiffs(ctx, xrPayload, desired)
 	if err != nil {
 		// Fail completely rather than emit potentially incorrect partial results (design principle)
 		p.config.Logger.Debug("Error calculating diffs - failing XR", "resource", resourceID, "error", err)

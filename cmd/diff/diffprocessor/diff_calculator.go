@@ -31,9 +31,8 @@ type DiffCalculator interface {
 
 	// CalculateNonRemovalDiffs computes diffs for modified/added resources and returns
 	// the set of rendered resource keys. This is used by nested XR processing.
-	// parentComposite should be nil for root XRs, and the parent XR for nested XRs.
 	// Returns: (diffs map, rendered resource keys, error)
-	CalculateNonRemovalDiffs(ctx context.Context, xr *cmp.Unstructured, parentComposite *un.Unstructured, desired render.CompositionOutputs) (map[string]*dt.ResourceDiff, map[string]bool, error)
+	CalculateNonRemovalDiffs(ctx context.Context, xr *cmp.Unstructured, desired render.CompositionOutputs) (map[string]*dt.ResourceDiff, map[string]bool, error)
 
 	// CalculateRemovedResourceDiffs identifies resources that exist in the cluster but are not
 	// in the rendered set. This is called after nested XR processing is complete.
@@ -224,7 +223,7 @@ func (c *DefaultDiffCalculator) CalculateDiff(ctx context.Context, composite *un
 //	           No false removal detection!
 //
 // Returns: (diffs map, rendered resource keys, error).
-func (c *DefaultDiffCalculator) CalculateNonRemovalDiffs(ctx context.Context, xr *cmp.Unstructured, parentComposite *un.Unstructured, desired render.CompositionOutputs) (map[string]*dt.ResourceDiff, map[string]bool, error) {
+func (c *DefaultDiffCalculator) CalculateNonRemovalDiffs(ctx context.Context, xr *cmp.Unstructured, desired render.CompositionOutputs) (map[string]*dt.ResourceDiff, map[string]bool, error) {
 	xrName := xr.GetName()
 	c.logger.Debug("Calculating diffs",
 		"xr", xrName,
@@ -236,34 +235,13 @@ func (c *DefaultDiffCalculator) CalculateNonRemovalDiffs(ctx context.Context, xr
 
 	renderedResources := make(map[string]bool)
 
-	// Determine if this is a nested XR or root XR, and select the appropriate XR to diff
 	if desired.CompositeResource == nil {
 		return nil, nil, errors.New("render produced no composite resource (possible fatal pipeline error)")
 	}
 
-	renderedXR := desired.CompositeResource.GetUnstructured()
-
-	var (
-		desiredXR       *un.Unstructured
-		compositeParent *un.Unstructured
-	)
-
-	if renderedXR.GetAnnotations()["crossplane.io/composition-resource-name"] != "" {
-		// NESTED XR: Use rendered XR (it's a composed resource from parent's composition)
-		c.logger.Debug("Processing nested XR", "xr", xrName, "hasParent", parentComposite != nil)
-
-		desiredXR = renderedXR
-		compositeParent = parentComposite
-	} else {
-		// ROOT XR: Use input XR as-is (source of truth, don't use rendered metadata)
-		c.logger.Debug("Processing root XR", "xr", xrName)
-
-		desiredXR = xr.GetUnstructured()
-		compositeParent = nil
-	}
-
-	// Calculate diff for the XR
-	xrDiff, err := c.CalculateDiff(ctx, compositeParent, desiredXR)
+	// Calculate diff for the XR. It is diffed as the caller passed it, never as rendered, nested or
+	// not: render adds nothing to an XR that belongs in its payload (see diffSingleResourceInternal).
+	xrDiff, err := c.CalculateDiff(ctx, nil, xr.GetUnstructured())
 	if err != nil || xrDiff == nil {
 		return nil, nil, errors.Wrap(err, "cannot calculate diff for XR")
 	}
@@ -372,8 +350,7 @@ func (c *DefaultDiffCalculator) CalculateNonRemovalDiffs(ctx context.Context, xr
 // This is the primary method that most code should use.
 func (c *DefaultDiffCalculator) CalculateDiffs(ctx context.Context, xr *cmp.Unstructured, desired render.CompositionOutputs) (map[string]*dt.ResourceDiff, error) {
 	// First calculate diffs for modified/added resources
-	// parentComposite is nil because CalculateDiffs is only called for root XRs
-	diffs, renderedResources, err := c.CalculateNonRemovalDiffs(ctx, xr, nil, desired)
+	diffs, renderedResources, err := c.CalculateNonRemovalDiffs(ctx, xr, desired)
 	if err != nil {
 		return nil, err
 	}
@@ -708,14 +685,13 @@ func apiserverMessage(err error) string {
 //
 // managedFields matters for a different reason: client-go's dynamic Apply refuses any object that
 // has it populated ("cannot apply an object with managed fields already set"). diff_processor.go
-// guards the root XR against this, but the nested-XR branch below feeds render output straight
-// through with no such guard — the unexplained failure mode in crossplane-diff#452. Stripping here
-// closes it for every path at the one point where objects leave for the apiserver.
+// guards the XR against this; composed resources had no equivalent. Stripping here closes it for
+// every path at the one point where objects leave for the apiserver.
 //
 // resourceVersion is the same shape of problem: a stale value from a user's input file (very
 // plausible for anything exported with `kubectl get -o yaml`) makes the apiserver reject the request
 // on optimistic concurrency, and it is illegal on a create. diff_processor.go already clears it for
-// the root XR; composed resources had no equivalent.
+// the XR; composed resources had no equivalent.
 func sanitizeForDryRun(obj *un.Unstructured) *un.Unstructured {
 	out := obj.DeepCopy()
 
