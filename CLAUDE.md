@@ -278,6 +278,24 @@ When using structured output (`--output json` or `--output yaml`):
 - Mock external dependencies using `testutils/mock_builder.go`
 - Integration tests use `envtest` for realistic cluster interactions
 
+**Integration-Test XR and Claim CRDs Are Generated, Not Hand-Written**
+
+In a real cluster Crossplane generates each XR's (and claim's) CRD from its XRD. The integration harness does the
+same: for every XRD a test case's `setupFiles` declare, `envtestCRDs` (in `cmd/diff/diff_it_utils_test.go`) calls
+`testutils.CRDsForXRD`, which runs upstream crossplane-runtime `pkg/xcrd` (`ForCompositeResource`, plus
+`ForCompositeResourceClaim` when `spec.claimNames` is set) after defaulting the XRD as the apiserver would. So:
+
+- To give an XR or claim a field, add it to the XRD fixture. There is no CRD to update.
+- Don't declare Crossplane's machinery fields (`compositionRef`, `compositionUpdatePolicy`, `compositeDeletePolicy`,
+  `resourceRefs`, `spec.crossplane`, …) in an XRD fixture unless that is what the test is about: xcrd generates them,
+  and a user-declared field xcrd doesn't overwrite lands on the generated CRD exactly as it would in a cluster.
+- An XR or claim kind exists only in a test that applies its XRD, as in a cluster.
+- `testdata/{diff,comp}/crds/` holds only plain CRDs that no XRD defines (managed-resource stand-ins such as
+  `XDownstreamResource`). The harness fails if a CRD there is also generated from an XRD, so a hand-written copy of a
+  generated CRD can't linger.
+
+e2e tests need none of this: they run real Crossplane, which generates the CRDs itself.
+
 **Neither Test Suite Reproduces What a Real Client Adds**
 
 No fixture in either suite carries the fields a real client writes, because of how each applies manifests:

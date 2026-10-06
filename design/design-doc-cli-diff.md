@@ -175,8 +175,17 @@ first as a part of requirements.
 
 To ensure the reliability and correctness of the Diff command, comprehensive integration tests verify the functionality
 across a wide range of scenarios that users may encounter in real-world usage. These test cases serve as both validation
-criteria and usage examples, demonstrating the expected behavior of the command in various situations. The integration
-test cases cover:
+criteria and usage examples, demonstrating the expected behavior of the command in various situations.
+
+Each case runs against its own `envtest` apiserver. Its XR and claim CRDs are not hand-written: as in a real cluster,
+they are generated from the XRDs the case applies, by upstream crossplane-runtime `pkg/xcrd` (`ForCompositeResource`,
+plus `ForCompositeResourceClaim` for an XRD with `spec.claimNames`), after the XRD manifest is defaulted as the
+apiserver would default it. A field an XR or claim needs is therefore added to the XRD fixture alone, and the test CRDs
+cannot drift from the shape Crossplane generates (a drifted claim CRD once hid a defaulting bug, #503). Only plain CRDs
+that no XRD defines, such as managed-resource stand-ins, live under `cmd/diff/testdata/{diff,comp}/crds/`; the harness
+refuses to start if one of them duplicates a generated CRD.
+
+The integration test cases cover:
 
 ### 4.1 Basic Diff Scenarios
 

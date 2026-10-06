@@ -89,8 +89,8 @@ func (v *DefaultSchemaValidator) ValidateResources(ctx context.Context, xr *un.U
 	// derived from XRDs declare spec.crossplane (Crossplane's CRD generator
 	// emits the subtree), so the v2-style XR + the composed resources we
 	// hand to SchemaValidation should pass strict validation against those
-	// CRDs unmodified. Our integration-test CRD fixtures match the
-	// cluster-derived shape — see testdata/{diff,comp}/crds — so no
+	// CRDs unmodified. Our integration tests generate their XR CRDs from
+	// the XRD fixtures the same way (crossplane-runtime pkg/xcrd), so no
 	// preprocessing is needed here.
 	resources := make([]*un.Unstructured, 0, len(composed)+1)
 
