@@ -1,0 +1,19 @@
+# The composed resource of existing-claim-revision-ref-xr.yaml, rendered from the revision that XR
+# tracks, so configData holds that revision's name. Carries crossplane.io/composition-resource-name and
+# the composite and claim labels because the render adds all of them: a fixture missing any is reported
+# as modified on every run, which would hide whether the revision name propagated.
+apiVersion: nop.example.org/v1alpha1
+kind: XDownstreamResource
+metadata:
+  name: revision-ref-claim-xr
+  annotations:
+    crossplane.io/composition-resource-name: nop-resource
+    gotemplating.fn.crossplane.io/composition-resource-name: nop-resource
+  labels:
+    crossplane.io/composite: revision-ref-claim-xr
+    crossplane.io/claim-name: revision-ref-claim
+    crossplane.io/claim-namespace: test-namespace
+spec:
+  forProvider:
+    configData: xrevisionrefclaims.diff.example.org-staleref
+    resourceTier: basic

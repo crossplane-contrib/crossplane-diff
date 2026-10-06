@@ -1,0 +1,41 @@
+# claim-revision-templating-composition.yaml as the cluster holds it after a client-side
+# `kubectl apply` of an older file: identical content, plus a last-applied-configuration annotation
+# that no longer describes the file. Diffing claim-revision-templating-composition.yaml against this is
+# a change whose only delta is that annotation, so the name of the revision it would mint cannot be
+# predicted, nothing is seeded, and every composite renders against the revision it tracks now.
+apiVersion: apiextensions.crossplane.io/v1
+kind: Composition
+metadata:
+  name: xrevisionrefclaims.diff.example.org
+  annotations:
+    # Deliberately stale: it describes some earlier file, not the one diffed against this.
+    kubectl.kubernetes.io/last-applied-configuration: |
+      {"apiVersion":"apiextensions.crossplane.io/v1","kind":"Composition","metadata":{"name":"xrevisionrefclaims.diff.example.org"},"spec":{"mode":"Pipeline"}}
+spec:
+  compositeTypeRef:
+    apiVersion: diff.example.org/v1alpha1
+    kind: XNop
+  mode: Pipeline
+  pipeline:
+    - step: generate-resources
+      functionRef:
+        name: function-go-templating
+      input:
+        apiVersion: template.fn.crossplane.io/v1beta1
+        kind: GoTemplate
+        source: Inline
+        inline:
+          template: |
+            apiVersion: nop.example.org/v1alpha1
+            kind: XDownstreamResource
+            metadata:
+              annotations:
+                gotemplating.fn.crossplane.io/composition-resource-name: nop-resource
+              name: {{ .observed.composite.resource.metadata.name }}
+            spec:
+              forProvider:
+                configData: {{ .observed.composite.resource.spec.compositionRevisionRef.name }}
+                resourceTier: basic
+    - step: automatically-detect-ready-composed-resources
+      functionRef:
+        name: function-auto-ready

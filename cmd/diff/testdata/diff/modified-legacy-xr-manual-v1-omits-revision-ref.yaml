@@ -1,0 +1,12 @@
+# The v1-path (spec.compositionRevisionRef) twin of modified-xr-manual-v1-omits-revision-ref.yaml:
+# resources/existing-legacy-xr-manual-v1.yaml with coolField modified and compositionRevisionRef left
+# out, so it must stay pinned to the abc123 revision (the v1 template). See issue #499.
+apiVersion: legacycluster.diff.example.org/v1alpha1
+kind: XNopResource
+metadata:
+  name: test-legacy-manual-v1
+spec:
+  compositionRef:
+    name: xlegacynopresources.diff.example.org
+  compositionUpdatePolicy: Manual
+  coolField: modified-value

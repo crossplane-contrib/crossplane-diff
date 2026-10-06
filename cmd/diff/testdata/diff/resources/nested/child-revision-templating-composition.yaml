@@ -1,0 +1,38 @@
+# A child composition whose template reads the CompositionRevision's own name off the nested composite
+# and propagates it into the composed resource — the nested counterpart of
+# testdata/comp/resources/revision-templating-composition.yaml. A nested XR is rendered from its
+# parent's output, which never carries compositionRevisionRef (Crossplane's composite reconciler writes
+# that), so unless the render inherits the cluster copy's ref this template has nothing to read.
+# Used in place of child-composition.yaml, never alongside it: both target XChildResource.
+apiVersion: apiextensions.crossplane.io/v1
+kind: Composition
+metadata:
+  name: xchildresources.nested.example.org
+spec:
+  compositeTypeRef:
+    apiVersion: ns.nested.example.org/v1alpha1
+    kind: XChildResource
+  mode: Pipeline
+  pipeline:
+    - step: generate-managed-resources
+      functionRef:
+        name: function-go-templating
+      input:
+        apiVersion: template.fn.crossplane.io/v1beta1
+        kind: GoTemplate
+        source: Inline
+        inline:
+          template: |
+            apiVersion: ns.nop.example.org/v1alpha1
+            kind: XDownstreamResource
+            metadata:
+              name: {{ .observed.composite.resource.metadata.name }}-managed
+              namespace: {{ .observed.composite.resource.metadata.namespace }}
+              annotations:
+                gotemplating.fn.crossplane.io/composition-resource-name: managed-resource
+            spec:
+              forProvider:
+                configData: {{ .observed.composite.resource.spec.crossplane.compositionRevisionRef.name }}
+    - step: automatically-detect-ready-composed-resources
+      functionRef:
+        name: function-auto-ready

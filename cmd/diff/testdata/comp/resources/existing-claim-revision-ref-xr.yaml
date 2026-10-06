@@ -1,0 +1,21 @@
+# The backing XR of existing-claim-revision-ref.yaml, tracking a CompositionRevision as Crossplane's
+# composite reconciler leaves it. The suffix is deliberately not seven hex characters, so the pattern a
+# test asserts a predicted revision name against cannot also match this stale value.
+apiVersion: diff.example.org/v1alpha1
+kind: XNop
+metadata:
+  name: revision-ref-claim-xr
+  labels:
+    crossplane.io/claim-name: revision-ref-claim
+    crossplane.io/claim-namespace: test-namespace
+spec:
+  claimRef:
+    apiVersion: diff.example.org/v1alpha1
+    kind: NopClaim
+    name: revision-ref-claim
+    namespace: test-namespace
+  coolField: revision-ref-claim-value
+  compositionRef:
+    name: xrevisionrefclaims.diff.example.org
+  compositionRevisionRef:
+    name: xrevisionrefclaims.diff.example.org-staleref

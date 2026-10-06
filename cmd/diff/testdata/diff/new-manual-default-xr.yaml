@@ -1,0 +1,15 @@
+# A new composite pinned to revision 1, the older of its composition's two revisions, that leaves its
+# update policy to its XRD's default (Manual). Under Manual, Crossplane renders a composite against the
+# revision it names, so this one renders revision 1; under Automatic it would render the latest.
+apiVersion: manualdefault.diff.example.org/v1alpha1
+kind: XManualDefault
+metadata:
+  name: new-manual-default
+  namespace: default
+spec:
+  coolField: new-value
+  crossplane:
+    compositionRef:
+      name: xmanualdefaults.manualdefault.diff.example.org
+    compositionRevisionRef:
+      name: xmanualdefaults.manualdefault.diff.example.org-rev1
