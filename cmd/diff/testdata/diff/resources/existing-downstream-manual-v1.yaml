@@ -4,6 +4,7 @@ metadata:
   name: test-manual-v1
   namespace: default
   annotations:
+    crossplane.io/composition-resource-name: nop-resource
     gotemplating.fn.crossplane.io/composition-resource-name: nop-resource
   labels:
     crossplane.io/composite: test-manual-v1

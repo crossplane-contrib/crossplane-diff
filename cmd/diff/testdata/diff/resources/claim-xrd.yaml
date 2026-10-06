@@ -1,7 +1,7 @@
 apiVersion: apiextensions.crossplane.io/v1
 kind: CompositeResourceDefinition
 metadata:
-  name: xnopresources2.diff.example.org
+  name: xnopresources.diff.example.org
 spec:
   group: diff.example.org
   names:
@@ -23,30 +23,6 @@ spec:
               properties:
                 coolField:
                   type: string
-                compositionRef:
-                  type: object
-                  properties:
-                    name:
-                      type: string
-                compositionSelector:
-                  type: object
-                  properties:
-                    matchLabels:
-                      type: object
-                      additionalProperties:
-                        type: string
-                compositionUpdatePolicy:
-                  type: string
-                  enum:
-                    - Automatic
-                    - Manual
-                  default: "Automatic"
-                compositeDeletePolicy:
-                  type: string
-                  enum:
-                    - Background
-                    - Foreground
-                  default: "Background"
                 publishConnectionDetailsTo:
                   type: object
                   properties:

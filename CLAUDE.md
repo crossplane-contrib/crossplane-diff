@@ -31,7 +31,12 @@ go tool cover -func=/tmp/coverage.out
 # Pre-PR checks: linting, tests, generation (requires long timeout, can take several minutes)
 earthly -P +reviewable
 
-# Fetch Crossplane cluster CRDs (required after Crossplane API changes or for integration tests)
+# Fetch Crossplane's CRDs at the crossplane version go.mod pins into cluster/gomod/crds. Required for unit and
+# integration tests (run it in a fresh worktree, and again after a crossplane dependency bump). +go-test runs it.
+earthly +fetch-crossplane-crds-gomod
+
+# Fetch Crossplane's cluster directory for an image tag into cluster/<tag>. Only e2e uses it, because it must
+# match the Crossplane image e2e runs.
 earthly +fetch-crossplane-cluster --CROSSPLANE_IMAGE_TAG=main
 
 # Tidy go modules
@@ -277,6 +282,29 @@ When using structured output (`--output json` or `--output yaml`):
 - Use table-driven tests for multiple scenarios
 - Mock external dependencies using `testutils/mock_builder.go`
 - Integration tests use `envtest` for realistic cluster interactions
+
+**Integration-Test XR and Claim CRDs Are Generated, Not Hand-Written**
+
+In a real cluster Crossplane generates each XR's (and claim's) CRD from its XRD. The integration harness does the
+same: for every XRD a test case's `setupFiles` declare, `envtestCRDs` (in `cmd/diff/diff_it_utils_test.go`) calls
+`testutils.CRDsForXRD`, which runs upstream crossplane-runtime `pkg/xcrd` (`ForCompositeResource`, plus
+`ForCompositeResourceClaim` when `spec.claimNames` is set) after defaulting the XRD as the apiserver would. So:
+
+- To give an XR or claim a field, add it to the XRD fixture. There is no CRD to update.
+- Don't declare Crossplane's machinery fields (`compositionRef`, `compositionUpdatePolicy`, `compositeDeletePolicy`,
+  `resourceRefs`, `spec.crossplane`, …) in an XRD fixture unless that is what the test is about: xcrd generates them,
+  and a user-declared field xcrd doesn't overwrite lands on the generated CRD exactly as it would in a cluster.
+- An XR or claim kind exists only in a test that applies its XRD, as in a cluster.
+- `testdata/{diff,comp}/crds/` holds only plain CRDs that no XRD defines (managed-resource stand-ins such as
+  `XDownstreamResource`). The harness fails if a CRD there is also generated from an XRD, so a hand-written copy of a
+  generated CRD can't linger.
+- Crossplane's own CRDs (Composition, XRD, Function, …) are installed from `cluster/gomod/crds`
+  (`testutils.PinnedCrossplaneCRDsDir`), which `earthly +fetch-crossplane-crds-gomod` fills. That target asks the go
+  binary in the build which `github.com/crossplane/crossplane/v2` version go.mod selects and clones crossplane at that
+  tag, so the CRDs match the xcrd and other Crossplane code under test, and a dependency bump (e.g. by Renovate) moves
+  them with it. e2e instead uses `cluster/<image tag>` from `+fetch-crossplane-cluster`, matching the image it runs.
+
+e2e tests need none of this: they run real Crossplane, which generates the CRDs itself.
 
 **Neither Test Suite Reproduces What a Real Client Adds**
 

@@ -22,7 +22,7 @@ spec:
             apiVersion: ns.cycle.example.org/v1alpha1
             kind: XCycleB
             metadata:
-              name: {{ .observed.composite.resource.metadata.name }}-child
+              name: {{ .observed.composite.resource.metadata.name }}-c
               namespace: {{ .observed.composite.resource.metadata.namespace }}
               annotations:
                 gotemplating.fn.crossplane.io/composition-resource-name: cycle-b

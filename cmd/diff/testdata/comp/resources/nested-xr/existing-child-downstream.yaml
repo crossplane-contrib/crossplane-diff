@@ -9,8 +9,9 @@ metadata:
   annotations:
     crossplane.io/composition-resource-name: nop-resource
   labels:
-    # Note: This label points to the nested child XR, not the parent
-    crossplane.io/composite: test-parent-nested
+    # The ROOT XR's name, not the nested child XR's: Crossplane gives every composed resource its
+    # XR's own crossplane.io/composite label, and the nested XR's is test-parent, inherited from its parent.
+    crossplane.io/composite: test-parent
 spec:
   forProvider:
     # This value comes from the CHILD's composition (xnopresources.diff.example.org)

@@ -6,6 +6,7 @@ metadata:
   name: v2-resource
   namespace: default
   annotations:
+    crossplane.io/composition-resource-name: nop-resource-v2
     gotemplating.fn.crossplane.io/composition-resource-name: nop-resource-v2
   labels:
     crossplane.io/composite: v2-resource

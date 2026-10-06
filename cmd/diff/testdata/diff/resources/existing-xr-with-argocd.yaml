@@ -13,3 +13,7 @@ spec:
   compositionRef:
     name: test-composition
   coolField: "new-value"
+  # What any XR Crossplane has reconciled carries: the reconciler writes spec.crossplane, and the
+  # XR's generated CRD then defaults the policy.
+  crossplane:
+    compositionUpdatePolicy: Automatic

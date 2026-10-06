@@ -29,6 +29,9 @@ Before you begin, ensure you have the following tools installed:
 2. **Generate required manifests**:
    ```bash
    earthly +generate --CROSSPLANE_IMAGE_TAG=main
+   # Crossplane's CRDs at the version go.mod pins, for unit and integration tests (cluster/gomod/crds).
+   earthly +fetch-crossplane-crds-gomod
+   # Crossplane's cluster directory for an image tag, for e2e tests (cluster/<tag>).
    earthly +fetch-crossplane-cluster --CROSSPLANE_IMAGE_TAG=main
    ```
 
