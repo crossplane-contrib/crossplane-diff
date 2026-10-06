@@ -99,6 +99,26 @@ the comparison is against a resource that is going away. `comp` takes the opposi
 excludes such composites from impact analysis entirely, since a deleting composite can never adopt
 the composition change being diffed.
 
+Crossplane, not you, writes an XR's `compositionRef`, `compositionRevisionRef` and (by defaulting)
+`compositionUpdatePolicy`, so your manifest normally leaves them out, and applying a manifest that
+leaves a field out does not remove it. `xr` therefore diffs an existing XR, or nested XR, whose input
+omits one of them with the value the cluster copy holds, and then applies the XR's CRD defaults. So:
+
+- A composite with a `Manual` update policy is rendered against the revision it is pinned to, not
+  the latest one. To preview moving it to another revision, set `compositionRevisionRef` in your
+  input. If the pinned revision no longer exists, the diff fails, as the reconcile would.
+- A composite that selects its composition with `compositionSelector` keeps the composition
+  Crossplane already chose; Crossplane does not re-select.
+- A new composite whose XRD sets `defaultCompositionUpdatePolicy: Manual` is rendered as `Manual`,
+  so a `compositionRevisionRef` in its input is honoured.
+
+A claim is rendered as its backing XR with the claim's spec synced in, the way Crossplane's claim
+controller syncs it. Under `Automatic` the backing XR keeps its own `compositionRevisionRef`,
+whatever the claim carries; under `Manual` the claim's ref, if it sets one, is propagated, and
+otherwise the backing XR's pin is kept. A claim whose `spec.resourceRef` names an XR that does not
+exist is diffed as though Crossplane will create that XR, with a warning. Any other failure to fetch
+a claim's backing XR fails the diff.
+
 ### Warnings
 
 Some conditions are worth telling you about without invalidating the diff or stopping the run. These
@@ -133,7 +153,8 @@ render may not reflect reality), leftover function containers, a CompositionRevi
 not be predicted (see `predictedRevisionName` under
 [Structured Output](#structured-output-jsonyaml)), an added resource that could not be verified against the
 apiserver (see [Required Permissions](#required-permissions)), a composed resource the XR still references
-but which no longer exists in the cluster (see below), and the deleting-XR case above.
+but which no longer exists in the cluster (see below), the deleting-XR case above, and a claim whose backing
+XR does not exist (its composed resources are diffed as though Crossplane will create that XR).
 
 A warning identical to one already raised — same `message` **and** same `context` — is reported once,
 not once per occurrence. That matters for conditions that are a property of a composition rather than
@@ -983,11 +1004,12 @@ The structured output includes:
   `"createsRevision": false` would assert otherwise.
 - **Predicted revision name** (comp only): `revisionImpact.predictedRevisionName` is `<composition>-<hash[:7]>`, derived
   from Crossplane's own `Composition.Hash()` — the same value the cluster would produce. Composites are **rendered with
-  it seeded onto their `compositionRevisionRef`**, so a composition template that reads the revision name (templates
-  receive the whole composite, with no field stripping) renders the value it would really get, and a change it causes is
-  detected rather than assumed away. The composites' own `compositionRevisionRef` diff is suppressed from the rendered
-  output, since `revisionImpact` already carries that fact once per composition rather than once per composite; a
-  composed resource deriving a value *from* the revision name is not suppressed, and is precisely the signal this
+  it seeded onto their `compositionRevisionRef`** (a claim's onto its backing XR's, which is the ref Crossplane
+  re-points), so a composition template that reads the revision name (templates receive the whole composite, with no
+  field stripping) renders the value it would really get, and a change it causes is detected rather than assumed away.
+  The seed reaches only the render, never the composite's own dry run, so the composites' own `compositionRevisionRef`
+  is not shown changing: `revisionImpact` already carries that fact once per composition rather than once per
+  composite. A composed resource deriving a value *from* the revision name is shown, and is precisely the signal this
   exists to surface.
 
   The field is **absent when `createsRevision` is true** only if the name could not be predicted, which happens when the
