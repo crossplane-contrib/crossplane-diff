@@ -2035,8 +2035,8 @@ Summary: 2 modified, 2 removed`,
 		},
 		// Issue #485. The unit test for the depth guard uses a render stub that caps its own recursion,
 		// so it cannot show what a real cycle does across real renders: real templates, real names that
-		// grow at every level (76 characters by the time the guard fires), real schema validation and
-		// dry-run at each level. This drives the whole path. It fails at exactly one level past the
+		// grow at every level (kept under the generated CRDs' 63-character limit by a short suffix), real
+		// schema validation and dry-run at each level. This drives the whole path. It fails at exactly one level past the
 		// default --max-nested-depth of 10, attributed to the XR the user named.
 		"CyclicCompositionStopsAtMaxNestedDepth": {
 			reason:       "A composition cycle (XCycleA -> XCycleB -> XCycleA ...) must stop at --max-nested-depth with a clear error, not recurse until the stack overflows (#485)",
@@ -2048,7 +2048,7 @@ Summary: 2 modified, 2 removed`,
 			},
 			inputFiles:            []string{"testdata/diff/new-cycle-xr.yaml"},
 			expectedError:         true,
-			expectedErrorContains: "maximum nesting depth exceeded: XCycleB/test-cycle-child-child-child-child-child-child-child-child-child-child-child (nested depth 11) is nested 11 levels deep, but --max-nested-depth is 10",
+			expectedErrorContains: "maximum nesting depth exceeded: XCycleB/test-cycle-c-c-c-c-c-c-c-c-c-c-c (nested depth 11) is nested 11 levels deep, but --max-nested-depth is 10",
 			expectedExitCode:      dp.ExitCodeToolError,
 			expectedStructuredOutput: tu.ExpectDiff().
 				WithError("XCycleA/test-cycle").

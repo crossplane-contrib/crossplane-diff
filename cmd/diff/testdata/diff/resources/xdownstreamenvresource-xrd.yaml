@@ -1,12 +1,12 @@
 apiVersion: apiextensions.crossplane.io/v1
 kind: CompositeResourceDefinition
 metadata:
-  name: xdownstreamenrresources.nop.example.org
+  name: xdownstreamenvresources.nop.example.org
 spec:
   group: nop.example.org
   names:
     kind: XDownstreamEnvResource
-    plural: xdownstreamenrresources
+    plural: xdownstreamenvresources
   versions:
     - name: v1alpha1
       served: true
