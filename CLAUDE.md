@@ -31,8 +31,12 @@ go tool cover -func=/tmp/coverage.out
 # Pre-PR checks: linting, tests, generation (requires long timeout, can take several minutes)
 earthly -P +reviewable
 
-# Fetch Crossplane's cluster directory into cluster/<tag>. Only e2e needs it: unit and integration tests
-# install Crossplane's CRDs from the github.com/crossplane/crossplane/v2 module go.mod pins.
+# Fetch Crossplane's CRDs at the crossplane version go.mod pins into cluster/gomod/crds. Required for unit and
+# integration tests (run it in a fresh worktree, and again after a crossplane dependency bump). +go-test runs it.
+earthly +fetch-crossplane-crds-gomod
+
+# Fetch Crossplane's cluster directory for an image tag into cluster/<tag>. Only e2e uses it, because it must
+# match the Crossplane image e2e runs.
 earthly +fetch-crossplane-cluster --CROSSPLANE_IMAGE_TAG=main
 
 # Tidy go modules
@@ -294,9 +298,11 @@ same: for every XRD a test case's `setupFiles` declare, `envtestCRDs` (in `cmd/d
 - `testdata/{diff,comp}/crds/` holds only plain CRDs that no XRD defines (managed-resource stand-ins such as
   `XDownstreamResource`). The harness fails if a CRD there is also generated from an XRD, so a hand-written copy of a
   generated CRD can't linger.
-- Crossplane's own CRDs (Composition, XRD, Function, …) come from the `github.com/crossplane/crossplane/v2` module at
-  the version go.mod pins (`testutils.CrossplaneCRDsDir`), not from `cluster/<tag>`. They therefore match the xcrd and
-  other Crossplane code under test, and unit and integration tests need no `earthly +fetch-crossplane-cluster`.
+- Crossplane's own CRDs (Composition, XRD, Function, …) are installed from `cluster/gomod/crds`
+  (`testutils.PinnedCrossplaneCRDsDir`), which `earthly +fetch-crossplane-crds-gomod` fills. That target asks the go
+  binary in the build which `github.com/crossplane/crossplane/v2` version go.mod selects and clones crossplane at that
+  tag, so the CRDs match the xcrd and other Crossplane code under test, and a dependency bump (e.g. by Renovate) moves
+  them with it. e2e instead uses `cluster/<image tag>` from `+fetch-crossplane-cluster`, matching the image it runs.
 
 e2e tests need none of this: they run real Crossplane, which generates the CRDs itself.
 

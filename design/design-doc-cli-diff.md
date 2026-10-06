@@ -184,10 +184,11 @@ apiserver would default it. A field an XR or claim needs is therefore added to t
 cannot drift from the shape Crossplane generates (a drifted claim CRD once hid a defaulting bug, #503). Only plain CRDs
 that no XRD defines, such as managed-resource stand-ins, live under `cmd/diff/testdata/{diff,comp}/crds/`; the harness
 refuses to start if one of them duplicates a generated CRD. Crossplane's own CRDs (Composition, XRD, Function, …) are
-installed from the `github.com/crossplane/crossplane/v2` module at the version `go.mod` pins, the same version as the
-xcrd and render code under test, so a test run is reproducible and needs no fetch of Crossplane's repository. Only the
-e2e suite, which runs real Crossplane images, uses the `cluster/<tag>` directory `earthly +fetch-crossplane-cluster`
-produces.
+installed from `cluster/gomod/crds`, which `earthly +fetch-crossplane-crds-gomod` fetches at the
+`github.com/crossplane/crossplane/v2` version `go.mod` selects (the go binary in the build resolves it). They are
+therefore the same version as the xcrd and render code under test, a run is reproducible, and a dependency bump moves
+them automatically. The e2e suite, which runs real Crossplane images, instead uses the `cluster/<image tag>` directory
+`earthly +fetch-crossplane-cluster` produces.
 
 The integration test cases cover:
 
