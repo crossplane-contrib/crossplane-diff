@@ -23,6 +23,7 @@ classDiagram
         -applyClient ApplyClient
         -config ProcessorConfig
         -schemaValidator SchemaValidator
+        -renderDefaulter Defaulter
         -diffCalculator DiffCalculator
         -diffRenderer DiffRenderer
         -requirementsProvider RequirementsProvider
@@ -69,6 +70,7 @@ classDiagram
     class ComponentFactories {
         +ResourceManager
         +SchemaValidator
+        +Defaulter
         +DiffCalculator
         +DiffRenderer
         +CompDiffRenderer
@@ -84,11 +86,16 @@ classDiagram
         +ValidateScopeConstraints(ctx, resource, ns, isClaimRoot) error
     }
 
+    class Defaulter {
+        <<interface>>
+        +Default(ctx, obj) (*Unstructured, error)
+    }
+
     class DiffCalculator {
         <<interface>>
         +CalculateDiff(ctx, composite, desired) (*ResourceDiff, error)
         +CalculateDiffs(ctx, xr, desired) (map[string]*ResourceDiff, error)
-        +CalculateNonRemovalDiffs(ctx, xr, parent, desired) (map[string]*ResourceDiff, map[string]bool, error)
+        +CalculateNonRemovalDiffs(ctx, xr, desired) (map[string]*ResourceDiff, map[string]bool, error)
         +CalculateRemovedResourceDiffs(ctx, xr, rendered) (map[string]*ResourceDiff, error)
     }
 
@@ -140,6 +147,7 @@ classDiagram
     DefaultDiffProcessor --> ProcessorConfig
     DefaultDiffProcessor --> SchemaValidator
     DefaultDiffProcessor --> DiffCalculator
+    DefaultDiffProcessor --> Defaulter : strict, render input
     DefaultDiffProcessor --> ResourceManager
     DefaultDiffProcessor --> RequirementsProvider
     DefaultDiffProcessor --> FunctionProvider
@@ -150,3 +158,4 @@ classDiagram
     ProcessorConfig --> ComponentFactories
 
     DiffCalculator --> ResourceManager
+    DiffCalculator --> Defaulter : lenient, additions without a dry run

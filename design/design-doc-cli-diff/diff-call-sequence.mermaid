@@ -41,10 +41,11 @@ sequenceDiagram
             CompClient-->>DP: *Composition (cluster's, or proposed under comp)
             DP->>FnProv: GetFunctionsForComposition(comp)
             FnProv-->>DP: []Function
-            DP->>ResMgr: FetchCurrentObject(ctx, xr) / FetchObservedResources(ctx, xr)
+            DP->>ResMgr: FetchCurrentObject(ctx, authoredXR) / FetchObservedResources(ctx, xr)
             ResMgr-->>DP: existing XR + observed composed resources (fetch failure is fatal)
 
-            DP->>DP: RenderToStableState(ctx, xr, comp, fns, id, observed, eventualState)
+            Note over DP: authoredXR stays as written: it is the XR's payload. renderXR = strict Defaulter.Default(effectiveXR), where effectiveXR is authoredXR with the cluster UID, or a claim's backing XR
+            DP->>DP: RenderToStableState(ctx, renderXR, comp, fns, id, observed, eventualState)
             loop Until requirements stabilise (or steady state under --eventual-state)
                 DP->>Render: Render(ctx, inputs)
                 Render-->>DP: CompositionOutputs (incl. RequiredResources)
@@ -61,10 +62,10 @@ sequenceDiagram
                 DP->>DP: ProcessNestedXRs(..., depth+1)
                 DP->>DP: Recurse via diffSingleResourceInternal (err if depth > --max-nested-depth)
             end
-            DP->>Validator: ValidateResources / ValidateScopeConstraints
-            Validator-->>DP: ok / err
+            DP->>Validator: ValidateResources(authoredXR, composed) / ValidateScopeConstraints
+            Validator-->>DP: ok / err (inputs left unmodified)
 
-            DP->>DiffCalc: CalculateNonRemovalDiffs(ctx, xr, parent, desired)
+            DP->>DiffCalc: CalculateNonRemovalDiffs(ctx, authoredXR, desired)
             loop For each rendered resource
                 DiffCalc->>ResMgr: FetchCurrentObject
                 ResMgr->>K8sAPI: GET
@@ -80,7 +81,7 @@ sequenceDiagram
                         K8sAPI-->>DiffCalc: allowed? => degrade or report
                     end
                 else addition, --dry-run-on=existing
-                    DiffCalc->>DiffCalc: use rendered desired, mark dryRun.skipReason=disabled
+                    DiffCalc->>DiffCalc: lenient Defaulter.Default(desired), mark dryRun.skipReason=disabled
                 end
             end
             DiffCalc-->>DP: diffs + rendered keys
