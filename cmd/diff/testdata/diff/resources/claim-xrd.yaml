@@ -1,12 +1,12 @@
 apiVersion: apiextensions.crossplane.io/v1
 kind: CompositeResourceDefinition
 metadata:
-  name: xnopclaims.diff.example.org
+  name: xnopresources.diff.example.org
 spec:
   group: diff.example.org
   names:
-    kind: XNopClaim
-    plural: xnopclaims
+    kind: XNopResource
+    plural: xnopresources
   claimNames:
     kind: NopClaim
     plural: nopclaims
