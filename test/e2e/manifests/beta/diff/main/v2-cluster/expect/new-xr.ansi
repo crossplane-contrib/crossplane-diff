@@ -29,8 +29,6 @@
 +   name: new-resource
 + spec:
 +   coolField: I'm new!
-+   crossplane:
-+     compositionUpdatePolicy: Automatic
 +   parameters:
 +     config:
 +       setting1: value1

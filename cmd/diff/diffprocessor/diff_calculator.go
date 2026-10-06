@@ -31,9 +31,8 @@ type DiffCalculator interface {
 
 	// CalculateNonRemovalDiffs computes diffs for modified/added resources and returns
 	// the set of rendered resource keys. This is used by nested XR processing.
-	// parentComposite should be nil for root XRs, and the parent XR for nested XRs.
 	// Returns: (diffs map, rendered resource keys, error)
-	CalculateNonRemovalDiffs(ctx context.Context, xr *cmp.Unstructured, parentComposite *un.Unstructured, desired render.CompositionOutputs) (map[string]*dt.ResourceDiff, map[string]bool, error)
+	CalculateNonRemovalDiffs(ctx context.Context, xr *cmp.Unstructured, desired render.CompositionOutputs) (map[string]*dt.ResourceDiff, map[string]bool, error)
 
 	// CalculateRemovedResourceDiffs identifies resources that exist in the cluster but are not
 	// in the rendered set. This is called after nested XR processing is complete.
@@ -49,6 +48,7 @@ type DefaultDiffCalculator struct {
 	logger          logging.Logger
 	diffOptions     renderer.DiffOptions
 	dryRunOn        DryRunOn
+	predictor       Defaulter
 }
 
 // SetDiffOptions updates the diff options used by the calculator.
@@ -56,8 +56,10 @@ func (c *DefaultDiffCalculator) SetDiffOptions(options renderer.DiffOptions) {
 	c.diffOptions = options
 }
 
-// NewDiffCalculator creates a new DefaultDiffCalculator.
-func NewDiffCalculator(apply k8.ApplyClient, access k8.AccessChecker, tree xp.ResourceTreeClient, resourceManager ResourceManager, logger logging.Logger, diffOptions renderer.DiffOptions, dryRunOn DryRunOn) DiffCalculator {
+// NewDiffCalculator creates a new DefaultDiffCalculator. predictor predicts CRD defaults for the
+// additions that get no apiserver result; see dryRunCreateAddition. It should be lenient
+// (LenientDefaulting): a prediction is best effort, and must not fail an addition for want of a CRD.
+func NewDiffCalculator(apply k8.ApplyClient, access k8.AccessChecker, tree xp.ResourceTreeClient, resourceManager ResourceManager, logger logging.Logger, diffOptions renderer.DiffOptions, dryRunOn DryRunOn, predictor Defaulter) DiffCalculator {
 	return &DefaultDiffCalculator{
 		treeClient:      tree,
 		applyClient:     apply,
@@ -66,6 +68,7 @@ func NewDiffCalculator(apply k8.ApplyClient, access k8.AccessChecker, tree xp.Re
 		logger:          logger,
 		diffOptions:     diffOptions,
 		dryRunOn:        dryRunOn,
+		predictor:       predictor,
 	}
 }
 
@@ -220,7 +223,7 @@ func (c *DefaultDiffCalculator) CalculateDiff(ctx context.Context, composite *un
 //	           No false removal detection!
 //
 // Returns: (diffs map, rendered resource keys, error).
-func (c *DefaultDiffCalculator) CalculateNonRemovalDiffs(ctx context.Context, xr *cmp.Unstructured, parentComposite *un.Unstructured, desired render.CompositionOutputs) (map[string]*dt.ResourceDiff, map[string]bool, error) {
+func (c *DefaultDiffCalculator) CalculateNonRemovalDiffs(ctx context.Context, xr *cmp.Unstructured, desired render.CompositionOutputs) (map[string]*dt.ResourceDiff, map[string]bool, error) {
 	xrName := xr.GetName()
 	c.logger.Debug("Calculating diffs",
 		"xr", xrName,
@@ -232,34 +235,13 @@ func (c *DefaultDiffCalculator) CalculateNonRemovalDiffs(ctx context.Context, xr
 
 	renderedResources := make(map[string]bool)
 
-	// Determine if this is a nested XR or root XR, and select the appropriate XR to diff
 	if desired.CompositeResource == nil {
 		return nil, nil, errors.New("render produced no composite resource (possible fatal pipeline error)")
 	}
 
-	renderedXR := desired.CompositeResource.GetUnstructured()
-
-	var (
-		desiredXR       *un.Unstructured
-		compositeParent *un.Unstructured
-	)
-
-	if renderedXR.GetAnnotations()["crossplane.io/composition-resource-name"] != "" {
-		// NESTED XR: Use rendered XR (it's a composed resource from parent's composition)
-		c.logger.Debug("Processing nested XR", "xr", xrName, "hasParent", parentComposite != nil)
-
-		desiredXR = renderedXR
-		compositeParent = parentComposite
-	} else {
-		// ROOT XR: Use input XR as-is (source of truth, don't use rendered metadata)
-		c.logger.Debug("Processing root XR", "xr", xrName)
-
-		desiredXR = xr.GetUnstructured()
-		compositeParent = nil
-	}
-
-	// Calculate diff for the XR
-	xrDiff, err := c.CalculateDiff(ctx, compositeParent, desiredXR)
+	// Calculate diff for the XR. It is diffed as the caller passed it, never as rendered, nested or
+	// not: render adds nothing to an XR that belongs in its payload (see diffSingleResourceInternal).
+	xrDiff, err := c.CalculateDiff(ctx, nil, xr.GetUnstructured())
 	if err != nil || xrDiff == nil {
 		return nil, nil, errors.Wrap(err, "cannot calculate diff for XR")
 	}
@@ -368,8 +350,7 @@ func (c *DefaultDiffCalculator) CalculateNonRemovalDiffs(ctx context.Context, xr
 // This is the primary method that most code should use.
 func (c *DefaultDiffCalculator) CalculateDiffs(ctx context.Context, xr *cmp.Unstructured, desired render.CompositionOutputs) (map[string]*dt.ResourceDiff, error) {
 	// First calculate diffs for modified/added resources
-	// parentComposite is nil because CalculateDiffs is only called for root XRs
-	diffs, renderedResources, err := c.CalculateNonRemovalDiffs(ctx, xr, nil, desired)
+	diffs, renderedResources, err := c.CalculateNonRemovalDiffs(ctx, xr, desired)
 	if err != nil {
 		return nil, err
 	}
@@ -456,19 +437,18 @@ func (c *DefaultDiffCalculator) CalculateRemovedResourceDiffs(ctx context.Contex
 // dry-run creating it.
 //
 // On success it returns the apiserver's view of the object, which is the whole point: server-side
-// defaulting and mutating admission are invisible to the render pipeline, and for a built-in type
-// they are invisible to the schema validator's applyCRDDefaults too, since that skips anything
-// without a CRD.
+// defaulting and mutating admission are invisible to the render pipeline. The rendered object is sent
+// as it is, with no locally predicted defaults, because the apiserver applies its own.
 //
-// When the dry run could not be performed it returns the rendered object unchanged plus a
-// DryRunInfo saying why, rather than failing: a missing permission or an unreachable webhook is a
-// property of the environment, not a finding about the resource, and an addition has a reasonable
-// lower-fidelity fallback. It returns an error only when the cluster actually refused the resource
-// (a real finding, routed to the schema-validation exit-code tier) or when something is wrong that
-// we must not paper over.
+// When the dry run could not be performed it returns the rendered object with locally predicted CRD
+// defaults (see predictLocally) plus a DryRunInfo saying why, rather than failing: a missing
+// permission or an unreachable webhook is a property of the environment, not a finding about the
+// resource, and an addition has a reasonable lower-fidelity fallback. It returns an error only when
+// the cluster actually refused the resource (a real finding, routed to the schema-validation
+// exit-code tier) or when something is wrong that we must not paper over.
 func (c *DefaultDiffCalculator) dryRunCreateAddition(ctx context.Context, desired *un.Unstructured, resourceID string) (*un.Unstructured, *dt.DryRunInfo, error) {
 	if c.dryRunOn == DryRunOnExisting {
-		return desired, &dt.DryRunInfo{SkipReason: dt.DryRunSkipDisabled}, nil
+		return c.predictLocally(ctx, desired, resourceID, &dt.DryRunInfo{SkipReason: dt.DryRunSkipDisabled})
 	}
 
 	createDesired := sanitizeForDryRun(desired)
@@ -511,7 +491,7 @@ func (c *DefaultDiffCalculator) dryRunCreateAddition(ctx context.Context, desire
 		// would break a supported workflow to report something that may not be true by the time it
 		// matters. TestDiffConcurrentDirectory diffs 21 XRs into a namespace that is never created and
 		// is exactly this case.
-		return desired, &dt.DryRunInfo{SkipReason: dt.DryRunSkipNamespaceNotFound, Detail: apiserverMessage(err)}, nil
+		return c.predictLocally(ctx, desired, resourceID, &dt.DryRunInfo{SkipReason: dt.DryRunSkipNamespaceNotFound, Detail: apiserverMessage(err)})
 
 	case apierrors.IsInvalid(err):
 		return nil, nil, NewAdmissionRejectionError(resourceID, desired, err)
@@ -526,11 +506,25 @@ func (c *DefaultDiffCalculator) dryRunCreateAddition(ctx context.Context, desire
 		// The apiserver could not complete the admission chain — classically an unreachable webhook
 		// with failurePolicy: Fail. We cannot know what it would have done, so we must not present
 		// rendered output as though it were verified.
-		return desired, &dt.DryRunInfo{SkipReason: dt.DryRunSkipWebhookUnavailable, Detail: apiserverMessage(err)}, nil
+		return c.predictLocally(ctx, desired, resourceID, &dt.DryRunInfo{SkipReason: dt.DryRunSkipWebhookUnavailable, Detail: apiserverMessage(err)})
 
 	default:
 		return nil, nil, errors.Wrapf(err, "cannot dry-run create %s", resourceID)
 	}
+}
+
+// predictLocally is what an addition shows when it got no apiserver result: the rendered object with
+// the CRD defaults the apiserver would have applied, predicted locally, and the DryRunInfo saying why
+// the apiserver was not asked. The prediction is never sent anywhere, so unlike a dry-run payload it
+// cannot claim fields. It covers CRD `default:` values only; see Defaulter for what it misses,
+// including pruning (#527) and multi-version conversion (#528).
+func (c *DefaultDiffCalculator) predictLocally(ctx context.Context, desired *un.Unstructured, resourceID string, info *dt.DryRunInfo) (*un.Unstructured, *dt.DryRunInfo, error) {
+	predicted, err := c.predictor.Default(ctx, desired)
+	if err != nil {
+		return nil, nil, errors.Wrapf(err, "cannot predict defaults for %s", resourceID)
+	}
+
+	return predicted, info, nil
 }
 
 // resolveForbiddenCreate asks the authorizer whether a Forbidden from a dry-run create was an
@@ -549,7 +543,7 @@ func (c *DefaultDiffCalculator) resolveForbiddenCreate(ctx context.Context, desi
 		return nil, nil, errors.Wrapf(createErr, "cannot dry-run create %s, and cannot determine whether that was an authorization denial (%v)", resourceID, ssarErr)
 
 	case !allowed:
-		return desired, &dt.DryRunInfo{SkipReason: dt.DryRunSkipForbidden, Detail: reason}, nil
+		return c.predictLocally(ctx, desired, resourceID, &dt.DryRunInfo{SkipReason: dt.DryRunSkipForbidden, Detail: reason})
 
 	default:
 		// Authorized to create, yet refused: admission or quota. A real finding.
@@ -614,7 +608,7 @@ func (c *DefaultDiffCalculator) classifyApplyFailure(ctx context.Context, desire
 // rest.BeforeCreate, ahead of the dry-run short-circuit at the storage layer, so it invents a random
 // name, which would make an addition's diff differ on every run. For a *named* resource we keep the
 // server's name, so a mutating webhook that rewrites a name still surfaces.
-// Latent because nothing reaches here with an empty name: prepareXRForDiff synthesizes a
+// Latent because nothing reaches here with an empty name: SanitizeXR synthesizes a
 // deterministic name for generateName XRs (see SynthesizeGeneratedName), and the render binary names
 // generateName composed resources itself.
 //
@@ -691,14 +685,13 @@ func apiserverMessage(err error) string {
 //
 // managedFields matters for a different reason: client-go's dynamic Apply refuses any object that
 // has it populated ("cannot apply an object with managed fields already set"). diff_processor.go
-// guards the root XR against this, but the nested-XR branch below feeds render output straight
-// through with no such guard — the unexplained failure mode in crossplane-diff#452. Stripping here
-// closes it for every path at the one point where objects leave for the apiserver.
+// guards the XR against this; composed resources had no equivalent. Stripping here closes it for
+// every path at the one point where objects leave for the apiserver.
 //
 // resourceVersion is the same shape of problem: a stale value from a user's input file (very
 // plausible for anything exported with `kubectl get -o yaml`) makes the apiserver reject the request
 // on optimistic concurrency, and it is illegal on a create. diff_processor.go already clears it for
-// the root XR; composed resources had no equivalent.
+// the XR; composed resources had no equivalent.
 func sanitizeForDryRun(obj *un.Unstructured) *un.Unstructured {
 	out := obj.DeepCopy()
 

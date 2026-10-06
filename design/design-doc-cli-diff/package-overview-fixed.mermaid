@@ -54,8 +54,13 @@ classDiagram
         <<interface>>
         +CalculateDiff(ctx, composite, desired) (*ResourceDiff, error)
         +CalculateDiffs(ctx, xr, desired) (map[string]*ResourceDiff, error)
-        +CalculateNonRemovalDiffs(ctx, xr, parent, desired) (map[string]*ResourceDiff, map[string]bool, error)
+        +CalculateNonRemovalDiffs(ctx, xr, desired) (map[string]*ResourceDiff, map[string]bool, error)
         +CalculateRemovedResourceDiffs(ctx, xr, rendered) (map[string]*ResourceDiff, error)
+    }
+
+    class Defaulter {
+        <<interface>>
+        +Default(ctx, obj) (*Unstructured, error)
     }
 
     class ResourceManager {
@@ -143,6 +148,8 @@ classDiagram
     CompDiffProcessor --> DiffProcessor : delegates via xrProc
 
     DiffProcessor --> DiffCalculator
+    DiffProcessor --> Defaulter : strict, render input
+    DiffCalculator --> Defaulter : lenient, additions without a dry run
     DiffProcessor --> SchemaValidator
     DiffProcessor --> ResourceManager
     DiffProcessor --> FunctionProvider

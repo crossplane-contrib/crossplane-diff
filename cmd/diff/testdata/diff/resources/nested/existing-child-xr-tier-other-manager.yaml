@@ -1,0 +1,9 @@
+# A different field manager sets the XRD-defaulted spec.tier to a non-default value on the child XR,
+# which the parent composition renders without it.
+apiVersion: ns.nested.example.org/v1alpha1
+kind: XChildResource
+metadata:
+  name: test-parent-child
+  namespace: default
+spec:
+  tier: premium

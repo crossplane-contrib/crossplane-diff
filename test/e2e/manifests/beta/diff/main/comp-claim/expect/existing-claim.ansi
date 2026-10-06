@@ -88,30 +88,5 @@ Summary: 2 resources with changes
       name: default
 
 ---
-~~~ NopClaimDiffResource/test-comp-claim
-  apiVersion: claimdiff.example.org/v1alpha1
-  kind: NopClaimDiffResource
-  metadata:
-    finalizers:
-    - finalizer.apiextensions.crossplane.io
-    name: test-comp-claim
-    namespace: default
-  spec:
-    compositeDeletePolicy: Background
-    compositionRef:
-      name: xnopclaimdiffresources.claimdiff.example.org
-    compositionRevisionRef:
-      name: xnopclaimdiffresources.claimdiff.example.org-XXXXXXX
-+   compositionUpdatePolicy: Automatic
-    coolField: claim-value-1
-    crossplane:
-      compositionRef:
-        name: xnopclaimdiffresources.claimdiff.example.org
-    resourceRef:
-      apiVersion: claimdiff.example.org/v1alpha1
-      kind: XNopClaimDiffResource
-      name: test-comp-claim-XXXXX
 
----
-
-Summary: 2 modified
+Summary: 1 modified

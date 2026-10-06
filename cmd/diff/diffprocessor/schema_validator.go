@@ -9,7 +9,6 @@ import (
 	xp "github.com/crossplane-contrib/crossplane-diff/cmd/diff/client/crossplane"
 	k8 "github.com/crossplane-contrib/crossplane-diff/cmd/diff/client/kubernetes"
 	pkgvalidate "github.com/crossplane/cli/v2/pkg/validate"
-	clixr "github.com/crossplane/cli/v2/pkg/xr"
 	extv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	un "k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -109,21 +108,18 @@ func (v *DefaultSchemaValidator) ValidateResources(ctx context.Context, xr *un.U
 		return errors.Wrap(err, "unable to ensure CRDs")
 	}
 
-	// Apply CRD-level defaults in place before handing resources off to
-	// the diff calculator. The structured SchemaValidate API
-	// intentionally deep-copies inputs and does not surface defaults
-	// to its caller, so without this step composed resources would
-	// reach diff calculation undefaulted and produce spurious diffs
-	// for fields the cluster's defaulter would have populated. The
-	// previous SchemaValidation entry point fused this defaulting
-	// into validation; doing it explicitly here makes the
-	// dependency obvious.
-	if err := v.applyCRDDefaults(ctx, resources); err != nil {
-		return err
-	}
-
 	// SchemaValidate is the structured-result API: it returns a
 	// *ValidationResult that callers inspect directly.
+	//
+	// Validation is read-only. SchemaValidate applies CRD defaults to its
+	// own deep copy of each resource before validating, so a field that is
+	// both required and defaulted validates without the caller's objects
+	// being defaulted. They must not be: the diff calculator sends them to
+	// the apiserver as server-side apply payloads, where every field present
+	// claims ownership, so a locally defaulted field would take over a
+	// value another manager set (#503). The apiserver applies defaults to
+	// what it is sent; the lenient Defaulter predicts them for additions
+	// that are never sent.
 	//
 	// Every resource is passed through, including built-in Kubernetes types
 	// that have no CRD. SchemaValidate validates those against its embedded
@@ -291,34 +287,6 @@ func (v *DefaultSchemaValidator) ValidateScopeConstraints(ctx context.Context, r
 		}
 	default:
 		v.logger.Debug("Unknown resource scope", "resource", resourceID, "namespace", resourceNamespace, "scope", string(scope))
-	}
-
-	return nil
-}
-
-// applyCRDDefaults applies CRD-derived defaults to each resource in
-// place. Built-in types and resources whose CRD is unknown are
-// skipped; in both cases the diff calculator already handles them
-// without server-side defaulting. We treat a CRD lookup error here
-// as a no-op rather than a failure: EnsureComposedResourceCRDs is
-// the canonical gate on missing CRDs, and the subsequent SchemaValidate
-// call surfaces the same condition through ValidationStatusMissingSchema.
-func (v *DefaultSchemaValidator) applyCRDDefaults(ctx context.Context, resources []*un.Unstructured) error {
-	for _, r := range resources {
-		gvk := r.GroupVersionKind()
-		if !v.schemaClient.IsCRDRequired(ctx, gvk) {
-			continue
-		}
-
-		crd, err := v.schemaClient.GetCRD(ctx, gvk)
-		if err != nil {
-			v.logger.Debug("skipping defaulting; CRD not found", "gvk", gvk.String(), "error", err)
-			continue
-		}
-
-		if err := clixr.ApplyCRDDefaults(r.Object, r.GetAPIVersion(), *crd); err != nil {
-			return errors.Wrapf(err, "cannot apply CRD defaults for %s/%s", gvk.String(), r.GetName())
-		}
 	}
 
 	return nil

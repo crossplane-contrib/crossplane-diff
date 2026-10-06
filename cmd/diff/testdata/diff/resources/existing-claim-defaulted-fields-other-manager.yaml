@@ -1,0 +1,10 @@
+# A different field manager sets two fields the claim's CRD defaults to non-default values on the
+# claim, whose manifest (modified-claim-omitting-defaulted-fields.yaml) omits both.
+apiVersion: diff.example.org/v1alpha1
+kind: NopClaim
+metadata:
+  name: test-claim
+  namespace: existing-namespace
+spec:
+  compositeDeletePolicy: Foreground
+  compositionUpdatePolicy: Manual

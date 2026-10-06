@@ -44,15 +44,16 @@ type DryRunOn string
 
 const (
 	// DryRunOnExisting dry-runs only resources that already exist in the cluster, leaving additions
-	// as the render pipeline produced them. This was the only behaviour before crossplane-diff#334.
-	// It needs no create permission, and costs one round-trip fewer per added resource.
+	// as the render pipeline produced them plus locally predicted CRD defaults (see Defaulter). This
+	// was the only behaviour before crossplane-diff#334. It needs no create permission, and costs one
+	// round-trip fewer per added resource.
 	DryRunOnExisting DryRunOn = "existing"
 
 	// DryRunOnAll additionally dry-run creates added resources, so their diffs pick up
-	// apiserver-side defaulting and mutating admission — neither of which the local schema
-	// validator's applyCRDDefaults can supply for a built-in type, and neither of which it can
-	// supply at all for admission. The default. Where the create is not permitted, the resource
-	// degrades to rendered output and says so rather than failing the run.
+	// apiserver-side defaulting and mutating admission — neither of which the local Defaulter can
+	// predict for a built-in type, and neither of which it can predict at all for admission. The
+	// default. Where the create is not permitted, the resource degrades to rendered output plus
+	// locally predicted CRD defaults, and says so rather than failing the run.
 	DryRunOnAll DryRunOn = "all"
 )
 
@@ -207,8 +208,12 @@ type ComponentFactories struct {
 	// SchemaValidator creates a SchemaValidator
 	SchemaValidator func(schema k8.SchemaClient, resource k8.ResourceClient, def xp.DefinitionClient, logger logging.Logger) SchemaValidator
 
+	// Defaulter creates a Defaulter with the given policy. The processor makes two: a strict one for the
+	// XR it renders, and a lenient one the DiffCalculator uses to predict additions.
+	Defaulter func(schema k8.SchemaClient, def xp.DefinitionClient, policy DefaultingPolicy) Defaulter
+
 	// DiffCalculator creates a DiffCalculator
-	DiffCalculator func(apply k8.ApplyClient, access k8.AccessChecker, tree xp.ResourceTreeClient, resourceManager ResourceManager, logger logging.Logger, diffOptions renderer.DiffOptions, dryRunOn DryRunOn) DiffCalculator
+	DiffCalculator func(apply k8.ApplyClient, access k8.AccessChecker, tree xp.ResourceTreeClient, resourceManager ResourceManager, logger logging.Logger, diffOptions renderer.DiffOptions, dryRunOn DryRunOn, predictor Defaulter) DiffCalculator
 
 	// DiffRenderer creates a DiffRenderer
 	DiffRenderer func(logger logging.Logger, diffOptions renderer.DiffOptions) renderer.DiffRenderer
@@ -419,8 +424,15 @@ func WithSchemaValidatorFactory(factory func(k8.SchemaClient, k8.ResourceClient,
 	}
 }
 
+// WithDefaulterFactory sets the Defaulter factory function.
+func WithDefaulterFactory(factory func(k8.SchemaClient, xp.DefinitionClient, DefaultingPolicy) Defaulter) ProcessorOption {
+	return func(config *ProcessorConfig) {
+		config.Factories.Defaulter = factory
+	}
+}
+
 // WithDiffCalculatorFactory sets the DiffCalculator factory function.
-func WithDiffCalculatorFactory(factory func(k8.ApplyClient, k8.AccessChecker, xp.ResourceTreeClient, ResourceManager, logging.Logger, renderer.DiffOptions, DryRunOn) DiffCalculator) ProcessorOption {
+func WithDiffCalculatorFactory(factory func(k8.ApplyClient, k8.AccessChecker, xp.ResourceTreeClient, ResourceManager, logging.Logger, renderer.DiffOptions, DryRunOn, Defaulter) DiffCalculator) ProcessorOption {
 	return func(config *ProcessorConfig) {
 		config.Factories.DiffCalculator = factory
 	}
@@ -487,6 +499,10 @@ func (c *ProcessorConfig) SetDefaultFactories() {
 
 	if c.Factories.SchemaValidator == nil {
 		c.Factories.SchemaValidator = NewSchemaValidator
+	}
+
+	if c.Factories.Defaulter == nil {
+		c.Factories.Defaulter = NewDefaulter
 	}
 
 	if c.Factories.DiffCalculator == nil {

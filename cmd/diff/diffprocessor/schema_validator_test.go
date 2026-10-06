@@ -450,7 +450,12 @@ func (c *xrdCountingClient) GetXRDs(ctx context.Context) ([]*un.Unstructured, er
 	return c.MockDefinitionClient.GetXRDs(ctx)
 }
 
-func TestDefaultSchemaValidator_ValidateResources_AppliesDefaults(t *testing.T) {
+// ValidateResources must be read-only. Its results feed the diff calculator, and anything it added to
+// a resource would reach the server-side apply payload and claim that field (#503). The CRD here both
+// defaults and REQUIRES deletionPolicy, and the resource omits it, so the case also pins that
+// validation outcomes do not depend on defaulting the caller's objects: SchemaValidate defaults its
+// own copy before validating.
+func TestDefaultSchemaValidator_ValidateResources_DoesNotMutateResources(t *testing.T) {
 	ctx := t.Context()
 
 	// Create a simple managed resource
@@ -481,6 +486,7 @@ func TestDefaultSchemaValidator_ValidateResources_AppliesDefaults(t *testing.T) 
 		"spec": {
 			Type:                   "object",
 			XPreserveUnknownFields: func() *bool { b := true; return &b }(), // Allow all fields
+			Required:               []string{"deletionPolicy"},
 			Properties: map[string]extv1.JSONSchemaProps{
 				"deletionPolicy": {
 					Type:    "string",
@@ -522,52 +528,21 @@ func TestDefaultSchemaValidator_ValidateResources_AppliesDefaults(t *testing.T) 
 
 	validator := NewSchemaValidator(schemaClient, tu.NewMockResourceClient().Build(), defClient, logger)
 
-	// Verify compositionRevisionRef exists before validation
-	crossplane, found, _ := un.NestedMap(managedResource.Object, "spec", "crossplane")
-	if !found || crossplane["compositionRevisionRef"] == nil {
-		t.Fatal("Test setup failed: compositionRevisionRef not found in managed resource before validation")
-	}
+	xrBefore := xr.DeepCopy()
+	managedBefore := managedResource.DeepCopy()
 
-	// Call ValidateResources
-	// This should succeed even with compositionRevisionRef present because the validator
-	// strips Crossplane-managed fields internally before scope validation
 	err := validator.ValidateResources(ctx, xr, []cpd.Unstructured{*managedResource})
 	if err != nil {
 		t.Fatalf("ValidateResources() unexpected error: %v", err)
 	}
 
-	// Verify defaults were applied to the ORIGINAL resource
-	// The defaults are applied in-place by applyCRDDefaults before validation, so they persist
-	deletionPolicy, found, err := un.NestedString(managedResource.Object, "spec", "deletionPolicy")
-	if err != nil {
-		t.Fatalf("Failed to get deletionPolicy: %v", err)
+	if d := cmp.Diff(xrBefore, xr); d != "" {
+		t.Errorf("ValidateResources() mutated the XR (-before +after):\n%s", d)
 	}
 
-	if !found || deletionPolicy != "Delete" {
-		t.Errorf("Expected deletionPolicy default 'Delete' to be applied, got found=%v, value=%q", found, deletionPolicy)
+	if d := cmp.Diff(managedBefore, managedResource); d != "" {
+		t.Errorf("ValidateResources() mutated a composed resource (-before +after):\n%s", d)
 	}
-
-	managementPolicies, found, err := un.NestedStringSlice(managedResource.Object, "spec", "managementPolicies")
-	if err != nil {
-		t.Fatalf("Failed to get managementPolicies: %v", err)
-	}
-
-	if !found || len(managementPolicies) != 1 || managementPolicies[0] != "*" {
-		t.Errorf("Expected managementPolicies default ['*'] to be applied, got found=%v, value=%v", found, managementPolicies)
-	}
-
-	providerConfigRef, found, err := un.NestedMap(managedResource.Object, "spec", "providerConfigRef")
-	if err != nil {
-		t.Fatalf("Failed to get providerConfigRef: %v", err)
-	}
-
-	if !found || providerConfigRef["name"] != "default" {
-		t.Errorf("Expected providerConfigRef.name default 'default' to be applied, got found=%v, value=%v", found, providerConfigRef)
-	}
-
-	// Note: We do NOT verify that compositionRevisionRef is stripped from the original resource,
-	// because the stripping only happens on temporary copies used for scope validation.
-	// The compositionRevisionRef remains in the original resource, which is correct behavior.
 }
 
 func TestFormatValidationErrors(t *testing.T) {

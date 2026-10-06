@@ -23,6 +23,9 @@ spec:
               properties:
                 coolField:
                   type: string
+                tier:
+                  type: string
+                  default: standard
                 publishConnectionDetailsTo:
                   type: object
                   properties:

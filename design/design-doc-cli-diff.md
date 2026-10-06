@@ -199,6 +199,18 @@ The integration test cases cover:
 - **Resource Modification**: Verifies that changes to existing resources are correctly identified and displayed.
 - **Modified XR with New Downstream Resource**: Tests that when an XR is modified in a way that generates new downstream
   resources, both the modification to the XR and the creation of the new resource are properly displayed.
+- **Defaulted Fields Owned by Another Manager** (#503): A field the CRD or XRD defaults, which the manifest or
+  composition omits, and which another field manager has set to a non-default value in the cluster, is not reported as
+  changing — for a composed resource, an XR, a nested XR and a claim. These need real field ownership, so the cases
+  server-side apply their setup objects under named managers (`fieldManagerApplies`) rather than creating them, since
+  a plain create records only the test client and the apiserver drops `managedFields` supplied on create. Companion
+  cases under `--dry-run-on=existing` pin that additions still show their CRD and XRD defaults, predicted locally.
+- **Claims Defaulted With Their Own CRD**: A new claim omitting every defaulted field shows its own CRD's defaults (a
+  user default and `compositeDeletePolicy`, never `compositionUpdatePolicy`), whether the apiserver applies them on
+  dry-run create or the lenient `Defaulter` predicts them under `--dry-run-on=existing`; and the composed resource,
+  which renders the XR's `tier` and `compositionUpdatePolicy`, shows that render saw the XR CRD's defaults. Both
+  CRDs are generated from the XRD fixture with `pkg/xcrd`, so they differ exactly as a cluster's do, which is what
+  makes these cases, and the existing claim cases, sensitive to defaulting a claim with its XR's CRD.
 
 ### 4.2 Environment Configuration Testing
 
@@ -599,7 +611,8 @@ The `DefaultDiffProcessor` uses several subcomponents:
 - `fnProvider`: Resolves the function set for a given composition (see §6.6)
 - `compClient`, `defClient`, `schemaClient`, `treeClient`, `applyClient`: Cluster I/O (see §6.8)
 - `schemaValidator`: Validates resources against schemas and enforces scope constraints
-- `diffCalculator`: Calculates differences between resources
+- `renderDefaulter`: The strict `Defaulter` (§6.5a) that defaults the XR render consumes
+- `diffCalculator`: Calculates differences between resources; holds the lenient `Defaulter` (§6.5a)
 - `diffRenderer`: Formats and displays XR diffs
 - `requirementsProvider`: Handles requirements (env-configs, label selectors) for rendering
 
@@ -650,8 +663,10 @@ The `ProcessorConfig` structure provides configuration options:
 - `Logger`: Structured logger, propagated to all subcomponents.
 - `RenderFunc`: Renders a composition pipeline; defaults to the in-process engine.
 - `Factories`: Factory functions for creating subcomponents (used for testing and to swap caching strategies).
-  `Factories.InputValidator` (set with `WithInputValidatorFactory`, defaulting to `NewBundleInputValidator`) creates
-  the `InputValidator` for each `PerformDiff` run (see §6.7a).
+  `Factories.Defaulter` (set with `WithDefaulterFactory`, defaulting to `NewDefaulter`) takes a `DefaultingPolicy`; the
+  processor calls it twice, for its own strict `renderDefaulter` and for the lenient one it hands to the
+  `DiffCalculator` factory (see §6.5a). `Factories.InputValidator` (set with `WithInputValidatorFactory`, defaulting to
+  `NewBundleInputValidator`) creates the `InputValidator` for each `PerformDiff` run (see §6.7a).
 
 Note: `comp`'s `--namespace` filter and `--resource` filter are call-time parameters to `DiffComposition`, not
 processor-wide config; they describe what to include in a single impact analysis run, not how the processor itself
@@ -852,7 +867,8 @@ type DiffCalculator interface {
     // a set of rendered resource keys. Splitting this from removal detection lets nested XRs be processed
     // before any "missing from render" decisions are made (a nested XR may render additional resources
     // that the parent's render does not see).
-    CalculateNonRemovalDiffs(ctx context.Context, xr *cmp.Unstructured, parentComposite *un.Unstructured, desired render.CompositionOutputs) (map[string]*dt.ResourceDiff, map[string]bool, error)
+    // xr is diffed exactly as passed in — for DefaultDiffProcessor, the authored XR (§7.1) — never as rendered.
+    CalculateNonRemovalDiffs(ctx context.Context, xr *cmp.Unstructured, desired render.CompositionOutputs) (map[string]*dt.ResourceDiff, map[string]bool, error)
 
     // CalculateRemovedResourceDiffs identifies resources that exist in the cluster under this XR but are
     // absent from the merged set of rendered resource keys, and produces removal diffs for them.
@@ -881,12 +897,15 @@ func NewDiffCalculator(
     logger logging.Logger,
     diffOptions renderer.DiffOptions,
     dryRunOn DryRunOn,
+    predictor Defaulter,
 ) DiffCalculator
 ```
 
 The `AccessChecker` and `DryRunOn` are constructor parameters rather than post-construction setters, so a calculator
 cannot exist in a state where it is about to reach the apiserver without knowing what it is permitted to do. The
-`ProcessorConfig.Factories.DiffCalculator` factory type carries the same signature.
+`predictor` (a lenient `Defaulter`, §6.5a) is a constructor parameter for the same reason in reverse: it is what the
+calculator shows for an addition when it does *not* reach the apiserver. The `ProcessorConfig.Factories.DiffCalculator`
+factory type carries the same signature.
 
 #### 6.3.2 Computing the would-be state
 
@@ -897,7 +916,7 @@ one:
 |------|---------|
 | `current != nil` | Server-side apply, `dryRun=All`, under the field owner read from the existing object's `managedFields` (so the merge matches what Crossplane itself would produce). |
 | `current == nil`, `DryRunOnAll` | `Create` with `dryRun=All` and `FieldOwnerDefault`. |
-| `current == nil`, `DryRunOnExisting` | No request; the rendered object is used as-is and marked `DryRunSkipDisabled`. |
+| `current == nil`, `DryRunOnExisting` | No request; the rendered object plus locally predicted CRD defaults (§6.5a) is used, marked `DryRunSkipDisabled`. |
 
 Server-side apply cannot serve the addition path at all. `DryRunApply` issues a PUT-shaped request to a named path, and
 an addition relying on `metadata.generateName` has no name; SSA has no `generateName` equivalent. `Create` is also the
@@ -910,8 +929,13 @@ either server-assigned or rejected on input, and all seven are stripped from dis
 removing them costs nothing in output. Two of them fix real failures on the *existing* path as a side effect: a stale
 `resourceVersion` from a user's input file (plausible for anything exported with `kubectl get -o yaml`) makes the
 apiserver reject the request on optimistic concurrency, and client-go's dynamic `Apply` refuses outright any object with
-`managedFields` populated. `DefaultDiffProcessor` already guarded the root XR against both; the nested-XR branch and
-composed resources had no equivalent.
+`managedFields` populated. `DefaultDiffProcessor` already guarded the XR against both; composed resources had no
+equivalent.
+
+A payload is exactly what was rendered — for the XR, what was authored — and never carries locally predicted defaults,
+on either path. Under server-side apply every field present in the request claims ownership, so a field defaulted
+locally would take over a value another manager set and report a change the real apply would not make (#503). The
+apiserver applies its own defaults to what it is sent, on a dry-run create just the same.
 
 Three fields are restored from our side after a successful dry-run create:
 
@@ -931,7 +955,8 @@ Three fields are restored from our side after a successful dry-run create:
 
 #### 6.3.3 Degrade, report, or fail
 
-An addition that could not be verified falls back to the rendered object and carries a `DryRunInfo` saying why. The
+An addition that could not be verified falls back to the rendered object with locally predicted CRD defaults (§6.5a)
+and carries a `DryRunInfo` saying why. The
 calculator raises no warning about it: what to tell a human, and how to group it, is a presentation decision, so the
 renderers derive the summary from the `DryRunInfo` on the diffs (§6.8.1 Interfaces, *Summary of unverified
 additions*). `DryRunInfo.Detail` is the apiserver's own
@@ -1099,11 +1124,11 @@ paths, messages, and offending values. The validator surfaces this structure to 
 - The structured-output renderers expose it on the wire as `OutputError.ValidationFailures` (see §6.8.3), so JSON/YAML
   consumers don't need to parse the human-readable `Message` string.
 
-Note that `SchemaValidate` deep-copies its inputs and does not mutate them. The previous, line-parsing API
-(`validate.SchemaValidation`) fused defaulting with validation as a side-effect; with the new API, defaulting is
-explicit. The processor calls `clixr.ApplyCRDDefaults` (renamed from the old `render.DefaultValues`) on the rendered
-tree before invoking `ValidateResources`, preserving the invariant that the diff calculator sees fully-defaulted
-resources.
+`ValidateResources` is read-only. `SchemaValidate` deep-copies its inputs and applies CRD defaults to its own copy
+before validating, so a field that is both required and defaulted validates without the caller's objects being touched.
+They must not be touched: the resources it validates — the authored XR and the rendered composed resources — go on to
+become dry-run payloads, and a locally defaulted field in a payload claims ownership of it (§6.3.2, #503). Defaults are
+predicted locally only by the `Defaulter` (§6.5a).
 
 Every rendered resource is handed to `SchemaValidate`, including built-in Kubernetes types that have no CRD.
 `SchemaValidate` validates those against a scheme it embeds (`kubescheme` plus `apiextensions` and `apiregistration`)
@@ -1126,6 +1151,49 @@ Scope determination is shared by `ValidateScopeConstraints` and the XR processor
 If neither source can answer, the diff fails rather than guessing — and the error reports both failures, since
 discovery failing for a reason unrelated to the kind (connectivity, RBAC) is worth surfacing rather than leaving hidden
 behind the CRD error it causes. This mirrors how `RequirementsProvider` resolves scope for extra-resource selectors.
+
+### 6.5a Defaulter
+
+The `Defaulter` predicts the defaults the apiserver would apply to a resource from its CRD's schema. It never modifies
+its input; it returns a defaulted copy.
+
+```go
+type Defaulter interface {
+    // Default returns a copy of obj with its CRD's defaults applied. obj itself is never modified.
+    Default(ctx context.Context, obj *un.Unstructured) (*un.Unstructured, error)
+}
+
+// DefaultingPolicy says what a Defaulter does with a resource it finds no CRD for.
+type DefaultingPolicy int
+
+const (
+    StrictDefaulting  DefaultingPolicy = iota // fail
+    LenientDefaulting                         // return an unchanged copy
+)
+
+func NewDefaulter(sc k8.SchemaClient, dc xp.DefinitionClient, policy DefaultingPolicy) Defaulter
+```
+
+It finds an XR's CRD through the XRD that defines it, by name, among the CRDs loaded when the processor initialized;
+any other resource's by GVK. A built-in type has none. Defaulting itself is upstream's `clixr.ApplyCRDDefaults`. A CRD
+that is found but does not define the resource's apiVersion is an error under either policy.
+
+It has exactly two uses, one per policy:
+
+- **Strict, for the render input.** `DefaultDiffProcessor` defaults the effective XR (§7.1) before rendering, so the
+  composition sees the spec Crossplane would. Rendering without those defaults could produce a wrong diff, so a missing
+  XRD or CRD is an error.
+- **Lenient, for prediction.** An addition with no apiserver result — `--dry-run-on=existing`, or one of the
+  degradations in §6.3.3 (namespace not found, webhook unavailable, forbidden) — is shown defaulted
+  (`DefaultDiffCalculator.predictLocally`). This is best effort: built-in types and unknown CRDs come back unchanged,
+  and the schema validator, not the `Defaulter`, is the gate on missing CRDs.
+
+What it returns is never sent to the apiserver (§6.3.2), which is also why it is kept out of `SchemaValidator`: the
+resources validation sees go on to become payloads.
+
+The prediction covers CRD `default:` values only. It does not model mutating admission or admission plugins, nor
+structural-schema pruning of unknown fields (#527) or conversion of a multi-version CRD through its storage version
+(#528), so a fallback diff can be incomplete or, for those last two, differ from what the apiserver would store.
 
 ### 6.6 RequirementsProvider
 
@@ -1721,13 +1789,29 @@ The client layer provides interfaces to interact with Kubernetes and Crossplane 
 4. For each input XR or claim:
     - The `DiffProcessor` resolves the matching composition (or, for `comp`, the proposed one supplied via the
       `CompositionProvider`).
+    - The processor keeps three views of the XR. The **authored** XR is the input as written, plus a synthesized name
+      for a `generateName`-only XR and, for a nested XR, its cluster identity; it is never modified, and it is what is
+      validated and dry-run applied (for a claim, the claim itself). The **render** XR is the effective XR — the
+      authored XR carrying its cluster copy's UID, or for a claim its backing XR — defaulted by the strict
+      `Defaulter` (§6.5a) with the XR's CRD; it is what render consumes. The **predicted** view is a lenient-defaulted copy of an
+      addition, used only where no apiserver result exists (§6.3.3). The UID matters because render keeps an input UID
+      and checks observed resources' controller references against it. Nothing render adds to the XR is carried into
+      the payload: render adds only `resourceRefs` and `status`, both of which `cleanupForDiff` strips.
     - For claim inputs, `resolveBackingXRForClaim` fetches the backing XR from the cluster if it exists; if the claim
       is brand new, `synthesizeDummyBackingXRForNewClaim` produces a synthetic backing XR via upstream's
       `ConvertClaimToXR` helper. The synthesized XR uses the XRD's authoritative `spec.names.kind`, pins the XR name to
       the claim's name (cleaner diff output than the upstream default suffix), and carries a synthesized `spec.claimRef`
       plus the claim's annotations and `crossplane.io/claim-name` / `crossplane.io/claim-namespace` labels. Rendering
-      then proceeds from the (real or synthesized) backing XR with merged Claim spec, producing composed resources with
-      correct `crossplane.io/composite` labels.
+      then proceeds from the (real or synthesized) backing XR with merged Claim spec, defaulted with the XR's CRD,
+      producing composed resources with correct `crossplane.io/composite` labels. `buildMergedSpec` rebuilds the
+      backing XR's spec from the claim's plus a few preserved fields, so it is this defaulting that restores the XR's
+      defaults. Only the XR that render consumes is defaulted with the XR's CRD. The claim is defaulted with its
+      own CRD: by the apiserver on a dry run, or by the lenient `Defaulter` when an addition is predicted locally.
+      That CRD carries the XRD's user schema defaults (crossplane-runtime `pkg/xcrd`, `genCrdVersion`, crd.go:206)
+      plus the claim-only machinery defaults of `CompositeResourceClaimSpecProps` (schemas.go:209), so it differs
+      from the XR's (`CompositeResourceSpecProps`, schemas.go:75): only the XR's CRD defaults
+      `compositionUpdatePolicy`, and only the claim's defaults `compositeDeletePolicy`. Defaulting a claim with its
+      XR's CRD would therefore put fields in its payload that applying the claim never adds.
     - If the XR already exists in the cluster, `ResourceManager.FetchObservedResources` walks its resource tree to
       assemble the observed set that render is given. A failure here is fatal: downstream an empty observed set is
       indistinguishable from "this XR genuinely has no composed resources yet", so continuing would report every
@@ -1744,12 +1828,12 @@ The client layer provides interfaces to interact with Kubernetes and Crossplane 
       composes XR-A) has no stopping condition at all.
     - The processor strips namespaces from cluster-scoped composed resources (workaround for upstream
       `SetComposedResourceMetadata` blindly setting namespaces; see §9.5.6.3).
-    - The `SchemaValidator` validates the rendered resources and enforces scope constraints
-      (`ValidateScopeConstraints`).
+    - The `SchemaValidator` validates the authored XR and the rendered composed resources, without modifying them, and
+      enforces scope constraints (`ValidateScopeConstraints`).
     - `DiffCalculator.CalculateNonRemovalDiffs` computes per-resource diffs for the entire (possibly nested) tree, each
       against the apiserver's view of the desired state — a dry-run apply for a resource that already exists, a dry-run
-      create for an addition (§6.3.2). A resource the dry run could not reach falls back to rendered output and is
-      marked; one the cluster refuses fails the XR.
+      create for an addition (§6.3.2). A resource the dry run could not reach falls back to rendered output plus
+      locally predicted CRD defaults (§6.5a) and is marked; one the cluster refuses fails the XR.
     - Once the whole tree has been processed, `DiffCalculator.CalculateRemovedResourceDiffs` identifies resources that
       exist in the cluster under this XR but no longer appear in the rendered set. These are built straight from cluster
       state and never carry a `DryRunInfo` — there is no desired state to preview.
@@ -2081,13 +2165,6 @@ that process YAML resources.
 The command integrates with Crossplane CLI's structured validation API at `pkg/validate.SchemaValidate`:
 
 ```go
-// Apply CRD defaults explicitly (the structured API doesn't mutate inputs).
-for _, r := range resources {
-    if err := clixr.ApplyCRDDefaults(r.Object, r.GetAPIVersion(), *crd); err != nil {
-        return errors.Wrap(err, "apply CRD defaults")
-    }
-}
-
 // SchemaValidate is the structured-result API: it returns a
 // *ValidationResult that callers inspect directly.
 result, err := pkgvalidate.SchemaValidate(ctx, resources, v.schemaClient.GetAllCRDs())
@@ -2111,17 +2188,17 @@ This validation:
 - Shares validation rules with other Crossplane tools that consume the same `pkg/validate` package
 - Reduces code duplication and maintenance burden
 
-Defaulting is explicit (via `clixr.ApplyCRDDefaults`) rather than fused with validation as it was under the old
-`validate.SchemaValidation` API. This decouples the two concerns: defaulting can fail independently and is reported as
-a `FieldErrorTypeDefaulting` entry in the structured result.
+Validation does not default the caller's resources. `SchemaValidate` defaults its own copy before validating, and a
+defaulting failure is reported as a `FieldErrorTypeDefaulting` entry in the structured result rather than failing the
+call. Local defaulting is the `Defaulter`'s alone (§6.5a), via `clixr.ApplyCRDDefaults`: strictly for the XR render
+consumes, and leniently for an addition with no apiserver result.
 
-**What local defaulting does and does not cover**, since it defines the boundary the §6.3.2 dry-run create exists to
-close. `applyCRDDefaults` runs over the XR *and every composed resource* before the diff calculator sees them —
-deliberately, so a composed resource does not reach diff calculation undefaulted and produce a spurious diff for a field
-the cluster's own defaulter would have populated. So CRD `default:` values have never been missing from an addition's
-diff. Per its own contract, what it skips is any resource for which `IsCRDRequired` is false or whose CRD cannot be
-found: **built-in Kubernetes types**. Their defaults, and mutating-admission output for any type, are only observable by
-sending the object to the apiserver — which is what §6.3.2 does.
+**What local defaulting does and does not cover**, since it defines the boundary the §6.3.2 dry-run create closes.
+Every dry-run payload is sent undefaulted, so wherever the apiserver is asked, all defaulting is the apiserver's. Where
+it is not asked, the lenient `Defaulter` supplies CRD `default:` values, and per its contract passes through any
+resource for which `IsCRDRequired` is false or whose CRD cannot be found: **built-in Kubernetes types**. Their
+defaults, and mutating-admission output for any type, are only observable by sending the object to the apiserver —
+which is what §6.3.2 does.
 
 #### 9.5.3 Resource Rendering
 
@@ -2332,6 +2409,10 @@ been removed.)
     least-privilege implementations in restricted environments.
 13. **Function Container Reuse Across Invocations**: The current `CachedFunctionProvider` reuses containers across XRs
     in a single run. A daemon-mode could reuse them across runs.
+14. **Higher-Fidelity Local Defaulting**: Where an addition gets no apiserver result, the lenient `Defaulter` (§6.5a)
+    applies CRD `default:` values only. Two divergences from the apiserver can make that prediction wrong rather than
+    merely incomplete: structural-schema pruning of unknown fields (#527) and conversion of a multi-version CRD through
+    its storage version (#528).
 
 These enhancements would expand the utility of the Diff command and make it more accessible to all user personas.
 
@@ -2359,8 +2440,8 @@ cmd/
 │   ├── cmd_utils.go               # Shared CommonCmdFields → ProcessorOption helpers
 │   ├── app_context.go             # AppContext: cluster client initialization
 │   ├── diffprocessor/             # DiffProcessor, CompDiffProcessor, calculator, validator,
-│   │                              #   resource manager, requirements provider, function provider,
-│   │                              #   WarningLogger (advisory channel)
+│   │                              #   defaulter, resource manager, requirements provider,
+│   │                              #   function provider, WarningLogger (advisory channel)
 │   ├── client/
 │   │   ├── kubernetes/            # apply_client.go (DryRunApply / DryRunCreate),
 │   │   │                          #   access_client.go (AccessChecker, SSAR-backed),

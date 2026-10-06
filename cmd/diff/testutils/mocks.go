@@ -332,6 +332,25 @@ func (m *MockSchemaValidator) ValidateScopeConstraints(ctx context.Context, reso
 
 // endregion
 
+// region MockDefaulter
+
+// MockDefaulter Mock defaulter. With no DefaultFn it applies no defaults, returning a copy of its
+// input unchanged.
+type MockDefaulter struct {
+	DefaultFn func(ctx context.Context, obj *un.Unstructured) (*un.Unstructured, error)
+}
+
+// Default returns a copy of obj with predicted CRD defaults applied.
+func (m *MockDefaulter) Default(ctx context.Context, obj *un.Unstructured) (*un.Unstructured, error) {
+	if m.DefaultFn != nil {
+		return m.DefaultFn(ctx, obj)
+	}
+
+	return obj.DeepCopy(), nil
+}
+
+// endregion
+
 // region MockInputValidator
 
 // MockInputValidator Mock input validator, for driving PerformDiff's wiring directly.
@@ -858,7 +877,7 @@ func (m *MockCredentialClient) FetchCompositionCredentials(ctx context.Context, 
 type MockDiffCalculator struct {
 	CalculateDiffFn                 func(context.Context, *un.Unstructured, *un.Unstructured) (*dt.ResourceDiff, error)
 	CalculateDiffsFn                func(context.Context, *cmp.Unstructured, render.CompositionOutputs) (map[string]*dt.ResourceDiff, error)
-	CalculateNonRemovalDiffsFn      func(context.Context, *cmp.Unstructured, *un.Unstructured, render.CompositionOutputs) (map[string]*dt.ResourceDiff, map[string]bool, error)
+	CalculateNonRemovalDiffsFn      func(context.Context, *cmp.Unstructured, render.CompositionOutputs) (map[string]*dt.ResourceDiff, map[string]bool, error)
 	CalculateRemovedResourceDiffsFn func(context.Context, *un.Unstructured, map[string]bool) (map[string]*dt.ResourceDiff, error)
 }
 
@@ -881,9 +900,9 @@ func (m *MockDiffCalculator) CalculateDiffs(ctx context.Context, xr *cmp.Unstruc
 }
 
 // CalculateNonRemovalDiffs implements DiffCalculator.
-func (m *MockDiffCalculator) CalculateNonRemovalDiffs(ctx context.Context, xr *cmp.Unstructured, parentComposite *un.Unstructured, desired render.CompositionOutputs) (map[string]*dt.ResourceDiff, map[string]bool, error) {
+func (m *MockDiffCalculator) CalculateNonRemovalDiffs(ctx context.Context, xr *cmp.Unstructured, desired render.CompositionOutputs) (map[string]*dt.ResourceDiff, map[string]bool, error) {
 	if m.CalculateNonRemovalDiffsFn != nil {
-		return m.CalculateNonRemovalDiffsFn(ctx, xr, parentComposite, desired)
+		return m.CalculateNonRemovalDiffsFn(ctx, xr, desired)
 	}
 
 	return nil, nil, nil

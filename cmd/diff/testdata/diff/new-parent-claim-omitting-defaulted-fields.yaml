@@ -1,0 +1,11 @@
+# A new claim that omits every field a CRD defaults: spec.tier (defaulted by both the claim's and the
+# XR's CRD), spec.compositeDeletePolicy (claim CRD only) and spec.compositionUpdatePolicy (XR CRD only).
+apiVersion: claimnested.diff.example.org/v1alpha1
+kind: ParentNopClaim
+metadata:
+  name: new-parent-claim
+  namespace: default
+spec:
+  parentField: new-value
+  compositionRef:
+    name: parent-nop-claim-defaults-composition
