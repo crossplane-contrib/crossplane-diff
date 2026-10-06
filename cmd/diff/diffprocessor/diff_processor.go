@@ -11,7 +11,6 @@ import (
 	"strings"
 	"time"
 
-	"dario.cat/mergo"
 	xp "github.com/crossplane-contrib/crossplane-diff/cmd/diff/client/crossplane"
 	k8 "github.com/crossplane-contrib/crossplane-diff/cmd/diff/client/kubernetes"
 	"github.com/crossplane-contrib/crossplane-diff/cmd/diff/renderer"
@@ -19,7 +18,6 @@ import (
 	"github.com/crossplane-contrib/crossplane-diff/cmd/diff/types"
 	"github.com/crossplane/cli/v2/cmd/crossplane/render"
 	clixrgen "github.com/crossplane/cli/v2/cmd/crossplane/xr"
-	clixr "github.com/crossplane/cli/v2/pkg/xr"
 	corev1 "k8s.io/api/core/v1"
 	extv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -78,6 +76,7 @@ type DefaultDiffProcessor struct {
 	config               ProcessorConfig
 	functionProvider     FunctionProvider
 	schemaValidator      SchemaValidator
+	renderDefaulter      Defaulter // strict; defaults the XR render consumes (see effectiveXR)
 	diffCalculator       DiffCalculator
 	diffRenderer         renderer.DiffRenderer
 	requirementsProvider *RequirementsProvider
@@ -122,7 +121,9 @@ func NewDiffProcessor(k8cs k8.Clients, xpcs xp.Clients, opts ...ProcessorOption)
 	resourceManager := config.Factories.ResourceManager(k8cs.Resource, xpcs.Definition, xpcs.ResourceTree, config.Logger)
 	schemaValidator := config.Factories.SchemaValidator(k8cs.Schema, k8cs.Resource, xpcs.Definition, config.Logger)
 	requirementsProvider := config.Factories.RequirementsProvider(k8cs.Resource, xpcs.Environment, config.Logger)
-	diffCalculator := config.Factories.DiffCalculator(k8cs.Apply, k8cs.Access, xpcs.ResourceTree, resourceManager, config.Logger, diffOpts, config.DryRunOn)
+	renderDefaulter := config.Factories.Defaulter(k8cs.Schema, xpcs.Definition, StrictDefaulting)
+	predictor := config.Factories.Defaulter(k8cs.Schema, xpcs.Definition, LenientDefaulting)
+	diffCalculator := config.Factories.DiffCalculator(k8cs.Apply, k8cs.Access, xpcs.ResourceTree, resourceManager, config.Logger, diffOpts, config.DryRunOn, predictor)
 	diffRenderer := config.Factories.DiffRenderer(config.Logger, diffOpts)
 
 	functionProvider := config.Factories.FunctionProvider(xpcs.Function, config.Logger)
@@ -140,6 +141,7 @@ func NewDiffProcessor(k8cs k8.Clients, xpcs xp.Clients, opts ...ProcessorOption)
 		config:               config,
 		functionProvider:     functionProvider,
 		schemaValidator:      schemaValidator,
+		renderDefaulter:      renderDefaulter,
 		diffCalculator:       diffCalculator,
 		diffRenderer:         diffRenderer,
 		requirementsProvider: requirementsProvider,
@@ -393,7 +395,12 @@ func (p *DefaultDiffProcessor) diffSingleResourceInternal(ctx context.Context, r
 	resourceID := fmt.Sprintf("%s/%s", res.GetKind(), res.GetName())
 	p.config.Logger.Debug("Processing resource", "resource", resourceID, "namespace", res.GetNamespace())
 
-	xr, done, err := p.SanitizeXR(res, resourceID)
+	// authoredXR is the input as written, plus a synthesized name for a generateName-only XR and, for
+	// a nested XR, the identity of its cluster copy (see ProcessNestedXRs). It is the XR's dry-run apply
+	// payload, so it is never modified: under server-side apply every field in a payload claims
+	// ownership of that field, and a locally derived one would take a value from whichever manager set
+	// it in the cluster (#503). What render consumes is a separate, defaulted copy; see renderXR.
+	authoredXR, done, err := p.SanitizeXR(res, resourceID)
 	if done {
 		return nil, nil, err
 	}
@@ -417,23 +424,12 @@ func (p *DefaultDiffProcessor) diffSingleResourceInternal(ctx context.Context, r
 	// Note: Serialization mutex prevents concurrent Docker operations.
 	// In e2e tests, named Docker containers (via annotations) reuse containers across renders.
 
-	// Apply XRD defaults before rendering
-	err = p.applyXRDDefaults(ctx, xr, resourceID)
-	if err != nil {
-		p.config.Logger.Debug("Failed to apply XRD defaults", "resource", resourceID, "error", err)
-		return nil, nil, errors.Wrap(err, "cannot apply XRD defaults")
-	}
-
-	// Fetch the existing XR from the cluster to populate UID and other cluster-specific fields.
-	// This ensures that when composition functions set owner references on nested resources,
-	// they use the correct UID from the cluster, preventing duplicate owner reference errors.
-	existingXRFromCluster, isNew, err := p.resourceManager.FetchCurrentObject(ctx, nil, xr.GetUnstructured())
+	// Fetch the existing XR from the cluster. Its UID goes onto the XR render consumes (see
+	// effectiveXR), and it is the source of the observed resources render needs.
+	existingXRFromCluster, isNew, err := p.resourceManager.FetchCurrentObject(ctx, nil, authoredXR.GetUnstructured())
 	switch {
 	case err == nil && !isNew && existingXRFromCluster != nil:
-		// Preserve cluster-specific fields from the existing XR
-		xr.SetUID(existingXRFromCluster.GetUID())
-		xr.SetResourceVersion(existingXRFromCluster.GetResourceVersion())
-		p.config.Logger.Debug("Populated XR with cluster UID before rendering",
+		p.config.Logger.Debug("Found XR in cluster",
 			"resource", resourceID,
 			"uid", existingXRFromCluster.GetUID())
 	case isNew:
@@ -450,23 +446,29 @@ func (p *DefaultDiffProcessor) diffSingleResourceInternal(ctx context.Context, r
 	// If the input was a Claim, resolve the backing XR and fetch its observed resources.
 	// If successful, we'll render from the backing XR (with merged Claim spec) instead of
 	// the Claim. This produces composed resources with correct crossplane.io/composite labels.
-	backingXRResolution, err := p.resolveBackingXRForClaim(ctx, existingXRFromCluster, xr)
+	backingXRResolution, err := p.resolveBackingXRForClaim(ctx, existingXRFromCluster, authoredXR)
 	if err != nil {
 		return nil, nil, errors.Wrap(err, "cannot resolve backing XR for Claim")
 	}
 
 	observedResources := backingXRResolution.observedResources
 
-	// Determine which XR to use for rendering:
-	// - If we resolved a backing XR with merged spec, use it (correct labels automatically)
-	// - Otherwise, use the original XR (may need post-render fixups for nested XRs)
-	xrForRendering := xr
 	if backingXRResolution.xrForRendering != nil {
-		xrForRendering = backingXRResolution.xrForRendering
 		p.config.Logger.Debug("Rendering from backing XR instead of Claim",
-			"claim", xr.GetName(),
-			"backingXR", xrForRendering.GetName())
+			"claim", authoredXR.GetName(),
+			"backingXR", backingXRResolution.xrForRendering.GetName())
 	}
+
+	// Default the effective XR the way the apiserver would, so that render sees the spec Crossplane
+	// would see. The policy is strict: rendering without those defaults could produce a wrong diff.
+	defaultedXR, err := p.renderDefaulter.Default(ctx, effectiveXR(authoredXR, existingXRFromCluster, backingXRResolution))
+	if err != nil {
+		p.config.Logger.Debug("Failed to apply XRD defaults", "resource", resourceID, "error", err)
+		return nil, nil, errors.Wrap(err, "cannot apply XRD defaults")
+	}
+
+	renderXR := cmp.New()
+	renderXR.SetUnstructuredContent(defaultedXR.Object)
 
 	// Fetch observed resources for use in rendering (needed for getComposedResource template function)
 	// and for function-sequencer to know which resources already exist in the cluster)
@@ -480,20 +482,10 @@ func (p *DefaultDiffProcessor) diffSingleResourceInternal(ctx context.Context, r
 	// Perform iterative rendering with requirements resolution.
 	// When EventualState is enabled, also synthesizes Ready status between iterations
 	// to reveal all stages that function-sequencer would eventually render.
-	desired, err := p.RenderToStableState(ctx, xrForRendering, comp, fns, resourceID, observedResources, p.config.EventualState)
+	desired, err := p.RenderToStableState(ctx, renderXR, comp, fns, resourceID, observedResources, p.config.EventualState)
 	if err != nil {
 		p.config.Logger.Debug("Resource rendering failed", "resource", resourceID, "error", err)
 		return nil, nil, errors.Wrap(err, "cannot render resources with requirements")
-	}
-
-	// Prepare the top-level XR for diff calculation
-	p.config.Logger.Debug("Preparing XR for diff calculation",
-		"resource", resourceID,
-		"composedCount", len(desired.ComposedResources))
-
-	xrUnstructured, err := p.prepareXRForDiff(xr, desired, backingXRResolution, resourceID)
-	if err != nil {
-		return nil, nil, err
 	}
 
 	// Render stamps the XR's namespace onto every composed resource of a
@@ -505,26 +497,25 @@ func (p *DefaultDiffProcessor) diffSingleResourceInternal(ctx context.Context, r
 		return nil, nil, errors.Wrap(err, "cannot clean up namespaces from cluster-scoped resources")
 	}
 
+	// The XR is validated and dry-run applied as authored: for a Claim, the Claim itself, never the
+	// backing XR render consumed. Nothing from render belongs in it. The only fields render adds to the
+	// XR it returns are spec.resourceRefs (spec.crossplane.resourceRefs for a v2 XR) and status, which
+	// Crossplane writes itself and cleanupForDiff strips from every diff; and the locally predicted
+	// defaults on the render input must stay out for the reason given on authoredXR.
+	xrPayload := authoredXR.DeepCopy()
+
+	// Fields a manifest exported from the cluster may still carry, which a dry-run apply rejects.
+	xrPayload.SetManagedFields(nil)
+	xrPayload.SetResourceVersion("")
+
 	// Validate the resources
-	if err := p.schemaValidator.ValidateResources(ctx, xrUnstructured, desired.ComposedResources); err != nil {
+	if err := p.schemaValidator.ValidateResources(ctx, xrPayload.GetUnstructured(), desired.ComposedResources); err != nil {
 		p.config.Logger.Debug("Resource validation failed", "resource", resourceID, "error", err)
 		return nil, nil, errors.Wrap(err, "cannot validate resources")
 	}
 
 	// Calculate diffs (without removal detection)
-	p.config.Logger.Debug("Calculating diffs", "resource", resourceID)
-
-	// Use the merged XR (input + rendered metadata) for diff calculation
-	// This ensures Claims get the generated XR name and other metadata from rendering
-	mergedXR := cmp.New()
-	if err = runtime.DefaultUnstructuredConverter.FromUnstructured(xrUnstructured.UnstructuredContent(), mergedXR); err != nil {
-		p.config.Logger.Debug("Failed to convert merged XR", "resource", resourceID, "error", err)
-		return nil, nil, errors.Wrap(err, "cannot convert merged XR")
-	}
-
-	// Clean the merged XR for diff calculation - remove managed fields that can cause apply issues
-	mergedXR.SetManagedFields(nil)
-	mergedXR.SetResourceVersion("")
+	p.config.Logger.Debug("Calculating diffs", "resource", resourceID, "composedCount", len(desired.ComposedResources))
 
 	// Convert parentXR to unstructured for the diff calculator
 	var parentComposite *un.Unstructured
@@ -532,7 +523,7 @@ func (p *DefaultDiffProcessor) diffSingleResourceInternal(ctx context.Context, r
 		parentComposite = parentXR.GetUnstructured()
 	}
 
-	diffs, renderedResources, err := p.diffCalculator.CalculateNonRemovalDiffs(ctx, mergedXR, parentComposite, desired)
+	diffs, renderedResources, err := p.diffCalculator.CalculateNonRemovalDiffs(ctx, xrPayload, parentComposite, desired)
 	if err != nil {
 		// Fail completely rather than emit potentially incorrect partial results (design principle)
 		p.config.Logger.Debug("Error calculating diffs - failing XR", "resource", resourceID, "error", err)
@@ -547,7 +538,7 @@ func (p *DefaultDiffProcessor) diffSingleResourceInternal(ctx context.Context, r
 	// which is only available on the existing cluster XR, not the modified XR from the input file.
 	var existingXR *cmp.Unstructured
 
-	xrDiffKey := dt.MakeDiffKeyFromResource(&xr.Unstructured)
+	xrDiffKey := dt.MakeDiffKeyFromResource(&authoredXR.Unstructured)
 	if xrDiff, ok := diffs[xrDiffKey]; ok && xrDiff.Current.Raw != nil {
 		// Convert from unstructured.Unstructured to composite.Unstructured
 		existingXR = cmp.New()
@@ -950,34 +941,25 @@ func (p *DefaultDiffProcessor) synthesizeDummyBackingXRForNewClaim(ctx context.C
 	return result, nil
 }
 
-// prepareXRForDiff prepares the XR unstructured object for diff calculation.
-// When rendered from backing XR (for correct composed resource labels), we use
-// the original Claim for the top-level diff. Otherwise, we merge the rendered XR with input.
-func (p *DefaultDiffProcessor) prepareXRForDiff(xr *cmp.Unstructured, desired render.CompositionOutputs, backingXRResolution backingXRInfo, resourceID string) (*un.Unstructured, error) {
-	if backingXRResolution.xrForRendering != nil {
-		// We rendered from backing XR for correct composed resource labels, but we want
-		// to diff against the original Claim that the user provided - not the backing XR.
-		// The composed resources already have correct labels; only the top-level needs
-		// to show the Claim identity.
-		p.config.Logger.Debug("Using original Claim for top-level diff (rendered from backing XR)",
-			"resource", resourceID,
-			"claim", xr.GetName())
-
-		return xr.GetUnstructured().DeepCopy(), nil
+// effectiveXR returns the XR Crossplane would compose for authored, before defaulting.
+//
+// For a Claim that is its backing XR (see resolveBackingXRForClaim), never the Claim: Crossplane
+// composes the backing XR, and the Claim's CRD and its XR's differ, so a Claim must not be defaulted
+// with its XR's CRD. Otherwise it is a copy of authored carrying the UID of the XR's cluster copy, if
+// it has one. Render keeps an input UID (crossplane internal/render/composite.Render), so that UID
+// reaches what composition functions observe and the owner references of composed resources, rather
+// than a fake one derived from the XR's name.
+func effectiveXR(authored *cmp.Unstructured, existing *un.Unstructured, backing backingXRInfo) *un.Unstructured {
+	if backing.xrForRendering != nil {
+		return backing.xrForRendering.GetUnstructured()
 	}
 
-	// Normal case: merge rendered XR with input
-	xrUnstructured, err := mergeUnstructured(
-		desired.CompositeResource.GetUnstructured(),
-		xr.GetUnstructured(),
-	)
-	if err != nil {
-		p.config.Logger.Debug("Failed to merge XR", "resource", resourceID, "error", err)
-
-		return nil, errors.Wrap(err, "cannot merge input XR with result of rendered XR")
+	effective := authored.GetUnstructured().DeepCopy()
+	if existing != nil {
+		effective.SetUID(existing.GetUID())
 	}
 
-	return xrUnstructured, nil
+	return effective
 }
 
 // findExistingNestedXR locates an existing nested XR in the observed resources by matching
@@ -1204,35 +1186,6 @@ func renderName(res *un.Unstructured) (string, bool) {
 	}
 
 	return dt.SynthesizeGeneratedName(res.GetGenerateName()), true
-}
-
-// mergeUnstructured merges two unstructured objects.
-func mergeUnstructured(dest *un.Unstructured, src *un.Unstructured) (*un.Unstructured, error) {
-	// Start with a deep copy of the rendered resource
-	result := dest.DeepCopy()
-
-	// Save the rendered name before merging, in case it was generated (e.g., for Claims)
-	renderedName := dest.GetName()
-
-	err := mergo.Merge(&result.Object, src.Object, mergo.WithOverride)
-	if err != nil {
-		return nil, errors.Wrap(err, "cannot merge unstructured objects")
-	}
-
-	// WORKAROUND for https://github.com/crossplane/crossplane/issues/6782
-	// Crossplane render strips namespace from XRs - restore it from the original
-	if src.GetNamespace() != "" && result.GetNamespace() == "" {
-		result.SetNamespace(src.GetNamespace())
-	}
-
-	// If the rendered XR had a generated name (different from input), preserve it
-	// This is critical for Claims where the input has the Claim name but rendering
-	// generates the XR name with a suffix (e.g., "my-claim-abc123")
-	if renderedName != "" && renderedName != src.GetName() {
-		result.SetName(renderedName)
-	}
-
-	return result, nil
 }
 
 // RenderToStableState performs iterative rendering until stable state is reached.
@@ -1735,66 +1688,6 @@ func (p *DefaultDiffProcessor) getCompositeResourceXRD(ctx context.Context, reso
 		"resource", fmt.Sprintf("%s/%s", resource.GetKind(), resource.GetName()))
 
 	return false, nil
-}
-
-// applyXRDDefaults applies default values from the XRD schema to the XR.
-func (p *DefaultDiffProcessor) applyXRDDefaults(ctx context.Context, xr *cmp.Unstructured, resourceID string) error {
-	p.config.Logger.Debug("Applying XRD defaults", "resource", resourceID)
-
-	// Get the XR's GVK
-	gvk := xr.GroupVersionKind()
-
-	// Find the XRD that defines this XR
-	var (
-		xrd *un.Unstructured
-		err error
-	)
-
-	// Check if this is a claim or an XR
-	if p.defClient.IsClaimResource(ctx, xr.GetUnstructured()) {
-		xrd, err = p.defClient.GetXRDForClaim(ctx, gvk)
-	} else {
-		xrd, err = p.defClient.GetXRDForXR(ctx, gvk)
-	}
-
-	if err != nil {
-		return errors.Wrapf(err, "cannot find XRD for resource %s with GVK %s", resourceID, gvk.String())
-	}
-
-	// Get the CRD that corresponds to this XRD using the XRD name
-	xrdName := xrd.GetName()
-
-	p.config.Logger.Debug("Looking for CRD matching XRD in applyXRDDefaults", "resource", resourceID, "xrdName", xrdName)
-
-	// Use the new GetCRDByName method to directly get the CRD
-	crdForDefaults, err := p.schemaClient.GetCRDByName(xrdName)
-	if err != nil {
-		return errors.Wrapf(err, "cannot find CRD for XRD %s (resource %s)", xrdName, resourceID)
-	}
-
-	// Apply defaults using the cli's pkg/xr defaulting helper. The
-	// previous home, render.DefaultValues, was renamed to
-	// xr.ApplyCRDDefaults and moved out of cmd/crossplane/render in
-	// crossplane/cli when that package was promoted to a library.
-	apiVersion := xr.GetAPIVersion()
-	xrContent := xr.UnstructuredContent()
-
-	p.config.Logger.Debug("Applying defaults to XR in applyXRDDefaults",
-		"resource", resourceID,
-		"apiVersion", apiVersion,
-		"crdName", crdForDefaults.Name)
-
-	err = clixr.ApplyCRDDefaults(xrContent, apiVersion, *crdForDefaults)
-	if err != nil {
-		return errors.Wrapf(err, "cannot apply default values for XR %s", resourceID)
-	}
-
-	// Update the XR with the defaulted content
-	xr.SetUnstructuredContent(xrContent)
-
-	p.config.Logger.Debug("Successfully applied XRD defaults", "resource", resourceID)
-
-	return nil
 }
 
 // fetchCompositionCredentials delegates to the credential client to fetch credential secrets

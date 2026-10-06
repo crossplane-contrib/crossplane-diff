@@ -49,6 +49,7 @@ type DefaultDiffCalculator struct {
 	logger          logging.Logger
 	diffOptions     renderer.DiffOptions
 	dryRunOn        DryRunOn
+	predictor       Defaulter
 }
 
 // SetDiffOptions updates the diff options used by the calculator.
@@ -56,8 +57,10 @@ func (c *DefaultDiffCalculator) SetDiffOptions(options renderer.DiffOptions) {
 	c.diffOptions = options
 }
 
-// NewDiffCalculator creates a new DefaultDiffCalculator.
-func NewDiffCalculator(apply k8.ApplyClient, access k8.AccessChecker, tree xp.ResourceTreeClient, resourceManager ResourceManager, logger logging.Logger, diffOptions renderer.DiffOptions, dryRunOn DryRunOn) DiffCalculator {
+// NewDiffCalculator creates a new DefaultDiffCalculator. predictor predicts CRD defaults for the
+// additions that get no apiserver result; see dryRunCreateAddition. It should be lenient
+// (LenientDefaulting): a prediction is best effort, and must not fail an addition for want of a CRD.
+func NewDiffCalculator(apply k8.ApplyClient, access k8.AccessChecker, tree xp.ResourceTreeClient, resourceManager ResourceManager, logger logging.Logger, diffOptions renderer.DiffOptions, dryRunOn DryRunOn, predictor Defaulter) DiffCalculator {
 	return &DefaultDiffCalculator{
 		treeClient:      tree,
 		applyClient:     apply,
@@ -66,6 +69,7 @@ func NewDiffCalculator(apply k8.ApplyClient, access k8.AccessChecker, tree xp.Re
 		logger:          logger,
 		diffOptions:     diffOptions,
 		dryRunOn:        dryRunOn,
+		predictor:       predictor,
 	}
 }
 
@@ -456,19 +460,18 @@ func (c *DefaultDiffCalculator) CalculateRemovedResourceDiffs(ctx context.Contex
 // dry-run creating it.
 //
 // On success it returns the apiserver's view of the object, which is the whole point: server-side
-// defaulting and mutating admission are invisible to the render pipeline, and for a built-in type
-// they are invisible to the schema validator's applyCRDDefaults too, since that skips anything
-// without a CRD.
+// defaulting and mutating admission are invisible to the render pipeline. The rendered object is sent
+// as it is, with no locally predicted defaults, because the apiserver applies its own.
 //
-// When the dry run could not be performed it returns the rendered object unchanged plus a
-// DryRunInfo saying why, rather than failing: a missing permission or an unreachable webhook is a
-// property of the environment, not a finding about the resource, and an addition has a reasonable
-// lower-fidelity fallback. It returns an error only when the cluster actually refused the resource
-// (a real finding, routed to the schema-validation exit-code tier) or when something is wrong that
-// we must not paper over.
+// When the dry run could not be performed it returns the rendered object with locally predicted CRD
+// defaults (see predictLocally) plus a DryRunInfo saying why, rather than failing: a missing
+// permission or an unreachable webhook is a property of the environment, not a finding about the
+// resource, and an addition has a reasonable lower-fidelity fallback. It returns an error only when
+// the cluster actually refused the resource (a real finding, routed to the schema-validation
+// exit-code tier) or when something is wrong that we must not paper over.
 func (c *DefaultDiffCalculator) dryRunCreateAddition(ctx context.Context, desired *un.Unstructured, resourceID string) (*un.Unstructured, *dt.DryRunInfo, error) {
 	if c.dryRunOn == DryRunOnExisting {
-		return desired, &dt.DryRunInfo{SkipReason: dt.DryRunSkipDisabled}, nil
+		return c.predictLocally(ctx, desired, resourceID, &dt.DryRunInfo{SkipReason: dt.DryRunSkipDisabled})
 	}
 
 	createDesired := sanitizeForDryRun(desired)
@@ -511,7 +514,7 @@ func (c *DefaultDiffCalculator) dryRunCreateAddition(ctx context.Context, desire
 		// would break a supported workflow to report something that may not be true by the time it
 		// matters. TestDiffConcurrentDirectory diffs 21 XRs into a namespace that is never created and
 		// is exactly this case.
-		return desired, &dt.DryRunInfo{SkipReason: dt.DryRunSkipNamespaceNotFound, Detail: apiserverMessage(err)}, nil
+		return c.predictLocally(ctx, desired, resourceID, &dt.DryRunInfo{SkipReason: dt.DryRunSkipNamespaceNotFound, Detail: apiserverMessage(err)})
 
 	case apierrors.IsInvalid(err):
 		return nil, nil, NewAdmissionRejectionError(resourceID, desired, err)
@@ -526,11 +529,25 @@ func (c *DefaultDiffCalculator) dryRunCreateAddition(ctx context.Context, desire
 		// The apiserver could not complete the admission chain — classically an unreachable webhook
 		// with failurePolicy: Fail. We cannot know what it would have done, so we must not present
 		// rendered output as though it were verified.
-		return desired, &dt.DryRunInfo{SkipReason: dt.DryRunSkipWebhookUnavailable, Detail: apiserverMessage(err)}, nil
+		return c.predictLocally(ctx, desired, resourceID, &dt.DryRunInfo{SkipReason: dt.DryRunSkipWebhookUnavailable, Detail: apiserverMessage(err)})
 
 	default:
 		return nil, nil, errors.Wrapf(err, "cannot dry-run create %s", resourceID)
 	}
+}
+
+// predictLocally is what an addition shows when it got no apiserver result: the rendered object with
+// the CRD defaults the apiserver would have applied, predicted locally, and the DryRunInfo saying why
+// the apiserver was not asked. The prediction is never sent anywhere, so unlike a dry-run payload it
+// cannot claim fields. It covers CRD `default:` values only; see Defaulter for what it misses,
+// including pruning (#527) and multi-version conversion (#528).
+func (c *DefaultDiffCalculator) predictLocally(ctx context.Context, desired *un.Unstructured, resourceID string, info *dt.DryRunInfo) (*un.Unstructured, *dt.DryRunInfo, error) {
+	predicted, err := c.predictor.Default(ctx, desired)
+	if err != nil {
+		return nil, nil, errors.Wrapf(err, "cannot predict defaults for %s", resourceID)
+	}
+
+	return predicted, info, nil
 }
 
 // resolveForbiddenCreate asks the authorizer whether a Forbidden from a dry-run create was an
@@ -549,7 +566,7 @@ func (c *DefaultDiffCalculator) resolveForbiddenCreate(ctx context.Context, desi
 		return nil, nil, errors.Wrapf(createErr, "cannot dry-run create %s, and cannot determine whether that was an authorization denial (%v)", resourceID, ssarErr)
 
 	case !allowed:
-		return desired, &dt.DryRunInfo{SkipReason: dt.DryRunSkipForbidden, Detail: reason}, nil
+		return c.predictLocally(ctx, desired, resourceID, &dt.DryRunInfo{SkipReason: dt.DryRunSkipForbidden, Detail: reason})
 
 	default:
 		// Authorized to create, yet refused: admission or quota. A real finding.
@@ -614,7 +631,7 @@ func (c *DefaultDiffCalculator) classifyApplyFailure(ctx context.Context, desire
 // rest.BeforeCreate, ahead of the dry-run short-circuit at the storage layer, so it invents a random
 // name, which would make an addition's diff differ on every run. For a *named* resource we keep the
 // server's name, so a mutating webhook that rewrites a name still surfaces.
-// Latent because nothing reaches here with an empty name: prepareXRForDiff synthesizes a
+// Latent because nothing reaches here with an empty name: SanitizeXR synthesizes a
 // deterministic name for generateName XRs (see SynthesizeGeneratedName), and the render binary names
 // generateName composed resources itself.
 //

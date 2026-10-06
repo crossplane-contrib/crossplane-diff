@@ -580,7 +580,7 @@ func TestDefaultDiffProcessor_PerformDiff(t *testing.T) {
 					}
 				}),
 				// Override the diff calculator factory to return actual diffs
-				WithDiffCalculatorFactory(func(k8.ApplyClient, k8.AccessChecker, xp.ResourceTreeClient, ResourceManager, logging.Logger, renderer.DiffOptions, DryRunOn) DiffCalculator {
+				WithDiffCalculatorFactory(func(k8.ApplyClient, k8.AccessChecker, xp.ResourceTreeClient, ResourceManager, logging.Logger, renderer.DiffOptions, DryRunOn, Defaulter) DiffCalculator {
 					return &tu.MockDiffCalculator{
 						CalculateNonRemovalDiffsFn: func(context.Context, *cmp.Unstructured, *un.Unstructured, render.CompositionOutputs) (map[string]*dt.ResourceDiff, map[string]bool, error) {
 							diffs := make(map[string]*dt.ResourceDiff)
@@ -1041,7 +1041,7 @@ func TestDefaultDiffProcessor_PerformDiff_Groups(t *testing.T) {
 						},
 					}
 				}),
-				WithDiffCalculatorFactory(func(k8.ApplyClient, k8.AccessChecker, xp.ResourceTreeClient, ResourceManager, logging.Logger, renderer.DiffOptions, DryRunOn) DiffCalculator {
+				WithDiffCalculatorFactory(func(k8.ApplyClient, k8.AccessChecker, xp.ResourceTreeClient, ResourceManager, logging.Logger, renderer.DiffOptions, DryRunOn, Defaulter) DiffCalculator {
 					return &tu.MockDiffCalculator{
 						CalculateNonRemovalDiffsFn: func(_ context.Context, rendered *cmp.Unstructured, _ *un.Unstructured, _ render.CompositionOutputs) (map[string]*dt.ResourceDiff, map[string]bool, error) {
 							if rendered.GetName() == tt.failRender {
@@ -3017,7 +3017,7 @@ func TestDefaultDiffProcessor_ProcessNestedXRs(t *testing.T) {
 						},
 					}
 				}),
-				WithDiffCalculatorFactory(func(k8.ApplyClient, k8.AccessChecker, xp.ResourceTreeClient, ResourceManager, logging.Logger, renderer.DiffOptions, DryRunOn) DiffCalculator {
+				WithDiffCalculatorFactory(func(k8.ApplyClient, k8.AccessChecker, xp.ResourceTreeClient, ResourceManager, logging.Logger, renderer.DiffOptions, DryRunOn, Defaulter) DiffCalculator {
 					return &tu.MockDiffCalculator{
 						CalculateNonRemovalDiffsFn: func(_ context.Context, xr *cmp.Unstructured, _ *un.Unstructured, _ render.CompositionOutputs) (map[string]*dt.ResourceDiff, map[string]bool, error) {
 							// Return a simple diff for the XR to make the test pass
@@ -4739,6 +4739,56 @@ func TestCleanupDetached(t *testing.T) {
 				if limit := time.Now().Add(CleanupTimeout); dl.After(limit) {
 					t.Errorf("\n%s\nCleanupDetached(...): deadline %v is later than %v", tt.reason, dl, limit)
 				}
+			}
+		})
+	}
+}
+
+func TestEffectiveXR(t *testing.T) {
+	authored := tu.NewResource("example.org/v1", "XR", "my-xr").WithSpecField("field", "authored").BuildUComposite()
+	claim := tu.NewResource("example.org/v1", "Claim", "my-claim").WithNamespace("ns").WithSpecField("field", "authored").BuildUComposite()
+	backing := tu.NewResource("example.org/v1", "XR", "my-claim-abc12").WithUID("backing-uid").WithSpecField("field", "authored").BuildUComposite()
+	cluster := tu.NewResource("example.org/v1", "XR", "my-xr").WithUID("cluster-uid").WithSpecField("field", "in-cluster").Build()
+
+	tests := map[string]struct {
+		reason   string
+		authored *cmp.Unstructured
+		existing *un.Unstructured
+		backing  backingXRInfo
+		want     *un.Unstructured
+	}{
+		"NewXRIsTheAuthoredXR": {
+			reason:   "An XR with no cluster copy is composed as written.",
+			authored: authored,
+			want:     tu.NewResource("example.org/v1", "XR", "my-xr").WithSpecField("field", "authored").Build(),
+		},
+		"ExistingXRCarriesItsClusterUID": {
+			reason:   "Render checks observed resources' controller references against the XR's UID, so the cluster's must reach it; nothing else is taken from the cluster copy.",
+			authored: authored,
+			existing: cluster,
+			want:     tu.NewResource("example.org/v1", "XR", "my-xr").WithUID("cluster-uid").WithSpecField("field", "authored").Build(),
+		},
+		"ClaimIsComposedAsItsBackingXR": {
+			reason:   "Crossplane composes a claim's backing XR, so that, never the claim, is what gets defaulted with the XR's CRD.",
+			authored: claim,
+			existing: tu.NewResource("example.org/v1", "Claim", "my-claim").WithNamespace("ns").WithUID("claim-uid").Build(),
+			backing:  backingXRInfo{xrForRendering: backing},
+			want:     tu.NewResource("example.org/v1", "XR", "my-claim-abc12").WithUID("backing-uid").WithSpecField("field", "authored").Build(),
+		},
+	}
+
+	for name, tt := range tests {
+		t.Run(name, func(t *testing.T) {
+			before := tt.authored.DeepCopy()
+
+			got := effectiveXR(tt.authored, tt.existing, tt.backing)
+
+			if d := gcmp.Diff(tt.want, got); d != "" {
+				t.Errorf("%s\neffectiveXR() (-want +got):\n%s", tt.reason, d)
+			}
+
+			if d := gcmp.Diff(before.Object, tt.authored.Object); d != "" {
+				t.Errorf("%s\neffectiveXR() modified the authored XR (-before +after):\n%s", tt.reason, d)
 			}
 		})
 	}

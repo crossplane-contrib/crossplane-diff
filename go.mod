@@ -3,7 +3,6 @@ module github.com/crossplane-contrib/crossplane-diff
 go 1.26.7
 
 require (
-	dario.cat/mergo v1.0.2
 	github.com/Masterminds/semver v1.5.0
 	github.com/alecthomas/kong v1.16.1
 	github.com/crossplane/cli/v2 v2.5.0
@@ -25,6 +24,7 @@ require (
 )
 
 require (
+	dario.cat/mergo v1.0.2 // indirect
 	github.com/moby/sys/sequential v0.6.0 // indirect
 	google.golang.org/protobuf v1.36.12 // indirect
 	k8s.io/kube-aggregator v0.35.1 // indirect
