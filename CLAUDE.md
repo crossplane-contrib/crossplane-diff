@@ -358,6 +358,23 @@ requires that. See `cmd/diff/testdata/comp/resources/original-composition-kubect
 Prefer an integration test for this (seconds, and it exercises the real CLI wiring) over an e2e — e2e's SSA gives it the
 same blind spot, so it would need the same hand-placed fixture field at minutes-scale for no extra coverage.
 
+**envtest Process Guards**
+
+Each integration case starts its own envtest `kube-apiserver` and `etcd` as children of the test binary. A deferred
+`testEnv.Stop()` does not run if the binary hits `-timeout`, is killed, or gets Ctrl+C, and the children used to be
+reparented to PID 1 and run forever (#524; hundreds once piled up and starved the machine). `TestMain` installs three
+guards (`cmd/diff/envtest_guard_utils_test.go`):
+- at suite start it SIGKILLs every `kube-apiserver`/`etcd` whose parent is PID 1 and whose executable is an envtest
+  binary (`KUBEBUILDER_ASSETS`, `TEST_ASSET_*`, setup-envtest's store, `/usr/local/kubebuilder/bin`);
+- 5s before the `-test.timeout` panic it SIGKILLs this binary's own envtest servers;
+- on SIGINT/SIGTERM/SIGHUP it does the same, then re-raises the signal.
+
+Their work shows up on stderr as `envtest guard: ...` lines. If cases fail with connection errors just before a timeout
+panic, that is the deadline guard: the run was out of time, so raise `-timeout` (the integration package can need more
+than go test's default 10m when it falls back to the Docker render engine). Keep the guards in `TestMain`, not in a test
+case, so they cost nothing per case. A Linux session under `systemd --user` reparents orphans to that subreaper rather
+than PID 1, so the start-of-suite reaper does not see them there.
+
 **Working with ANSI Escape Codes in Test Expectations**
 
 E2E test expectation files (`.ansi` files) contain actual ANSI escape sequences as binary data. These are extremely fragile when editing with shell tools.
