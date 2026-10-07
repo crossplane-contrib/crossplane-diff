@@ -18,8 +18,10 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/envtest"
 )
 
-// servers are the names of the long-running servers envtest starts.
-var servers = []string{"kube-apiserver", "etcd"}
+// isServer reports whether name is that of a long-running server envtest starts.
+func isServer(name string) bool {
+	return name == "kube-apiserver" || name == "etcd"
+}
 
 // candidate is an orphaned process named like an envtest server.
 type candidate struct {
@@ -46,7 +48,7 @@ func Reap(logf func(format string, args ...any)) {
 			continue
 		}
 
-		if name, err := p.Name(); err != nil || !slices.Contains(servers, name) {
+		if name, err := p.Name(); err != nil || !isServer(name) {
 			continue
 		}
 
@@ -78,7 +80,7 @@ func selectServers(candidates []candidate, dirs []string) []candidate {
 
 	for _, c := range candidates {
 		exe := filepath.Clean(c.exe)
-		if filepath.IsAbs(exe) && slices.Contains(servers, filepath.Base(exe)) && slices.Contains(dirs, filepath.Dir(exe)) {
+		if filepath.IsAbs(exe) && isServer(filepath.Base(exe)) && slices.Contains(dirs, filepath.Dir(exe)) {
 			selected = append(selected, c)
 		}
 	}
