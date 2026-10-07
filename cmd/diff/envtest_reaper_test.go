@@ -27,8 +27,10 @@ func TestSelectOrphanedEnvtestServers(t *testing.T) {
 		{PID: 407, PPID: 1, Exe: ""},                                     // unknown executable
 	}
 
-	var got []int
-	for _, p := range selectOrphanedEnvtestServers(procs, dirs) {
+	selected := selectOrphanedEnvtestServers(procs, dirs)
+
+	got := make([]int, 0, len(selected))
+	for _, p := range selected {
 		got = append(got, p.PID)
 	}
 
