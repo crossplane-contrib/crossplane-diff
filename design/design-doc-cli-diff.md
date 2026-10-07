@@ -1308,8 +1308,9 @@ What it returns is never sent to the apiserver (§6.3.2), which is also why it i
 resources validation sees go on to become payloads.
 
 The prediction covers CRD `default:` values only. It does not model mutating admission or admission plugins, nor
-structural-schema pruning of unknown fields (#527) or conversion of a multi-version CRD through its storage version
-(#528), so a fallback diff can be incomplete or, for those last two, differ from what the apiserver would store.
+conversion of a multi-version CRD through its storage version (#528), so a fallback diff can be incomplete or, for
+conversion, differ from what the apiserver would store. It does not prune fields the schema leaves undeclared either,
+but that cannot show in a diff: schema validation rejects such a field as an `unknownField` error first.
 
 ### 6.6 RequirementsProvider
 
@@ -2540,9 +2541,8 @@ been removed.)
 13. **Function Container Reuse Across Invocations**: The current `CachedFunctionProvider` reuses containers across XRs
     in a single run. A daemon-mode could reuse them across runs.
 14. **Higher-Fidelity Local Defaulting**: Where an addition gets no apiserver result, the lenient `Defaulter` (§6.5a)
-    applies CRD `default:` values only. Two divergences from the apiserver can make that prediction wrong rather than
-    merely incomplete: structural-schema pruning of unknown fields (#527) and conversion of a multi-version CRD through
-    its storage version (#528).
+    applies CRD `default:` values only. Conversion of a multi-version CRD through its storage version (#528) can make
+    that prediction wrong rather than merely incomplete.
 15. **Fuller Claim Sync**: `syncClaimSpec` (§6.4a) mirrors the claim syncer's spec rules but not two others. An XRD's
     `enforcedCompositionRef` stops the claim's `compositionRef` from being propagated, and the syncer also copies the
     claim's labels and annotations (minus `*.kubernetes.io` keys) onto the backing XR. An existing backing XR is
