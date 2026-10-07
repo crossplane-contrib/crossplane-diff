@@ -34,7 +34,7 @@ type candidate struct {
 // could not. A process whose parent is PID 1 has lost the test binary that started it, so it cannot belong to a live
 // run. Reap is best-effort: it never fails, and it skips any process it cannot inspect.
 func Reap(logf func(format string, args ...any)) {
-	procs, err := process.Processes()
+	pids, err := process.Pids()
 	if err != nil {
 		logf("envtest reaper: cannot list processes: %v", err)
 		return
@@ -43,7 +43,11 @@ func Reap(logf func(format string, args ...any)) {
 	// Look up the executable only of orphans named like an envtest server.
 	var candidates []candidate
 
-	for _, p := range procs {
+	for _, pid := range pids {
+		// Not process.NewProcess, which first checks the PID exists and fetches its creation time: most of the
+		// scan's cost, for nothing Kill uses. A PID that has exited meanwhile fails Ppid and is skipped.
+		p := &process.Process{Pid: pid}
+
 		if ppid, err := p.Ppid(); err != nil || ppid != 1 {
 			continue
 		}
