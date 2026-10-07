@@ -192,9 +192,9 @@ them automatically. The e2e suite, which runs real Crossplane images, instead us
 
 envtest runs each case's `kube-apiserver` and `etcd` as children of the test binary, and only a deferred
 `Environment.Stop` ends them, which does not run when the binary times out, is killed or is interrupted. So that they
-never outlive it (#524), `TestMain` reaps envtest servers orphaned to PID 1 by an earlier run when the suite starts, kills
-its own shortly before the `-test.timeout` panic, and kills them on SIGINT, SIGTERM or SIGHUP before re-raising the
-signal. A process is selected only by its parent PID and its executable being an envtest binary, so a live run's servers
+never outlive it (#524), `TestMain` reaps envtest servers orphaned to PID 1 by an earlier run when the suite starts. Shortly
+before the `-test.timeout` panic, and on SIGINT, SIGTERM or SIGHUP, it kills its own and stops cases starting more (the
+harness starts envtest through `startEnvtest`, which refuses from then on); after a signal it re-raises it. A process is selected only by its parent PID and its executable being an envtest binary, so a live run's servers
 are never touched.
 
 The integration test cases cover:

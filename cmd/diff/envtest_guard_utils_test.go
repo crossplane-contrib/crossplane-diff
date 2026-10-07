@@ -7,9 +7,11 @@ import (
 	"os/signal"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"syscall"
 	"time"
 
+	"k8s.io/client-go/rest"
 	"sigs.k8s.io/controller-runtime/pkg/envtest"
 )
 
@@ -21,11 +23,12 @@ import (
 // reaches only the terminal's foreground process group, which envtest's children have left. Their parent is gone, so
 // they are reparented to PID 1 and run until someone kills them.
 //
-// startEnvtestGuards installs three guards, all from TestMain, so no test pays for them:
+// startEnvtestGuards, called from TestMain, installs three guards:
 //   - a reaper that, when the suite starts, kills envtest servers orphaned by an earlier run (covers SIGKILL, OOM and
 //     job cancellation after the fact);
-//   - a timer that kills this binary's own envtest servers just before the -test.timeout panic;
-//   - a handler that kills them when the binary is interrupted or terminated, then re-raises the signal.
+//   - a timer that, just before the -test.timeout panic, kills this binary's envtest servers and keeps killing any that
+//     a case already inside envtest's Start goes on to spawn, while startEnvtest refuses to start more;
+//   - a handler that does the same when the binary is interrupted or terminated, then re-raises the signal.
 //
 // The guards select processes by parent PID and executable path alone, so they never touch a server that belongs to a
 // live run (its parent is that run's test binary, not PID 1) or one that envtest did not start.
@@ -48,7 +51,14 @@ const (
 	// envtestDeadlineMargin is how long before the -test.timeout panic the deadline guard kills this binary's envtest
 	// servers. Killing them takes milliseconds; the margin absorbs timer lateness on a loaded machine.
 	envtestDeadlineMargin = 5 * time.Second
+
+	// envtestStopPollInterval is how often the deadline guard looks again for servers to kill once it has fired.
+	envtestStopPollInterval = 50 * time.Millisecond
 )
+
+// envtestStopping is set once a guard has begun killing this binary's envtest servers. A server started after that
+// would outlive the binary, so startEnvtest refuses to start one.
+var envtestStopping atomic.Bool
 
 // process is the part of a process-table entry the guards need.
 type process struct {
@@ -65,10 +75,26 @@ type process struct {
 func startEnvtestGuards(timeout time.Duration) (stop func()) {
 	killEnvtestServers(1, "reaped servers orphaned by an earlier run")
 
+	disarmed := make(chan struct{})
+
 	var deadline *time.Timer
 	if delay, ok := envtestDeadlineGuardDelay(timeout); ok {
 		deadline = time.AfterFunc(delay, func() {
-			killEnvtestServers(os.Getpid(), fmt.Sprintf("-test.timeout=%s expires in %s", timeout, timeout-delay))
+			stopEnvtestServers(fmt.Sprintf("-test.timeout=%s expires in %s", timeout, timeout-delay))
+
+			// A case that was already inside envtest's Start may still spawn a server. Keep killing until the
+			// binary exits, or until every case has finished and TestMain disarms the guards.
+			tick := time.NewTicker(envtestStopPollInterval)
+			defer tick.Stop()
+
+			for {
+				select {
+				case <-tick.C:
+					killEnvtestServers(os.Getpid(), "still stopping for -test.timeout")
+				case <-disarmed:
+					return
+				}
+			}
 		})
 	}
 
@@ -81,14 +107,12 @@ func startEnvtestGuards(timeout time.Duration) (stop func()) {
 	}
 
 	received := make(chan os.Signal, 1)
-	disarmed := make(chan struct{})
-
 	signal.Notify(received, sigs...)
 
 	go func() {
 		select {
 		case sig := <-received:
-			killEnvtestServers(os.Getpid(), "received "+sig.String())
+			stopEnvtestServers("received " + sig.String())
 			// Restore the default disposition and re-raise, so the binary still dies of the signal it was sent.
 			signal.Reset(sigs...)
 
@@ -107,6 +131,22 @@ func startEnvtestGuards(timeout time.Duration) (stop func()) {
 		signal.Stop(received)
 		close(disarmed)
 	}
+}
+
+// stopEnvtestServers stops any more envtest servers being started, then kills this binary's.
+func stopEnvtestServers(reason string) {
+	envtestStopping.Store(true)
+	killEnvtestServers(os.Getpid(), reason)
+}
+
+// startEnvtest starts env, unless a guard has begun killing this binary's envtest servers.
+func startEnvtest(env *envtest.Environment) (*rest.Config, error) {
+	if envtestStopping.Load() {
+		return nil, errors.New("not starting envtest: the envtest guard is killing this test binary's servers, " +
+			"because -test.timeout is about to expire or the binary was signalled")
+	}
+
+	return env.Start()
 }
 
 // envtestDeadlineGuardDelay returns how long after the start of the run the deadline guard should fire, given the

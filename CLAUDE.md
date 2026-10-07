@@ -366,14 +366,16 @@ reparented to PID 1 and run forever (#524; hundreds once piled up and starved th
 guards (`cmd/diff/envtest_guard_utils_test.go`):
 - at suite start it SIGKILLs every `kube-apiserver`/`etcd` whose parent is PID 1 and whose executable is an envtest
   binary (`KUBEBUILDER_ASSETS`, `TEST_ASSET_*`, setup-envtest's store, `/usr/local/kubebuilder/bin`);
-- 5s before the `-test.timeout` panic it SIGKILLs this binary's own envtest servers;
+- 5s before the `-test.timeout` panic it SIGKILLs this binary's own envtest servers, keeps killing any that a case
+  already inside envtest's `Start` goes on to spawn, and makes `startEnvtest` refuse to start more;
 - on SIGINT/SIGTERM/SIGHUP it does the same, then re-raises the signal.
 
-Their work shows up on stderr as `envtest guard: ...` lines. If cases fail with connection errors just before a timeout
-panic, that is the deadline guard: the run was out of time, so raise `-timeout` (the integration package can need more
-than go test's default 10m when it falls back to the Docker render engine). Keep the guards in `TestMain`, not in a test
-case, so they cost nothing per case. A Linux session under `systemd --user` reparents orphans to that subreaper rather
-than PID 1, so the start-of-suite reaper does not see them there.
+Their work shows up on stderr as `envtest guard: ...` lines. Cases that fail with `not starting envtest: ...` or with
+connection errors at the end of a run hit the deadline guard: the run was out of time, so raise `-timeout` (the
+integration package can need more than go test's default 10m when it falls back to the Docker render engine). Start
+envtest through `startEnvtest`, never `Environment.Start` directly, or the deadline guard cannot stop new servers. Keep
+the rest of the guards in `TestMain` so a case pays only one atomic load. A Linux session under `systemd --user`
+reparents orphans to that subreaper rather than PID 1, so the start-of-suite reaper does not see them there.
 
 **Working with ANSI Escape Codes in Test Expectations**
 

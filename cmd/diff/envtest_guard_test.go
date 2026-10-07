@@ -6,6 +6,7 @@ import (
 
 	"github.com/google/go-cmp/cmp"
 	"github.com/google/go-cmp/cmp/cmpopts"
+	"sigs.k8s.io/controller-runtime/pkg/envtest"
 )
 
 func TestEnvtestBinaryPaths(t *testing.T) {
@@ -137,6 +138,18 @@ func TestSelectEnvtestProcesses(t *testing.T) {
 				t.Errorf("selectEnvtestProcesses() PIDs -want +got:\n%s", diff)
 			}
 		})
+	}
+}
+
+func TestStartEnvtestRefusesOnceStopping(t *testing.T) {
+	envtestStopping.Store(true)
+	t.Cleanup(func() { envtestStopping.Store(false) })
+
+	env := &envtest.Environment{}
+	if _, err := startEnvtest(env); err == nil {
+		_ = env.Stop()
+
+		t.Fatal("startEnvtest() started envtest after a guard began stopping this binary's servers")
 	}
 }
 
