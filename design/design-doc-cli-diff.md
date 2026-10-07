@@ -190,6 +190,12 @@ therefore the same version as the xcrd and render code under test, a run is repr
 them automatically. The e2e suite, which runs real Crossplane images, instead uses the `cluster/<image tag>` directory
 `earthly +fetch-crossplane-cluster` produces.
 
+envtest runs each case's `kube-apiserver` and `etcd` as children of the test binary, and only a deferred
+`Environment.Stop` ends them, which does not run when the binary times out, is killed or is interrupted. Such a run
+leaves its servers running, reparented to PID 1, until the next run starts: so that they cannot pile up (#524),
+`TestMain` then kills every envtest server whose parent is PID 1, using `cmd/diff/testutils/envtestreaper`. A live run's
+servers have that run's test binary as their parent, so they are never touched.
+
 The integration test cases cover:
 
 ### 4.1 Basic Diff Scenarios
@@ -1302,8 +1308,9 @@ What it returns is never sent to the apiserver (§6.3.2), which is also why it i
 resources validation sees go on to become payloads.
 
 The prediction covers CRD `default:` values only. It does not model mutating admission or admission plugins, nor
-structural-schema pruning of unknown fields (#527) or conversion of a multi-version CRD through its storage version
-(#528), so a fallback diff can be incomplete or, for those last two, differ from what the apiserver would store.
+conversion of a multi-version CRD through its storage version (#528), so a fallback diff can be incomplete or, for
+conversion, differ from what the apiserver would store. It does not prune fields the schema leaves undeclared either,
+but that cannot show in a diff: schema validation rejects such a field as an `unknownField` error first.
 
 ### 6.6 RequirementsProvider
 
@@ -2534,9 +2541,8 @@ been removed.)
 13. **Function Container Reuse Across Invocations**: The current `CachedFunctionProvider` reuses containers across XRs
     in a single run. A daemon-mode could reuse them across runs.
 14. **Higher-Fidelity Local Defaulting**: Where an addition gets no apiserver result, the lenient `Defaulter` (§6.5a)
-    applies CRD `default:` values only. Two divergences from the apiserver can make that prediction wrong rather than
-    merely incomplete: structural-schema pruning of unknown fields (#527) and conversion of a multi-version CRD through
-    its storage version (#528).
+    applies CRD `default:` values only. Conversion of a multi-version CRD through its storage version (#528) can make
+    that prediction wrong rather than merely incomplete.
 15. **Fuller Claim Sync**: `syncClaimSpec` (§6.4a) mirrors the claim syncer's spec rules but not two others. An XRD's
     `enforcedCompositionRef` stops the claim's `compositionRef` from being propagated, and the syncer also copies the
     claim's labels and annotations (minus `*.kubernetes.io` keys) onto the backing XR. An existing backing XR is
@@ -2583,6 +2589,7 @@ cmd/
 │   ├── kubecfg/                   # kubeconfig resolution helpers
 │   ├── types/                     # Shared types (CompositionProvider, XRDiffOptions, etc.)
 │   ├── testutils/                 # Mock builders, structured-assertion helpers used by tests
+│   │   └── envtestreaper/         # Kills envtest servers orphaned by earlier test runs
 │   └── versioncmd/                # `version` subcommand
 ```
 

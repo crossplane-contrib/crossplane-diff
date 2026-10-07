@@ -23,8 +23,9 @@ import (
 // apiserver result (LenientDefaulting).
 //
 // The prediction covers CRD `default:` values only. Mutating admission and admission plugins are not
-// modelled at all, and neither is structural-schema pruning of unknown fields (#527) or conversion of
-// a multi-version CRD through its storage version (#528).
+// modelled at all, and neither is conversion of a multi-version CRD through its storage version (#528).
+// Nor does it prune fields the schema does not declare, as the apiserver would, but that never shows:
+// schema validation rejects an undeclared field as an unknownField error before any prediction runs.
 type Defaulter interface {
 	// Default returns a copy of obj with its CRD's defaults applied. obj itself is never modified.
 	Default(ctx context.Context, obj *un.Unstructured) (*un.Unstructured, error)

@@ -358,6 +358,16 @@ requires that. See `cmd/diff/testdata/comp/resources/original-composition-kubect
 Prefer an integration test for this (seconds, and it exercises the real CLI wiring) over an e2e — e2e's SSA gives it the
 same blind spot, so it would need the same hand-placed fixture field at minutes-scale for no extra coverage.
 
+**Orphaned envtest Servers**
+
+Each integration case starts its own envtest `kube-apiserver` and `etcd` as children of the test binary, and only a
+deferred `testEnv.Stop()` ends them. A run that times out, is killed or is interrupted leaves its servers running,
+reparented to PID 1, until the next run starts (#524; hundreds once piled up and starved the machine). At suite start
+`TestMain` calls `envtestreaper.Reap` (`cmd/diff/testutils/envtestreaper`, built on gopsutil), which SIGKILLs every
+`kube-apiserver`/`etcd` whose parent is PID 1 and whose executable is in an envtest directory (`KUBEBUILDER_ASSETS`,
+setup-envtest's store, `/usr/local/kubebuilder/bin`), logging `envtest reaper: ...` to stderr. A Linux session under `systemd --user` reparents orphans to that subreaper
+rather than PID 1, so the reaper does not see them there.
+
 **Working with ANSI Escape Codes in Test Expectations**
 
 E2E test expectation files (`.ansi` files) contain actual ANSI escape sequences as binary data. These are extremely fragile when editing with shell tools.
