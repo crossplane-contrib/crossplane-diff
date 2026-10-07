@@ -381,7 +381,11 @@ func (e *EngineRenderFn) staleRenderBackendHint(err error) string {
 
 // claimForRun prepares the run before anything is created for fns (reclaiming
 // what dead runs left behind, taking this run's lease and creating its
-// network) and names fns' containers for it. A no-op when there is no run.
+// network). It then names fns' containers for the run, which is what lets a
+// later run recognise them, and leaves them for the run to remove
+// (dockerrun.Run.Close) rather than stopped one by one upstream. The
+// annotations are copied: a function may share its map with the caller's,
+// e.g. a FunctionProvider's cache. A no-op when there is no run.
 func (e *EngineRenderFn) claimForRun(ctx context.Context, fns []pkgv1.Function) error {
 	if e.run == nil {
 		return nil
@@ -392,28 +396,17 @@ func (e *EngineRenderFn) claimForRun(ctx context.Context, fns []pkgv1.Function) 
 	}
 
 	for i := range fns {
-		fns[i] = claimFunction(fns[i], e.run.ContainerName(fns[i].Spec.Package))
+		annotations := maps.Clone(fns[i].GetAnnotations())
+		if annotations == nil {
+			annotations = make(map[string]string, 2)
+		}
+
+		annotations[render.AnnotationKeyRuntimeNamedContainer] = e.run.ContainerName(fns[i].Spec.Package)
+		annotations[render.AnnotationKeyRuntimeDockerCleanup] = string(render.AnnotationValueRuntimeDockerCleanupOrphan)
+		fns[i].SetAnnotations(annotations)
 	}
 
 	return nil
-}
-
-// claimFunction returns fn annotated so the container started for it carries
-// the run's name, which is what lets a later run recognise it, and is left for
-// the run to remove (dockerrun.Run.Close) rather than stopped one by one
-// upstream. The annotations are copied: fn may share its map with the
-// caller's, e.g. a FunctionProvider's cache.
-func claimFunction(fn pkgv1.Function, name string) pkgv1.Function {
-	annotations := maps.Clone(fn.GetAnnotations())
-	if annotations == nil {
-		annotations = make(map[string]string, 2)
-	}
-
-	annotations[render.AnnotationKeyRuntimeNamedContainer] = name
-	annotations[render.AnnotationKeyRuntimeDockerCleanup] = string(render.AnnotationValueRuntimeDockerCleanupOrphan)
-	fn.SetAnnotations(annotations)
-
-	return fn
 }
 
 // Cleanup stops every function runtime started across the engine's lifetime
