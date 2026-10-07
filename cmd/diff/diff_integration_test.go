@@ -2029,10 +2029,14 @@ Summary: 2 modified, 2 removed`,
 				"testdata/diff/resources/functions.yaml",
 				// Add existing resources for comparison
 				"testdata/diff/resources/existing-claim.yaml",
+				"testdata/diff/resources/existing-claim-xr.yaml",
 				"testdata/diff/resources/existing-claim-downstream-resource.yaml",
 			},
 			inputFiles: []string{"testdata/diff/modified-claim.yaml"},
 			expectedStructuredOutput: tu.ExpectDiff().
+				// The composed resource is labelled with the backing XR the claim's resourceRef names, so it
+				// already belongs to this claim: no ownership advisory (#534).
+				WithNoWarnings().
 				WithSummary(0, 2, 0).
 				WithModifiedResource("NopClaim", "test-claim", "existing-namespace").
 				WithFieldChange("spec.coolField", "existing-value", "modified-value").
@@ -2054,6 +2058,7 @@ Summary: 2 modified, 2 removed`,
 				"testdata/diff/resources/claim-composition-revision.yaml",
 				"testdata/diff/resources/functions.yaml",
 				"testdata/diff/resources/existing-claim.yaml",
+				"testdata/diff/resources/existing-claim-xr.yaml",
 				"testdata/diff/resources/existing-claim-downstream-resource.yaml",
 			},
 			fieldManagerApplies: []fieldManagerApply{
@@ -2061,6 +2066,8 @@ Summary: 2 modified, 2 removed`,
 			},
 			inputFiles: []string{"testdata/diff/modified-claim-omitting-defaulted-fields.yaml"},
 			expectedStructuredOutput: tu.ExpectDiff().
+				// As in ModifiedClaimShowsDiff: the composed resource belongs to the claim's backing XR (#534).
+				WithNoWarnings().
 				WithSummary(0, 2, 0).
 				WithModifiedResource("NopClaim", "test-claim", "existing-namespace").
 				WithFieldChange("spec.coolField", "existing-value", "modified-value").
