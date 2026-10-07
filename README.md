@@ -147,7 +147,9 @@ WARNING: Resource already belongs to another composite. Applying this diff will 
 Warnings deliberately do **not** affect the exit code — gate CI on `errors[]`, not `warnings[]`. They
 are emitted when raised rather than at the end of the run, so a warning is still reported if a later
 step fails, and appears in step with the work that produced it. Today they cover: a composed resource
-that belongs to a different composite (applying would take ownership), a nested XR whose composition
+that belongs to a different composite (applying would take ownership; for a claim, the owner it is
+compared against is the claim's backing XR, whose name Crossplane puts on a claim's composed
+resources), a nested XR whose composition
 could not be found (it will compose nothing), function credentials that could not be fetched (the
 render may not reflect reality), leftover function containers, a CompositionRevision whose name could
 not be predicted (see `predictedRevisionName` under
