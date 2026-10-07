@@ -28,5 +28,5 @@ import (
 // process, so two opens of one lease conflict even within a process, and the kernel drops the lock
 // when the process exits, however it exits.
 func lock(f *os.File) error {
-	return unix.Flock(int(f.Fd()), unix.LOCK_EX|unix.LOCK_NB) //nolint:gosec // A file descriptor fits in an int.
+	return unix.Flock(int(f.Fd()), unix.LOCK_EX|unix.LOCK_NB)
 }

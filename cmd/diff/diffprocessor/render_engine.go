@@ -252,16 +252,8 @@ func (e *EngineRenderFn) Render(ctx context.Context, log logging.Logger, in Rend
 	// work for the engine and would just accumulate no-op cleanups in the
 	// slice for the lifetime of the engine.
 	if len(newFns) > 0 {
-		if e.run != nil {
-			// Before anything is created: reclaim what dead runs left
-			// behind, take this run's lease, and create its network.
-			if err := e.run.Start(ctx); err != nil {
-				return render.CompositionOutputs{}, errors.Wrap(err, "cannot prepare Docker resources for rendering")
-			}
-
-			for i := range newFns {
-				newFns[i] = claimFunction(newFns[i], e.run.ContainerName(newFns[i].Spec.Package))
-			}
+		if err := e.claimForRun(ctx, newFns); err != nil {
+			return render.CompositionOutputs{}, err
 		}
 
 		// Setup integrates newFns into the engine's environment. Whether
@@ -385,6 +377,25 @@ func (e *EngineRenderFn) staleRenderBackendHint(err error) string {
 
 	return fmt.Sprintf("the cached render image %q does not support `crossplane internal render`, so it predates %s, the minimum this tool supports; re-pull it with `docker pull %s`",
 		e.image, MinCrossplaneRenderVersion, e.image)
+}
+
+// claimForRun prepares the run before anything is created for fns (reclaiming
+// what dead runs left behind, taking this run's lease and creating its
+// network) and names fns' containers for it. A no-op when there is no run.
+func (e *EngineRenderFn) claimForRun(ctx context.Context, fns []pkgv1.Function) error {
+	if e.run == nil {
+		return nil
+	}
+
+	if err := e.run.Start(ctx); err != nil {
+		return errors.Wrap(err, "cannot prepare Docker resources for rendering")
+	}
+
+	for i := range fns {
+		fns[i] = claimFunction(fns[i], e.run.ContainerName(fns[i].Spec.Package))
+	}
+
+	return nil
 }
 
 // claimFunction returns fn annotated so the container started for it carries
