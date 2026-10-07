@@ -52,6 +52,7 @@ sequenceDiagram
             DP->>DP: RenderToStableState(ctx, renderXR, comp, fns, id, observed, eventualState)
             loop Until requirements stabilise (or steady state under --eventual-state)
                 DP->>Render: Render(ctx, inputs)
+                Note over Render: Before starting a function for the first time - take this run's lease, reclaim dead runs' containers and networks, create this run's network, name each container for the run
                 Render-->>DP: CompositionOutputs (incl. RequiredResources)
                 alt Has unresolved RequiredResources
                     DP->>ReqProv: ResolveSelectors(ctx, selectors, ns)
@@ -96,12 +97,17 @@ sequenceDiagram
         end
     end
 
+    Note over CDP, Render: Cleanup runs before output is rendered, so a teardown advisory reaches warnings[]
+    alt comp subcommand
+        CDP->>DP: Cleanup(ctx)
+    end
+    DP->>FnProv: Cleanup(ctx)
+    DP->>Render: Cleanup(ctx)
+    Note over Render: The run removes its function containers, then its network, then releases its lease
     alt comp subcommand
         CDP->>Renderer: RenderCompDiff(output)
-        CDP->>DP: Cleanup(ctx)
     else xr subcommand
         DP->>Renderer: RenderDiffs(allDiffs, errs)
-        DP->>FnProv: Cleanup(ctx)
     end
 
     Renderer-->>Cmd: formatted output

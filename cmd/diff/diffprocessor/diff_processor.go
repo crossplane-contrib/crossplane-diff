@@ -206,7 +206,7 @@ type Cleaner interface {
 //
 // This is also what lets cleanup finish after Ctrl+C or SIGTERM: the first signal cancels the run's
 // context (see the command layer's run context) rather than killing the process. A second signal
-// exits immediately and may leave containers behind (see #525).
+// exits immediately and may leave containers behind, which the next run reclaims (see dockerrun).
 func CleanupDetached(ctx context.Context, c Cleaner, logger logging.Logger) {
 	cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), CleanupTimeout)
 	defer cancel()

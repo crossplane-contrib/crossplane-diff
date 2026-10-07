@@ -1332,8 +1332,9 @@ with `--verbose` can trace why a composition behaved as if a required resource w
 
 ### 6.7 FunctionProvider
 
-The `FunctionProvider` is the seam between the diff tool and Crossplane composition functions. Function containers can
-be expensive to spin up, so this layer governs how — and how aggressively — they are reused across renders.
+The `FunctionProvider` is the seam between the diff tool and Crossplane composition functions: it resolves which
+functions a composition's pipeline runs. Starting, reusing and removing their containers is the render engine's job
+(§6.7.2).
 
 #### 6.7.1 Interface and Implementations
 
@@ -1350,22 +1351,54 @@ Three implementations are wired up at the CLI layer based on configuration:
 - **`DefaultFunctionProvider`**: Fetches the function definitions from the cluster on demand. Used when the same
   composition is unlikely to be rendered repeatedly.
 - **`CachedFunctionProvider`**: Lazy-loads functions per composition and caches them by composition name. Composition
-  diff renders the same composition many times (once per affected XR), so cached function containers are reused across
-  XRs in the same run. The factory selection happens at the CLI layer; the processors are oblivious to which strategy
-  is in use.
+  diff renders the same composition many times (once per affected XR), so the cluster is asked for a composition's
+  functions once per run. The factory selection happens at the CLI layer; the processors are oblivious to which
+  strategy is in use.
 - **`RegistryOverrideFunctionProvider`**: Wraps another provider and rewrites function image references to a mirror
   (used with `--function-registry-override`).
 
-`Cleanup` is responsible for terminating any function containers the provider has started; it is invoked by the
-processor's `Cleanup`.
+Providers only resolve functions; none starts a container, so each built-in `Cleanup` is a no-op (the
+`RegistryOverrideFunctionProvider` delegates to the provider it wraps). `Cleaner` stays on the interface so a provider
+that does hold resources can release them: the processor's `Cleanup` calls it before the render engine's.
 
-All three providers also apply the `render.crossplane.io/runtime-docker-network` annotation to every returned function
-package when the `CROSSPLANE_DIFF_DOCKER_NETWORK` environment variable is set. This is the user-facing knob for running
-`crossplane-diff` inside a Docker container (e.g. a GitHub Actions container job): the spawned function containers join
-the caller's network instead of the default Docker bridge, where they would be unreachable from the caller. The
-annotation is applied on every `GetFunctionsForComposition` call, including cache hits in `CachedFunctionProvider`, so
-the env var works correctly regardless of when it is set relative to cache population. Any non-empty value the user
-has pre-set on a function package is preserved.
+#### 6.7.2 Function Containers and Run Ownership
+
+The render engine (`EngineRenderFn`, §9.5.3) starts each function's container on the first render that needs it and
+reuses it for every later render in the run. It ties everything it creates to the run through `cmd/diff/dockerrun`, so
+that a run that dies without cleaning up (SIGKILL, an OOM kill, a second Ctrl+C, a CI runner tearing down the job) does
+not leak them for good (#525):
+
+- **Naming.** The upstream Docker runtime cannot label a function container, but it honours the
+  `render.crossplane.io/runtime-docker-name` annotation. The engine sets that annotation on a copy of every function
+  to `<function>-<version>-diff-<run ID>`, where the run ID is 64 random bits. It also sets
+  `runtime-docker-cleanup: Orphan`, so the run removes its containers in one sweep instead of upstream stopping them
+  one by one.
+- **Network.** Upstream's docker engine would create a `crossplane-render-<suffix>` network that carries nothing tying
+  it to the run that made it. The engine passes `crossplane-diff-<run ID>` to it as the network to use instead, and the
+  run creates that network itself, labelled `crossplane-diff.io/run-id`. The run's unnamed render containers are
+  recognised by being attached to it. When `CROSSPLANE_DIFF_DOCKER_NETWORK` names the user's network, the engine uses
+  that network but never creates or removes it. The local engine needs no network.
+- **Liveness.** A run holds an exclusive `flock` on `<user cache dir>/crossplane-diff/runs/<run ID>.lock` while it has
+  resources. The lease is locked under a temporary name before it is renamed into place, so it is never visible
+  unlocked. The kernel drops the lock when the process exits, however it exits, so a lease that can be locked belongs
+  to a dead run. This was chosen over labelling resources with a PID, host name and process start time because it
+  needs no process table and is immune to PID reuse. It also works across processes, other worktrees and the many
+  engines an integration-test binary runs at once, because a `flock` belongs to the open file and not the process. A
+  per-user directory keeps one user's runs from judging another's.
+- **Reaping.** On its first render, before it creates anything, a run takes its lease and checks every other lease in
+  the directory. For each lease it can lock, it removes that run's containers (by name suffix or network membership),
+  then its network, then the lease file. With no dead run there is no Docker call at all: the check is a directory
+  listing and one non-blocking `flock` per lease. On exit (`dockerrun.Run.Close`, from `EngineRenderFn.Cleanup`) the
+  run sweeps its own resources the same way, which also catches containers upstream cleanup failed to remove, then
+  deletes its lease. Every failure is best effort: it is logged as a warning, the lease file is kept so a later run
+  retries, and the diff is not failed.
+
+Limitations: a run can only reclaim runs that share its cache directory, so a fresh CI container sharing only the
+host's Docker socket leaves an earlier job's resources alone. A lease does not record which Docker daemon its run
+used, so a run pointed at a different daemon (`DOCKER_HOST`, `docker context`) finds nothing to remove there and
+retires the lease, leaving the dead run's resources on the first daemon. Windows is unsupported, since a file that is
+open there cannot be renamed or removed. Containers and `crossplane-render-*` networks from versions before #525 carry no owner
+and are never reclaimed.
 
 ### 6.7a InputValidator
 
@@ -1803,8 +1836,9 @@ sorted context pair with `%q` so a value containing the separators cannot forge 
 identity (`{"a": "b=c"}` and `{"a=b": "c"}` are distinct).
 
 **Draining late advisories.** A warning only reaches structured output if it is raised before the
-renderer reads the collected slice. Teardown is the awkward case: `FunctionProvider.Cleanup` can raise
-the leftover-container advisory, and it was invoked solely from the command layer's `defer`, which runs
+renderer reads the collected slice. Teardown is the awkward case: the processor's `Cleanup` can raise
+the leftover-container advisory (today from the render engine's run sweep, §6.7.2; originally from
+`FunctionProvider.Cleanup`), and it was invoked solely from the command layer's `defer`, which runs
 at command exit — after `PerformDiff`/`DiffComposition` have already serialized `warnings[]`. That made
 one advisory permanently stderr-only, contradicting this section's own contract. Both processors
 therefore release resources immediately *before* rendering (`CleanupDetached`), on a context that keeps
@@ -1818,8 +1852,8 @@ fails with `context.DeadlineExceeded`; that is how the two are told apart (`diff
 evaluated before the run's own cancel, which also yields `Canceled`). The cancelled run still renders: both processors
 append an `errors[]` entry saying the run was interrupted, and the command reports the interruption in
 place of the cancelled calls it caused, exiting 130, which outranks every other exit code. A second
-signal makes the handler exit immediately with code 1, which may leave function containers behind;
-reaping containers whose owning run died is tracked in #525. The command's `defer` remains, and remains necessary: it
+signal makes the handler exit immediately with code 1, which may leave function containers behind for
+the next run to reclaim (§6.7.2). The command's `defer` remains, and remains necessary: it
 covers the paths that return before any rendering happens (load failure, initialization failure,
 cancellation). `Cleanup` is idempotent, so running in both places is safe — the second call finds
 nothing to remove and raises nothing.
@@ -1962,7 +1996,8 @@ The client layer provides interfaces to interact with Kubernetes and Crossplane 
       state and never carry a `DryRunInfo` — there is no desired state to preview.
     - The `DiffRenderer` (human-readable or structured) formats and displays the result.
 5. `Cleanup` tears down any function containers / networks created during rendering. This is essential — without it,
-   Docker resources leak for the lifetime of the process.
+   Docker resources outlive the run. If the process dies before `Cleanup` runs, the next run reclaims what it left
+   behind before starting any containers of its own (§6.7.2).
 
 ### 7.2 Composition Diff Workflow
 
@@ -2354,6 +2389,9 @@ This rendering layer:
 - Maintains compatibility with the Crossplane rendering mechanism
 - Carries the XRD so the upstream binary can pick the right composite schema (Legacy v1 / Modern v2) for the input XR's
   GVK, making dry-run apply succeed and the rendered desired state comparable against cluster state
+- Owns the run's Docker resources: it names every function container for the run, supplies the docker engine's
+  network rather than letting upstream create an unattributable one, and reclaims dead runs' leftovers before it starts
+  anything (§6.7.2)
 
 #### 9.5.4 Resource Tree Evaluation
 
@@ -2531,8 +2569,8 @@ been removed.)
     overlap with the existing functionality of `crossplane render`.
 12. **Targeted Permission Sets**: Define more granular permission sets for specific diff operations, allowing for
     least-privilege implementations in restricted environments.
-13. **Function Container Reuse Across Invocations**: The current `CachedFunctionProvider` reuses containers across XRs
-    in a single run. A daemon-mode could reuse them across runs.
+13. **Function Container Reuse Across Invocations**: The render engine reuses each function's container across XRs
+    in a single run, and the run removes it on exit (§6.7.2). A daemon-mode could reuse them across runs.
 14. **Higher-Fidelity Local Defaulting**: Where an addition gets no apiserver result, the lenient `Defaulter` (§6.5a)
     applies CRD `default:` values only. Two divergences from the apiserver can make that prediction wrong rather than
     merely incomplete: structural-schema pruning of unknown fields (#527) and conversion of a multi-version CRD through
@@ -2542,6 +2580,10 @@ been removed.)
     claim's labels and annotations (minus `*.kubernetes.io` keys) onto the backing XR. An existing backing XR is
     rendered with the labels and annotations it has in the cluster, so a template reading one the claim has just
     changed sees the old value.
+16. **Wider Reclamation of Dead Runs' Resources**: The run reaper (§6.7.2) only sees runs that share its cache
+    directory and does not run on Windows. Reclaiming across CI containers that share one Docker daemon would need the
+    lease to live where every client can reach it, or a liveness signal Docker itself can observe. Labelling function
+    containers directly would also need the upstream Docker runtime to accept labels.
 
 These enhancements would expand the utility of the Diff command and make it more accessible to all user personas.
 
@@ -2572,6 +2614,8 @@ cmd/
 │   │                              #   defaulter, resource manager, composite resolver,
 │   │                              #   requirements provider, function provider,
 │   │                              #   WarningLogger (advisory channel)
+│   ├── dockerrun/                 # Run ownership of function containers and the render
+│   │                              #   network; reaps dead runs' resources (§6.7.2)
 │   ├── client/
 │   │   ├── kubernetes/            # apply_client.go (DryRunApply / DryRunCreate),
 │   │   │                          #   access_client.go (AccessChecker, SSAR-backed),

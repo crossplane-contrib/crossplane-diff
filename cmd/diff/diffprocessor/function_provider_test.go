@@ -21,6 +21,7 @@ import (
 	"testing"
 
 	tu "github.com/crossplane-contrib/crossplane-diff/cmd/diff/testutils"
+	gcmp "github.com/google/go-cmp/cmp"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	apiextensionsv1 "github.com/crossplane/crossplane/apis/v2/apiextensions/v1"
@@ -160,28 +161,10 @@ func TestCachedFunctionProvider_GetFunctionsForComposition_LazyLoading(t *testin
 		t.Fatalf("GetFunctionsForComposition() returned %d functions, want 1", len(fns))
 	}
 
-	// Verify Docker reuse annotations were added
-	if fns[0].Annotations == nil {
-		t.Fatal("GetFunctionsForComposition() did not add annotations")
-	}
-
-	// Container name should have format: function-go-templating-v0.11.0-comp-<instanceID>
-	expectedPrefix := "function-go-templating-v0.11.0-comp-"
-
-	gotContainerName := fns[0].Annotations["render.crossplane.io/runtime-docker-name"]
-	if !strings.HasPrefix(gotContainerName, expectedPrefix) {
-		t.Errorf("Container name = %q, want prefix %q", gotContainerName, expectedPrefix)
-	}
-
-	// Verify the instance ID suffix is present and has expected length (8 hex chars)
-	instanceID := strings.TrimPrefix(gotContainerName, expectedPrefix)
-	if len(instanceID) != 8 {
-		t.Errorf("Instance ID length = %d, want 8 (got container name: %q)", len(instanceID), gotContainerName)
-	}
-
-	gotCleanup := fns[0].Annotations["render.crossplane.io/runtime-docker-cleanup"]
-	if gotCleanup != "Orphan" {
-		t.Errorf("Cleanup policy = %q, want %q", gotCleanup, "Orphan")
+	// The provider only caches: naming and cleaning up function containers is the render engine's job,
+	// so the functions come back exactly as the cluster returned them.
+	if diff := gcmp.Diff(functions, fns); diff != "" {
+		t.Errorf("GetFunctionsForComposition() -want, +got:\n%s", diff)
 	}
 }
 
@@ -345,160 +328,6 @@ func TestCachedFunctionProvider_GetFunctionsForComposition_MultipleCompositions(
 	}
 }
 
-func TestCachedFunctionProvider_Cleanup(t *testing.T) {
-	tests := map[string]struct {
-		setupContainers func() []string // Returns container names to create
-		expectCleanup   bool            // Whether cleanup should be attempted
-	}{
-		"NoContainers": {
-			setupContainers: func() []string {
-				return []string{}
-			},
-			expectCleanup: false,
-		},
-		"WithContainers": {
-			setupContainers: func() []string {
-				// We'll track container names but won't actually create them
-				// The test will verify the cleanup logic is called correctly
-				return []string{"test-container-1-comp", "test-container-2-comp"}
-			},
-			expectCleanup: true,
-		},
-	}
-
-	for name, tt := range tests {
-		t.Run(name, func(t *testing.T) {
-			fnClient := tu.NewMockFunctionClient().Build()
-			logger := tu.TestLogger(t, false)
-			provider := &CachedFunctionProvider{
-				fnClient:       fnClient,
-				cache:          make(map[string][]pkgv1.Function),
-				containerNames: tt.setupContainers(),
-				logger:         logger,
-			}
-
-			err := provider.Cleanup(t.Context())
-			// Cleanup should never return an error (graceful degradation)
-			if err != nil {
-				t.Errorf("Cleanup() returned unexpected error: %v", err)
-			}
-		})
-	}
-}
-
-func TestCachedFunctionProvider_TracksContainerNames(t *testing.T) {
-	functions := []pkgv1.Function{
-		{
-			ObjectMeta: metav1.ObjectMeta{Name: "function-1"},
-			Spec: pkgv1.FunctionSpec{
-				PackageSpec: pkgv1.PackageSpec{
-					Package: "xpkg.io/test/function-one:v1.0.0",
-				},
-			},
-		},
-		{
-			ObjectMeta: metav1.ObjectMeta{Name: "function-2"},
-			Spec: pkgv1.FunctionSpec{
-				PackageSpec: pkgv1.PackageSpec{
-					Package: "xpkg.io/test/function-two:v2.0.0",
-				},
-			},
-		},
-	}
-
-	fnClient := tu.NewMockFunctionClient().
-		WithSuccessfulFunctionsFetch(functions).
-		Build()
-
-	logger := tu.TestLogger(t, false)
-	provider := NewCachedFunctionProvider(fnClient, logger).(*CachedFunctionProvider)
-
-	comp := &apiextensionsv1.Composition{
-		ObjectMeta: metav1.ObjectMeta{Name: "test-composition"},
-	}
-
-	_, err := provider.GetFunctionsForComposition(comp)
-	if err != nil {
-		t.Fatalf("GetFunctionsForComposition() error = %v", err)
-	}
-
-	// Verify container names were tracked
-	if len(provider.containerNames) != 2 {
-		t.Errorf("Expected 2 container names tracked, got %d", len(provider.containerNames))
-	}
-
-	// Container names should have format: <function-name>-<version>-comp-<instanceID>
-	expectedPrefixes := []string{"function-one-v1.0.0-comp-", "function-two-v2.0.0-comp-"}
-	for i, expectedPrefix := range expectedPrefixes {
-		if i >= len(provider.containerNames) {
-			t.Errorf("Missing container name at index %d", i)
-			continue
-		}
-
-		if !strings.HasPrefix(provider.containerNames[i], expectedPrefix) {
-			t.Errorf("Container name[%d] = %q, want prefix %q", i, provider.containerNames[i], expectedPrefix)
-		}
-
-		// Verify instance ID is present
-		instanceID := strings.TrimPrefix(provider.containerNames[i], expectedPrefix)
-		if len(instanceID) != 8 {
-			t.Errorf("Instance ID length at index %d = %d, want 8 (got: %q)", i, len(instanceID), provider.containerNames[i])
-		}
-	}
-}
-
-func TestGenerateContainerName_LengthConstraint(t *testing.T) {
-	const testInstanceID = "test1234"
-
-	// Test that SHA256 digest container names stay under 63 characters
-	tests := map[string]struct {
-		pkg string
-	}{
-		"SHA256Digest": {
-			pkg: "xpkg.io/crossplane-contrib/function-go-templating@sha256:54726c28b78f51a7e88b87db33de79721d8be60890b71dad96276aea4a3397d1",
-		},
-		"SHA256DigestWithFIPS": {
-			pkg: "ghcr.io/crossplane-contrib/function-go-templating-fips@sha256:54726c28b78f51a7e88b87db33de79721d8be60890b71dad96276aea4a3397d1",
-		},
-		"LongFunctionName": {
-			pkg: "xpkg.io/org/my-very-long-function-name-that-might-cause-issues@sha256:54726c28b78f51a7e88b87db33de79721d8be60890b71dad96276aea4a3397d1",
-		},
-	}
-
-	for name, tt := range tests {
-		t.Run(name, func(t *testing.T) {
-			got := generateContainerName(tt.pkg, testInstanceID)
-			if len(got) > maxContainerNameLength {
-				t.Errorf("generateContainerName() returned name with length %d, want <= %d: %q",
-					len(got), maxContainerNameLength, got)
-			}
-		})
-	}
-}
-
-func TestGenerateContainerName_TruncationStability(t *testing.T) {
-	const testInstanceID = "test1234"
-
-	// Test that truncated names are stable (same input always produces same output)
-	pkg := "xpkg.io/org/my-very-long-function-name-that-might-cause-issues@sha256:54726c28b78f51a7e88b87db33de79721d8be60890b71dad96276aea4a3397d1"
-
-	first := generateContainerName(pkg, testInstanceID)
-	second := generateContainerName(pkg, testInstanceID)
-
-	if first != second {
-		t.Errorf("generateContainerName() not stable: first=%q, second=%q", first, second)
-	}
-
-	// Verify the truncated name still contains identifiable parts
-	if !strings.Contains(first, "my-very-long") {
-		t.Errorf("truncated name should contain start of function name: %q", first)
-	}
-
-	if !strings.Contains(first, "-comp-test1234") {
-		t.Errorf("truncated name should contain instance suffix: %q", first)
-	}
-}
-
 func TestReplaceRegistry(t *testing.T) {
 	tests := map[string]struct {
 		pkg         string
@@ -607,67 +436,5 @@ func TestRegistryOverrideFunctionProvider(t *testing.T) {
 
 	if fns[1].Spec.Package != "registry.example.com/crossplane-contrib/function-auto-ready:v1.0.0" {
 		t.Errorf("function[1].Spec.Package = %q, want overridden registry", fns[1].Spec.Package)
-	}
-}
-
-func TestGenerateContainerName(t *testing.T) {
-	const testInstanceID = "test1234"
-
-	tests := map[string]struct {
-		pkg  string
-		want string
-	}{
-		"StandardPackage": {
-			pkg:  "xpkg.io/crossplane-contrib/function-go-templating:v0.11.0",
-			want: "function-go-templating-v0.11.0-comp-test1234",
-		},
-		"DifferentRegistry": {
-			pkg:  "ghcr.io/crossplane/function-auto-ready:v1.2.3",
-			want: "function-auto-ready-v1.2.3-comp-test1234",
-		},
-		"ShortPackage": {
-			pkg:  "function-test:v1.0.0",
-			want: "function-test-v1.0.0-comp-test1234",
-		},
-		"NoVersion": {
-			pkg:  "xpkg.io/org/function-name",
-			want: "function-name-comp-test1234",
-		},
-		"EmptyPackage": {
-			pkg:  "",
-			want: "unknown-comp-test1234",
-		},
-		"OnlyName": {
-			pkg:  "my-function",
-			want: "my-function-comp-test1234",
-		},
-		"SHA256Digest": {
-			// SHA256 digest is truncated to 12 chars (like Docker short IDs)
-			pkg:  "xpkg.io/crossplane-contrib/function-go-templating@sha256:54726c28b78f51a7e88b87db33de79721d8be60890b71dad96276aea4a3397d1",
-			want: "function-go-templating-54726c28b78f-comp-test1234",
-		},
-		"SHA256DigestWithFIPS": {
-			// SHA256 digest is truncated to 12 chars (like Docker short IDs)
-			pkg:  "ghcr.io/crossplane-contrib/function-go-templating-fips@sha256:54726c28b78f51a7e88b87db33de79721d8be60890b71dad96276aea4a3397d1",
-			want: "function-go-templating-fips-54726c28b78f-comp-test1234",
-		},
-		"SHA256DigestShort": {
-			// Short digest (less than 12 chars) is used as-is
-			pkg:  "xpkg.io/test/function@sha256:abc123",
-			want: "function-abc123-comp-test1234",
-		},
-		"TagAndDigest": {
-			pkg:  "registry.io/path/function-auto-ready:v0.6.1-0@sha256:751a4afb65f1abcdef1234567890abcdef1234567890abcdef1234567890abcd",
-			want: "function-auto-ready-v0.6.1-0-751a4afb65f1-comp-test1234",
-		},
-	}
-
-	for name, tt := range tests {
-		t.Run(name, func(t *testing.T) {
-			got := generateContainerName(tt.pkg, testInstanceID)
-			if got != tt.want {
-				t.Errorf("generateContainerName(%q, %q) = %q, want %q", tt.pkg, testInstanceID, got, tt.want)
-			}
-		})
 	}
 }

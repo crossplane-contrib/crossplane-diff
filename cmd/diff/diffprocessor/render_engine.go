@@ -25,6 +25,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/crossplane-contrib/crossplane-diff/cmd/diff/dockerrun"
 	"github.com/crossplane/cli/v2/cmd/crossplane/render"
 	corev1 "k8s.io/api/core/v1"
 	kunstructured "k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -104,6 +105,13 @@ type EngineRenderFn struct {
 	// real render package functions.
 	startRuntimes func(ctx context.Context, log logging.Logger, fns []pkgv1.Function) (*render.FunctionAddresses, error)
 	stopRuntimes  func(log logging.Logger, fa *render.FunctionAddresses)
+
+	// run ties the function containers and render network this engine creates
+	// to this process, so that a later run reclaims them if this one dies
+	// without cleaning up (#525). It names every function container, creates
+	// the render network when the docker engine needs one, and removes both in
+	// Cleanup. nil disables all of that, for tests that stub the engine out.
+	run *dockerrun.Run
 }
 
 // NewEngineRenderFn constructs an EngineRenderFn.
@@ -124,12 +132,15 @@ type EngineRenderFn struct {
 // wrap them. Our EngineRenderFn.Render still expects (rsp != nil, err != nil)
 // on pipeline fatal and surfaces both — see the comment there.
 //
-// CROSSPLANE_DIFF_DOCKER_NETWORK is read once here and threaded through
-// render.EngineFlags.CrossplaneDockerNetwork (crossplane/cli#65). The docker
+// The docker engine always renders on a Docker network it hands to
+// render.EngineFlags.CrossplaneDockerNetwork (crossplane/cli#65): the docker
 // engine then runs the crossplane-render container on that network AND
-// annotates each fn at Setup time so its container joins it too — closing
-// both halves of the "crossplane-diff inside a container" case
-// (crossplane/cli#75). For the local engine the flag is a no-op.
+// annotates each fn at Setup time so its container joins it too. Normally that
+// is a network this run creates and removes itself (see renderNetwork), rather
+// than the one the upstream engine would create, which carries nothing tying
+// it to the run that made it. CROSSPLANE_DIFF_DOCKER_NETWORK, read once here,
+// names the user's network instead — closing both halves of the
+// "crossplane-diff inside a container" case (crossplane/cli#75).
 func NewEngineRenderFn(log logging.Logger, binaryPath, version, image string) *EngineRenderFn {
 	// Normalize before the value reaches EngineFlags: upstream formats it into
 	// the tag verbatim and only v-prefixed tags are published, so the bare form
@@ -147,18 +158,37 @@ func NewEngineRenderFn(log logging.Logger, binaryPath, version, image string) *E
 		log.Info(w)
 	}
 
+	// The run's ID is fixed here, so the engine can be told the name of a
+	// network that is only created when the first function starts.
+	network := os.Getenv(EnvDockerNetwork)
+	ownsNetwork := ownsRenderNetwork(binaryPath, network)
+
+	run := dockerrun.New(dockerrun.DefaultLeaseDir(), dockerrun.NewDockerClient, ownsNetwork, log)
+	if ownsNetwork {
+		network = run.NetworkName()
+	}
+
 	return &EngineRenderFn{
 		engine: render.NewEngineFromFlags(&render.EngineFlags{
 			CrossplaneBinary:        binaryPath,
 			CrossplaneVersion:       version,
 			CrossplaneImage:         image,
-			CrossplaneDockerNetwork: os.Getenv(EnvDockerNetwork),
+			CrossplaneDockerNetwork: network,
 		}, log),
 		image:         resolveRenderImage(binaryPath, version, image),
 		log:           log,
 		startRuntimes: render.StartFunctionRuntimes,
 		stopRuntimes:  render.StopFunctionRuntimes,
+		run:           run,
 	}
+}
+
+// ownsRenderNetwork reports whether the run creates (and so removes) the
+// network the render engine uses. It does not when CROSSPLANE_DIFF_DOCKER_NETWORK
+// names the user's network, nor for the local engine, which renders on the host
+// and reaches functions through published ports.
+func ownsRenderNetwork(binaryPath, envNetwork string) bool {
+	return binaryPath == "" && envNetwork == ""
 }
 
 // RenderImage returns the fully-resolved render image reference the engine will
@@ -222,6 +252,10 @@ func (e *EngineRenderFn) Render(ctx context.Context, log logging.Logger, in Rend
 	// work for the engine and would just accumulate no-op cleanups in the
 	// slice for the lifetime of the engine.
 	if len(newFns) > 0 {
+		if err := e.claimForRun(ctx, newFns); err != nil {
+			return render.CompositionOutputs{}, err
+		}
+
 		// Setup integrates newFns into the engine's environment. Whether
 		// this call creates the environment or only adds to one that
 		// already exists is the engine's concern; we just hold onto
@@ -345,14 +379,44 @@ func (e *EngineRenderFn) staleRenderBackendHint(err error) string {
 		e.image, MinCrossplaneRenderVersion, e.image)
 }
 
+// claimForRun prepares the run before anything is created for fns (reclaiming
+// what dead runs left behind, taking this run's lease and creating its
+// network). It then names fns' containers for the run, which is what lets a
+// later run recognise them, and leaves them for the run to remove
+// (dockerrun.Run.Close) rather than stopped one by one upstream. The
+// annotations are copied: a function may share its map with the caller's,
+// e.g. a FunctionProvider's cache. A no-op when there is no run.
+func (e *EngineRenderFn) claimForRun(ctx context.Context, fns []pkgv1.Function) error {
+	if e.run == nil {
+		return nil
+	}
+
+	if err := e.run.Start(ctx); err != nil {
+		return errors.Wrap(err, "cannot prepare Docker resources for rendering")
+	}
+
+	for i := range fns {
+		annotations := maps.Clone(fns[i].GetAnnotations())
+		if annotations == nil {
+			annotations = make(map[string]string, 2)
+		}
+
+		annotations[render.AnnotationKeyRuntimeNamedContainer] = e.run.ContainerName(fns[i].Spec.Package)
+		annotations[render.AnnotationKeyRuntimeDockerCleanup] = string(render.AnnotationValueRuntimeDockerCleanupOrphan)
+		fns[i].SetAnnotations(annotations)
+	}
+
+	return nil
+}
+
 // Cleanup stops every function runtime started across the engine's lifetime
 // and runs the cleanups accumulated from each engine.Setup call in LIFO
-// order. The effect of those cleanups is engine-specific — for the docker
-// engine the one real cleanup releases the docker network it created;
-// other engines (local, or docker pre-configured with an externally-managed
-// network) accumulate only no-op cleanups. Idempotent and safe to call when
-// Render was never invoked.
-func (e *EngineRenderFn) Cleanup(_ context.Context) error {
+// order, then has the run remove every container and the network it created.
+// Upstream cleanup is engine-specific and, with the run supplying the docker
+// engine's network, amounts to no-op cleanups; the run's own sweep also
+// catches containers upstream fails to remove. Idempotent and safe to call
+// when Render was never invoked.
+func (e *EngineRenderFn) Cleanup(ctx context.Context) error {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
@@ -373,6 +437,10 @@ func (e *EngineRenderFn) Cleanup(_ context.Context) error {
 	}
 
 	e.cleanups = nil
+
+	if e.run != nil {
+		e.run.Close(ctx)
+	}
 
 	return nil
 }

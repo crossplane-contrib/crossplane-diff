@@ -696,10 +696,36 @@ jobs:
       - run: crossplane-diff xr xr.yaml
 ```
 
-The env var is read on every `GetFunctionsForComposition` call, so it works correctly even with the cached function
-provider (cached function packages are re-annotated on cache hits). If the env var is unset, the tool leaves the
-annotation alone — appropriate for the common case of running `crossplane-diff` directly on a host with Docker
-installed. Any value the user has already set on a function package is preserved.
+The env var is read once per run. The network it names belongs to the caller: `crossplane-diff` uses it but never
+creates or removes it. If the env var is unset, each run renders on a network of its own (see below), which is
+appropriate for the common case of running `crossplane-diff` directly on a host with Docker installed. Any
+`runtime-docker-network` value already set on a function package is preserved.
+
+#### Function containers left behind by a run that died
+
+Each run names its function containers `<function>-<version>-diff-<run ID>` and, unless
+`CROSSPLANE_DIFF_DOCKER_NETWORK` is set, renders on a Docker network named `crossplane-diff-<run ID>` (labelled
+`crossplane-diff.io/run-id=<run ID>`). It removes both when it exits, including after the first Ctrl+C or SIGTERM.
+While it runs it holds a lock on `<user cache dir>/crossplane-diff/runs/<run ID>.lock` (`~/.cache` on Linux,
+`~/Library/Caches` on macOS). The operating system releases that lock when the process exits, however it exits.
+
+A run that dies without cleaning up (SIGKILL, an OOM kill, a second Ctrl+C, a CI runner tearing down the job) leaves
+its containers, its network and its lock file behind. The next run on the same machine, by the same user, finds the
+lock file unlocked and removes what that run left before it starts any containers of its own. A run that is still
+alive, such as a concurrent run in another terminal or worktree, keeps its lock, so its containers are never touched.
+Neither are containers and networks that `crossplane-diff` did not name, including other users'. Reclaiming is best
+effort. If it fails, you get a warning, the lock file stays and a later run tries again. It never fails the diff.
+
+Limitations:
+
+- The next run must share the dead run's cache directory. A fresh CI container that only shares the host's Docker
+  socket cannot see a previous job's lock file, so it leaves that job's containers alone.
+- On Windows a run removes its own containers when it exits, but runs do not take locks, so nothing is reclaimed
+  after a run dies.
+- Older versions of `crossplane-diff` named containers `<function>-<version>-comp-<id>` and let the render engine
+  create `crossplane-render-<suffix>` networks. Neither records which run owns it, so they are not reclaimed. Once no
+  older `crossplane-diff` is running, remove them by hand. Leaked networks eventually make Docker fail with `all
+  predefined address pools have been fully subnetted`.
 
 ## Output Format
 
@@ -1148,7 +1174,8 @@ The tool returns different exit codes to indicate the result of the diff operati
 An interrupt stops the run but still releases the function containers it started (cleanup is bounded at 30 seconds),
 and, once diffing has begun, `-o json`/`-o yaml` output is still written, with an `errors[]` entry saying the run was
 interrupted. An interruption outranks every other exit code. A second Ctrl+C exits immediately with code 1 and may leave
-function containers behind; reaping containers whose owning run died is tracked in #525.
+function containers behind; the next run removes them (see
+[Function containers left behind by a run that died](#function-containers-left-behind-by-a-run-that-died)).
 
 Exit codes 0-3 are ordered by severity. When processing multiple resources, the highest severity exit code is returned:
 

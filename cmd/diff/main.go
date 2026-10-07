@@ -226,7 +226,7 @@ func main() {
 
 	// The one and only call: SetupSignalHandler panics if called twice. The first SIGINT/SIGTERM
 	// cancels sigCtx, which stops the run and lets cleanup release its function containers; a second
-	// exits immediately with code 1, which may leave containers behind.
+	// exits immediately with code 1, which may leave containers behind for the next run to reclaim.
 	sigCtx := signals.SetupSignalHandler()
 
 	// The *dp.WarningLogger and its logging.Logger view come first; see warningLoggerBindings.
