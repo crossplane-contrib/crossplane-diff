@@ -328,7 +328,8 @@ func acquireLease(dir, id string) (*os.File, error) {
 	return f, nil
 }
 
-// tryLease takes the lease at path if no process holds it, i.e. if its run is dead.
+// tryLease takes the lease at path if no process holds it, i.e. if its run is dead. If another reaper
+// reclaimed the run between our open and our lock, reaping it again finds nothing left to remove.
 func tryLease(path string) (*os.File, bool) {
 	f, err := os.OpenFile(path, os.O_RDWR, 0) //nolint:gosec // The path is a lease file in our own lease directory.
 	if err != nil {
@@ -336,16 +337,6 @@ func tryLease(path string) (*os.File, bool) {
 	}
 
 	if err := lock(f); err != nil {
-		_ = f.Close()
-		return nil, false
-	}
-
-	// Another reaper may have reclaimed this run and removed the file between our open and lock, in which
-	// case we hold the lock on a file that is no longer the lease.
-	fi, ferr := f.Stat()
-
-	pi, perr := os.Stat(path)
-	if ferr != nil || perr != nil || !os.SameFile(fi, pi) {
 		_ = f.Close()
 		return nil, false
 	}
