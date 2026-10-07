@@ -2,17 +2,20 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"os/exec"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/crossplane-contrib/crossplane-diff/cmd/diff/testutils/envtestreaper"
 )
 
 // TestMain runs before all tests and cleans up after all tests complete.
 func TestMain(m *testing.M) {
 	// Kill envtest servers that an earlier run left behind when it died abnormally.
-	reapOrphanedEnvtestServers()
+	envtestreaper.Reap(func(format string, args ...any) { fmt.Fprintf(os.Stderr, format+"\n", args...) })
 
 	// Run all tests
 	exitCode := m.Run()

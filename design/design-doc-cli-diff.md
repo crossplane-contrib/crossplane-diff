@@ -193,8 +193,8 @@ them automatically. The e2e suite, which runs real Crossplane images, instead us
 envtest runs each case's `kube-apiserver` and `etcd` as children of the test binary, and only a deferred
 `Environment.Stop` ends them, which does not run when the binary times out, is killed or is interrupted. Such a run
 leaves its servers running, reparented to PID 1, until the next run starts: so that they cannot pile up (#524),
-`TestMain` then kills every envtest server whose parent is PID 1. A live run's servers have that run's test binary as
-their parent, so they are never touched.
+`TestMain` then kills every envtest server whose parent is PID 1, using `cmd/diff/testutils/envtestreaper`. A live run's
+servers have that run's test binary as their parent, so they are never touched.
 
 The integration test cases cover:
 
@@ -2589,6 +2589,7 @@ cmd/
 │   ├── kubecfg/                   # kubeconfig resolution helpers
 │   ├── types/                     # Shared types (CompositionProvider, XRDiffOptions, etc.)
 │   ├── testutils/                 # Mock builders, structured-assertion helpers used by tests
+│   │   └── envtestreaper/         # Kills envtest servers orphaned by earlier test runs
 │   └── versioncmd/                # `version` subcommand
 ```
 

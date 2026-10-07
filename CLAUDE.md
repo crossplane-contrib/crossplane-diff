@@ -363,9 +363,9 @@ same blind spot, so it would need the same hand-placed fixture field at minutes-
 Each integration case starts its own envtest `kube-apiserver` and `etcd` as children of the test binary, and only a
 deferred `testEnv.Stop()` ends them. A run that times out, is killed or is interrupted leaves its servers running,
 reparented to PID 1, until the next run starts (#524; hundreds once piled up and starved the machine). At suite start
-`TestMain` SIGKILLs every `kube-apiserver`/`etcd` whose parent is PID 1 and whose executable is in an envtest directory
-(`KUBEBUILDER_ASSETS`, setup-envtest's store, `/usr/local/kubebuilder/bin`), logging `envtest reaper: ...` to stderr
-(`cmd/diff/envtest_reaper_utils_test.go`). A Linux session under `systemd --user` reparents orphans to that subreaper
+`TestMain` calls `envtestreaper.Reap` (`cmd/diff/testutils/envtestreaper`, built on gopsutil), which SIGKILLs every
+`kube-apiserver`/`etcd` whose parent is PID 1 and whose executable is in an envtest directory (`KUBEBUILDER_ASSETS`,
+setup-envtest's store, `/usr/local/kubebuilder/bin`), logging `envtest reaper: ...` to stderr. A Linux session under `systemd --user` reparents orphans to that subreaper
 rather than PID 1, so the reaper does not see them there.
 
 **Working with ANSI Escape Codes in Test Expectations**
