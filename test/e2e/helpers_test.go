@@ -26,6 +26,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"testing"
 	"unicode"
@@ -71,6 +72,18 @@ var clusterNopList = composed.NewList(composed.FromReferenceToList(corev1.Object
 	APIVersion: "nop.crossplane.io/v1alpha1",
 	Kind:       "ClusterNopResource",
 }))
+
+// composedNopKind returns the kind of the cluster-scoped Nop managed resource that the v1-style (claim and
+// cluster XR) compositions compose for the Crossplane version under test: the release-1.20 manifests compose
+// NopResource (see v1NopList), while the main manifests compose ClusterNopResource (see clusterNopList).
+func composedNopKind(c *envconf.Config) string {
+	// we should only ever be running with one version label
+	if slices.Contains(c.Labels()[LabelCrossplaneVersion], CrossplaneVersionRelease120) {
+		return "NopResource"
+	}
+
+	return "ClusterNopResource"
+}
 
 // Regular expressions to match the dynamic parts.
 var (
