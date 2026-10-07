@@ -2755,7 +2755,7 @@ Summary: 2 modified, 2 removed`,
 				"testdata/diff/resources/functions.yaml",
 				"testdata/diff/resources/pinned-claim/existing-automatic.yaml",
 			},
-			inputFiles:               []string{"testdata/diff/unchanged-automatic-pinned-claim.yaml"},
+			inputFiles: []string{"testdata/diff/unchanged-automatic-pinned-claim.yaml"},
 			// No warnings either: the composed resource belongs to the claim's backing XR (#534).
 			expectedStructuredOutput: tu.ExpectDiff().WithNoWarnings().WithSummary(0, 0, 0),
 			expectedExitCode:         dp.ExitCodeSuccess,
@@ -3607,10 +3607,10 @@ Impact analysis skipped: this composition is identical to the cluster's, so appl
 				"testdata/comp/resources/existing-claim-revision-ref-xr.yaml",
 				"testdata/comp/resources/existing-claim-revision-ref-downstream.yaml",
 			},
-			inputFiles:       []string{"testdata/comp/resources/claim-revision-templating-composition.yaml"},
-			namespace:        "test-namespace",
-			outputFormat:     "json",
-			expectedExitCode: dp.ExitCodeSuccess,
+			inputFiles:             []string{"testdata/comp/resources/claim-revision-templating-composition.yaml"},
+			namespace:              "test-namespace",
+			outputFormat:           "json",
+			expectedExitCode:       dp.ExitCodeSuccess,
 			expectedStderrContains: []string{"Could not predict the name of the CompositionRevision"},
 			expectedStructuredCompOutput: tu.ExpectCompDiff().
 				// The could-not-predict advisory is the only warning: the claim's composed resource is labelled
