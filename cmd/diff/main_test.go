@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"flag"
 	"os"
 	"os/exec"
 	"strings"
@@ -11,14 +12,38 @@ import (
 
 // TestMain runs before all tests and cleans up after all tests complete.
 func TestMain(m *testing.M) {
+	// Parse now rather than in m.Run, so the envtest guards can read -test.timeout.
+	flag.Parse()
+
+	stopEnvtestGuards := startEnvtestGuards(testTimeout())
+
 	// Run all tests
 	exitCode := m.Run()
+
+	stopEnvtestGuards()
 
 	// Clean up orphaned function containers after tests complete
 	cleanupFunctionContainers()
 
 	// Exit with the test suite's exit code
 	os.Exit(exitCode)
+}
+
+// testTimeout returns the value of go test's -timeout flag (-test.timeout), or 0 if it has none.
+func testTimeout() time.Duration {
+	f := flag.Lookup("test.timeout")
+	if f == nil {
+		return 0
+	}
+
+	getter, ok := f.Value.(flag.Getter)
+	if !ok {
+		return 0
+	}
+
+	timeout, _ := getter.Get().(time.Duration)
+
+	return timeout
 }
 
 // cleanupFunctionContainers removes the named function containers used by integration tests.
