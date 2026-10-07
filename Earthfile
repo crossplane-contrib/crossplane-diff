@@ -99,14 +99,6 @@ e2e-matrix:
     --CROSSPLANE_IMAGE_TAG=main \
     --SAVE_LOCALLY=false
 
-# ci-e2e-matrix is used by CI to run e2e tests without the host cluster check.
-# CI environments always start with a clean state, so the check is unnecessary.
-ci-e2e-matrix:
-  BUILD +ci-e2e \
-    --CROSSPLANE_IMAGE_TAG=release-1.20 \
-    --CROSSPLANE_IMAGE_TAG=main \
-    --SAVE_LOCALLY=false
-
 # e2e-check-host verifies that the host doesn't have kind clusters that would interfere with DIND.
 # The nested containerization (host Docker -> earthly DIND -> kind) has limited cgroup capacity.
 # Existing host kind clusters consume significant resources, preventing DIND from creating its own
@@ -132,7 +124,9 @@ e2e:
   BUILD +e2e-internal
 
 # ci-e2e runs end-to-end tests without host cluster check.
-# For CI use only - skips the LOCALLY check to work in strict mode.
+# For CI use only - skips the LOCALLY check to work in strict mode. CI runs one
+# Crossplane version per job (see the e2e-tests matrix in .github/workflows/ci.yml),
+# passing CROSSPLANE_IMAGE_TAG and a matching -labels=crossplane-version= in FLAGS.
 ci-e2e:
   BUILD +e2e-internal
 

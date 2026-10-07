@@ -180,6 +180,10 @@ jobs:
           token: ${{ secrets.CODECOV_TOKEN }}
 
   e2e-tests:
+    # Each leg reports as its own check, e.g. "e2e-tests (base, release-1.20)".
+    # The main branch ruleset lists these names as required status checks, so
+    # renaming the job or changing the matrix means updating the ruleset too.
+    name: e2e-tests (${{ matrix.test-suite }}, ${{ matrix.crossplane-version }})
     runs-on: ubuntu-24.04
     strategy:
       fail-fast: false
@@ -188,6 +192,12 @@ jobs:
           - base
           # - package-dependency-updates  # TODO(jcogilvie):  do we need these?
           # - package-signature-verification
+        # Crossplane image tag to test against. Each value selects the matching
+        # test/e2e/manifests/beta/diff/<version>/ directory and, via the
+        # crossplane-version label filter below, only the tests that support it.
+        crossplane-version:
+          - main
+          - release-1.20
 
     steps:
       - name: Checkout
@@ -236,8 +246,9 @@ jobs:
 
       - name: Run E2E Tests
         run: |
-          earthly --strict --allow-privileged --remote-cache ghcr.io/crossplane-contrib/crossplane-diff/earthly-cache:${{ github.job }}-${{ matrix.test-suite}} \
-            +ci-e2e --FLAGS="-test.failfast -fail-fast -prior-crossplane-version=${CROSSPLANE_PRIOR_VERSION} --test-suite ${{ matrix.test-suite }}"
+          earthly --strict --allow-privileged --remote-cache ghcr.io/crossplane-contrib/crossplane-diff/earthly-cache:${{ github.job }}-${{ matrix.test-suite }}-${{ matrix.crossplane-version }} \
+            +ci-e2e --CROSSPLANE_IMAGE_TAG=${{ matrix.crossplane-version }} \
+            --FLAGS="-test.failfast -fail-fast -prior-crossplane-version=${CROSSPLANE_PRIOR_VERSION} --test-suite ${{ matrix.test-suite }} -labels=crossplane-version=${{ matrix.crossplane-version }}"
 
   build-artifacts:
     # Only run when explicitly requested via workflow_dispatch input,

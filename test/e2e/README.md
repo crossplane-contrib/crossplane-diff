@@ -162,7 +162,11 @@ worry about one test potentially conflicting with another - for example by
 installing the same provider another test would install.
 
 The [CI GitHub workflow] uses a matrix strategy to run multiple jobs in parallel,
-each running a test suite, see the dedicated section for more details.
+one per combination of test suite and Crossplane version (`main` and
+`release-1.20`), see the dedicated section for more details. Each job installs
+the Crossplane image for its version, reads manifests and expectations from
+`manifests/beta/diff/<version>/`, and selects only the tests labelled with
+`crossplane-version=<version>`.
 
 We are currently splitting the tests to be able to run all basic tests against
 the default installation of Crossplane, and for each alpha feature covered we
