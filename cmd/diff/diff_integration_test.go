@@ -209,7 +209,7 @@ func runIntegrationTest(t *testing.T, testType DiffTestType, tt IntegrationTestC
 	}
 
 	// Start the test environment
-	cfg, err := startEnvtest(testEnv)
+	cfg, err := testEnv.Start()
 	if err != nil {
 		t.Fatalf("failed to start test environment: %v", err)
 	}

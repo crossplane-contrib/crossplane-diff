@@ -9,10 +9,9 @@ import (
 	"testing"
 )
 
-// listProcesses returns the processes for which keep, given a process's parent PID and command name, returns true.
-// It reads /proc/<pid>/stat for every process and resolves the executable only of the processes it keeps. Processes
-// it cannot inspect, such as one that exited meanwhile or another user's, are left out.
-func listProcesses(keep func(ppid int, name string) bool) ([]process, error) {
+// listOrphanCandidates returns the processes for which isOrphanCandidate holds, read from /proc. Processes it cannot
+// inspect, such as one that exited meanwhile, are left out.
+func listOrphanCandidates() ([]process, error) {
 	entries, err := os.ReadDir("/proc")
 	if err != nil {
 		return nil, err
@@ -32,7 +31,7 @@ func listProcesses(keep func(ppid int, name string) bool) ([]process, error) {
 		}
 
 		name, ppid, ok := parseProcStat(stat)
-		if !ok || !keep(ppid, name) {
+		if !ok || !isOrphanCandidate(ppid, name) {
 			continue
 		}
 
@@ -49,8 +48,7 @@ func listProcesses(keep func(ppid int, name string) bool) ([]process, error) {
 }
 
 // parseProcStat returns the command name and parent PID from the contents of /proc/<pid>/stat, which reads
-// "pid (comm) state ppid ...". The command name, cut to 15 bytes, may itself contain spaces and parentheses, so it
-// runs to the last ')'.
+// "pid (comm) state ppid ...". The command name may itself contain spaces and parentheses, so it runs to the last ')'.
 func parseProcStat(stat []byte) (name string, ppid int, ok bool) {
 	open, closing := bytes.IndexByte(stat, '('), bytes.LastIndexByte(stat, ')')
 	if open < 0 || closing < open {
@@ -77,12 +75,11 @@ func TestParseProcStat(t *testing.T) {
 		wantPPID int
 		wantOK   bool
 	}{
-		"Apiserver":                {stat: "4711 (kube-apiserver) S 1 4711 4711 0 -1 ...", wantName: "kube-apiserver", wantPPID: 1, wantOK: true},
-		"NameWithSpacesAndParens":  {stat: "12 (a (b) c) R 34 12 12 0", wantName: "a (b) c", wantPPID: 34, wantOK: true},
-		"NoParens":                 {stat: "12 etcd S 1", wantOK: false},
-		"TruncatedAfterName":       {stat: "12 (etcd) S", wantOK: false},
-		"NonNumericParent":         {stat: "12 (etcd) S x", wantOK: false},
-		"ClosingBeforeOpeningOnly": {stat: ") 12 (", wantOK: false},
+		"Apiserver":               {stat: "4711 (kube-apiserver) S 1 4711 4711 0 -1 ...", wantName: "kube-apiserver", wantPPID: 1, wantOK: true},
+		"NameWithSpacesAndParens": {stat: "12 (a (b) c) R 34 12 12 0", wantName: "a (b) c", wantPPID: 34, wantOK: true},
+		"NoParens":                {stat: "12 etcd S 1", wantOK: false},
+		"TruncatedAfterName":      {stat: "12 (etcd) S", wantOK: false},
+		"NonNumericParent":        {stat: "12 (etcd) S x", wantOK: false},
 	}
 
 	for name, tt := range tests {

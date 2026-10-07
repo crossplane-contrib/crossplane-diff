@@ -358,24 +358,15 @@ requires that. See `cmd/diff/testdata/comp/resources/original-composition-kubect
 Prefer an integration test for this (seconds, and it exercises the real CLI wiring) over an e2e — e2e's SSA gives it the
 same blind spot, so it would need the same hand-placed fixture field at minutes-scale for no extra coverage.
 
-**envtest Process Guards**
+**Orphaned envtest Servers**
 
-Each integration case starts its own envtest `kube-apiserver` and `etcd` as children of the test binary. A deferred
-`testEnv.Stop()` does not run if the binary hits `-timeout`, is killed, or gets Ctrl+C, and the children used to be
-reparented to PID 1 and run forever (#524; hundreds once piled up and starved the machine). `TestMain` installs three
-guards (`cmd/diff/envtest_guard_utils_test.go`):
-- at suite start it SIGKILLs every `kube-apiserver`/`etcd` whose parent is PID 1 and whose executable is an envtest
-  binary (`KUBEBUILDER_ASSETS`, `TEST_ASSET_*`, setup-envtest's store, `/usr/local/kubebuilder/bin`);
-- 5s before the `-test.timeout` panic it SIGKILLs this binary's own envtest servers, keeps killing any that a case
-  already inside envtest's `Start` goes on to spawn, and makes `startEnvtest` refuse to start more;
-- on SIGINT/SIGTERM/SIGHUP it does the same, then re-raises the signal.
-
-Their work shows up on stderr as `envtest guard: ...` lines. Cases that fail with `not starting envtest: ...` or with
-connection errors at the end of a run hit the deadline guard: the run was out of time, so raise `-timeout` (the
-integration package can need more than go test's default 10m when it falls back to the Docker render engine). Start
-envtest through `startEnvtest`, never `Environment.Start` directly, or the deadline guard cannot stop new servers. Keep
-the rest of the guards in `TestMain` so a case pays only one atomic load. A Linux session under `systemd --user`
-reparents orphans to that subreaper rather than PID 1, so the start-of-suite reaper does not see them there.
+Each integration case starts its own envtest `kube-apiserver` and `etcd` as children of the test binary, and only a
+deferred `testEnv.Stop()` ends them. A run that times out, is killed or is interrupted leaves its servers running,
+reparented to PID 1, until the next run starts (#524; hundreds once piled up and starved the machine). At suite start
+`TestMain` SIGKILLs every `kube-apiserver`/`etcd` whose parent is PID 1 and whose executable is in an envtest directory
+(`KUBEBUILDER_ASSETS`, setup-envtest's store, `/usr/local/kubebuilder/bin`), logging `envtest reaper: ...` to stderr
+(`cmd/diff/envtest_reaper_utils_test.go`). A Linux session under `systemd --user` reparents orphans to that subreaper
+rather than PID 1, so the reaper does not see them there.
 
 **Working with ANSI Escape Codes in Test Expectations**
 
