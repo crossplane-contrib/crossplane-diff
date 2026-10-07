@@ -2141,6 +2141,33 @@ Summary: 2 modified, 2 removed`,
 			expectedError:    false,
 			expectedExitCode: dp.ExitCodeDiffDetected,
 		},
+		// The sibling of XRDDefaultsAppliedBeforeRendering, whose composition renders nothing, so it checks
+		// only the XR's dry run. Here a composition reads the composite's defaulted fields into a composed
+		// resource: a user default (spec.region) for a v2 and a legacy XR, and for the legacy XR also the
+		// machinery default spec.compositionUpdatePolicy. Rendering an undefaulted XR writes "<no value>".
+		"XRDDefaultsReachTheRender": {
+			reason:       "Validates that a composition observes an XR's CRD defaults, for both a v2 and a legacy XR",
+			outputFormat: "json",
+			setupFiles: []string{
+				"testdata/diff/resources/rendered-defaults/definitions.yaml",
+				"testdata/diff/resources/functions.yaml",
+			},
+			inputFiles: []string{"testdata/diff/new-rendered-defaults-xrs.yaml"},
+			expectedStructuredOutput: tu.ExpectDiff().
+				WithSummary(4, 0, 0).
+				WithAddedResource("XRegionalDatabase", "modern-database", "default").
+				WithField("spec.region", "us-east-1").
+				And().
+				WithAddedResource("XLegacyRegionalDatabase", "legacy-database", "").
+				WithField("spec.region", "eu-west-1").
+				And().
+				WithAddedResource("XDownstreamResource", "modern-database", "default").
+				WithField("spec.forProvider.configData", "us-east-1/large").
+				And().
+				WithAddedResource("XDownstreamResource", "legacy-database", "").
+				WithField("spec.forProvider.configData", "eu-west-1/small/Automatic"),
+			expectedExitCode: dp.ExitCodeDiffDetected,
+		},
 		// #503: a composed resource's dry-run apply payload must be exactly what the composition
 		// rendered. If it carried a locally-defaulted spec.forProvider.size: small, the apply would
 		// claim the field away from the manager that set it to large, predicting a change real
@@ -2612,6 +2639,192 @@ Summary: 2 modified, 2 removed`,
 				WithModifiedResource("XNopResource", "test-legacy-manual-v1", "").
 				WithFieldChange("spec.coolField", "existing-value", "modified-value"),
 			expectedError:    false,
+			expectedExitCode: dp.ExitCodeDiffDetected,
+		},
+		// Issue #499: Crossplane's composite reconciler writes compositionRevisionRef, so a hand-written
+		// manifest omits it — and an apply that omits a field leaves it where it is. The render must
+		// therefore see the cluster copy's ref. Here the composition propagates the revision name into the
+		// composed resource, so a render that dropped the ref reported configData changing from the real
+		// revision name to empty for an input identical to what is deployed.
+		"ExistingXROmittingRevisionRefRendersWithClusterRef": {
+			reason:       "An existing XR whose input omits compositionRevisionRef renders with the cluster's ref, so a template reading the revision name shows no spurious change",
+			outputFormat: "json",
+			setupFiles: []string{
+				"testdata/diff/resources/xrd.yaml",
+				"testdata/comp/resources/revision-templating-composition.yaml",
+				"testdata/diff/resources/functions.yaml",
+				"testdata/comp/resources/existing-xr-revision-ref.yaml",
+				"testdata/comp/resources/existing-downstream-revision-ref.yaml",
+			},
+			inputFiles:               []string{"testdata/diff/existing-xr-revision-ref-omitted.yaml"},
+			expectedStructuredOutput: tu.ExpectDiff().WithSummary(0, 0, 0),
+			expectedExitCode:         dp.ExitCodeSuccess,
+		},
+		// Issue #499, the consequence for which revision renders. The cluster's ref is inherited before the
+		// composition is resolved, so a Manual composite whose input omits the ref stays on the revision it
+		// is pinned to (abc123, the v1 template), as it would in the cluster, instead of being rendered
+		// against the latest one (def456, v2). Compare V2ManualPolicyPinnedRevision, the same change with
+		// the ref spelled out.
+		"V2ManualPolicyOmittedRevisionRefStaysPinned": {
+			reason:       "Validates v2 XR with Manual update policy whose input omits compositionRevisionRef stays on the cluster's pinned revision",
+			outputFormat: "json",
+			setupFiles: []string{
+				"testdata/diff/resources/xrd.yaml",
+				"testdata/diff/resources/composition-revision-v1.yaml",
+				"testdata/diff/resources/composition-revision-v2.yaml",
+				"testdata/diff/resources/composition-v2.yaml", // Current composition is v2
+				"testdata/diff/resources/functions.yaml",
+				"testdata/diff/resources/existing-xr-manual-v1.yaml",
+				"testdata/diff/resources/existing-downstream-manual-v1.yaml",
+			},
+			inputFiles: []string{"testdata/diff/modified-xr-manual-v1-omits-revision-ref.yaml"},
+			expectedStructuredOutput: tu.ExpectDiff().
+				WithSummary(0, 2, 0).
+				WithModifiedResource("XDownstreamResource", "test-manual-v1", "default").
+				// v1-* (not v2-*) proves the pinned revision, not the latest, rendered.
+				WithFieldChange("spec.forProvider.configData", "v1-existing-value", "v1-modified-value").
+				And().
+				WithModifiedResource("XNopResource", "test-manual-v1", "default").
+				WithFieldChange("spec.coolField", "existing-value", "modified-value"),
+			expectedExitCode: dp.ExitCodeDiffDetected,
+		},
+		// The v1-path (spec.compositionRevisionRef) twin of the above.
+		"V1ManualPolicyOmittedRevisionRefStaysPinned": {
+			reason:        "Validates v1 XR with Manual update policy whose input omits compositionRevisionRef stays on the cluster's pinned revision",
+			outputFormat:  "json",
+			xrdAPIVersion: V1,
+			setupFiles: []string{
+				"testdata/diff/resources/legacy-xrd.yaml",
+				"testdata/diff/resources/legacy-composition-revision-v1.yaml",
+				"testdata/diff/resources/legacy-composition-revision-v2.yaml",
+				"testdata/diff/resources/legacy-composition-v2.yaml",
+				"testdata/diff/resources/functions.yaml",
+				"testdata/diff/resources/existing-legacy-xr-manual-v1.yaml",
+				"testdata/diff/resources/existing-legacy-downstream-manual-v1.yaml",
+			},
+			inputFiles: []string{"testdata/diff/modified-legacy-xr-manual-v1-omits-revision-ref.yaml"},
+			expectedStructuredOutput: tu.ExpectDiff().
+				WithSummary(0, 2, 0).
+				WithModifiedResource("XDownstreamResource", "test-legacy-manual-v1", "").
+				WithFieldChange("spec.forProvider.configData", "v1-existing-value", "v1-modified-value").
+				And().
+				WithModifiedResource("XNopResource", "test-legacy-manual-v1", "").
+				WithFieldChange("spec.coolField", "existing-value", "modified-value"),
+			expectedExitCode: dp.ExitCodeDiffDetected,
+		},
+		// Issue #499 for a nested XR. It is rendered from its parent's output, which never carries
+		// compositionRevisionRef, so it must inherit the cluster copy's, which ProcessNestedXRs hands it
+		// rather than fetching it again. The child's composition propagates the revision name into the
+		// managed resource; the parent's change reaches the child's childField but not that name, so the
+		// managed resource must not be reported.
+		"NestedXRInheritsClusterRevisionRef": {
+			reason:       "A nested XR renders with its cluster copy's compositionRevisionRef, so a template reading the revision name shows no spurious change",
+			outputFormat: "json",
+			setupFiles: []string{
+				"testdata/diff/resources/nested/parent-xrd.yaml",
+				"testdata/diff/resources/nested/child-xrd.yaml",
+				"testdata/diff/resources/nested/parent-composition.yaml",
+				"testdata/diff/resources/nested/child-revision-templating-composition.yaml",
+				"testdata/diff/resources/xdownstreamenvresource-xrd.yaml",
+				"testdata/diff/resources/functions.yaml",
+				"testdata/diff/resources/nested/existing-parent-xr.yaml",
+				"testdata/diff/resources/nested/existing-child-xr-revision-ref.yaml",
+				"testdata/diff/resources/nested/existing-managed-resource-revision-ref.yaml",
+			},
+			inputFiles: []string{"testdata/diff/modified-nested-xr.yaml"},
+			expectedStructuredOutput: tu.ExpectDiff().
+				WithSummary(0, 2, 0).
+				WithModifiedResource("XChildResource", "test-parent-child", "default").
+				WithFieldChange("spec.childField", "existing-value", "modified-value").
+				And().
+				WithModifiedResource("XParentResource", "test-parent", "default").
+				WithFieldChange("spec.parentField", "existing-value", "modified-value"),
+			expectedExitCode: dp.ExitCodeDiffDetected,
+		},
+		// Issue #498, as a user meets it: an Automatic claim's manifest omits the compositionRevisionRef the
+		// claim syncer copied onto the cluster copy. Under Automatic the claim's ref is never propagated to
+		// the backing XR anyway; the XR controller owns the XR's own, which is what render must see. Before,
+		// the backing XR's ref was dropped, so the template read no revision name and configData was
+		// reported changing to "v2:<no value>:existing-value" for an unchanged claim.
+		"AutomaticClaimOmittingRevisionRefRendersWithBackingXRRef": {
+			reason:       "An Automatic claim renders with its backing XR's compositionRevisionRef, so a template reading the revision name shows no spurious change",
+			outputFormat: "json",
+			setupFiles: []string{
+				"testdata/diff/resources/existing-namespace.yaml",
+				"testdata/diff/resources/pinned-claim/definitions.yaml",
+				"testdata/diff/resources/functions.yaml",
+				"testdata/diff/resources/pinned-claim/existing-automatic.yaml",
+			},
+			inputFiles:               []string{"testdata/diff/unchanged-automatic-pinned-claim.yaml"},
+			expectedStructuredOutput: tu.ExpectDiff().WithSummary(0, 0, 0),
+			expectedExitCode:         dp.ExitCodeSuccess,
+		},
+		// A Manual claim's pin lives on its backing XR: the claim syncer copies the ref back to a claim only
+		// under Automatic. Composition resolution and render must both see that pin. Before, the composition
+		// was resolved from the claim, which names no revision, so the latest one (v2) was chosen, while the
+		// render read the backing XR's ref (rev1): configData became "v2:...-rev1:...", a revision's template
+		// paired with another revision's name.
+		"ManualClaimRendersAgainstItsBackingXRsPinnedRevision": {
+			reason:       "A Manual claim whose backing XR is pinned to an older revision renders that revision, with that revision's name",
+			outputFormat: "json",
+			setupFiles: []string{
+				"testdata/diff/resources/existing-namespace.yaml",
+				"testdata/diff/resources/pinned-claim/definitions.yaml",
+				"testdata/diff/resources/functions.yaml",
+				"testdata/diff/resources/pinned-claim/existing-manual.yaml",
+			},
+			inputFiles: []string{"testdata/diff/modified-manual-pinned-claim.yaml"},
+			expectedStructuredOutput: tu.ExpectDiff().
+				WithSummary(0, 2, 0).
+				WithModifiedResource("Pinned", "manual-claim", "existing-namespace").
+				WithFieldChange("spec.coolField", "existing-value", "modified-value").
+				And().
+				WithModifiedResource("XDownstreamResource", "manual-claim-x1y2z", "").
+				WithFieldChange("spec.forProvider.configData",
+					"v1:xpinneds.pinned.diff.example.org-rev1:existing-value",
+					"v1:xpinneds.pinned.diff.example.org-rev1:modified-value"),
+			expectedExitCode: dp.ExitCodeDiffDetected,
+		},
+		// An XRD's defaultCompositionUpdatePolicy applies to a new composite before Crossplane resolves its
+		// revision, so a new composite that names a revision and leaves the policy to an XRD defaulting to
+		// Manual renders the revision it names. Before, the composition was resolved before defaulting, as
+		// Automatic, so the latest revision (v2) rendered.
+		"NewXRUnderManualDefaultingXRDRendersTheRevisionItNames": {
+			reason:       "A new XR whose XRD defaults its update policy to Manual is resolved as Manual",
+			outputFormat: "json",
+			setupFiles: []string{
+				"testdata/diff/resources/manual-default/definitions.yaml",
+				"testdata/diff/resources/functions.yaml",
+			},
+			inputFiles: []string{"testdata/diff/new-manual-default-xr.yaml"},
+			expectedStructuredOutput: tu.ExpectDiff().
+				WithSummary(2, 0, 0).
+				WithAddedResource("XManualDefault", "new-manual-default", "default").
+				And().
+				WithAddedResource("XDownstreamResource", "new-manual-default", "default").
+				WithField("spec.forProvider.configData", "v1-new-value"),
+			expectedExitCode: dp.ExitCodeDiffDetected,
+		},
+		// Crossplane selects a composition only for a composite with no compositionRef, and never
+		// re-selects. A composite whose input relies on a selector therefore keeps the compositionRef
+		// Crossplane wrote, here composition A, even though the selector now matches two compositions.
+		// Before, the selector was re-evaluated against the input, and the diff failed as ambiguous.
+		"ExistingXRSelectingItsCompositionKeepsTheClusterCompositionRef": {
+			reason:       "An existing XR whose input selects its composition by label renders with the composition Crossplane already bound it to",
+			outputFormat: "json",
+			setupFiles: []string{
+				"testdata/diff/resources/xrd.yaml",
+				"testdata/diff/resources/functions.yaml",
+				"testdata/diff/resources/selector-bound/setup.yaml",
+			},
+			inputFiles: []string{"testdata/diff/modified-xr-selector-bound.yaml"},
+			expectedStructuredOutput: tu.ExpectDiff().
+				WithSummary(0, 2, 0).
+				WithModifiedResource("XDownstreamResource", "selector-bound", "default").
+				WithFieldChange("spec.forProvider.configData", "a-existing-value", "a-modified-value").
+				And().
+				WithModifiedResource("XNopResource", "selector-bound", "default").
+				WithFieldChange("spec.coolField", "existing-value", "modified-value"),
 			expectedExitCode: dp.ExitCodeDiffDetected,
 		},
 		// v2 XRD with v1-style composition paths (issue #206)
@@ -3304,7 +3517,7 @@ Impact analysis skipped: this composition is identical to the cluster's, so appl
 		// Before the fix, the composite was rendered with its EXISTING compositionRevisionRef: configData
 		// came out as the old revision's name, matched the cluster, and the tool reported unchanged with
 		// exit 0. Seeding the predicted ref is what turns that into the exit 3 below. This is the
-		// regression test for the whole feature — flip seedRepointingXRs off and this is what fails.
+		// regression test for the whole feature — stop applying XRDiffOptions.RevisionName and this is what fails.
 		//
 		// Note also what is NOT in the output: the composite's own
 		// spec.crossplane.compositionRevisionRef diff. Suppressing it is why the exit code still reflects
@@ -3339,6 +3552,69 @@ Impact analysis skipped: this composition is identical to the cluster's, so appl
 				// The old value is the revision the composite currently tracks; the new one is the predicted
 				// revision, i.e. the thing this whole feature exists to surface.
 				WithFieldValuePattern("spec.forProvider.configData", `^xrevisionrefs\.diff\.example\.org-[0-9a-f]{7}$`),
+		},
+		// Issue #498, the claim variant of the above. A claim is rendered from its backing XR with the
+		// claim's spec synced in. Under Automatic the claim's own ref is never propagated (the XR controller
+		// owns the backing XR's), so seeding the claim would reach nothing: comp passes the predicted name
+		// as an option, which is applied to the backing XR the render consumes. Without it, the backing
+		// XR's stale ref renders and the change goes unreported.
+		"ClaimRevisionNamePropagatesToComposedResource": {
+			reason: "A metadata-only composition edit is rendered for an Automatic claim with the revision its backing XR would re-point to",
+			setupFiles: []string{
+				"testdata/comp/resources/claim-xrd.yaml",
+				"testdata/comp/resources/claim-revision-templating-composition.yaml",
+				"testdata/comp/resources/functions.yaml",
+				"testdata/comp/resources/test-namespace.yaml",
+				"testdata/comp/resources/existing-claim-revision-ref.yaml",
+				"testdata/comp/resources/existing-claim-revision-ref-xr.yaml",
+				"testdata/comp/resources/existing-claim-revision-ref-downstream.yaml",
+			},
+			inputFiles:       []string{"testdata/comp/claim-revision-templating-updated-composition.yaml"},
+			namespace:        "test-namespace",
+			outputFormat:     "json",
+			expectedExitCode: dp.ExitCodeDiffDetected,
+			// No warnings assertion: diffing a claim's composed resources currently raises an ownership
+			// advisory unrelated to revisions (#534), and pinning the warning count would pin that too.
+			expectedStructuredCompOutput: tu.ExpectCompDiff().
+				WithComposition("xrevisionrefclaims.diff.example.org").
+				WithRevisionImpact("metadata", true, 1).
+				WithPredictedRevisionNamePattern(`^xrevisionrefclaims\.diff\.example\.org-[0-9a-f]{7}$`).
+				WithAffectedResources(1, 1, 0, 0).
+				WithXRImpact("NopClaim", "revision-ref-claim", "test-namespace", "changed").
+				WithDownstreamSummary(0, 1, 0).
+				WithDownstreamResource("modified", "XDownstreamResource", "revision-ref-claim-xr", "").
+				// The old value is the revision the backing XR tracks now; the new one is the predicted name.
+				WithFieldValuePattern("spec.forProvider.configData", `^xrevisionrefclaims\.diff\.example\.org-[0-9a-f]{7}$`),
+		},
+		// Issue #498, the other half: when nothing is seeded, an Automatic claim renders against the
+		// revision its backing XR tracks now, not against no revision at all. Nothing is seeded here
+		// because the composition differs from the cluster's only by a stale kubectl annotation, so the
+		// name of the revision that would mint is unknowable (see CompositionAppliedWithKubectlEvaluatesXRs);
+		// the claim is still rendered, so the backing XR's ref is what the template reads.
+		"ClaimRendersWithBackingXRRevisionWhenNothingIsSeeded": {
+			reason: "An Automatic claim with nothing seeded renders with its backing XR's compositionRevisionRef, so a template reading the revision name shows no spurious change",
+			setupFiles: []string{
+				"testdata/comp/resources/claim-xrd.yaml",
+				"testdata/comp/resources/claim-revision-templating-composition-kubectl-applied.yaml",
+				"testdata/comp/resources/functions.yaml",
+				"testdata/comp/resources/test-namespace.yaml",
+				"testdata/comp/resources/existing-claim-revision-ref.yaml",
+				"testdata/comp/resources/existing-claim-revision-ref-xr.yaml",
+				"testdata/comp/resources/existing-claim-revision-ref-downstream.yaml",
+			},
+			inputFiles:       []string{"testdata/comp/resources/claim-revision-templating-composition.yaml"},
+			namespace:        "test-namespace",
+			outputFormat:     "json",
+			expectedExitCode: dp.ExitCodeSuccess,
+			// Asserted on stderr rather than warnings[], for the same reason as the sibling above.
+			expectedStderrContains: []string{"Could not predict the name of the CompositionRevision"},
+			expectedStructuredCompOutput: tu.ExpectCompDiff().
+				WithComposition("xrevisionrefclaims.diff.example.org").
+				WithRevisionImpact("metadata", true, 1).
+				WithoutPredictedRevisionName().
+				WithAffectedResources(1, 0, 1, 0).
+				WithXRImpact("NopClaim", "revision-ref-claim", "test-namespace", "unchanged").
+				WithDownstreamSummary(0, 0, 0),
 		},
 		// Issue #472: the same metadata-only change, with the user opting out of paying a render per
 		// composite for it. The composites go unevaluated — but the mutative consequence is still

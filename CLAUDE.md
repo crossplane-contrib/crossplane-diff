@@ -128,6 +128,7 @@ cmd/diff/
 │   ├── comp_processor.go     # Composition diff orchestration
 │   ├── diff_calculator.go    # Calculates diffs between resources
 │   ├── resource_manager.go   # Fetches current cluster state
+│   ├── composite_resolver.go # Computes the effective composite Crossplane would reconcile
 │   ├── schema_validator.go   # Validates resources against CRD schemas
 │   ├── requirements_provider.go  # Resolves composition requirements
 │   ├── function_provider.go  # Provides functions for composition pipeline
@@ -164,7 +165,8 @@ cmd/diff/
 
 **Function Pipeline Integration**
 - Functions fetched from cluster or provided via factory
-- Docker containers may be orphaned after diff (TODO: cleanup mechanism)
+- Function containers are removed by the processor's `Cleanup`, which also runs on the first Ctrl+C/SIGTERM. A run
+  that dies without cleanup (SIGKILL, OOM, a second Ctrl+C) can leave them behind; reaping those is #525
 - Functions are tied to compositions; cached provider reuses containers across XR renders
 
 **Resource Validation**
@@ -193,12 +195,39 @@ Key implications:
 - Test expectations must reflect this: NO label changes when modifying existing Claims
 - This behavior is consistent across Crossplane versions
 
+**The Effective Composite (Authored vs. Effective)**
+Each composite being diffed is seen two ways, and they must not be confused:
+- **Authored**: the input as written (plus a synthesized name for generateName-only XRs, and a nested XR's preserved
+  identity). This is the server-side dry-run payload, because it is what a user's apply would send. Never default it
+  locally: under SSA, including a field claims ownership of it, so locally derived defaults produce false diffs (#503).
+- **Effective**: what Crossplane would actually reconcile. `CompositeResolver.Resolve`
+  (`diffprocessor/composite_resolver.go`) computes it **once, before composition resolution**, and both composition
+  resolution and render consume it. The order matters: inherit from the cluster → apply `comp`'s predicted revision
+  (`XRDiffOptions.RevisionName`, root only) → default with the XR's CRD → resolve the composition → render. Defaulting
+  before inheriting would let a default `Automatic` overwrite the cluster's `Manual`.
+  - **XR**: the authored input plus each Crossplane-written field it omits, taken from the cluster copy
+    (`compositionRef`, `compositionRevisionRef`, `compositionUpdatePolicy`, at the v1 or v2 path), plus the cluster UID.
+    The UID is required: render keeps an input UID and checks observed resources' controller refs against it.
+  - **Claim**: the backing XR named by the cluster claim's `spec.resourceRef`, with the claim's spec synced into it by
+    `syncClaimSpec`, which mirrors upstream's claim syncers (e.g. the claim's `compositionRevisionRef` is only propagated
+    to the XR under Manual). A fetch error for the backing XR is fatal.
+
+**Defaulting**
+- One non-mutating `Defaulter` predicts apiserver CRD defaulting. It is used strictly for the effective XR before
+  render, and leniently (built-ins and unknown CRDs pass through) for local prediction of additions when no apiserver
+  result is available (`--dry-run-on=existing`, missing namespace, unavailable webhook, forbidden).
+- `SchemaValidator.ValidateResources` is read-only; it never defaults its inputs.
+- A Claim is defaulted with **its own** CRD, never the XR's: by the apiserver on dry-run, or by the lenient `Defaulter`
+  in local prediction. The two CRDs differ (crossplane-runtime `pkg/xcrd`): both carry the XRD's user schema defaults,
+  but only the XR CRD defaults `compositionUpdatePolicy`, and only the Claim CRD defaults `compositeDeletePolicy`.
+
 **New Claim Handling with spec.claimRef**
-When diffing a new Claim (one that doesn't exist in the cluster yet), compositions may reference `spec.claimRef` fields
-like `{{ .observed.composite.resource.spec.claimRef.name }}`. Since `claimRef` is only populated by Crossplane on the
-backing XR at runtime, we synthesize a dummy backing XR. The synthesis happens in `DefaultDiffProcessor` (specifically
-`synthesizeDummyBackingXRForNewClaim`, called from `resolveBackingXRForClaim`) and delegates to upstream's
-`ConvertClaimToXR` helper from `crossplane/cli`. The synthesized XR carries:
+When diffing a new Claim (one that doesn't exist in the cluster yet, or isn't bound to an XR yet), compositions may
+reference `spec.claimRef` fields like `{{ .observed.composite.resource.spec.claimRef.name }}`. Since `claimRef` is only
+populated by Crossplane on the backing XR at runtime, `CompositeResolver` synthesizes a backing XR
+(`synthesizeBackingXR`), delegating to upstream's `ConvertClaimToXR` helper from `crossplane/cli`. If the claim's
+`resourceRef` names an XR that doesn't exist, it synthesizes one under that name (the XR the claim syncer would create)
+and warns. The synthesized XR carries:
 - The authoritative XR kind from the XRD's `spec.names.kind` (XRDs are not required to use the `"X" + claimKind`
   convention)
 - The claim's name as the XR name (pinned, vs. the upstream default suffix — preserves cleaner diff output)
@@ -227,8 +256,10 @@ for new claims.
   - `FetchCurrentObject`: Retrieves existing resource from cluster (for identity preservation)
   - `FetchObservedResources`: Fetches resource tree to find all composed resources (including nested)
   - `UpdateOwnerReferences`: Updates owner references with dry-run annotations
-- Separation of concerns: `DiffCalculator` focuses on diff logic, `ResourceManager` handles cluster I/O
-- Identity preservation: Fetches existing nested XRs to maintain their cluster identity across renders
+- Separation of concerns: `DiffCalculator` focuses on diff logic, `ResourceManager` handles cluster I/O, and
+  `CompositeResolver` turns cluster state into the effective composite (see "The Effective Composite" above)
+- Identity preservation: nested XRs reuse the existing object their parent's observed resources already found (passed
+  to `CompositeResolver.Resolve` instead of re-fetching), so they keep their cluster identity across renders
 
 ## Design Principles
 

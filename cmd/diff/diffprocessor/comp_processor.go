@@ -501,11 +501,11 @@ func (p *DefaultCompDiffProcessor) processSingleComposition(ctx context.Context,
 	// When the name is not predictable we render unseeded — the pre-#474 behaviour — and say so, rather
 	// than seed a guess. Seeding a name we invented would manufacture a downstream diff on a converged
 	// cluster for exactly the compositions this feature exists to serve.
-	renderInputs := keptXRs
+	revisionName := ""
 
 	switch {
 	case comparison.revisionNamePredictable:
-		renderInputs = seedRepointingXRs(keptXRs, repointingXRs, pred.name)
+		revisionName = pred.name
 	case comparison.changed():
 		p.config.Logger.Info(
 			"Could not predict the name of the CompositionRevision this composition would create, because it differs from the cluster's only by the annotation a client-side `kubectl apply` writes — whose post-apply value depends on how you apply, not on the file. Composites were rendered with their existing compositionRevisionRef, so if any of your composition templates read the revision name, a resulting change was not detected. Apply with `--server-side` (or via Argo/Flux) to make it predictable.",
@@ -515,7 +515,7 @@ func (p *DefaultCompDiffProcessor) processSingleComposition(ctx context.Context,
 	// Process kept XRs and collect diffs to determine which ones have changes
 	p.config.Logger.Debug("Processing XRs to collect diff information", "count", len(keptXRs))
 
-	xrResults := p.collectXRDiffs(ctx, renderInputs, newComp)
+	xrResults := p.collectXRDiffs(ctx, keptXRs, newComp, repointingXRs, revisionName)
 
 	// Build impact analysis and counts from results for the kept set, then merge in any
 	// already-appended filtered entries.
@@ -530,7 +530,11 @@ func (p *DefaultCompDiffProcessor) processSingleComposition(ctx context.Context,
 }
 
 // collectXRDiffs processes XRs and collects their diffs, returning results for each XR.
-func (p *DefaultCompDiffProcessor) collectXRDiffs(ctx context.Context, xrs []*un.Unstructured, newComp *un.Unstructured) map[string]*XRDiffResult {
+//
+// Each composite in repointing is rendered with revisionName as the revision it points at, unless
+// revisionName is empty (unpredictable). The others, a Manual composite kept by --include-manual, stay
+// pinned, so they are rendered against the revision they already name. See types.XRDiffOptions.
+func (p *DefaultCompDiffProcessor) collectXRDiffs(ctx context.Context, xrs []*un.Unstructured, newComp *un.Unstructured, repointing map[string]bool, revisionName string) map[string]*XRDiffResult {
 	// Convert the CLI composition to typed once for reuse
 	cliComp := &apiextensionsv1.Composition{}
 	if err := runtime.DefaultUnstructuredConverter.FromUnstructured(newComp.Object, cliComp); err != nil {
@@ -573,6 +577,9 @@ func (p *DefaultCompDiffProcessor) collectXRDiffs(ctx context.Context, xrs []*un
 	// 2. XRs whose type matches the CLI composition's compositeTypeRef
 	//
 	// For nested XRs with different types, looks up from the cluster.
+	//
+	// The provider is handed the effective composite (see CompositeResolver), so a root claim reaches it
+	// as its backing XR, whose key is not in rootResourceKeys: Check 2 matches it by type instead.
 	compositionProvider := func(ctx context.Context, res *un.Unstructured) (*apiextensionsv1.Composition, error) {
 		resGVK := res.GroupVersionKind()
 		resAPIVersion := resGVK.GroupVersion().String()
@@ -616,7 +623,12 @@ func (p *DefaultCompDiffProcessor) collectXRDiffs(ctx context.Context, xrs []*un
 	for _, xr := range xrs {
 		resourceID := dt.MakeDiffKeyFromResource(xr)
 
-		diffs, err := p.xrProc.DiffSingleResource(ctx, xr, compositionProvider)
+		var opts dtypes.XRDiffOptions
+		if repointing[resourceID] {
+			opts.RevisionName = revisionName
+		}
+
+		diffs, err := p.xrProc.DiffSingleResource(ctx, xr, compositionProvider, opts)
 		if err != nil {
 			p.config.Logger.Debug("Failed to process resource", "resource", resourceID, "error", err)
 
@@ -1094,36 +1106,6 @@ func (p *DefaultCompDiffProcessor) classifyXR(xr *un.Unstructured, targetLabels,
 	}
 
 	return xrDisposition{}, nil
-}
-
-// seedRepointingXRs returns the composites to render: a copy of each re-pointing composite with its
-// compositionRevisionRef pointed at revisionName, and every other composite unchanged. Input order is
-// preserved, and the supplied composites are never mutated — they are the cluster's objects, and the
-// impact analysis and removal detection still read identity from them.
-//
-// Only composites in `repointing` are seeded, and of those only the ones already tracking a revision;
-// see SetCompositionRevisionRefName for why a ref is never created from nothing.
-func seedRepointingXRs(xrs []*un.Unstructured, repointing map[string]bool, revisionName string) []*un.Unstructured {
-	seeded := make([]*un.Unstructured, 0, len(xrs))
-
-	for _, xr := range xrs {
-		if !repointing[dt.MakeDiffKeyFromResource(xr)] {
-			seeded = append(seeded, xr)
-			continue
-		}
-
-		candidate := xr.DeepCopy()
-		if !SetCompositionRevisionRefName(candidate, revisionName) {
-			// Not tracking a revision yet, so there is no stale value to correct and nowhere safe to put
-			// one. Render the original rather than an identical copy.
-			seeded = append(seeded, xr)
-			continue
-		}
-
-		seeded = append(seeded, candidate)
-	}
-
-	return seeded
 }
 
 // filterCounts tallies dropped XRs by filter reason. A struct rather than a growing list of

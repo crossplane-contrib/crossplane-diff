@@ -2,7 +2,7 @@ classDiagram
     class DiffProcessor {
         <<interface>>
         +PerformDiff(ctx, resources, compositionProvider) (bool, error)
-        +DiffSingleResource(ctx, res, compositionProvider) (map[string]*ResourceDiff, error)
+        +DiffSingleResource(ctx, res, compositionProvider, opts) (map[string]*ResourceDiff, error)
         +Initialize(ctx) error
         +Cleanup(ctx) error
     }
@@ -23,6 +23,7 @@ classDiagram
         -applyClient ApplyClient
         -config ProcessorConfig
         -schemaValidator SchemaValidator
+        -compositeResolver CompositeResolver
         -renderDefaulter Defaulter
         -diffCalculator DiffCalculator
         -diffRenderer DiffRenderer
@@ -30,7 +31,7 @@ classDiagram
         +Initialize(ctx) error
         +Cleanup(ctx) error
         +PerformDiff(ctx, resources, compositionProvider) (bool, error)
-        +DiffSingleResource(ctx, res, compositionProvider) (map[string]*ResourceDiff, error)
+        +DiffSingleResource(ctx, res, compositionProvider, opts) (map[string]*ResourceDiff, error)
         +RenderToStableState(ctx, xr, comp, fns, id, observed, synthReady) (render.CompositionOutputs, error)
     }
 
@@ -106,6 +107,10 @@ classDiagram
         +FetchObservedResources(ctx, xr) ([]Unstructured, error)
     }
 
+    class CompositeResolver {
+        +Resolve(ctx, authored, existing) (EffectiveComposite, error)
+    }
+
     class FunctionProvider {
         <<interface>>
         +GetFunctionsForComposition(comp) ([]Function, error)
@@ -149,6 +154,8 @@ classDiagram
     DefaultDiffProcessor --> DiffCalculator
     DefaultDiffProcessor --> Defaulter : strict, render input
     DefaultDiffProcessor --> ResourceManager
+    DefaultDiffProcessor --> CompositeResolver : effective composite
+    CompositeResolver --> ResourceManager
     DefaultDiffProcessor --> RequirementsProvider
     DefaultDiffProcessor --> FunctionProvider
     DefaultDiffProcessor --> InputValidator : one per PerformDiff

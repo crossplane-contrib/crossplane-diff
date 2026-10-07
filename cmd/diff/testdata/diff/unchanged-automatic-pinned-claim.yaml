@@ -1,0 +1,12 @@
+# resources/pinned-claim/existing-automatic.yaml's claim as its author keeps it: unchanged, but without
+# the compositionRevisionRef the claim syncer copied onto the cluster copy (issue #498).
+apiVersion: pinned.diff.example.org/v1alpha1
+kind: Pinned
+metadata:
+  name: automatic-claim
+  namespace: existing-namespace
+spec:
+  coolField: existing-value
+  compositionUpdatePolicy: Automatic
+  compositionRef:
+    name: xpinneds.pinned.diff.example.org

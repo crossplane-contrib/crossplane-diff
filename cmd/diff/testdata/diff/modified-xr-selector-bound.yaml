@@ -1,0 +1,13 @@
+# resources/selector-bound/setup.yaml's composite as its author keeps it, with coolField changed. It
+# selects its composition by label and leaves compositionRef to Crossplane, which already set it.
+apiVersion: ns.diff.example.org/v1alpha1
+kind: XNopResource
+metadata:
+  name: selector-bound
+  namespace: default
+spec:
+  coolField: modified-value
+  crossplane:
+    compositionSelector:
+      matchLabels:
+        binding: shared

@@ -1,0 +1,133 @@
+# A claim-capable XRD and a composition with two revisions, for the claim revision tests. Each revision's
+# template writes "<revision's own version>:<the compositionRevisionRef name the composite carries>:<coolField>"
+# into the composed resource, so one value shows both which revision rendered and which ref the render
+# saw. The composition itself is the newest revision (v2), as it is in a cluster.
+apiVersion: apiextensions.crossplane.io/v1
+kind: CompositeResourceDefinition
+metadata:
+  name: xpinneds.pinned.diff.example.org
+spec:
+  group: pinned.diff.example.org
+  names:
+    kind: XPinned
+    plural: xpinneds
+  claimNames:
+    kind: Pinned
+    plural: pinneds
+  versions:
+    - name: v1alpha1
+      served: true
+      referenceable: true
+      schema:
+        openAPIV3Schema:
+          type: object
+          properties:
+            spec:
+              type: object
+              properties:
+                coolField:
+                  type: string
+---
+apiVersion: apiextensions.crossplane.io/v1
+kind: Composition
+metadata:
+  name: xpinneds.pinned.diff.example.org
+spec:
+  compositeTypeRef:
+    apiVersion: pinned.diff.example.org/v1alpha1
+    kind: XPinned
+  mode: Pipeline
+  pipeline:
+    - step: generate-resources
+      functionRef:
+        name: function-go-templating
+      input:
+        apiVersion: template.fn.crossplane.io/v1beta1
+        kind: GoTemplate
+        source: Inline
+        inline:
+          template: |
+            apiVersion: nop.example.org/v1alpha1
+            kind: XDownstreamResource
+            metadata:
+              name: {{ .observed.composite.resource.metadata.name }}
+              annotations:
+                gotemplating.fn.crossplane.io/composition-resource-name: nop-resource
+            spec:
+              forProvider:
+                configData: v2:{{ .observed.composite.resource.spec.compositionRevisionRef.name }}:{{ .observed.composite.resource.spec.coolField }}
+    - step: automatically-detect-ready-composed-resources
+      functionRef:
+        name: function-auto-ready
+---
+apiVersion: apiextensions.crossplane.io/v1
+kind: CompositionRevision
+metadata:
+  name: xpinneds.pinned.diff.example.org-rev1
+  labels:
+    crossplane.io/composition-name: xpinneds.pinned.diff.example.org
+    crossplane.io/composition-hash: rev1
+spec:
+  revision: 1
+  compositeTypeRef:
+    apiVersion: pinned.diff.example.org/v1alpha1
+    kind: XPinned
+  mode: Pipeline
+  pipeline:
+    - step: generate-resources
+      functionRef:
+        name: function-go-templating
+      input:
+        apiVersion: template.fn.crossplane.io/v1beta1
+        kind: GoTemplate
+        source: Inline
+        inline:
+          template: |
+            apiVersion: nop.example.org/v1alpha1
+            kind: XDownstreamResource
+            metadata:
+              name: {{ .observed.composite.resource.metadata.name }}
+              annotations:
+                gotemplating.fn.crossplane.io/composition-resource-name: nop-resource
+            spec:
+              forProvider:
+                configData: v1:{{ .observed.composite.resource.spec.compositionRevisionRef.name }}:{{ .observed.composite.resource.spec.coolField }}
+    - step: automatically-detect-ready-composed-resources
+      functionRef:
+        name: function-auto-ready
+---
+apiVersion: apiextensions.crossplane.io/v1
+kind: CompositionRevision
+metadata:
+  name: xpinneds.pinned.diff.example.org-rev2
+  labels:
+    crossplane.io/composition-name: xpinneds.pinned.diff.example.org
+    crossplane.io/composition-hash: rev2
+spec:
+  revision: 2
+  compositeTypeRef:
+    apiVersion: pinned.diff.example.org/v1alpha1
+    kind: XPinned
+  mode: Pipeline
+  pipeline:
+    - step: generate-resources
+      functionRef:
+        name: function-go-templating
+      input:
+        apiVersion: template.fn.crossplane.io/v1beta1
+        kind: GoTemplate
+        source: Inline
+        inline:
+          template: |
+            apiVersion: nop.example.org/v1alpha1
+            kind: XDownstreamResource
+            metadata:
+              name: {{ .observed.composite.resource.metadata.name }}
+              annotations:
+                gotemplating.fn.crossplane.io/composition-resource-name: nop-resource
+            spec:
+              forProvider:
+                configData: v2:{{ .observed.composite.resource.spec.compositionRevisionRef.name }}:{{ .observed.composite.resource.spec.coolField }}
+    - step: automatically-detect-ready-composed-resources
+      functionRef:
+        name: function-auto-ready

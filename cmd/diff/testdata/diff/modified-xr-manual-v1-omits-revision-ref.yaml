@@ -1,0 +1,16 @@
+# resources/existing-xr-manual-v1.yaml with coolField modified, and with compositionRevisionRef left
+# out — as a hand-written manifest would, since Crossplane is what writes that field. An apply that
+# omits a field does not remove it, so the composite stays pinned to the revision the cluster copy
+# names (abc123, the v1 template). Rendering against the latest revision instead would show the v2
+# template's output for a change that cannot cause it. See issue #499.
+apiVersion: ns.diff.example.org/v1alpha1
+kind: XNopResource
+metadata:
+  name: test-manual-v1
+  namespace: default
+spec:
+  crossplane:
+    compositionRef:
+      name: xnopresources.diff.example.org
+    compositionUpdatePolicy: Manual
+  coolField: modified-value
