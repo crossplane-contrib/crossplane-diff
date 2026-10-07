@@ -256,8 +256,8 @@ func TestRunStart(t *testing.T) {
 				files: []string{liveID + ".lock", selfID + ".lock"},
 			},
 		},
-		"ReapsSeveralDeadRunsWithOneList": {
-			reason: "Every dead run is reclaimed from a single container listing.",
+		"ReapsEveryDeadRun": {
+			reason: "Every dead run is reclaimed, each one's containers before its network.",
 			dead:   []string{deadID, dead2ID},
 			docker: fakeDocker{containers: hostContainers},
 			want: want{
@@ -267,6 +267,7 @@ func TestRunStart(t *testing.T) {
 					"remove container dead-render",
 					"remove container dead-fn-local",
 					"remove network " + networkName(deadID),
+					"list containers",
 					"remove container dead2-fn",
 					"remove network " + networkName(dead2ID),
 				},
