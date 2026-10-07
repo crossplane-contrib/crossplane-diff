@@ -1394,8 +1394,10 @@ not leak them for good (#525):
   logged as a warning, the lease file is kept so a later run retries, and the diff is not failed.
 
 Limitations: a run can only reclaim runs that share its cache directory, so a fresh CI container sharing only the
-host's Docker socket leaves an earlier job's resources alone. Windows is unsupported, since a file that is open there
-cannot be renamed or removed. Containers and `crossplane-render-*` networks from versions before #525 carry no owner
+host's Docker socket leaves an earlier job's resources alone. A lease does not record which Docker daemon its run
+used, so a run pointed at a different daemon (`DOCKER_HOST`, `docker context`) finds nothing to remove there and
+retires the lease, leaving the dead run's resources on the first daemon. Windows is unsupported, since a file that is
+open there cannot be renamed or removed. Containers and `crossplane-render-*` networks from versions before #525 carry no owner
 and are never reclaimed.
 
 ### 6.7a InputValidator
