@@ -1387,11 +1387,11 @@ not leak them for good (#525):
   per-user directory keeps one user's runs from judging another's.
 - **Reaping.** On its first render, before it creates anything, a run takes its lease and checks every other lease in
   the directory. For each lease it can lock, it removes that run's containers (by name suffix or network membership),
-  then its network, then the lease file. All dead runs share a single `ContainerList`. With no dead run there is no
-  Docker call at all: the check is a directory listing and one non-blocking `flock` per lease. On exit
-  (`dockerrun.Run.Close`, from `EngineRenderFn.Cleanup`) the run sweeps its own resources the same way, which also
-  catches containers upstream cleanup failed to remove, then deletes its lease. Every failure is best effort: it is
-  logged as a warning, the lease file is kept so a later run retries, and the diff is not failed.
+  then its network, then the lease file. With no dead run there is no Docker call at all: the check is a directory
+  listing and one non-blocking `flock` per lease. On exit (`dockerrun.Run.Close`, from `EngineRenderFn.Cleanup`) the
+  run sweeps its own resources the same way, which also catches containers upstream cleanup failed to remove, then
+  deletes its lease. Every failure is best effort: it is logged as a warning, the lease file is kept so a later run
+  retries, and the diff is not failed.
 
 Limitations: a run can only reclaim runs that share its cache directory, so a fresh CI container sharing only the
 host's Docker socket leaves an earlier job's resources alone. A lease does not record which Docker daemon its run

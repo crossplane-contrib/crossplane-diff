@@ -176,7 +176,7 @@ func (r *Run) Close(ctx context.Context) {
 		return
 	}
 
-	err := r.reap(ctx, r.id, nil)
+	err := r.reap(ctx, r.id)
 	if err != nil {
 		r.log.Info("Some function containers could not be cleaned up; the next crossplane-diff run will retry",
 			"error", err)
@@ -194,17 +194,14 @@ func (r *Run) Close(ctx context.Context) {
 // reapDead reclaims the resources of every run whose lease is in r.dir but held by no process.
 func (r *Run) reapDead(ctx context.Context) {
 	paths, err := filepath.Glob(filepath.Join(r.dir, "*"+leaseExt))
-	if err != nil || len(paths) == 0 {
+	if err != nil {
 		return
 	}
 
-	type deadRun struct {
-		id    string
-		path  string
-		lease *os.File
-	}
+	ctx, cancel := context.WithTimeout(ctx, reapTimeout)
+	defer cancel()
 
-	var dead []deadRun
+	var errs []error
 
 	for _, p := range paths {
 		id := strings.TrimSuffix(filepath.Base(p), leaseExt)
@@ -212,57 +209,32 @@ func (r *Run) reapDead(ctx context.Context) {
 			continue
 		}
 
-		if f, ok := tryLease(p); ok {
-			dead = append(dead, deadRun{id: id, path: p, lease: f})
-		}
-	}
-
-	if len(dead) == 0 {
-		return
-	}
-
-	ctx, cancel := context.WithTimeout(ctx, reapTimeout)
-	defer cancel()
-
-	// One listing serves every dead run.
-	containers, err := r.docker.ContainerList(ctx, container.ListOptions{All: true})
-	if err != nil {
-		err = errors.Wrap(err, "cannot list Docker containers")
-	}
-
-	var errs []error
-
-	for _, d := range dead {
-		rerr := err
-		if rerr == nil {
-			rerr = r.reap(ctx, d.id, containers)
+		f, ok := tryLease(p)
+		if !ok {
+			continue
 		}
 
-		if rerr != nil {
-			errs = append(errs, errors.Wrapf(rerr, "run %s", d.id))
+		err := r.reap(ctx, id)
+		if err != nil {
+			errs = append(errs, errors.Wrapf(err, "run %s", id))
+		} else {
+			r.log.Debug("Reclaimed Docker resources left by a dead run", "run", id)
 		}
 
-		releaseLease(d.lease, d.path, rerr == nil)
+		releaseLease(f, p, err == nil)
 	}
 
 	if len(errs) > 0 {
 		r.log.Info("Cannot clean up function containers left behind by an earlier crossplane-diff run; the next run will retry",
 			"error", errors.Join(errs...))
 	}
-
-	r.log.Debug("Reclaimed Docker resources left by dead runs", "runs", len(dead)-len(errs))
 }
 
-// reap removes run id's containers, then its network. containers is a listing of every container on
-// the host; when nil, reap lists them itself.
-func (r *Run) reap(ctx context.Context, id string, containers []container.Summary) error {
-	if containers == nil {
-		var err error
-
-		containers, err = r.docker.ContainerList(ctx, container.ListOptions{All: true})
-		if err != nil {
-			return errors.Wrap(err, "cannot list Docker containers")
-		}
+// reap removes run id's containers, then its network.
+func (r *Run) reap(ctx context.Context, id string) error {
+	containers, err := r.docker.ContainerList(ctx, container.ListOptions{All: true})
+	if err != nil {
+		return errors.Wrap(err, "cannot list Docker containers")
 	}
 
 	var errs []error
