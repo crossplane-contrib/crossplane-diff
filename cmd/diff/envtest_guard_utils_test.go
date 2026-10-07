@@ -196,7 +196,7 @@ func kill(pid int) error {
 	if err != nil {
 		return err
 	}
-	defer p.Release() //nolint:errcheck // Releasing only frees the handle.
+	defer p.Release()
 
 	if err := p.Kill(); err != nil && !errors.Is(err, os.ErrProcessDone) {
 		return err
