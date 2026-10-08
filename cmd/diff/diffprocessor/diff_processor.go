@@ -49,9 +49,8 @@ type DiffProcessor interface {
 	// Returns (hasDiffs, error) where hasDiffs indicates if any differences were detected.
 	PerformDiff(ctx context.Context, resources []*un.Unstructured, compositionProvider types.CompositionProvider) (bool, error)
 
-	// DiffSingleResource processes a single resource and returns its diffs. opts adjusts how that
-	// resource is rendered; see types.XRDiffOptions.
-	DiffSingleResource(ctx context.Context, res *un.Unstructured, compositionProvider types.CompositionProvider, opts types.XRDiffOptions) (map[string]*dt.ResourceDiff, error)
+	// DiffSingleResource processes a single resource and returns its diffs.
+	DiffSingleResource(ctx context.Context, res *un.Unstructured, compositionProvider types.CompositionProvider) (map[string]*dt.ResourceDiff, error)
 
 	// Initialize loads required resources like CRDs and environment configs
 	Initialize(ctx context.Context) error
@@ -280,7 +279,7 @@ func (p *DefaultDiffProcessor) PerformDiff(ctx context.Context, resources []*un.
 		}
 
 		if in.Err == nil {
-			diffs, rendered, err := p.diffSingleResourceInternal(ctx, res, compositionProvider, nil, nil, types.XRDiffOptions{}, true, 0)
+			diffs, rendered, err := p.diffSingleResourceInternal(ctx, res, compositionProvider, nil, nil, true, 0)
 			validator.RecordRender(i, rendered, err)
 
 			if err == nil {
@@ -379,8 +378,8 @@ func (p *DefaultDiffProcessor) PerformDiff(ctx context.Context, resources []*un.
 // DiffSingleResource handles one resource at a time and returns its diffs.
 // The compositionProvider function is called to obtain the composition to use for rendering.
 // This is the public method for top-level XR diffing, which enables removal detection.
-func (p *DefaultDiffProcessor) DiffSingleResource(ctx context.Context, res *un.Unstructured, compositionProvider types.CompositionProvider, opts types.XRDiffOptions) (map[string]*dt.ResourceDiff, error) {
-	diffs, _, err := p.diffSingleResourceInternal(ctx, res, compositionProvider, nil, nil, opts, true, 0)
+func (p *DefaultDiffProcessor) DiffSingleResource(ctx context.Context, res *un.Unstructured, compositionProvider types.CompositionProvider) (map[string]*dt.ResourceDiff, error) {
+	diffs, _, err := p.diffSingleResourceInternal(ctx, res, compositionProvider, nil, nil, true, 0)
 	return diffs, err
 }
 
@@ -388,11 +387,10 @@ func (p *DefaultDiffProcessor) DiffSingleResource(ctx context.Context, res *un.U
 // parentXR should be nil for root XRs, and the parent XR for nested XRs.
 // existing is res's cluster copy when the caller already has it (a nested XR found among its parent's
 // observed resources), and nil otherwise.
-// opts applies to res alone; nested XRs are diffed with the zero value.
 // detectRemovals should be true for top-level XRs and false for nested XRs (which don't own their composed resources).
 // depth is the nesting depth of res itself: 0 for the XR the user named, 1 for an XR composed by it,
 // and so on. It must be threaded through the recursion for MaxNestedDepth to bound it at all.
-func (p *DefaultDiffProcessor) diffSingleResourceInternal(ctx context.Context, res *un.Unstructured, compositionProvider types.CompositionProvider, parentXR *cmp.Unstructured, existing *un.Unstructured, opts types.XRDiffOptions, detectRemovals bool, depth int) (map[string]*dt.ResourceDiff, map[string]bool, error) {
+func (p *DefaultDiffProcessor) diffSingleResourceInternal(ctx context.Context, res *un.Unstructured, compositionProvider types.CompositionProvider, parentXR *cmp.Unstructured, existing *un.Unstructured, detectRemovals bool, depth int) (map[string]*dt.ResourceDiff, map[string]bool, error) {
 	resourceID := fmt.Sprintf("%s/%s", res.GetKind(), res.GetName())
 	p.config.Logger.Debug("Processing resource", "resource", resourceID, "namespace", res.GetNamespace())
 
@@ -417,13 +415,6 @@ func (p *DefaultDiffProcessor) diffSingleResourceInternal(ctx context.Context, r
 
 	p.warnIfDeleting(composite.Cluster, parentXR, resourceID)
 
-	// comp's prediction of the revision this composite would re-point at. Applied to the effective
-	// composite, never the authored one, so it reaches render (for a claim, through its backing XR's
-	// ref) but not the dry-run payload.
-	if opts.RevisionName != "" {
-		SetCompositionRevisionRefName(composite.Effective, opts.RevisionName)
-	}
-
 	// Default the effective XR the way the apiserver would, so that composition resolution and render
 	// see the spec Crossplane would see. This follows inheriting the cluster's fields, so that a default
 	// never overrides a value the cluster already holds (a Manual policy, say). The policy is strict:
@@ -436,13 +427,15 @@ func (p *DefaultDiffProcessor) diffSingleResourceInternal(ctx context.Context, r
 
 	// Get the composition using the provided function. It is resolved from the defaulted effective XR,
 	// so that it sees the revision a composite is pinned to and the update policy an XRD defaults.
-	comp, err := compositionProvider(ctx, defaultedXR)
+	resolved, err := compositionProvider(ctx, defaultedXR)
 	if err != nil {
 		p.config.Logger.Debug("Failed to get composition", "resource", resourceID, "namespace", res.GetNamespace(), "error", err)
 		return nil, nil, errors.Wrap(err, "cannot get composition")
 	}
 
-	p.config.Logger.Debug("Resource setup complete", "resource", resourceID, "composition", comp.GetName())
+	comp := resolved.Composition
+
+	p.config.Logger.Debug("Resource setup complete", "resource", resourceID, "composition", comp.GetName(), "revision", resolved.RevisionName)
 
 	// Get functions for this composition (provider handles caching internally)
 	fns, err := p.functionProvider.GetFunctionsForComposition(comp)
@@ -456,6 +449,16 @@ func (p *DefaultDiffProcessor) diffSingleResourceInternal(ctx context.Context, r
 
 	renderXR := cmp.New()
 	renderXR.SetUnstructuredContent(defaultedXR.Object)
+
+	// Crossplane's composite reconciler writes the revision it selects to compositionRevisionRef, creating
+	// the ref if there is none, and only then composes. So point the render input's ref at the revision
+	// it renders, and a template reading the revision name sees the one that rendered it. Only the render
+	// input: for a claim that is its backing XR, and the dry-run payload stays as authored. The ref is
+	// written where the schema render uses puts it (spec.crossplane.* or, for a legacy XR, spec.*).
+	if resolved.RevisionName != "" {
+		renderXR.Schema, _ = p.resolveSchemaAndXRDForRender(ctx, renderXR, resourceID)
+		renderXR.SetCompositionRevisionReference(&corev1.LocalObjectReference{Name: resolved.RevisionName})
+	}
 
 	// Fetch observed resources for use in rendering (needed for getComposedResource template function)
 	// and for function-sequencer to know which resources already exist in the cluster). They are the
@@ -786,7 +789,7 @@ func (p *DefaultDiffProcessor) ProcessNestedXRs(
 		// has none) so it is not fetched again
 		// Use detectRemovals=false for nested XRs since they don't own their composed resources
 		// (resources are owned by the top-level parent XR in Crossplane's ownership model)
-		nestedDiffs, nestedRenderedResources, err := p.diffSingleResourceInternal(ctx, nestedXR, compositionProvider, parentXR, existingNestedXR, types.XRDiffOptions{}, false, depth)
+		nestedDiffs, nestedRenderedResources, err := p.diffSingleResourceInternal(ctx, nestedXR, compositionProvider, parentXR, existingNestedXR, false, depth)
 		if err != nil {
 			// Check if the error is due to missing composition
 			// Note: It's valid to have an XRD in Crossplane without a composition attached to it.

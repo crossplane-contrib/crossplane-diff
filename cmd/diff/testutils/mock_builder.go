@@ -785,22 +785,23 @@ func (b *MockCompositionClientBuilder) WithFailedInitialize(errMsg string) *Mock
 }
 
 // WithFindMatchingComposition sets the FindMatchingComposition behavior.
-func (b *MockCompositionClientBuilder) WithFindMatchingComposition(fn func(context.Context, *un.Unstructured) (*xpextv1.Composition, error)) *MockCompositionClientBuilder {
+func (b *MockCompositionClientBuilder) WithFindMatchingComposition(fn func(context.Context, *un.Unstructured) (dtypes.ResolvedComposition, error)) *MockCompositionClientBuilder {
 	b.mock.FindMatchingCompositionFn = fn
 	return b
 }
 
-// WithSuccessfulCompositionMatch sets FindMatchingComposition to return a specific composition.
+// WithSuccessfulCompositionMatch sets FindMatchingComposition to return a specific composition, with no
+// revision resolved.
 func (b *MockCompositionClientBuilder) WithSuccessfulCompositionMatch(comp *xpextv1.Composition) *MockCompositionClientBuilder {
-	return b.WithFindMatchingComposition(func(context.Context, *un.Unstructured) (*xpextv1.Composition, error) {
-		return comp, nil
+	return b.WithFindMatchingComposition(func(context.Context, *un.Unstructured) (dtypes.ResolvedComposition, error) {
+		return dtypes.ResolvedComposition{Composition: comp}, nil
 	})
 }
 
 // WithNoMatchingComposition sets FindMatchingComposition to return "not found".
 func (b *MockCompositionClientBuilder) WithNoMatchingComposition() *MockCompositionClientBuilder {
-	return b.WithFindMatchingComposition(func(context.Context, *un.Unstructured) (*xpextv1.Composition, error) {
-		return nil, errors.New("composition not found")
+	return b.WithFindMatchingComposition(func(context.Context, *un.Unstructured) (dtypes.ResolvedComposition, error) {
+		return dtypes.ResolvedComposition{}, errors.New("composition not found")
 	})
 }
 

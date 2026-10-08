@@ -1,4 +1,4 @@
-# A claim-capable XRD and a composition with two revisions, for the claim revision tests. Each revision's
+# A claim-capable XRD and a composition with two revisions, for the revision tests. Each revision's
 # template writes "<revision's own version>:<the compositionRevisionRef name the composite carries>:<coolField>"
 # into the composed resource, so one value shows both which revision rendered and which ref the render
 # saw. The composition itself is the newest revision (v2), as it is in a cluster.

@@ -1030,65 +1030,108 @@ func TestDefaultCompDiffProcessor_partitionXRsByUpdatePolicy(t *testing.T) {
 	}
 }
 
-// TestDefaultCompDiffProcessor_collectXRDiffs_RevisionName pins which composites are rendered with the
-// predicted revision name: only the re-pointing ones, and none when the name is unpredictable. A Manual
-// composite kept by --include-manual stays pinned, so rendering it with the new name would render it
-// against a revision it never uses. The supplied composites are passed through unmodified: the name is
-// applied to what render consumes, never to the cluster's objects.
+// TestDefaultCompDiffProcessor_collectXRDiffs_RevisionName pins which composites comp's composition
+// provider resolves to the predicted revision: only the ones that would re-point at it, and none when the
+// name is unpredictable. A Manual composite kept by --include-manual stays pinned, so rendering it with
+// the new name would render it against a revision it never uses. A claim reaches the provider as its
+// backing XR, which is what gets the name. The supplied composites are passed through unmodified: the
+// name is applied to what render consumes, never to the cluster's objects.
 func TestDefaultCompDiffProcessor_collectXRDiffs_RevisionName(t *testing.T) {
+	const predicted = "comp-abc1234"
+
 	auto := tu.NewResource("example.org/v1", "XResource", "auto-xr").WithNamespace("default").Build()
 	manual := tu.NewResource("example.org/v1", "XResource", "manual-xr").WithNamespace("default").
-		WithNestedField("Manual", "spec", "crossplane", "compositionUpdatePolicy").Build()
+		WithNestedField("Manual", "spec", "crossplane", "compositionUpdatePolicy").
+		WithNestedField(map[string]any{"name": "comp-0ld0001"}, "spec", "crossplane", "compositionRevisionRef").Build()
+	selective := tu.NewResource("example.org/v1", "XResource", "selective-xr").WithNamespace("default").
+		WithCompositionRevisionSelector(xp.CrossplaneAPIExtGroupV2, map[string]string{"channel": "stable"}, nil).Build()
+	claim := tu.NewResource("example.org/v1", "Resource", "my-claim").WithNamespace("default").Build()
+	backing := tu.NewResource("example.org/v1", "XResource", "my-claim-x7k2p").Build()
 
-	repointing := map[string]bool{dt.MakeDiffKeyFromResource(auto): true}
+	// The labels the predicted revision would carry; the selective composite's selector rejects them.
+	revisionLabels := map[string]string{xp.LabelCompositionName: "comp"}
 
 	tests := map[string]struct {
-		reason       string
+		reason string
+		// xr is the composite comp diffs.
+		xr *un.Unstructured
+		// rendered is what the processor hands the provider: xr's effective composite, which for a claim is
+		// its backing XR. xr when nil.
+		rendered     *un.Unstructured
 		revisionName string
-		want         map[string]types.XRDiffOptions
+		// wantRevision is the revision the provider resolves rendered to; empty for none.
+		wantRevision string
 	}{
-		"RepointingCompositesGetThePredictedName": {
-			reason:       "A composite that would re-point at the new revision is rendered with its name; a pinned one is not.",
-			revisionName: "comp-abc1234",
-			want: map[string]types.XRDiffOptions{
-				"auto-xr":   {RevisionName: "comp-abc1234"},
-				"manual-xr": {},
-			},
+		"RepointingCompositeGetsThePredictedName": {
+			reason:       "A composite that would re-point at the new revision is rendered with its name.",
+			xr:           auto,
+			revisionName: predicted,
+			wantRevision: predicted,
 		},
-		"UnpredictableNameIsNeverSeeded": {
-			reason: "When the revision name cannot be predicted, every composite renders with the ref it has.",
-			want: map[string]types.XRDiffOptions{
-				"auto-xr":   {},
-				"manual-xr": {},
-			},
+		"ClaimsBackingXRGetsThePredictedName": {
+			reason:       "A claim is rendered as its backing XR, which is matched by type and gets the name.",
+			xr:           claim,
+			rendered:     backing,
+			revisionName: predicted,
+			wantRevision: predicted,
+		},
+		"ManualCompositeKeepsItsRef": {
+			reason:       "A Manual composite stays pinned, so no revision is resolved and it keeps the ref it has.",
+			xr:           manual,
+			revisionName: predicted,
+		},
+		"SelectorRejectingTheRevisionKeepsItsRef": {
+			reason:       "An Automatic composite whose compositionRevisionSelector rejects the new revision does not adopt it.",
+			xr:           selective,
+			revisionName: predicted,
+		},
+		"UnpredictableNameIsNeverUsed": {
+			reason: "When the revision name cannot be predicted, the composite renders with the ref it has.",
+			xr:     auto,
 		},
 	}
 
 	for name, tt := range tests {
 		t.Run(name, func(t *testing.T) {
-			xrs := []*un.Unstructured{auto, manual}
-			before := []*un.Unstructured{auto.DeepCopy(), manual.DeepCopy()}
+			rendered := tt.rendered
+			if rendered == nil {
+				rendered = tt.xr
+			}
 
-			got := make(map[string]types.XRDiffOptions)
+			before := tt.xr.DeepCopy()
+
+			var got types.ResolvedComposition
+
 			processor := &DefaultCompDiffProcessor{
 				xrProc: &tu.MockDiffProcessor{
-					DiffSingleResourceFn: func(_ context.Context, res *un.Unstructured, _ types.CompositionProvider, opts types.XRDiffOptions) (map[string]*dt.ResourceDiff, error) {
-						got[res.GetName()] = opts
-						return map[string]*dt.ResourceDiff{}, nil
+					DiffSingleResourceFn: func(ctx context.Context, _ *un.Unstructured, provider types.CompositionProvider) (map[string]*dt.ResourceDiff, error) {
+						var err error
+
+						got, err = provider(ctx, rendered)
+
+						return map[string]*dt.ResourceDiff{}, err
 					},
 				},
-				config: ProcessorConfig{Logger: tu.TestLogger(t, false)},
+				config: ProcessorConfig{Logger: tu.TestLogger(t, false), IncludeManual: true},
 			}
 
 			comp := tu.NewComposition("comp").WithCompositeTypeRef("example.org/v1", "XResource").WithPipelineMode().BuildAsUnstructured()
-			_ = processor.collectXRDiffs(t.Context(), xrs, comp, repointing, tt.revisionName)
+			results := processor.collectXRDiffs(t.Context(), []*un.Unstructured{tt.xr}, comp, tt.revisionName, revisionLabels)
 
-			if diff := gcmp.Diff(tt.want, got); diff != "" {
-				t.Errorf("%s\ncollectXRDiffs() options (-want +got):\n%s", tt.reason, diff)
+			if err := results[dt.MakeDiffKeyFromResource(tt.xr)].Error; err != nil {
+				t.Fatalf("%s\ncollectXRDiffs(): unexpected error: %v", tt.reason, err)
 			}
 
-			if diff := gcmp.Diff(before, xrs); diff != "" {
-				t.Errorf("%s\ncollectXRDiffs() modified the supplied composites (-before +after):\n%s", tt.reason, diff)
+			if diff := gcmp.Diff("comp", got.Composition.GetName()); diff != "" {
+				t.Errorf("%s\ncollectXRDiffs() provider composition (-want +got):\n%s", tt.reason, diff)
+			}
+
+			if diff := gcmp.Diff(tt.wantRevision, got.RevisionName); diff != "" {
+				t.Errorf("%s\ncollectXRDiffs() provider revision (-want +got):\n%s", tt.reason, diff)
+			}
+
+			if diff := gcmp.Diff(before, tt.xr); diff != "" {
+				t.Errorf("%s\ncollectXRDiffs() modified the supplied composite (-before +after):\n%s", tt.reason, diff)
 			}
 		})
 	}
@@ -1353,14 +1396,14 @@ func TestDefaultCompDiffProcessor_collectXRDiffs_NestedXRCompositionLookup(t *te
 				compositionRequests := make([]string, 0)
 
 				mockXRProc := &tu.MockDiffProcessor{
-					DiffSingleResourceFn: func(ctx context.Context, res *un.Unstructured, compositionProvider types.CompositionProvider, _ types.XRDiffOptions) (map[string]*dt.ResourceDiff, error) {
+					DiffSingleResourceFn: func(ctx context.Context, res *un.Unstructured, compositionProvider types.CompositionProvider) (map[string]*dt.ResourceDiff, error) {
 						// For the root XR, test what composition is returned
 						comp, err := compositionProvider(ctx, res)
 						if err != nil {
 							return nil, err
 						}
 
-						compositionRequests = append(compositionRequests, fmt.Sprintf("%s/%s->%s", res.GetKind(), res.GetName(), comp.GetName()))
+						compositionRequests = append(compositionRequests, fmt.Sprintf("%s/%s->%s", res.GetKind(), res.GetName(), comp.Composition.GetName()))
 
 						// Simulate processing a nested XR by calling the provider with a different resource type
 						// This is what ProcessNestedXRs does when it encounters nested XRs
@@ -1369,7 +1412,7 @@ func TestDefaultCompDiffProcessor_collectXRDiffs_NestedXRCompositionLookup(t *te
 							return nil, err
 						}
 
-						compositionRequests = append(compositionRequests, fmt.Sprintf("%s/%s->%s", nestedXR.GetKind(), nestedXR.GetName(), nestedComp.GetName()))
+						compositionRequests = append(compositionRequests, fmt.Sprintf("%s/%s->%s", nestedXR.GetKind(), nestedXR.GetName(), nestedComp.Composition.GetName()))
 
 						return make(map[string]*dt.ResourceDiff), nil
 					},
@@ -1404,7 +1447,7 @@ func TestDefaultCompDiffProcessor_collectXRDiffs_NestedXRCompositionLookup(t *te
 				},
 			}
 
-			_ = processor.collectXRDiffs(ctx, tt.xrs, tt.cliComposition, nil, "")
+			_ = processor.collectXRDiffs(ctx, tt.xrs, tt.cliComposition, "", nil)
 
 			// Verify the composition requests
 			if len(*compositionRequests) < 2 {
@@ -1464,7 +1507,7 @@ func TestDefaultCompDiffProcessor_DiffComposition_StderrErrorOutput(t *testing.T
 
 	// Create mock XR processor that fails for one XR
 	mockXRProc := &tu.MockDiffProcessor{
-		DiffSingleResourceFn: func(_ context.Context, res *un.Unstructured, _ types.CompositionProvider, _ types.XRDiffOptions) (map[string]*dt.ResourceDiff, error) {
+		DiffSingleResourceFn: func(_ context.Context, res *un.Unstructured, _ types.CompositionProvider) (map[string]*dt.ResourceDiff, error) {
 			if res.GetName() == "fail-xr" {
 				return nil, fmt.Errorf("render pipeline failed: function timeout")
 			}
@@ -1547,7 +1590,7 @@ func TestDefaultCompDiffProcessor_DiffComposition_LateWarningsReachStructuredOut
 	warnings := NewWarningLogger(tu.TestLogger(t, false), &stderr)
 
 	mockXRProc := &tu.MockDiffProcessor{
-		DiffSingleResourceFn: func(context.Context, *un.Unstructured, types.CompositionProvider, types.XRDiffOptions) (map[string]*dt.ResourceDiff, error) {
+		DiffSingleResourceFn: func(context.Context, *un.Unstructured, types.CompositionProvider) (map[string]*dt.ResourceDiff, error) {
 			return map[string]*dt.ResourceDiff{}, nil
 		},
 		// Stands in for the leftover-container advisory raised from the function provider's teardown,
@@ -1623,7 +1666,7 @@ func newCompProcessorForTest(t *testing.T, compClient xp.CompositionClient, incl
 	compRenderer := config.Factories.CompDiffRenderer(logger, diffRenderer, diffOpts)
 
 	mockXR := &tu.MockDiffProcessor{
-		DiffSingleResourceFn: func(context.Context, *un.Unstructured, types.CompositionProvider, types.XRDiffOptions) (map[string]*dt.ResourceDiff, error) {
+		DiffSingleResourceFn: func(context.Context, *un.Unstructured, types.CompositionProvider) (map[string]*dt.ResourceDiff, error) {
 			return map[string]*dt.ResourceDiff{}, nil
 		},
 	}

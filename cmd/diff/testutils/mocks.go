@@ -257,7 +257,7 @@ type MockDiffProcessor struct {
 	// Function fields for mocking behavior
 	InitializeFn         func(ctx context.Context) error
 	PerformDiffFn        func(ctx context.Context, resources []*un.Unstructured, compositionProvider types.CompositionProvider) (bool, error)
-	DiffSingleResourceFn func(ctx context.Context, res *un.Unstructured, compositionProvider types.CompositionProvider, opts types.XRDiffOptions) (map[string]*dt.ResourceDiff, error)
+	DiffSingleResourceFn func(ctx context.Context, res *un.Unstructured, compositionProvider types.CompositionProvider) (map[string]*dt.ResourceDiff, error)
 	CleanupFn            func(ctx context.Context) error
 }
 
@@ -280,9 +280,9 @@ func (m *MockDiffProcessor) PerformDiff(ctx context.Context, resources []*un.Uns
 }
 
 // DiffSingleResource implements the DiffProcessor.DiffSingleResource method.
-func (m *MockDiffProcessor) DiffSingleResource(ctx context.Context, res *un.Unstructured, compositionProvider types.CompositionProvider, opts types.XRDiffOptions) (map[string]*dt.ResourceDiff, error) {
+func (m *MockDiffProcessor) DiffSingleResource(ctx context.Context, res *un.Unstructured, compositionProvider types.CompositionProvider) (map[string]*dt.ResourceDiff, error) {
 	if m.DiffSingleResourceFn != nil {
-		return m.DiffSingleResourceFn(ctx, res, compositionProvider, opts)
+		return m.DiffSingleResourceFn(ctx, res, compositionProvider)
 	}
 
 	return make(map[string]*dt.ResourceDiff), nil
@@ -650,7 +650,7 @@ func (m *MockTypeConverter) GetResourceNameForGVK(ctx context.Context, gvk schem
 // MockCompositionClient implements the crossplane.CompositionClient interface.
 type MockCompositionClient struct {
 	InitializeFn              func(ctx context.Context) error
-	FindMatchingCompositionFn func(ctx context.Context, res *un.Unstructured) (*xpextv1.Composition, error)
+	FindMatchingCompositionFn func(ctx context.Context, res *un.Unstructured) (types.ResolvedComposition, error)
 	ListCompositionsFn        func(ctx context.Context) ([]*xpextv1.Composition, error)
 	GetCompositionFn          func(ctx context.Context, name string) (*xpextv1.Composition, error)
 	FindCompositesFn          func(ctx context.Context, comp *un.Unstructured, opts types.FindCompositesOptions) ([]*un.Unstructured, error)
@@ -666,12 +666,12 @@ func (m *MockCompositionClient) Initialize(ctx context.Context) error {
 }
 
 // FindMatchingComposition implements crossplane.CompositionClient.
-func (m *MockCompositionClient) FindMatchingComposition(ctx context.Context, res *un.Unstructured) (*xpextv1.Composition, error) {
+func (m *MockCompositionClient) FindMatchingComposition(ctx context.Context, res *un.Unstructured) (types.ResolvedComposition, error) {
 	if m.FindMatchingCompositionFn != nil {
 		return m.FindMatchingCompositionFn(ctx, res)
 	}
 
-	return nil, errors.New("FindMatchingComposition not implemented")
+	return types.ResolvedComposition{}, errors.New("FindMatchingComposition not implemented")
 }
 
 // ListCompositions implements crossplane.CompositionClient.

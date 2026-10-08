@@ -33,7 +33,9 @@ func TestDefaultCompositionClient_FindMatchingComposition(t *testing.T) {
 
 	type want struct {
 		composition *apiextensionsv1.Composition
-		err         error
+		// revisionName is the CompositionRevision the composition comes from; empty when none applies.
+		revisionName string
+		err          error
 	}
 
 	// Create test compositions
@@ -176,6 +178,39 @@ func TestDefaultCompositionClient_FindMatchingComposition(t *testing.T) {
 			},
 			want: want{
 				composition: referencedComp,
+			},
+		},
+		"DirectCompositionReferenceResolvesRevision": {
+			reason: "Should return the composition from the referenced composition's revision, and that revision's name",
+			mockResource: *tu.NewMockResourceClient().
+				WithSuccessfulInitialize().
+				WithResourcesFoundByLabel([]*un.Unstructured{
+					tu.NewResource(CrossplaneAPIExtGroupV1, "CompositionRevision", "referenced-comp-abc1234").
+						WithLabels(map[string]string{LabelCompositionName: "referenced-comp"}).
+						WithSpecField("revision", int64(1)).
+						WithSpecField("compositeTypeRef", map[string]any{"apiVersion": "example.org/v1", "kind": "XR1"}).
+						Build(),
+				}, LabelCompositionName, "referenced-comp").
+				Build(),
+			mockDef: *tu.NewMockDefinitionClient().
+				WithSuccessfulInitialize().
+				WithEmptyXRDsFetch().
+				WithV1XRDForXR().
+				Build(),
+			fields: fields{
+				compositions: map[string]*apiextensionsv1.Composition{
+					"referenced-comp": referencedComp,
+				},
+			},
+			args: args{
+				ctx: t.Context(),
+				res: tu.NewResource("example.org/v1", "XR1", "my-xr").
+					WithSpecField("compositionRef", map[string]any{"name": "referenced-comp"}).
+					Build(),
+			},
+			want: want{
+				composition:  referencedComp,
+				revisionName: "referenced-comp-abc1234",
 			},
 		},
 		"DirectCompositionReferenceIncompatible": {
@@ -782,13 +817,17 @@ func TestDefaultCompositionClient_FindMatchingComposition(t *testing.T) {
 			}
 
 			if tt.want.composition != nil {
-				if diff := cmp.Diff(tt.want.composition.Name, got.Name); diff != "" {
+				if diff := cmp.Diff(tt.want.composition.Name, got.Composition.Name); diff != "" {
 					t.Errorf("\n%s\nFindMatchingComposition(...): -want composition name, +got composition name:\n%s", tt.reason, diff)
 				}
 
-				if diff := cmp.Diff(tt.want.composition.Spec.CompositeTypeRef, got.Spec.CompositeTypeRef); diff != "" {
+				if diff := cmp.Diff(tt.want.composition.Spec.CompositeTypeRef, got.Composition.Spec.CompositeTypeRef); diff != "" {
 					t.Errorf("\n%s\nFindMatchingComposition(...): -want composition type ref, +got composition type ref:\n%s", tt.reason, diff)
 				}
+			}
+
+			if diff := cmp.Diff(tt.want.revisionName, got.RevisionName); diff != "" {
+				t.Errorf("\n%s\nFindMatchingComposition(...): -want revision name, +got revision name:\n%s", tt.reason, diff)
 			}
 		})
 	}
@@ -1169,10 +1208,10 @@ func TestDefaultCompositionClient_ResolveCompositionFromRevisions(t *testing.T) 
 		res             *un.Unstructured
 		compositionName string
 		mockResource    *tu.MockResourceClient
-		expectComp      *apiextensionsv1.Composition
-		expectNil       bool
-		expectError     bool
-		errorPattern    string
+		// wantRevision names the revision selected; empty when none is, so the composition is used.
+		wantRevision string
+		expectError  bool
+		errorPattern string
 	}{
 		"AutomaticPolicyUsesLatestRevision": {
 			reason: "Should use latest revision when update policy is Automatic",
@@ -1190,18 +1229,8 @@ func TestDefaultCompositionClient_ResolveCompositionFromRevisions(t *testing.T) 
 					toUnstructured(rev1), toUnstructured(rev2),
 				}, LabelCompositionName, "test-comp").
 				Build(),
-			expectComp: &apiextensionsv1.Composition{
-				ObjectMeta: metav1.ObjectMeta{
-					Name: "test-comp",
-				},
-				Spec: apiextensionsv1.CompositionSpec{
-					CompositeTypeRef: apiextensionsv1.TypeReference{
-						APIVersion: "example.org/v1",
-						Kind:       "XR1",
-					},
-				},
-			},
-			expectError: false,
+			wantRevision: "test-comp-rev2",
+			expectError:  false,
 		},
 		"ManualPolicyWithRevisionRefUsesSpecifiedRevision": {
 			reason: "Should use specified revision when update policy is Manual with revision ref",
@@ -1226,18 +1255,8 @@ func TestDefaultCompositionClient_ResolveCompositionFromRevisions(t *testing.T) 
 					return nil, errors.New("not found")
 				}).
 				Build(),
-			expectComp: &apiextensionsv1.Composition{
-				ObjectMeta: metav1.ObjectMeta{
-					Name: "test-comp",
-				},
-				Spec: apiextensionsv1.CompositionSpec{
-					CompositeTypeRef: apiextensionsv1.TypeReference{
-						APIVersion: "example.org/v1",
-						Kind:       "XR1",
-					},
-				},
-			},
-			expectError: false,
+			wantRevision: "test-comp-rev1",
+			expectError:  false,
 		},
 		"ManualPolicyWithoutRevisionRefUsesLatestRevision": {
 			reason: "Should use latest revision when update policy is Manual without revision ref (net new XR case)",
@@ -1255,18 +1274,8 @@ func TestDefaultCompositionClient_ResolveCompositionFromRevisions(t *testing.T) 
 					toUnstructured(rev1), toUnstructured(rev2),
 				}, LabelCompositionName, "test-comp").
 				Build(),
-			expectComp: &apiextensionsv1.Composition{
-				ObjectMeta: metav1.ObjectMeta{
-					Name: "test-comp",
-				},
-				Spec: apiextensionsv1.CompositionSpec{
-					CompositeTypeRef: apiextensionsv1.TypeReference{
-						APIVersion: "example.org/v1",
-						Kind:       "XR1",
-					},
-				},
-			},
-			expectError: false,
+			wantRevision: "test-comp-rev2",
+			expectError:  false,
 		},
 		"V2XRWithAutomaticPolicy": {
 			reason: "Should use latest revision for v2 XR with Automatic policy",
@@ -1286,18 +1295,8 @@ func TestDefaultCompositionClient_ResolveCompositionFromRevisions(t *testing.T) 
 					toUnstructured(rev1), toUnstructured(rev2),
 				}, LabelCompositionName, "test-comp").
 				Build(),
-			expectComp: &apiextensionsv1.Composition{
-				ObjectMeta: metav1.ObjectMeta{
-					Name: "test-comp",
-				},
-				Spec: apiextensionsv1.CompositionSpec{
-					CompositeTypeRef: apiextensionsv1.TypeReference{
-						APIVersion: "example.org/v1",
-						Kind:       "XR1",
-					},
-				},
-			},
-			expectError: false,
+			wantRevision: "test-comp-rev2",
+			expectError:  false,
 		},
 		"V2XRWithManualPolicyWithoutRevisionRef": {
 			reason: "Should use latest revision for v2 XR with Manual policy but no revision ref",
@@ -1317,18 +1316,8 @@ func TestDefaultCompositionClient_ResolveCompositionFromRevisions(t *testing.T) 
 					toUnstructured(rev1), toUnstructured(rev2),
 				}, LabelCompositionName, "test-comp").
 				Build(),
-			expectComp: &apiextensionsv1.Composition{
-				ObjectMeta: metav1.ObjectMeta{
-					Name: "test-comp",
-				},
-				Spec: apiextensionsv1.CompositionSpec{
-					CompositeTypeRef: apiextensionsv1.TypeReference{
-						APIVersion: "example.org/v1",
-						Kind:       "XR1",
-					},
-				},
-			},
-			expectError: false,
+			wantRevision: "test-comp-rev2",
+			expectError:  false,
 		},
 		"NoRevisionsFoundFallsBackToNil": {
 			reason: "Should return nil when no revisions exist (unpublished composition)",
@@ -1344,7 +1333,6 @@ func TestDefaultCompositionClient_ResolveCompositionFromRevisions(t *testing.T) 
 				WithSuccessfulInitialize().
 				WithResourcesFoundByLabel([]*un.Unstructured{}, LabelCompositionName, "test-comp").
 				Build(),
-			expectNil:   true,
 			expectError: false,
 		},
 		// Bug B (issue #388): an Automatic XR with a compositionRevisionSelector that matches none of
@@ -1447,7 +1435,7 @@ func TestDefaultCompositionClient_ResolveCompositionFromRevisions(t *testing.T) 
 				compositions:   make(map[string]*apiextensionsv1.Composition),
 			}
 
-			comp, err := c.resolveCompositionFromRevisions(ctx, tt.xrd, tt.res, tt.compositionName, "test-resource-id")
+			revision, err := c.resolveCompositionFromRevisions(ctx, tt.xrd, tt.res, tt.compositionName, "test-resource-id")
 
 			if tt.expectError {
 				if err == nil {
@@ -1468,25 +1456,13 @@ func TestDefaultCompositionClient_ResolveCompositionFromRevisions(t *testing.T) 
 				return
 			}
 
-			if tt.expectNil {
-				if comp != nil {
-					t.Errorf("\n%s\nresolveCompositionFromRevisions(...): expected nil composition, got %v", tt.reason, comp)
-				}
-
-				return
+			gotRevision := ""
+			if revision != nil {
+				gotRevision = revision.GetName()
 			}
 
-			if comp == nil {
-				t.Errorf("\n%s\nresolveCompositionFromRevisions(...): unexpected nil composition", tt.reason)
-				return
-			}
-
-			if diff := cmp.Diff(tt.expectComp.GetName(), comp.GetName()); diff != "" {
-				t.Errorf("\n%s\nresolveCompositionFromRevisions(...): -want name, +got name:\n%s", tt.reason, diff)
-			}
-
-			if diff := cmp.Diff(tt.expectComp.Spec.CompositeTypeRef, comp.Spec.CompositeTypeRef); diff != "" {
-				t.Errorf("\n%s\nresolveCompositionFromRevisions(...): -want type ref, +got type ref:\n%s", tt.reason, diff)
+			if diff := cmp.Diff(tt.wantRevision, gotRevision); diff != "" {
+				t.Errorf("\n%s\nresolveCompositionFromRevisions(...): -want revision, +got revision:\n%s", tt.reason, diff)
 			}
 		})
 	}
@@ -1674,7 +1650,7 @@ func TestDefaultCompositionClient_V2XRDWithV1StylePaths(t *testing.T) {
 				return
 			}
 
-			if diff := cmp.Diff(tt.wantComp.Name, got.Name); diff != "" {
+			if diff := cmp.Diff(tt.wantComp.Name, got.Composition.Name); diff != "" {
 				t.Errorf("\n%s\nFindMatchingComposition(...): -want composition name, +got:\n%s",
 					tt.reason, diff)
 			}
