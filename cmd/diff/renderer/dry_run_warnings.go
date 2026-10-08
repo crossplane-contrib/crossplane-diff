@@ -14,48 +14,74 @@ import (
 )
 
 // dryRunSkipSummary is how one dt.DryRunSkipReason is summarised for a human: the warning's message,
-// and the context key its DryRunInfo.Detail is reported under.
+// and the context key its DryRunInfo.Detail is reported under (none for a reason without a cause).
 type dryRunSkipSummary struct {
 	message   string
 	detailKey string
 }
 
-// summaryFor returns how additions skipped for reason are summarised, and false for a reason that is
-// not worth telling the user about.
+// storageVersionNote is appended to the summary of additions whose CRD stores them at a version other
+// than the one requested (dt.DryRunInfo.StorageVersion). Their local prediction defaulted against the
+// requested version only, so the storage version's defaults, and any conversion through it, are not
+// in their diffs. The versions are reported under the `versions` context key.
+const storageVersionNote = "; they are stored at a version other than the one requested, whose defaults and conversion the cluster may apply but their diffs do not"
+
+// summaryFor returns how the additions of group g are summarised, and false for a group that is not
+// worth telling the user about. Additions stored at a version other than the one requested get
+// storageVersionNote appended to their reason's message.
 //
-// dt.DryRunSkipDisabled is deliberately not summarised: --dry-run-on=existing is the user's own choice,
-// so the additions it leaves unverified are not news to them.
-func summaryFor(reason dt.DryRunSkipReason) (dryRunSkipSummary, bool) {
-	switch reason {
+// dt.DryRunSkipDisabled is summarised only for additions stored at another version:
+// --dry-run-on=existing is the user's own choice, so the additions it leaves unverified are not news to
+// them, but that the cluster stores some at a version the prediction did not default against is.
+func summaryFor(g dryRunGroup) (dryRunSkipSummary, bool) {
+	var s dryRunSkipSummary
+
+	switch g.reason {
 	case dt.DryRunSkipForbidden:
-		return dryRunSkipSummary{
+		s = dryRunSkipSummary{
 			message:   "skipped apiserver verification of added resources: not authorized to create them, so their diffs omit server-side defaulting and admission",
 			detailKey: "reason",
-		}, true
+		}
 	case dt.DryRunSkipNamespaceNotFound:
-		return dryRunSkipSummary{
+		s = dryRunSkipSummary{
 			message:   "skipped apiserver verification of added resources: their namespace does not exist yet, so their diffs omit server-side defaulting and admission",
 			detailKey: "cause",
-		}, true
+		}
 	case dt.DryRunSkipWebhookUnavailable:
-		return dryRunSkipSummary{
+		s = dryRunSkipSummary{
 			message:   "skipped apiserver verification of added resources: the cluster could not complete admission",
 			detailKey: "cause",
-		}, true
+		}
 	case dt.DryRunSkipDisabled:
-		return dryRunSkipSummary{}, false
+		if g.storageVersion == "" {
+			return dryRunSkipSummary{}, false
+		}
+
+		// The user's own choice has no cause, so there is no detail key.
+		s = dryRunSkipSummary{message: "did not verify added resources against the apiserver (--dry-run-on=existing)"}
 	default:
 		return dryRunSkipSummary{}, false
 	}
+
+	if g.storageVersion != "" {
+		s.message += storageVersionNote
+	}
+
+	return s, true
 }
 
 // dryRunGroup is what one summary warning stands for: additions of one GVK in one namespace that were
-// not verified for one reason and one cause.
+// not verified for one reason and one cause, and are stored at one version.
+//
+// storageVersion never splits a group in practice: one GVK has one CRD, and so one storage version. It
+// is part of the key so that the note a warning carries is always true of every resource it counts.
 type dryRunGroup struct {
-	gvk       string
-	namespace string
-	reason    dt.DryRunSkipReason
-	detail    string
+	gvk            string
+	version        string // the requested version, already part of gvk; kept for the `versions` key
+	namespace      string
+	reason         dt.DryRunSkipReason
+	detail         string
+	storageVersion string
 }
 
 // dryRunWarnings derives, from the DryRunInfo carried on the supplied diffs, the warnings that tell a
@@ -64,10 +90,12 @@ type dryRunGroup struct {
 // It is the only place a human sees this: the text renderer does not show DryRunInfo. So there is one
 // warning per GVK + namespace + distinct cause, rather than per reason, because grouping any coarser
 // would keep one cause and silently drop the rest. Each warning counts the resources behind it under
-// the `count` context key. A resource that appears in more than one set (two overlapping inputs that
-// render the same object) is one resource and is counted once.
+// the `count` context key and, for additions stored at a version other than the one requested, names
+// both versions under the `versions` context key. A resource that appears in more than one set (two
+// overlapping inputs that render the same object) is one resource and is counted once.
 //
-// The result is sorted by GVK, namespace, reason and cause, since diffs arrive in map order. It is nil
+// The result is sorted by GVK, namespace, reason, cause and storage version, since diffs arrive in map
+// order. It is nil
 // when there is nothing to report.
 //
 // The per-resource dryRun field in structured output stays the machine-readable record: a warning has
@@ -81,11 +109,19 @@ func dryRunWarnings(diffSets ...map[string]*dt.ResourceDiff) []dt.OutputWarning 
 				continue
 			}
 
-			if _, summarised := summaryFor(d.DryRun.SkipReason); !summarised {
+			g := dryRunGroup{
+				gvk:            d.Gvk.String(),
+				version:        d.Gvk.Version,
+				namespace:      d.Namespace,
+				reason:         d.DryRun.SkipReason,
+				detail:         d.DryRun.Detail,
+				storageVersion: d.DryRun.StorageVersion,
+			}
+
+			if _, summarised := summaryFor(g); !summarised {
 				continue
 			}
 
-			g := dryRunGroup{gvk: d.Gvk.String(), namespace: d.Namespace, reason: d.DryRun.SkipReason, detail: d.DryRun.Detail}
 			if resources[g] == nil {
 				resources[g] = make(map[string]struct{})
 			}
@@ -104,22 +140,29 @@ func dryRunWarnings(diffSets ...map[string]*dt.ResourceDiff) []dt.OutputWarning 
 			cmp.Compare(a.namespace, b.namespace),
 			cmp.Compare(a.reason, b.reason),
 			cmp.Compare(a.detail, b.detail),
+			cmp.Compare(a.storageVersion, b.storageVersion),
 		)
 	})
 
 	warnings := make([]dt.OutputWarning, 0, len(groups))
 
 	for _, g := range groups {
-		s, _ := summaryFor(g.reason)
-		warnings = append(warnings, dt.OutputWarning{
-			Message: s.message,
-			Context: map[string]string{
-				"gvk":       g.gvk,
-				"namespace": g.namespace,
-				s.detailKey: g.detail,
-				"count":     strconv.Itoa(len(resources[g])),
-			},
-		})
+		s, _ := summaryFor(g)
+
+		context := map[string]string{
+			"gvk":       g.gvk,
+			"namespace": g.namespace,
+			"count":     strconv.Itoa(len(resources[g])),
+		}
+		if s.detailKey != "" {
+			context[s.detailKey] = g.detail
+		}
+
+		if g.storageVersion != "" {
+			context["versions"] = fmt.Sprintf("requested %s, stored %s", g.version, g.storageVersion)
+		}
+
+		warnings = append(warnings, dt.OutputWarning{Message: s.message, Context: context})
 	}
 
 	return warnings

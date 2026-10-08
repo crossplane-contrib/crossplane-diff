@@ -17,6 +17,8 @@ const (
 	forbiddenSummary = "skipped apiserver verification of added resources: not authorized to create them, so their diffs omit server-side defaulting and admission"
 	namespaceSummary = "skipped apiserver verification of added resources: their namespace does not exist yet, so their diffs omit server-side defaulting and admission"
 	webhookSummary   = "skipped apiserver verification of added resources: the cluster could not complete admission"
+	storageNote      = "; they are stored at a version other than the one requested, whose defaults and conversion the cluster may apply but their diffs do not"
+	disabledSummary  = "did not verify added resources against the apiserver (--dry-run-on=existing)"
 	testResourceGVK  = "example.org/v1, Kind=TestResource"
 	otherResourceGVK = "example.org/v1, Kind=OtherResource"
 )
@@ -31,6 +33,14 @@ func unverifiedAddition(kind, name, namespace string, reason dt.DryRunSkipReason
 		DiffType:     dt.DiffTypeAdded,
 		DryRun:       &dt.DryRunInfo{SkipReason: reason, Detail: detail},
 	}
+}
+
+// storedAt makes d an addition requested at version and stored, by its CRD, at storageVersion.
+func storedAt(d *dt.ResourceDiff, version, storageVersion string) *dt.ResourceDiff {
+	d.Gvk.Version = version
+	d.DryRun.StorageVersion = storageVersion
+
+	return d
 }
 
 // diffMap keys diffs the way the diff calculator does.
@@ -123,6 +133,43 @@ func TestDryRunWarnings(t *testing.T) {
 				unverifiedAddition("TestResource", "a", "ns-a", dt.DryRunSkipDisabled, ""),
 			)},
 			want: nil,
+		},
+		"StorageVersionIsNotedOnTheGroupsWarning": {
+			reason: "Additions requested at a version their CRD does not store say which version it stores, on the warning their group already raises, without splitting the group.",
+			diffSets: []map[string]*dt.ResourceDiff{diffMap(
+				storedAt(unverifiedAddition("TestResource", "a", "ns-a", dt.DryRunSkipForbidden, "no create"), "v1alpha1", "v1"),
+				storedAt(unverifiedAddition("TestResource", "b", "ns-a", dt.DryRunSkipForbidden, "no create"), "v1alpha1", "v1"),
+			)},
+			want: []dt.OutputWarning{
+				{Message: forbiddenSummary + storageNote, Context: map[string]string{
+					"gvk": "example.org/v1alpha1, Kind=TestResource", "namespace": "ns-a", "reason": "no create", "versions": "requested v1alpha1, stored v1", "count": "2",
+				}},
+			},
+		},
+		"StorageVersionNoteStaysWithItsOwnVersion": {
+			reason: "Additions of one kind at the storage version and at another version are already two GVKs, so only the one at the other version carries the note.",
+			diffSets: []map[string]*dt.ResourceDiff{diffMap(
+				storedAt(unverifiedAddition("TestResource", "a", "ns-a", dt.DryRunSkipNamespaceNotFound, "gone"), "v1alpha1", "v1"),
+				unverifiedAddition("TestResource", "b", "ns-a", dt.DryRunSkipNamespaceNotFound, "gone"),
+			)},
+			want: []dt.OutputWarning{
+				{Message: namespaceSummary, Context: map[string]string{"gvk": testResourceGVK, "namespace": "ns-a", "cause": "gone", "count": "1"}},
+				{Message: namespaceSummary + storageNote, Context: map[string]string{
+					"gvk": "example.org/v1alpha1, Kind=TestResource", "namespace": "ns-a", "cause": "gone", "versions": "requested v1alpha1, stored v1", "count": "1",
+				}},
+			},
+		},
+		"DisabledIsWarnedAboutForAStorageVersion": {
+			reason: "--dry-run-on=existing is the user's choice, but that the cluster stores the additions at another version is not, so it is news worth a warning.",
+			diffSets: []map[string]*dt.ResourceDiff{diffMap(
+				storedAt(unverifiedAddition("TestResource", "a", "ns-a", dt.DryRunSkipDisabled, ""), "v1alpha1", "v1"),
+				unverifiedAddition("TestResource", "b", "ns-a", dt.DryRunSkipDisabled, ""),
+			)},
+			want: []dt.OutputWarning{
+				{Message: disabledSummary + storageNote, Context: map[string]string{
+					"gvk": "example.org/v1alpha1, Kind=TestResource", "namespace": "ns-a", "versions": "requested v1alpha1, stored v1", "count": "1",
+				}},
+			},
 		},
 		"VerifiedDiffsRaiseNothing": {
 			reason: "A diff without DryRunInfo was verified, and there is nothing to say about it.",

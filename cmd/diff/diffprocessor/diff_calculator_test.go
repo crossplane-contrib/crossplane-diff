@@ -76,6 +76,11 @@ func TestDefaultDiffCalculator_CalculateDiff(t *testing.T) {
 		// unset cases exercise the default behaviour rather than a special test-only mode.
 		dryRunOn DryRunOn
 
+		// storedAt is the storage version the case's Defaulter reports for every resource it defaults:
+		// the version, other than the requested one, that the resource's CRD stores. Empty, the common
+		// case, means there is none.
+		storedAt string
+
 		// wantDryRun is the expected DryRunInfo on the resulting diff. Nil asserts its ABSENCE, i.e.
 		// that the desired state really did go through the apiserver.
 		wantDryRun *dt.DryRunInfo
@@ -320,6 +325,60 @@ func TestDefaultDiffCalculator_CalculateDiff(t *testing.T) {
 			},
 			wantLocallyDefaulted: true,
 			wantDryRun:           &dt.DryRunInfo{SkipReason: dt.DryRunSkipDisabled},
+		},
+		"AdditionNotDryRunWhenDisabledRecordsTheStorageVersion": {
+			// The local prediction defaults against the requested version only, so a CRD that stores
+			// another version may default or convert the resource in ways the diff does not show. The
+			// calculator records the version the Defaulter reports so the renderer can say so.
+			setupMocks: func(t *testing.T) (k8.ApplyClient, xp.ResourceTreeClient, ResourceManager) {
+				t.Helper()
+
+				applyClient := tu.NewMockApplyClient().Build()
+				resourceClient := tu.NewMockResourceClient().WithResourceNotFound().Build()
+				resourceManager := NewResourceManager(resourceClient, tu.NewMockDefinitionClient().Build(), tu.NewMockResourceTreeClient().Build(), tu.TestLogger(t, false))
+
+				return applyClient, tu.NewMockResourceTreeClient().Build(), resourceManager
+			},
+			composite: nil,
+			desired:   newResource,
+			dryRunOn:  DryRunOnExisting,
+			storedAt:  "v2",
+			wantDiff: &dt.ResourceDiff{
+				Gvk:          schema.GroupVersionKind{Kind: "TestResource", Group: "example.org", Version: "v1"},
+				ResourceName: "new-resource",
+				DiffType:     dt.DiffTypeAdded,
+			},
+			wantLocallyDefaulted: true,
+			wantDryRun:           &dt.DryRunInfo{SkipReason: dt.DryRunSkipDisabled, StorageVersion: "v2"},
+		},
+		"AdditionForbiddenByRBACRecordsTheStorageVersion": {
+			// Every fallback that predicts locally records the storage version, not just the one the
+			// user chose: the prediction is the same whatever kept the apiserver from being asked.
+			setupMocks: func(t *testing.T) (k8.ApplyClient, xp.ResourceTreeClient, ResourceManager) {
+				t.Helper()
+
+				applyClient := tu.NewMockApplyClient().
+					WithDryRunCreate(func(context.Context, *un.Unstructured) (*un.Unstructured, error) {
+						return nil, apierrors.NewForbidden(schema.GroupResource{Group: "example.org", Resource: "testresources"}, "new-resource", errors.New("nope"))
+					}).
+					Build()
+
+				resourceClient := tu.NewMockResourceClient().WithResourceNotFound().Build()
+				resourceManager := NewResourceManager(resourceClient, tu.NewMockDefinitionClient().Build(), tu.NewMockResourceTreeClient().Build(), tu.TestLogger(t, false))
+
+				return applyClient, tu.NewMockResourceTreeClient().Build(), resourceManager
+			},
+			composite:     nil,
+			desired:       newResource,
+			storedAt:      "v2",
+			accessChecker: tu.NewMockAccessChecker().WithDenied("no create on testresources").Build(),
+			wantDiff: &dt.ResourceDiff{
+				Gvk:          schema.GroupVersionKind{Kind: "TestResource", Group: "example.org", Version: "v1"},
+				ResourceName: "new-resource",
+				DiffType:     dt.DiffTypeAdded,
+			},
+			wantLocallyDefaulted: true,
+			wantDryRun:           &dt.DryRunInfo{SkipReason: dt.DryRunSkipForbidden, Detail: "no create on testresources", StorageVersion: "v2"},
 		},
 		"AdditionForbiddenByRBACDegrades": {
 			// Forbidden + authorizer says we may NOT create: a property of our credentials, not a finding
@@ -918,7 +977,7 @@ func TestDefaultDiffCalculator_CalculateDiff(t *testing.T) {
 				logger,
 				renderer.DefaultDiffOptions(),
 				tt.dryRunOn,
-				markerDefaulter(),
+				markerDefaulterStoringAt(tt.storedAt),
 			)
 
 			// Call the function under test
@@ -1026,14 +1085,15 @@ func TestDefaultDiffCalculator_CalculateDiff(t *testing.T) {
 // locallyDefaultedField is the spec field markerDefaulter adds.
 const locallyDefaultedField = "locallyDefaulted"
 
-// markerDefaulter is a Defaulter that adds spec.locallyDefaulted, so a case can tell whether a
-// diff's desired side was locally defaulted.
-func markerDefaulter() Defaulter {
-	return &tu.MockDefaulter{DefaultFn: func(_ context.Context, obj *un.Unstructured) (*un.Unstructured, error) {
+// markerDefaulterStoringAt is a Defaulter that adds spec.locallyDefaulted, so a case can tell whether
+// a diff's desired side was locally defaulted, and reports storageVersion as the version, other than
+// the requested one, that every resource's CRD stores.
+func markerDefaulterStoringAt(storageVersion string) Defaulter {
+	return &tu.MockDefaulter{DefaultFn: func(_ context.Context, obj *un.Unstructured) (*un.Unstructured, string, error) {
 		out := obj.DeepCopy()
 		err := un.SetNestedField(out.Object, "predicted", "spec", locallyDefaultedField)
 
-		return out, err
+		return out, storageVersion, err
 	}}
 }
 

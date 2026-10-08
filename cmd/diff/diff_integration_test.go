@@ -2273,6 +2273,61 @@ Summary: 2 modified, 2 removed`,
 			expectedError:    false,
 			expectedExitCode: dp.ExitCodeDiffDetected,
 		},
+		// The local prediction defaults an addition against the version it was requested at. Its CRD
+		// stores another version, whose defaults (and conversion) the cluster may also apply, so the
+		// prediction cannot be trusted to match and the advisory says so — even under
+		// --dry-run-on=existing, whose unverified additions are otherwise not warned about. Defaulting
+		// itself is unchanged: size is the requested version's default, not the storage version's.
+		// The XR's own XRD has one version, so it raises no warning, which the count pins.
+		"AdditionAtANonStorageVersionWarnsThatItsDiffOmitsTheStorageVersion": {
+			reason:       "With --dry-run-on=existing an addition requested at a version its CRD does not store warns that the cluster stores it at another version",
+			outputFormat: "json",
+			dryRunOn:     "existing",
+			inputFiles:   []string{"testdata/diff/new-xr.yaml"},
+			setupFiles: []string{
+				"testdata/diff/resources/xrd.yaml",
+				"testdata/diff/resources/composition-with-non-storage-version-downstream.yaml",
+				"testdata/diff/resources/functions.yaml",
+			},
+			expectedStructuredOutput: tu.ExpectDiff().
+				WithSummary(2, 0, 0).
+				WithAddedResource("XVersionedDownstreamResource", "test-resource-versioned", "default").
+				WithDryRunSkipped("disabled", "").
+				WithDryRunStorageVersion("v1").
+				WithField("spec.forProvider.size", "small").
+				And().
+				WithAddedResource("XNopResource", "test-resource", "default").
+				WithDryRunSkipped("disabled", "").
+				And().
+				WithWarning("they are stored at a version other than the one requested").
+				WithWarningContext(map[string]string{
+					"gvk":       "ns.nop.example.org/v1alpha1, Kind=XVersionedDownstreamResource",
+					"namespace": "default",
+					"versions":  "requested v1alpha1, stored v1",
+					"count":     "1",
+				}),
+			expectedError:    false,
+			expectedExitCode: dp.ExitCodeDiffDetected,
+		},
+		"AdditionAtANonStorageVersionWarnsOnStderr": {
+			reason:     "In text mode the storage-version note reaches stderr, the only place a person sees it",
+			dryRunOn:   "existing",
+			inputFiles: []string{"testdata/diff/new-xr.yaml"},
+			setupFiles: []string{
+				"testdata/diff/resources/xrd.yaml",
+				"testdata/diff/resources/composition-with-non-storage-version-downstream.yaml",
+				"testdata/diff/resources/functions.yaml",
+			},
+			noColor: true,
+			expectedStderrContains: []string{
+				`WARNING: did not verify added resources against the apiserver (--dry-run-on=existing); they are stored at a version other than the one requested, ` +
+					`whose defaults and conversion the cluster may apply but their diffs do not ` +
+					`(count=1, gvk=ns.nop.example.org/v1alpha1, Kind=XVersionedDownstreamResource, namespace=default, versions=requested v1alpha1, stored v1)`,
+			},
+			expectedOutput:   "+++ XVersionedDownstreamResource/test-resource-versioned",
+			expectedError:    false,
+			expectedExitCode: dp.ExitCodeDiffDetected,
+		},
 		"XRDDefaultsNoOverride": {
 			reason:       "Validates that XRD defaults do not override user-specified values",
 			outputFormat: "json",

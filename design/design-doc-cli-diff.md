@@ -1279,8 +1279,9 @@ its input; it returns a defaulted copy.
 
 ```go
 type Defaulter interface {
-    // Default returns a copy of obj with its CRD's defaults applied. obj itself is never modified.
-    Default(ctx context.Context, obj *un.Unstructured) (*un.Unstructured, error)
+    // Default returns a copy of obj with its CRD's defaults applied, and the version that CRD stores
+    // obj at when that is not obj's own version ("" otherwise). obj itself is never modified.
+    Default(ctx context.Context, obj *un.Unstructured) (defaulted *un.Unstructured, storageVersion string, err error)
 }
 
 // DefaultingPolicy says what a Defaulter does with a resource it finds no CRD for.
@@ -1313,10 +1314,16 @@ It has exactly two uses, one per policy:
 What it returns is never sent to the apiserver (§6.3.2), which is also why it is kept out of `SchemaValidator`: the
 resources validation sees go on to become payloads.
 
-The prediction covers CRD `default:` values only. It does not model mutating admission or admission plugins, nor
-conversion of a multi-version CRD through its storage version (#528), so a fallback diff can be incomplete or, for
-conversion, differ from what the apiserver would store. It does not prune fields the schema leaves undeclared either,
-but that cannot show in a diff: schema validation rejects such a field as an `unknownField` error first.
+The prediction covers CRD `default:` values only. It does not model mutating admission or admission plugins, so a
+fallback diff can be incomplete. Nor does it model a multi-version CRD's storage version. It defaults against the
+requested version only, while the cluster may also apply the storage version's defaults and convert the resource
+through it, so the stored object can differ from the diff. That cannot be predicted without the conversion, but it can
+be named (#528). `Default` returns the storage version of the CRD it has already resolved whenever that differs from
+the requested version. It returns `""` for a built-in type, an unknown CRD, a single-version CRD, or a request at the
+storage version, whatever the conversion strategy. `predictLocally` records it as `DryRunInfo.StorageVersion`
+(§6.8.3), and the unverified-addition warning notes it (§6.8.1). The strict render-input use discards it, and
+defaulting itself is unchanged. It does not prune fields the schema leaves undeclared either, but that cannot show in
+a diff: schema validation rejects such a field as an `unknownField` error first.
 
 ### 6.6 RequirementsProvider
 
@@ -1454,8 +1461,13 @@ receiving it: the advisory that added resources could not be verified against th
 skip reason and `Detail`, and emits one `OutputWarning` per group with `gvk`, `namespace`, the detail
 (under `cause`, or `reason` for `forbidden`) and `count`, the number of distinct resources behind it,
 in `Context`. Grouping on the detail is what keeps every distinct cause visible: the text renderer
-shows no `DryRunInfo`, so the summary is a human's only view of it. `disabled` is not summarised —
-the user chose `--dry-run-on=existing`. The summaries are sorted (diffs arrive in map order), so they
+shows no `DryRunInfo`, so the summary is a human's only view of it. `DryRunInfo.StorageVersion` is part of the group
+key too. It never splits a group in practice, because one GVK has one CRD, but it guarantees that every resource a
+warning counts shares the warning's note. A group with a storage version gets a note appended to its message ("they
+are stored at a version other than the one requested, whose defaults and conversion the cluster may apply but their
+diffs do not") and a `versions` context key (`"requested v1alpha1, stored v1"`). `disabled` is summarised only for
+such a group: the user chose `--dry-run-on=existing`, so its unverified additions are not news, but the version
+mismatch is. Its message has no cause key. The summaries are sorted (diffs arrive in map order), so they
 change the order of `warnings[]`: they come after the warnings raised during the run, grouped, and on
 stderr just before any errors. For `comp` there is one run-wide summary, across every composition,
 because `warnings[]` is top-level; the human comp renderer reuses `DefaultDiffRenderer` per
@@ -1701,7 +1713,9 @@ contract:
 - `DryRunInfo` — optional `dryRun` object on a `ChangeDetail`, recording that this resource's desired state did **not**
   go through the apiserver, and why: `Performed` (`performed`), `SkipReason` (`skipReason`, one of `"disabled"` /
   `"forbidden"` / `"webhookUnavailable"` / `"namespaceNotFound"` — §6.3.3) and `Detail` (`detail`, the cluster's own explanation: the
-  `SelfSubjectAccessReview`'s reason, or the apiserver's error message). `ChangeDetail` is the shared per-resource wire
+  `SelfSubjectAccessReview`'s reason, or the apiserver's error message). `StorageVersion` (`storageVersion`) is set
+  only when the resource's CRD stores it at a version other than the requested one, whose defaults and conversion
+  the local prediction does not model (§6.5a). `ChangeDetail` is the shared per-resource wire
   shape — `xr` reaches it via `Changes`/`xrs[].changes`, `comp` via `DownstreamChanges.Changes` — so one field covers
   both commands with no per-command plumbing.
 
@@ -2547,8 +2561,11 @@ been removed.)
 13. **Function Container Reuse Across Invocations**: The current `CachedFunctionProvider` reuses containers across XRs
     in a single run. A daemon-mode could reuse them across runs.
 14. **Higher-Fidelity Local Defaulting**: Where an addition gets no apiserver result, the lenient `Defaulter` (§6.5a)
-    applies CRD `default:` values only. Conversion of a multi-version CRD through its storage version (#528) can make
-    that prediction wrong rather than merely incomplete.
+    applies CRD `default:` values for the requested version only. When a multi-version CRD stores another version,
+    the cluster may also apply that version's defaults and convert through it, which can make the prediction wrong
+    rather than merely incomplete. Today the addition's warning names the storage version (#528). Defaulting against
+    the storage version as well, where conversion is `None`, is a possible follow-up once the apiserver's behaviour has
+    been verified.
 15. **Fuller Claim Sync**: `syncClaimSpec` (§6.4a) mirrors the claim syncer's spec rules but not two others. An XRD's
     `enforcedCompositionRef` stops the claim's `compositionRef` from being propagated, and the syncer also copies the
     claim's labels and annotations (minus `*.kubernetes.io` keys) onto the backing XR. An existing backing XR is
