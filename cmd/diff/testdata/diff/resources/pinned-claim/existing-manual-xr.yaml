@@ -1,0 +1,21 @@
+# The backing XR of existing-manual.yaml, pinned to revision 1.
+apiVersion: pinned.diff.example.org/v1alpha1
+kind: XPinned
+metadata:
+  name: manual-claim-x1y2z
+  labels:
+    crossplane.io/composite: manual-claim-x1y2z
+    crossplane.io/claim-name: manual-claim
+    crossplane.io/claim-namespace: existing-namespace
+spec:
+  coolField: existing-value
+  compositionUpdatePolicy: Manual
+  compositionRef:
+    name: xpinneds.pinned.diff.example.org
+  compositionRevisionRef:
+    name: xpinneds.pinned.diff.example.org-rev1
+  claimRef:
+    apiVersion: pinned.diff.example.org/v1alpha1
+    kind: Pinned
+    name: manual-claim
+    namespace: existing-namespace

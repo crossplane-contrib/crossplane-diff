@@ -2,6 +2,8 @@ apiVersion: legacycluster.diff.example.org/v1alpha1
 kind: XNopResource
 metadata:
   name: test-legacy-manual-v1
+  labels:
+    crossplane.io/composite: test-legacy-manual-v1
 spec:
   compositionRef:
     name: xlegacynopresources.diff.example.org

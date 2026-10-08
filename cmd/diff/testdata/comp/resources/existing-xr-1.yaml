@@ -2,6 +2,8 @@ apiVersion: ns.diff.example.org/v1alpha1
 kind: XNopResource
 metadata:
   name: test-resource
+  labels:
+    crossplane.io/composite: test-resource
   namespace: default
 spec:
   coolField: existing-value

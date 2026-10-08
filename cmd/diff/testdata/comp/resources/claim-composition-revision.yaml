@@ -1,0 +1,39 @@
+# The CompositionRevision Crossplane creates for claim-composition.yaml, named and labelled from that
+# composition's hash as Crossplane names it. envtest runs no Crossplane controllers, so it must be
+# declared. The backing XRs in existing-claim-{1,2}-xr.yaml track it.
+apiVersion: apiextensions.crossplane.io/v1
+kind: CompositionRevision
+metadata:
+  name: nopclaims.diff.example.org-e164b8b
+  labels:
+    crossplane.io/composition-name: nopclaims.diff.example.org
+    crossplane.io/composition-hash: e164b8b5b7fef344617ab5063ad3c0bce426df3863524cd1025c6a7ebf6432a
+spec:
+  revision: 1
+  compositeTypeRef:
+    apiVersion: diff.example.org/v1alpha1
+    kind: XNop
+  mode: Pipeline
+  pipeline:
+    - step: generate-resources
+      functionRef:
+        name: function-go-templating
+      input:
+        apiVersion: template.fn.crossplane.io/v1beta1
+        kind: GoTemplate
+        source: Inline
+        inline:
+          template: |
+            apiVersion: nop.example.org/v1alpha1
+            kind: XDownstreamResource
+            metadata:
+              annotations:
+                gotemplating.fn.crossplane.io/composition-resource-name: nop-resource
+              name: {{ .observed.composite.resource.metadata.name }}
+            spec:
+              forProvider:
+                configData: {{ .observed.composite.resource.spec.coolField }}
+                resourceTier: basic
+    - step: automatically-detect-ready-composed-resources
+      functionRef:
+        name: function-auto-ready

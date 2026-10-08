@@ -3,6 +3,8 @@ apiVersion: ns.diff.example.org/v1alpha1
 kind: XNopResource
 metadata:
   name: xr-in-ns-a
+  labels:
+    crossplane.io/composite: xr-in-ns-a
   namespace: ns-a
 spec:
   coolField: test-value-a

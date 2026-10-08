@@ -2,6 +2,8 @@ apiVersion: ns.diff.example.org/v1alpha1
 kind: XNopResource
 metadata:
   name: sha256-test-resource
+  labels:
+    crossplane.io/composite: sha256-test-resource
   namespace: default
 spec:
   coolField: sha256-value

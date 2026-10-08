@@ -6,6 +6,7 @@ metadata:
   annotations:
     argocd.argoproj.io/tracking-id: "test-app:/XNopResource:default/test-resource"
   labels:
+    crossplane.io/composite: test-resource
     argocd.argoproj.io/instance: test-app
 spec:
   coolField: "existing-value"
