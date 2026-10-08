@@ -38,7 +38,7 @@ classDiagram
     class DiffProcessor {
         <<interface>>
         +PerformDiff(ctx, resources, compositionProvider) (bool, error)
-        +DiffSingleResource(ctx, res, compositionProvider, opts) (map[string]*ResourceDiff, error)
+        +DiffSingleResource(ctx, res, compositionProvider) (map[string]*ResourceDiff, error)
         +Initialize(ctx) error
         +Cleanup(ctx) error
     }

@@ -107,7 +107,7 @@ classDiagram
     class CompositionClient {
         <<interface>>
         +Initialize(ctx) error
-        +FindMatchingComposition(ctx, res) (*Composition, error)
+        +FindMatchingComposition(ctx, res) (ResolvedComposition, error)
         +ListCompositions(ctx) ([]*Composition, error)
         +GetComposition(ctx, name) (*Composition, error)
         +FindComposites(ctx, comp, opts) ([]*Unstructured, error)
