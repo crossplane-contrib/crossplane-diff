@@ -1,3 +1,5 @@
+# The backing XR Crossplane's claim syncer created for existing-claim.yaml. It tracks the revision in
+# parent-composition-revision.yaml.
 apiVersion: claimnested.diff.example.org/v1alpha1
 kind: XParentNopClaim
 metadata:
@@ -9,5 +11,8 @@ metadata:
     crossplane.io/composite: existing-parent-claim-82crv
 spec:
   parentField: existing-parent-value
+  compositionUpdatePolicy: Automatic
   compositionRef:
     name: parent-nop-claim-composition
+  compositionRevisionRef:
+    name: parent-nop-claim-composition-7c02fc0

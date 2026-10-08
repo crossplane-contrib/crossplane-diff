@@ -2,6 +2,8 @@ apiVersion: ns.diff.example.org/v1alpha1
 kind: XNopResource
 metadata:
   name: test-api-version-xr
+  labels:
+    crossplane.io/composite: test-api-version-xr
   namespace: default
 spec:
   crossplane:

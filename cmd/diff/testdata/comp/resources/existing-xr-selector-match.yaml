@@ -2,6 +2,8 @@ apiVersion: ns.diff.example.org/v1alpha1
 kind: XNopResource
 metadata:
   name: selector-match-resource
+  labels:
+    crossplane.io/composite: selector-match-resource
   namespace: default
 spec:
   coolField: selector-match-existing-value

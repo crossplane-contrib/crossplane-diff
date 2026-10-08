@@ -3,7 +3,6 @@ kind: XDownstreamResource
 metadata:
   annotations:
     crossplane.io/composition-resource-name: nop-resource
-    gotemplating.fn.crossplane.io/composition-resource-name: nop-resource
   labels:
     crossplane.io/composite: test-claim-2-xr
     crossplane.io/claim-name: test-claim-2

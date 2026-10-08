@@ -2,6 +2,8 @@ apiVersion: ns.diff.example.org/v1alpha1
 kind: XNopResource
 metadata:
   name: test-manual-v1
+  labels:
+    crossplane.io/composite: test-manual-v1
   namespace: default
 spec:
   crossplane:

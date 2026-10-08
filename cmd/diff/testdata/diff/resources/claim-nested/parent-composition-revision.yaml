@@ -1,0 +1,38 @@
+# The CompositionRevision Crossplane creates for parent-composition.yaml, named and labelled from that
+# composition's hash as Crossplane names it. envtest runs no Crossplane controllers, so it must be
+# declared. The backing XR in existing-parent-xr.yaml tracks it.
+apiVersion: apiextensions.crossplane.io/v1
+kind: CompositionRevision
+metadata:
+  name: parent-nop-claim-composition-7c02fc0
+  labels:
+    crossplane.io/composition-name: parent-nop-claim-composition
+    crossplane.io/composition-hash: 7c02fc06a62bcb8f7788180a1e556c9526352a2abe0bcfc27377371183d3605
+spec:
+  revision: 1
+  compositeTypeRef:
+    apiVersion: claimnested.diff.example.org/v1alpha1
+    kind: XParentNopClaim
+  mode: Pipeline
+  pipeline:
+    - step: create-child-xr
+      functionRef:
+        name: function-go-templating
+      input:
+        apiVersion: gotemplating.fn.crossplane.io/v1beta1
+        kind: GoTemplate
+        source: Inline
+        inline:
+          template: |
+            apiVersion: claimnested.diff.example.org/v1alpha1
+            kind: XChildNopClaim
+            metadata:
+              generateName: {{ .observed.composite.resource.metadata.name }}-
+              namespace: {{ .observed.composite.resource.metadata.namespace }}
+              annotations:
+                gotemplating.fn.crossplane.io/composition-resource-name: child-xr
+            spec:
+              childField: {{ .observed.composite.resource.spec.parentField }}
+    - step: auto-ready
+      functionRef:
+        name: function-auto-ready

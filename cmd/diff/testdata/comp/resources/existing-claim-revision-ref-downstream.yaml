@@ -8,7 +8,6 @@ metadata:
   name: revision-ref-claim-xr
   annotations:
     crossplane.io/composition-resource-name: nop-resource
-    gotemplating.fn.crossplane.io/composition-resource-name: nop-resource
   labels:
     crossplane.io/composite: revision-ref-claim-xr
     crossplane.io/claim-name: revision-ref-claim

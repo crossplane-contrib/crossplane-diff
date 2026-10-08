@@ -1,0 +1,13 @@
+# sequencer-xr.yaml as it stands in the cluster once Crossplane has reconciled it: Crossplane labels
+# every XR with its own name as its composite.
+apiVersion: ns.diff.example.org/v1alpha1
+kind: XNopResource
+metadata:
+  name: sequencer-test
+  namespace: default
+  annotations:
+    crossplane.io/composition-resource-name: ""
+  labels:
+    crossplane.io/composite: sequencer-test
+spec:
+  coolField: "test-value"

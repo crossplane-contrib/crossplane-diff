@@ -5,7 +5,6 @@ metadata:
   namespace: default
   annotations:
     crossplane.io/composition-resource-name: storage
-    gotemplating.fn.crossplane.io/composition-resource-name: storage
   labels:
     crossplane.io/composite: mixed-test-xr-3
 spec:

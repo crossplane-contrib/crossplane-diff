@@ -8,7 +8,6 @@ metadata:
   namespace: default
   annotations:
     crossplane.io/composition-resource-name: managed-resource
-    gotemplating.fn.crossplane.io/composition-resource-name: managed-resource
 spec:
   forProvider:
     configData: "existing-value"
