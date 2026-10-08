@@ -1,10 +1,12 @@
+# Pull from xpkg.crossplane.io, not xpkg.upbound.io: the latter answers GitHub-hosted runners with HTTP 429, so
+# packages never install there (see the main suite's _setup/functions.yaml).
 apiVersion: pkg.crossplane.io/v1beta1
 kind: Function
 metadata:
   name: function-patch-and-transform
 spec:
-  # the earliest version of this from crossplane.io is 0.8.2 so stay at upbound (for pinning)
-  package: xpkg.upbound.io/crossplane-contrib/function-patch-and-transform:v0.7.0
+  # the earliest release published to xpkg.crossplane.io (v0.7.0 was only ever on xpkg.upbound.io)
+  package: xpkg.crossplane.io/crossplane-contrib/function-patch-and-transform:v0.8.2
 ---
 apiVersion: pkg.crossplane.io/v1beta1
 kind: Function
@@ -12,12 +14,12 @@ metadata:
   name: function-go-templating
 spec:
   # used by v1-claim-nested's parent composition; the version main's _setup pinned when that test was added
-  package: xpkg.upbound.io/crossplane-contrib/function-go-templating:v0.11.0
+  package: xpkg.crossplane.io/crossplane-contrib/function-go-templating:v0.11.0
 ---
 apiVersion: pkg.crossplane.io/v1beta1
 kind: Function
 metadata:
   name: function-auto-ready
 spec:
-  # the earliest version of this from crossplane.io is 0.4.2 so stay at upbound (for pinning)
-  package: xpkg.upbound.io/crossplane-contrib/function-auto-ready:v0.3.0
+  # the earliest release published to xpkg.crossplane.io (v0.3.0 was only ever on xpkg.upbound.io)
+  package: xpkg.crossplane.io/crossplane-contrib/function-auto-ready:v0.4.2

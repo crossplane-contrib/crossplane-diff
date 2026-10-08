@@ -1,20 +1,23 @@
+# Pull from xpkg.crossplane.io, not xpkg.upbound.io. Since 2026-10-08 xpkg.upbound.io answers GitHub-hosted runners
+# with HTTP 429, so the packages never install and setup times out waiting for them. xpkg.crossplane.io serves the
+# same crossplane-contrib packages (identical digests), and the integration tests already pull from it.
 apiVersion: pkg.crossplane.io/v1beta1
 kind: Function
 metadata:
   name: function-patch-and-transform
 spec:
-  package: xpkg.upbound.io/crossplane-contrib/function-patch-and-transform:v0.10.7
+  package: xpkg.crossplane.io/crossplane-contrib/function-patch-and-transform:v0.10.7
 ---
 apiVersion: pkg.crossplane.io/v1beta1
 kind: Function
 metadata:
   name: function-go-templating
 spec:
-  package: xpkg.upbound.io/crossplane-contrib/function-go-templating:v0.12.2
+  package: xpkg.crossplane.io/crossplane-contrib/function-go-templating:v0.12.2
 ---
 apiVersion: pkg.crossplane.io/v1beta1
 kind: Function
 metadata:
   name: function-auto-ready
 spec:
-  package: xpkg.upbound.io/crossplane-contrib/function-auto-ready:v0.7.0
+  package: xpkg.crossplane.io/crossplane-contrib/function-auto-ready:v0.7.0
