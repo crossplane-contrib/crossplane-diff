@@ -81,7 +81,7 @@ func (m *DefaultResourceManager) FetchCurrentObject(ctx context.Context, composi
 				"resource", resourceID,
 				"resourceVersion", current.GetResourceVersion())
 
-			m.checkCompositeOwnership(current, composite)
+			m.checkCompositeOwnership(ctx, current, composite)
 
 			return current, false, nil
 		}
@@ -155,25 +155,48 @@ func (m *DefaultResourceManager) createResourceID(gvk schema.GroupVersionKind, n
 }
 
 // checkCompositeOwnership logs a warning if the resource is owned by a different composite.
-func (m *DefaultResourceManager) checkCompositeOwnership(current *un.Unstructured, composite *un.Unstructured) {
+func (m *DefaultResourceManager) checkCompositeOwnership(ctx context.Context, current *un.Unstructured, composite *un.Unstructured) {
 	if composite == nil {
 		return
 	}
 
-	if labels := current.GetLabels(); labels != nil {
-		if owner, exists := labels[LabelComposite]; exists && owner != composite.GetName() {
-			// Info is the advisory level per logging.Logger's own contract, so this reaches the user via
-			// stderr and structured output rather than being buried in --verbose tracing. See WarningLogger.
-			m.logger.Info(
-				// TODO:  should we fail by default here?  maybe require a --force flag to proceed?
-				"Resource already belongs to another composite.  Applying this diff will assume ownership!",
-				"resource", fmt.Sprintf("%s/%s", current.GetKind(), current.GetName()),
-				"namespace", current.GetNamespace(),
-				"currentOwner", owner,
-				"newOwner", composite.GetName(),
-			)
-		}
+	owner, exists := current.GetLabels()[LabelComposite]
+	if !exists {
+		return
 	}
+
+	newOwner := m.compositeLabelValue(ctx, composite)
+	if owner == newOwner {
+		return
+	}
+
+	// Info is the advisory level per logging.Logger's own contract, so this reaches the user via
+	// stderr and structured output rather than being buried in --verbose tracing. See WarningLogger.
+	m.logger.Info(
+		// TODO:  should we fail by default here?  maybe require a --force flag to proceed?
+		"Resource already belongs to another composite.  Applying this diff will assume ownership!",
+		"resource", fmt.Sprintf("%s/%s", current.GetKind(), current.GetName()),
+		"namespace", current.GetNamespace(),
+		"currentOwner", owner,
+		"newOwner", newOwner,
+	)
+}
+
+// compositeLabelValue returns the crossplane.io/composite label Crossplane gives composite's composed
+// resources. For an XR that is its own name. A claim composes nothing itself: its composed resources
+// belong to its backing XR and carry that XR's name, never the claim's (#534). The backing XR is the
+// one the claim's spec.resourceRef names or, for a claim not yet bound to one, one named after the
+// claim, the same XR CompositeResolver resolves.
+func (m *DefaultResourceManager) compositeLabelValue(ctx context.Context, composite *un.Unstructured) string {
+	if !m.defClient.IsClaimResource(ctx, composite) {
+		return composite.GetName()
+	}
+
+	if ref, bound := resourceRef(composite); bound {
+		return ref.name
+	}
+
+	return composite.GetName()
 }
 
 // lookupByComposite attempts to find a resource by looking at composite ownership and composition resource name.

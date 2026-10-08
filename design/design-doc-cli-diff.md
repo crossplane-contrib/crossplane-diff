@@ -1143,6 +1143,12 @@ The `DefaultResourceManager` handles:
   resources rendered with `generateName`
 - Walking the resource tree (via `ResourceTreeClient`) to enumerate observed children of an XR
 - Managing owner references and synthesizing UIDs for dry-run
+- Warning when a resource found by name already belongs to another composite, by comparing its
+  `crossplane.io/composite` label with the label the composite's composed resources carry. For an XR that is the XR's
+  name. A claim composes nothing itself: Crossplane labels its composed resources with its backing XR's name, so a
+  claim is compared by the XR its `spec.resourceRef` names or, when it is not bound yet, by its own name, the name
+  `CompositeResolver` gives the backing XR it synthesizes (#534). The composite passed to `FetchCurrentObject` stays
+  the claim, because the claim-label lookup and the claim's owner-reference handling need it.
 
 ### 6.4a CompositeResolver
 

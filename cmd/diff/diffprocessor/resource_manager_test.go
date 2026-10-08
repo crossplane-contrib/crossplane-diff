@@ -926,53 +926,115 @@ func TestDefaultResourceManager_createResourceID(t *testing.T) {
 }
 
 func TestDefaultResourceManager_checkCompositeOwnership(t *testing.T) {
+	// Only the claim kind is a claim; every other composite is an XR.
+	defClient := tu.NewMockDefinitionClient().
+		WithIsClaimResource(func(_ context.Context, resource *un.Unstructured) bool {
+			return resource.GetKind() == testClaimKind
+		}).
+		Build()
+
+	ownedBy := func(composite string) *un.Unstructured {
+		return tu.NewResource("example.org/v1", "Resource", "my-resource").
+			WithLabels(map[string]string{"crossplane.io/composite": composite}).
+			Build()
+	}
+
+	claim := func() *tu.ResourceBuilder {
+		return tu.NewResource("example.org/v1", testClaimKind, testClaimName).InNamespace("test-namespace")
+	}
+
+	boundClaim := func(backingXR string) *un.Unstructured {
+		return claim().
+			WithSpecField("resourceRef", map[string]any{"apiVersion": "example.org/v1", "kind": "XR", "name": backingXR}).
+			Build()
+	}
+
+	takeover := func(currentOwner, newOwner string) map[string]string {
+		return map[string]string{
+			"resource":     "Resource/my-resource",
+			"namespace":    "",
+			"currentOwner": currentOwner,
+			"newOwner":     newOwner,
+		}
+	}
+
 	tests := map[string]struct {
+		reason    string
 		current   *un.Unstructured
 		composite *un.Unstructured
-		wantLog   bool
+		// wantContext is the context of the one ownership warning expected, or nil if none is.
+		wantContext map[string]string
 	}{
 		"NilComposite": {
-			current: tu.NewResource("example.org/v1", "Resource", "my-resource").
-				WithLabels(map[string]string{
-					"crossplane.io/composite": "other-xr",
-				}).
-				Build(),
+			reason:    "Without a composite there is no new owner to compare against.",
+			current:   ownedBy("other-xr"),
 			composite: nil,
-			wantLog:   false,
 		},
 		"NoCompositeLabel": {
+			reason: "A resource no composite has labelled belongs to none.",
 			current: tu.NewResource("example.org/v1", "Resource", "my-resource").
+				WithLabels(map[string]string{"unrelated": "label"}).
 				Build(),
-			composite: tu.NewResource("example.org/v1", "XR", "my-xr").
-				Build(),
-			wantLog: false,
-		},
-		"MatchingCompositeLabel": {
-			current: tu.NewResource("example.org/v1", "Resource", "my-resource").
-				WithLabels(map[string]string{
-					"crossplane.io/composite": "my-xr",
-				}).
-				Build(),
-			composite: tu.NewResource("example.org/v1", "XR", "my-xr").
-				Build(),
-			wantLog: false,
-		},
-		"DifferentCompositeLabel": {
-			current: tu.NewResource("example.org/v1", "Resource", "my-resource").
-				WithLabels(map[string]string{
-					"crossplane.io/composite": "other-xr",
-				}).
-				Build(),
-			composite: tu.NewResource("example.org/v1", "XR", "my-xr").
-				Build(),
-			wantLog: true,
+			composite: tu.NewResource("example.org/v1", "XR", "my-xr").Build(),
 		},
 		"NilLabels": {
-			current: tu.NewResource("example.org/v1", "Resource", "my-resource").
-				Build(),
+			reason:    "A resource with no labels at all belongs to no composite.",
+			current:   tu.NewResource("example.org/v1", "Resource", "my-resource").Build(),
+			composite: tu.NewResource("example.org/v1", "XR", "my-xr").Build(),
+		},
+		"MatchingCompositeLabel": {
+			reason:    "An XR's composed resources are labelled with the XR's name.",
+			current:   ownedBy("my-xr"),
+			composite: tu.NewResource("example.org/v1", "XR", "my-xr").Build(),
+		},
+		"DifferentCompositeLabel": {
+			reason:      "Applying an XR takes over a resource labelled with another XR's name.",
+			current:     ownedBy("other-xr"),
+			composite:   tu.NewResource("example.org/v1", "XR", "my-xr").Build(),
+			wantContext: takeover("other-xr", "my-xr"),
+		},
+		"XRIsComparedByItsOwnNameEvenWithAResourceRef": {
+			reason:  "Only a claim's spec.resourceRef names its backing XR; an XR is always compared by its own name.",
+			current: ownedBy("referenced-xr"),
 			composite: tu.NewResource("example.org/v1", "XR", "my-xr").
+				WithSpecField("resourceRef", map[string]any{"apiVersion": "example.org/v1", "kind": "XR", "name": "referenced-xr"}).
 				Build(),
-			wantLog: false,
+			wantContext: takeover("referenced-xr", "my-xr"),
+		},
+		"ClaimLabelMatchesBackingXR": {
+			reason:    "Crossplane labels a claim's composed resources with its backing XR's name, never the claim's (#534).",
+			current:   ownedBy("test-claim-abc12"),
+			composite: boundClaim("test-claim-abc12"),
+		},
+		"ClaimLabelNamesAnotherXR": {
+			reason:      "Applying a claim takes over a resource labelled with an XR other than the claim's backing XR.",
+			current:     ownedBy("other-xr"),
+			composite:   boundClaim("test-claim-abc12"),
+			wantContext: takeover("other-xr", "test-claim-abc12"),
+		},
+		"BoundClaimLabelNamesTheClaimItself": {
+			reason:      "A bound claim's composed resources carry its backing XR's name, so the claim's own name is another composite's.",
+			current:     ownedBy(testClaimName),
+			composite:   boundClaim("test-claim-abc12"),
+			wantContext: takeover(testClaimName, "test-claim-abc12"),
+		},
+		"UnboundClaimLabelMatchesClaimName": {
+			reason:    "A claim with no resourceRef is bound to a backing XR named after the claim, so that is its composed resources' label.",
+			current:   ownedBy(testClaimName),
+			composite: claim().Build(),
+		},
+		"UnboundClaimLabelNamesAnotherXR": {
+			reason:      "Applying a claim with no resourceRef takes over a resource labelled with any XR not named after the claim.",
+			current:     ownedBy("other-xr"),
+			composite:   claim().Build(),
+			wantContext: takeover("other-xr", testClaimName),
+		},
+		"ClaimWithIncompleteResourceRef": {
+			reason:  "A resourceRef with no name does not bind the claim yet, so its backing XR is named after the claim.",
+			current: ownedBy(testClaimName),
+			composite: claim().
+				WithSpecField("resourceRef", map[string]any{"apiVersion": "example.org/v1", "kind": "XR"}).
+				Build(),
 		},
 	}
 
@@ -986,23 +1048,24 @@ func TestDefaultResourceManager_checkCompositeOwnership(t *testing.T) {
 			warnings := NewWarningLogger(tu.TestLogger(t, false), &stderr)
 
 			rm := &DefaultResourceManager{
-				logger: warnings,
+				defClient: defClient,
+				logger:    warnings,
 			}
 
-			rm.checkCompositeOwnership(tt.current, tt.composite)
+			rm.checkCompositeOwnership(t.Context(), tt.current, tt.composite)
 
 			got := warnings.Warnings()
 
-			if !tt.wantLog {
+			if tt.wantContext == nil {
 				if len(got) != 0 {
-					t.Errorf("expected no ownership warning, got %v", got)
+					t.Errorf("%s\nexpected no ownership warning, got %v", tt.reason, got)
 				}
 
 				return
 			}
 
 			if len(got) != 1 {
-				t.Fatalf("expected exactly one ownership warning, got %v", got)
+				t.Fatalf("%s\nexpected exactly one ownership warning, got %v", tt.reason, got)
 			}
 
 			// The message must name the consequence, not just the condition: a user who sees this needs
@@ -1013,14 +1076,8 @@ func TestDefaultResourceManager_checkCompositeOwnership(t *testing.T) {
 
 			// The old and new owners are the load-bearing detail — without them a user cannot tell
 			// which composite they are about to take the resource from.
-			wantContext := map[string]string{
-				"resource":     "Resource/my-resource",
-				"namespace":    "",
-				"currentOwner": "other-xr",
-				"newOwner":     "my-xr",
-			}
-			if diff := gcmp.Diff(wantContext, got[0].Context); diff != "" {
-				t.Errorf("warning context mismatch (-want +got):\n%s", diff)
+			if diff := gcmp.Diff(tt.wantContext, got[0].Context); diff != "" {
+				t.Errorf("%s\nwarning context mismatch (-want +got):\n%s", tt.reason, diff)
 			}
 
 			if !strings.Contains(stderr.String(), "WARNING: ") {

@@ -2029,10 +2029,14 @@ Summary: 2 modified, 2 removed`,
 				"testdata/diff/resources/functions.yaml",
 				// Add existing resources for comparison
 				"testdata/diff/resources/existing-claim.yaml",
+				"testdata/diff/resources/existing-claim-xr.yaml",
 				"testdata/diff/resources/existing-claim-downstream-resource.yaml",
 			},
 			inputFiles: []string{"testdata/diff/modified-claim.yaml"},
 			expectedStructuredOutput: tu.ExpectDiff().
+				// The composed resource is labelled with the backing XR the claim's resourceRef names, so it
+				// already belongs to this claim: no ownership advisory (#534).
+				WithNoWarnings().
 				WithSummary(0, 2, 0).
 				WithModifiedResource("NopClaim", "test-claim", "existing-namespace").
 				WithFieldChange("spec.coolField", "existing-value", "modified-value").
@@ -2054,6 +2058,7 @@ Summary: 2 modified, 2 removed`,
 				"testdata/diff/resources/claim-composition-revision.yaml",
 				"testdata/diff/resources/functions.yaml",
 				"testdata/diff/resources/existing-claim.yaml",
+				"testdata/diff/resources/existing-claim-xr.yaml",
 				"testdata/diff/resources/existing-claim-downstream-resource.yaml",
 			},
 			fieldManagerApplies: []fieldManagerApply{
@@ -2061,6 +2066,8 @@ Summary: 2 modified, 2 removed`,
 			},
 			inputFiles: []string{"testdata/diff/modified-claim-omitting-defaulted-fields.yaml"},
 			expectedStructuredOutput: tu.ExpectDiff().
+				// As in ModifiedClaimShowsDiff: the composed resource belongs to the claim's backing XR (#534).
+				WithNoWarnings().
 				WithSummary(0, 2, 0).
 				WithModifiedResource("NopClaim", "test-claim", "existing-namespace").
 				WithFieldChange("spec.coolField", "existing-value", "modified-value").
@@ -2755,8 +2762,9 @@ Summary: 2 modified, 2 removed`,
 				"testdata/diff/resources/functions.yaml",
 				"testdata/diff/resources/pinned-claim/existing-automatic.yaml",
 			},
-			inputFiles:               []string{"testdata/diff/unchanged-automatic-pinned-claim.yaml"},
-			expectedStructuredOutput: tu.ExpectDiff().WithSummary(0, 0, 0),
+			inputFiles: []string{"testdata/diff/unchanged-automatic-pinned-claim.yaml"},
+			// No warnings either: the composed resource belongs to the claim's backing XR (#534).
+			expectedStructuredOutput: tu.ExpectDiff().WithNoWarnings().WithSummary(0, 0, 0),
 			expectedExitCode:         dp.ExitCodeSuccess,
 		},
 		// A Manual claim's pin lives on its backing XR: the claim syncer copies the ref back to a claim only
@@ -2775,6 +2783,9 @@ Summary: 2 modified, 2 removed`,
 			},
 			inputFiles: []string{"testdata/diff/modified-manual-pinned-claim.yaml"},
 			expectedStructuredOutput: tu.ExpectDiff().
+				// The composed resource is labelled with the backing XR's name, which the claim's resourceRef
+				// names, so it already belongs to this claim: no ownership advisory (#534).
+				WithNoWarnings().
 				WithSummary(0, 2, 0).
 				WithModifiedResource("Pinned", "manual-claim", "existing-namespace").
 				WithFieldChange("spec.coolField", "existing-value", "modified-value").
@@ -3573,9 +3584,10 @@ Impact analysis skipped: this composition is identical to the cluster's, so appl
 			namespace:        "test-namespace",
 			outputFormat:     "json",
 			expectedExitCode: dp.ExitCodeDiffDetected,
-			// No warnings assertion: diffing a claim's composed resources currently raises an ownership
-			// advisory unrelated to revisions (#534), and pinning the warning count would pin that too.
 			expectedStructuredCompOutput: tu.ExpectCompDiff().
+				// The claim's composed resource is labelled with its backing XR's name, which is the claim's
+				// owner, so no "already belongs to another composite" advisory is raised (#534).
+				WithNoWarnings().
 				WithComposition("xrevisionrefclaims.diff.example.org").
 				WithRevisionImpact("metadata", true, 1).
 				WithPredictedRevisionNamePattern(`^xrevisionrefclaims\.diff\.example\.org-[0-9a-f]{7}$`).
@@ -3602,13 +3614,17 @@ Impact analysis skipped: this composition is identical to the cluster's, so appl
 				"testdata/comp/resources/existing-claim-revision-ref-xr.yaml",
 				"testdata/comp/resources/existing-claim-revision-ref-downstream.yaml",
 			},
-			inputFiles:       []string{"testdata/comp/resources/claim-revision-templating-composition.yaml"},
-			namespace:        "test-namespace",
-			outputFormat:     "json",
-			expectedExitCode: dp.ExitCodeSuccess,
-			// Asserted on stderr rather than warnings[], for the same reason as the sibling above.
+			inputFiles:             []string{"testdata/comp/resources/claim-revision-templating-composition.yaml"},
+			namespace:              "test-namespace",
+			outputFormat:           "json",
+			expectedExitCode:       dp.ExitCodeSuccess,
 			expectedStderrContains: []string{"Could not predict the name of the CompositionRevision"},
 			expectedStructuredCompOutput: tu.ExpectCompDiff().
+				// The could-not-predict advisory is the only warning: the claim's composed resource is labelled
+				// with its backing XR's name, so it raises no ownership advisory (#534).
+				WithWarning("Could not predict the name of the CompositionRevision").
+				WithWarningContext(map[string]string{"composition": "xrevisionrefclaims.diff.example.org"}).
+				And().
 				WithComposition("xrevisionrefclaims.diff.example.org").
 				WithRevisionImpact("metadata", true, 1).
 				WithoutPredictedRevisionName().

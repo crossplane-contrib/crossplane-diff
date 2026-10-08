@@ -8,3 +8,11 @@ spec:
   compositeDeletePolicy: Background
   compositionRef:
     name: claim-composition
+  # Copied back from the backing XR, as the claim syncer does under the XR's Automatic update policy.
+  compositionRevisionRef:
+    name: claim-composition-default
+  # Bound to its backing XR, existing-claim-xr.yaml, as Crossplane's claim syncer binds it.
+  resourceRef:
+    apiVersion: diff.example.org/v1alpha1
+    kind: XNopResource
+    name: test-claim-82crv
