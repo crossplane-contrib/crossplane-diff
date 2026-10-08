@@ -65,9 +65,10 @@ type ChangeDetail struct {
 // state was verified against the apiserver; see WithDryRunSkipped /
 // WithDryRunPerformed.
 type DryRunInfo struct {
-	Performed  bool   `json:"performed"`
-	SkipReason string `json:"skipReason,omitempty"`
-	Detail     string `json:"detail,omitempty"`
+	Performed      bool   `json:"performed"`
+	SkipReason     string `json:"skipReason,omitempty"`
+	Detail         string `json:"detail,omitempty"`
+	StorageVersion string `json:"storageVersion,omitempty"`
 }
 
 // DiffExpectation is an interface that allows AssertStructuredDiff to accept
@@ -143,6 +144,7 @@ type ResourceExpectation struct {
 type dryRunExpectation struct {
 	skipReason      string
 	detailSubstring string
+	storageVersion  string
 	mustBePerformed bool
 }
 
@@ -422,6 +424,15 @@ func (r *ResourceExpectation) WithDryRunSkipped(reason, detailSubstring string) 
 	r.dryRun.skipReason = reason
 	r.dryRun.detailSubstring = detailSubstring
 
+	return r
+}
+
+// WithDryRunStorageVersion asserts this change, reported as not verified (see
+// WithDryRunSkipped), records version as the version its CRD stores it at:
+// one other than the version it was requested at, whose defaults and
+// conversion its locally predicted diff does not model.
+func (r *ResourceExpectation) WithDryRunStorageVersion(version string) *ResourceExpectation {
+	r.dryRun.storageVersion = version
 	return r
 }
 
@@ -805,6 +816,11 @@ func assertDryRun(t *testing.T, id string, found *ChangeDetail, expect dryRunExp
 	if expect.detailSubstring != "" && !strings.Contains(found.DryRun.Detail, expect.detailSubstring) {
 		t.Errorf("%s: dryRun.detail %q does not contain %q — the cluster's own explanation must be propagated, not swallowed",
 			id, found.DryRun.Detail, expect.detailSubstring)
+	}
+
+	if expect.storageVersion != "" && found.DryRun.StorageVersion != expect.storageVersion {
+		t.Errorf("%s: dryRun.storageVersion: expected %q, got %q",
+			id, expect.storageVersion, found.DryRun.StorageVersion)
 	}
 }
 
