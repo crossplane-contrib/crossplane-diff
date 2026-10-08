@@ -27,7 +27,7 @@ sequenceDiagram
         CompClient-->>CDP: [affected XRs]
         CDP->>DiffCalc: CalculateDiff(ctx, currentComp, newComp)
         DiffCalc-->>CDP: composition-level diff
-        Note over CDP, DP: For each affected XR, CDP calls DP.DiffSingleResource, passing XRDiffOptions.RevisionName (the predicted revision) for a composite that would re-point. See per-XR body below.
+        Note over CDP, DP: For each affected XR, CDP calls DP.DiffSingleResource with a provider that returns the proposed composition, and the predicted revision name for a composite that would re-point. See per-XR body below.
     else xr subcommand
         Cmd->>DP: Initialize(ctx)
         Cmd->>DP: PerformDiff(ctx, resources, clusterCompositionProvider)
@@ -35,16 +35,17 @@ sequenceDiagram
     end
 
     rect rgb(245, 245, 255)
-        Note over DP, DiffCalc: per-XR body. DiffSingleResource(ctx, xr, compositionProvider, opts). Driven once per input XR (xr) or once per affected XR (comp).
+        Note over DP, DiffCalc: per-XR body. DiffSingleResource(ctx, xr, compositionProvider). Driven once per input XR (xr) or once per affected XR (comp).
         loop For each XR being diffed
             DP->>DP: SanitizeXR(res) = authoredXR
             DP->>Resolver: Resolve(ctx, authoredXR, existingNested)
             Resolver->>ResMgr: FetchCurrentObject (the XR unless a nested XR copy is supplied, plus a claim backing XR)
             ResMgr-->>Resolver: cluster copy / backing XR (fetch error is fatal)
             Resolver-->>DP: EffectiveComposite (Authored, Cluster, Backing, Effective)
-            Note over DP: Effective = input + cluster's compositionRef / compositionRevisionRef / policy / UID, or a claim's backing XR with the claim synced in. Apply opts.RevisionName, then renderXR = strict Defaulter.Default(Effective). authoredXR stays as written: it is the payload.
+            Note over DP: Effective = input + cluster's compositionRef / compositionRevisionRef / policy / UID, or a claim's backing XR with the claim synced in. renderXR = strict Defaulter.Default(Effective). authoredXR stays as written: it is the payload.
             DP->>CompClient: compositionProvider(ctx, renderXR)
-            CompClient-->>DP: *Composition (cluster's, or proposed under comp)
+            CompClient-->>DP: ResolvedComposition (cluster's composition and revision, or proposed under comp)
+            Note over DP: If a revision was resolved, set renderXR's compositionRevisionRef to it (creating the ref if absent), as the reconciler does before composing.
             DP->>FnProv: GetFunctionsForComposition(comp)
             FnProv-->>DP: []Function
             DP->>ResMgr: FetchObservedResources(ctx, Composed())
