@@ -46,6 +46,10 @@ earthly -P +e2e --FLAGS="-test.v -test-suite=composition-webhook-schema-validati
 
 ### Generating Expected Output Files
 
+Most tests assert on the structured JSON output (`--output=json`) and have no expected file. A per-case
+`expect/<case>.ansi` file exists only where a test compares its human-readable output against it via
+`assertDiffMatchesFile`; a file no test loads is dead weight, so delete it rather than leave it to go stale.
+
 When adding or updating tests that compare command output against expected files, you can use the `E2E_DUMP_EXPECTED` environment variable to automatically generate or update the expected output files:
 
 ```shell

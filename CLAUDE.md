@@ -416,7 +416,7 @@ Usage:
 python3 scripts/fix-ansi-codes.py test/e2e/manifests/beta/diff/main/*/expect/*.ansi
 
 # Verify ANSI codes are correct (should show single \x1b before each [)
-hexdump -C test/e2e/manifests/beta/diff/main/comp/expect/existing-xr.ansi | grep "1b 5b 33"
+hexdump -C test/e2e/manifests/beta/diff/main/v1/expect/new-xr.ansi | grep "1b 5b 33"
 ```
 
 **Better Alternative**: Use `E2E_DUMP_EXPECTED=1` to auto-generate correct expectation files:

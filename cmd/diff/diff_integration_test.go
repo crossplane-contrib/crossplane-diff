@@ -2554,8 +2554,8 @@ Summary: 2 modified, 2 removed`,
 			setupFiles: []string{
 				"testdata/diff/resources/xrd.yaml",
 				// NOTE: xapimigrate CRD is auto-loaded from testdata/diff/crds/
-				// We don't include xapimigrate-xrd.yaml because XApiMigrateResource is a regular
-				// managed resource (not a composite), and including the XRD would make it composite.
+				// We apply no XRD for XApiMigrateResource because it is a regular managed resource
+				// (not a composite), and an XRD would make it composite.
 				"testdata/diff/resources/api-version-composition-revision-v1.yaml",
 				"testdata/diff/resources/api-version-composition-revision-v2.yaml",
 				"testdata/diff/resources/functions.yaml",
@@ -4063,9 +4063,8 @@ Summary: 1 modified`,
 			setupFiles: []string{
 				"testdata/comp/resources/xrd.yaml",
 				// NOTE: xapimigrate CRD is auto-loaded from testdata/comp/crds/
-				// We don't include xapimigrate-xrd.yaml because XApiMigrateResource is a regular
-				// managed resource (not a composite), and including the XRD would make it composite,
-				// causing infinite recursion.
+				// We apply no XRD for XApiMigrateResource because it is a regular managed resource
+				// (not a composite), and an XRD would make it composite, causing infinite recursion.
 				"testdata/comp/resources/api-version-original-composition.yaml",
 				"testdata/comp/resources/functions.yaml",
 				"testdata/comp/resources/existing-api-version-xr.yaml",
