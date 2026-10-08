@@ -63,19 +63,20 @@ const (
 	VerbPatch Verb = "patch"
 )
 
-// CompositionProvider is a function that provides a composition for a given resource.
-type CompositionProvider func(ctx context.Context, res *un.Unstructured) (*apiextensionsv1.Composition, error)
+// CompositionProvider resolves the composition a composite is rendered against, and the
+// CompositionRevision that composition comes from.
+type CompositionProvider func(ctx context.Context, res *un.Unstructured) (ResolvedComposition, error)
 
-// XRDiffOptions adjusts how DiffProcessor.DiffSingleResource diffs one composite. The zero value diffs
-// it as the cluster would reconcile it today. Lives here (not in diffprocessor) so the processor's mock
-// in cmd/diff/testutils can name it without an import cycle.
-type XRDiffOptions struct {
-	// RevisionName, when set, is the name of the CompositionRevision the composite would be pointing
-	// at once the diffed change is applied: comp sets it, for a composite that would re-point at the
-	// revision applying the diffed composition creates. The composite is rendered with its existing
-	// compositionRevisionRef pointed at that name, so a template reading the revision name renders the
-	// value it would really get (#474). A composite with no ref keeps none: a ref is never created.
-	// It applies to the composite named, not to the XRs nested beneath it.
+// ResolvedComposition is what a CompositionProvider resolves for one composite.
+type ResolvedComposition struct {
+	// Composition is the composition to render the composite against.
+	Composition *apiextensionsv1.Composition
+
+	// RevisionName is the name of the CompositionRevision Composition comes from. Crossplane's composite
+	// reconciler writes the revision it selects to the composite's compositionRevisionRef before it
+	// composes, so the composite is rendered with its ref set to this name, and a template reading the
+	// revision name sees the revision that rendered it (#536). Empty means unknown, for example a
+	// composition with no revisions yet. The composite then keeps the ref it has; a name is never made up.
 	RevisionName string
 }
 

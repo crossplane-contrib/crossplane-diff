@@ -25,8 +25,9 @@ import (
 type CompositionClient interface {
 	core.Initializable
 
-	// FindMatchingComposition finds a composition that matches the given XR or claim
-	FindMatchingComposition(ctx context.Context, res *un.Unstructured) (*apiextensionsv1.Composition, error)
+	// FindMatchingComposition finds the composition that matches the given XR or claim, and the
+	// CompositionRevision it comes from when one applies. See dtypes.ResolvedComposition.
+	FindMatchingComposition(ctx context.Context, res *un.Unstructured) (dtypes.ResolvedComposition, error)
 
 	// ListCompositions lists all compositions in the cluster
 	ListCompositions(ctx context.Context) ([]*apiextensionsv1.Composition, error)
@@ -200,14 +201,15 @@ func (c *DefaultCompositionClient) getCompositionRevisionRef(xrd, res *un.Unstru
 	return name, found && name != "", nil
 }
 
-// resolveCompositionFromRevisions determines which composition to use based on revision logic.
-// Returns a composition or nil if standard resolution should be used.
+// resolveCompositionFromRevisions selects the CompositionRevision Crossplane would compose res with,
+// mirroring the composite reconciler's revision fetcher. Returns nil if the composition has no
+// revisions yet, in which case the composition itself is used.
 func (c *DefaultCompositionClient) resolveCompositionFromRevisions(
 	ctx context.Context,
 	xrd, res *un.Unstructured,
 	compositionName string,
 	resourceID string,
-) (*apiextensionsv1.Composition, error) {
+) (*apiextensionsv1.CompositionRevision, error) {
 	// Check if there's a composition revision reference
 	revisionRefName, hasRevisionRef, err := c.getCompositionRevisionRef(xrd, res)
 	if err != nil {
@@ -254,14 +256,13 @@ func (c *DefaultCompositionClient) resolveCompositionFromRevisions(
 				resourceID, compositionName)
 		}
 
-		comp := c.revisionClient.GetCompositionFromRevision(latest)
 		c.logger.Debug("Using latest matching revision for Automatic policy",
 			"resource", resourceID,
 			"revisionName", latest.GetName(),
 			"revisionNumber", latest.Spec.Revision,
 			"selector", selector.String())
 
-		return comp, nil
+		return latest, nil
 
 	case updatePolicy == updatePolicyManual && hasRevisionRef:
 		// Case 2: Manual policy with revision reference - use that specific revision
@@ -281,13 +282,12 @@ func (c *DefaultCompositionClient) resolveCompositionFromRevisions(
 			}
 		}
 
-		comp := c.revisionClient.GetCompositionFromRevision(revision)
 		c.logger.Debug("Using pinned revision for Manual policy",
 			"resource", resourceID,
 			"revisionName", revisionRefName,
 			"revisionNumber", revision.Spec.Revision)
 
-		return comp, nil
+		return revision, nil
 
 	default:
 		// Case 3: Manual policy without revision reference in spec
@@ -314,18 +314,20 @@ func (c *DefaultCompositionClient) resolveCompositionFromRevisions(
 				resourceID, compositionName)
 		}
 
-		comp := c.revisionClient.GetCompositionFromRevision(latest)
 		c.logger.Debug("Using latest revision for Manual policy",
 			"resource", resourceID,
 			"revisionName", latest.GetName(),
 			"revisionNumber", latest.Spec.Revision)
 
-		return comp, nil
+		return latest, nil
 	}
 }
 
-// FindMatchingComposition finds a composition matching the given resource.
-func (c *DefaultCompositionClient) FindMatchingComposition(ctx context.Context, res *un.Unstructured) (*apiextensionsv1.Composition, error) {
+// FindMatchingComposition finds a composition matching the given resource, and the revision it comes
+// from. Only a resource naming its composition resolves a revision: one Crossplane has reconciled always
+// does, because the composite reconciler writes compositionRef. One that selects its composition by label
+// or by type resolves none, so its RevisionName is empty.
+func (c *DefaultCompositionClient) FindMatchingComposition(ctx context.Context, res *un.Unstructured) (dtypes.ResolvedComposition, error) {
 	gvk := res.GroupVersionKind()
 	resourceID := fmt.Sprintf("%s/%s", gvk.String(), res.GetName())
 
@@ -349,7 +351,7 @@ func (c *DefaultCompositionClient) FindMatchingComposition(ctx context.Context, 
 	case xrd != nil:
 		targetGVK, err = c.getXRTypeFromXRD(xrd, resourceID)
 		if err != nil {
-			return nil, errors.Wrapf(err, "claim %s requires its XR type to find a composition", resourceID)
+			return dtypes.ResolvedComposition{}, errors.Wrapf(err, "claim %s requires its XR type to find a composition", resourceID)
 		}
 	default:
 		targetGVK = gvk
@@ -359,24 +361,26 @@ func (c *DefaultCompositionClient) FindMatchingComposition(ctx context.Context, 
 
 		xrd, err = c.definitionClient.GetXRDForXR(ctx, gvk)
 		if err != nil {
-			return nil, errors.Wrapf(err, "resource %s requires its XR type to find a composition", resourceID)
+			return dtypes.ResolvedComposition{}, errors.Wrapf(err, "resource %s requires its XR type to find a composition", resourceID)
 		}
 	}
 
 	// Case 1: Check for direct composition reference in spec.compositionRef.name
-	comp, err := c.findByDirectReference(ctx, xrd, res, targetGVK, resourceID)
-	if err != nil || comp != nil {
-		return comp, err
+	resolved, err := c.findByDirectReference(ctx, xrd, res, targetGVK, resourceID)
+	if err != nil || resolved.Composition != nil {
+		return resolved, err
 	}
 
 	// Case 2: Check for selector-based composition reference
-	comp, err = c.findByLabelSelector(ctx, xrd, res, targetGVK, resourceID)
+	comp, err := c.findByLabelSelector(ctx, xrd, res, targetGVK, resourceID)
 	if err != nil || comp != nil {
-		return comp, err
+		return dtypes.ResolvedComposition{Composition: comp}, err
 	}
 
 	// Case 3: Look up by composite type reference (default behavior)
-	return c.findByTypeReference(ctx, xrd, targetGVK, resourceID)
+	comp, err = c.findByTypeReference(ctx, xrd, targetGVK, resourceID)
+
+	return dtypes.ResolvedComposition{Composition: comp}, err
 }
 
 // getXRTypeFromXRD extracts the XR GroupVersionKind from an XRD.
@@ -558,9 +562,10 @@ func nestedCrossplaneMap(obj map[string]any, apiVersion string, path ...string) 
 	return nestedCrossplaneValue(obj, apiVersion, "an object", un.NestedMap, path...)
 }
 
-// findByDirectReference attempts to find a composition directly referenced by name.
+// findByDirectReference attempts to find a composition directly referenced by name, and the revision it
+// comes from. The zero value means res references none.
 // Checks both v2 (spec.crossplane.compositionRef) and v1 (spec.compositionRef) paths.
-func (c *DefaultCompositionClient) findByDirectReference(ctx context.Context, xrd, res *un.Unstructured, targetGVK schema.GroupVersionKind, resourceID string) (*apiextensionsv1.Composition, error) {
+func (c *DefaultCompositionClient) findByDirectReference(ctx context.Context, xrd, res *un.Unstructured, targetGVK schema.GroupVersionKind, resourceID string) (dtypes.ResolvedComposition, error) {
 	// Try all possible paths for compositionRef (v2 path first, then v1 fallback)
 	var (
 		compositionRefName  string
@@ -585,30 +590,32 @@ func (c *DefaultCompositionClient) findByDirectReference(ctx context.Context, xr
 			"compositionName", compositionRefName)
 
 		// Check if we should use a revision instead
-		comp, err := c.resolveCompositionFromRevisions(ctx, xrd, res, compositionRefName, resourceID)
+		revision, err := c.resolveCompositionFromRevisions(ctx, xrd, res, compositionRefName, resourceID)
 		if err != nil {
-			return nil, err
+			return dtypes.ResolvedComposition{}, err
 		}
 
-		if comp != nil {
+		if revision != nil {
+			comp := c.revisionClient.GetCompositionFromRevision(revision)
+
 			// Validate that the composition's compositeTypeRef matches the target GVK
 			if !c.isCompositionCompatible(comp, targetGVK) {
-				return nil, errors.Errorf("composition from revision is not compatible with %s", targetGVK.String())
+				return dtypes.ResolvedComposition{}, errors.Errorf("composition from revision is not compatible with %s", targetGVK.String())
 			}
 
-			return comp, nil
+			return dtypes.ResolvedComposition{Composition: comp, RevisionName: revision.GetName()}, nil
 		}
 
 		// No revision-based resolution, use composition directly
-		comp, err = c.GetComposition(ctx, compositionRefName)
+		comp, err := c.GetComposition(ctx, compositionRefName)
 		if err != nil {
-			return nil, errors.Errorf("composition %s referenced in %s not found",
+			return dtypes.ResolvedComposition{}, errors.Errorf("composition %s referenced in %s not found",
 				compositionRefName, resourceID)
 		}
 
 		// Validate that the composition's compositeTypeRef matches the target GVK
 		if !c.isCompositionCompatible(comp, targetGVK) {
-			return nil, errors.Errorf("composition %s is not compatible with %s",
+			return dtypes.ResolvedComposition{}, errors.Errorf("composition %s is not compatible with %s",
 				compositionRefName, targetGVK.String())
 		}
 
@@ -616,10 +623,10 @@ func (c *DefaultCompositionClient) findByDirectReference(ctx context.Context, xr
 			"resource", resourceID,
 			"composition", comp.GetName())
 
-		return comp, nil
+		return dtypes.ResolvedComposition{Composition: comp}, nil
 	}
 
-	return nil, nil // No direct reference found
+	return dtypes.ResolvedComposition{}, nil // No direct reference found
 }
 
 // findByLabelSelector attempts to find compositions that match label selectors.

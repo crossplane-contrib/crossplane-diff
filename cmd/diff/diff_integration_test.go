@@ -2796,6 +2796,28 @@ Summary: 2 modified, 2 removed`,
 					"v1:xpinneds.pinned.diff.example.org-rev1:modified-value"),
 			expectedExitCode: dp.ExitCodeDiffDetected,
 		},
+		// Issue #536. Crossplane's composite reconciler resolves the revision, writes it to
+		// compositionRevisionRef, and then composes, so an Automatic composite whose ref lags behind the
+		// latest revision is composed from the latest one AND sees its name. Before, the latest revision
+		// rendered while the template read the stale ref: configData became "v2:...-rev1:...", a revision's
+		// template paired with another revision's name.
+		"AutomaticXRWithLaggingRevisionRefRendersLatestRevisionAndName": {
+			reason:       "An Automatic XR whose cluster ref names an older revision renders the latest revision, with that revision's name",
+			outputFormat: "json",
+			setupFiles: []string{
+				"testdata/diff/resources/pinned-claim/definitions.yaml",
+				"testdata/diff/resources/functions.yaml",
+				"testdata/diff/resources/pinned-claim/existing-lagging-automatic-xr.yaml",
+			},
+			inputFiles: []string{"testdata/diff/unchanged-lagging-automatic-xr.yaml"},
+			expectedStructuredOutput: tu.ExpectDiff().
+				WithSummary(0, 1, 0).
+				WithModifiedResource("XDownstreamResource", "lagging-xr", "").
+				WithFieldChange("spec.forProvider.configData",
+					"v1:xpinneds.pinned.diff.example.org-rev1:existing-value",
+					"v2:xpinneds.pinned.diff.example.org-rev2:existing-value"),
+			expectedExitCode: dp.ExitCodeDiffDetected,
+		},
 		// An XRD's defaultCompositionUpdatePolicy applies to a new composite before Crossplane resolves its
 		// revision, so a new composite that names a revision and leaves the policy to an XRD defaulting to
 		// Manual renders the revision it names. Before, the composition was resolved before defaulting, as
@@ -3528,7 +3550,8 @@ Impact analysis skipped: this composition is identical to the cluster's, so appl
 		// Before the fix, the composite was rendered with its EXISTING compositionRevisionRef: configData
 		// came out as the old revision's name, matched the cluster, and the tool reported unchanged with
 		// exit 0. Seeding the predicted ref is what turns that into the exit 3 below. This is the
-		// regression test for the whole feature — stop applying XRDiffOptions.RevisionName and this is what fails.
+		// regression test for the whole feature — stop comp's composition provider resolving the predicted
+		// revision, or stop the processor writing the resolved revision to the ref, and this is what fails.
 		//
 		// Note also what is NOT in the output: the composite's own
 		// spec.crossplane.compositionRevisionRef diff. Suppressing it is why the exit code still reflects
@@ -3566,9 +3589,9 @@ Impact analysis skipped: this composition is identical to the cluster's, so appl
 		},
 		// Issue #498, the claim variant of the above. A claim is rendered from its backing XR with the
 		// claim's spec synced in. Under Automatic the claim's own ref is never propagated (the XR controller
-		// owns the backing XR's), so seeding the claim would reach nothing: comp passes the predicted name
-		// as an option, which is applied to the backing XR the render consumes. Without it, the backing
-		// XR's stale ref renders and the change goes unreported.
+		// owns the backing XR's), so seeding the claim would reach nothing: comp's composition provider is
+		// handed the backing XR the render consumes, and resolves that to the predicted revision. Without it,
+		// the backing XR's stale ref renders and the change goes unreported.
 		"ClaimRevisionNamePropagatesToComposedResource": {
 			reason: "A metadata-only composition edit is rendered for an Automatic claim with the revision its backing XR would re-point to",
 			setupFiles: []string{
