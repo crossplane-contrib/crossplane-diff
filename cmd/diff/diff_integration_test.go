@@ -1551,7 +1551,10 @@ Summary: 2 modified, 2 removed`,
 						// Stage 0 resource - exists in cluster
 						"testdata/diff/resources/sequencer-stage0-downstream.yaml": nil,
 						// Stage 1 resource - exists in cluster, should NOT be hidden by sequencer
-						// because observed resources are passed correctly to the function pipeline
+						// because observed resources are passed correctly to the function pipeline.
+						// Stage 0 has no Ready condition, so the sequencer would gate stage 1 if it
+						// were not observed: this case depends on the XR's own composed resources
+						// reaching render as observed state.
 						"testdata/diff/resources/sequencer-stage1-downstream.yaml": nil,
 					},
 				},
@@ -1726,6 +1729,32 @@ Summary: 2 modified, 2 removed`,
 				WithModifiedResource("XNopResource", "test-resource", "default").
 				WithFieldChange("spec.coolField", "existing-value", "new-value"),
 			expectedError:    false,
+			expectedExitCode: dp.ExitCodeDiffDetected,
+		},
+		// The generateName counterpart of NewXRWithExistingComposedResource. A new XR renders its composed
+		// resource with only a generateName, and nothing is observed for it, so no name identifies the
+		// existing resource: only its crossplane.io/composite label and composition-resource-name
+		// annotation can. ResourceWithGenerateName cannot reach that lookup, because there the XR exists and
+		// render names the resource after the observed one.
+		"NewXRAdoptsOrphanedGenerateNamedComposedResource": {
+			reason:       "A new XR's generateName composed resource is matched to an existing orphan by its composite label",
+			outputFormat: "json",
+			setupFiles: []string{
+				"testdata/diff/resources/xrd.yaml",
+				"testdata/diff/resources/functions.yaml",
+				"testdata/diff/resources/generated-name-composition.yaml",
+				// Deliberately not in crossplaneManagedResources: an orphan has no controller
+				// ownerReference (the garbage collector strips it when the XR is deleted with
+				// --cascade=orphan) and no XR lists it, but it keeps its labels and annotations.
+				"testdata/diff/resources/existing-downstream-with-generated-name.yaml",
+			},
+			inputFiles: []string{"testdata/diff/new-xr.yaml"},
+			expectedStructuredOutput: tu.ExpectDiff().
+				WithSummary(1, 1, 0).
+				WithAddedResource("XNopResource", "test-resource", "default").
+				And().
+				WithModifiedResource("XDownstreamResource", "test-resource-abc123", "default").
+				WithFieldChange("spec.forProvider.configData", "existing-value", "new-value"),
 			expectedExitCode: dp.ExitCodeDiffDetected,
 		},
 		// A generateName-only input next to an ordinary one is an ordinary invocation. The unnamed input
