@@ -89,7 +89,7 @@ classDiagram
 
     class Defaulter {
         <<interface>>
-        +Default(ctx, obj) (*Unstructured, error)
+        +Default(ctx, obj) (*Unstructured, storageVersion string, error)
     }
 
     class DiffCalculator {

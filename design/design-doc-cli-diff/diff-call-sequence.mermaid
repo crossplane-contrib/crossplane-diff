@@ -85,7 +85,7 @@ sequenceDiagram
                         K8sAPI-->>DiffCalc: allowed? => degrade or report
                     end
                 else addition, --dry-run-on=existing
-                    DiffCalc->>DiffCalc: lenient Defaulter.Default(desired), mark dryRun.skipReason=disabled
+                    DiffCalc->>DiffCalc: lenient Defaulter.Default(desired), mark dryRun.skipReason=disabled (+ storageVersion if the CRD stores another version)
                 end
             end
             DiffCalc-->>DP: diffs + rendered keys

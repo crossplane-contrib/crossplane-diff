@@ -171,7 +171,15 @@ and distinct cluster cause, with `context` carrying `gvk`, `namespace`, the caus
 `reason` for an authorization denial) and `count`, the number of resources behind it as a string. So
 forty unverifiable ConfigMaps in one namespace are one warning with `"count": "40"`, while a second,
 different cause is a second warning rather than being hidden behind the first. Which resources were
-affected is in each change's `dryRun` object. A failed XR's diffs are withheld, so no summary is shown
+affected is in each change's `dryRun` object. An unverified addition's defaults are predicted against
+the version it was requested at only. When its CRD stores it at a different version, that version's
+defaults and any conversion through it may change what the cluster stores, and the diff shows neither.
+Its warning then adds "they are stored at a version other than the one requested, whose defaults and
+conversion the cluster may apply but their diffs do not", with a `versions` context key such as
+`"requested v1alpha1, stored v1"`. This holds even under `--dry-run-on=existing`, whose additions are
+otherwise not warned about. Its message then begins "did not verify added resources against the
+apiserver (--dry-run-on=existing)" and has no cause key. Built-in types, single-version CRDs and
+resources requested at their storage version never get this note. A failed XR's diffs are withheld, so no summary is shown
 for it: the summary says how far to trust the diffs that are shown, and the XR's error is reported in
 `errors[]` and on stderr; re-running after fixing it gives the full summary. (Before this was derived
 from the diffs, a failed XR's warning could appear incidentally, because it was raised mid-calculation.)
@@ -586,7 +594,7 @@ Unlike `patch`, this one **degrades per-resource rather than failing the run**. 
 | `forbidden` | The authorizer says these credentials may not create this kind here. Nothing was learned about the resource; this is a property of the credentials, not a finding about the resource. |
 | `webhookUnavailable` | The apiserver could not complete the admission chain — classically an unreachable webhook with `failurePolicy: Fail`. `dryRun.detail` carries the apiserver's own message. |
 | `namespaceNotFound` | The resource's target namespace does not exist yet, so the apiserver would not admit it. |
-| `disabled` | You passed `--dry-run-on=existing`. No warning is raised: you asked for it. |
+| `disabled` | You passed `--dry-run-on=existing`. No warning is raised, because you asked for it. The exception is additions stored at a version other than the one requested (`dryRun.storageVersion`); see [Warnings](#warnings). |
 
 `namespaceNotFound` is a degradation rather than a finding on purpose. A Namespace and the resources inside it are routinely applied together, so the namespace being absent when you *diff* says nothing about whether the apply will succeed — `crossplane-diff` cannot know whether that Namespace is part of the same apply, and refusing to diff would break previewing a bootstrap. If you do want to treat it as a failure, gate on that `skipReason` value.
 
@@ -958,6 +966,9 @@ The structured output includes:
   `"forbidden"`, `"webhookUnavailable"`, `"namespaceNotFound"` — see [Required Permissions](#required-permissions) for what
   each means), and
   `detail`, the cluster's own explanation (the `SelfSubjectAccessReview`'s reason, or the apiserver's error message).
+  `storageVersion` is set only when the resource's CRD stores it at a version other than the one in its `apiVersion`.
+  The locally predicted diff defaults against the requested version only, so it may omit that storage version's
+  defaults and any conversion through it.
   `dryRun` lives on the shared per-resource change shape, so it appears in `xr`'s `changes[]` and `xrs[].changes[]` and
   in `comp`'s `impactAnalysis[].downstreamChanges.changes[]` alike:
 
