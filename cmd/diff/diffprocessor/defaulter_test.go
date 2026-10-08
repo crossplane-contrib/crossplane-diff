@@ -36,6 +36,22 @@ func TestCRDDefaulter_Default(t *testing.T) {
 		Build()
 	mrGVK := schema.GroupVersionKind{Group: "example.org", Version: "v1", Kind: "Sized"}
 
+	// A composed resource whose CRD serves two versions that default spec.size differently, and stores
+	// the newer one.
+	versionedCRD := tu.NewCRD("versioneds.example.org", "example.org", "Versioned").
+		WithPlural("versioneds").
+		WithVersion("v1alpha1", true, false).
+		WithDefaultedStringFieldSchema("size", "small").
+		WithVersion("v1", true, true).
+		WithDefaultedStringFieldSchema("size", "medium").
+		Build()
+	versionedCRDByGVK := func() *tu.MockSchemaClient {
+		return tu.NewMockSchemaClient().
+			WithFoundCRD("example.org", "Versioned", versionedCRD).
+			WithAllResourcesRequiringCRDs().
+			Build()
+	}
+
 	xrdsFor := func(gvk schema.GroupVersionKind) *tu.MockDefinitionClient {
 		return tu.NewMockDefinitionClient().WithXRDForGVK(gvk, xrd).Build()
 	}
@@ -78,8 +94,9 @@ func TestCRDDefaulter_Default(t *testing.T) {
 	configMap := tu.NewResource("v1", "ConfigMap", "cm").WithNestedField(map[string]any{"k": "v"}, "data").Build()
 
 	type want struct {
-		out *un.Unstructured
-		err bool
+		out            *un.Unstructured
+		storageVersion string
+		err            bool
 	}
 
 	tests := map[string]struct {
@@ -105,6 +122,25 @@ func TestCRDDefaulter_Default(t *testing.T) {
 			defClient:    noXRDs(),
 			in:           unsizedMR,
 			want:         want{out: tu.NewResource("example.org/v1", "Sized", "mr").WithSpecField("size", "small").Build()},
+		},
+		"ReportsAStorageVersionOtherThanTheRequestedOne": {
+			reason:       "A resource requested at a version its CRD does not store is still defaulted against the requested version only, and the version the CRD stores is reported so the caller can say what the prediction does not model.",
+			policy:       LenientDefaulting,
+			schemaClient: versionedCRDByGVK(),
+			defClient:    noXRDs(),
+			in:           tu.NewResource("example.org/v1alpha1", "Versioned", "mr").WithNestedField(map[string]any{}, "spec").Build(),
+			want: want{
+				out:            tu.NewResource("example.org/v1alpha1", "Versioned", "mr").WithSpecField("size", "small").Build(),
+				storageVersion: "v1",
+			},
+		},
+		"ReportsNoStorageVersionForARequestAtTheStorageVersion": {
+			reason:       "A resource requested at its CRD's storage version is stored as it is requested, so there is no other version to report, however many versions the CRD serves.",
+			policy:       LenientDefaulting,
+			schemaClient: versionedCRDByGVK(),
+			defClient:    noXRDs(),
+			in:           tu.NewResource("example.org/v1", "Versioned", "mr").WithNestedField(map[string]any{}, "spec").Build(),
+			want:         want{out: tu.NewResource("example.org/v1", "Versioned", "mr").WithSpecField("size", "medium").Build()},
 		},
 		"KeepsAValueTheResourceSets": {
 			reason:       "A default never overrides a value the resource already carries.",
@@ -187,7 +223,7 @@ func TestCRDDefaulter_Default(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			before := tt.in.DeepCopy()
 
-			out, err := NewDefaulter(tt.schemaClient, tt.defClient, tt.policy).Default(t.Context(), tt.in)
+			out, storageVersion, err := NewDefaulter(tt.schemaClient, tt.defClient, tt.policy).Default(t.Context(), tt.in)
 
 			if d := cmp.Diff(before, tt.in); d != "" {
 				t.Errorf("%s\nDefault() mutated its input (-before +after):\n%s", tt.reason, d)
@@ -199,6 +235,10 @@ func TestCRDDefaulter_Default(t *testing.T) {
 
 			if d := cmp.Diff(tt.want.out, out); d != "" {
 				t.Errorf("%s\nDefault() (-want +got):\n%s", tt.reason, d)
+			}
+
+			if storageVersion != tt.want.storageVersion {
+				t.Errorf("%s\nDefault() storage version = %q, want %q", tt.reason, storageVersion, tt.want.storageVersion)
 			}
 
 			if out != nil && out == tt.in {

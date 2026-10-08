@@ -516,14 +516,18 @@ func (c *DefaultDiffCalculator) dryRunCreateAddition(ctx context.Context, desire
 // predictLocally is what an addition shows when it got no apiserver result: the rendered object with
 // the CRD defaults the apiserver would have applied, predicted locally, and the DryRunInfo saying why
 // the apiserver was not asked. The prediction is never sent anywhere, so unlike a dry-run payload it
-// cannot claim fields. It covers CRD `default:` values only; see Defaulter for what it misses, such as
-// multi-version conversion (#528). It does not prune undeclared fields either, but cannot meet one:
-// schema validation rejects them as unknownField errors before an addition gets here.
+// cannot claim fields. It covers CRD `default:` values only; see Defaulter for what it misses. Of
+// that, a multi-version CRD's storage version is recorded on the DryRunInfo, so that the addition's
+// warning can say its diff may omit that version's defaults and conversion (#528). It does not prune
+// undeclared fields either, but cannot meet one: schema validation rejects them as unknownField
+// errors before an addition gets here.
 func (c *DefaultDiffCalculator) predictLocally(ctx context.Context, desired *un.Unstructured, resourceID string, info *dt.DryRunInfo) (*un.Unstructured, *dt.DryRunInfo, error) {
-	predicted, err := c.predictor.Default(ctx, desired)
+	predicted, storageVersion, err := c.predictor.Default(ctx, desired)
 	if err != nil {
 		return nil, nil, errors.Wrapf(err, "cannot predict defaults for %s", resourceID)
 	}
+
+	info.StorageVersion = storageVersion
 
 	return predicted, info, nil
 }

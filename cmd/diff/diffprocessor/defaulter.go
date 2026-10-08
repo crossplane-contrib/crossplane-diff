@@ -23,12 +23,19 @@ import (
 // apiserver result (LenientDefaulting).
 //
 // The prediction covers CRD `default:` values only. Mutating admission and admission plugins are not
-// modelled at all, and neither is conversion of a multi-version CRD through its storage version (#528).
+// modelled at all. Nor is a multi-version CRD's storage version: the prediction defaults against the
+// requested version only, while the cluster may also apply the storage version's defaults and convert
+// the resource through it. That one cannot be predicted without the conversion, but it can be named,
+// so Default reports the storage version whenever it differs from the requested one, and the
+// unverified addition's warning says the diff may omit its defaults and conversion (#528).
 // Nor does it prune fields the schema does not declare, as the apiserver would, but that never shows:
 // schema validation rejects an undeclared field as an unknownField error before any prediction runs.
 type Defaulter interface {
-	// Default returns a copy of obj with its CRD's defaults applied. obj itself is never modified.
-	Default(ctx context.Context, obj *un.Unstructured) (*un.Unstructured, error)
+	// Default returns a copy of obj with its CRD's defaults applied, and the version that CRD stores
+	// obj at when that is not obj's own version. The version is empty when there is no other: for a
+	// built-in type, a resource whose CRD is not found, a single-version CRD, or a resource at its
+	// CRD's storage version. obj itself is never modified.
+	Default(ctx context.Context, obj *un.Unstructured) (defaulted *un.Unstructured, storageVersion string, err error)
 }
 
 // DefaultingPolicy says what a Defaulter does with a resource it finds no CRD for.
@@ -59,27 +66,42 @@ func NewDefaulter(sc k8.SchemaClient, dc xp.DefinitionClient, policy DefaultingP
 	return &CRDDefaulter{schemaClient: sc, defClient: dc, policy: policy}
 }
 
-// Default returns a copy of obj with its CRD's defaults applied. What happens when no CRD can be found
-// depends on the policy. A CRD that is found but does not define obj's apiVersion is an error under
-// either policy: there is nothing to predict from, and returning obj as though defaulted would hide it.
-func (d *CRDDefaulter) Default(ctx context.Context, obj *un.Unstructured) (*un.Unstructured, error) {
+// Default returns a copy of obj with its CRD's defaults applied, and the CRD's storage version when it
+// is not obj's. What happens when no CRD can be found depends on the policy. A CRD that is found but
+// does not define obj's apiVersion is an error under either policy: there is nothing to predict from,
+// and returning obj as though defaulted would hide it.
+func (d *CRDDefaulter) Default(ctx context.Context, obj *un.Unstructured) (*un.Unstructured, string, error) {
 	out := obj.DeepCopy()
 	gvk := out.GroupVersionKind()
 
 	crd, err := d.crdFor(ctx, gvk)
 	if err != nil {
 		if d.policy == LenientDefaulting {
-			return out, nil
+			return out, "", nil
 		}
 
-		return nil, errors.Wrapf(err, "cannot default %s %q", gvk.String(), out.GetName())
+		return nil, "", errors.Wrapf(err, "cannot default %s %q", gvk.String(), out.GetName())
 	}
 
 	if err := clixr.ApplyCRDDefaults(out.Object, out.GetAPIVersion(), *crd); err != nil {
-		return nil, errors.Wrapf(err, "cannot apply CRD defaults to %s %q", gvk.String(), out.GetName())
+		return nil, "", errors.Wrapf(err, "cannot apply CRD defaults to %s %q", gvk.String(), out.GetName())
 	}
 
-	return out, nil
+	return out, otherStorageVersion(crd, gvk.Version), nil
+}
+
+// otherStorageVersion returns the version crd stores its resources at, or "" when that is version
+// itself. ApplyCRDDefaults has already failed for a version crd does not define, so a different
+// storage version means crd serves more than one. Which conversion strategy crd uses does not matter:
+// even with None the storage version's defaults may be applied, so both are reported.
+func otherStorageVersion(crd *extv1.CustomResourceDefinition, version string) string {
+	for _, v := range crd.Spec.Versions {
+		if v.Storage && v.Name != version {
+			return v.Name
+		}
+	}
+
+	return ""
 }
 
 // crdFor finds the CRD for gvk. An XR's comes from its XRD, by name, from the CRDs loaded when the

@@ -427,8 +427,9 @@ func (p *DefaultDiffProcessor) diffSingleResourceInternal(ctx context.Context, r
 	// Default the effective XR the way the apiserver would, so that composition resolution and render
 	// see the spec Crossplane would see. This follows inheriting the cluster's fields, so that a default
 	// never overrides a value the cluster already holds (a Manual policy, say). The policy is strict:
-	// rendering without those defaults could produce a wrong diff.
-	defaultedXR, err := p.renderDefaulter.Default(ctx, composite.Effective)
+	// rendering without those defaults could produce a wrong diff. The storage version it reports is
+	// only for describing a predicted addition (see predictLocally), so it is not wanted here.
+	defaultedXR, _, err := p.renderDefaulter.Default(ctx, composite.Effective)
 	if err != nil {
 		p.config.Logger.Debug("Failed to apply XRD defaults", "resource", resourceID, "error", err)
 		return nil, nil, errors.Wrap(err, "cannot apply XRD defaults")

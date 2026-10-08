@@ -140,6 +140,13 @@ type DryRunInfo struct {
 	// Detail is the underlying cause as reported by the cluster (the
 	// SelfSubjectAccessReview's reason, or the apiserver's error message).
 	Detail string `json:"detail,omitempty"`
+
+	// StorageVersion is the version the resource's CRD stores it at, set only when that is not the
+	// version it was requested at. The local prediction defaults against the requested version
+	// only, while the cluster may also apply the storage version's defaults and convert the
+	// resource through it, so the diff may omit both. Empty for a built-in type, a single-version
+	// CRD, or a request at the storage version (#528).
+	StorageVersion string `json:"storageVersion,omitempty"`
 }
 
 // DiffType represents the type of diff (added, removed, modified).
