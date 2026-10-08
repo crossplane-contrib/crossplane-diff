@@ -77,7 +77,7 @@ func summaryFor(g dryRunGroup) (dryRunSkipSummary, bool) {
 // is part of the key so that the note a warning carries is always true of every resource it counts.
 type dryRunGroup struct {
 	gvk            string
-	version        string
+	version        string // the requested version, already part of gvk; kept for the `versions` key
 	namespace      string
 	reason         dt.DryRunSkipReason
 	detail         string
@@ -90,11 +90,12 @@ type dryRunGroup struct {
 // It is the only place a human sees this: the text renderer does not show DryRunInfo. So there is one
 // warning per GVK + namespace + distinct cause, rather than per reason, because grouping any coarser
 // would keep one cause and silently drop the rest. Each warning counts the resources behind it under
-// the `count` context key, and, for additions stored at a version other than the one requested, names
-// both under the `versions` context key. A resource that appears in more than one set (two overlapping inputs that
-// render the same object) is one resource and is counted once.
+// the `count` context key and, for additions stored at a version other than the one requested, names
+// both versions under the `versions` context key. A resource that appears in more than one set (two
+// overlapping inputs that render the same object) is one resource and is counted once.
 //
-// The result is sorted by GVK, namespace, reason and cause, since diffs arrive in map order. It is nil
+// The result is sorted by GVK, namespace, reason, cause and storage version, since diffs arrive in map
+// order. It is nil
 // when there is nothing to report.
 //
 // The per-resource dryRun field in structured output stays the machine-readable record: a warning has
