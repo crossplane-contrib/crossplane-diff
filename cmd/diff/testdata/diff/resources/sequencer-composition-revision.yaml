@@ -41,6 +41,9 @@ spec:
             spec:
               forProvider:
                 configData: {{ .observed.composite.resource.spec.coolField }}
+    - step: automatically-detect-ready-composed-resources
+      functionRef:
+        name: function-auto-ready
     - step: sequence-resources
       functionRef:
         name: function-sequencer
@@ -49,8 +52,5 @@ spec:
         kind: Input
         rules:
           - sequence:
-              - ^0-  # Stage 0 resources (rendered first)
-              - ^1-  # Stage 1 resources (hidden until stage 0 is ready)
-    - step: automatically-detect-ready-composed-resources
-      functionRef:
-        name: function-auto-ready
+              - ^stage0-  # Stage 0 (composition-resource-name starts with stage0-)
+              - ^stage1-  # Stage 1 (hidden until stage 0 is ready, unless it already exists)

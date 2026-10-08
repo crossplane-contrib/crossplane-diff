@@ -190,6 +190,17 @@ therefore the same version as the xcrd and render code under test, a run is repr
 them automatically. The e2e suite, which runs real Crossplane images, instead uses the `cluster/<image tag>` directory
 `earthly +fetch-crossplane-cluster` produces.
 
+envtest runs no Crossplane controllers either, so what Crossplane writes to existing resources has to come from the
+fixtures or the harness, and the ownership-dependent paths (composed-resource lookup by composite, the controller-UID
+filter on observed resources, render's check that observed resources are controlled by the XR, removal detection from
+the XR's `resourceRefs`) are only exercised if it does (#542). A case lists each existing XR with what it composes in
+`crossplaneManagedResources`. The harness creates the XR plainly, server-side applies each composed resource under
+Crossplane's composed field manager, gives it a controller ownerReference to the XR's real UID, as
+`RenderComposedResourceMetadata` does, and records it in the XR's `resourceRefs`. Reconciled XR fixtures carry their own
+`crossplane.io/composite` label, claims' backing XRs track a declared CompositionRevision that the claim mirrors under
+Automatic, and composed fixtures omit the annotation function-go-templating strips from its output. A composed
+resource without a controlling XR, such as an orphan being adopted, is set up as a plain fixture, and only on purpose.
+
 envtest runs each case's `kube-apiserver` and `etcd` as children of the test binary, and only a deferred
 `Environment.Stop` ends them, which does not run when the binary times out, is killed or is interrupted. Such a run
 leaves its servers running, reparented to PID 1, until the next run starts: so that they cannot pile up (#524),
