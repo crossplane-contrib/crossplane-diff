@@ -58,6 +58,10 @@ earthly -P +e2e-matrix
 # Single E2E test against specific Crossplane version
 earthly +e2e --CROSSPLANE_IMAGE_TAG=main
 
+# Overriding FLAGS replaces the default `-labels=crossplane-version=<tag>` filter, so pass it yourself when
+# targeting release-1.20; otherwise main-only (v2) tests run against Crossplane v1 and fail
+earthly -P +e2e --CROSSPLANE_IMAGE_TAG=release-1.20 --FLAGS="-labels=crossplane-version=release-1.20 -test.run ^TestDiffExistingClaim$"
+
 # Run specific E2E test with verbose logging
 earthly -P +e2e --FLAGS="-v=4 -test.run ^TestCompositionDiff"
 
@@ -68,6 +72,10 @@ earthly -i -P +e2e --FLAGS="-test.failfast -fail-fast -destroy-kind-cluster=fals
 go test -c -o e2e ./test/e2e
 ./e2e -v=4 -test.v -test.failfast -destroy-kind-cluster=false -test.run ^TestSpecificTest
 ```
+
+CI runs the `e2e-tests` job once per Crossplane version (`main` and `release-1.20`), as parallel matrix legs that each
+call `+ci-e2e` with `CROSSPLANE_IMAGE_TAG` and the matching `-labels=crossplane-version=` filter. Each leg's tag selects
+the `test/e2e/manifests/beta/diff/<tag>/` expectations, so changes under `release-1.20/` are verified in CI too.
 
 **IMPORTANT**: Never interrupt running tests to try a simpler approach. E2E tests take a long time but that's expected. Killing them wastes the effort up to that point.
 

@@ -8,8 +8,9 @@ name: Renovate Auto-Approve
 #
 # Automerge itself, and the decision of *which* updates to merge, live in
 # .github/renovate.json5. This workflow only supplies the approval; the
-# required status checks (unit-tests, e2e-tests) remain the real gate, so a
-# failing update never merges even though it is approved.
+# required status checks (unit-tests and every e2e-tests matrix leg, one per
+# Crossplane version) remain the real gate, so a failing update never merges
+# even though it is approved.
 #
 # NOTE: This requires "Allow GitHub Actions to create and approve pull
 # requests" to be enabled under Settings -> Actions -> General. Without it,

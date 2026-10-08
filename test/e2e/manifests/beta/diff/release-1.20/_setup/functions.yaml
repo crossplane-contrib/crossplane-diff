@@ -9,6 +9,14 @@ spec:
 apiVersion: pkg.crossplane.io/v1beta1
 kind: Function
 metadata:
+  name: function-go-templating
+spec:
+  # used by v1-claim-nested's parent composition; the version main's _setup pinned when that test was added
+  package: xpkg.upbound.io/crossplane-contrib/function-go-templating:v0.11.0
+---
+apiVersion: pkg.crossplane.io/v1beta1
+kind: Function
+metadata:
   name: function-auto-ready
 spec:
   # the earliest version of this from crossplane.io is 0.4.2 so stay at upbound (for pinning)

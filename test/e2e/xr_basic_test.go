@@ -316,10 +316,10 @@ func TestDiffExistingResourceV1(t *testing.T) {
 
 				// Verify the diff shows 2 modified resources:
 				// 1. The XR itself (XNopResource)
-				// 2. The composed managed resource (ClusterNopResource)
+				// 2. The composed managed resource (see composedNopKind)
 				AssertStructuredDiff(t, jsonOutput, tu.ExpectDiff().
 					WithSummary(0, 2, 0).
-					WithModifiedResource("ClusterNopResource", "", "").
+					WithModifiedResource(composedNopKind(c), "", "").
 					WithAnyName(). // Name is generated
 					And().
 					WithModifiedResource("XNopResource", "existing-resource", "").
