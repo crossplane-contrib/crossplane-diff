@@ -479,6 +479,22 @@ func TestDefaultCompDiffProcessor_calculateCompositionDiff(t *testing.T) {
 			BuildAsUnstructured()
 	}
 
+	// lastAppliedFor is the last-applied-configuration a client-side `kubectl apply` of c writes: c minus
+	// the annotation, JSON-encoded, keeping the emptied annotations map as kubectl does.
+	lastAppliedFor := func(c *un.Unstructured) string {
+		obj := c.DeepCopy()
+		annotations := obj.GetAnnotations()
+		delete(annotations, "kubectl.kubernetes.io/last-applied-configuration")
+		_ = un.SetNestedStringMap(obj.Object, annotations, "metadata", "annotations")
+
+		b, err := json.Marshal(obj.Object)
+		if err != nil {
+			t.Fatalf("cannot encode last-applied-configuration: %v", err)
+		}
+
+		return string(b)
+	}
+
 	type want struct {
 		hasDiff bool
 		scope   ChangeScope
@@ -539,6 +555,38 @@ func TestDefaultCompDiffProcessor_calculateCompositionDiff(t *testing.T) {
 			},
 			ignorePaths: []string{"metadata.annotations[kubectl.kubernetes.io/last-applied-configuration]"},
 			want:        want{hasDiff: false, scope: ChangeScopeMetadata, revisionNamePredictable: false},
+		},
+		// Issue #500: the cluster's annotation is the one a client-side apply of this very file writes, so
+		// re-applying it produces an empty patch and kubectl writes nothing. No revision is created.
+		"LastAppliedConfigurationDescribesFile_Unchanged": {
+			input: compWithLabels(map[string]string{"version": "0.0.1"}),
+			clusterAnnotations: map[string]string{
+				"kubectl.kubernetes.io/last-applied-configuration": lastAppliedFor(compWithLabels(map[string]string{"version": "0.0.1"})),
+			},
+			want: want{hasDiff: false, scope: ChangeScopeNone, revisionNamePredictable: true},
+		},
+		// A file that carries the annotation itself would have it written verbatim under server-side
+		// apply, so the outcome again depends on the apply mode, even though the cluster's value describes
+		// the file.
+		"LastAppliedConfigurationInFile_StillChanged": {
+			input: tu.NewComposition("test-composition").
+				WithCompositeTypeRef("example.org/v1", "XResource").
+				WithPipelineMode().
+				WithLabels(map[string]string{"version": "0.0.1"}).
+				WithAnnotations(map[string]string{"kubectl.kubernetes.io/last-applied-configuration": `{}`}).
+				BuildAsUnstructured(),
+			clusterAnnotations: map[string]string{
+				"kubectl.kubernetes.io/last-applied-configuration": lastAppliedFor(compWithLabels(map[string]string{"version": "0.0.1"})),
+			},
+			want: want{hasDiff: false, scope: ChangeScopeMetadata, revisionNamePredictable: false},
+		},
+		// A value that is not JSON was not written by kubectl, so what applying does is unknown.
+		"LastAppliedConfigurationUnparseable_StillChanged": {
+			input: compWithLabels(map[string]string{"version": "0.0.1"}),
+			clusterAnnotations: map[string]string{
+				"kubectl.kubernetes.io/last-applied-configuration": `not json`,
+			},
+			want: want{hasDiff: false, scope: ChangeScopeMetadata, revisionNamePredictable: false},
 		},
 		// The discriminator for the guard: the cluster copy carries the kubectl annotation AND the
 		// compositions genuinely differ. The annotation is no longer the *sole* delta, so the hash
@@ -681,7 +729,7 @@ func TestDefaultCompDiffProcessor_partitionXRsByUpdatePolicy(t *testing.T) {
 		wantRepointing []string
 		wantErr        bool
 	}{
-		// AC2.5 (Manual side): --include-manual keeps Manual XRs...
+		// Manual side: --include-manual keeps Manual XRs...
 		"IncludeManualTrue_KeepsManualXRs": {
 			includeManual: true,
 			compLabels:    map[string]string{"version": "0.0.2"},
@@ -709,7 +757,7 @@ func TestDefaultCompDiffProcessor_partitionXRsByUpdatePolicy(t *testing.T) {
 			wantRepointing: nil,
 			wantDropped:    nil,
 		},
-		// AC2.5 (selector side): ...but --include-manual does NOT re-include selector-mismatched
+		// Selector side: ...but --include-manual does NOT re-include selector-mismatched
 		// Automatic XRs — they would never adopt the new revision.
 		"IncludeManualTrue_StillDropsSelectorMismatchedAutomaticXRs": {
 			includeManual: true,
@@ -739,7 +787,7 @@ func TestDefaultCompDiffProcessor_partitionXRsByUpdatePolicy(t *testing.T) {
 			wantRepointing: []string{"auto-xr"},
 			wantDropped:    []droppedWant{{name: "manual-xr", reason: renderer.FilterReasonManualPolicy}},
 		},
-		// AC2.1: Automatic XR whose selector does not match the composition labels is dropped.
+		// Automatic XR whose selector does not match the composition labels is dropped.
 		"AutomaticSelectorMismatch_Dropped": {
 			includeManual: false,
 			compLabels:    map[string]string{"version": "0.0.2"},
@@ -752,7 +800,7 @@ func TestDefaultCompDiffProcessor_partitionXRsByUpdatePolicy(t *testing.T) {
 			wantRepointing: nil,
 			wantDropped:    []droppedWant{{name: "selector-old", reason: renderer.FilterReasonRevisionSelectorMismatch}},
 		},
-		// AC2.2: Automatic XR whose selector matches the composition labels is kept.
+		// Automatic XR whose selector matches the composition labels is kept.
 		"AutomaticSelectorMatch_Kept": {
 			includeManual: false,
 			compLabels:    map[string]string{"version": "0.0.2"},
@@ -802,7 +850,7 @@ func TestDefaultCompDiffProcessor_partitionXRsByUpdatePolicy(t *testing.T) {
 			wantRepointing: []string{"hash-selector"},
 			wantDropped:    nil,
 		},
-		// AC2.3: Automatic XR with no selector is kept (unchanged from prior behavior).
+		// Automatic XR with no selector is kept (unchanged from prior behavior).
 		"AutomaticNoSelector_Kept": {
 			includeManual: false,
 			compLabels:    map[string]string{"version": "0.0.2"},
@@ -815,7 +863,7 @@ func TestDefaultCompDiffProcessor_partitionXRsByUpdatePolicy(t *testing.T) {
 			wantRepointing: []string{"no-selector", "default-policy"},
 			wantDropped:    nil,
 		},
-		// AC2.4: Manual XR with a matching selector is still dropped by policy (reason manual_policy),
+		// Manual XR with a matching selector is still dropped by policy (reason manual_policy),
 		// not rescued by the selector match.
 		"ManualWithMatchingSelector_DroppedByPolicy": {
 			includeManual: false,
@@ -982,61 +1030,67 @@ func TestDefaultCompDiffProcessor_partitionXRsByUpdatePolicy(t *testing.T) {
 	}
 }
 
-// TestSeedRepointingXRs pins the render-input construction: only re-pointing composites already
-// tracking a revision are seeded, the supplied composites are never mutated (they are the cluster's
-// objects, still read for identity by the impact analysis and removal detection), and input order is
-// preserved because the rendered impact analysis follows it.
-func TestSeedRepointingXRs(t *testing.T) {
-	withRef := func(name, policy string) *un.Unstructured {
-		return tu.NewResource("example.org/v1", "XResource", name).WithNamespace("default").
-			WithNestedField(policy, "spec", "crossplane", "compositionUpdatePolicy").
-			WithNestedField(map[string]any{"name": "old-revision"}, "spec", "crossplane", "compositionRevisionRef").
-			Build()
+// TestDefaultCompDiffProcessor_collectXRDiffs_RevisionName pins which composites are rendered with the
+// predicted revision name: only the re-pointing ones, and none when the name is unpredictable. A Manual
+// composite kept by --include-manual stays pinned, so rendering it with the new name would render it
+// against a revision it never uses. The supplied composites are passed through unmodified: the name is
+// applied to what render consumes, never to the cluster's objects.
+func TestDefaultCompDiffProcessor_collectXRDiffs_RevisionName(t *testing.T) {
+	auto := tu.NewResource("example.org/v1", "XResource", "auto-xr").WithNamespace("default").Build()
+	manual := tu.NewResource("example.org/v1", "XResource", "manual-xr").WithNamespace("default").
+		WithNestedField("Manual", "spec", "crossplane", "compositionUpdatePolicy").Build()
+
+	repointing := map[string]bool{dt.MakeDiffKeyFromResource(auto): true}
+
+	tests := map[string]struct {
+		reason       string
+		revisionName string
+		want         map[string]types.XRDiffOptions
+	}{
+		"RepointingCompositesGetThePredictedName": {
+			reason:       "A composite that would re-point at the new revision is rendered with its name; a pinned one is not.",
+			revisionName: "comp-abc1234",
+			want: map[string]types.XRDiffOptions{
+				"auto-xr":   {RevisionName: "comp-abc1234"},
+				"manual-xr": {},
+			},
+		},
+		"UnpredictableNameIsNeverSeeded": {
+			reason: "When the revision name cannot be predicted, every composite renders with the ref it has.",
+			want: map[string]types.XRDiffOptions{
+				"auto-xr":   {},
+				"manual-xr": {},
+			},
+		},
 	}
 
-	auto := withRef("auto-xr", "Automatic")
-	manual := withRef("manual-xr", "Manual")
-	noRef := tu.NewResource("example.org/v1", "XResource", "no-ref-xr").WithNamespace("default").
-		WithNestedField("Automatic", "spec", "crossplane", "compositionUpdatePolicy").Build()
+	for name, tt := range tests {
+		t.Run(name, func(t *testing.T) {
+			xrs := []*un.Unstructured{auto, manual}
+			before := []*un.Unstructured{auto.DeepCopy(), manual.DeepCopy()}
 
-	xrs := []*un.Unstructured{auto, manual, noRef}
-	repointing := map[string]bool{
-		dt.MakeDiffKeyFromResource(auto):  true,
-		dt.MakeDiffKeyFromResource(noRef): true,
-	}
+			got := make(map[string]types.XRDiffOptions)
+			processor := &DefaultCompDiffProcessor{
+				xrProc: &tu.MockDiffProcessor{
+					DiffSingleResourceFn: func(_ context.Context, res *un.Unstructured, _ types.CompositionProvider, opts types.XRDiffOptions) (map[string]*dt.ResourceDiff, error) {
+						got[res.GetName()] = opts
+						return map[string]*dt.ResourceDiff{}, nil
+					},
+				},
+				config: ProcessorConfig{Logger: tu.TestLogger(t, false)},
+			}
 
-	got := seedRepointingXRs(xrs, repointing, "new-revision")
+			comp := tu.NewComposition("comp").WithCompositeTypeRef("example.org/v1", "XResource").WithPipelineMode().BuildAsUnstructured()
+			_ = processor.collectXRDiffs(t.Context(), xrs, comp, repointing, tt.revisionName)
 
-	wantRefs := []string{"new-revision", "old-revision", ""}
-	gotNames := make([]string, 0, len(got))
-	gotRefs := make([]string, 0, len(got))
+			if diff := gcmp.Diff(tt.want, got); diff != "" {
+				t.Errorf("%s\ncollectXRDiffs() options (-want +got):\n%s", tt.reason, diff)
+			}
 
-	for _, xr := range got {
-		gotNames = append(gotNames, xr.GetName())
-
-		ref, _, _ := un.NestedString(xr.Object, "spec", "crossplane", "compositionRevisionRef", "name")
-		gotRefs = append(gotRefs, ref)
-	}
-
-	if diff := gcmp.Diff([]string{"auto-xr", "manual-xr", "no-ref-xr"}, gotNames); diff != "" {
-		t.Errorf("seedRepointingXRs() changed the order (-want +got):\n%s", diff)
-	}
-
-	if diff := gcmp.Diff(wantRefs, gotRefs); diff != "" {
-		t.Errorf("seedRepointingXRs() refs mismatch (-want +got):\n%s", diff)
-	}
-
-	// The cluster's objects must come back untouched — the seeded composite is a copy.
-	for _, original := range xrs {
-		ref, _, _ := un.NestedString(original.Object, "spec", "crossplane", "compositionRevisionRef", "name")
-		if ref == "new-revision" {
-			t.Errorf("seedRepointingXRs() mutated the supplied composite %q", original.GetName())
-		}
-	}
-
-	// An unseeded composite is passed through, not copied, so nothing downstream sees a needless clone.
-	if got[1] != manual {
-		t.Errorf("seedRepointingXRs() copied a composite it did not seed")
+			if diff := gcmp.Diff(before, xrs); diff != "" {
+				t.Errorf("%s\ncollectXRDiffs() modified the supplied composites (-before +after):\n%s", tt.reason, diff)
+			}
+		})
 	}
 }
 
@@ -1299,7 +1353,7 @@ func TestDefaultCompDiffProcessor_collectXRDiffs_NestedXRCompositionLookup(t *te
 				compositionRequests := make([]string, 0)
 
 				mockXRProc := &tu.MockDiffProcessor{
-					DiffSingleResourceFn: func(ctx context.Context, res *un.Unstructured, compositionProvider types.CompositionProvider) (map[string]*dt.ResourceDiff, error) {
+					DiffSingleResourceFn: func(ctx context.Context, res *un.Unstructured, compositionProvider types.CompositionProvider, _ types.XRDiffOptions) (map[string]*dt.ResourceDiff, error) {
 						// For the root XR, test what composition is returned
 						comp, err := compositionProvider(ctx, res)
 						if err != nil {
@@ -1350,7 +1404,7 @@ func TestDefaultCompDiffProcessor_collectXRDiffs_NestedXRCompositionLookup(t *te
 				},
 			}
 
-			_ = processor.collectXRDiffs(ctx, tt.xrs, tt.cliComposition)
+			_ = processor.collectXRDiffs(ctx, tt.xrs, tt.cliComposition, nil, "")
 
 			// Verify the composition requests
 			if len(*compositionRequests) < 2 {
@@ -1410,7 +1464,7 @@ func TestDefaultCompDiffProcessor_DiffComposition_StderrErrorOutput(t *testing.T
 
 	// Create mock XR processor that fails for one XR
 	mockXRProc := &tu.MockDiffProcessor{
-		DiffSingleResourceFn: func(_ context.Context, res *un.Unstructured, _ types.CompositionProvider) (map[string]*dt.ResourceDiff, error) {
+		DiffSingleResourceFn: func(_ context.Context, res *un.Unstructured, _ types.CompositionProvider, _ types.XRDiffOptions) (map[string]*dt.ResourceDiff, error) {
 			if res.GetName() == "fail-xr" {
 				return nil, fmt.Errorf("render pipeline failed: function timeout")
 			}
@@ -1493,7 +1547,7 @@ func TestDefaultCompDiffProcessor_DiffComposition_LateWarningsReachStructuredOut
 	warnings := NewWarningLogger(tu.TestLogger(t, false), &stderr)
 
 	mockXRProc := &tu.MockDiffProcessor{
-		DiffSingleResourceFn: func(context.Context, *un.Unstructured, types.CompositionProvider) (map[string]*dt.ResourceDiff, error) {
+		DiffSingleResourceFn: func(context.Context, *un.Unstructured, types.CompositionProvider, types.XRDiffOptions) (map[string]*dt.ResourceDiff, error) {
 			return map[string]*dt.ResourceDiff{}, nil
 		},
 		// Stands in for the leftover-container advisory raised from the function provider's teardown,
@@ -1569,7 +1623,7 @@ func newCompProcessorForTest(t *testing.T, compClient xp.CompositionClient, incl
 	compRenderer := config.Factories.CompDiffRenderer(logger, diffRenderer, diffOpts)
 
 	mockXR := &tu.MockDiffProcessor{
-		DiffSingleResourceFn: func(context.Context, *un.Unstructured, types.CompositionProvider) (map[string]*dt.ResourceDiff, error) {
+		DiffSingleResourceFn: func(context.Context, *un.Unstructured, types.CompositionProvider, types.XRDiffOptions) (map[string]*dt.ResourceDiff, error) {
 			return map[string]*dt.ResourceDiff{}, nil
 		},
 	}
@@ -1856,7 +1910,7 @@ func TestDefaultCompDiffProcessor_DiffComposition_ResourceMode(t *testing.T) {
 	// RevisionSelectorMismatchSurfacedWithReasonAndCounts: an Automatic XR whose
 	// compositionRevisionSelector does not match the diffed composition's labels is surfaced as
 	// filtered with reason revision_selector_mismatch (and a detail hint), and counted in
-	// FilteredBySelector rather than FilteredByPolicy. (T3 / AC2.6, AC2.7, AC4.6)
+	// FilteredBySelector rather than FilteredByPolicy.
 	t.Run("RevisionSelectorMismatchSurfacedWithReasonAndCounts", func(t *testing.T) {
 		labeledComp := tu.NewComposition("test-comp").
 			WithCompositeTypeRef("example.org/v1", "XR").

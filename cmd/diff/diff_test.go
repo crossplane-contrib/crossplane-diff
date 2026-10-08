@@ -267,6 +267,7 @@ metadata:
 			}
 
 			err := c.Run(
+				t.Context(),
 				kongCtx,
 				tu.TestLogger(t, false),
 				&tc.args.appContext,
@@ -923,7 +924,7 @@ spec:
 			}
 
 			// Execute the test
-			err = cmd.Run(kongCtx, logger, appCtx, mockProcessor, mockLoader, &ExitCode{})
+			err = cmd.Run(t.Context(), kongCtx, logger, appCtx, mockProcessor, mockLoader, &ExitCode{})
 
 			// Check for expected errors
 			if tt.expectError {

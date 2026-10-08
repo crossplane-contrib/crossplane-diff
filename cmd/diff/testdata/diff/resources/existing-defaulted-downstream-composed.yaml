@@ -1,0 +1,14 @@
+# The fields Crossplane's composed-resource field manager applies. spec.forProvider.size is absent,
+# exactly as the composition renders it.
+apiVersion: ns.nop.example.org/v1alpha1
+kind: XDefaultedDownstreamResource
+metadata:
+  name: test-resource-defaulted
+  namespace: default
+  annotations:
+    crossplane.io/composition-resource-name: defaulted-resource
+  labels:
+    crossplane.io/composite: test-resource
+spec:
+  forProvider:
+    configData: new-value

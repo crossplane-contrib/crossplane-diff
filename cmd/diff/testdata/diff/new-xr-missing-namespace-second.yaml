@@ -1,0 +1,10 @@
+# A second XR targeting the same namespace as new-xr-missing-namespace.yaml, which does not exist in
+# the cluster. Diffed together, the two give the unverified-addition warning more than one resource
+# to count.
+apiVersion: ns.diff.example.org/v1alpha1
+kind: XNopResource
+metadata:
+  name: second-resource
+  namespace: nonexistent-namespace
+spec:
+  coolField: "second-value"

@@ -4,6 +4,7 @@ metadata:
   name: sha256-test-resource
   namespace: default
   annotations:
+    crossplane.io/composition-resource-name: nop-resource
     gotemplating.fn.crossplane.io/composition-resource-name: nop-resource
   labels:
     crossplane.io/composite: sha256-test-resource

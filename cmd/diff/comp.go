@@ -17,6 +17,8 @@ limitations under the License.
 package main
 
 import (
+	"context"
+
 	"github.com/alecthomas/kong"
 	dp "github.com/crossplane-contrib/crossplane-diff/cmd/diff/diffprocessor"
 	"github.com/crossplane-contrib/crossplane-diff/cmd/diff/ref"
@@ -190,13 +192,17 @@ func makeDefaultCompProc(c *CompCmd, kongCtx *kong.Context, appCtx *AppContext, 
 }
 
 // Run executes the composition diff command.
-func (c *CompCmd) Run(_ *kong.Context, log logging.Logger, appCtx *AppContext, proc dp.CompDiffProcessor, loader ld.Loader, exitCode *ExitCode) error {
-	ctx, cancel, err := initializeAppContext(c.Timeout, appCtx, log)
+func (c *CompCmd) Run(sigCtx context.Context, _ *kong.Context, log logging.Logger, appCtx *AppContext, proc dp.CompDiffProcessor, loader ld.Loader, exitCode *ExitCode) (err error) {
+	ctx, cancel, err := initializeAppContext(sigCtx, c.Timeout, appCtx, log)
 	if err != nil {
 		exitCode.Code = dp.ExitCodeToolError
 		return err
 	}
 	defer cancel()
+
+	// An interrupted run reports the interruption, not the cancelled calls it caused. Registered after
+	// cancel, so it runs before it: the run's own cancel must not read as an interrupt.
+	defer func() { err = interruptedRunResult(ctx, err, exitCode) }()
 
 	// Covers paths that return before rendering; Cleanup is idempotent.
 	defer dp.CleanupDetached(ctx, proc, log)

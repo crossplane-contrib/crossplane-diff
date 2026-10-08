@@ -13,7 +13,6 @@
     compositionRevisionRef:
       name: xnopclaims.claim.diff.example.org-xxxxxxx
 [31m-   coolField: existing-value[0m
-[32m+   compositionUpdatePolicy: Automatic[0m
 [32m+   coolField: modified-value[0m
 [32m+   parameters:[0m
 [32m+     config:[0m

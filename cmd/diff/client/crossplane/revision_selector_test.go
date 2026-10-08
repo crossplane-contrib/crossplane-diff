@@ -21,7 +21,7 @@ func TestXRRevisionSelectorMatch_Matches(t *testing.T) {
 		want         bool
 		wantErr      bool
 	}{
-		// AC1.1: no selector => matches (no restriction), regardless of policy.
+		// No selector => matches (no restriction), regardless of policy.
 		"NoSelector_Automatic_Matches": {
 			xr: tu.NewResource("example.org/v1", "XResource", "no-selector").
 				WithNestedField("Automatic", "spec", "crossplane", "compositionUpdatePolicy").
@@ -35,7 +35,7 @@ func TestXRRevisionSelectorMatch_Matches(t *testing.T) {
 			targetLabels: map[string]string{"version": "0.0.2"},
 			want:         true,
 		},
-		// AC1.2: Automatic + matchLabels subset of composition labels => matches.
+		// Automatic + matchLabels subset of composition labels => matches.
 		"Automatic_MatchLabelsSubset_Matches": {
 			xr: tu.NewResource("example.org/v1", "XResource", "match").
 				WithNestedField("Automatic", "spec", "crossplane", "compositionUpdatePolicy").
@@ -48,7 +48,7 @@ func TestXRRevisionSelectorMatch_Matches(t *testing.T) {
 			targetLabels: map[string]string{"version": "0.0.2", "extra": "ignored"},
 			want:         true,
 		},
-		// AC1.3: Automatic + matchLabels not satisfied => does not match.
+		// Automatic + matchLabels not satisfied => does not match.
 		"Automatic_MatchLabelsMismatch_DoesNotMatch": {
 			xr: tu.NewResource("example.org/v1", "XResource", "mismatch").
 				WithNestedField("Automatic", "spec", "crossplane", "compositionUpdatePolicy").
@@ -61,7 +61,7 @@ func TestXRRevisionSelectorMatch_Matches(t *testing.T) {
 			targetLabels: map[string]string{"version": "0.0.2"},
 			want:         false,
 		},
-		// AC1.4: matchExpressions honored (In / NotIn / Exists / DoesNotExist).
+		// matchExpressions honored (In / NotIn / Exists / DoesNotExist).
 		"Automatic_MatchExpressionsIn_Matches": {
 			xr: tu.NewResource("example.org/v1", "XResource", "expr-in").
 				WithNestedField("Automatic", "spec", "crossplane", "compositionUpdatePolicy").
@@ -90,7 +90,7 @@ func TestXRRevisionSelectorMatch_Matches(t *testing.T) {
 			targetLabels: map[string]string{"channel": "preview"},
 			want:         false,
 		},
-		// AC1.5: v1 path is read as well.
+		// The v1 path is read as well.
 		"Automatic_V1Path_MatchLabels_Matches": {
 			xr: tu.NewResource("example.org/v1", "XResource", "v1-path").
 				WithNestedField("Automatic", "spec", "compositionUpdatePolicy").
@@ -103,7 +103,7 @@ func TestXRRevisionSelectorMatch_Matches(t *testing.T) {
 			targetLabels: map[string]string{"version": "0.0.2"},
 			want:         true,
 		},
-		// AC1.6: Manual policy => selector not applied by this predicate (returns matches=true
+		// Manual policy => selector not applied by this predicate (returns matches=true
 		// so Manual XRs are governed only by the policy filter / --include-manual).
 		"Manual_MismatchingSelector_StillMatches": {
 			xr: tu.NewResource("example.org/v1", "XResource", "manual-mismatch").
@@ -117,7 +117,7 @@ func TestXRRevisionSelectorMatch_Matches(t *testing.T) {
 			targetLabels: map[string]string{"version": "0.0.2"},
 			want:         true,
 		},
-		// AC1.7: empty selector (no matchLabels, no matchExpressions) => matches everything.
+		// Empty selector (no matchLabels, no matchExpressions) => matches everything.
 		"Automatic_EmptySelector_Matches": {
 			xr: tu.NewResource("example.org/v1", "XResource", "empty-selector").
 				WithNestedField("Automatic", "spec", "crossplane", "compositionUpdatePolicy").

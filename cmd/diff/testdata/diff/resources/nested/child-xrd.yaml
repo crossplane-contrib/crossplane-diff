@@ -24,6 +24,10 @@ spec:
                 childField:
                   type: string
                   description: A field for the child resource
+                tier:
+                  type: string
+                  default: standard
+                  description: Defaulted by the XRD; the parent composition never sets it
             status:
               type: object
               properties:

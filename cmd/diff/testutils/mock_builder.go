@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
@@ -562,8 +563,88 @@ func (b *MockApplyClientBuilder) WithFailedDryRun(errMsg string) *MockApplyClien
 	})
 }
 
+// WithDryRunCreate sets the DryRunCreate behavior.
+func (b *MockApplyClientBuilder) WithDryRunCreate(fn func(context.Context, *un.Unstructured) (*un.Unstructured, error)) *MockApplyClientBuilder {
+	b.mock.DryRunCreateFn = fn
+	return b
+}
+
+// WithSuccessfulDryRunCreate sets DryRunCreate to return the input resource.
+func (b *MockApplyClientBuilder) WithSuccessfulDryRunCreate() *MockApplyClientBuilder {
+	return b.WithDryRunCreate(func(_ context.Context, obj *un.Unstructured) (*un.Unstructured, error) {
+		return obj, nil
+	})
+}
+
+// WithFailedDryRunCreate sets DryRunCreate to return an error.
+func (b *MockApplyClientBuilder) WithFailedDryRunCreate(errMsg string) *MockApplyClientBuilder {
+	return b.WithDryRunCreate(func(context.Context, *un.Unstructured) (*un.Unstructured, error) {
+		return nil, errors.New(errMsg)
+	})
+}
+
 // Build returns the built mock.
 func (b *MockApplyClientBuilder) Build() *MockApplyClient {
+	return b.mock
+}
+
+// MockAccessCheckerBuilder helps build kubernetes.AccessChecker mocks.
+type MockAccessCheckerBuilder struct {
+	mock *MockAccessChecker
+}
+
+// NewMockAccessChecker creates a new MockAccessCheckerBuilder. With no further calls the mock allows
+// everything — see MockAccessChecker.Can for why that is the right default.
+func NewMockAccessChecker() *MockAccessCheckerBuilder {
+	return &MockAccessCheckerBuilder{
+		mock: &MockAccessChecker{},
+	}
+}
+
+// WithCan sets the Can behavior.
+func (b *MockAccessCheckerBuilder) WithCan(fn func(context.Context, schema.GroupVersionKind, string, dtypes.Verb) (bool, string, error)) *MockAccessCheckerBuilder {
+	b.mock.CanFn = fn
+	return b
+}
+
+// WithAllowed makes every authorization check succeed.
+func (b *MockAccessCheckerBuilder) WithAllowed() *MockAccessCheckerBuilder {
+	return b.WithCan(func(_ context.Context, _ schema.GroupVersionKind, _ string, _ dtypes.Verb) (bool, string, error) {
+		return true, "", nil
+	})
+}
+
+// WithDenied makes every authorization check report that we are not permitted, with the given
+// reason. This is what turns a Forbidden dry-run into a graceful per-resource degradation rather
+// than a reported cluster rejection.
+func (b *MockAccessCheckerBuilder) WithDenied(reason string) *MockAccessCheckerBuilder {
+	return b.WithCan(func(_ context.Context, _ schema.GroupVersionKind, _ string, _ dtypes.Verb) (bool, string, error) {
+		return false, reason, nil
+	})
+}
+
+// WithDeniedVerb denies only the named verb and allows everything else. A user holding patch but not
+// create is the exact configuration this feature exists to cope with, so it needs to be expressible.
+func (b *MockAccessCheckerBuilder) WithDeniedVerb(deniedVerb dtypes.Verb, reason string) *MockAccessCheckerBuilder {
+	return b.WithCan(func(_ context.Context, _ schema.GroupVersionKind, _ string, verb dtypes.Verb) (bool, string, error) {
+		if verb == deniedVerb {
+			return false, reason, nil
+		}
+
+		return true, "", nil
+	})
+}
+
+// WithFailedCheck makes the authorization check itself fail, leaving a Forbidden dry-run
+// unclassifiable.
+func (b *MockAccessCheckerBuilder) WithFailedCheck(err error) *MockAccessCheckerBuilder {
+	return b.WithCan(func(_ context.Context, _ schema.GroupVersionKind, _ string, _ dtypes.Verb) (bool, string, error) {
+		return false, "", err
+	})
+}
+
+// Build returns the built mock.
+func (b *MockAccessCheckerBuilder) Build() *MockAccessChecker {
 	return b.mock
 }
 
@@ -1244,10 +1325,7 @@ func (b *MockResourceTreeClientBuilder) WithSuccessfulResourceTreeFetch(resource
 // WithEmptyResourceTree sets GetResourceTree to return just the root with no children.
 func (b *MockResourceTreeClientBuilder) WithEmptyResourceTree() *MockResourceTreeClientBuilder {
 	return b.WithGetResourceTree(func(_ context.Context, root *un.Unstructured) (*resource.Resource, error) {
-		return &resource.Resource{
-			Unstructured: *root.DeepCopy(),
-			Children:     []*resource.Resource{},
-		}, nil
+		return NewTreeNode(root).Build(), nil
 	})
 }
 
@@ -1266,27 +1344,50 @@ func (b *MockResourceTreeClientBuilder) WithResourceTreeFromXRAndComposed(xr *un
 			return nil, errors.Errorf("unexpected resource %s/%s", root.GetKind(), root.GetName())
 		}
 
-		// Create the resource tree with the XR as root
-		resourceTree := &resource.Resource{
-			Unstructured: *xr.DeepCopy(),
-			Children:     make([]*resource.Resource, 0, len(composed)),
-		}
-
-		// Add composed resources as children
+		// Create the resource tree with the XR as root and the composed resources as its children
+		children := make([]*TreeNodeBuilder, 0, len(composed))
 		for _, comp := range composed {
-			resourceTree.Children = append(resourceTree.Children, &resource.Resource{
-				Unstructured: *comp.DeepCopy(),
-				Children:     []*resource.Resource{},
-			})
+			children = append(children, NewTreeNode(comp))
 		}
 
-		return resourceTree, nil
+		return NewTreeNode(xr).WithChildren(children...).Build(), nil
 	})
 }
 
 // Build returns the built mock.
 func (b *MockResourceTreeClientBuilder) Build() *MockResourceTreeClient {
 	return b.mock
+}
+
+// TreeNodeBuilder builds a resource-tree node, the shape a ResourceTreeClient returns.
+type TreeNodeBuilder struct {
+	node *resource.Resource
+}
+
+// NewTreeNode starts a tree node holding a deep copy of obj, so the caller's object is never shared
+// with, or mutated through, the tree.
+func NewTreeNode(obj *un.Unstructured) *TreeNodeBuilder {
+	return &TreeNodeBuilder{node: &resource.Resource{Unstructured: *obj.DeepCopy()}}
+}
+
+// WithChildren appends the given nodes as children of this one.
+func (b *TreeNodeBuilder) WithChildren(children ...*TreeNodeBuilder) *TreeNodeBuilder {
+	for _, c := range children {
+		b.node.Children = append(b.node.Children, c.Build())
+	}
+
+	return b
+}
+
+// WithError records err on the node, as upstream's tree client does for a node it could not fetch.
+func (b *TreeNodeBuilder) WithError(err error) *TreeNodeBuilder {
+	b.node.Error = err
+	return b
+}
+
+// Build returns the built node.
+func (b *TreeNodeBuilder) Build() *resource.Resource {
+	return b.node
 }
 
 // endregion
@@ -1786,6 +1887,27 @@ func (b *CRDBuilder) WithStringFieldSchema(fieldName string) *CRDBuilder {
 			},
 			"status": {
 				Type: "object",
+			},
+		},
+	}
+
+	return b.WithSchema(schema)
+}
+
+// WithDefaultedStringFieldSchema adds a schema whose spec has a single string field carrying a
+// `default:` value, for exercising CRD defaulting.
+func (b *CRDBuilder) WithDefaultedStringFieldSchema(fieldName, defaultValue string) *CRDBuilder {
+	schema := &extv1.JSONSchemaProps{
+		Type: "object",
+		Properties: map[string]extv1.JSONSchemaProps{
+			"spec": {
+				Type: "object",
+				Properties: map[string]extv1.JSONSchemaProps{
+					fieldName: {
+						Type:    "string",
+						Default: &extv1.JSON{Raw: []byte(strconv.Quote(defaultValue))},
+					},
+				},
 			},
 		},
 	}

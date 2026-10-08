@@ -40,6 +40,12 @@ type DiffRenderer interface {
 	// diffprocessor.WarningLogger) — emitting them at render time instead would lose any warning
 	// raised during a run that fails before rendering, and would report them out of chronological
 	// order with the work that produced them. The human renderer therefore ignores this parameter.
+	//
+	// One kind of warning is instead derived here, from the groups: the summary of added resources
+	// that could not be verified against the apiserver (see dryRunWarnings). Deciding what to summarise
+	// is a presentation decision, and the DryRunInfo it is built from only exists once the diffs do.
+	// Every renderer writes that summary to stderr; a structured one also appends it to warnings[],
+	// after the warnings passed in.
 	RenderDiffs(groups []dt.XRDiffGroup, errs []dt.OutputError, warnings []dt.OutputWarning) error
 }
 
@@ -207,6 +213,11 @@ func identitylessGroups(diffs map[string]*dt.ResourceDiff) []dt.XRDiffGroup {
 // pre-grouping behavior.
 // The warnings parameter is intentionally unused: warnings reach humans via stderr when they are
 // raised, not at render time. See the DiffRenderer interface comment.
+//
+// The summary of unverified additions is derived from identity-bearing groups only. An identity-less
+// group is the composition renderer's internal reuse of this one (see dt.XRDiffGroup), which happens
+// once per composition; that renderer writes one run-wide summary itself, so deriving one here as well
+// would repeat it.
 func (r *DefaultDiffRenderer) RenderDiffs(groups []dt.XRDiffGroup, errs []dt.OutputError, _ []dt.OutputWarning) error {
 	r.logger.Debug("Rendering diffs to output",
 		"groupCount", len(groups),
@@ -218,22 +229,26 @@ func (r *DefaultDiffRenderer) RenderDiffs(groups []dt.XRDiffGroup, errs []dt.Out
 	// than one input XR is present — that's what there is to disambiguate. A
 	// single XR (or identity-less comp reuse) renders as a flat block, exactly
 	// as before grouping was introduced.
-	identityGroups := 0
+	var xrGroups []dt.XRDiffGroup
 
 	for _, g := range groups {
 		if hasIdentity(g) {
-			identityGroups++
+			xrGroups = append(xrGroups, g)
 		}
 	}
 
 	var err error
-	if identityGroups > 1 {
+	if len(xrGroups) > 1 {
 		err = r.renderGrouped(groups)
 	} else {
 		err = r.renderFlat(flattenGroups(groups))
 	}
 
 	if err != nil {
+		return err
+	}
+
+	if err := writeWarnings(r.diffOpts.Stderr, xrDryRunWarnings(xrGroups)); err != nil {
 		return err
 	}
 

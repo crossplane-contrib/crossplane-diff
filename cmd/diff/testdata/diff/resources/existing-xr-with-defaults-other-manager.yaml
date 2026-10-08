@@ -1,0 +1,9 @@
+# A different field manager (a user or another controller) sets the XRD-defaulted spec.region to a
+# non-default value on an XR whose own manifest (xr-with-missing-defaults.yaml) omits it.
+apiVersion: ns.diff.example.org/v1alpha1
+kind: XTestDefaultResource
+metadata:
+  name: test-resource-with-defaults
+  namespace: default
+spec:
+  region: eu-west-1

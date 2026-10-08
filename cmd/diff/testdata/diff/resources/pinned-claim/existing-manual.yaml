@@ -1,0 +1,53 @@
+# A Manual claim bound to a backing XR that is pinned to revision 1, the older of the composition's two
+# revisions, together with that XR's composed resource as revision 1 rendered it. The claim carries no
+# compositionRevisionRef: the claim syncer copies the ref back to a claim only under Automatic, so a
+# Manual claim has one only if its author set it. The pin therefore lives on the backing XR alone.
+apiVersion: pinned.diff.example.org/v1alpha1
+kind: Pinned
+metadata:
+  name: manual-claim
+  namespace: existing-namespace
+spec:
+  coolField: existing-value
+  compositionUpdatePolicy: Manual
+  compositionRef:
+    name: xpinneds.pinned.diff.example.org
+  resourceRef:
+    apiVersion: pinned.diff.example.org/v1alpha1
+    kind: XPinned
+    name: manual-claim-x1y2z
+---
+apiVersion: pinned.diff.example.org/v1alpha1
+kind: XPinned
+metadata:
+  name: manual-claim-x1y2z
+  labels:
+    crossplane.io/claim-name: manual-claim
+    crossplane.io/claim-namespace: existing-namespace
+spec:
+  coolField: existing-value
+  compositionUpdatePolicy: Manual
+  compositionRef:
+    name: xpinneds.pinned.diff.example.org
+  compositionRevisionRef:
+    name: xpinneds.pinned.diff.example.org-rev1
+  claimRef:
+    apiVersion: pinned.diff.example.org/v1alpha1
+    kind: Pinned
+    name: manual-claim
+    namespace: existing-namespace
+---
+apiVersion: nop.example.org/v1alpha1
+kind: XDownstreamResource
+metadata:
+  name: manual-claim-x1y2z
+  annotations:
+    crossplane.io/composition-resource-name: nop-resource
+    gotemplating.fn.crossplane.io/composition-resource-name: nop-resource
+  labels:
+    crossplane.io/composite: manual-claim-x1y2z
+    crossplane.io/claim-name: manual-claim
+    crossplane.io/claim-namespace: existing-namespace
+spec:
+  forProvider:
+    configData: v1:xpinneds.pinned.diff.example.org-rev1:existing-value

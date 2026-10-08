@@ -4,6 +4,7 @@ metadata:
   name: custom-namespace-resource
   namespace: custom-namespace
   annotations:
+    crossplane.io/composition-resource-name: nop-resource
     gotemplating.fn.crossplane.io/composition-resource-name: nop-resource
   labels:
     crossplane.io/composite: custom-namespace-resource

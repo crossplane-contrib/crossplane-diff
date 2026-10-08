@@ -257,7 +257,7 @@ type MockDiffProcessor struct {
 	// Function fields for mocking behavior
 	InitializeFn         func(ctx context.Context) error
 	PerformDiffFn        func(ctx context.Context, resources []*un.Unstructured, compositionProvider types.CompositionProvider) (bool, error)
-	DiffSingleResourceFn func(ctx context.Context, res *un.Unstructured, compositionProvider types.CompositionProvider) (map[string]*dt.ResourceDiff, error)
+	DiffSingleResourceFn func(ctx context.Context, res *un.Unstructured, compositionProvider types.CompositionProvider, opts types.XRDiffOptions) (map[string]*dt.ResourceDiff, error)
 	CleanupFn            func(ctx context.Context) error
 }
 
@@ -280,9 +280,9 @@ func (m *MockDiffProcessor) PerformDiff(ctx context.Context, resources []*un.Uns
 }
 
 // DiffSingleResource implements the DiffProcessor.DiffSingleResource method.
-func (m *MockDiffProcessor) DiffSingleResource(ctx context.Context, res *un.Unstructured, compositionProvider types.CompositionProvider) (map[string]*dt.ResourceDiff, error) {
+func (m *MockDiffProcessor) DiffSingleResource(ctx context.Context, res *un.Unstructured, compositionProvider types.CompositionProvider, opts types.XRDiffOptions) (map[string]*dt.ResourceDiff, error) {
 	if m.DiffSingleResourceFn != nil {
-		return m.DiffSingleResourceFn(ctx, res, compositionProvider)
+		return m.DiffSingleResourceFn(ctx, res, compositionProvider, opts)
 	}
 
 	return make(map[string]*dt.ResourceDiff), nil
@@ -328,6 +328,25 @@ func (m *MockSchemaValidator) ValidateScopeConstraints(ctx context.Context, reso
 	}
 
 	return nil
+}
+
+// endregion
+
+// region MockDefaulter
+
+// MockDefaulter Mock defaulter. With no DefaultFn it applies no defaults, returning a copy of its
+// input unchanged.
+type MockDefaulter struct {
+	DefaultFn func(ctx context.Context, obj *un.Unstructured) (*un.Unstructured, error)
+}
+
+// Default returns a copy of obj with predicted CRD defaults applied.
+func (m *MockDefaulter) Default(ctx context.Context, obj *un.Unstructured) (*un.Unstructured, error) {
+	if m.DefaultFn != nil {
+		return m.DefaultFn(ctx, obj)
+	}
+
+	return obj.DeepCopy(), nil
 }
 
 // endregion
@@ -534,9 +553,10 @@ func (m *MockSchemaClient) GetAllCRDs() []*extv1.CustomResourceDefinition {
 
 // MockApplyClient implements the kubernetes.ApplyClient interface.
 type MockApplyClient struct {
-	InitializeFn  func(ctx context.Context) error
-	ApplyFn       func(ctx context.Context, obj *un.Unstructured) (*un.Unstructured, error)
-	DryRunApplyFn func(ctx context.Context, obj *un.Unstructured, fieldOwner string) (*un.Unstructured, error)
+	InitializeFn   func(ctx context.Context) error
+	ApplyFn        func(ctx context.Context, obj *un.Unstructured) (*un.Unstructured, error)
+	DryRunApplyFn  func(ctx context.Context, obj *un.Unstructured, fieldOwner string) (*un.Unstructured, error)
+	DryRunCreateFn func(ctx context.Context, obj *un.Unstructured) (*un.Unstructured, error)
 }
 
 // Initialize implements kubernetes.ApplyClient.
@@ -564,6 +584,35 @@ func (m *MockApplyClient) DryRunApply(ctx context.Context, obj *un.Unstructured,
 	}
 
 	return nil, errors.New("DryRunApply not implemented")
+}
+
+// DryRunCreate implements kubernetes.ApplyClient.
+func (m *MockApplyClient) DryRunCreate(ctx context.Context, obj *un.Unstructured) (*un.Unstructured, error) {
+	if m.DryRunCreateFn != nil {
+		return m.DryRunCreateFn(ctx, obj)
+	}
+
+	return nil, errors.New("DryRunCreate not implemented")
+}
+
+// MockAccessChecker implements the kubernetes.AccessChecker interface.
+type MockAccessChecker struct {
+	CanFn func(ctx context.Context, gvk schema.GroupVersionKind, namespace string, verb types.Verb) (bool, string, error)
+}
+
+// Can implements kubernetes.AccessChecker.
+//
+// The unset default is "allowed", not an error, and that is deliberate. The production code only
+// consults the authorizer after a dry run has already come back Forbidden, and "allowed" is the
+// answer that routes such a 403 to the cluster-rejection path. So a test that wires a Forbidden
+// without saying anything about authorization gets the rejection behaviour rather than a confusing
+// "Can not implemented" failure from a collaborator it never meant to exercise.
+func (m *MockAccessChecker) Can(ctx context.Context, gvk schema.GroupVersionKind, namespace string, verb types.Verb) (bool, string, error) {
+	if m.CanFn != nil {
+		return m.CanFn(ctx, gvk, namespace, verb)
+	}
+
+	return true, "", nil
 }
 
 // MockTypeConverter implements the kubernetes.TypeConverter interface.
@@ -828,7 +877,7 @@ func (m *MockCredentialClient) FetchCompositionCredentials(ctx context.Context, 
 type MockDiffCalculator struct {
 	CalculateDiffFn                 func(context.Context, *un.Unstructured, *un.Unstructured) (*dt.ResourceDiff, error)
 	CalculateDiffsFn                func(context.Context, *cmp.Unstructured, render.CompositionOutputs) (map[string]*dt.ResourceDiff, error)
-	CalculateNonRemovalDiffsFn      func(context.Context, *cmp.Unstructured, *un.Unstructured, render.CompositionOutputs) (map[string]*dt.ResourceDiff, map[string]bool, error)
+	CalculateNonRemovalDiffsFn      func(context.Context, *cmp.Unstructured, render.CompositionOutputs) (map[string]*dt.ResourceDiff, map[string]bool, error)
 	CalculateRemovedResourceDiffsFn func(context.Context, *un.Unstructured, map[string]bool) (map[string]*dt.ResourceDiff, error)
 }
 
@@ -851,9 +900,9 @@ func (m *MockDiffCalculator) CalculateDiffs(ctx context.Context, xr *cmp.Unstruc
 }
 
 // CalculateNonRemovalDiffs implements DiffCalculator.
-func (m *MockDiffCalculator) CalculateNonRemovalDiffs(ctx context.Context, xr *cmp.Unstructured, parentComposite *un.Unstructured, desired render.CompositionOutputs) (map[string]*dt.ResourceDiff, map[string]bool, error) {
+func (m *MockDiffCalculator) CalculateNonRemovalDiffs(ctx context.Context, xr *cmp.Unstructured, desired render.CompositionOutputs) (map[string]*dt.ResourceDiff, map[string]bool, error) {
 	if m.CalculateNonRemovalDiffsFn != nil {
-		return m.CalculateNonRemovalDiffsFn(ctx, xr, parentComposite, desired)
+		return m.CalculateNonRemovalDiffsFn(ctx, xr, desired)
 	}
 
 	return nil, nil, nil

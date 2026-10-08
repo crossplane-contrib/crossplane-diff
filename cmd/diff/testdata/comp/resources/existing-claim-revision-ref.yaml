@@ -1,0 +1,20 @@
+# A Claim at the default (Automatic) update policy, bound to existing-claim-revision-ref-xr.yaml. It
+# carries that XR's compositionRevisionRef, because under Automatic the claim syncer copies the XR's ref
+# back onto the claim. Going the other way the claim's ref is not propagated: under Automatic the XR
+# controller owns the backing XR's ref, so that is the one render must see (issue #498).
+apiVersion: diff.example.org/v1alpha1
+kind: NopClaim
+metadata:
+  name: revision-ref-claim
+  namespace: test-namespace
+spec:
+  coolField: revision-ref-claim-value
+  compositeDeletePolicy: Background
+  compositionRef:
+    name: xrevisionrefclaims.diff.example.org
+  compositionRevisionRef:
+    name: xrevisionrefclaims.diff.example.org-staleref
+  resourceRef:
+    apiVersion: diff.example.org/v1alpha1
+    kind: XNop
+    name: revision-ref-claim-xr

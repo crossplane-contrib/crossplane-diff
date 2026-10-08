@@ -31,7 +31,12 @@ go tool cover -func=/tmp/coverage.out
 # Pre-PR checks: linting, tests, generation (requires long timeout, can take several minutes)
 earthly -P +reviewable
 
-# Fetch Crossplane cluster CRDs (required after Crossplane API changes or for integration tests)
+# Fetch Crossplane's CRDs at the crossplane version go.mod pins into cluster/gomod/crds. Required for unit and
+# integration tests (run it in a fresh worktree, and again after a crossplane dependency bump). +go-test runs it.
+earthly +fetch-crossplane-crds-gomod
+
+# Fetch Crossplane's cluster directory for an image tag into cluster/<tag>. Only e2e uses it, because it must
+# match the Crossplane image e2e runs.
 earthly +fetch-crossplane-cluster --CROSSPLANE_IMAGE_TAG=main
 
 # Tidy go modules
@@ -123,6 +128,7 @@ cmd/diff/
 │   ├── comp_processor.go     # Composition diff orchestration
 │   ├── diff_calculator.go    # Calculates diffs between resources
 │   ├── resource_manager.go   # Fetches current cluster state
+│   ├── composite_resolver.go # Computes the effective composite Crossplane would reconcile
 │   ├── schema_validator.go   # Validates resources against CRD schemas
 │   ├── requirements_provider.go  # Resolves composition requirements
 │   ├── function_provider.go  # Provides functions for composition pipeline
@@ -159,7 +165,8 @@ cmd/diff/
 
 **Function Pipeline Integration**
 - Functions fetched from cluster or provided via factory
-- Docker containers may be orphaned after diff (TODO: cleanup mechanism)
+- Function containers are removed by the processor's `Cleanup`, which also runs on the first Ctrl+C/SIGTERM. A run
+  that dies without cleanup (SIGKILL, OOM, a second Ctrl+C) can leave them behind; reaping those is #525
 - Functions are tied to compositions; cached provider reuses containers across XR renders
 
 **Resource Validation**
@@ -188,12 +195,39 @@ Key implications:
 - Test expectations must reflect this: NO label changes when modifying existing Claims
 - This behavior is consistent across Crossplane versions
 
+**The Effective Composite (Authored vs. Effective)**
+Each composite being diffed is seen two ways, and they must not be confused:
+- **Authored**: the input as written (plus a synthesized name for generateName-only XRs, and a nested XR's preserved
+  identity). This is the server-side dry-run payload, because it is what a user's apply would send. Never default it
+  locally: under SSA, including a field claims ownership of it, so locally derived defaults produce false diffs (#503).
+- **Effective**: what Crossplane would actually reconcile. `CompositeResolver.Resolve`
+  (`diffprocessor/composite_resolver.go`) computes it **once, before composition resolution**, and both composition
+  resolution and render consume it. The order matters: inherit from the cluster → apply `comp`'s predicted revision
+  (`XRDiffOptions.RevisionName`, root only) → default with the XR's CRD → resolve the composition → render. Defaulting
+  before inheriting would let a default `Automatic` overwrite the cluster's `Manual`.
+  - **XR**: the authored input plus each Crossplane-written field it omits, taken from the cluster copy
+    (`compositionRef`, `compositionRevisionRef`, `compositionUpdatePolicy`, at the v1 or v2 path), plus the cluster UID.
+    The UID is required: render keeps an input UID and checks observed resources' controller refs against it.
+  - **Claim**: the backing XR named by the cluster claim's `spec.resourceRef`, with the claim's spec synced into it by
+    `syncClaimSpec`, which mirrors upstream's claim syncers (e.g. the claim's `compositionRevisionRef` is only propagated
+    to the XR under Manual). A fetch error for the backing XR is fatal.
+
+**Defaulting**
+- One non-mutating `Defaulter` predicts apiserver CRD defaulting. It is used strictly for the effective XR before
+  render, and leniently (built-ins and unknown CRDs pass through) for local prediction of additions when no apiserver
+  result is available (`--dry-run-on=existing`, missing namespace, unavailable webhook, forbidden).
+- `SchemaValidator.ValidateResources` is read-only; it never defaults its inputs.
+- A Claim is defaulted with **its own** CRD, never the XR's: by the apiserver on dry-run, or by the lenient `Defaulter`
+  in local prediction. The two CRDs differ (crossplane-runtime `pkg/xcrd`): both carry the XRD's user schema defaults,
+  but only the XR CRD defaults `compositionUpdatePolicy`, and only the Claim CRD defaults `compositeDeletePolicy`.
+
 **New Claim Handling with spec.claimRef**
-When diffing a new Claim (one that doesn't exist in the cluster yet), compositions may reference `spec.claimRef` fields
-like `{{ .observed.composite.resource.spec.claimRef.name }}`. Since `claimRef` is only populated by Crossplane on the
-backing XR at runtime, we synthesize a dummy backing XR. The synthesis happens in `DefaultDiffProcessor` (specifically
-`synthesizeDummyBackingXRForNewClaim`, called from `resolveBackingXRForClaim`) and delegates to upstream's
-`ConvertClaimToXR` helper from `crossplane/cli`. The synthesized XR carries:
+When diffing a new Claim (one that doesn't exist in the cluster yet, or isn't bound to an XR yet), compositions may
+reference `spec.claimRef` fields like `{{ .observed.composite.resource.spec.claimRef.name }}`. Since `claimRef` is only
+populated by Crossplane on the backing XR at runtime, `CompositeResolver` synthesizes a backing XR
+(`synthesizeBackingXR`), delegating to upstream's `ConvertClaimToXR` helper from `crossplane/cli`. If the claim's
+`resourceRef` names an XR that doesn't exist, it synthesizes one under that name (the XR the claim syncer would create)
+and warns. The synthesized XR carries:
 - The authoritative XR kind from the XRD's `spec.names.kind` (XRDs are not required to use the `"X" + claimKind`
   convention)
 - The claim's name as the XR name (pinned, vs. the upstream default suffix — preserves cleaner diff output)
@@ -222,8 +256,10 @@ for new claims.
   - `FetchCurrentObject`: Retrieves existing resource from cluster (for identity preservation)
   - `FetchObservedResources`: Fetches resource tree to find all composed resources (including nested)
   - `UpdateOwnerReferences`: Updates owner references with dry-run annotations
-- Separation of concerns: `DiffCalculator` focuses on diff logic, `ResourceManager` handles cluster I/O
-- Identity preservation: Fetches existing nested XRs to maintain their cluster identity across renders
+- Separation of concerns: `DiffCalculator` focuses on diff logic, `ResourceManager` handles cluster I/O, and
+  `CompositeResolver` turns cluster state into the effective composite (see "The Effective Composite" above)
+- Identity preservation: nested XRs reuse the existing object their parent's observed resources already found (passed
+  to `CompositeResolver.Resolve` instead of re-fetching), so they keep their cluster identity across renders
 
 ## Design Principles
 
@@ -278,6 +314,29 @@ When using structured output (`--output json` or `--output yaml`):
 - Mock external dependencies using `testutils/mock_builder.go`
 - Integration tests use `envtest` for realistic cluster interactions
 
+**Integration-Test XR and Claim CRDs Are Generated, Not Hand-Written**
+
+In a real cluster Crossplane generates each XR's (and claim's) CRD from its XRD. The integration harness does the
+same: for every XRD a test case's `setupFiles` declare, `envtestCRDs` (in `cmd/diff/diff_it_utils_test.go`) calls
+`testutils.CRDsForXRD`, which runs upstream crossplane-runtime `pkg/xcrd` (`ForCompositeResource`, plus
+`ForCompositeResourceClaim` when `spec.claimNames` is set) after defaulting the XRD as the apiserver would. So:
+
+- To give an XR or claim a field, add it to the XRD fixture. There is no CRD to update.
+- Don't declare Crossplane's machinery fields (`compositionRef`, `compositionUpdatePolicy`, `compositeDeletePolicy`,
+  `resourceRefs`, `spec.crossplane`, …) in an XRD fixture unless that is what the test is about: xcrd generates them,
+  and a user-declared field xcrd doesn't overwrite lands on the generated CRD exactly as it would in a cluster.
+- An XR or claim kind exists only in a test that applies its XRD, as in a cluster.
+- `testdata/{diff,comp}/crds/` holds only plain CRDs that no XRD defines (managed-resource stand-ins such as
+  `XDownstreamResource`). The harness fails if a CRD there is also generated from an XRD, so a hand-written copy of a
+  generated CRD can't linger.
+- Crossplane's own CRDs (Composition, XRD, Function, …) are installed from `cluster/gomod/crds`
+  (`testutils.PinnedCrossplaneCRDsDir`), which `earthly +fetch-crossplane-crds-gomod` fills. That target asks the go
+  binary in the build which `github.com/crossplane/crossplane/v2` version go.mod selects and clones crossplane at that
+  tag, so the CRDs match the xcrd and other Crossplane code under test, and a dependency bump (e.g. by Renovate) moves
+  them with it. e2e instead uses `cluster/<image tag>` from `+fetch-crossplane-cluster`, matching the image it runs.
+
+e2e tests need none of this: they run real Crossplane, which generates the CRDs itself.
+
 **Neither Test Suite Reproduces What a Real Client Adds**
 
 No fixture in either suite carries the fields a real client writes, because of how each applies manifests:
@@ -298,6 +357,16 @@ requires that. See `cmd/diff/testdata/comp/resources/original-composition-kubect
 
 Prefer an integration test for this (seconds, and it exercises the real CLI wiring) over an e2e — e2e's SSA gives it the
 same blind spot, so it would need the same hand-placed fixture field at minutes-scale for no extra coverage.
+
+**Orphaned envtest Servers**
+
+Each integration case starts its own envtest `kube-apiserver` and `etcd` as children of the test binary, and only a
+deferred `testEnv.Stop()` ends them. A run that times out, is killed or is interrupted leaves its servers running,
+reparented to PID 1, until the next run starts (#524; hundreds once piled up and starved the machine). At suite start
+`TestMain` calls `envtestreaper.Reap` (`cmd/diff/testutils/envtestreaper`, built on gopsutil), which SIGKILLs every
+`kube-apiserver`/`etcd` whose parent is PID 1 and whose executable is in an envtest directory (`KUBEBUILDER_ASSETS`,
+setup-envtest's store, `/usr/local/kubebuilder/bin`), logging `envtest reaper: ...` to stderr. A Linux session under `systemd --user` reparents orphans to that subreaper
+rather than PID 1, so the reaper does not see them there.
 
 **Working with ANSI Escape Codes in Test Expectations**
 
@@ -410,6 +479,16 @@ Keep a small set of ANSI tests (~5-7) to smoke test visual output formatting.
 - When refactoring, back out changes that don't directly support the new architecture
 - Keep processors simple: inject dependencies rather than constructing them internally
 - Reuse injected instances (e.g., single `DiffProcessor` for all XRs) rather than creating new ones per operation
+
+### Don't Cite Requirements Specs in Code
+- Never refer to a `.requirements/` spec from code, comments, test names, fixtures, or docs. That means no IDs like
+  `R7`, `AC2.1` or `T3`, and no paths to a `REQUIREMENTS.md`.
+- Each spec numbers independently, so every one starts at `R1`/`AC1`, and specs are frozen once their feature ships. A
+  bare ID is therefore ambiguous (several specs use `AC3.1` for unrelated things) and goes stale as the code moves on
+  while the spec does not.
+- Write down the reason the ID stood for. If a comment reads fine with its leading label deleted, delete the label;
+  otherwise the comment was relying on the ID and needs the reason spelled out.
+- Issue and PR numbers (`#334`) are fine: they are globally unique and do not get renumbered.
 
 ### Backwards Compatibility
 - Support both Crossplane v1 and v2 API structures

@@ -541,8 +541,6 @@ func TestStructuredDiffRenderer_RenderDiffs_ErrorsToStderr(t *testing.T) {
 // Each case runs GenerateDiffWithOptions to classify the diff (matching real
 // CLI flow) and then renders through the structured renderer, then asserts on
 // the parsed structured output.
-//
-// See: .requirements/20260709T200044Z_resourceviews_dedup/REQUIREMENTS.md.
 func TestStructuredDiffRenderer_RespectsIgnorePaths(t *testing.T) {
 	const (
 		ignoredAnnotation = "argocd.argoproj.io/tracking-id"
@@ -587,7 +585,7 @@ func TestStructuredDiffRenderer_RespectsIgnorePaths(t *testing.T) {
 		wantDiffDetail map[string]any
 	}{
 		{
-			// AC5.2: only user-supplied ignored path differs -> classified Equal.
+			// Only user-supplied ignored path differs -> classified Equal.
 			name: "OnlyIgnoredAnnotation_UnchangedInSummary",
 			current: xExample().WithSpecField("configData", "same").
 				WithAnnotations(map[string]string{ignoredAnnotation: "id-old"}).Build(),
@@ -598,7 +596,7 @@ func TestStructuredDiffRenderer_RespectsIgnorePaths(t *testing.T) {
 			wantChanges: 0,
 		},
 		{
-			// AC5.1 / AC2.2: only ownerReferences differ -> classified Equal
+			// Only ownerReferences differ -> classified Equal
 			// via unconditional cleanup, without any user --ignore-paths.
 			name: "OnlyOwnerReferences_UnchangedInSummary",
 			current: xExample().WithSpecField("configData", "same").
@@ -609,7 +607,7 @@ func TestStructuredDiffRenderer_RespectsIgnorePaths(t *testing.T) {
 			wantChanges: 0,
 		},
 		{
-			// AC1.1 / AC5.3: mixed ignored + non-ignored change. Modified count
+			// Mixed ignored + non-ignored change. Modified count
 			// increments once; diff.old/new carry only the cleaned bodies — the
 			// ignored annotation and label are absent, the spec change survives.
 			name: "IgnoredPlusNonIgnored_CountOneAndIgnoredStripped",
@@ -628,7 +626,7 @@ func TestStructuredDiffRenderer_RespectsIgnorePaths(t *testing.T) {
 			},
 		},
 		{
-			// AC2.1: unconditional-cleanup fields (server metadata, managedFields,
+			// Unconditional-cleanup fields (server metadata, managedFields,
 			// ownerReferences, status) must not leak into the JSON diff even
 			// without user-supplied --ignore-paths.
 			name: "ServerSideFieldsStripped",
@@ -650,7 +648,7 @@ func TestStructuredDiffRenderer_RespectsIgnorePaths(t *testing.T) {
 			},
 		},
 		{
-			// AC3.1: Added resource — diff.spec carries only the cleaned body,
+			// Added resource — diff.spec carries only the cleaned body,
 			// no ignored annotation and no server-side fields.
 			name:    "AddedResource_IgnoresPathsInSpec",
 			current: nil,
@@ -666,7 +664,7 @@ func TestStructuredDiffRenderer_RespectsIgnorePaths(t *testing.T) {
 			},
 		},
 		{
-			// AC4.1: Removed resource — diff.spec carries only the cleaned body,
+			// Removed resource — diff.spec carries only the cleaned body,
 			// no ignored annotation and no ownerReferences.
 			name: "RemovedResource_IgnoresPathsInSpec",
 			current: xExample().WithSpecField("configData", "old").
@@ -683,7 +681,8 @@ func TestStructuredDiffRenderer_RespectsIgnorePaths(t *testing.T) {
 		},
 	}
 
-	// R6: run every case through both JSON and YAML.
+	// Run every case through both structured formats, JSON and YAML: each must honour the same
+	// cleanup, so a case that passed for one alone would prove nothing about the other.
 	formats := []OutputFormat{OutputFormatJSON, OutputFormatYAML}
 
 	for _, format := range formats {

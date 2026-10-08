@@ -53,9 +53,11 @@ func CopyLabels(source, target *un.Unstructured, keys ...string) {
 // composite not yet tracking a revision therefore keeps rendering no ref at all — unchanged from
 // before, and so never a spurious diff.
 //
-// Used by comp to seed the CompositionRevision a diffed composition would produce, so a template
-// reading the revision name renders the value it would really get. Only ever applied to composites
-// that would genuinely re-point; see issue #474.
+// Used to apply types.XRDiffOptions.RevisionName, with which comp seeds the CompositionRevision a
+// diffed composition would produce, so a template reading the revision name renders the value it would
+// really get. It is applied to the effective composite (for a claim, its backing XR), after the
+// cluster's ref has been inherited. Only ever applied to composites that would genuinely re-point; see
+// issue #474.
 func SetCompositionRevisionRefName(target *un.Unstructured, name string) bool {
 	for _, path := range [][]string{
 		{"spec", "crossplane", "compositionRevisionRef"},
@@ -75,31 +77,4 @@ func SetCompositionRevisionRefName(target *un.Unstructured, name string) bool {
 	}
 
 	return false
-}
-
-// CopyCompositionRef copies compositionRef from source to target.
-// Handles both V1 (spec.compositionRef) and V2 (spec.crossplane.compositionRef) paths.
-// In a real cluster, Crossplane's control plane sets compositionRef via composition selection.
-// Since crossplane render doesn't do this selection, we preserve the existing compositionRef
-// to avoid showing spurious removals in the diff.
-func CopyCompositionRef(source, target *un.Unstructured) {
-	// Try V1 path first: spec.compositionRef
-	compRef, found, _ := un.NestedMap(source.Object, "spec", "compositionRef")
-	if found && compRef != nil {
-		_ = un.SetNestedMap(target.Object, compRef, "spec", "compositionRef")
-		return
-	}
-
-	// Try V2 path: spec.crossplane.compositionRef
-	compRef, found, _ = un.NestedMap(source.Object, "spec", "crossplane", "compositionRef")
-	if found && compRef != nil {
-		// Ensure spec.crossplane exists in target
-		crossplane, _, _ := un.NestedMap(target.Object, "spec", "crossplane")
-		if crossplane == nil {
-			crossplane = make(map[string]any)
-		}
-
-		crossplane["compositionRef"] = compRef
-		_ = un.SetNestedMap(target.Object, crossplane, "spec", "crossplane")
-	}
 }

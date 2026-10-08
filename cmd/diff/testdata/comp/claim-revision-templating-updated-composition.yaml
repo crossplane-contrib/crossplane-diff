@@ -1,0 +1,37 @@
+# A metadata-only edit of resources/claim-revision-templating-composition.yaml: one added label,
+# identical spec. Applying it mints a new CompositionRevision, which an Automatic claim's backing XR
+# re-points to — and the template reads that revision's name, so the composed resource changes.
+apiVersion: apiextensions.crossplane.io/v1
+kind: Composition
+metadata:
+  name: xrevisionrefclaims.diff.example.org
+  labels:
+    channel: preview
+spec:
+  compositeTypeRef:
+    apiVersion: diff.example.org/v1alpha1
+    kind: XNop
+  mode: Pipeline
+  pipeline:
+    - step: generate-resources
+      functionRef:
+        name: function-go-templating
+      input:
+        apiVersion: template.fn.crossplane.io/v1beta1
+        kind: GoTemplate
+        source: Inline
+        inline:
+          template: |
+            apiVersion: nop.example.org/v1alpha1
+            kind: XDownstreamResource
+            metadata:
+              annotations:
+                gotemplating.fn.crossplane.io/composition-resource-name: nop-resource
+              name: {{ .observed.composite.resource.metadata.name }}
+            spec:
+              forProvider:
+                configData: {{ .observed.composite.resource.spec.compositionRevisionRef.name }}
+                resourceTier: basic
+    - step: automatically-detect-ready-composed-resources
+      functionRef:
+        name: function-auto-ready

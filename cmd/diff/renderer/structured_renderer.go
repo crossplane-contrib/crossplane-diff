@@ -98,7 +98,8 @@ type StructuredDiffOutput struct {
 	// Warnings is the list of non-fatal advisories raised during the run — things worth knowing that
 	// did not invalidate the diff. Unlike Errors they do NOT affect the exit code, so a consumer
 	// gating on failure should read Errors. Warnings are not grouped per input XR because they
-	// originate deep in the call stack, below the point where the owning input is known.
+	// originate deep in the call stack, below the point where the owning input is known. They are in
+	// the order raised, followed by the renderer's summary of unverified additions (see dryRunWarnings).
 	Warnings []dt.OutputWarning `json:"warnings,omitempty"`
 }
 
@@ -143,6 +144,11 @@ func (s *Summary) increment(t dt.DiffType) {
 }
 
 // ChangeDetail represents a single resource change.
+//
+// This is the shared per-resource wire shape for both commands: the xr command
+// reaches it via xrDiffWire.Changes, the comp command via
+// DownstreamChanges.Changes. A field added here therefore surfaces in both
+// outputs without per-command plumbing.
 type ChangeDetail struct {
 	Type       string         `json:"type"`
 	APIVersion string         `json:"apiVersion"`
@@ -150,6 +156,11 @@ type ChangeDetail struct {
 	Name       string         `json:"name"`
 	Namespace  string         `json:"namespace,omitempty"`
 	Diff       map[string]any `json:"diff"`
+
+	// DryRun is present only when this resource's desired state was not
+	// verified against the apiserver. See dt.DryRunInfo for why absence is the
+	// success case and what it does not promise for removals.
+	DryRun *dt.DryRunInfo `json:"dryRun,omitempty"`
 }
 
 // CompDiffOutput is the top-level output for composition diffs (internal representation).
@@ -160,7 +171,8 @@ type CompDiffOutput struct {
 	// Warnings are non-fatal advisories raised during the run. Like the xr command's, they do not
 	// affect the exit code and are not attributed to a single composition — they are raised below the
 	// point where the owning composition is known. They have already been written to stderr when
-	// raised; this field carries them into structured output.
+	// raised; this field carries them into structured output. The summary of unverified additions is
+	// not among them: the renderer derives it from the diffs (see compDryRunWarnings).
 	Warnings []dt.OutputWarning
 }
 
@@ -390,7 +402,11 @@ func (r *StructuredDiffRenderer) RenderDiffs(groups []dt.XRDiffGroup, errs []dt.
 	summary, changes := flatChangeSet(groups)
 	output := StructuredDiffOutput{Summary: summary, Changes: changes}
 	output.Errors = errs
-	output.Warnings = warnings
+
+	// The summary of unverified additions is derived here, from the diffs, and follows the warnings
+	// raised during the run rather than being interleaved with them. See the DiffRenderer interface.
+	dryRun := xrDryRunWarnings(groups)
+	output.Warnings = append(slices.Clone(warnings), dryRun...)
 
 	// Grouped view: one entry per input XR, in input order, each complete for its input. Where inputs
 	// overlap, a shared resource appears under each, so the xrs[] summaries can sum to more than the
@@ -427,7 +443,12 @@ func (r *StructuredDiffRenderer) RenderDiffs(groups []dt.XRDiffGroup, errs []dt.
 	}
 
 	// Write errors to stderr for human visibility (they're also included in the structured output).
-	// Warnings are deliberately not written here: they already went to stderr when they were raised.
+	// Of the warnings, only the ones derived here are written: the rest already went to stderr when
+	// they were raised.
+	if err := writeWarnings(r.opts.Stderr, dryRun); err != nil {
+		return err
+	}
+
 	for _, e := range errs {
 		if _, err := fmt.Fprintln(r.opts.Stderr, e.FormatError()); err != nil {
 			return errors.Wrap(err, "failed to write error to stderr")
@@ -529,6 +550,9 @@ func resourceDiffToChangeDetail(diff *dt.ResourceDiff) *ChangeDetail {
 		Name:       diff.ResourceName,
 		Namespace:  diff.Namespace,
 		Diff:       make(map[string]any),
+		// Nil for every resource whose desired state reached the apiserver, which
+		// omitempty turns into an absent key — see dt.DryRunInfo.
+		DryRun: diff.DryRun,
 	}
 
 	switch diff.DiffType {

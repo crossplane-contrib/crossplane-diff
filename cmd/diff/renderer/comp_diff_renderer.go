@@ -20,6 +20,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"slices"
 	"strings"
 
 	dt "github.com/crossplane-contrib/crossplane-diff/cmd/diff/renderer/types"
@@ -77,6 +78,12 @@ func (r *DefaultCompDiffRenderer) RenderCompDiff(output *CompDiffOutput) error {
 		if err := r.renderComposition(&comp); err != nil {
 			return err
 		}
+	}
+
+	// One run-wide summary of unverified additions; see DiffRenderer.RenderDiffs for why it is derived
+	// at render time, and why the per-composition reuse of the diff renderer above does not emit it.
+	if err := writeWarnings(r.opts.Stderr, compDryRunWarnings(output)); err != nil {
+		return err
 	}
 
 	// Write top-level errors to stderr
@@ -585,8 +592,13 @@ func NewStructuredCompDiffRenderer(logger logging.Logger, opts DiffOptions) Comp
 // Top-level errors go to both r.opts.Stderr (for human visibility) and the
 // structured output payload. Per-composition data goes to r.opts.Stdout.
 func (r *StructuredCompDiffRenderer) RenderCompDiff(output *CompDiffOutput) error {
+	// One run-wide summary of unverified additions, derived here from the diffs and appended after the
+	// warnings raised during the run. See DiffRenderer.RenderDiffs.
+	dryRun := compDryRunWarnings(output)
+
 	// Convert internal representation to JSON output structure
 	jsonOutput := r.buildStructuredCompOutput(output)
+	jsonOutput.Warnings = append(slices.Clone(jsonOutput.Warnings), dryRun...)
 
 	var (
 		data []byte
@@ -611,6 +623,11 @@ func (r *StructuredCompDiffRenderer) RenderCompDiff(output *CompDiffOutput) erro
 	_, err = r.opts.Stdout.Write(append(data, '\n'))
 	if err != nil {
 		return errors.Wrap(err, "failed to write output")
+	}
+
+	// Of the warnings, only the ones derived here go to stderr: the rest went there when raised.
+	if err := writeWarnings(r.opts.Stderr, dryRun); err != nil {
+		return err
 	}
 
 	// Write errors to stderr for human visibility (they're also included in the structured output)

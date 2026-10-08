@@ -1,0 +1,129 @@
+# XRDs whose defaults a composition reads, one modern (v2, machinery under spec.crossplane) and one
+# legacy (v1, machinery directly under spec), each with a composition that writes the composite's
+# defaulted fields into a composed resource. The CRDs are generated from these XRDs (upstream xcrd), so
+# the XR CRDs default region from the XRD's schema and, for the legacy XR, spec.compositionUpdatePolicy
+# from defaultCompositionUpdatePolicy, as in a real cluster. A render input that was not defaulted would
+# write "<no value>" instead.
+#
+# The modern template does not read spec.crossplane.compositionUpdatePolicy: its CRD defaults the
+# policy only inside an existing spec.crossplane, which a new XR's manifest does not have, so the tool
+# renders a new modern XR without one. (In a cluster Crossplane writes spec.crossplane before it first
+# composes, so the apiserver defaults the policy by then.)
+apiVersion: apiextensions.crossplane.io/v2
+kind: CompositeResourceDefinition
+metadata:
+  name: xregionaldatabases.rendered-defaults.diff.example.org
+spec:
+  group: rendered-defaults.diff.example.org
+  names:
+    kind: XRegionalDatabase
+    plural: xregionaldatabases
+  scope: Namespaced
+  defaultCompositionUpdatePolicy: Automatic
+  versions:
+    - name: v1alpha1
+      served: true
+      referenceable: true
+      schema:
+        openAPIV3Schema:
+          type: object
+          properties:
+            spec:
+              type: object
+              properties:
+                size:
+                  type: string
+                region:
+                  type: string
+                  default: us-east-1
+---
+apiVersion: apiextensions.crossplane.io/v1
+kind: Composition
+metadata:
+  name: xregionaldatabases.rendered-defaults.diff.example.org
+spec:
+  compositeTypeRef:
+    apiVersion: rendered-defaults.diff.example.org/v1alpha1
+    kind: XRegionalDatabase
+  mode: Pipeline
+  pipeline:
+    - step: generate-resources
+      functionRef:
+        name: function-go-templating
+      input:
+        apiVersion: template.fn.crossplane.io/v1beta1
+        kind: GoTemplate
+        source: Inline
+        inline:
+          template: |
+            apiVersion: ns.nop.example.org/v1alpha1
+            kind: XDownstreamResource
+            metadata:
+              name: {{ .observed.composite.resource.metadata.name }}
+              namespace: {{ .observed.composite.resource.metadata.namespace }}
+              annotations:
+                gotemplating.fn.crossplane.io/composition-resource-name: database
+            spec:
+              forProvider:
+                configData: {{ .observed.composite.resource.spec.region }}/{{ .observed.composite.resource.spec.size }}
+    - step: automatically-detect-ready-composed-resources
+      functionRef:
+        name: function-auto-ready
+---
+apiVersion: apiextensions.crossplane.io/v1
+kind: CompositeResourceDefinition
+metadata:
+  name: xlegacyregionaldatabases.rendered-defaults.diff.example.org
+spec:
+  group: rendered-defaults.diff.example.org
+  names:
+    kind: XLegacyRegionalDatabase
+    plural: xlegacyregionaldatabases
+  versions:
+    - name: v1alpha1
+      served: true
+      referenceable: true
+      schema:
+        openAPIV3Schema:
+          type: object
+          properties:
+            spec:
+              type: object
+              properties:
+                size:
+                  type: string
+                region:
+                  type: string
+                  default: eu-west-1
+---
+apiVersion: apiextensions.crossplane.io/v1
+kind: Composition
+metadata:
+  name: xlegacyregionaldatabases.rendered-defaults.diff.example.org
+spec:
+  compositeTypeRef:
+    apiVersion: rendered-defaults.diff.example.org/v1alpha1
+    kind: XLegacyRegionalDatabase
+  mode: Pipeline
+  pipeline:
+    - step: generate-resources
+      functionRef:
+        name: function-go-templating
+      input:
+        apiVersion: template.fn.crossplane.io/v1beta1
+        kind: GoTemplate
+        source: Inline
+        inline:
+          template: |
+            apiVersion: nop.example.org/v1alpha1
+            kind: XDownstreamResource
+            metadata:
+              name: {{ .observed.composite.resource.metadata.name }}
+              annotations:
+                gotemplating.fn.crossplane.io/composition-resource-name: database
+            spec:
+              forProvider:
+                configData: {{ .observed.composite.resource.spec.region }}/{{ .observed.composite.resource.spec.size }}/{{ .observed.composite.resource.spec.compositionUpdatePolicy }}
+    - step: automatically-detect-ready-composed-resources
+      functionRef:
+        name: function-auto-ready

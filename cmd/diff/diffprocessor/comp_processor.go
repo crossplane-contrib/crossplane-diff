@@ -280,6 +280,10 @@ func (p *DefaultCompDiffProcessor) DiffComposition(ctx context.Context, composit
 	// carries them into structured output.
 	output.Warnings = p.collectedWarnings()
 
+	// Counted before the interruption entry is added: it is not an XR failure.
+	totalXRErrors := len(output.Errors)
+	output.Errors = withInterruption(ctx, output.Errors)
+
 	// Always render output (even if all compositions failed) to ensure valid structured output
 	// The renderer will include errors in the structured output and write them to stderr
 	if err := p.compDiffRenderer.RenderCompDiff(output); err != nil {
@@ -288,8 +292,6 @@ func (p *DefaultCompDiffProcessor) DiffComposition(ctx context.Context, composit
 
 	// Check for XR processing errors after rendering (so users see the output first).
 	// Return an error so CI/CD pipelines get a non-zero exit code when impact analysis failed.
-	totalXRErrors := len(output.Errors)
-
 	if totalXRErrors > 0 {
 		return hasDiffs, errors.Errorf("impact analysis failed for %d XR(s)", totalXRErrors)
 	}
@@ -499,11 +501,11 @@ func (p *DefaultCompDiffProcessor) processSingleComposition(ctx context.Context,
 	// When the name is not predictable we render unseeded — the pre-#474 behaviour — and say so, rather
 	// than seed a guess. Seeding a name we invented would manufacture a downstream diff on a converged
 	// cluster for exactly the compositions this feature exists to serve.
-	renderInputs := keptXRs
+	revisionName := ""
 
 	switch {
 	case comparison.revisionNamePredictable:
-		renderInputs = seedRepointingXRs(keptXRs, repointingXRs, pred.name)
+		revisionName = pred.name
 	case comparison.changed():
 		p.config.Logger.Info(
 			"Could not predict the name of the CompositionRevision this composition would create, because it differs from the cluster's only by the annotation a client-side `kubectl apply` writes — whose post-apply value depends on how you apply, not on the file. Composites were rendered with their existing compositionRevisionRef, so if any of your composition templates read the revision name, a resulting change was not detected. Apply with `--server-side` (or via Argo/Flux) to make it predictable.",
@@ -513,7 +515,7 @@ func (p *DefaultCompDiffProcessor) processSingleComposition(ctx context.Context,
 	// Process kept XRs and collect diffs to determine which ones have changes
 	p.config.Logger.Debug("Processing XRs to collect diff information", "count", len(keptXRs))
 
-	xrResults := p.collectXRDiffs(ctx, renderInputs, newComp)
+	xrResults := p.collectXRDiffs(ctx, keptXRs, newComp, repointingXRs, revisionName)
 
 	// Build impact analysis and counts from results for the kept set, then merge in any
 	// already-appended filtered entries.
@@ -528,7 +530,11 @@ func (p *DefaultCompDiffProcessor) processSingleComposition(ctx context.Context,
 }
 
 // collectXRDiffs processes XRs and collects their diffs, returning results for each XR.
-func (p *DefaultCompDiffProcessor) collectXRDiffs(ctx context.Context, xrs []*un.Unstructured, newComp *un.Unstructured) map[string]*XRDiffResult {
+//
+// Each composite in repointing is rendered with revisionName as the revision it points at, unless
+// revisionName is empty (unpredictable). The others, a Manual composite kept by --include-manual, stay
+// pinned, so they are rendered against the revision they already name. See types.XRDiffOptions.
+func (p *DefaultCompDiffProcessor) collectXRDiffs(ctx context.Context, xrs []*un.Unstructured, newComp *un.Unstructured, repointing map[string]bool, revisionName string) map[string]*XRDiffResult {
 	// Convert the CLI composition to typed once for reuse
 	cliComp := &apiextensionsv1.Composition{}
 	if err := runtime.DefaultUnstructuredConverter.FromUnstructured(newComp.Object, cliComp); err != nil {
@@ -571,6 +577,9 @@ func (p *DefaultCompDiffProcessor) collectXRDiffs(ctx context.Context, xrs []*un
 	// 2. XRs whose type matches the CLI composition's compositeTypeRef
 	//
 	// For nested XRs with different types, looks up from the cluster.
+	//
+	// The provider is handed the effective composite (see CompositeResolver), so a root claim reaches it
+	// as its backing XR, whose key is not in rootResourceKeys: Check 2 matches it by type instead.
 	compositionProvider := func(ctx context.Context, res *un.Unstructured) (*apiextensionsv1.Composition, error) {
 		resGVK := res.GroupVersionKind()
 		resAPIVersion := resGVK.GroupVersion().String()
@@ -614,7 +623,12 @@ func (p *DefaultCompDiffProcessor) collectXRDiffs(ctx context.Context, xrs []*un
 	for _, xr := range xrs {
 		resourceID := dt.MakeDiffKeyFromResource(xr)
 
-		diffs, err := p.xrProc.DiffSingleResource(ctx, xr, compositionProvider)
+		var opts dtypes.XRDiffOptions
+		if repointing[resourceID] {
+			opts.RevisionName = revisionName
+		}
+
+		diffs, err := p.xrProc.DiffSingleResource(ctx, xr, compositionProvider, opts)
 		if err != nil {
 			p.config.Logger.Debug("Failed to process resource", "resource", resourceID, "error", err)
 
@@ -672,6 +686,10 @@ type compositionComparison struct {
 	// rewritten, minting one. What is unknowable is the identity, so we decline to seed it and say so
 	// rather than seed a name we invented — which, for a template reading the name, would manufacture
 	// a downstream diff on a converged cluster. See issue #474.
+	//
+	// The exception is a live annotation that already describes the file: applying it then writes
+	// nothing, so the composition is reported unchanged rather than unpredictable. See
+	// lastAppliedDescribes and issue #500.
 	revisionNamePredictable bool
 }
 
@@ -787,6 +805,14 @@ func (p *DefaultCompDiffProcessor) calculateCompositionDiff(ctx context.Context,
 		}
 
 		revisionNamePredictable = withoutLastApplied.DiffType != dt.DiffTypeEqual
+
+		// The annotation is the sole delta. If the cluster's copy of it already describes this exact
+		// file, applying the file is a no-op under either apply mode, so it is not a change at all. See
+		// lastAppliedDescribes.
+		if !revisionNamePredictable && lastAppliedDescribes(originalCompUnstructured, newCompUnstructured) {
+			scope = ChangeScopeNone
+			revisionNamePredictable = true
+		}
 	}
 
 	p.config.Logger.Debug("No displayable changes in composition",
@@ -795,6 +821,59 @@ func (p *DefaultCompDiffProcessor) calculateCompositionDiff(ctx context.Context,
 		"revisionNamePredictable", revisionNamePredictable)
 
 	return compositionComparison{diff: nil, scope: scope, revisionNamePredictable: revisionNamePredictable}, nil
+}
+
+// lastAppliedDescribes reports whether the cluster object's kubectl last-applied-configuration is
+// semantically the proposed file, in which case applying the file writes nothing (issue #500).
+//
+// A client-side `kubectl apply` sets that annotation to the file minus the annotation, JSON-encoded
+// (kubectl's GetModifiedConfiguration), so the value is a function of the file alone: if the live value
+// already equals it, the three-way patch is empty and kubectl issues no request. Server-side apply leaves
+// an annotation the file does not mention untouched. Either way nothing changes, so no
+// CompositionRevision is created. Equal maps encode to equal JSON, so semantic equality suffices.
+//
+// Only a file that does not carry the annotation itself qualifies: one that does (say, a fetched object
+// checked into git) would have it written verbatim under server-side apply, so its outcome again depends
+// on the apply mode. kubectl keeps the emptied annotations map in what it encodes, so an empty
+// annotations map is treated as absent on both sides. Neither object is mutated.
+func lastAppliedDescribes(original, proposed *un.Unstructured) bool {
+	if original == nil {
+		return false
+	}
+
+	if _, ok := proposed.GetAnnotations()[corev1.LastAppliedConfigAnnotation]; ok {
+		return false
+	}
+
+	live, ok := original.GetAnnotations()[corev1.LastAppliedConfigAnnotation]
+	if !ok {
+		return false
+	}
+
+	lastApplied := &un.Unstructured{}
+	if err := lastApplied.UnmarshalJSON([]byte(live)); err != nil {
+		// Not something kubectl wrote, so we cannot say what applying would do; keep the difference.
+		return false
+	}
+
+	return equality.Semantic.DeepEqual(withoutLastApplied(lastApplied).Object, withoutLastApplied(proposed).Object)
+}
+
+// withoutLastApplied returns a copy of obj without kubectl's last-applied-configuration annotation,
+// dropping the annotations map entirely if that leaves it empty.
+func withoutLastApplied(obj *un.Unstructured) *un.Unstructured {
+	out := obj.DeepCopy()
+
+	annotations := out.GetAnnotations()
+	delete(annotations, corev1.LastAppliedConfigAnnotation)
+
+	if len(annotations) == 0 {
+		un.RemoveNestedField(out.Object, "metadata", "annotations")
+	} else {
+		out.SetAnnotations(annotations)
+	}
+
+	return out
 }
 
 // compositionChangeScope classifies how much of a composition differs from its in-cluster version,
@@ -1027,36 +1106,6 @@ func (p *DefaultCompDiffProcessor) classifyXR(xr *un.Unstructured, targetLabels,
 	}
 
 	return xrDisposition{}, nil
-}
-
-// seedRepointingXRs returns the composites to render: a copy of each re-pointing composite with its
-// compositionRevisionRef pointed at revisionName, and every other composite unchanged. Input order is
-// preserved, and the supplied composites are never mutated — they are the cluster's objects, and the
-// impact analysis and removal detection still read identity from them.
-//
-// Only composites in `repointing` are seeded, and of those only the ones already tracking a revision;
-// see SetCompositionRevisionRefName for why a ref is never created from nothing.
-func seedRepointingXRs(xrs []*un.Unstructured, repointing map[string]bool, revisionName string) []*un.Unstructured {
-	seeded := make([]*un.Unstructured, 0, len(xrs))
-
-	for _, xr := range xrs {
-		if !repointing[dt.MakeDiffKeyFromResource(xr)] {
-			seeded = append(seeded, xr)
-			continue
-		}
-
-		candidate := xr.DeepCopy()
-		if !SetCompositionRevisionRefName(candidate, revisionName) {
-			// Not tracking a revision yet, so there is no stale value to correct and nowhere safe to put
-			// one. Render the original rather than an identical copy.
-			seeded = append(seeded, xr)
-			continue
-		}
-
-		seeded = append(seeded, candidate)
-	}
-
-	return seeded
 }
 
 // filterCounts tallies dropped XRs by filter reason. A struct rather than a growing list of

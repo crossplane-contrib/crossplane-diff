@@ -152,6 +152,17 @@ For the current implementation, the following logical permissions are required:
     - Owner references
     - Resource relationships maintained by Crossplane
 
+6. **Dry-run write access on every GVK being diffed** (nothing is ever persisted, but the apiserver authorizes a dry
+   run exactly as it would the real request):
+    - `patch`, for the dry-run server-side apply against a resource that already exists. **Required, and does not
+      degrade**: the diff depends on the apiserver's merge result to detect field removals, so one computed without it
+      would be wrong rather than merely less detailed.
+    - `create`, for the dry-run create of an addition (`--dry-run-on=all`, the default). **Degrades per-resource**: an
+      addition has a usable lower-fidelity fallback (the rendered object), so a missing verb marks that resource and
+      warns rather than failing the run. See §6.3.
+    - `create` on `selfsubjectaccessreviews`, to disambiguate a 403 — granted to `system:authenticated` by default
+      through the built-in `system:basic-user` ClusterRole.
+
 These permissions are needed to accurately render resources, resolve requirements, validate against schemas, and
 identify resources that would be removed by changes. For the CI/CD and Composition Developer personas, these permission
 requirements are generally not problematic. For the End-User Developer persona, these extensive permissions may be
@@ -164,8 +175,28 @@ first as a part of requirements.
 
 To ensure the reliability and correctness of the Diff command, comprehensive integration tests verify the functionality
 across a wide range of scenarios that users may encounter in real-world usage. These test cases serve as both validation
-criteria and usage examples, demonstrating the expected behavior of the command in various situations. The integration
-test cases cover:
+criteria and usage examples, demonstrating the expected behavior of the command in various situations.
+
+Each case runs against its own `envtest` apiserver. Its XR and claim CRDs are not hand-written: as in a real cluster,
+they are generated from the XRDs the case applies, by upstream crossplane-runtime `pkg/xcrd` (`ForCompositeResource`,
+plus `ForCompositeResourceClaim` for an XRD with `spec.claimNames`), after the XRD manifest is defaulted as the
+apiserver would default it. A field an XR or claim needs is therefore added to the XRD fixture alone, and the test CRDs
+cannot drift from the shape Crossplane generates (a drifted claim CRD once hid a defaulting bug, #503). Only plain CRDs
+that no XRD defines, such as managed-resource stand-ins, live under `cmd/diff/testdata/{diff,comp}/crds/`; the harness
+refuses to start if one of them duplicates a generated CRD. Crossplane's own CRDs (Composition, XRD, Function, …) are
+installed from `cluster/gomod/crds`, which `earthly +fetch-crossplane-crds-gomod` fetches at the
+`github.com/crossplane/crossplane/v2` version `go.mod` selects (the go binary in the build resolves it). They are
+therefore the same version as the xcrd and render code under test, a run is reproducible, and a dependency bump moves
+them automatically. The e2e suite, which runs real Crossplane images, instead uses the `cluster/<image tag>` directory
+`earthly +fetch-crossplane-cluster` produces.
+
+envtest runs each case's `kube-apiserver` and `etcd` as children of the test binary, and only a deferred
+`Environment.Stop` ends them, which does not run when the binary times out, is killed or is interrupted. Such a run
+leaves its servers running, reparented to PID 1, until the next run starts: so that they cannot pile up (#524),
+`TestMain` then kills every envtest server whose parent is PID 1, using `cmd/diff/testutils/envtestreaper`. A live run's
+servers have that run's test binary as their parent, so they are never touched.
+
+The integration test cases cover:
 
 ### 4.1 Basic Diff Scenarios
 
@@ -174,6 +205,23 @@ test cases cover:
 - **Resource Modification**: Verifies that changes to existing resources are correctly identified and displayed.
 - **Modified XR with New Downstream Resource**: Tests that when an XR is modified in a way that generates new downstream
   resources, both the modification to the XR and the creation of the new resource are properly displayed.
+- **Defaulted Fields Owned by Another Manager** (#503): A field the CRD or XRD defaults, which the manifest or
+  composition omits, and which another field manager has set to a non-default value in the cluster, is not reported as
+  changing — for a composed resource, an XR, a nested XR and a claim. These need real field ownership, so the cases
+  server-side apply their setup objects under named managers (`fieldManagerApplies`) rather than creating them, since
+  a plain create records only the test client and the apiserver drops `managedFields` supplied on create. Companion
+  cases under `--dry-run-on=existing` pin that additions still show their CRD and XRD defaults, predicted locally.
+- **XR Defaults Reach the Render**: `XRDDefaultsReachTheRender` has a composition read a v2 XR's and a legacy XR's
+  defaulted fields (a user default, and the legacy XR's `spec.compositionUpdatePolicy`) into composed resources, so an
+  undefaulted render input shows up as `<no value>`. `XRDDefaultsAppliedBeforeRendering`'s composition renders
+  nothing, so it pins only the XR's own dry run. A new v2 XR's `spec.crossplane.compositionUpdatePolicy` is not
+  asserted: its CRD defaults the policy only inside an existing `spec.crossplane`, which a new XR's manifest lacks.
+- **Claims Defaulted With Their Own CRD**: A new claim omitting every defaulted field shows its own CRD's defaults (a
+  user default and `compositeDeletePolicy`, never `compositionUpdatePolicy`), whether the apiserver applies them on
+  dry-run create or the lenient `Defaulter` predicts them under `--dry-run-on=existing`; and the composed resource,
+  which renders the XR's `tier` and `compositionUpdatePolicy`, shows that render saw the XR CRD's defaults. Both
+  CRDs are generated from the XRD fixture with `pkg/xcrd`, so they differ exactly as a cluster's do, which is what
+  makes these cases, and the existing claim cases, sensitive to defaulting a claim with its XR's CRD.
 
 ### 4.2 Environment Configuration Testing
 
@@ -199,6 +247,9 @@ test cases cover:
   shown in the diff output.
 - **Hierarchical Resource Relationships**: Verifies that parent-child relationships between resources are correctly
   understood, including cascading removal of child resources when a parent would be removed.
+- **Composed Resource Deleted Out of Band**: Verifies, for both `xr` and `comp`, that a composed resource the XR still
+  references but which no longer exists is left out of the observed state with a warning, rather than silently dropped.
+  The fatal case (a child that cannot be read) is unit-tested only, since envtest grants the harness every permission.
 
 ### 4.6 Resource Naming Patterns
 
@@ -225,6 +276,17 @@ test cases cover:
 - **Composition Selection by Label Selector**: Verifies that compositions can be selected using label selectors.
 - **Ambiguous Composition Selection**: Tests that appropriate errors are returned when composition selection is
   ambiguous.
+- **Selection Is Not Repeated**: `ExistingXRSelectingItsCompositionKeepsTheClusterCompositionRef` diffs an existing XR
+  whose input selects its composition by label, where the selector now matches two compositions. Crossplane selects
+  only for a composite with no `compositionRef` and never re-selects, so the XR inherits the cluster's ref (§6.4a) and
+  renders the composition it is bound to, rather than failing as ambiguous.
+- **Update Policy and Pinned Revisions (`xr`)**: `V2ManualPolicyOmittedRevisionRefStaysPinned` and its v1 twin diff a
+  `Manual` XR whose input omits `compositionRevisionRef`; it must render the revision the cluster copy is pinned to, not
+  the latest. `ExistingXROmittingRevisionRefRendersWithClusterRef` covers the same inheritance for a template reading the
+  revision name (#499). `NewXRUnderManualDefaultingXRDRendersTheRevisionItNames` covers an XRD whose
+  `defaultCompositionUpdatePolicy` is `Manual`: the XR is defaulted before its composition is resolved, so a new XR
+  naming a revision renders that revision. The default is set on the XRD fixture, and the CRD that declares it is
+  generated from that XRD by upstream xcrd, as in a real cluster.
 
 ### 4.9 Claim Handling
 
@@ -232,6 +294,13 @@ test cases cover:
   resulting composed resources.
 - **Modified Claim Processing**: Verifies that changes to existing claims correctly propagate to their underlying
   resources in the diff output.
+- **Claim Revision Sync**: `ManualClaimRendersAgainstItsBackingXRsPinnedRevision` diffs a `Manual` claim whose backing XR
+  is pinned to the older of two revisions; both composition resolution and render must use that revision, so the
+  composed resource shows the old revision's template *and* its name. `AutomaticClaimOmittingRevisionRefRendersWithBackingXRRef`
+  diffs an unchanged `Automatic` claim whose manifest omits the ref the claim syncer copied onto the cluster copy, which
+  must show no change (#498). The rules are `syncClaimSpec`'s (§6.4a), unit-tested in `TestSyncClaimSpec`;
+  `TestCompositeResolver_Resolve` covers the backing-XR lookup, including a fetch error (fatal, #533) and a
+  `resourceRef` naming an XR that does not exist.
 
 ### 4.10 Output Formatting and Options
 
@@ -246,6 +315,9 @@ test cases cover:
   `WithFieldError` builder chain to pin specific GVKs, namespaces, statuses, error types (`schema`, `cel`,
   `unknownField`, `defaulting`), and field paths. Message wording is intentionally not asserted so apimachinery
   upgrades can shift phrasing without breaking tests.
+- **Unverified-Addition Summary**: Additions whose dry-run create was skipped are summarised as one counted warning
+  per GVK + namespace + cause, asserted with `WithWarning` / `WithWarningContext` (including `count`) and on stderr —
+  across several `xr` inputs, and through `comp` as one run-wide summary.
 
 ### 4.11 Composition Diff Scenarios
 
@@ -293,15 +365,20 @@ The `comp` subcommand has its own set of integration tests:
   spec) whose template reads the CompositionRevision name off the composite and propagates it into a composed resource.
   The rendered output genuinely changes, so the run exits 3 — where before the fix, rendering the composite with its
   *existing* `compositionRevisionRef`, it reported the composite as unchanged with no downstream changes and exited 0.
-  Disable `seedRepointingXRs` and this is what fails. It also pins the two things that keep the result readable:
-  `predictedRevisionName` is matched by pattern (`^…-[0-9a-f]{7}$`) rather than literally, so editing the fixture is not
-  a test failure, and the composite's own `spec.crossplane.compositionRevisionRef` diff is deliberately *absent*.
+  Stop applying `XRDiffOptions.RevisionName` and this is what fails. It also pins the two things that keep the result
+  readable: `predictedRevisionName` is matched by pattern (`^…-[0-9a-f]{7}$`) rather than literally, so editing the
+  fixture is not a test failure, and the composite's own `spec.crossplane.compositionRevisionRef` diff is deliberately
+  *absent*. `ClaimRevisionNamePropagatesToComposedResource` is the claim variant: the name must reach the backing XR's
+  ref, since the claim's own is never propagated under `Automatic`, and `ClaimRendersWithBackingXRRevisionWhenNothingIsSeeded`
+  pins that an unseeded claim renders with the backing XR's current ref rather than none (#498). The claim fixture
+  carries the ref the claim syncer copies back under `Automatic`, as a real claim does.
   Underneath it, `TestRevisionIdentity` pins the mirrored `<composition>-<hash[:7]>` derivation exactly, including
   upstream's `>=` truncation guards at both bounds (63 characters for the hash label value, 7 for the name suffix) and
   the `"unknown"` sentinel `Composition.Hash()` returns on a marshal error, which is shorter than either bound.
-  `TestDefaultCompDiffProcessor_partitionXRsByUpdatePolicy` (its `wantRepointing`) and `TestSeedRepointingXRs` cover
-  which composites are seeded (`Manual`-policy ones are not), that input order survives, and that the supplied composites — the cluster's objects — are never mutated, an unseeded
-  one being passed through rather than needlessly cloned. `TestSetCompositionRevisionRefName` pins that seeding
+  `TestDefaultCompDiffProcessor_partitionXRsByUpdatePolicy` (its `wantRepointing`) and
+  `TestDefaultCompDiffProcessor_collectXRDiffs_RevisionName` cover which composites are given the name (`Manual`-policy
+  ones are not, and none when it is unpredictable), and that the supplied composites — the cluster's objects — are never
+  mutated. `TestSetCompositionRevisionRefName` pins that seeding
   overwrites an existing ref on either the v1 or the v2 path, preferring v2 when a pathological object carries both, and
   never *creates* a ref that isn't already present. `AutomaticSelectorOnCompositionHash_Kept` pins the other consumer of
   the prediction: a composite whose `compositionRevisionSelector` keys on `crossplane.io/composition-hash` is now kept
@@ -333,7 +410,8 @@ The `comp` subcommand has its own set of integration tests:
 ### 4.12 Nested XRs and Eventual State
 
 - **Nested XR Recursion**: Tests that composed XRs are themselves diffed, with identity preserved across renders by
-  fetching observed state.
+  fetching observed state. `NestedXRInheritsClusterRevisionRef` pins that a nested XR, rendered from its parent's output
+  (which never carries a ref), inherits its cluster copy's `compositionRevisionRef` like a root XR (§6.4a).
 - **`--max-nested-depth`**: Verifies the recursion limit short-circuits cleanly — that a cyclic composition terminates
   with a "maximum nesting depth exceeded" error instead of exhausting the stack, that `--max-nested-depth 1` refuses a
   second level of nesting, and that it still accepts a tree exactly one level deep (the bound is inclusive). The unit
@@ -350,6 +428,9 @@ The `comp` subcommand has its own set of integration tests:
 - **New Claim with `spec.claimRef`**: Verifies that compositions referencing
   `.observed.composite.resource.spec.claimRef.*` render correctly for new claims (no backing XR yet exists), via the
   synthesised dummy XR.
+- **Backing XR Missing or Unreadable**: `TestCompositeResolver_Resolve` pins that a `resourceRef` naming an XR that does
+  not exist is synthesized under the ref's name (the XR the claim syncer would create), with a warning, and that any
+  other error fetching the backing XR fails the diff (#533).
 - **`crossplane.io/composite` Label**: Confirms that diffing a Claim does not show spurious changes to the composite
   label, since Crossplane uses the XR name there even when rendering from a Claim.
 
@@ -452,6 +533,7 @@ The business logic layer containing the core diff functionality, resource manage
 - `DiffCalculator`: Computes differences between resources (split into non-removal and removal phases for nested XRs)
 - `SchemaValidator`: Validates resources against their schemas and enforces scope constraints
 - `ResourceManager`: Fetches cluster state and manages owner references
+- `CompositeResolver`: Computes the effective composite, what Crossplane would reconcile for an XR or claim
 - `RequirementsProvider`: Resolves environment-config and label-selector requirements between render iterations
 - `FunctionProvider`: Resolves the function set for a composition, with strategies for caching and registry override
 - `DiffRenderer` / `CompDiffRenderer`: Format and display XR and composition diffs (human-readable or structured
@@ -473,7 +555,7 @@ The infrastructure access layer that interfaces with Kubernetes and Crossplane.
 
 **Key Components:**
 
-- Kubernetes Clients: `ApplyClient`, `ResourceClient`, `SchemaClient`, `TypeConverter`
+- Kubernetes Clients: `AccessChecker`, `ApplyClient`, `ResourceClient`, `SchemaClient`, `TypeConverter`
 - Crossplane Clients (injected via `AppContext`): `CompositionClient`, `CredentialClient`, `DefinitionClient`,
   `EnvironmentClient`, `FunctionClient`, `ResourceTreeClient`. `CompositionRevisionClient` is not part of the injected
   bundle — `DefaultCompositionClient` constructs and owns one internally.
@@ -484,7 +566,8 @@ The infrastructure access layer that interfaces with Kubernetes and Crossplane.
 - Crossplane resource access
 - Resource conversion
 - Type handling
-- Server-side apply
+- Dry-run apply and dry-run create
+- Authorization checks
 
 #### 5.2.5 External Systems
 
@@ -540,8 +623,8 @@ type DiffProcessor interface {
     PerformDiff(ctx context.Context, resources []*un.Unstructured, compositionProvider types.CompositionProvider) (bool, error)
 
     // DiffSingleResource processes one resource and returns its diffs without rendering them.
-    // Used by CompDiffProcessor to drive per-XR diffs.
-    DiffSingleResource(ctx context.Context, res *un.Unstructured, compositionProvider types.CompositionProvider) (map[string]*dt.ResourceDiff, error)
+    // Used by CompDiffProcessor to drive per-XR diffs. opts adjusts how that resource is rendered.
+    DiffSingleResource(ctx context.Context, res *un.Unstructured, compositionProvider types.CompositionProvider, opts types.XRDiffOptions) (map[string]*dt.ResourceDiff, error)
 
     // Initialize loads required resources like CRDs.
     Initialize(ctx context.Context) error
@@ -560,14 +643,33 @@ type Cleaner interface {
 
 A `CompositionProvider` is `func(ctx, *Unstructured) (*apiextensionsv1.Composition, error)`. The `xr` subcommand passes a
 provider that looks up matching compositions in the cluster; the `comp` subcommand passes one backed by the updated
-composition file under test, so the same per-XR diff machinery serves both flows.
+composition file under test, so the same per-XR diff machinery serves both flows. The provider is handed the
+effective composite, defaulted (§6.4a, §7.1), never the raw input: for a claim, that is its backing XR.
+
+```go
+// XRDiffOptions adjusts how DiffSingleResource diffs one composite (in cmd/diff/types). The zero value
+// diffs it as the cluster would reconcile it today.
+type XRDiffOptions struct {
+    // RevisionName, when set, is the CompositionRevision the composite would point at once the diffed
+    // change is applied. It is applied to the effective composite's existing compositionRevisionRef
+    // (never creating one), for the named composite only, not for XRs nested beneath it.
+    RevisionName string
+}
+```
+
+`comp` sets `RevisionName` for a composite that would re-point at the revision the diffed composition creates (§6.2
+step 3a). It is an explicit argument rather than a value on the context or a field seeded onto the input, because the
+input is the cluster's object and, for a claim, the ref that matters is on the backing XR, which only the processor
+sees.
 
 The `DefaultDiffProcessor` uses several subcomponents:
 
 - `fnProvider`: Resolves the function set for a given composition (see §6.6)
 - `compClient`, `defClient`, `schemaClient`, `treeClient`, `applyClient`: Cluster I/O (see §6.8)
+- `compositeResolver`: The `CompositeResolver` (§6.4a) that computes the effective composite
 - `schemaValidator`: Validates resources against schemas and enforces scope constraints
-- `diffCalculator`: Calculates differences between resources
+- `renderDefaulter`: The strict `Defaulter` (§6.5a) that defaults the effective composite
+- `diffCalculator`: Calculates differences between resources; holds the lenient `Defaulter` (§6.5a)
 - `diffRenderer`: Formats and displays XR diffs
 - `requirementsProvider`: Handles requirements (env-configs, label selectors) for rendering
 
@@ -590,6 +692,14 @@ The `ProcessorConfig` structure provides configuration options:
   the two, and `validateFlags` hard-errors when they disagree. `--analyze-on` carries an *empty* kong default rather
   than `any-change` so that "not passed" stays distinguishable from "passed explicitly" at that check — which is why
   `--help` states the default in prose rather than showing it as a value.
+- `DryRunOn`: Which resources are round-tripped through the apiserver to compute their post-apply form — one of
+  `DryRunOnExisting` or `DryRunOnAll` (the zero value, matching the `--dry-run-on` default; see §6.3). The same kind of
+  knob as `AnalyzeOn`: each round-trip costs an apiserver call and a permission, and every resource left un-verified is
+  marked with a `DryRunInfo` (§6.8.3), so "we did not check" stays distinguishable from "we checked and this is what the
+  cluster would store". Unlike `--analyze-on`, a plain kong `default:"all"` is correct here — degradation is uniform, so
+  no behaviour depends on telling a defaulted value from an explicitly-passed one. It is set from
+  `CommonCmdFields.DryRunOn`, which lives on the struct shared by `xr` and `comp`, so both subcommands get the flag;
+  `WithDryRunOn` ignores an empty value so the config default survives.
 - `Warnings`: The `*WarningLogger` whose collected advisories are included in structured output. Nil is valid and means
   warnings reach stderr but not structured output.
 - `EventualState`: Synthesize composed-resource readiness between render iterations to model the steady state of
@@ -610,8 +720,10 @@ The `ProcessorConfig` structure provides configuration options:
 - `Logger`: Structured logger, propagated to all subcomponents.
 - `RenderFunc`: Renders a composition pipeline; defaults to the in-process engine.
 - `Factories`: Factory functions for creating subcomponents (used for testing and to swap caching strategies).
-  `Factories.InputValidator` (set with `WithInputValidatorFactory`, defaulting to `NewBundleInputValidator`) creates
-  the `InputValidator` for each `PerformDiff` run (see §6.7a).
+  `Factories.Defaulter` (set with `WithDefaulterFactory`, defaulting to `NewDefaulter`) takes a `DefaultingPolicy`; the
+  processor calls it twice, for its own strict `renderDefaulter` and for the lenient one it hands to the
+  `DiffCalculator` factory (see §6.5a). `Factories.InputValidator` (set with `WithInputValidatorFactory`, defaulting to
+  `NewBundleInputValidator`) creates the `InputValidator` for each `PerformDiff` run (see §6.7a).
 
 Note: `comp`'s `--namespace` filter and `--resource` filter are call-time parameters to `DiffComposition`, not
 processor-wide config; they describe what to include in a single impact analysis run, not how the processor itself
@@ -742,14 +854,18 @@ type CompDiffProcessor interface {
    name produced the *stale* one, the resulting composed resource matched the cluster, and a real change was reported as
    no change at all with exit code 0. The default `--analyze-on` setting could not observe its own flagship consequence.
    So `predictRevision` derives the identity from Crossplane's own exported `Composition.Hash()`, and
-   `seedRepointingXRs` writes the resulting name onto a *copy* of each re-pointing composite before the renders. The
-   cluster's objects are never mutated — the impact analysis and removal detection still read identity from them — and
-   only composites that would genuinely re-point are seeded. A `Manual`-policy composite surfaced by `--include-manual`
-   is not one of them: it keeps its own ref, `resolveCompositionFromRevisions` honours that ref, so seeding it would
-   change *which* revision renders for it. `SetCompositionRevisionRefName` additionally never *creates* a ref that isn't
-   already present — an existing ref is the only case with a stale value to correct, and its presence proves the path is
-   one the composite's schema accepts, where inventing a path could fail validation for a composite that renders fine
-   today. A composite not yet tracking a revision therefore keeps rendering no ref at all, exactly as before.
+   `collectXRDiffs` passes the resulting name to `DiffSingleResource` as `XRDiffOptions.RevisionName` (§6.1.1) for each
+   re-pointing composite. The processor applies it to the effective composite (§6.4a), after the cluster's ref has been
+   inherited and before defaulting, so it reaches the render but never the dry-run payload. For a claim the effective
+   composite is the backing XR: the claim's own ref is never propagated under `Automatic`, so a name seeded onto the
+   claim would reach nothing. The cluster's objects are never mutated — the impact analysis and removal detection
+   still read identity from them — and only composites that would genuinely re-point are given the name. A
+   `Manual`-policy composite surfaced by `--include-manual` is not one of them: it keeps its own ref,
+   `resolveCompositionFromRevisions` honours that ref, so seeding it would change *which* revision renders for it.
+   `SetCompositionRevisionRefName` additionally never *creates* a ref that isn't already present — an existing ref is
+   the only case with a stale value to correct, and its presence proves the path is one the composite's schema accepts,
+   where inventing a path could fail validation for a composite that renders fine today. A composite not yet tracking a
+   revision therefore keeps rendering no ref at all, exactly as before.
 
    The name is the one thing this tool mirrors from upstream rather than calling: the `<composition>-<hash[:7]>`
    derivation lives in `NewCompositionRevision`, inside an `internal/` package, while the hash it consumes comes from
@@ -770,7 +886,12 @@ type CompDiffProcessor interface {
    `calculateCompositionDiff` establishes this with one more local comparison: the same mask-lifted view, with that
    single path (`renderer.PathLastAppliedConfiguration`) ignored. Ordering matters, because the annotation must stay in
    the comparison that decides `ChangeScope` — it is a real difference and Crossplane hashes it — and be excluded only
-   from this narrower question about identity. In that case `PredictedRevisionName` is omitted, the composites are
+   from this narrower question about identity. Before giving up on the name, `lastAppliedDescribes` checks whether the
+   cluster's annotation, parsed as JSON, is semantically the file minus that annotation (empty `annotations` treated as
+   absent, and only when the file does not carry the annotation itself). If so, a client-side apply recomputes the same
+   value, the patch is empty and kubectl writes nothing, and server-side apply leaves it alone — so the composition is
+   reported `ChangeScopeNone` with no revision created (issue #500). Otherwise the annotation is stale and a re-apply
+   genuinely rewrites it. In that case `PredictedRevisionName` is omitted, the composites are
    rendered unseeded (the pre-#474 behaviour), and a warning says so. The alternative — seeding a name the tool invented
    — would manufacture a downstream diff on a converged cluster for exactly the compositions this feature exists to
    serve. Note what is deliberately *not* claimed when the guard fires: `CreatesRevision` stays true. The delta is real,
@@ -780,7 +901,9 @@ type CompDiffProcessor interface {
    only the predicted value is imprecise.)
 4. **Diff each XR.** Delegate to the `xrProc` `DiffProcessor` via `DiffSingleResource`, supplying a
    `CompositionProvider` that returns the proposed composition for the affected XR's GVK and the cluster's composition
-   otherwise (so nested XRs that use a different composition are diffed against their unchanged composition).
+   otherwise (so nested XRs that use a different composition are diffed against their unchanged composition), and the
+   predicted revision name for a re-pointing composite. The provider is handed the effective composite, so a claim
+   reaches it as its backing XR and is matched by type rather than by its root key.
 5. **Aggregate.** Produce a `CompDiffOutput` with composition-level changes, an `XRImpact` entry per XR, and an
    `AffectedResourcesSummary` (changed / unchanged / errored counts).
 
@@ -807,7 +930,8 @@ type DiffCalculator interface {
     // a set of rendered resource keys. Splitting this from removal detection lets nested XRs be processed
     // before any "missing from render" decisions are made (a nested XR may render additional resources
     // that the parent's render does not see).
-    CalculateNonRemovalDiffs(ctx context.Context, xr *cmp.Unstructured, parentComposite *un.Unstructured, desired render.CompositionOutputs) (map[string]*dt.ResourceDiff, map[string]bool, error)
+    // xr is diffed exactly as passed in — for DefaultDiffProcessor, the authored XR (§7.1) — never as rendered.
+    CalculateNonRemovalDiffs(ctx context.Context, xr *cmp.Unstructured, desired render.CompositionOutputs) (map[string]*dt.ResourceDiff, map[string]bool, error)
 
     // CalculateRemovedResourceDiffs identifies resources that exist in the cluster under this XR but are
     // absent from the merged set of rendered resource keys, and produces removal diffs for them.
@@ -823,9 +947,160 @@ output.
 The `DefaultDiffCalculator` handles:
 
 - Retrieving current resources from the cluster (via `ResourceManager`)
-- Performing dry-run applies to determine the would-be state
+- Round-tripping the desired state through the apiserver to determine the would-be state
 - Generating text-based diffs between current and desired
 - Identifying resources that would be removed
+
+```go
+func NewDiffCalculator(
+    apply k8.ApplyClient,
+    access k8.AccessChecker,
+    tree xp.ResourceTreeClient,
+    resourceManager ResourceManager,
+    logger logging.Logger,
+    diffOptions renderer.DiffOptions,
+    dryRunOn DryRunOn,
+    predictor Defaulter,
+) DiffCalculator
+```
+
+The `AccessChecker` and `DryRunOn` are constructor parameters rather than post-construction setters, so a calculator
+cannot exist in a state where it is about to reach the apiserver without knowing what it is permitted to do. The
+`predictor` (a lenient `Defaulter`, §6.5a) is a constructor parameter for the same reason in reverse: it is what the
+calculator shows for an addition when it does *not* reach the apiserver. The `ProcessorConfig.Factories.DiffCalculator`
+factory type carries the same signature.
+
+#### 6.3.2 Computing the would-be state
+
+Which request is issued depends on whether the resource exists, because they are different operations, not two modes of
+one:
+
+| Case | Request |
+|------|---------|
+| `current != nil` | Server-side apply, `dryRun=All`, under the field owner read from the existing object's `managedFields` (so the merge matches what Crossplane itself would produce). |
+| `current == nil`, `DryRunOnAll` | `Create` with `dryRun=All` and `FieldOwnerDefault`. |
+| `current == nil`, `DryRunOnExisting` | No request; the rendered object plus locally predicted CRD defaults (§6.5a) is used, marked `DryRunSkipDisabled`. |
+
+Server-side apply cannot serve the addition path at all. `DryRunApply` issues a PUT-shaped request to a named path, and
+an addition relying on `metadata.generateName` has no name; SSA has no `generateName` equivalent. `Create` is also the
+narrower permission ask (`create` alone, versus `create` + `patch` for a *creating* SSA apply) and the semantically
+correct primitive for "plan before apply".
+
+Both paths send a payload prepared by a single `sanitizeForDryRun` helper, which deep-copies the object and drops
+`metadata.{resourceVersion,uid,creationTimestamp,generation,selfLink,managedFields,ownerReferences}`. All seven are
+either server-assigned or rejected on input, and all seven are stripped from display by `cleanupForDiff` regardless, so
+removing them costs nothing in output. Two of them fix real failures on the *existing* path as a side effect: a stale
+`resourceVersion` from a user's input file (plausible for anything exported with `kubectl get -o yaml`) makes the
+apiserver reject the request on optimistic concurrency, and client-go's dynamic `Apply` refuses outright any object with
+`managedFields` populated. `DefaultDiffProcessor` already guarded the XR against both; composed resources had no
+equivalent.
+
+A payload is exactly what was rendered — for the XR, what was authored — and never carries locally predicted defaults,
+on either path. Under server-side apply every field present in the request claims ownership, so a field defaulted
+locally would take over a value another manager set and report a change the real apply would not make (#503). The
+apiserver applies its own defaults to what it is sent, on a dry-run create just the same.
+
+Three fields are restored from our side after a successful dry-run create:
+
+- **`ownerReferences`, whenever the rendered object had them.** Stripping them from the request is not the same as
+  dropping them from the desired state: the real apply creates the object with its rendered controller reference, and
+  render-overlap detection (`InputValidator`, §6.7a) reads that reference to name the XR that would control each
+  composed resource. Without the restoration, two XRs contending for one new object would be reported as merely
+  producing it differently. Any references the server returned (only a mutating webhook could have added one) are kept
+  after the rendered ones.
+- **Identity, when the request carried `generateName` and no `name`.** The apiserver runs `names.Generator` in
+  `rest.BeforeCreate`, ahead of the dry-run short-circuit at the storage layer, so it invents a random name that would
+  make the diff differ on every run. For a *named* resource the server's name is kept, so a mutating webhook that
+  rewrites a name still surfaces.
+- **`status`, whenever the rendered object had one.** Composition pipelines are allowed to write their own status, so a
+  rendered status is authored content. The apiserver contributes nothing to status on create (it is a subresource) and
+  returns it empty, so taking the server's value would delete the user's output under the banner of fidelity.
+
+#### 6.3.3 Degrade, report, or fail
+
+An addition that could not be verified falls back to the rendered object with locally predicted CRD defaults (§6.5a)
+and carries a `DryRunInfo` saying why. The
+calculator raises no warning about it: what to tell a human, and how to group it, is a presentation decision, so the
+renderers derive the summary from the `DryRunInfo` on the diffs (§6.8.1 Interfaces, *Summary of unverified
+additions*). `DryRunInfo.Detail` is the apiserver's own
+`Status().Message`, not the wrapped error, because `ApplyClient` wraps with the resource's name: as a cause, that
+would make every resource's summary a distinct warning. A resource the cluster
+*refuses* is a finding, not a degradation, and becomes a `SchemaValidationError` via `NewAdmissionRejectionError` —
+exit code 2, with a `ResourceValidationFailure` whose single `FieldValidationError` has `Type: "admission"`. The
+classification is by status class only, never by message text:
+
+| Outcome of the dry-run create | Handling |
+|-------------------------------|----------|
+| `nil` | Merge as above; no `DryRunInfo`. |
+| `errors.Is(err, ErrUnresolvableGVK)` | Fail (exit 1). Checked **first**, before any status class — see below. |
+| `IsInvalid` (422) | Report: cluster rejection. |
+| `IsForbidden` (403) | Ambiguous — resolved by `AccessChecker`, below. |
+| `IsInternalError` / `IsServiceUnavailable` / `IsTimeout` | Degrade, `DryRunSkipWebhookUnavailable`. |
+| `IsAlreadyExists` (409) | Fail (exit 1). `FetchCurrentObject` reported no existing resource, so either its matching logic is wrong or something created the resource underneath us; the diff rests on a false premise either way. |
+| anything else | Fail (exit 1). |
+
+`DryRunSkipWebhookUnavailable` is named for its dominant cause but the predicate is broader: it means the apiserver could
+not complete the admission chain. `DryRunInfo.Detail` always carries the apiserver's own message, so the specific cause
+is never lost.
+
+`ErrUnresolvableGVK` must be tested before anything else in that table, and the reason is that status class alone is not
+sufficient to classify these errors — which is the one place the "classify by status class, never by message" rule needs
+a carve-out. Both dry-run methods resolve the GVK through discovery themselves (`apply_client.go`), and a discovery 404
+for an unserved group/version is `apierrors`-`NotFound`: identical in shape to `NamespaceLifecycle` refusing a resource
+whose type is perfectly fine. A discovery 503 or timeout is likewise identical to the apiserver failing admission. So
+without the sentinel, an unknown type would be degraded as `namespaceNotFound` and a transient discovery outage as
+`webhookUnavailable` — in both cases pointing the user at the wrong root cause, and in both cases *degrading* where the
+tool should fail, since a type the cluster does not serve cannot be diffed at all. The client therefore joins a sentinel
+onto the resolution failure and the calculator classifies on that, rather than inferring cause from shape.
+
+The gap this closes is narrow but real. Earlier guards catch most unresolvable types:
+`removeNamespacesFromClusterScopedResources` runs before diff calculation and fails on any composed resource whose scope
+cannot be determined. But scope determination falls back to a **CRD lookup** when discovery fails, whereas `GVKToGVR` is
+**discovery-only** — so a CRD whose version is not `served`, or one created moments before discovery caught up, passes
+the scope check and reaches the dry run. (`IsCRDRequired` has a related gap, assuming any `*.k8s.io` group other than
+`apiextensions.k8s.io` is built-in without consulting discovery, but for composed resources the scope check shadows it.)
+
+The existing-resource path (`classifyApplyFailure`) uses the same rejection classification, and that is a deliberate
+behaviour change rather than a side effect. A validating-webhook rejection of an existing resource used to surface as a
+plain tool error (exit 1). Had only the addition path been given the new classification, the exit code for one cluster
+fact would have come to depend on whether the resource happened to exist already — a fresh asymmetry in the change whose
+whole purpose is removing one. It is now exit 2 on both paths.
+
+That path never *degrades*, though: see §3.4 item 6.
+
+A `NotFound` from a dry-run create is classified as a **degradation**, not a rejection, and the reasoning is worth
+recording because it is the one place where "the cluster refused this object" is the wrong reading. `GVKToGVR` has
+already resolved the resource, so in practice a `NotFound` here is `NamespaceLifecycle` admission reporting that the
+target namespace does not exist. A quota or webhook refusal describes the object and will still hold when the user
+applies; a missing namespace is a *precondition they are very often about to satisfy in the same apply* — a `Namespace`
+and the resources inside it in one `kubectl apply -f ./manifests/` is routine. crossplane-diff cannot know whether that
+`Namespace` is part of the apply being previewed, so reporting a finding would break a supported workflow over something
+that may well not be true by the time it matters. The resource degrades with
+`DryRunSkipNamespaceNotFound`, and a consumer that *does* want to treat bootstrap order as a failure can gate on that
+`skipReason`.
+
+This was found by the e2e suite rather than by design review: `TestDiffConcurrentDirectory` diffs 21 XRs into a
+namespace that is never created, and the first cut of this feature failed the whole run. It is now covered by
+`TestDiffIntegration/AdditionInMissingNamespaceDegradesRatherThanFailing` at integration speed, since envtest's
+apiserver enforces `NamespaceLifecycle`.
+
+#### 6.3.4 Why a `SelfSubjectAccessReview`, and why lazily
+
+`Forbidden` is overloaded. The apiserver returns 403 from the authorizer when RBAC denies the verb, and equally from
+`ResourceQuota` and from any validating webhook that chooses that status. Only the first is an environment limitation to
+be degraded past; the others are findings the user needs. Treating every 403 as "degrade" would silently swallow them,
+and reading the 403's *message* to tell them apart would rest a correctness decision on unversioned apiserver prose.
+
+So the tool asks the authorizer directly, through `AccessChecker.Can` (§6.9.1). `!allowed` means degrade (nothing was
+learned about the resource); `allowed` means the cluster looked at this object and refused it, which is reported. An
+`AccessChecker` error is neither: the tool holds a 403 it cannot classify, and says so as a plain error rather than
+asserting a finding it has not established or hiding one.
+
+Two properties make this affordable. The review is consulted **lazily** — only once a dry run has actually returned 403
+— so the happy path costs no extra calls at all. And answers are **memoized on `{gvr, namespace, verb}`**, so the
+unhappy path costs one review per distinct question rather than one per resource. The verb is part of the key because
+holding `patch` but not `create` on one GVK is precisely the configuration this feature exists to cope with; reusing one
+verb's answer for the other would invert the decision being made.
 
 ### 6.4 ResourceManager
 
@@ -850,8 +1125,13 @@ type ResourceManager interface {
     UpdateOwnerRefs(ctx context.Context, parent *un.Unstructured, child *un.Unstructured)
 
     // FetchObservedResources walks the live resource tree under an XR and returns the composed
-    // resources observed in the cluster. Used to preserve the identity of nested XRs across
-    // re-renders (so re-rendering doesn't appear to "create" a child XR that already exists).
+    // resources that XR controls: those carrying crossplane.io/composition-resource-name whose
+    // controller reference, if any, is the XR itself. A nested XR's own children are excluded; they
+    // belong to the nested XR's observed set, assembled when it is rendered. Used to preserve the
+    // identity of nested XRs across re-renders (so re-rendering doesn't appear to "create" a child
+    // XR that already exists). The scoping is mandatory, not tidiness: see §9.5.4. Per-node fetch
+    // errors recorded on the tree are not ignored: a NotFound child is skipped with a warning, and
+    // any other node error (or any error on the root) fails the call; see §9.5.4.
     FetchObservedResources(ctx context.Context, xr *cmp.Unstructured) ([]cpd.Unstructured, error)
 }
 ```
@@ -863,6 +1143,57 @@ The `DefaultResourceManager` handles:
   resources rendered with `generateName`
 - Walking the resource tree (via `ResourceTreeClient`) to enumerate observed children of an XR
 - Managing owner references and synthesizing UIDs for dry-run
+
+### 6.4a CompositeResolver
+
+The `CompositeResolver` computes the **effective composite**: what Crossplane would actually reconcile for a composite as
+supplied, given what the cluster already holds. `ResourceManager` fetches; this decides what the fetched state means. It
+is a concrete struct built by `NewDiffProcessor` from the processor's `ResourceManager` and `DefinitionClient`, so it
+is tested through those.
+
+```go
+type EffectiveComposite struct {
+    Authored  *cmp.Unstructured // the input (see SanitizeXR); never modified; the dry-run payload
+    Cluster   *un.Unstructured  // Authored's cluster copy, or nil; for a claim, the claim
+    Backing   *un.Unstructured  // a claim's backing XR as the cluster holds it, or nil
+    Effective *un.Unstructured  // the XR Crossplane would compose, before CRD defaulting
+    IsClaim   bool
+}
+
+// Composed is the cluster object whose composed resources Effective observes: Backing for a claim, Cluster otherwise.
+func (c EffectiveComposite) Composed() *un.Unstructured
+
+func NewCompositeResolver(resources ResourceManager, defs xp.DefinitionClient, logger logging.Logger) *CompositeResolver
+
+// Resolve computes the effective composite. existing is Authored's cluster copy when the caller has it already
+// (a nested XR found among its parent's observed resources); otherwise Resolve fetches it.
+func (r *CompositeResolver) Resolve(ctx context.Context, authored *cmp.Unstructured, existing *un.Unstructured) (EffectiveComposite, error)
+```
+
+- **An XR.** Effective is Authored plus, from Cluster, its UID and each of the fields Crossplane writes that Authored
+  leaves out: `compositionRef` (the composite reconciler selects it once and never re-selects), `compositionRevisionRef`
+  (the reconciler selects it) and `compositionUpdatePolicy` (the apiserver defaults it). Each is copied at whichever of
+  the v2 (`spec.crossplane.*`) and v1 (`spec.*`) paths the cluster copy holds it at, and a field Authored sets at either
+  path wins, which is how a `Manual` composite is moved to another revision. An apply that omits a field leaves it in
+  place, so this is the state the reconcile would see. The UID matters because render keeps an input UID and checks
+  observed resources' controller references against it.
+- **A claim.** Backing is the XR the claim's `spec.resourceRef` names. A claim with no cluster copy, or one Crossplane
+  has not bound yet, gets a backing XR synthesized by upstream's `ConvertClaimToXR`, under the claim's name; a
+  `resourceRef` naming an XR that does not exist gets one under the ref's name, with a warning, because that is the XR
+  the claim syncer would create. Any other fetch error is fatal (#533). Effective is the backing XR with the claim's spec
+  synced in by `syncClaimSpec`, which mirrors upstream's claim syncers (`internal/controller/apiextensions/claim/
+  syncer_ssa.go` and `syncer_csa.go`, crossplane v2.4.2) using the same `xcrd` field sets they do: the claim's spec is
+  propagated minus the claim's own fields and the XR machinery a claim must not set; `compositionRevisionRef` is
+  propagated only when the backing XR's policy is `Manual`, since under `Automatic` the XR controller owns it; and
+  `spec.claimRef` is set to the claim. The SSA syncer applies that with its own field manager, so a field the claim no
+  longer has leaves the XR, while the fields the XR controller writes (the three above, plus `resourceRefs` and
+  `writeConnectionSecretToRef`) survive and are kept from Backing. Not modelled: an XRD's `enforcedCompositionRef`,
+  under which the claim's `compositionRef` is not propagated either.
+
+The processor calls it once per composite, before anything reads the composite's composition, revision or policy
+(§7.1). A nested XR's cluster copy is the one `ProcessNestedXRs` already found (among its parent's observed resources,
+or by its fallback lookup), so it is not fetched again. The `DiffCalculator` still fetches each composite once more for
+its own dry run (§6.3).
 
 ### 6.5 SchemaValidator
 
@@ -907,11 +1238,11 @@ paths, messages, and offending values. The validator surfaces this structure to 
 - The structured-output renderers expose it on the wire as `OutputError.ValidationFailures` (see §6.8.3), so JSON/YAML
   consumers don't need to parse the human-readable `Message` string.
 
-Note that `SchemaValidate` deep-copies its inputs and does not mutate them. The previous, line-parsing API
-(`validate.SchemaValidation`) fused defaulting with validation as a side-effect; with the new API, defaulting is
-explicit. The processor calls `clixr.ApplyCRDDefaults` (renamed from the old `render.DefaultValues`) on the rendered
-tree before invoking `ValidateResources`, preserving the invariant that the diff calculator sees fully-defaulted
-resources.
+`ValidateResources` is read-only. `SchemaValidate` deep-copies its inputs and applies CRD defaults to its own copy
+before validating, so a field that is both required and defaulted validates without the caller's objects being touched.
+They must not be touched: the resources it validates — the authored XR and the rendered composed resources — go on to
+become dry-run payloads, and a locally defaulted field in a payload claims ownership of it (§6.3.2, #503). Defaults are
+predicted locally only by the `Defaulter` (§6.5a).
 
 Every rendered resource is handed to `SchemaValidate`, including built-in Kubernetes types that have no CRD.
 `SchemaValidate` validates those against a scheme it embeds (`kubescheme` plus `apiextensions` and `apiregistration`)
@@ -934,6 +1265,52 @@ Scope determination is shared by `ValidateScopeConstraints` and the XR processor
 If neither source can answer, the diff fails rather than guessing — and the error reports both failures, since
 discovery failing for a reason unrelated to the kind (connectivity, RBAC) is worth surfacing rather than leaving hidden
 behind the CRD error it causes. This mirrors how `RequirementsProvider` resolves scope for extra-resource selectors.
+
+### 6.5a Defaulter
+
+The `Defaulter` predicts the defaults the apiserver would apply to a resource from its CRD's schema. It never modifies
+its input; it returns a defaulted copy.
+
+```go
+type Defaulter interface {
+    // Default returns a copy of obj with its CRD's defaults applied. obj itself is never modified.
+    Default(ctx context.Context, obj *un.Unstructured) (*un.Unstructured, error)
+}
+
+// DefaultingPolicy says what a Defaulter does with a resource it finds no CRD for.
+type DefaultingPolicy int
+
+const (
+    StrictDefaulting  DefaultingPolicy = iota // fail
+    LenientDefaulting                         // return an unchanged copy
+)
+
+func NewDefaulter(sc k8.SchemaClient, dc xp.DefinitionClient, policy DefaultingPolicy) Defaulter
+```
+
+It finds an XR's CRD through the XRD that defines it, by name, among the CRDs loaded when the processor initialized;
+any other resource's by GVK. A built-in type has none. Defaulting itself is upstream's `clixr.ApplyCRDDefaults`. A CRD
+that is found but does not define the resource's apiVersion is an error under either policy.
+
+It has exactly two uses, one per policy:
+
+- **Strict, for the render input.** `DefaultDiffProcessor` defaults the effective composite (§6.4a) before resolving its
+  composition and rendering it, so both see the spec Crossplane would: an XRD's `defaultCompositionUpdatePolicy:
+  Manual` decides which revision a new XR resolves to. It defaults *after* the cluster's fields are inherited, so that a
+  default never overrides a value the cluster holds (a `Manual` policy, say). Rendering without those defaults could
+  produce a wrong diff, so a missing XRD or CRD is an error.
+- **Lenient, for prediction.** An addition with no apiserver result — `--dry-run-on=existing`, or one of the
+  degradations in §6.3.3 (namespace not found, webhook unavailable, forbidden) — is shown defaulted
+  (`DefaultDiffCalculator.predictLocally`). This is best effort: built-in types and unknown CRDs come back unchanged,
+  and the schema validator, not the `Defaulter`, is the gate on missing CRDs.
+
+What it returns is never sent to the apiserver (§6.3.2), which is also why it is kept out of `SchemaValidator`: the
+resources validation sees go on to become payloads.
+
+The prediction covers CRD `default:` values only. It does not model mutating admission or admission plugins, nor
+conversion of a multi-version CRD through its storage version (#528), so a fallback diff can be incomplete or, for
+conversion, differ from what the apiserver would store. It does not prune fields the schema leaves undeclared either,
+but that cannot show in a diff: schema validation rejects such a field as an `unknownField` error first.
 
 ### 6.6 RequirementsProvider
 
@@ -958,7 +1335,7 @@ with `--verbose` can trace why a composition behaved as if a required resource w
 (RBAC denial, API server unreachable, etc.) still wrap and propagate, aborting the diff.
 
 (Claim-to-XR synthesis for new claims is not a `RequirementsProvider` responsibility — it happens in
-`DefaultDiffProcessor.resolveBackingXRForClaim` and delegates to upstream's `ConvertClaimToXR`. See §7.1.)
+`CompositeResolver` (§6.4a) and delegates to upstream's `ConvertClaimToXR`. See §7.1.)
 
 ### 6.7 FunctionProvider
 
@@ -1044,8 +1421,11 @@ type DiffRenderer interface {
     // RenderDiffs writes diffs grouped by input XR, plus the top-level (union) errors. The output
     // writer is held by the renderer (configured at construction time), not passed in per call, so
     // the same interface can serve human-readable and structured renderers without leaking
-    // io.Writer.
-    RenderDiffs(groups []dt.XRDiffGroup, errs []dt.OutputError) error
+    // io.Writer. warnings is for structured output only: each warning already went to stderr when
+    // it was raised, so the human renderer ignores it. The one warning derived here instead, the
+    // summary of unverified additions, goes to stderr from every renderer and is appended to
+    // warnings[] by the structured one.
+    RenderDiffs(groups []dt.XRDiffGroup, errs []dt.OutputError, warnings []dt.OutputWarning) error
 }
 
 // CompDiffRenderer handles rendering composition diffs.
@@ -1061,6 +1441,28 @@ failure); the processor builds them in `PerformDiff`, one per input, in input or
 renderer renders per-XR sections when more than one XR is present (a single XR, and the
 composition renderer's identity-less internal reuse, render as a flat block); the structured
 renderer emits both the deprecated flat `changes[]` and the grouped `xrs[]`.
+
+**Summary of unverified additions.** Every renderer derives one kind of warning itself rather than
+receiving it: the advisory that added resources could not be verified against the apiserver (§6.3.3).
+`dryRunWarnings` (`renderer/dry_run_warnings.go`) groups the diffs' `DryRunInfo` by GVK, namespace,
+skip reason and `Detail`, and emits one `OutputWarning` per group with `gvk`, `namespace`, the detail
+(under `cause`, or `reason` for `forbidden`) and `count`, the number of distinct resources behind it,
+in `Context`. Grouping on the detail is what keeps every distinct cause visible: the text renderer
+shows no `DryRunInfo`, so the summary is a human's only view of it. `disabled` is not summarised —
+the user chose `--dry-run-on=existing`. The summaries are sorted (diffs arrive in map order), so they
+change the order of `warnings[]`: they come after the warnings raised during the run, grouped, and on
+stderr just before any errors. For `comp` there is one run-wide summary, across every composition,
+because `warnings[]` is top-level; the human comp renderer reuses `DefaultDiffRenderer` per
+composition with identity-less groups, so `DefaultDiffRenderer` summarises identity-bearing groups
+only and leaves the run-wide summary to `DefaultCompDiffRenderer`.
+
+A failed XR's diffs are withheld, so no dry-run summary is shown for it: the summary says how far to
+trust the diffs that are shown, and the XR's error is reported in `errors[]` and on stderr;
+re-running after fixing it gives the full summary. This differs from the calculator-raised warning it
+replaces, which appeared for a failed XR only incidentally, because it fired mid-calculation. Carrying
+a failed XR's unverified additions through to the renderer was considered and rejected: it would have
+forced a "partial diffs alongside an error" contract onto `DiffProcessor.DiffSingleResource`, and the
+resulting count would be meaningless, since it depends on how far the XR got before failing.
 
 Implementations:
 
@@ -1144,6 +1546,8 @@ The structured types are split across two files:
 - The error envelope and the validation-failure types live in `cmd/diff/renderer/types/`: `OutputError`,
   `ResourceValidationFailure`, `FieldValidationError`. These are separated because they're consumed by the
   human-readable renderer too, not just the structured ones.
+- `DryRunInfo` and `DryRunSkipReason` also live in `cmd/diff/renderer/types/`, because they hang off `ResourceDiff` —
+  the processor→renderer type — and are copied onto the wire shape by the structured renderer.
 - `XRDiffGroup` also lives in `cmd/diff/renderer/types/`. It is the processor→renderer handoff type (input-XR
   identity + its `Diffs map[string]*ResourceDiff` + a pre-converted `*OutputError`), not a wire type. It lives in the
   leaf `types` package rather than alongside the `DiffRenderer` interface so `testutils` (which mocks `DiffRenderer`)
@@ -1210,9 +1614,14 @@ contract:
   (`ExitCodeToolError`). The check is format-independent and, per the "always render" contract above, the structured
   document is still emitted, carrying the error. A collision whose every entry is `DiffTypeEqual` is not reported:
   equal diffs are excluded from every rendered view, so the merge loses nothing observable.
-  Two overlaps are out of reach of this check, because they never produce two groups sharing a key: one XR rendering
-  the same object under two composition resource names (the per-XR diff map overwrites it; #505), and the same
-  object rendered at two API versions (two keys for one object; #506).
+  Entries are matched on the resource's version-independent identity (group, kind, namespace, name), not on the
+  diff key itself: served versions are views of one stored object, so two XRs rendering it at two API versions
+  produce two keys yet still contend (#506). Renderings at different versions never compare identical, so such an
+  overlap lands on contention or disagreement. The overlap within one XR — its composition rendering the same
+  object twice, under two composition resource names or at two API versions — never reaches this check, because
+  the per-XR diff map would collapse or split it; `CalculateNonRemovalDiffs` fails that XR instead (#505), since
+  Crossplane applies both renderings with one field manager in no fixed order and no single diff predicts the
+  result. Because `comp` diffs each affected XR through the same calculator, it fails such an XR too.
 - `xrDiffWire` — one entry in the `xrs[]` array, per input XR/claim in input order: an `xr` identity object, a
   `status` (`"changed"` / `"unchanged"` / `"error"` — the same `XRStatus` enum comp uses; `"filtered"` does not apply
   to `xr`), its own `summary`, its own `changes[]`, and (for a failed XR) its own `errors[]`.
@@ -1283,6 +1692,23 @@ contract:
   re-includes only `manual_policy`; the other two XRs genuinely would not select the resulting revision.
 - `DownstreamChanges` — the serialized wrapper for an XR's downstream diffs, used inside `xrImpactWire`: a `Summary`
   plus a `[]ChangeDetail`.
+- `DryRunInfo` — optional `dryRun` object on a `ChangeDetail`, recording that this resource's desired state did **not**
+  go through the apiserver, and why: `Performed` (`performed`), `SkipReason` (`skipReason`, one of `"disabled"` /
+  `"forbidden"` / `"webhookUnavailable"` / `"namespaceNotFound"` — §6.3.3) and `Detail` (`detail`, the cluster's own explanation: the
+  `SelfSubjectAccessReview`'s reason, or the apiserver's error message). `ChangeDetail` is the shared per-resource wire
+  shape — `xr` reaches it via `Changes`/`xrs[].changes`, `comp` via `DownstreamChanges.Changes` — so one field covers
+  both commands with no per-command plumbing.
+
+  Emitted as a **pointer with `omitempty`, only in the degraded case**: absence means the desired state did reach the
+  apiserver. One deliberate exception, documented on the type: removal diffs never carry it, because
+  `CalculateRemovedResourceDiffs` builds them straight from cluster state and there is no desired state to preview, so
+  absence reads as "nothing was skipped" rather than as a positive fidelity guarantee for a resource that was never a
+  candidate. `Performed` is therefore always `false` whenever the struct is present, which is redundancy on purpose: it
+  keeps the emitted JSON self-describing, so a consumer reading a `dryRun` object need not know that mere presence
+  implies degradation, and it leaves room to emit the struct unconditionally later without a schema break.
+
+  The warning summarised from it (§6.8.1 Interfaces) is the human channel and does not replace this one: an `OutputWarning` has no
+  resource anchor, so it cannot tell a pipeline *which* additions were degraded.
 - `OutputWarning` — non-fatal advisory envelope, carried on both XR and comp diff outputs as
   `warnings[]`. Carries a `Message` plus an optional `Context map[string]string` holding the log
   key/value pairs from the emitting call site, so machine consumers read individual values instead of
@@ -1297,19 +1723,33 @@ contract:
   render time. Emitting at render time would lose any warning raised during a run that fails before
   rendering, and would report warnings out of chronological order with the work that produced them.
   `DiffRenderer.RenderDiffs` therefore takes warnings for structured output only; the human renderer
-  ignores the parameter.
+  ignores the parameter. The exception is the summary of unverified additions, which can only be built
+  once the diffs exist and is derived by the renderers themselves (§6.8.1 Interfaces).
 - `OutputError` — error envelope used by both XR and comp diff outputs. Carries:
     - `ResourceID`: which user-supplied input the diff was processing (one entry per batched run)
     - `Message`: human-readable error string
     - `ValidationFailures`: optional `[]ResourceValidationFailure`, populated when the error originated from schema
-      validation. Lets machine consumers inspect typed failures without parsing `Message`.
+      validation *or* from an apiserver dry-run rejection. Lets machine consumers inspect typed failures without
+      parsing `Message`. `SchemaValidationError` carries the two in separate fields — `Result` for a
+      `pkgvalidate.ValidationResult` from upstream's validator, `Failures` for rows we built ourselves — because
+      synthesising a `ValidationResult` for an admission rejection would mean inventing a `FieldErrorType` value
+      upstream does not define. `NewOutputError` prefers explicit `Failures` over `Result`; in practice only one is
+      ever set.
 - `ResourceValidationFailure` — per-resource view inside `ValidationFailures`. Mirrors upstream
   `pkg/validate.ResourceValidationResult` (apiVersion / kind / name / namespace / status), but is owned by
   `crossplane-diff` so the public JSON schema can evolve independently of upstream's. `Status` surfaces `"invalid"` and
   `"missingSchema"`; valid entries are filtered out so consumers iterating `ValidationFailures` see only failure rows.
 - `FieldValidationError` — single field-level error inside `ResourceValidationFailure.Errors`. Carries `Type`
-  (`"schema"` / `"cel"` / `"unknownField"` / `"defaulting"`), `Field` (JSONPath, when locatable), `Message`, and
-  `Value` (typed: string, number, bool, or struct).
+  (`"schema"` / `"cel"` / `"unknownField"` / `"defaulting"` / `"admission"`), `Field` (JSONPath, when locatable),
+  `Message`, and `Value` (typed: string, number, bool, or struct). The first four are upstream's values, produced by
+  local validation; `"admission"` (`diffprocessor.FieldErrorTypeAdmission`) is ours and means the apiserver refused the
+  resource during the dry run. It shares the field deliberately: to a consumer asking "why won't the cluster accept
+  this?" it is the same kind of answer, and the row's shape is indistinguishable from one
+  `validationFailuresFromResult` would have produced — including its `Status`, which reuses upstream's
+  `ValidationStatusInvalid` rather than a literal. An `"admission"` row has no `Field` or `Value`: the apiserver reports
+  one rejection, not a field list. It is likewise the only `Type` whose human-readable rendering carries no `[<type>]`
+  suffix, since that suffix is produced by the local validator's per-resource block formatter, which an admission
+  rejection never passes through.
 
 `ResourceID` and `ValidationFailures` are intentionally complementary: `ResourceID` anchors the failure to a specific
 batched input, while `ValidationFailures` enumerates every resource (the input itself plus any composed resources)
@@ -1346,9 +1786,12 @@ The label shown to a human is `WARNING`, not `INFO`, deliberately: an operator r
 `INFO: applying this diff will assume ownership` would under-weight it. The upstream *level* and the
 word presented to a user answer different questions.
 
-The CLI wraps the logger at *both* binding sites (`main()` and `verboseFlag.BeforeApply`). The
-`--verbose` flag rebinds the logger, so wrapping only in `main()` would silently drop the channel at
-exactly the verbosity where a user is asking for more output. `Info` is deliberately not forwarded to
+The CLI constructs the `WarningLogger` exactly once, in a memoized kong provider
+(`warningLoggerBindings` in `main.go`) that runs after flags are parsed and picks the wrapped logger
+from `--verbose` (a discarding logger by default, zap under `--verbose`). kong does not memoize
+providers itself, so the memo is load-bearing: without it each consumer would get its own instance and
+its own sink. The `logging.Logger` binding is derived from the `*WarningLogger` binding, so the two
+always resolve to the same instance. `Info` is deliberately not forwarded to
 the wrapped logger, so a `--verbose` run does not print each warning twice in two formats.
 
 **Identity and deduplication.** The sink keeps one entry per distinct `(message, context)` pair; a
@@ -1374,8 +1817,16 @@ one advisory permanently stderr-only, contradicting this section's own contract.
 therefore release resources immediately *before* rendering (`CleanupDetached`), on a context that keeps
 the run context's values but drops its cancellation (`context.WithoutCancel`), bounded by
 `CleanupTimeout`, so an expired `--timeout` cannot make teardown fail fast and report a container leak
-that is not real. (Ctrl+C is not covered: there is no signal handling, so an interrupt skips cleanup
-entirely; see #515.) The command's `defer` remains, and remains necessary: it
+that is not real. The same detachment is what makes teardown survive Ctrl+C (#515): `main()` calls
+controller-runtime's `signals.SetupSignalHandler()` once and passes its context down as the parent of
+the run's timeout context (`initializeAppContext` in `cmd_utils.go`). The first SIGINT or SIGTERM
+cancels that parent, so the run context fails with `context.Canceled`, while an expired `--timeout`
+fails with `context.DeadlineExceeded`; that is how the two are told apart (`diffprocessor.Interrupted`,
+evaluated before the run's own cancel, which also yields `Canceled`). The cancelled run still renders: both processors
+append an `errors[]` entry saying the run was interrupted, and the command reports the interruption in
+place of the cancelled calls it caused, exiting 130, which outranks every other exit code. A second
+signal makes the handler exit immediately with code 1, which may leave function containers behind;
+reaping containers whose owning run died is tracked in #525. The command's `defer` remains, and remains necessary: it
 covers the paths that return before any rendering happens (load failure, initialization failure,
 cancellation). `Cleanup` is idempotent, so running in both places is safe — the second call finds
 nothing to remove and raises nothing.
@@ -1389,7 +1840,27 @@ The client layer provides interfaces to interact with Kubernetes and Crossplane 
 
 #### 6.9.1 Kubernetes Clients
 
-- `ApplyClient`: Handles server-side dry-run apply
+- `ApplyClient`: Handles the two dry-run round-trips — `DryRunApply` (server-side apply under a given field owner, for a
+  resource that already exists) and `DryRunCreate` (`Create` with `dryRun=All` and `FieldOwnerDefault`, for an addition).
+  `DryRunCreate` takes no `fieldOwner`: a brand-new object has no `managedFields`, so `GetComposedFieldOwner` has nothing
+  to read. Its errors are wrapped with crossplane-runtime's `errors.Wrapf`, which implements `Unwrap` — load-bearing,
+  because callers discriminate outcomes with `apierrors.IsInvalid` / `IsForbidden` / `IsAlreadyExists` /
+  `IsInternalError` / `IsServiceUnavailable` / `IsTimeout`, all of which reach the apiserver's `APIStatus` through
+  `errors.As`.
+- `AccessChecker`: Answers `Can(ctx, gvk, namespace, verb) (allowed bool, reason string, err error)` by POSTing a
+  `SelfSubjectAccessReview` through the dynamic client (`authorization.k8s.io/v1`; no addition to `core.Clients`).
+  `SelfSubjectAccessReview` rather than `SubjectAccessReview` because `create` on `selfsubjectaccessreviews` is granted
+  to `system:authenticated` by default via the `system:basic-user` ClusterRole, so the check needs no permission of its
+  own; it also reflects the *whole* authorizer chain (RBAC, webhook, node), not only RBAC. `resourceAttributes` are
+  expressed in plural-resource terms, so the GVK is resolved through `TypeConverter` first (itself memoized). Answers are
+  memoized on `{gvr, namespace, verb}`; the mutex is released across the API call, so two goroutines racing a cold key
+  may both issue the review — benign, since they compute the same answer — which is preferred to holding a lock across
+  network I/O. Three failure modes are deliberately *not* read as denial-or-permission: an empty `verb` is a caller bug
+  and errors (asking about the verb `""` would come back denied and masquerade as a real RBAC limitation); a missing
+  `status.allowed` errors, since it is a required non-`omitempty` field of `SubjectAccessReviewStatus` and its absence
+  means no authorization answer was given at all; and a `status.evaluationError` forces `allowed = false` with the cause
+  folded into `reason`, because a wrongly-*allowed* answer converts an RBAC denial into a reported cluster rejection — a
+  false finding — whereas a wrongly-denied one only costs fidelity on one resource.
 - `ResourceClient`: Handles basic CRUD operations against the dynamic client
 - `SchemaClient`: Handles schema-related operations (fetching CRDs, scope detection)
 - `TypeConverter`: Handles GVK ↔ GVR resolution and resource-name lookup
@@ -1433,24 +1904,53 @@ The client layer provides interfaces to interact with Kubernetes and Crossplane 
 2. The `Loader` loads resources from files or stdin.
 3. `DiffProcessor.Initialize` loads required schemas.
 4. For each input XR or claim:
-    - The `DiffProcessor` resolves the matching composition (or, for `comp`, the proposed one supplied via the
-      `CompositionProvider`).
-    - For claim inputs, `resolveBackingXRForClaim` fetches the backing XR from the cluster if it exists; if the claim
-      is brand new, `synthesizeDummyBackingXRForNewClaim` produces a synthetic backing XR via upstream's
-      `ConvertClaimToXR` helper. The synthesized XR uses the XRD's authoritative `spec.names.kind`, pins the XR name to
-      the claim's name (cleaner diff output than the upstream default suffix), and carries a synthesized `spec.claimRef`
-      plus the claim's annotations and `crossplane.io/claim-name` / `crossplane.io/claim-namespace` labels. Rendering
-      then proceeds from the (real or synthesized) backing XR with merged Claim spec, producing composed resources with
-      correct `crossplane.io/composite` labels.
-    - If the XR already exists in the cluster, `ResourceManager.FetchObservedResources` walks its resource tree to
-      assemble the observed set that render is given. A failure here is fatal: downstream an empty observed set is
-      indistinguishable from "this XR genuinely has no composed resources yet", so continuing would report every
-      existing composed resource as a creation. The claim path applies the same rule to a claim's backing XR.
+    - The `CompositeResolver` (§6.4a) computes the effective composite: the input over its cluster copy (UID,
+      `compositionRef`, `compositionRevisionRef`, `compositionUpdatePolicy` where the input omits them) or, for a
+      claim, its backing XR with the claim's spec synced in. This runs first, because everything after it that reads
+      the composite's composition, revision or update policy must agree on them.
+    - For `comp`, `XRDiffOptions.RevisionName` is applied to the effective composite (never creating a ref), and the
+      result is defaulted by the strict `Defaulter` (§6.5a). Inheriting comes before defaulting, so a default never
+      overrides what the cluster holds.
+    - The `DiffProcessor` resolves the matching composition from that defaulted effective composite (or, for `comp`,
+      takes the proposed one supplied via the `CompositionProvider`). A `Manual` composite therefore resolves to the
+      revision it is pinned to, whether the pin is in the input or only in the cluster, and an XRD-defaulted `Manual`
+      policy applies to a new XR.
+    - The processor keeps three views of the XR. The **authored** XR is the input as written, plus a synthesized name
+      for a `generateName`-only XR and, for a nested XR, its cluster identity; it is never modified, and it is what is
+      validated and dry-run applied (for a claim, the claim itself). The **render** XR is the defaulted effective
+      composite (for a claim, its backing XR, never the claim); it is what render consumes. The **predicted** view is a
+      lenient-defaulted copy of an addition, used only where no apiserver result exists (§6.3.3). The UID matters
+      because render keeps an input UID and checks observed resources' controller references against it. Nothing
+      render adds to the XR is carried into the payload: render adds only `resourceRefs` and `status`, both of which
+      `cleanupForDiff` strips.
+    - For a claim, the backing XR is the one its `spec.resourceRef` names. A brand-new or unbound claim gets a synthetic
+      backing XR from upstream's `ConvertClaimToXR`, which uses the XRD's authoritative `spec.names.kind`, pins the XR
+      name to the claim's name (cleaner diff output than the upstream default suffix), and carries a synthesized
+      `spec.claimRef` plus the claim's annotations and `crossplane.io/claim-name` / `crossplane.io/claim-namespace`
+      labels. A `resourceRef` naming an XR that does not exist is synthesized the same way under the ref's name, with a
+      warning; any other error fetching the backing XR fails the diff. `syncClaimSpec` builds the backing XR's spec the
+      way the claim syncer does (§6.4a), and defaulting with the XR's CRD then restores the XR's defaults. Rendering from
+      the backing XR produces composed resources with correct `crossplane.io/composite` labels. Only the XR that render
+      consumes is defaulted with the XR's CRD. The claim is defaulted with its own CRD: by the apiserver on a dry run,
+      or by the lenient `Defaulter` when an addition is predicted locally. That CRD carries the XRD's user schema
+      defaults (crossplane-runtime `pkg/xcrd`, `genCrdVersion`, crd.go:206) plus the claim-only machinery defaults of
+      `CompositeResourceClaimSpecProps` (schemas.go:209), so it differs from the XR's (`CompositeResourceSpecProps`,
+      schemas.go:75): only the XR's CRD defaults `compositionUpdatePolicy`, and only the claim's defaults
+      `compositeDeletePolicy`. Defaulting a claim with its XR's CRD would therefore put fields in its payload that
+      applying the claim never adds. Conversely `syncClaimSpec` strips `compositeDeletePolicy` from the backing XR
+      only; the claim's payload keeps it.
+    - If the composed XR already exists in the cluster (for a claim, its backing XR),
+      `ResourceManager.FetchObservedResources` walks its resource tree to assemble the observed set that render is
+      given. A failure here is fatal: downstream an empty observed set is indistinguishable from "this XR genuinely has
+      no composed resources yet", so continuing would report every existing composed resource as a creation.
     - It calls `RenderToStableState` (see §9.5.6.2), which iteratively renders the composition pipeline, resolves any
       `RequiredResources` selectors via the `RequirementsProvider`, and re-renders until the requirement set stabilises
       (or the eventual-state criterion is met under `--eventual-state`).
-    - For any nested XRs in the rendered output, the `ResourceManager` fetches their observed state from the cluster to
-      preserve identity, then the processor recurses (subject to `--max-nested-depth`). The current nesting depth is
+    - For any nested XRs in the rendered output, the processor finds each one's cluster copy among the parent's
+      observed resources (falling back to a `ResourceManager` lookup), gives the nested XR that copy's name and
+      Crossplane labels (`preserveNestedXRIdentity`, which is all its payload needs), and recurses with the copy as the
+      nested XR's known cluster state, so the `CompositeResolver` inherits from it without fetching it again (subject to
+      `--max-nested-depth`). The current nesting depth is
       threaded through `diffSingleResourceInternal` into `ProcessNestedXRs`, which is what makes the bound effective:
       `--max-nested-depth N` permits N levels of nesting below the XR the user named, and a composed XR at level N+1 is
       a hard error rather than a silently truncated subtree. The bound is checked only for composed resources that are
@@ -1458,11 +1958,15 @@ The client layer provides interfaces to interact with Kubernetes and Crossplane 
       composes XR-A) has no stopping condition at all.
     - The processor strips namespaces from cluster-scoped composed resources (workaround for upstream
       `SetComposedResourceMetadata` blindly setting namespaces; see §9.5.6.3).
-    - The `SchemaValidator` validates the rendered resources and enforces scope constraints
-      (`ValidateScopeConstraints`).
-    - `DiffCalculator.CalculateNonRemovalDiffs` computes per-resource diffs for the entire (possibly nested) tree.
+    - The `SchemaValidator` validates the authored XR and the rendered composed resources, without modifying them, and
+      enforces scope constraints (`ValidateScopeConstraints`).
+    - `DiffCalculator.CalculateNonRemovalDiffs` computes per-resource diffs for the entire (possibly nested) tree, each
+      against the apiserver's view of the desired state — a dry-run apply for a resource that already exists, a dry-run
+      create for an addition (§6.3.2). A resource the dry run could not reach falls back to rendered output plus
+      locally predicted CRD defaults (§6.5a) and is marked; one the cluster refuses fails the XR.
     - Once the whole tree has been processed, `DiffCalculator.CalculateRemovedResourceDiffs` identifies resources that
-      exist in the cluster under this XR but no longer appear in the rendered set.
+      exist in the cluster under this XR but no longer appear in the rendered set. These are built straight from cluster
+      state and never carry a `DryRunInfo` — there is no desired state to preview.
     - The `DiffRenderer` (human-readable or structured) formats and displays the result.
 5. `Cleanup` tears down any function containers / networks created during rendering. This is essential — without it,
    Docker resources leak for the lifetime of the process.
@@ -1494,11 +1998,12 @@ The client layer provides interfaces to interact with Kubernetes and Crossplane 
       the composites discovered and the `FilterReason` breakdown from the drop step above cost nothing to establish, so
       they are reported before stopping (`AffectedResources` always, plus the individual `filtered` entries in
       `--resource` mode).
-    - Seed the predicted revision name onto a copy of every composite that would actually re-point — the kept set minus
-      those pinned by a `Manual` `compositionUpdatePolicy`, which adopt nothing — so that a composition template reading
-      `.observed.composite.resource.spec.crossplane.compositionRevisionRef.name` renders the value it would really get
-      rather than the stale one. Skipped, with a warning, when the name is not predictable (§6.2 step 3a). The seeded ref
-      itself is suppressed from the *displayed* diff (§6.8.2); anything derived from it is not.
+    - Pass the predicted revision name, as `XRDiffOptions.RevisionName`, for every composite that would actually
+      re-point — the kept set minus those pinned by a `Manual` `compositionUpdatePolicy`, which adopt nothing — so that a
+      composition template reading `.observed.composite.resource.spec.crossplane.compositionRevisionRef.name` renders
+      the value it would really get rather than the stale one. The processor applies it to the effective composite
+      (for a claim, the backing XR), so it reaches render but never the dry-run payload. Skipped, with a warning, when
+      the name is not predictable (§6.2 step 3a). Anything derived from the name is shown.
     - For each remaining XR, run the XR diff workflow above, using a `CompositionProvider` that returns the proposed
       composition for the affected XR's GVK and the cluster's composition for any nested XRs of a different kind.
 4. Aggregate per-XR results into a `CompDiffOutput` (composition diff + `XRImpact` list +
@@ -1559,6 +2064,11 @@ crossplane-diff xr --max-nested-depth 3 xr.yaml
 # Show steady-state diff for compositions that need multiple reconciliation cycles
 crossplane-diff xr --eventual-state xr.yaml
 
+# Only dry-run resources already in the cluster, so no 'create' permission is needed. Added
+# resources then show rendered output rather than what the apiserver would store, and say so
+# via dryRun.skipReason in structured output. Default is 'all'. Also on comp.
+crossplane-diff xr --dry-run-on=existing xr.yaml
+
 # Pin the crossplane render version (minimum v2.3.4) for reproducible diffs
 crossplane-diff xr --crossplane-version v2.3.4 xr.yaml
 
@@ -1606,6 +2116,10 @@ crossplane-diff comp updated-composition.yaml --resource production/my-xr --reso
 # Also include XRs whose update policy is Manual
 crossplane-diff comp updated-composition.yaml --include-manual
 
+# Collapse each changed composition's own diff to a single change-marker line, keeping the affected
+# XRs and their downstream diffs (human-readable output only; JSON/YAML keeps full detail)
+crossplane-diff comp updated-composition.yaml --minimize-composition
+
 # Evaluate affected composites even for a composition identical to the cluster's (skipped by
 # default, since it would render nothing differently)
 crossplane-diff comp unchanged-composition.yaml --analyze-on=always
@@ -1616,6 +2130,9 @@ crossplane-diff comp unchanged-composition.yaml --analyze-on=always
 # --analyze-on=always; passing both with conflicting values is an error.
 crossplane-diff comp updated-composition.yaml --analyze-on=spec-change
 ```
+
+`--dry-run-on` is declared on `CommonCmdFields`, so it is available on both subcommands with one declaration
+(`default:"all" enum:"existing,all"`, so an invalid value fails at parse time).
 
 Note that the `xr` subcommand has no `--namespace` flag: namespaced XRs carry their own namespace in YAML, and that
 namespace flows through render, validation, dry-run apply, and requirement resolution. The `comp` subcommand's
@@ -1779,13 +2296,6 @@ that process YAML resources.
 The command integrates with Crossplane CLI's structured validation API at `pkg/validate.SchemaValidate`:
 
 ```go
-// Apply CRD defaults explicitly (the structured API doesn't mutate inputs).
-for _, r := range resources {
-    if err := clixr.ApplyCRDDefaults(r.Object, r.GetAPIVersion(), *crd); err != nil {
-        return errors.Wrap(err, "apply CRD defaults")
-    }
-}
-
 // SchemaValidate is the structured-result API: it returns a
 // *ValidationResult that callers inspect directly.
 result, err := pkgvalidate.SchemaValidate(ctx, resources, v.schemaClient.GetAllCRDs())
@@ -1809,9 +2319,17 @@ This validation:
 - Shares validation rules with other Crossplane tools that consume the same `pkg/validate` package
 - Reduces code duplication and maintenance burden
 
-Defaulting is explicit (via `clixr.ApplyCRDDefaults`) rather than fused with validation as it was under the old
-`validate.SchemaValidation` API. This decouples the two concerns: defaulting can fail independently and is reported as
-a `FieldErrorTypeDefaulting` entry in the structured result.
+Validation does not default the caller's resources. `SchemaValidate` defaults its own copy before validating, and a
+defaulting failure is reported as a `FieldErrorTypeDefaulting` entry in the structured result rather than failing the
+call. Local defaulting is the `Defaulter`'s alone (§6.5a), via `clixr.ApplyCRDDefaults`: strictly for the XR render
+consumes, and leniently for an addition with no apiserver result.
+
+**What local defaulting does and does not cover**, since it defines the boundary the §6.3.2 dry-run create closes.
+Every dry-run payload is sent undefaulted, so wherever the apiserver is asked, all defaulting is the apiserver's. Where
+it is not asked, the lenient `Defaulter` supplies CRD `default:` values, and per its contract passes through any
+resource for which `IsCRDRequired` is false or whose CRD cannot be found: **built-in Kubernetes types**. Their
+defaults, and mutating-admission output for any type, are only observable by sending the object to the apiserver —
+which is what §6.3.2 does.
 
 #### 9.5.3 Resource Rendering
 
@@ -1858,6 +2376,36 @@ This shared functionality:
 - Identifies composed resources with the same logic as other commands
 - Uses the same parent-child relationship model
 - Enables accurate identification of resources to be removed
+
+The tree is not handed to render as-is. A tree walk descends into nested XRs, so it also reaches their children
+(the top XR's grandchildren), which are controlled by the nested XR rather than the one being rendered. The render
+binary from v2.3.4 onwards rejects any observed resource whose controller reference names a different XR ("has a
+controller ref but is not controlled by the XR"). So `FetchObservedResources` keeps only resources the rendered XR
+controls (`extractComposedResourcesFromTree`). This couples the observed set to the minimum render version
+(`MinCrossplaneRenderVersion`): an unscoped set would fail the render of any existing XR whose nested XRs already have composed
+resources in the cluster. Removal detection
+is unaffected, because it does its own unfiltered tree walk and never consumes the observed set.
+
+The upstream tree client never fails as a whole: `GetResourceTree` always returns the tree, and a child whose fetch
+failed is recorded as a node carrying an `Error` and an object holding only the GVK, name and namespace it was
+referenced by. Lacking the composition-resource-name annotation, such a node would otherwise be filtered out exactly
+like a resource that is legitimately not composed, and the diff would report a resource that exists as an addition
+(#495). `extractComposedResourcesFromTree` therefore checks each node's error before filtering:
+
+- `NotFound` on a descendant (matched with `apierrors.IsNotFound`, so through wrapping) means the resource really is
+  absent, typically deleted out of band. It is skipped and a warning naming it is raised through the advisory channel.
+  The warning's context omits the XR, so a nested XR's grandchild, walked once for the top XR and again for the nested
+  XR, collapses into one warning.
+- Any other node error (Forbidden, timeout, transport) fails `FetchObservedResources` with an error naming the
+  resource and wrapping the cause. Callers already treat that as fatal for the XR; for `comp`, and for `xr` with several
+  inputs, the other XRs are still diffed.
+- An error on the root fails it whatever the type, `NotFound` included. The root is the XR handed to the tree client,
+  not something it fetched, so an error there means the tree is unusable, and skipping it would leave the empty
+  observed set this whole check exists to rule out.
+
+The removal walk does not repeat the check. It runs only for an XR whose observed set was fetched first from the same
+live tree, so a non-`NotFound` node error has already failed the diff, and a `NotFound` node is correctly not a
+removal: the resource is already gone.
 
 #### 9.5.5 Benefits of Component Reuse
 
@@ -1992,6 +2540,14 @@ been removed.)
     least-privilege implementations in restricted environments.
 13. **Function Container Reuse Across Invocations**: The current `CachedFunctionProvider` reuses containers across XRs
     in a single run. A daemon-mode could reuse them across runs.
+14. **Higher-Fidelity Local Defaulting**: Where an addition gets no apiserver result, the lenient `Defaulter` (§6.5a)
+    applies CRD `default:` values only. Conversion of a multi-version CRD through its storage version (#528) can make
+    that prediction wrong rather than merely incomplete.
+15. **Fuller Claim Sync**: `syncClaimSpec` (§6.4a) mirrors the claim syncer's spec rules but not two others. An XRD's
+    `enforcedCompositionRef` stops the claim's `compositionRef` from being propagated, and the syncer also copies the
+    claim's labels and annotations (minus `*.kubernetes.io` keys) onto the backing XR. An existing backing XR is
+    rendered with the labels and annotations it has in the cluster, so a template reading one the claim has just
+    changed sees the old value.
 
 These enhancements would expand the utility of the Diff command and make it more accessible to all user personas.
 
@@ -2019,17 +2575,21 @@ cmd/
 │   ├── cmd_utils.go               # Shared CommonCmdFields → ProcessorOption helpers
 │   ├── app_context.go             # AppContext: cluster client initialization
 │   ├── diffprocessor/             # DiffProcessor, CompDiffProcessor, calculator, validator,
-│   │                              #   resource manager, requirements provider, function provider,
+│   │                              #   defaulter, resource manager, composite resolver,
+│   │                              #   requirements provider, function provider,
 │   │                              #   WarningLogger (advisory channel)
 │   ├── client/
-│   │   ├── kubernetes/            # ApplyClient, ResourceClient, SchemaClient, TypeConverter
+│   │   ├── kubernetes/            # apply_client.go (DryRunApply / DryRunCreate),
+│   │   │                          #   access_client.go (AccessChecker, SSAR-backed),
+│   │   │                          #   ResourceClient, SchemaClient, TypeConverter
 │   │   └── crossplane/            # Composition*, Definition, Environment, Function,
 │   │                              #   Credential, ResourceTree clients
 │   ├── renderer/                  # DiffRenderer, CompDiffRenderer, structured (JSON/YAML) renderers
 │   ├── ref/                       # Composite-ref parsing for `comp --resource`
 │   ├── kubecfg/                   # kubeconfig resolution helpers
-│   ├── types/                     # Shared types (CompositionProvider, etc.)
+│   ├── types/                     # Shared types (CompositionProvider, XRDiffOptions, etc.)
 │   ├── testutils/                 # Mock builders, structured-assertion helpers used by tests
+│   │   └── envtestreaper/         # Kills envtest servers orphaned by earlier test runs
 │   └── versioncmd/                # `version` subcommand
 ```
 

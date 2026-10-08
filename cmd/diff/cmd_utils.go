@@ -30,9 +30,26 @@ import (
 	"github.com/crossplane/crossplane-runtime/v2/pkg/logging"
 )
 
-// initializeAppContext initializes the application context with timeout and error handling.
-func initializeAppContext(timeout time.Duration, appCtx *AppContext, log logging.Logger) (context.Context, context.CancelFunc, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+// interruptedRunResult reports an interrupted run as such: when the run was interrupted (see
+// diffprocessor.Interrupted) it returns the interruption as the run's error and sets the matching exit
+// code, replacing whatever the run produced (mostly the cancelled calls the interruption caused).
+// Otherwise err is returned as is. It must be called before the run's own cancel, which would
+// otherwise read as an interrupt.
+func interruptedRunResult(ctx context.Context, err error, exitCode *ExitCode) error {
+	if !dp.Interrupted(ctx) {
+		return err
+	}
+
+	exitCode.Code = dp.ExitCodeInterrupted
+
+	return dp.ErrInterrupted
+}
+
+// initializeAppContext initializes the application context with timeout and error handling. sigCtx is
+// the signal context main() gets from SetupSignalHandler: a SIGINT or SIGTERM cancels it, and with it
+// the run context, so the run stops and its deferred cleanup still runs.
+func initializeAppContext(sigCtx context.Context, timeout time.Duration, appCtx *AppContext, log logging.Logger) (context.Context, context.CancelFunc, error) {
+	ctx, cancel := context.WithTimeout(sigCtx, timeout)
 	if err := appCtx.Initialize(ctx, log); err != nil {
 		cancel()
 		return nil, nil, errors.Wrap(err, "cannot initialize client")
@@ -56,6 +73,7 @@ func defaultProcessorOptions(fields CommonCmdFields) []dp.ProcessorOption {
 		dp.WithMaxRenderIterations(fields.MaxIterations),
 		dp.WithEventualState(fields.EventualState),
 		dp.WithIgnorePaths(fields.IgnorePaths),
+		dp.WithDryRunOn(dp.DryRunOn(fields.DryRunOn)),
 	}
 
 	// Add output format option

@@ -1,0 +1,12 @@
+# resources/pinned-claim/existing-manual.yaml's claim as its author keeps it, with coolField changed.
+# Like the cluster copy it names no revision: the pin is the backing XR's.
+apiVersion: pinned.diff.example.org/v1alpha1
+kind: Pinned
+metadata:
+  name: manual-claim
+  namespace: existing-namespace
+spec:
+  coolField: modified-value
+  compositionUpdatePolicy: Manual
+  compositionRef:
+    name: xpinneds.pinned.diff.example.org

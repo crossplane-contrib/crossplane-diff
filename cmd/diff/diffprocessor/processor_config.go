@@ -36,6 +36,27 @@ const (
 	AnalyzeOnAlways AnalyzeOn = "always"
 )
 
+// DryRunOn selects which resources are round-tripped through the apiserver to compute their
+// post-apply form. Like AnalyzeOn it is a depth/cost knob: every resource dry-run costs one
+// apiserver round-trip and requires a permission, and a resource left un-dry-run is marked with a
+// DryRunInfo so "we did not check" stays distinguishable from "we checked and it matches".
+type DryRunOn string
+
+const (
+	// DryRunOnExisting dry-runs only resources that already exist in the cluster, leaving additions
+	// as the render pipeline produced them plus locally predicted CRD defaults (see Defaulter). This
+	// was the only behaviour before crossplane-diff#334. It needs no create permission, and costs one
+	// round-trip fewer per added resource.
+	DryRunOnExisting DryRunOn = "existing"
+
+	// DryRunOnAll additionally dry-run creates added resources, so their diffs pick up
+	// apiserver-side defaulting and mutating admission — neither of which the local Defaulter can
+	// predict for a built-in type, and neither of which it can predict at all for admission. The
+	// default. Where the create is not permitted, the resource degrades to rendered output plus
+	// locally predicted CRD defaults, and says so rather than failing the run.
+	DryRunOnAll DryRunOn = "all"
+)
+
 // ChangeScope is how much of a composition differs from its in-cluster version, in terms of what
 // Crossplane hashes into the composition's identity (see Composition.Hash()).
 type ChangeScope string
@@ -118,6 +139,10 @@ type ProcessorConfig struct {
 	// Zero value means AnalyzeOnAnyChange, matching the CLI default.
 	AnalyzeOn AnalyzeOn
 
+	// DryRunOn selects which resources are verified against the apiserver. Zero value means
+	// DryRunOnAll, matching the CLI default.
+	DryRunOn DryRunOn
+
 	// EventualState enables iterative simulation to show eventual state after all reconciliation
 	// cycles complete. Useful with function-sequencer which hides later stage resources.
 	EventualState bool
@@ -189,8 +214,12 @@ type ComponentFactories struct {
 	// SchemaValidator creates a SchemaValidator
 	SchemaValidator func(schema k8.SchemaClient, resource k8.ResourceClient, def xp.DefinitionClient, logger logging.Logger) SchemaValidator
 
+	// Defaulter creates a Defaulter with the given policy. The processor makes two: a strict one for the
+	// XR it renders, and a lenient one the DiffCalculator uses to predict additions.
+	Defaulter func(schema k8.SchemaClient, def xp.DefinitionClient, policy DefaultingPolicy) Defaulter
+
 	// DiffCalculator creates a DiffCalculator
-	DiffCalculator func(apply k8.ApplyClient, tree xp.ResourceTreeClient, resourceManager ResourceManager, logger logging.Logger, diffOptions renderer.DiffOptions) DiffCalculator
+	DiffCalculator func(apply k8.ApplyClient, access k8.AccessChecker, tree xp.ResourceTreeClient, resourceManager ResourceManager, logger logging.Logger, diffOptions renderer.DiffOptions, dryRunOn DryRunOn, predictor Defaulter) DiffCalculator
 
 	// DiffRenderer creates a DiffRenderer
 	DiffRenderer func(logger logging.Logger, diffOptions renderer.DiffOptions) renderer.DiffRenderer
@@ -269,6 +298,16 @@ func WithAnalyzeOn(analyzeOn AnalyzeOn) ProcessorOption {
 	return func(config *ProcessorConfig) {
 		if analyzeOn != "" {
 			config.AnalyzeOn = analyzeOn
+		}
+	}
+}
+
+// WithDryRunOn sets which resources are round-tripped through the apiserver. An empty value leaves
+// the config's default in place, matching WithAnalyzeOn.
+func WithDryRunOn(dryRunOn DryRunOn) ProcessorOption {
+	return func(config *ProcessorConfig) {
+		if dryRunOn != "" {
+			config.DryRunOn = dryRunOn
 		}
 	}
 }
@@ -399,8 +438,15 @@ func WithSchemaValidatorFactory(factory func(k8.SchemaClient, k8.ResourceClient,
 	}
 }
 
+// WithDefaulterFactory sets the Defaulter factory function.
+func WithDefaulterFactory(factory func(k8.SchemaClient, xp.DefinitionClient, DefaultingPolicy) Defaulter) ProcessorOption {
+	return func(config *ProcessorConfig) {
+		config.Factories.Defaulter = factory
+	}
+}
+
 // WithDiffCalculatorFactory sets the DiffCalculator factory function.
-func WithDiffCalculatorFactory(factory func(k8.ApplyClient, xp.ResourceTreeClient, ResourceManager, logging.Logger, renderer.DiffOptions) DiffCalculator) ProcessorOption {
+func WithDiffCalculatorFactory(factory func(k8.ApplyClient, k8.AccessChecker, xp.ResourceTreeClient, ResourceManager, logging.Logger, renderer.DiffOptions, DryRunOn, Defaulter) DiffCalculator) ProcessorOption {
 	return func(config *ProcessorConfig) {
 		config.Factories.DiffCalculator = factory
 	}
@@ -467,6 +513,10 @@ func (c *ProcessorConfig) SetDefaultFactories() {
 
 	if c.Factories.SchemaValidator == nil {
 		c.Factories.SchemaValidator = NewSchemaValidator
+	}
+
+	if c.Factories.Defaulter == nil {
+		c.Factories.Defaulter = NewDefaulter
 	}
 
 	if c.Factories.DiffCalculator == nil {

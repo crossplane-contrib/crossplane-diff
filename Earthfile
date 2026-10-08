@@ -37,6 +37,28 @@ fetch-crossplane-cluster:
     SAVE ARTIFACT crossplane/cluster/${CROSSPLANE_IMAGE_TAG} AS LOCAL cluster/${CROSSPLANE_IMAGE_TAG}
   END
 
+# fetch-crossplane-crds-gomod fetches Crossplane's CRDs at the crossplane/crossplane/v2 version go.mod
+# selects, for unit and integration tests, and saves them to the version-independent cluster/gomod/crds.
+# Tests then install CRDs that match the xcrd and other Crossplane code they run, and a dependency bump
+# moves the CRDs with it. e2e is different: it runs a Crossplane image, so +e2e fetches by image tag.
+#
+# No +patch-crds: Crossplane applies cluster/crd-patches before committing cluster/crds, so a release
+# tag's CRDs already carry the patch (verified for v2.4.2's DeploymentRuntimeConfig CRD).
+fetch-crossplane-crds-gomod:
+  FROM +go-modules
+  # The go binary resolves the version, so it is the one minimal version selection picks, not a parse of
+  # go.mod. A replace would make that version say nothing about which source is built, so refuse one.
+  RUN replaced=$(go list -m -f '{{if .Replace}}{{.Replace.Path}} {{.Replace.Version}}{{end}}' github.com/crossplane/crossplane/v2) \
+      && if [ -n "$replaced" ]; then \
+           echo "go.mod replaces github.com/crossplane/crossplane/v2 with $replaced; cannot pick the matching crossplane git revision" >&2; \
+           exit 1; \
+         fi
+  # A release resolves to its git tag. A pseudo-version (vX.Y.Z-yyyymmddhhmmss-abcdef123456) ends in a
+  # commit hash, which +fetch-crossplane-cluster's full-clone fallback checks out.
+  ARG CROSSPLANE_GOMOD_REVISION=$(go list -m -f '{{.Version}}' github.com/crossplane/crossplane/v2 | sed -E 's/^.*-[0-9]{14}-([0-9a-f]{12})$/\1/')
+  COPY (+fetch-crossplane-cluster/${CROSSPLANE_GOMOD_REVISION} --CROSSPLANE_IMAGE_TAG=${CROSSPLANE_GOMOD_REVISION} --SAVE_LOCALLY=false) cluster/gomod
+  SAVE ARTIFACT cluster/gomod/crds AS LOCAL cluster/gomod/crds
+
 # reviewable checks that a branch is ready for review. Run it before opening a
 # pull request. It will catch a lot of the things our CI workflow will catch.
 reviewable:
@@ -266,18 +288,17 @@ go-build-e2e:
   RUN go test -c -o e2e ./test/e2e
   SAVE ARTIFACT e2e
 
-# go-test runs Go unit tests.
+# go-test runs Go unit and integration tests. They install Crossplane's CRDs at the version go.mod
+# pins (+fetch-crossplane-crds-gomod), not the image-tag fetch +e2e uses.
 go-test:
   ARG KUBE_VERSION=1.30.3
-  ARG CROSSPLANE_IMAGE_TAG=main
-  BUILD +fetch-crossplane-cluster
-  BUILD +patch-crds
+  BUILD +fetch-crossplane-crds-gomod
   FROM +go-modules
   DO github.com/earthly/lib+INSTALL_DIND
   CACHE --id go-build --sharing shared /root/.cache/go-build
   COPY --dir cmd/ internal/ .
-  # Fetch the cluster directory from the crossplane repo at the specified tag
-  COPY (+fetch-crossplane-cluster/${CROSSPLANE_IMAGE_TAG} --CROSSPLANE_IMAGE_TAG=${CROSSPLANE_IMAGE_TAG}) cluster/${CROSSPLANE_IMAGE_TAG}
+  # Same args as the BUILD above, so both reach one +fetch-crossplane-crds-gomod (and one +go-modules).
+  COPY +fetch-crossplane-crds-gomod/crds cluster/gomod/crds
   COPY --dir +envtest-setup/envtest /usr/local/kubebuilder/bin
   # a bit dirty but preload the cache with the images we use in IT (found in functions.yaml and functions-sha256.yaml)
   # Note: functions-sha256.yaml uses digest reference for function-go-templating which resolves to the same image as :v0.11.0
@@ -461,7 +482,7 @@ ci-push-build-artifacts:
   ARG ARTIFACTS_DIR=_output
   ARG BUCKET_RELEASES=crossplane.releases
   ARG AWS_DEFAULT_REGION
-  FROM amazon/aws-cli:2.36.49
+  FROM amazon/aws-cli:2.37.9
   COPY --dir ${ARTIFACTS_DIR} artifacts
   RUN --push --secret=AWS_ACCESS_KEY_ID --secret=AWS_SECRET_ACCESS_KEY aws s3 sync --delete --only-show-errors artifacts s3://${BUCKET_RELEASES}/build/${BUILD_DIR}/${CROSSPLANE_VERSION}
 
@@ -477,7 +498,7 @@ ci-promote-build-artifacts:
   ARG BUCKET_CHARTS=crossplane.charts
   ARG PRERELEASE=false
   ARG AWS_DEFAULT_REGION
-  FROM amazon/aws-cli:2.36.49
+  FROM amazon/aws-cli:2.37.9
   RUN --secret=AWS_ACCESS_KEY_ID --secret=AWS_SECRET_ACCESS_KEY aws s3 sync --only-show-errors s3://${BUCKET_RELEASES}/build/${BUILD_DIR}/${CROSSPLANE_VERSION}/charts repo
   RUN --push --secret=AWS_ACCESS_KEY_ID --secret=AWS_SECRET_ACCESS_KEY aws s3 sync --delete --only-show-errors s3://${BUCKET_RELEASES}/build/${BUILD_DIR}/${CROSSPLANE_VERSION} s3://${BUCKET_RELEASES}/${CHANNEL}/${CROSSPLANE_VERSION}
   IF [ "${PRERELEASE}" = "false" ]

@@ -18,7 +18,9 @@ limitations under the License.
 package main
 
 import (
+	"context"
 	"fmt"
+	"io"
 	"os"
 	"time"
 
@@ -31,6 +33,7 @@ import (
 	"k8s.io/client-go/rest"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
+	"sigs.k8s.io/controller-runtime/pkg/manager/signals"
 
 	"github.com/crossplane/crossplane-runtime/v2/pkg/logging"
 )
@@ -95,7 +98,7 @@ func (f *FunctionCredentials) Decode(ctx *kong.DecodeContext) error {
 type CommonCmdFields struct {
 	// Configuration options
 	Context                  KubeContext         `help:"Kubernetes context to use (defaults to current context)."                                   name:"context"`
-	Output                   string              `default:"diff"                                                                                    enum:"diff,json,yaml"                                                                                                                                        help:"Output format (diff, json, or yaml)." name:"output" short:"o"`
+	Output                   string              `default:"diff"                                                                                    enum:"diff,json,yaml"                                                                                                                                        help:"Output format (diff, json, or yaml)."                                                                                                                                                                                                                                                  name:"output"     short:"o"`
 	NoColor                  bool                `help:"Disable colorized output."                                                                  name:"no-color"`
 	Compact                  bool                `help:"Show compact diffs with minimal context."                                                   name:"compact"`
 	MaxNestedDepth           int                 `default:"10"                                                                                      help:"Maximum depth for nested XR recursion."                                                                                                                name:"max-nested-depth"`
@@ -105,7 +108,8 @@ type CommonCmdFields struct {
 	FunctionCredentials      FunctionCredentials `help:"A YAML file or directory of YAML files specifying Secret credentials to pass to Functions." name:"function-credentials"                                                                                                                                  placeholder:"PATH"`
 	FunctionRegistryOverride string              `help:"Override the registry for all function images (e.g., 'my-company.registry.io')."            name:"function-registry-override"`
 	EventualState            bool                `default:"false"                                                                                   help:"Show eventual state after all reconciliation cycles complete (useful with function-sequencer)."                                                        name:"eventual-state"`
-	MaxRecvMessageSize       int                 `env:"MAX_RECV_MESSAGE_SIZE"                                                       help:"Max gRPC message size (MB) for render function containers (4MB if undefined)."                                                                         name:"max-recv-message-size"`
+	MaxRecvMessageSize       int                 `env:"MAX_RECV_MESSAGE_SIZE"                                                                       help:"Max gRPC message size (MB) for render function containers (4MB if undefined)."                                                                         name:"max-recv-message-size"`
+	DryRunOn                 string              `default:"all"                                                                                     enum:"existing,all"                                                                                                                                          help:"Which resources to verify against the apiserver with a dry run: 'all' also dry-run creates added resources so their diffs include server-side defaulting and admission (needs the 'create' verb; degrades per-resource without it), 'existing' only resources already in the cluster." name:"dry-run-on"`
 
 	// CrossplaneVersion / CrossplaneImage / CrossplaneRenderBinary select the
 	// crossplane render backend. They are mutually exclusive (kong "xor"
@@ -154,19 +158,41 @@ func (c *CommonCmdFields) GetKubeContext() KubeContext {
 	return c.Context
 }
 
-func (v verboseFlag) BeforeApply(ctx *kong.Context) error { //nolint:unparam // BeforeApply requires this signature.
-	zapLogger := zap.New(zap.UseDevMode(true))
-	log.SetLogger(zapLogger)
-	logger := logging.NewLogrLogger(zapLogger)
+// warningLoggerBindings returns the kong options that provide the *dp.WarningLogger and its
+// logging.Logger view. The WarningLogger is what makes non-fatal advisories visible: Info calls
+// become stderr warnings and are collected for structured output. It wraps a logger that discards
+// Debug tracing, or a zap logger under --verbose.
+//
+// kong calls a provider every time a dependency is requested, so the provider memoizes its result:
+// one instance (and therefore one sink) serves every consumer. The closure scopes that cache to one
+// parser rather than the process. The logging.Logger binding is derived from the WarningLogger, so the
+// two can never resolve to different instances. c.Verbose is read when the provider first runs, which
+// is after flags are applied.
+func warningLoggerBindings(c *cli, stderr io.Writer) []kong.Option {
+	var inst *dp.WarningLogger
 
-	// Re-wrap: this rebinding replaces the logger bound in main(), so without wrapping here --verbose
-	// would silently discard the warning channel — warnings would stop reaching stderr and structured
-	// output at exactly the verbosity where a user is trying to see more, not less.
-	warnings := dp.NewWarningLogger(logger, os.Stderr)
-	ctx.BindTo(warnings, (*logging.Logger)(nil))
-	ctx.Bind(warnings)
+	provide := func() *dp.WarningLogger {
+		if inst != nil {
+			return inst
+		}
 
-	return nil
+		wrapped := logging.NewNopLogger()
+
+		if c.Verbose {
+			zapLogger := zap.New(zap.UseDevMode(true))
+			log.SetLogger(zapLogger)
+			wrapped = logging.NewLogrLogger(zapLogger)
+		}
+
+		inst = dp.NewWarningLogger(wrapped, stderr)
+
+		return inst
+	}
+
+	return []kong.Option{
+		kong.BindToProvider(provide),
+		kong.BindToProvider(func(w *dp.WarningLogger) logging.Logger { return w }),
+	}
 }
 
 // BeforeApply binds the CommonCmdFields pointer via the ContextProvider interface.
@@ -196,21 +222,22 @@ type cli struct {
 func main() {
 	log.SetLogger(logr.Discard())
 
-	// The base logger discards Debug tracing unless --verbose replaces it. Wrapping it in a
-	// WarningLogger is what makes non-fatal advisories visible at default verbosity: Info calls become
-	// stderr warnings and are collected for structured output, while Debug still goes nowhere. Both
-	// the *WarningLogger and the logging.Logger view of it are bound, so commands can request either.
-	warnings := dp.NewWarningLogger(logging.NewNopLogger(), os.Stderr)
 	exitCode := &ExitCode{Code: dp.ExitCodeSuccess} // Default to success
+	c := &cli{}
 
-	ctx := kong.Parse(&cli{},
+	// The one and only call: SetupSignalHandler panics if called twice. The first SIGINT/SIGTERM
+	// cancels sigCtx, which stops the run and lets cleanup release its function containers; a second
+	// exits immediately with code 1, which may leave containers behind.
+	sigCtx := signals.SetupSignalHandler()
+
+	// The *dp.WarningLogger and its logging.Logger view come first; see warningLoggerBindings.
+	opts := append(warningLoggerBindings(c, os.Stderr),
 		kong.Name("crossplane-diff"),
 		kong.Description("A command line tool for diffing  Crossplane resources."),
 		// Binding a variable to kong context makes it available to all commands
 		// at runtime.
-		kong.BindTo(warnings, (*logging.Logger)(nil)),
-		kong.Bind(warnings),
 		kong.Bind(exitCode), // Bind exit code state
+		kong.BindTo(sigCtx, (*context.Context)(nil)),
 		// Providers are resolved lazily when dependencies are needed.
 		// kubecfg.Provide depends on kubecfg.Provider (bound in CommonCmdFields.BeforeApply)
 		// provideAppContext depends on *rest.Config and logging.Logger
@@ -221,7 +248,10 @@ func main() {
 			Compact:        true,
 			WrapUpperBound: 80,
 		}),
-		kong.UsageOnError())
+		kong.UsageOnError(),
+	)
+
+	ctx := kong.Parse(c, opts...)
 	err := ctx.Run()
 	// Handle error output - commands set exitCode.Code based on their results
 	if err != nil {

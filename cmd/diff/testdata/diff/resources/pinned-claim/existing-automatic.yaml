@@ -1,0 +1,54 @@
+# An Automatic claim bound to a backing XR tracking revision 2, the latest, together with that XR's
+# composed resource as revision 2 rendered it. The claim carries the ref the claim syncer copies back
+# from its XR under Automatic.
+apiVersion: pinned.diff.example.org/v1alpha1
+kind: Pinned
+metadata:
+  name: automatic-claim
+  namespace: existing-namespace
+spec:
+  coolField: existing-value
+  compositionUpdatePolicy: Automatic
+  compositionRef:
+    name: xpinneds.pinned.diff.example.org
+  compositionRevisionRef:
+    name: xpinneds.pinned.diff.example.org-rev2
+  resourceRef:
+    apiVersion: pinned.diff.example.org/v1alpha1
+    kind: XPinned
+    name: automatic-claim-a1b2c
+---
+apiVersion: pinned.diff.example.org/v1alpha1
+kind: XPinned
+metadata:
+  name: automatic-claim-a1b2c
+  labels:
+    crossplane.io/claim-name: automatic-claim
+    crossplane.io/claim-namespace: existing-namespace
+spec:
+  coolField: existing-value
+  compositionUpdatePolicy: Automatic
+  compositionRef:
+    name: xpinneds.pinned.diff.example.org
+  compositionRevisionRef:
+    name: xpinneds.pinned.diff.example.org-rev2
+  claimRef:
+    apiVersion: pinned.diff.example.org/v1alpha1
+    kind: Pinned
+    name: automatic-claim
+    namespace: existing-namespace
+---
+apiVersion: nop.example.org/v1alpha1
+kind: XDownstreamResource
+metadata:
+  name: automatic-claim-a1b2c
+  annotations:
+    crossplane.io/composition-resource-name: nop-resource
+    gotemplating.fn.crossplane.io/composition-resource-name: nop-resource
+  labels:
+    crossplane.io/composite: automatic-claim-a1b2c
+    crossplane.io/claim-name: automatic-claim
+    crossplane.io/claim-namespace: existing-namespace
+spec:
+  forProvider:
+    configData: v2:xpinneds.pinned.diff.example.org-rev2:existing-value

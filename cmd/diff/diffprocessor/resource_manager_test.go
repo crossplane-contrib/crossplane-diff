@@ -7,9 +7,11 @@ import (
 	"strings"
 	"testing"
 
+	dt "github.com/crossplane-contrib/crossplane-diff/cmd/diff/renderer/types"
 	tu "github.com/crossplane-contrib/crossplane-diff/cmd/diff/testutils"
 	"github.com/crossplane/cli/v2/cmd/crossplane/common/resource"
 	gcmp "github.com/google/go-cmp/cmp"
+	"github.com/google/go-cmp/cmp/cmpopts"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	un "k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -1138,6 +1140,12 @@ func TestDefaultResourceManager_FetchObservedResources(t *testing.T) {
 		}).
 		Build()
 
+	// Named causes, so each failing case asserts that the error it got wraps exactly this one.
+	errTreeFetch := errors.New("failed to get tree")
+	errChildForbidden := apierrors.NewForbidden(schema.GroupResource{Group: "example.org", Resource: "managedresources"}, "resource-denied", errors.New("RBAC: access denied"))
+	errTransport := errors.New("connection reset by peer")
+	errRootNotFound := apierrors.NewNotFound(schema.GroupResource{Group: "example.org", Resource: "xrs"}, "test-xr")
+
 	// Create a resource without the composition-resource-name annotation (should be filtered out)
 	resourceWithoutAnnotation := tu.NewResource("example.org/v1", "OtherResource", "other-resource").
 		WithSpecField("field", "other").
@@ -1148,7 +1156,8 @@ func TestDefaultResourceManager_FetchObservedResources(t *testing.T) {
 		xr              *un.Unstructured
 		wantCount       int
 		wantResourceIDs []string // Names of resources we expect to find
-		wantErr         bool
+		wantWarnings    []dt.OutputWarning
+		wantErr         error // matched with errors.Is, so a wrapped cause matches
 	}{
 		"SuccessfullyFetchesFlatComposedResources": {
 			setupTreeClient: func() *tu.MockResourceTreeClient {
@@ -1162,7 +1171,6 @@ func TestDefaultResourceManager_FetchObservedResources(t *testing.T) {
 			xr:              testXR,
 			wantCount:       2,
 			wantResourceIDs: []string{"resource-1", "resource-2"},
-			wantErr:         false,
 		},
 		"SuccessfullyFetchesNestedResources": {
 			setupTreeClient: func() *tu.MockResourceTreeClient {
@@ -1172,62 +1180,30 @@ func TestDefaultResourceManager_FetchObservedResources(t *testing.T) {
 				//   -> nestedXR
 				//        -> nestedComposedResource
 				return tu.NewMockResourceTreeClient().
-					WithGetResourceTree(func(_ context.Context, _ *un.Unstructured) (*resource.Resource, error) {
-						return &resource.Resource{
-							Unstructured: *testXR.DeepCopy(),
-							Children: []*resource.Resource{
-								{
-									Unstructured: *composedResource1.DeepCopy(),
-									Children:     []*resource.Resource{},
-								},
-								{
-									Unstructured: *nestedXR.DeepCopy(),
-									Children: []*resource.Resource{
-										{
-											Unstructured: *nestedComposedResource.DeepCopy(),
-											Children:     []*resource.Resource{},
-										},
-									},
-								},
-							},
-						}, nil
-					}).
+					WithSuccessfulResourceTreeFetch(tu.NewTreeNode(testXR).WithChildren(
+						tu.NewTreeNode(composedResource1),
+						tu.NewTreeNode(nestedXR).WithChildren(tu.NewTreeNode(nestedComposedResource)),
+					).Build()).
 					Build()
 			},
 			xr:              testXR,
 			wantCount:       3, // composedResource1, nestedXR, nestedComposedResource
 			wantResourceIDs: []string{"resource-1", "nested-xr", "nested-resource-1"},
-			wantErr:         false,
 		},
 		"FiltersOutResourcesWithoutAnnotation": {
 			setupTreeClient: func() *tu.MockResourceTreeClient {
 				return tu.NewMockResourceTreeClient().
-					WithGetResourceTree(func(_ context.Context, _ *un.Unstructured) (*resource.Resource, error) {
-						return &resource.Resource{
-							Unstructured: *testXR.DeepCopy(),
-							Children: []*resource.Resource{
-								{
-									Unstructured: *composedResource1.DeepCopy(),
-									Children:     []*resource.Resource{},
-								},
-								{
-									// This resource lacks the annotation and should be filtered out
-									Unstructured: *resourceWithoutAnnotation.DeepCopy(),
-									Children:     []*resource.Resource{},
-								},
-								{
-									Unstructured: *composedResource2.DeepCopy(),
-									Children:     []*resource.Resource{},
-								},
-							},
-						}, nil
-					}).
+					WithSuccessfulResourceTreeFetch(tu.NewTreeNode(testXR).WithChildren(
+						tu.NewTreeNode(composedResource1),
+						// This resource lacks the annotation and should be filtered out
+						tu.NewTreeNode(resourceWithoutAnnotation),
+						tu.NewTreeNode(composedResource2),
+					).Build()).
 					Build()
 			},
 			xr:              testXR,
 			wantCount:       2, // Only composedResource1 and composedResource2
 			wantResourceIDs: []string{"resource-1", "resource-2"},
-			wantErr:         false,
 		},
 		"ReturnsEmptySliceWhenNoComposedResources": {
 			setupTreeClient: func() *tu.MockResourceTreeClient {
@@ -1238,33 +1214,28 @@ func TestDefaultResourceManager_FetchObservedResources(t *testing.T) {
 			xr:              testXR,
 			wantCount:       0,
 			wantResourceIDs: []string{},
-			wantErr:         false,
 		},
 		"ReturnsEmptySliceWhenOnlyRootXRInTree": {
 			setupTreeClient: func() *tu.MockResourceTreeClient {
+				// Tree with only root (XR itself has no composition-resource-name)
 				return tu.NewMockResourceTreeClient().
-					WithGetResourceTree(func(_ context.Context, _ *un.Unstructured) (*resource.Resource, error) {
-						// Tree with only root (XR itself has no composition-resource-name)
-						return &resource.Resource{
-							Unstructured: *testXR.DeepCopy(),
-							Children:     []*resource.Resource{},
-						}, nil
-					}).
+					WithSuccessfulResourceTreeFetch(tu.NewTreeNode(testXR).Build()).
 					Build()
 			},
 			xr:              testXR,
 			wantCount:       0,
 			wantResourceIDs: []string{},
-			wantErr:         false,
 		},
 		"ReturnsErrorWhenTreeClientFails": {
 			setupTreeClient: func() *tu.MockResourceTreeClient {
 				return tu.NewMockResourceTreeClient().
-					WithFailedResourceTreeFetch("failed to get tree").
+					WithGetResourceTree(func(context.Context, *un.Unstructured) (*resource.Resource, error) {
+						return nil, errTreeFetch
+					}).
 					Build()
 			},
 			xr:      testXR,
-			wantErr: true,
+			wantErr: errTreeFetch,
 		},
 		"FiltersGrandchildrenControlledByNestedXR": {
 			// Regression for the "has a controller ref but is not controlled by
@@ -1309,26 +1280,10 @@ func TestDefaultResourceManager_FetchObservedResources(t *testing.T) {
 					Build()
 
 				return tu.NewMockResourceTreeClient().
-					WithGetResourceTree(func(_ context.Context, _ *un.Unstructured) (*resource.Resource, error) {
-						return &resource.Resource{
-							Unstructured: *topXR.DeepCopy(),
-							Children: []*resource.Resource{
-								{
-									Unstructured: *directChild.DeepCopy(),
-									Children:     []*resource.Resource{},
-								},
-								{
-									Unstructured: *nestedXRWithUID.DeepCopy(),
-									Children: []*resource.Resource{
-										{
-											Unstructured: *grandchild.DeepCopy(),
-											Children:     []*resource.Resource{},
-										},
-									},
-								},
-							},
-						}, nil
-					}).
+					WithSuccessfulResourceTreeFetch(tu.NewTreeNode(topXR).WithChildren(
+						tu.NewTreeNode(directChild),
+						tu.NewTreeNode(nestedXRWithUID).WithChildren(tu.NewTreeNode(grandchild)),
+					).Build()).
 					Build()
 			},
 			xr: tu.NewResource("example.org/v1", "XR", "test-xr").
@@ -1337,7 +1292,6 @@ func TestDefaultResourceManager_FetchObservedResources(t *testing.T) {
 				Build(),
 			wantCount:       2, // directChild + nestedXR; grandchild filtered out
 			wantResourceIDs: []string{"resource-1", "nested-xr"},
-			wantErr:         false,
 		},
 		"HandlesDeepNestedStructure": {
 			setupTreeClient: func() *tu.MockResourceTreeClient {
@@ -1348,63 +1302,136 @@ func TestDefaultResourceManager_FetchObservedResources(t *testing.T) {
 				//             -> nestedComposedResource
 				//                  -> composedResource2
 				return tu.NewMockResourceTreeClient().
-					WithGetResourceTree(func(_ context.Context, _ *un.Unstructured) (*resource.Resource, error) {
-						return &resource.Resource{
-							Unstructured: *testXR.DeepCopy(),
-							Children: []*resource.Resource{
-								{
-									Unstructured: *composedResource1.DeepCopy(),
-									Children: []*resource.Resource{
-										{
-											Unstructured: *nestedXR.DeepCopy(),
-											Children: []*resource.Resource{
-												{
-													Unstructured: *nestedComposedResource.DeepCopy(),
-													Children: []*resource.Resource{
-														{
-															Unstructured: *composedResource2.DeepCopy(),
-															Children:     []*resource.Resource{},
-														},
-													},
-												},
-											},
-										},
-									},
-								},
-							},
-						}, nil
-					}).
+					WithSuccessfulResourceTreeFetch(tu.NewTreeNode(testXR).WithChildren(
+						tu.NewTreeNode(composedResource1).WithChildren(
+							tu.NewTreeNode(nestedXR).WithChildren(
+								tu.NewTreeNode(nestedComposedResource).WithChildren(
+									tu.NewTreeNode(composedResource2),
+								),
+							),
+						),
+					).Build()).
 					Build()
 			},
 			xr:              testXR,
 			wantCount:       4, // All 4 resources have the annotation
 			wantResourceIDs: []string{"resource-1", "nested-xr", "nested-resource-1", "resource-2"},
-			wantErr:         false,
+		},
+		// Upstream's tree client records a per-node fetch failure on the node itself and always
+		// returns the tree with a nil error. A failed node carries only the GVK, name and namespace
+		// it was referenced by, so it has no composition-resource-name annotation and would otherwise
+		// be indistinguishable from a resource that is legitimately not composed (issue #495).
+		"SkipsChildNotFoundWithWarning": {
+			// A child deleted out of band since the XR last recorded it is genuinely absent: omitting it
+			// from the observed set is the right answer, but the user is told.
+			setupTreeClient: func() *tu.MockResourceTreeClient {
+				return tu.NewMockResourceTreeClient().
+					WithSuccessfulResourceTreeFetch(tu.NewTreeNode(testXR).WithChildren(
+						tu.NewTreeNode(composedResource1),
+						tu.NewTreeNode(tu.NewResource("example.org/v1", "ManagedResource", "resource-gone").InNamespace("ns").Build()).
+							WithError(apierrors.NewNotFound(schema.GroupResource{Group: "example.org", Resource: "managedresources"}, "resource-gone")),
+					).Build()).
+					Build()
+			},
+			xr:              testXR,
+			wantCount:       1,
+			wantResourceIDs: []string{"resource-1"},
+			wantWarnings: []dt.OutputWarning{{
+				Message: treeNodeNotFoundWarning,
+				Context: map[string]string{"resource": "ManagedResource/resource-gone", "namespace": "ns"},
+			}},
+		},
+		"SkipsWrappedChildNotFoundUnderNestedXR": {
+			// NotFound is recognised through wrapping, and anywhere in the tree, not only at depth one.
+			setupTreeClient: func() *tu.MockResourceTreeClient {
+				return tu.NewMockResourceTreeClient().
+					WithSuccessfulResourceTreeFetch(tu.NewTreeNode(testXR).WithChildren(
+						tu.NewTreeNode(nestedXR).WithChildren(
+							tu.NewTreeNode(tu.NewResource("example.org/v1", "NestedResource", "nested-gone").Build()).
+								WithError(errors.Wrap(
+									apierrors.NewNotFound(schema.GroupResource{Group: "example.org", Resource: "nestedresources"}, "nested-gone"),
+									"cannot get resource")),
+						),
+					).Build()).
+					Build()
+			},
+			xr:              testXR,
+			wantCount:       1,
+			wantResourceIDs: []string{"nested-xr"},
+			wantWarnings: []dt.OutputWarning{{
+				Message: treeNodeNotFoundWarning,
+				Context: map[string]string{"resource": "NestedResource/nested-gone", "namespace": ""},
+			}},
+		},
+		"FailsOnChildForbidden": {
+			// The resource may well exist; we just cannot see it. Continuing would report it as an
+			// addition, so the diff for this XR must fail instead.
+			setupTreeClient: func() *tu.MockResourceTreeClient {
+				return tu.NewMockResourceTreeClient().
+					WithSuccessfulResourceTreeFetch(tu.NewTreeNode(testXR).WithChildren(
+						tu.NewTreeNode(composedResource1),
+						tu.NewTreeNode(tu.NewResource("example.org/v1", "ManagedResource", "resource-denied").InNamespace("ns").Build()).
+							WithError(errChildForbidden),
+					).Build()).
+					Build()
+			},
+			xr:      testXR,
+			wantErr: errChildForbidden,
+		},
+		"FailsOnGrandchildTransportError": {
+			// Any error other than NotFound is fatal, at any depth.
+			setupTreeClient: func() *tu.MockResourceTreeClient {
+				return tu.NewMockResourceTreeClient().
+					WithSuccessfulResourceTreeFetch(tu.NewTreeNode(testXR).WithChildren(
+						tu.NewTreeNode(nestedXR).WithChildren(
+							tu.NewTreeNode(tu.NewResource("example.org/v1", "NestedResource", "nested-unreachable").Build()).
+								WithError(errTransport),
+						),
+					).Build()).
+					Build()
+			},
+			xr:      testXR,
+			wantErr: errTransport,
+		},
+		"FailsOnRootError": {
+			// The root is the XR handed to the tree client, never re-fetched by it, so an error there
+			// means the whole tree is unusable. Even a NotFound is fatal: skipping the root would mean
+			// an empty observed set, which is the silent wrong answer this check exists to prevent.
+			setupTreeClient: func() *tu.MockResourceTreeClient {
+				return tu.NewMockResourceTreeClient().
+					WithSuccessfulResourceTreeFetch(tu.NewTreeNode(testXR).
+						WithError(errRootNotFound).
+						WithChildren(tu.NewTreeNode(composedResource1)).
+						Build()).
+					Build()
+			},
+			xr:      testXR,
+			wantErr: errRootNotFound,
 		},
 	}
 
 	for name, tt := range tests {
 		t.Run(name, func(t *testing.T) {
 			// Use the constructor and interface type to test via the public API
+			warnings := NewWarningLogger(tu.TestLogger(t, false), nil)
 			rm := NewResourceManager(
 				nil, // client not used by FetchObservedResources
 				nil, // defClient not used by FetchObservedResources
 				tt.setupTreeClient(),
-				tu.TestLogger(t, false),
+				warnings,
 			)
 
 			observed, err := rm.FetchObservedResources(ctx, &cmp.Unstructured{Unstructured: *tt.xr})
 
-			if tt.wantErr {
-				if err == nil {
-					t.Errorf("FetchObservedResources() expected error, got nil")
-				}
+			if diff := gcmp.Diff(tt.wantWarnings, warnings.Warnings()); diff != "" {
+				t.Errorf("FetchObservedResources() warnings mismatch (-want +got):\n%s", diff)
+			}
 
-				return
+			if diff := gcmp.Diff(tt.wantErr, err, cmpopts.EquateErrors()); diff != "" {
+				t.Errorf("FetchObservedResources() error mismatch (-want +got):\n%s", diff)
 			}
 
 			if err != nil {
-				t.Errorf("FetchObservedResources() unexpected error: %v", err)
 				return
 			}
 

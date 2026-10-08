@@ -8,6 +8,7 @@ sequenceDiagram
     participant FnProv as FunctionProvider
     participant Render as Render Function
     participant ReqProv as RequirementsProvider
+    participant Resolver as CompositeResolver
     participant ResMgr as ResourceManager
     participant Validator as SchemaValidator
     participant DiffCalc as DiffCalculator
@@ -26,7 +27,7 @@ sequenceDiagram
         CompClient-->>CDP: [affected XRs]
         CDP->>DiffCalc: CalculateDiff(ctx, currentComp, newComp)
         DiffCalc-->>CDP: composition-level diff
-        Note over CDP, DP: For each affected XR, CDP calls DP.DiffSingleResource. See per-XR body below.
+        Note over CDP, DP: For each affected XR, CDP calls DP.DiffSingleResource, passing XRDiffOptions.RevisionName (the predicted revision) for a composite that would re-point. See per-XR body below.
     else xr subcommand
         Cmd->>DP: Initialize(ctx)
         Cmd->>DP: PerformDiff(ctx, resources, clusterCompositionProvider)
@@ -34,17 +35,21 @@ sequenceDiagram
     end
 
     rect rgb(245, 245, 255)
-        Note over DP, DiffCalc: per-XR body. DiffSingleResource(ctx, xr, compositionProvider). Driven once per input XR (xr) or once per affected XR (comp).
+        Note over DP, DiffCalc: per-XR body. DiffSingleResource(ctx, xr, compositionProvider, opts). Driven once per input XR (xr) or once per affected XR (comp).
         loop For each XR being diffed
-            DP->>DP: SanitizeXR(res)
-            DP->>CompClient: compositionProvider(ctx, res)
+            DP->>DP: SanitizeXR(res) = authoredXR
+            DP->>Resolver: Resolve(ctx, authoredXR, existingNested)
+            Resolver->>ResMgr: FetchCurrentObject (the XR unless a nested XR copy is supplied, plus a claim backing XR)
+            ResMgr-->>Resolver: cluster copy / backing XR (fetch error is fatal)
+            Resolver-->>DP: EffectiveComposite (Authored, Cluster, Backing, Effective)
+            Note over DP: Effective = input + cluster's compositionRef / compositionRevisionRef / policy / UID, or a claim's backing XR with the claim synced in. Apply opts.RevisionName, then renderXR = strict Defaulter.Default(Effective). authoredXR stays as written: it is the payload.
+            DP->>CompClient: compositionProvider(ctx, renderXR)
             CompClient-->>DP: *Composition (cluster's, or proposed under comp)
             DP->>FnProv: GetFunctionsForComposition(comp)
             FnProv-->>DP: []Function
-            DP->>ResMgr: FetchCurrentObject(ctx, xr) / FetchObservedResources(ctx, xr)
-            ResMgr-->>DP: existing XR + observed composed resources (fetch failure is fatal)
-
-            DP->>DP: RenderToStableState(ctx, xr, comp, fns, id, observed, eventualState)
+            DP->>ResMgr: FetchObservedResources(ctx, Composed())
+            ResMgr-->>DP: observed composed resources (fetch failure is fatal)
+            DP->>DP: RenderToStableState(ctx, renderXR, comp, fns, id, observed, eventualState)
             loop Until requirements stabilise (or steady state under --eventual-state)
                 DP->>Render: Render(ctx, inputs)
                 Render-->>DP: CompositionOutputs (incl. RequiredResources)
@@ -59,18 +64,29 @@ sequenceDiagram
             DP->>DP: removeNamespacesFromClusterScopedResources(...)
             opt Nested XRs present
                 DP->>DP: ProcessNestedXRs(..., depth+1)
-                DP->>DP: Recurse via diffSingleResourceInternal (err if depth > --max-nested-depth)
+                DP->>DP: Recurse via diffSingleResourceInternal with the nested XR's cluster copy (err if depth > --max-nested-depth)
             end
-            DP->>Validator: ValidateResources / ValidateScopeConstraints
-            Validator-->>DP: ok / err
+            DP->>Validator: ValidateResources(authoredXR, composed) / ValidateScopeConstraints
+            Validator-->>DP: ok / err (inputs left unmodified)
 
-            DP->>DiffCalc: CalculateNonRemovalDiffs(ctx, xr, parent, desired)
+            DP->>DiffCalc: CalculateNonRemovalDiffs(ctx, authoredXR, desired)
             loop For each rendered resource
                 DiffCalc->>ResMgr: FetchCurrentObject
                 ResMgr->>K8sAPI: GET
                 K8sAPI-->>ResMgr: current
-                DiffCalc->>K8sAPI: DryRunApply(desired)
-                K8sAPI-->>DiffCalc: result
+                alt current != nil
+                    DiffCalc->>K8sAPI: DryRunApply(desired, fieldOwner)
+                    K8sAPI-->>DiffCalc: result
+                else addition, --dry-run-on=all
+                    DiffCalc->>K8sAPI: DryRunCreate(desired)
+                    K8sAPI-->>DiffCalc: result / Forbidden / Invalid
+                    opt Forbidden
+                        DiffCalc->>K8sAPI: SelfSubjectAccessReview (memoized)
+                        K8sAPI-->>DiffCalc: allowed? => degrade or report
+                    end
+                else addition, --dry-run-on=existing
+                    DiffCalc->>DiffCalc: lenient Defaulter.Default(desired), mark dryRun.skipReason=disabled
+                end
             end
             DiffCalc-->>DP: diffs + rendered keys
 

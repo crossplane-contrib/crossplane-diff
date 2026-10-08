@@ -1,0 +1,17 @@
+# existing-downstream-1.yaml after an out-of-band edit: someone changed configData in the cluster, so
+# it no longer matches what the composition renders for existing-xr-1.yaml. Re-rendering an unchanged
+# composition therefore surfaces a delta the composition did not cause.
+apiVersion: ns.nop.example.org/v1alpha1
+kind: XDownstreamResource
+metadata:
+  name: test-resource
+  namespace: default
+  annotations:
+    crossplane.io/composition-resource-name: nop-resource
+    gotemplating.fn.crossplane.io/composition-resource-name: nop-resource
+  labels:
+    crossplane.io/composite: test-resource
+spec:
+  forProvider:
+    configData: drifted-value
+    resourceTier: basic

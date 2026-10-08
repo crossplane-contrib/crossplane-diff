@@ -23,6 +23,9 @@ spec:
               properties:
                 parentField:
                   type: string
+                tier:
+                  type: string
+                  default: standard
               required:
                 - parentField
             status:

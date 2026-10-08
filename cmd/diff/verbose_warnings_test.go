@@ -18,8 +18,10 @@ package main
 
 import (
 	"bytes"
+	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/alecthomas/kong"
@@ -28,15 +30,15 @@ import (
 	"github.com/crossplane/crossplane-runtime/v2/pkg/logging"
 )
 
-// parseWithWarningLogger builds a parser over the real cli grammar the way main() does — the
-// *dp.WarningLogger and its logging.Logger view bound to the same instance — parses args, and
-// returns the kong context so a test can see which instance those two bindings resolve to once
-// parsing (and therefore every BeforeApply/AfterApply hook) has run. Any "<file>" placeholder is
-// replaced with a real temp file so the commands' AfterApply loaders succeed.
+// parseWithWarningLogger builds a parser over the real cli grammar with the same warning-logger
+// wiring main() uses, parses args, and returns the kong context so a test can see which instance the
+// *dp.WarningLogger and logging.Logger bindings resolve to once parsing (and therefore every
+// BeforeApply/AfterApply hook) has run. Any "<file>" placeholder is replaced with a real temp file so
+// the commands' AfterApply loaders succeed.
 //
 // It deliberately does not reuse parseArgs from render_backend_flags_test.go: that helper discards
 // the context, which is the only thing this test is interested in.
-func parseWithWarningLogger(t *testing.T, warnings *dp.WarningLogger, args ...string) (*kong.Context, error) {
+func parseWithWarningLogger(t *testing.T, stderr io.Writer, args ...string) (*kong.Context, error) {
 	t.Helper()
 
 	tmp := filepath.Join(t.TempDir(), "input.yaml")
@@ -54,15 +56,17 @@ func parseWithWarningLogger(t *testing.T, warnings *dp.WarningLogger, args ...st
 		}
 	}
 
-	parser, err := kong.New(&cli{},
+	c := &cli{}
+
+	opts := append([]kong.Option{
 		kong.Name("crossplane-diff"),
-		kong.BindTo(warnings, (*logging.Logger)(nil)),
-		kong.Bind(warnings),
 		// AfterApply on the concrete commands needs an *AppContext binding; a zero value is
 		// sufficient because processor construction at parse time is in-memory (no cluster
 		// connection until Run).
 		kong.Bind(&AppContext{}),
-	)
+	}, warningLoggerBindings(c, stderr)...)
+
+	parser, err := kong.New(c, opts...)
 	if err != nil {
 		t.Fatalf("kong.New: %v", err)
 	}
@@ -70,25 +74,21 @@ func parseWithWarningLogger(t *testing.T, warnings *dp.WarningLogger, args ...st
 	return parser.Parse(resolved)
 }
 
-// TestVerboseRebindsWarningLogger pins what verboseFlag.BeforeApply does to the advisory channel.
-// It replaces the logger bound in main() with a zap-backed one, and re-wraps that in a fresh
-// WarningLogger so Info calls still become user-facing warnings. Two properties matter and neither
-// was covered: the *dp.WarningLogger and logging.Logger bindings must land on the same instance
-// (they are what writes to stderr and what structured output collects from, so a split would report
-// one set of warnings and print another), and without --verbose the logger main() bound must survive
-// untouched.
-func TestVerboseRebindsWarningLogger(t *testing.T) {
+// TestWarningLoggerConstructedOnce pins the warning-logger wiring. kong does not memoize providers,
+// so every consumer of *dp.WarningLogger or logging.Logger (the commands' AfterApply, Run, and the
+// AppContext provider) must nonetheless see one instance: it is both what writes to stderr and what
+// structured output collects from, so a split would report one set of warnings and print another,
+// and a second construction would drop anything already collected. That must hold with and without
+// --verbose, which only changes the logger the WarningLogger wraps.
+func TestWarningLoggerConstructedOnce(t *testing.T) {
 	tests := map[string]struct {
 		args []string
-		// wantRebound is true when parsing is expected to replace the logger bound at construction.
-		wantRebound bool
 	}{
-		"WithoutVerboseKeepsTheLoggerBoundByMain": {
+		"WithoutVerbose": {
 			args: []string{"comp", "<file>"},
 		},
-		"VerboseRebindsToAFreshWarningLogger": {
-			args:        []string{"--verbose", "comp", "<file>"},
-			wantRebound: true,
+		"WithVerbose": {
+			args: []string{"--verbose", "comp", "<file>"},
 		},
 	}
 
@@ -96,53 +96,48 @@ func TestVerboseRebindsWarningLogger(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			var stderr bytes.Buffer
 
-			original := dp.NewWarningLogger(logging.NewNopLogger(), &stderr)
-
-			// Raised before parsing, so it can only ever be in the original's sink. Whether a
-			// rebinding happens or not, this pins where a pre-parse warning ends up.
-			original.Info("raised before parsing")
-
-			ctx, err := parseWithWarningLogger(t, original, tt.args...)
+			ctx, err := parseWithWarningLogger(t, &stderr, tt.args...)
 			if err != nil {
 				t.Fatalf("parse(%v) unexpected error: %v", tt.args, err)
 			}
 
-			var (
-				asLogger   logging.Logger
-				asWarnings *dp.WarningLogger
-			)
+			resolve := func() (logging.Logger, *dp.WarningLogger) {
+				var (
+					l logging.Logger
+					w *dp.WarningLogger
+				)
 
-			if _, err := ctx.Call(func(l logging.Logger, w *dp.WarningLogger) {
-				asLogger, asWarnings = l, w
-			}); err != nil {
-				t.Fatalf("resolve bindings after parse(%v): %v", tt.args, err)
+				if _, err := ctx.Call(func(gotL logging.Logger, gotW *dp.WarningLogger) {
+					l, w = gotL, gotW
+				}); err != nil {
+					t.Fatalf("resolve bindings after parse(%v): %v", tt.args, err)
+				}
+
+				return l, w
 			}
 
-			if asWarnings == nil {
+			firstLogger, first := resolve()
+			if first == nil {
 				t.Fatal("*dp.WarningLogger binding resolved to nil")
 			}
 
-			if asLogger != logging.Logger(asWarnings) {
-				t.Errorf("logging.Logger and *dp.WarningLogger bindings resolve to different instances; the logging.Logger is a %T", asLogger)
+			if firstLogger != logging.Logger(first) {
+				t.Errorf("logging.Logger and *dp.WarningLogger bindings resolve to different instances; the logging.Logger is a %T", firstLogger)
 			}
 
-			if rebound := asWarnings != original; rebound != tt.wantRebound {
-				t.Fatalf("logger rebound = %v, want %v", rebound, tt.wantRebound)
+			first.Info("raised after parsing")
+
+			secondLogger, second := resolve()
+			if second != first || secondLogger != logging.Logger(first) {
+				t.Fatal("a second resolution produced a different WarningLogger; the provider must construct it once")
 			}
 
-			if !tt.wantRebound {
-				return
+			if got := second.Warnings(); len(got) != 1 {
+				t.Errorf("WarningLogger holds %d warning(s), want the 1 raised earlier: %+v", len(got), got)
 			}
 
-			// The re-wrap brings its own sink, so a warning raised before the rebinding is not
-			// carried over. That is the cost of wrapping twice; pin it so a change in either
-			// direction is a deliberate one rather than a silent loss.
-			if got := asWarnings.Warnings(); len(got) != 0 {
-				t.Errorf("rebound logger carries %d warning(s), want 0: %+v", len(got), got)
-			}
-
-			if got := original.Warnings(); len(got) != 1 {
-				t.Errorf("logger bound by main() holds %d warning(s), want the 1 raised before parsing", len(got))
+			if !strings.Contains(stderr.String(), "raised after parsing") {
+				t.Errorf("warning did not reach the stderr writer; got %q", stderr.String())
 			}
 		})
 	}
