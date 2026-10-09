@@ -1,0 +1,18 @@
+# The composed resource of existing-xr-pinned-revision-ref.yaml as its pinned revision rendered it, so
+# configData holds that revision's name. It carries crossplane.io/composition-resource-name as well as the
+# gotemplating annotation, as a rendered resource does; see existing-downstream-revision-ref.yaml for why a
+# fixture without it would show a diff on every run.
+apiVersion: ns.nop.example.org/v1alpha1
+kind: XDownstreamResource
+metadata:
+  name: pinned-revision-ref-resource
+  namespace: default
+  annotations:
+    crossplane.io/composition-resource-name: nop-resource
+    gotemplating.fn.crossplane.io/composition-resource-name: nop-resource
+  labels:
+    crossplane.io/composite: pinned-revision-ref-resource
+spec:
+  forProvider:
+    configData: xrevisionrefs.diff.example.org-pinnedref
+    resourceTier: basic

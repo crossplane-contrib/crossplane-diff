@@ -3587,7 +3587,43 @@ Impact analysis skipped: this composition is identical to the cluster's, so appl
 				// revision, i.e. the thing this whole feature exists to surface.
 				WithFieldValuePattern("spec.forProvider.configData", `^xrevisionrefs\.diff\.example\.org-[0-9a-f]{7}$`),
 		},
-		// Issue #498, the claim variant of the above. A claim is rendered from its backing XR with the
+		// Issue #536 / #479: the same edit with --include-manual, which keeps a Manual composite for analysis
+		// without making it adopt the new revision. Only the Automatic composite is rendered with the
+		// predicted revision name; the Manual one stays pinned, so its template-read name, and with it its
+		// composed resource, is unchanged. Giving every composite the name would report the pinned one as
+		// changing to a revision it never uses.
+		"RevisionNameReachesOnlyRepointingCompositesWithIncludeManual": {
+			reason: "Under --include-manual, the predicted revision name reaches an Automatic composite but not a Manual one pinned to an older revision",
+			setupFiles: []string{
+				"testdata/comp/resources/xrd.yaml",
+				"testdata/comp/resources/revision-templating-composition.yaml",
+				"testdata/comp/resources/functions.yaml",
+				"testdata/comp/resources/existing-xr-revision-ref.yaml",
+				"testdata/comp/resources/existing-downstream-revision-ref.yaml",
+				"testdata/comp/resources/existing-xr-pinned-revision-ref.yaml",
+				"testdata/comp/resources/existing-downstream-pinned-revision-ref.yaml",
+			},
+			inputFiles:       []string{"testdata/comp/revision-templating-updated-composition.yaml"},
+			namespace:        "default",
+			includeManual:    true,
+			outputFormat:     "json",
+			expectedExitCode: dp.ExitCodeDiffDetected,
+			expectedStructuredCompOutput: tu.ExpectCompDiff().
+				WithNoWarnings().
+				WithComposition("xrevisionrefs.diff.example.org").
+				// One composite re-points; the Manual one is kept but adopts nothing.
+				WithRevisionImpact("metadata", true, 1).
+				WithPredictedRevisionNamePattern(`^xrevisionrefs\.diff\.example\.org-[0-9a-f]{7}$`).
+				WithAffectedResources(2, 1, 1, 0).
+				WithXRImpact("XNopResource", "pinned-revision-ref-resource", "default", "unchanged").
+				WithDownstreamSummary(0, 0, 0).
+				AndComp().
+				WithXRImpact("XNopResource", "revision-ref-resource", "default", "changed").
+				WithDownstreamSummary(0, 1, 0).
+				WithDownstreamResource("modified", "XDownstreamResource", "revision-ref-resource", "default").
+				WithFieldValuePattern("spec.forProvider.configData", `^xrevisionrefs\.diff\.example\.org-[0-9a-f]{7}$`),
+		},
+		// Issue #498, the claim variant of RevisionNamePropagatesToComposedResource. A claim is rendered from its backing XR with the
 		// claim's spec synced in. Under Automatic the claim's own ref is never propagated (the XR controller
 		// owns the backing XR's), so seeding the claim would reach nothing: comp's composition provider is
 		// handed the backing XR the render consumes, and resolves that to the predicted revision. Without it,

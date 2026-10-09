@@ -388,7 +388,9 @@ The `comp` subcommand has its own set of integration tests:
   `TestDefaultCompDiffProcessor_collectXRDiffs_RevisionName` cover which composites the provider resolves to the name
   (a re-pointing one, and a claim through its backing XR; not a `Manual` one, nor one whose selector rejects the new
   revision, and none when it is unpredictable), and that the supplied composites — the cluster's objects — are never
-  mutated. `AutomaticSelectorOnCompositionHash_Kept` pins the other consumer of
+  mutated. `RevisionNameReachesOnlyRepointingCompositesWithIncludeManual` covers the `Manual` case end-to-end: under
+  `--include-manual` the Automatic composite's downstream shows the predicted name while a `Manual` composite pinned
+  to an older revision renders unchanged. `AutomaticSelectorOnCompositionHash_Kept` pins the other consumer of
   the prediction: a composite whose `compositionRevisionSelector` keys on `crossplane.io/composition-hash` is now kept
   rather than dropped as a selector mismatch. The unpredictable case is covered on both sides of the skip:
   `revisionNamePredictable` is folded into `TestDefaultCompDiffProcessor_calculateCompositionDiff`'s want-struct across
