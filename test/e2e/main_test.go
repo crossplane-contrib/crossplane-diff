@@ -28,8 +28,12 @@ import (
 	"testing"
 	"time"
 
+	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/util/yaml"
+	"k8s.io/client-go/kubernetes"
 	"k8s.io/klog/v2"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/e2e-framework/klient/conf"
@@ -42,6 +46,7 @@ import (
 	"sigs.k8s.io/e2e-framework/pkg/features"
 	"sigs.k8s.io/e2e-framework/support/kind"
 	"sigs.k8s.io/e2e-framework/third_party/helm"
+	sigsyaml "sigs.k8s.io/yaml"
 
 	pkgv1 "github.com/crossplane/crossplane/apis/v2/pkg/v1"
 	"github.com/crossplane/crossplane/v2/test/e2e/config"
@@ -205,6 +210,7 @@ func TestMain(m *testing.M) {
 				return fn.Status.GetCondition(pkgv1.TypeHealthy).Status == "True" &&
 					fn.Status.GetCondition(pkgv1.TypeInstalled).Status == "True"
 			}), wait.WithTimeout(3*time.Minute)); err != nil {
+				dumpPackageDiagnostics(ctx, cfg)
 				return ctx, fmt.Errorf("function %s not ready: %w", fn.Name, err)
 			}
 		}
@@ -227,6 +233,7 @@ func TestMain(m *testing.M) {
 				return prov.Status.GetCondition(pkgv1.TypeHealthy).Status == "True" &&
 					prov.Status.GetCondition(pkgv1.TypeInstalled).Status == "True"
 			}), wait.WithTimeout(2*time.Minute)); err != nil {
+				dumpPackageDiagnostics(ctx, cfg)
 				return ctx, fmt.Errorf("provider %s not ready: %w", prov.Name, err)
 			}
 		}
@@ -259,4 +266,110 @@ func TestMain(m *testing.M) {
 	environment.Setup(setup...)
 	environment.Finish(finish...)
 	os.Exit(environment.Run(m))
+}
+
+// diagnosticsLogTailLines bounds how much of each container's log
+// dumpPackageDiagnostics prints. Crossplane runs with --debug here, so its full
+// log would bury everything else.
+const diagnosticsLogTailLines int64 = 200
+
+// dumpPackageDiagnostics writes the state of the shared packages and of the
+// Crossplane namespace to stderr. It runs when setup gives up waiting for a
+// package to become ready, so the CI log says why the package wasn't ready
+// rather than only that it wasn't. The setup failure is already fatal, so this
+// is best effort: anything it can't collect is reported inline and skipped.
+func dumpPackageDiagnostics(ctx context.Context, cfg *envconf.Config) {
+	ctx, cancel := context.WithTimeout(ctx, time.Minute)
+	defer cancel()
+
+	w := os.Stderr
+	res := cfg.Client().Resources()
+
+	fmt.Fprintln(w, "===== package diagnostics: begin =====")
+	defer fmt.Fprintln(w, "===== package diagnostics: end =====")
+
+	for _, l := range []struct {
+		kind string
+		list k8s.ObjectList
+	}{
+		{kind: "functions", list: &pkgv1.FunctionList{}},
+		{kind: "functionrevisions", list: &pkgv1.FunctionRevisionList{}},
+		{kind: "providers", list: &pkgv1.ProviderList{}},
+		{kind: "providerrevisions", list: &pkgv1.ProviderRevisionList{}},
+	} {
+		fmt.Fprintf(w, "--- %s ---\n", l.kind)
+
+		if err := res.List(ctx, l.list); err != nil {
+			fmt.Fprintf(w, "cannot list %s: %v\n", l.kind, err)
+			continue
+		}
+
+		// managedFields is noise when diagnosing readiness.
+		_ = meta.EachListItem(l.list, func(o runtime.Object) error {
+			if m, err := meta.Accessor(o); err == nil {
+				m.SetManagedFields(nil)
+			}
+
+			return nil
+		})
+
+		out, err := sigsyaml.Marshal(l.list)
+		if err != nil {
+			fmt.Fprintf(w, "cannot marshal %s: %v\n", l.kind, err)
+			continue
+		}
+
+		fmt.Fprintln(w, string(out))
+	}
+
+	fmt.Fprintf(w, "--- events in %s ---\n", namespace)
+
+	events := &corev1.EventList{}
+	if err := res.WithNamespace(namespace).List(ctx, events); err != nil {
+		fmt.Fprintf(w, "cannot list events: %v\n", err)
+	}
+
+	for _, e := range events.Items {
+		fmt.Fprintf(w, "%s %s %s %s/%s (x%d): %s\n",
+			e.LastTimestamp.UTC().Format(time.RFC3339), e.Type, e.Reason,
+			e.InvolvedObject.Kind, e.InvolvedObject.Name, e.Count, e.Message)
+	}
+
+	fmt.Fprintf(w, "--- pods in %s ---\n", namespace)
+
+	pods := &corev1.PodList{}
+	if err := res.WithNamespace(namespace).List(ctx, pods); err != nil {
+		fmt.Fprintf(w, "cannot list pods: %v\n", err)
+		return
+	}
+
+	cs, err := kubernetes.NewForConfig(cfg.Client().RESTConfig())
+	if err != nil {
+		fmt.Fprintf(w, "cannot create clientset for pod logs: %v\n", err)
+	}
+
+	for _, p := range pods.Items {
+		fmt.Fprintf(w, "pod %s phase=%s\n", p.Name, p.Status.Phase)
+
+		for _, s := range append(p.Status.InitContainerStatuses, p.Status.ContainerStatuses...) {
+			fmt.Fprintf(w, "  container %s ready=%t restarts=%d image=%s state=%+v\n",
+				s.Name, s.Ready, s.RestartCount, s.Image, s.State)
+		}
+
+		if cs == nil {
+			continue
+		}
+
+		for _, c := range append(p.Spec.InitContainers, p.Spec.Containers...) {
+			tail := diagnosticsLogTailLines
+
+			logs, err := cs.CoreV1().Pods(namespace).GetLogs(p.Name, &corev1.PodLogOptions{Container: c.Name, TailLines: &tail}).DoRaw(ctx)
+			if err != nil {
+				fmt.Fprintf(w, "  cannot get logs of %s/%s: %v\n", p.Name, c.Name, err)
+				continue
+			}
+
+			fmt.Fprintf(w, "  --- logs %s/%s (last %d lines) ---\n%s\n", p.Name, c.Name, tail, logs)
+		}
+	}
 }

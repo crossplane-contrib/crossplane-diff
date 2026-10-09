@@ -133,6 +133,23 @@ instead, for example:
 RUN gotestsum --no-color=false --format standard-verbose ...
 ```
 
+### Setup Failures
+
+Before any test runs, setup installs the shared packages from
+`manifests/beta/diff/<version>/_setup/` and waits for each Function and
+Provider to become `Healthy` and `Installed`. If a wait times out (`function
+function-auto-ready not ready: context deadline exceeded`), setup first prints
+everything between `===== package diagnostics: begin =====` and `===== package
+diagnostics: end =====`: the Functions, FunctionRevisions, Providers and
+ProviderRevisions with their status conditions, the events and pods in
+`crossplane-system`, and the tail of each container's log. The packages'
+`Installed`/`Healthy` condition messages usually name the cause, for example a
+registry pull error.
+
+Pull `crossplane-contrib` packages from `xpkg.crossplane.io`. `xpkg.upbound.io`
+answers GitHub-hosted runners with `429 Too Many Requests`, so packages from it
+never install in CI.
+
 ### Running Tests Directly
 
 The E2E tests are typically run via `earthly` for convenience and consistency.

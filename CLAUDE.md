@@ -316,6 +316,13 @@ When using structured output (`--output json` or `--output yaml`):
 - This causes status conditions to bubble up from child resources
 - Required for proper setup and teardown to work correctly
 
+**Package Registry for Test Fixtures**
+- Pull `crossplane-contrib` packages from `xpkg.crossplane.io`, never `xpkg.upbound.io`. Since 2026-10-08
+  `xpkg.upbound.io` answers GitHub-hosted runners with `429 Too Many Requests`. Packages from it never install, and e2e
+  setup fails with `function function-auto-ready not ready: context deadline exceeded`.
+- When an e2e setup wait times out, read the `===== package diagnostics =====` block in the log. It holds each package's
+  status conditions, the `crossplane-system` events and the pod logs, which usually name the cause.
+
 **Test Coverage Expectations**
 - New code should have comprehensive unit test coverage
 - Use table-driven tests for multiple scenarios
