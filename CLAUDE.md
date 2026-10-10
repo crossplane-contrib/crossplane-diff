@@ -352,6 +352,33 @@ same: for every XRD a test case's `setupFiles` declare, `envtestCRDs` (in `cmd/d
 
 e2e tests need none of this: they run real Crossplane, which generates the CRDs itself.
 
+**Integration Fixtures Look Like Reconciled Cluster State**
+
+envtest runs no Crossplane controllers, so whatever Crossplane would have written to an existing resource has to be in
+the fixture or put there by the harness. Ownership, adoption and lookup logic (`lookupByComposite`, the controller-UID
+filter in `extractComposedResourcesFromTree`, render's check that observed resources are controlled by the XR) reads
+exactly this state, so a fixture that lacks it tests a tree no real cluster has (#542):
+
+- **Composed resources go in `crossplaneManagedResources`, never `setupFiles`.** List each existing XR with what it
+  composes: `composes(xrFile, composedFiles...)`, or a `HierarchicalOwnershipRelation` literal for nested XRs. The
+  harness (`applyHierarchicalOwnership`) creates the XR as a user's manifest would be, server-side applies each composed
+  resource under Crossplane's composed field manager (so field-removal detection behaves as in a cluster), gives it a
+  controller ownerReference to the XR's real UID (as `RenderComposedResourceMetadata` does), and adds it to the XR's
+  `resourceRefs`, from which the resource tree, and so the observed state and removal detection, are built. Set
+  `xrdAPIVersion: V1` for a v1 XRD, whose XRs keep `resourceRefs` at `spec.resourceRefs`; the harness fails if the
+  apiserver prunes them. Each file holds exactly one resource.
+- **Leave a composed resource in `setupFiles` only when it deliberately has no controlling XR** (an orphan being
+  adopted, say), and say so in a comment.
+- **A reconciled XR carries its own `crossplane.io/composite: <name>` label**, as Crossplane labels every XR. A new-XR
+  input stays as a user would author it; if a test re-applies an existing XR's manifest, keep the cluster copy in its own
+  `existing-*.yaml`.
+- **A reconciled XR tracks a CompositionRevision** (`compositionRevisionRef`), which must then be declared as a
+  fixture. Under Automatic, the claim syncer copies the backing XR's ref onto the claim; follow
+  `testdata/diff/resources/existing-claim.yaml` with `existing-claim-xr.yaml`. Not every older XR fixture has one yet.
+- **Composed fixtures don't carry `gotemplating.fn.crossplane.io/composition-resource-name`.** function-go-templating
+  strips it from what it renders, so no real composed resource has it. Under the composed field manager a fixture that
+  kept it would show the annotation as removed.
+
 **Neither Test Suite Reproduces What a Real Client Adds**
 
 No fixture in either suite carries the fields a real client writes, because of how each applies manifests:

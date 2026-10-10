@@ -2,6 +2,8 @@ apiVersion: ns.diff.example.org/v1alpha1
 kind: XNopResource
 metadata:
   name: selector-mismatch-resource
+  labels:
+    crossplane.io/composite: selector-mismatch-resource
   namespace: default
 spec:
   coolField: selector-existing-value

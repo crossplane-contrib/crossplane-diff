@@ -5,7 +5,6 @@ metadata:
   namespace: default
   annotations:
     crossplane.io/composition-resource-name: database
-    gotemplating.fn.crossplane.io/composition-resource-name: database
   labels:
     crossplane.io/composite: mixed-test-xr-2
 spec:

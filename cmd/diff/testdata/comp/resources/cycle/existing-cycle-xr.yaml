@@ -4,6 +4,8 @@ apiVersion: ns.cycle.example.org/v1alpha1
 kind: XCycleA
 metadata:
   name: test-cycle
+  labels:
+    crossplane.io/composite: test-cycle
   namespace: default
 spec:
   cycleField: "cycle-value"

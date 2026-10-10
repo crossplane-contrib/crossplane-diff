@@ -4,7 +4,6 @@ metadata:
   name: test-legacy-manual-v1
   annotations:
     crossplane.io/composition-resource-name: nop-resource
-    gotemplating.fn.crossplane.io/composition-resource-name: nop-resource
   labels:
     crossplane.io/composite: test-legacy-manual-v1
 spec:

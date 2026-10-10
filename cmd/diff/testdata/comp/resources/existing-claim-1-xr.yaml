@@ -1,8 +1,11 @@
+# The backing XR Crossplane's claim syncer created for existing-claim-1.yaml. Its composed resource is
+# existing-claim-downstream-1.yaml, and it tracks the revision in claim-composition-revision.yaml.
 apiVersion: diff.example.org/v1alpha1
 kind: XNop
 metadata:
   name: test-claim-1-xr
   labels:
+    crossplane.io/composite: test-claim-1-xr
     crossplane.io/claim-name: test-claim-1
     crossplane.io/claim-namespace: test-namespace
 spec:
@@ -13,8 +16,11 @@ spec:
     namespace: test-namespace
   coolField: claim-value-1
   compositeDeletePolicy: Background
+  compositionUpdatePolicy: Automatic
   compositionRef:
     name: nopclaims.diff.example.org
+  compositionRevisionRef:
+    name: nopclaims.diff.example.org-e164b8b
   resourceRefs:
   - apiVersion: nop.example.org/v1alpha1
     kind: XDownstreamResource

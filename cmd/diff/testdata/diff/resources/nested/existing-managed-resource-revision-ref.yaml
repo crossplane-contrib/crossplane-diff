@@ -10,7 +10,6 @@ metadata:
   namespace: default
   annotations:
     crossplane.io/composition-resource-name: managed-resource
-    gotemplating.fn.crossplane.io/composition-resource-name: managed-resource
   labels:
     crossplane.io/composite: test-parent
 spec:

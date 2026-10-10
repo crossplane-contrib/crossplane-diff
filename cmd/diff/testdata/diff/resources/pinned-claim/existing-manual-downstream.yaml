@@ -1,0 +1,14 @@
+# The composed resource of existing-manual-xr.yaml, as revision 1 rendered it.
+apiVersion: nop.example.org/v1alpha1
+kind: XDownstreamResource
+metadata:
+  name: manual-claim-x1y2z
+  annotations:
+    crossplane.io/composition-resource-name: nop-resource
+  labels:
+    crossplane.io/composite: manual-claim-x1y2z
+    crossplane.io/claim-name: manual-claim
+    crossplane.io/claim-namespace: existing-namespace
+spec:
+  forProvider:
+    configData: v1:xpinneds.pinned.diff.example.org-rev1:existing-value

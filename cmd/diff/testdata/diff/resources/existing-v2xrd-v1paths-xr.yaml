@@ -4,6 +4,8 @@ apiVersion: v2withv1paths.diff.example.org/v1alpha1
 kind: XNopResource
 metadata:
   name: test-v2xrd-v1paths
+  labels:
+    crossplane.io/composite: test-v2xrd-v1paths
   namespace: default
 spec:
   # v1-style composition reference (at spec.compositionRef instead of spec.crossplane.compositionRef)

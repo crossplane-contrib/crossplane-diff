@@ -8,6 +8,7 @@ metadata:
     kubectl.kubernetes.io/last-applied-configuration: |
       {"apiVersion":"ns.diff.example.org/v1alpha1","kind":"XNopResource","metadata":{"name":"test-resource","namespace":"default"},"spec":{"coolField":"old-value"}}
   labels:
+    crossplane.io/composite: test-resource
     argocd.argoproj.io/instance: test-app-OLD
 spec:
   compositionRef:

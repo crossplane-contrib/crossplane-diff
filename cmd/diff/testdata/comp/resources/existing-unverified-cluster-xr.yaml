@@ -3,6 +3,8 @@ apiVersion: diff.example.org/v1alpha1
 kind: XNopResource
 metadata:
   name: unverified-xr
+  labels:
+    crossplane.io/composite: unverified-xr
 spec:
   coolField: existing-value
   crossplane:

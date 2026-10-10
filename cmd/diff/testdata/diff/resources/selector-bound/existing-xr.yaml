@@ -1,0 +1,18 @@
+# A composite whose compositionSelector matches both compositions in setup.yaml, and which Crossplane
+# bound to the first, selector-bound-a.
+apiVersion: ns.diff.example.org/v1alpha1
+kind: XNopResource
+metadata:
+  name: selector-bound
+  labels:
+    crossplane.io/composite: selector-bound
+  namespace: default
+spec:
+  coolField: existing-value
+  crossplane:
+    compositionSelector:
+      matchLabels:
+        binding: shared
+    compositionRef:
+      name: selector-bound-a
+    compositionUpdatePolicy: Automatic
