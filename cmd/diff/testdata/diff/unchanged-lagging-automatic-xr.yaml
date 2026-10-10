@@ -1,0 +1,11 @@
+# resources/pinned-claim/existing-lagging-automatic-xr.yaml's XR as its author keeps it: unchanged, and
+# without the compositionRevisionRef Crossplane's composite reconciler writes.
+apiVersion: pinned.diff.example.org/v1alpha1
+kind: XPinned
+metadata:
+  name: lagging-xr
+spec:
+  coolField: existing-value
+  compositionUpdatePolicy: Automatic
+  compositionRef:
+    name: xpinneds.pinned.diff.example.org

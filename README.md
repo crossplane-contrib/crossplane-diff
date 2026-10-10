@@ -111,6 +111,11 @@ omits one of them with the value the cluster copy holds, and then applies the XR
   Crossplane already chose; Crossplane does not re-select.
 - A new composite whose XRD sets `defaultCompositionUpdatePolicy: Manual` is rendered as `Manual`,
   so a `compositionRevisionRef` in its input is honoured.
+- A composite is rendered with its `compositionRevisionRef` naming the revision it is rendered
+  from, because Crossplane's composite reconciler writes that ref before it composes. So an
+  `Automatic` composite whose ref still names an older revision is rendered from the latest
+  revision *and* sees that revision's name, and a new composite gets the ref Crossplane would give
+  it. Only the render sees this; the XR's own diff is still computed from your manifest as written.
 
 A claim is rendered as its backing XR with the claim's spec synced in, the way Crossplane's claim
 controller syncs it. Under `Automatic` the backing XR keeps its own `compositionRevisionRef`,

@@ -210,9 +210,15 @@ Each composite being diffed is seen two ways, and they must not be confused:
   locally: under SSA, including a field claims ownership of it, so locally derived defaults produce false diffs (#503).
 - **Effective**: what Crossplane would actually reconcile. `CompositeResolver.Resolve`
   (`diffprocessor/composite_resolver.go`) computes it **once, before composition resolution**, and both composition
-  resolution and render consume it. The order matters: inherit from the cluster → apply `comp`'s predicted revision
-  (`XRDiffOptions.RevisionName`, root only) → default with the XR's CRD → resolve the composition → render. Defaulting
-  before inheriting would let a default `Automatic` overwrite the cluster's `Manual`.
+  resolution and render consume it. The order matters: inherit from the cluster → default with the XR's CRD → resolve
+  the composition and its revision → point the render input's `compositionRevisionRef` at that revision → render.
+  Defaulting before inheriting would let a default `Automatic` overwrite the cluster's `Manual`.
+  - **Resolved revision**: the `CompositionProvider` returns a `types.ResolvedComposition` (the composition plus the
+    `RevisionName` it comes from; empty = unknown). Crossplane's composite reconciler writes the revision it selects to
+    `compositionRevisionRef` before composing, creating the ref if absent, so the processor does the same on the
+    render input only (never the dry-run payload), at the path the XRD scope implies. An empty name leaves the ref as
+    the effective composite has it; never invent one. `comp`'s provider returns its predicted revision name only for
+    a composite that `classifyXR` says would re-point at it (#536).
   - **XR**: the authored input plus each Crossplane-written field it omits, taken from the cluster copy
     (`compositionRef`, `compositionRevisionRef`, `compositionUpdatePolicy`, at the v1 or v2 path), plus the cluster UID.
     The UID is required: render keeps an input UID and checks observed resources' controller refs against it.
