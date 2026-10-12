@@ -337,16 +337,17 @@ func (m *MockSchemaValidator) ValidateScopeConstraints(ctx context.Context, reso
 // MockDefaulter Mock defaulter. With no DefaultFn it applies no defaults, returning a copy of its
 // input unchanged.
 type MockDefaulter struct {
-	DefaultFn func(ctx context.Context, obj *un.Unstructured) (*un.Unstructured, error)
+	DefaultFn func(ctx context.Context, obj *un.Unstructured) (*un.Unstructured, string, error)
 }
 
-// Default returns a copy of obj with predicted CRD defaults applied.
-func (m *MockDefaulter) Default(ctx context.Context, obj *un.Unstructured) (*un.Unstructured, error) {
+// Default returns a copy of obj with predicted CRD defaults applied, and the storage version of its
+// CRD when that is not obj's own (none, without a DefaultFn).
+func (m *MockDefaulter) Default(ctx context.Context, obj *un.Unstructured) (*un.Unstructured, string, error) {
 	if m.DefaultFn != nil {
 		return m.DefaultFn(ctx, obj)
 	}
 
-	return obj.DeepCopy(), nil
+	return obj.DeepCopy(), "", nil
 }
 
 // endregion
