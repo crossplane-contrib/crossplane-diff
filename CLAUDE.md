@@ -368,8 +368,9 @@ e2e tests need none of this: they run real Crossplane, which generates the CRDs 
 
 envtest runs no Crossplane controllers, so whatever Crossplane would have written to an existing resource has to be in
 the fixture or put there by the harness. Ownership, adoption and lookup logic (`lookupByComposite`, the controller-UID
-filter in `extractComposedResourcesFromTree`, render's check that observed resources are controlled by the XR) reads
-exactly this state, so a fixture that lacks it tests a tree no real cluster has (#542):
+filter in `extractComposedResourcesFromTree`, render's check that observed resources are controlled by the XR, and
+removal detection, which like Crossplane's garbage collector only removes what the composite controls) reads exactly
+this state, so a fixture that lacks it tests a tree no real cluster has (#542):
 
 - **Composed resources go in `crossplaneManagedResources`, never `setupFiles`.** List each existing XR with what it
   composes: `composes(xrFile, composedFiles...)`, or a `HierarchicalOwnershipRelation` literal for nested XRs. The
@@ -386,7 +387,8 @@ exactly this state, so a fixture that lacks it tests a tree no real cluster has 
   `existing-*.yaml`.
 - **A reconciled XR tracks a CompositionRevision** (`compositionRevisionRef`), which must then be declared as a
   fixture. Under Automatic, the claim syncer copies the backing XR's ref onto the claim; follow
-  `testdata/diff/resources/existing-claim.yaml` with `existing-claim-xr.yaml`. Not every older XR fixture has one yet.
+  `testdata/diff/resources/existing-claim.yaml` with `existing-claim-xr.yaml`. Not every older XR fixture has one yet:
+  several are shared by cases with different compositions, so a ref (and a `compositionRef`) means per-case copies.
 - **Composed fixtures don't carry `gotemplating.fn.crossplane.io/composition-resource-name`.** function-go-templating
   strips it from what it renders, so no real composed resource has it. Under the composed field manager a fixture that
   kept it would show the annotation as removed.

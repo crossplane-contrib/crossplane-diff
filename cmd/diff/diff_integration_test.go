@@ -3085,9 +3085,15 @@ Summary: 2 modified, 2 removed`,
 			setupFiles: []string{
 				"testdata/diff/resources/pinned-claim/definitions.yaml",
 				"testdata/diff/resources/functions.yaml",
-				"testdata/diff/resources/pinned-claim/existing-lagging-automatic-xr.yaml",
 			},
-			inputFiles: []string{"testdata/diff/unchanged-lagging-automatic-xr.yaml"},
+			crossplaneManagedResources: []HierarchicalOwnershipRelation{
+				composes(
+					"testdata/diff/resources/pinned-claim/existing-lagging-automatic-xr.yaml",
+					"testdata/diff/resources/pinned-claim/existing-lagging-automatic-downstream.yaml",
+				),
+			},
+			xrdAPIVersion: V1, // the XRD is v1, so Crossplane writes the XR's resourceRefs at spec.resourceRefs
+			inputFiles:    []string{"testdata/diff/unchanged-lagging-automatic-xr.yaml"},
 			expectedStructuredOutput: tu.ExpectDiff().
 				WithSummary(0, 1, 0).
 				WithModifiedResource("XDownstreamResource", "lagging-xr", "").
@@ -3913,10 +3919,16 @@ Impact analysis skipped: this composition is identical to the cluster's, so appl
 				"testdata/comp/resources/xrd.yaml",
 				"testdata/comp/resources/revision-templating-composition.yaml",
 				"testdata/comp/resources/functions.yaml",
-				"testdata/comp/resources/existing-xr-revision-ref.yaml",
-				"testdata/comp/resources/existing-downstream-revision-ref.yaml",
-				"testdata/comp/resources/existing-xr-pinned-revision-ref.yaml",
-				"testdata/comp/resources/existing-downstream-pinned-revision-ref.yaml",
+			},
+			crossplaneManagedResources: []HierarchicalOwnershipRelation{
+				composes(
+					"testdata/comp/resources/existing-xr-revision-ref.yaml",
+					"testdata/comp/resources/existing-downstream-revision-ref.yaml",
+				),
+				composes(
+					"testdata/comp/resources/existing-xr-pinned-revision-ref.yaml",
+					"testdata/comp/resources/existing-downstream-pinned-revision-ref.yaml",
+				),
 			},
 			inputFiles:       []string{"testdata/comp/revision-templating-updated-composition.yaml"},
 			namespace:        "default",

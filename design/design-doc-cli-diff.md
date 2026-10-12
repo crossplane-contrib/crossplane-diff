@@ -196,7 +196,9 @@ filter on observed resources, render's check that observed resources are control
 the XR's `resourceRefs`) are only exercised if it does (#542). A case lists each existing XR with what it composes in
 `crossplaneManagedResources`. The harness creates the XR plainly, server-side applies each composed resource under
 Crossplane's composed field manager, gives it a controller ownerReference to the XR's real UID, as
-`RenderComposedResourceMetadata` does, and records it in the XR's `resourceRefs`. Reconciled XR fixtures carry their own
+`RenderComposedResourceMetadata` does, and records it in the XR's `resourceRefs`. That reference is what makes a
+composed resource removable at all: removal detection, like Crossplane's garbage collector, considers only resources
+the composite controls (§6.3.1). Reconciled XR fixtures carry their own
 `crossplane.io/composite` label, claims' backing XRs track a declared CompositionRevision that the claim mirrors under
 Automatic, and composed fixtures omit the annotation function-go-templating strips from its output. A composed
 resource without a controlling XR, such as an orphan being adopted, is set up as a plain fixture, and only on purpose.
@@ -251,6 +253,9 @@ The integration test cases cover:
 
 - **Go-templating Function**: Tests diffing with templated ExtraResources embedded in go-templating functions, ensuring
   that the diff correctly processes resources generated through templates.
+- **Function-sequencer Keeps Existing Resources**: Verifies that a later-stage resource function-sequencer would gate
+  (its earlier stage is not Ready) is neither hidden nor reported as removed when it already exists, which holds only
+  if the XR's own composed resources reach render as observed state (#259).
 
 ### 4.5 Resource Hierarchy and Removal Detection
 
@@ -269,6 +274,10 @@ The integration test cases cover:
 
 - **Resources with generateName**: Tests that resources using Kubernetes generateName pattern are correctly diffed by
   matching based on owner references rather than exact names.
+- **New XR adopting an orphaned generateName resource**: Verifies that a new XR's composed resource, rendered with
+  only a `generateName` and observed nowhere, is matched to an existing orphan (no controller reference, in no XR's
+  `resourceRefs`) by its `crossplane.io/composite` label and composition-resource-name annotation, and shown as
+  modified rather than added under a generated name.
 - **New XR with generateName**: Verifies that new XRs using generateName show the appropriate placeholder in the diff
   output, including as the `xrs[]` group identity and the human-readable section header (an XR with no
   `metadata.name` must not produce a nameless group).
