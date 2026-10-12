@@ -1543,27 +1543,15 @@ and is visible in classification, summary counts, and rendered bodies alike. The
 `renderer.PathLastAppliedConfiguration`, because a second caller has to name the same path and the two must not drift:
 comp's revision-name prediction asks whether it is the *only* thing a composition differs by (§6.2 step 3a).
 
-There is a second display-only suppression, and unlike the first it is **conditional**: the composite's own
-`compositionRevisionRef` (both homes — the v1 `spec.compositionRevisionRef` and the v2
-`spec.crossplane.compositionRevisionRef`) is stripped only when `DiffOptions.SeededRevisionRef` is set. That flag is
-*provenance*, not a user preference: it records that the value on the object being diffed was written by this tool
-rather than read from the cluster. `comp` seeds each re-pointing composite with the name of the CompositionRevision the
-diffed composition would produce, so that a template reading that name renders the value it would really get (§6.2 step
-3a); `xr` leaves the flag false, which is why a user's own hand-edited revision pin is still shown there. No flag sets
-it — `makeDefaultCompProc` passes `dp.WithSeededRevisionRef(true)` on the shared option slice, which is also how the
-composition processor and the XR processor it delegates downstream diffs to are guaranteed to agree.
-
-Suppressing a field this tool itself wrote looks like precisely the anti-pattern `ForVerdict` exists to prevent, and is
-not one, because the *fact* is not suppressed anywhere. That applying the composition creates a revision which N
-composites re-point to is reported unconditionally and per-composition as `RevisionImpact` (§6.8.3), so all that is
-hidden is its N-fold duplicate *presentation* — one identical bookkeeping field per composite, saying what one typed
-field already says once. Nor is anything *derived* from the seeded value hidden: a composed resource whose template
-propagates the revision name still shows its diff, and still flips its composite to `changed`. Surfacing exactly those
-is the entire reason the seeding exists. Without the suppression, every revision-creating change would add one field per
-composite and exit 3 — reintroducing the GitOps-gate problem that `CompositionDiff.HasChanges` excludes `RevisionImpact`
-to avoid. `cleanupForDiff` accordingly takes the whole `DiffOptions` rather than the two fields it was previously handed
-(`IgnorePaths`, `ForVerdict`); a conditional suppression is the second thing it has to read off the options, and a third
-positional parameter is how that starts going wrong.
+A composite's own `compositionRevisionRef` needs no suppression, although this tool writes it. The ref the composition
+provider resolves (the predicted one under `comp`, §6.2 step 3a) is written only to the render input (§6.1.1), never to
+the composite's dry-run payload, which is the composite as authored (§6.4a). So the composite's diff never shows the
+tool-written ref; there is one bookkeeping field per composite only if the user's own input changes it, and then it is
+the user's change and is shown. What a re-point does is reported once per composition as `RevisionImpact` (§6.8.3), and
+anything *derived* from the ref, such as a composed resource whose template propagates the revision name, shows its
+diff and flips its composite to `changed`. (Until #536 a `DiffOptions.SeededRevisionRef` flag stripped the ref paths
+from `comp`'s diffs; once the payload became the authored composite in #538 it had nothing left to strip, and it was
+removed.)
 
 #### 6.8.3 Structured output types
 
@@ -1692,8 +1680,8 @@ contract:
   `RepointedComposites` counts composites that *re-point*, which is not the same as composites whose rendered output
   changes; re-pointing alone usually renders identically.
   `PredictedRevisionName` is what makes a downstream change interpretable when it does not: a composed resource whose
-  template reads the revision name shows a diff with no other visible cause (the composite's own ref being suppressed
-  from display, §6.8.2), and this names the cause. It is populated even when `CreatesRevision` is false, where it names
+  template reads the revision name shows a diff with no other visible cause (the composite's own ref is never shown
+  changing, because it is written only to the render input, §6.8.2), and this names the cause. It is populated even when `CreatesRevision` is false, where it names
   the existing revision the composites already track — the same name by construction, since an unchanged composition
   hashes to the same value. The human renderer deliberately does *not* print the name (`revisionImpactMessage` reports
   the churn without it): the suffix is a hash of the composition's content, so printing it would make otherwise-stable

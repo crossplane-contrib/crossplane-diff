@@ -3554,9 +3554,9 @@ Impact analysis skipped: this composition is identical to the cluster's, so appl
 		// revision, or stop the processor writing the resolved revision to the ref, and this is what fails.
 		//
 		// Note also what is NOT in the output: the composite's own
-		// spec.crossplane.compositionRevisionRef diff. Suppressing it is why the exit code still reflects
-		// rendering rather than bookkeeping, and predictedRevisionName is what keeps the downstream change
-		// interpretable without it.
+		// spec.crossplane.compositionRevisionRef diff. The predicted ref is written only to the render input,
+		// never to the composite's dry-run payload, which is why the exit code reflects rendering rather than
+		// bookkeeping; predictedRevisionName is what keeps the downstream change interpretable without it.
 		"RevisionNamePropagatesToComposedResource": {
 			reason: "A metadata-only composition edit whose template reads the CompositionRevision name changes rendered output, and is detected rather than assumed away",
 			setupFiles: []string{
