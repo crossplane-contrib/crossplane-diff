@@ -54,7 +54,7 @@ classDiagram
         <<interface>>
         +CalculateDiff(ctx, composite, desired) (*ResourceDiff, error)
         +CalculateDiffs(ctx, xr, desired) (map[string]*ResourceDiff, error)
-        +CalculateNonRemovalDiffs(ctx, xr, desired) (map[string]*ResourceDiff, map[string]bool, error)
+        +CalculateNonRemovalDiffs(ctx, xr, desired) (map[string]*ResourceDiff, RenderedResources, error)
         +CalculateRemovedResourceDiffs(ctx, xr, rendered) (map[string]*ResourceDiff, error)
     }
 

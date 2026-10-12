@@ -569,9 +569,10 @@ func TestDefaultDiffProcessor_PerformDiff(t *testing.T) {
 				// Override the diff calculator factory to return actual diffs
 				WithDiffCalculatorFactory(func(k8.ApplyClient, k8.AccessChecker, xp.ResourceTreeClient, ResourceManager, logging.Logger, renderer.DiffOptions, DryRunOn, Defaulter) DiffCalculator {
 					return &tu.MockDiffCalculator{
-						CalculateNonRemovalDiffsFn: func(context.Context, *cmp.Unstructured, render.CompositionOutputs) (map[string]*dt.ResourceDiff, map[string]bool, error) {
+						CalculateNonRemovalDiffsFn: func(context.Context, *cmp.Unstructured, render.CompositionOutputs) (map[string]*dt.ResourceDiff, types.RenderedResources, error) {
 							diffs := make(map[string]*dt.ResourceDiff)
-							rendered := make(map[string]bool)
+
+							var rendered types.RenderedResources
 
 							// Add a modified diff (not just equal)
 							lineDiffs := []diffmatchpatch.Diff{
@@ -588,7 +589,7 @@ func TestDefaultDiffProcessor_PerformDiff(t *testing.T) {
 								Current:      dt.ResourceViews{Raw: resource1, Clean: resource1}, // for completeness
 								Desired:      dt.ResourceViews{Raw: resource1, Clean: resource1}, // for completeness
 							}
-							rendered[diffKey1] = true
+							rendered.AddKey(diffKey1)
 
 							// Add a composed resource diff that's also modified
 							diffKey2 := "example.org/v1/ComposedResource/resource-a"
@@ -600,7 +601,7 @@ func TestDefaultDiffProcessor_PerformDiff(t *testing.T) {
 								Current:      dt.ResourceViews{Raw: composedResource, Clean: composedResource},
 								Desired:      dt.ResourceViews{Raw: composedResource, Clean: composedResource},
 							}
-							rendered[diffKey2] = true
+							rendered.AddKey(diffKey2)
 
 							return diffs, rendered, nil
 						},
@@ -1030,14 +1031,17 @@ func TestDefaultDiffProcessor_PerformDiff_Groups(t *testing.T) {
 				}),
 				WithDiffCalculatorFactory(func(k8.ApplyClient, k8.AccessChecker, xp.ResourceTreeClient, ResourceManager, logging.Logger, renderer.DiffOptions, DryRunOn, Defaulter) DiffCalculator {
 					return &tu.MockDiffCalculator{
-						CalculateNonRemovalDiffsFn: func(_ context.Context, rendered *cmp.Unstructured, _ render.CompositionOutputs) (map[string]*dt.ResourceDiff, map[string]bool, error) {
+						CalculateNonRemovalDiffsFn: func(_ context.Context, rendered *cmp.Unstructured, _ render.CompositionOutputs) (map[string]*dt.ResourceDiff, types.RenderedResources, error) {
 							if rendered.GetName() == tt.failRender {
-								return nil, nil, errors.New("render failed")
+								return nil, types.RenderedResources{}, errors.New("render failed")
 							}
 
 							diff := bucket("parent", "same", rendered.GetName())
 
-							return map[string]*dt.ResourceDiff{sharedKey: diff}, map[string]bool{sharedKey: true}, nil
+							var keys types.RenderedResources
+							keys.AddKey(sharedKey)
+
+							return map[string]*dt.ResourceDiff{sharedKey: diff}, keys, nil
 						},
 					}
 				}),
@@ -3011,10 +3015,11 @@ func TestDefaultDiffProcessor_ProcessNestedXRs(t *testing.T) {
 				}),
 				WithDiffCalculatorFactory(func(k8.ApplyClient, k8.AccessChecker, xp.ResourceTreeClient, ResourceManager, logging.Logger, renderer.DiffOptions, DryRunOn, Defaulter) DiffCalculator {
 					return &tu.MockDiffCalculator{
-						CalculateNonRemovalDiffsFn: func(_ context.Context, xr *cmp.Unstructured, _ render.CompositionOutputs) (map[string]*dt.ResourceDiff, map[string]bool, error) {
+						CalculateNonRemovalDiffsFn: func(_ context.Context, xr *cmp.Unstructured, _ render.CompositionOutputs) (map[string]*dt.ResourceDiff, types.RenderedResources, error) {
 							// Return a simple diff for the XR to make the test pass
 							diffs := make(map[string]*dt.ResourceDiff)
-							rendered := make(map[string]bool)
+
+							var rendered types.RenderedResources
 							gvk := xr.GroupVersionKind()
 							resourceID := gvk.Kind + "/" + xr.GetName()
 							diffs[resourceID] = &dt.ResourceDiff{
@@ -3022,7 +3027,7 @@ func TestDefaultDiffProcessor_ProcessNestedXRs(t *testing.T) {
 								ResourceName: xr.GetName(),
 								DiffType:     dt.DiffTypeAdded,
 							}
-							rendered[resourceID] = true
+							rendered.AddKey(resourceID)
 
 							return diffs, rendered, nil
 						},

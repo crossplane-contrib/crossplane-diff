@@ -121,3 +121,71 @@ type CredentialFetchResult struct {
 	// rather than known-empty.
 	Absent []k8stypes.NamespacedName
 }
+
+// RenderedResources records what the render of a composite, and the renders of the XRs nested beneath
+// it, produced: what removal detection and input validation need to know about them. The zero value is
+// empty and ready to use. Lives here (not in diffprocessor, beside the DiffCalculator interface that
+// returns it) so the calculator's mock in cmd/diff/testutils can name it without an import cycle.
+//
+// It holds the rendered resources under two identities, because the two consumers mean different things
+// by "the same resource":
+//
+//   - Kubernetes identity, as a diff key: the object a rendering would be applied to. Input validation
+//     compares it across inputs, since two inputs reaching one object conflict whatever composed them.
+//   - Crossplane identity: the composition resource name (the crossplane.io/composition-resource-name
+//     annotation), which is unique only within the composite that desired it. Crossplane's garbage
+//     collector deletes a resource a composite composed exactly when the composite no longer desires a
+//     resource of that name, whatever API version or object the desired one would be applied as, so
+//     removal detection asks this one.
+type RenderedResources struct {
+	keys    map[string]bool
+	desired map[string]map[string]bool // composite identity -> composition resource names it desired
+}
+
+// AddKey records the diff key of a rendered composed resource, changed or not.
+func (r *RenderedResources) AddKey(key string) {
+	if r.keys == nil {
+		r.keys = make(map[string]bool)
+	}
+
+	r.keys[key] = true
+}
+
+// AddDesired records that the render of the composite with the given identity desired a composed resource
+// under compositionResourceName. The identity is the composite's version-independent one (group, kind,
+// namespace and name), so that what a removal check derives from the composite's cluster copy matches it.
+func (r *RenderedResources) AddDesired(composite, compositionResourceName string) {
+	if r.desired == nil {
+		r.desired = make(map[string]map[string]bool)
+	}
+
+	if r.desired[composite] == nil {
+		r.desired[composite] = make(map[string]bool)
+	}
+
+	r.desired[composite][compositionResourceName] = true
+}
+
+// Merge adds everything other records to r.
+func (r *RenderedResources) Merge(other RenderedResources) {
+	for key := range other.keys {
+		r.AddKey(key)
+	}
+
+	for composite, names := range other.desired {
+		for name := range names {
+			r.AddDesired(composite, name)
+		}
+	}
+}
+
+// Keys returns the diff keys of every rendered composed resource. The caller must not modify it.
+func (r *RenderedResources) Keys() map[string]bool {
+	return r.keys
+}
+
+// Desires reports whether the render of the composite with the given identity desired a composed resource
+// under compositionResourceName. A composite that was not rendered desires nothing.
+func (r *RenderedResources) Desires(composite, compositionResourceName string) bool {
+	return r.desired[composite][compositionResourceName]
+}

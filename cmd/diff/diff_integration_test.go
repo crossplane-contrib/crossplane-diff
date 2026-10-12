@@ -2556,6 +2556,12 @@ Summary: 2 modified, 2 removed`,
 			// to v1beta2. From Kubernetes' perspective, the resource exists as both versions simultaneously,
 			// so there's no apiVersion field change to show in the diff. The important thing is that the
 			// resource is matched (unchanged, not ---/+++), preventing delete/recreate operations.
+			//
+			// The XR composes the resource as Crossplane leaves it: controlled by the XR, and named in the
+			// XR's resourceRefs at v1beta1, the version it was composed at. Crossplane's garbage collector
+			// matches what an XR composed to what it renders by composition resource name, so it keeps the
+			// resource; removal detection must too, rather than report the v1beta1 reference unmatched by
+			// the v1beta2 render (#552).
 			reason:       "Validates XR upgrading composition revision that changes resource API version shows as update not remove/add",
 			outputFormat: "json",
 			setupFiles: []string{
@@ -2566,8 +2572,14 @@ Summary: 2 modified, 2 removed`,
 				"testdata/diff/resources/api-version-composition-revision-v1.yaml",
 				"testdata/diff/resources/api-version-composition-revision-v2.yaml",
 				"testdata/diff/resources/functions.yaml",
-				"testdata/diff/resources/existing-api-version-xr-rev1.yaml",
-				"testdata/diff/resources/existing-api-version-downstream-v1beta1.yaml",
+			},
+			crossplaneManagedResources: []HierarchicalOwnershipRelation{
+				{
+					OwnerFile: "testdata/diff/resources/existing-api-version-xr-rev1.yaml",
+					OwnedFiles: map[string]*HierarchicalOwnershipRelation{
+						"testdata/diff/resources/existing-api-version-downstream-v1beta1.yaml": nil,
+					},
+				},
 			},
 			inputFiles: []string{"testdata/diff/modified-api-version-xr-rev2.yaml"},
 			// Key assertion: nothing is added or removed, proving API version migration works. The
@@ -2576,6 +2588,38 @@ Summary: 2 modified, 2 removed`,
 			expectedStructuredOutput: tu.ExpectDiff().
 				WithSummary(0, 1, 0).
 				WithModifiedResource("XNopResource", "test-api-version-xr", "default"),
+			expectedError:    false,
+			expectedExitCode: dp.ExitCodeDiffDetected,
+		},
+		"CompositionRevisionUpgradesResourceAPIVersionAndChangesIt": {
+			// The same upgrade, with a change to the XR that the new revision renders into the resource too.
+			// The resource is one object, modified once at the version it is rendered at. Matched by API
+			// version, the v1beta1 reference was a removal contradicting that modification, and the xr
+			// command refused to combine the two diffs of one object (#552).
+			reason:       "Validates an API version change plus a field change is one modification, not a removal and a modification",
+			outputFormat: "json",
+			setupFiles: []string{
+				"testdata/diff/resources/xrd.yaml",
+				"testdata/diff/resources/api-version-composition-revision-v1.yaml",
+				"testdata/diff/resources/api-version-composition-revision-v2.yaml",
+				"testdata/diff/resources/functions.yaml",
+			},
+			crossplaneManagedResources: []HierarchicalOwnershipRelation{
+				{
+					OwnerFile: "testdata/diff/resources/existing-api-version-xr-rev1.yaml",
+					OwnedFiles: map[string]*HierarchicalOwnershipRelation{
+						"testdata/diff/resources/existing-api-version-downstream-v1beta1.yaml": nil,
+					},
+				},
+			},
+			inputFiles: []string{"testdata/diff/modified-api-version-xr-rev2-changed-field.yaml"},
+			expectedStructuredOutput: tu.ExpectDiff().
+				WithSummary(0, 2, 0).
+				WithModifiedResource("XApiMigrateResource", "test-api-version-xr-api-resource", "default").
+				WithFieldChange("spec.forProvider.configData", "test-value", "changed-value").
+				And().
+				WithModifiedResource("XNopResource", "test-api-version-xr", "default").
+				WithFieldChange("spec.coolField", "test-value", "changed-value"),
 			expectedError:    false,
 			expectedExitCode: dp.ExitCodeDiffDetected,
 		},
@@ -4134,6 +4178,10 @@ Summary: 1 modified`,
 			// identical at either version it renders unchanged, where an unmatched one would show as a
 			// +++ addition and a --- removal. The composition diff itself WILL show the template change
 			// from v1beta1 to v1beta2.
+			//
+			// As in TestDiffIntegration/CompositionRevisionUpgradesResourceAPIVersion, the XR composes the
+			// resource as Crossplane leaves it, named in its resourceRefs at v1beta1, so this also checks
+			// that it is not reported as removed (#552).
 			reason: "Validates composition upgrade that changes resource API version shows as update not remove/add",
 			setupFiles: []string{
 				"testdata/comp/resources/xrd.yaml",
@@ -4142,8 +4190,14 @@ Summary: 1 modified`,
 				// (not a composite), and an XRD would make it composite, causing infinite recursion.
 				"testdata/comp/resources/api-version-original-composition.yaml",
 				"testdata/comp/resources/functions.yaml",
-				"testdata/comp/resources/existing-api-version-xr.yaml",
-				"testdata/comp/resources/existing-api-version-downstream-v1beta1.yaml",
+			},
+			crossplaneManagedResources: []HierarchicalOwnershipRelation{
+				{
+					OwnerFile: "testdata/comp/resources/existing-api-version-xr.yaml",
+					OwnedFiles: map[string]*HierarchicalOwnershipRelation{
+						"testdata/comp/resources/existing-api-version-downstream-v1beta1.yaml": nil,
+					},
+				},
 			},
 			inputFiles: []string{"testdata/comp/api-version-updated-composition.yaml"},
 			namespace:  "default",

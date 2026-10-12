@@ -1634,6 +1634,12 @@ func (b *ResourceBuilder) WithControllerReference(kind, name, apiVersion, uid st
 	return b
 }
 
+// ControlledBy adds a controller owner reference to owner, by its apiVersion, kind, name and UID: what
+// Crossplane sets on every resource a composite composes.
+func (b *ResourceBuilder) ControlledBy(owner *un.Unstructured) *ResourceBuilder {
+	return b.WithControllerReference(owner.GetKind(), owner.GetName(), owner.GetAPIVersion(), string(owner.GetUID()))
+}
+
 // WithUID sets the resource's metadata.uid.
 func (b *ResourceBuilder) WithUID(uid string) *ResourceBuilder {
 	b.resource.SetUID(k8stypes.UID(uid))

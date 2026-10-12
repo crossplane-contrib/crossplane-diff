@@ -89,10 +89,10 @@ sequenceDiagram
                     DiffCalc->>DiffCalc: lenient Defaulter.Default(desired), mark dryRun.skipReason=disabled
                 end
             end
-            DiffCalc-->>DP: diffs + rendered keys
+            DiffCalc-->>DP: diffs + rendered (keys, desired resource names per composite)
 
-            DP->>DiffCalc: CalculateRemovedResourceDiffs(ctx, xr, renderedKeys)
-            DiffCalc->>ResMgr: walk live tree
+            DP->>DiffCalc: CalculateRemovedResourceDiffs(ctx, xr, rendered)
+            DiffCalc->>ResMgr: walk live tree, match by composition resource name
             DiffCalc-->>DP: removal diffs
         end
     end

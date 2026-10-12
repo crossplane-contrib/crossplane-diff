@@ -263,6 +263,12 @@ for new claims.
   2. **Phase 2 - Removal detection**: `CalculateRemovedResourceDiffs` identifies resources to be removed
   - This separation is critical because nested XRs must be processed before detecting removals
   - Nested XRs may render additional composed resources that shouldn't be marked as removals
+- Removal detection mirrors Crossplane's garbage collector: a composed resource is removed only when the composite that
+  controls it no longer desires its `crossplane.io/composition-resource-name`. It never matches by diff key, which
+  includes the apiVersion: a resource a new revision renders at a new apiVersion is still named at the old one in the
+  XR's `resourceRefs`, and Crossplane updates it in place (#552). Use Kubernetes identity (diff key, or the
+  version-independent `identityOf`) for "is this the same object"; use composition-resource-name, scoped to its
+  composite, for "does the composite still compose this". `types.RenderedResources` carries both
 
 **Resource Management**
 - `ResourceManager` handles all resource fetching and cluster state operations
