@@ -13,7 +13,10 @@ The `crossplane-diff` tool helps you:
 - **Analyze composition impact** showing how composition changes affect existing XRs in the cluster
 - **Support complex compositions** including functions, requirements, and environment configurations
 - **Handle both Crossplane v1 and v2** resource definitions, including namespaced composite resources
-- **Detect resources that would be removed** by your changes
+- **Detect resources that would be removed** by your changes, by the rule Crossplane's garbage collector applies: a
+  composed resource is removed only when the composite that controls it no longer renders a resource under its
+  `crossplane.io/composition-resource-name`. A resource a new revision renders at a new `apiVersion` is updated in place,
+  not removed
 
 ## Installation
 
@@ -448,7 +451,7 @@ Flags:
   `xpkg.crossplane.io/crossplane/crossplane:stable` by default, which satisfies this *when freshly
   pulled* — see below). Older images silently drop cluster-observed composed resources from the
   render pipeline. Because removal detection walks the live resource tree independently and marks
-  anything absent from the rendered set as removed, dropping observed resources produces
+  every composed resource the render no longer desires as removed, dropping observed resources produces
   **spurious removals**: resources that exist and will keep existing are reported as going away.
   An image older still — anything predating the `crossplane internal render` subcommand — fails
   outright with `crossplane: error: unexpected argument internal`; `crossplane-diff` appends a

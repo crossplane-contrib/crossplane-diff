@@ -13,6 +13,7 @@ import (
 	"github.com/crossplane/cli/v2/cmd/crossplane/common/resource"
 	"github.com/crossplane/cli/v2/cmd/crossplane/render"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	un "k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 
 	"github.com/crossplane/crossplane-runtime/v2/pkg/errors"
@@ -30,13 +31,14 @@ type DiffCalculator interface {
 	CalculateDiffs(ctx context.Context, xr *cmp.Unstructured, desired render.CompositionOutputs) (map[string]*dt.ResourceDiff, error)
 
 	// CalculateNonRemovalDiffs computes diffs for modified/added resources and returns
-	// the set of rendered resource keys. This is used by nested XR processing.
-	// Returns: (diffs map, rendered resource keys, error)
-	CalculateNonRemovalDiffs(ctx context.Context, xr *cmp.Unstructured, desired render.CompositionOutputs) (map[string]*dt.ResourceDiff, map[string]bool, error)
+	// what was rendered. This is used by nested XR processing.
+	// Returns: (diffs map, rendered resources, error)
+	CalculateNonRemovalDiffs(ctx context.Context, xr *cmp.Unstructured, desired render.CompositionOutputs) (map[string]*dt.ResourceDiff, dtypes.RenderedResources, error)
 
-	// CalculateRemovedResourceDiffs identifies resources that exist in the cluster but are not
-	// in the rendered set. This is called after nested XR processing is complete.
-	CalculateRemovedResourceDiffs(ctx context.Context, xr *un.Unstructured, renderedResources map[string]bool) (map[string]*dt.ResourceDiff, error)
+	// CalculateRemovedResourceDiffs identifies the composed resources in the cluster that Crossplane
+	// would garbage collect, given what was rendered. This is called after nested XR processing is
+	// complete.
+	CalculateRemovedResourceDiffs(ctx context.Context, xr *un.Unstructured, rendered dtypes.RenderedResources) (map[string]*dt.ResourceDiff, error)
 }
 
 // DefaultDiffCalculator implements the DiffCalculator interface.
@@ -222,8 +224,12 @@ func (c *DefaultDiffCalculator) CalculateDiff(ctx context.Context, composite *un
 //	  Phase 2: Now see [Resource-A, NestedXR-B, Resource-C, Resource-D] as rendered
 //	           No false removal detection!
 //
-// Returns: (diffs map, rendered resource keys, error).
-func (c *DefaultDiffCalculator) CalculateNonRemovalDiffs(ctx context.Context, xr *cmp.Unstructured, desired render.CompositionOutputs) (map[string]*dt.ResourceDiff, map[string]bool, error) {
+// What it records as rendered is keyed for both of its consumers; see dtypes.RenderedResources. Each
+// composed resource is recorded as desired by desired.CompositeResource, the composite render consumed
+// (for a claim, its backing XR, not the claim xr is), because that is the composite that composes it.
+//
+// Returns: (diffs map, rendered resources, error).
+func (c *DefaultDiffCalculator) CalculateNonRemovalDiffs(ctx context.Context, xr *cmp.Unstructured, desired render.CompositionOutputs) (map[string]*dt.ResourceDiff, dtypes.RenderedResources, error) {
 	xrName := xr.GetName()
 	c.logger.Debug("Calculating diffs",
 		"xr", xrName,
@@ -231,19 +237,22 @@ func (c *DefaultDiffCalculator) CalculateNonRemovalDiffs(ctx context.Context, xr
 
 	diffs := make(map[string]*dt.ResourceDiff)
 
-	var errs []error
-
-	renderedResources := make(map[string]bool)
+	var (
+		errs     []error
+		rendered dtypes.RenderedResources
+	)
 
 	if desired.CompositeResource == nil {
-		return nil, nil, errors.New("render produced no composite resource (possible fatal pipeline error)")
+		return nil, rendered, errors.New("render produced no composite resource (possible fatal pipeline error)")
 	}
+
+	compositeID := identityOf(desired.CompositeResource.GetUnstructured())
 
 	// Calculate diff for the XR. It is diffed as the caller passed it, never as rendered, nested or
 	// not: render adds nothing to an XR that belongs in its payload (see diffSingleResourceInternal).
 	xrDiff, err := c.CalculateDiff(ctx, nil, xr.GetUnstructured())
 	if err != nil || xrDiff == nil {
-		return nil, nil, errors.Wrap(err, "cannot calculate diff for XR")
+		return nil, rendered, errors.Wrap(err, "cannot calculate diff for XR")
 	}
 
 	// Always store the XR diff, even when DiffTypeEqual.
@@ -267,6 +276,13 @@ func (c *DefaultDiffCalculator) CalculateNonRemovalDiffs(ctx context.Context, xr
 		resourceID := fmt.Sprintf("%s/%s", kind, name)
 		if name == "" && generateName != "" {
 			resourceID = fmt.Sprintf("%s/%s*", kind, generateName)
+		}
+
+		// Recorded before anything below can skip the resource: the composite desires it whether or not
+		// it can be diffed, and that alone keeps Crossplane from garbage collecting what it composed under
+		// this name.
+		if resName, ok := un.GetAnnotations()["crossplane.io/composition-resource-name"]; ok {
+			rendered.AddDesired(compositeID, resName)
 		}
 
 		// For resources using generateName, the name will be empty but we shouldn't skip them
@@ -325,8 +341,8 @@ func (c *DefaultDiffCalculator) CalculateNonRemovalDiffs(ctx context.Context, xr
 			diffs[diffKey] = diff
 		}
 
-		renderedResources[diffKey] = true
-		c.logger.Debug("Added resource to renderedResources",
+		rendered.AddKey(diffKey)
+		c.logger.Debug("Added resource to rendered resources",
 			"xr", xrName,
 			"diffKey", diffKey,
 			"diffType", diff.DiffType)
@@ -335,28 +351,28 @@ func (c *DefaultDiffCalculator) CalculateNonRemovalDiffs(ctx context.Context, xr
 	// Log a summary
 	c.logger.Debug("Diff calculation complete",
 		"totalDiffs", len(diffs),
-		"renderedResourcesCount", len(renderedResources),
+		"renderedResourcesCount", len(rendered.Keys()),
 		"errors", len(errs),
 		"xr", xrName)
 
 	if len(errs) > 0 {
-		return diffs, renderedResources, errors.Join(errs...)
+		return diffs, rendered, errors.Join(errs...)
 	}
 
-	return diffs, renderedResources, nil
+	return diffs, rendered, nil
 }
 
 // CalculateDiffs computes all diffs including removals for the rendered resources.
 // This is the primary method that most code should use.
 func (c *DefaultDiffCalculator) CalculateDiffs(ctx context.Context, xr *cmp.Unstructured, desired render.CompositionOutputs) (map[string]*dt.ResourceDiff, error) {
 	// First calculate diffs for modified/added resources
-	diffs, renderedResources, err := c.CalculateNonRemovalDiffs(ctx, xr, desired)
+	diffs, rendered, err := c.CalculateNonRemovalDiffs(ctx, xr, desired)
 	if err != nil {
 		return nil, err
 	}
 
 	// Then detect removed resources
-	removedDiffs, err := c.CalculateRemovedResourceDiffs(ctx, xr.GetUnstructured(), renderedResources)
+	removedDiffs, err := c.CalculateRemovedResourceDiffs(ctx, xr.GetUnstructured(), rendered)
 	if err != nil {
 		return nil, err
 	}
@@ -367,12 +383,25 @@ func (c *DefaultDiffCalculator) CalculateDiffs(ctx context.Context, xr *cmp.Unst
 	return diffs, nil
 }
 
-// CalculateRemovedResourceDiffs identifies resources that would be removed and calculates their diffs.
-func (c *DefaultDiffCalculator) CalculateRemovedResourceDiffs(ctx context.Context, xr *un.Unstructured, renderedResources map[string]bool) (map[string]*dt.ResourceDiff, error) {
+// CalculateRemovedResourceDiffs identifies the composed resources Crossplane would garbage collect, and
+// calculates their removal diffs.
+//
+// It applies Crossplane's own rule (crossplane v2.4.2, internal/controller/apiextensions/composite/
+// composition_functions.go). ExistingComposedResourceObserver.ObserveComposedResources observes each
+// resource in a composite's resourceRefs, keyed by its composition resource name, except one another
+// controller owns. DeletingComposedResourceGarbageCollector.GarbageCollectComposedResources then deletes
+// each observed resource whose name is not among the names the composite's render desired, unless it
+// has no controller reference. Matching is by composition resource name within the composite, never by
+// API version or object name: a resource rendered at a new apiVersion is updated in place (#552).
+//
+// The walk covers nested XRs' resources too, each matched against the composite it hangs from in the
+// tree, which is the one that composed it. A composite that was not rendered, such as a nested XR being
+// removed, desires nothing, so what it composed is removed with it.
+func (c *DefaultDiffCalculator) CalculateRemovedResourceDiffs(ctx context.Context, xr *un.Unstructured, rendered dtypes.RenderedResources) (map[string]*dt.ResourceDiff, error) {
 	xrName := xr.GetName()
 	c.logger.Debug("Checking for resources to be removed",
 		"xr", xrName,
-		"renderedResourceCount", len(renderedResources))
+		"renderedResourceCount", len(rendered.Keys()))
 
 	removedDiffs := make(map[string]*dt.ResourceDiff)
 
@@ -383,54 +412,85 @@ func (c *DefaultDiffCalculator) CalculateRemovedResourceDiffs(ctx context.Contex
 		return nil, errors.Wrap(err, "cannot get resource tree")
 	}
 
-	// Create a handler function to recursively traverse the tree and find composed resources
-	var findRemovedResources func(node *resource.Resource)
+	// The objects rendered, by version-independent identity, to tell when one Crossplane garbage collects
+	// is rendered again.
+	renderedIDs := make(map[string]bool, len(rendered.Keys()))
+	for key := range rendered.Keys() {
+		renderedIDs[diffKeyIdentity(key)] = true
+	}
 
-	findRemovedResources = func(node *resource.Resource) {
-		// Skip the root (XR) node
-		if _, hasAnno := node.Unstructured.GetAnnotations()["crossplane.io/composition-resource-name"]; hasAnno {
-			apiVersion := node.Unstructured.GetAPIVersion()
-			kind := node.Unstructured.GetKind()
-			name := node.Unstructured.GetName()
-			resourceID := fmt.Sprintf("%s/%s", kind, name)
+	var errs []error
 
-			// Use the same key format as in CalculateDiffs to check if this resource was rendered
-			key := dt.MakeDiffKey(apiVersion, kind, node.Unstructured.GetNamespace(), name)
+	// Create a handler function to recursively traverse the tree and find composed resources. composite
+	// is the node that node hangs from: the composite whose resourceRefs name it.
+	var findRemovedResources func(composite, node *resource.Resource)
 
-			if !renderedResources[key] {
-				// This resource exists but wasn't rendered - it will be removed
-				c.logger.Debug("Resource will be removed", "resource", resourceID)
+	findRemovedResources = func(composite, node *resource.Resource) {
+		// Only composed resources carry the annotation; a claim's backing XR, say, does not.
+		if resName, hasAnno := node.Unstructured.GetAnnotations()["crossplane.io/composition-resource-name"]; hasAnno && garbageCollected(composite, node, resName, rendered) {
+			resourceID := fmt.Sprintf("%s/%s", node.Unstructured.GetKind(), node.Unstructured.GetName())
 
-				diff, err := renderer.GenerateDiffWithOptions(ctx, &node.Unstructured, nil, c.logger, c.diffOptions)
-				if err != nil {
-					c.logger.Debug("Cannot calculate removal diff (continuing)",
-						"resource", resourceID,
-						"error", err)
+			// Crossplane garbage collects before it applies what was rendered, so it would delete this
+			// object and then create it again: a removal and an addition that no single diff of it shows.
+			if id := identityOf(&node.Unstructured); id != "" && renderedIDs[id] {
+				errs = append(errs, errors.Errorf("cannot calculate removals for XR %s: %s/%s composed %s as %q, which "+
+					"it no longer renders, but it renders the same object again under another composition resource "+
+					"name; Crossplane deletes the resource it no longer renders before it applies the ones it does, "+
+					"so it would delete the object and create it again, which no single diff predicts",
+					xrName, composite.Unstructured.GetKind(), composite.Unstructured.GetName(), resourceID, resName))
 
-					return
-				}
+				return
+			}
 
-				if diff != nil {
-					diffKey := diff.GetDiffKey()
-					removedDiffs[diffKey] = diff
-				}
+			c.logger.Debug("Resource will be removed", "resource", resourceID)
+
+			diff, err := renderer.GenerateDiffWithOptions(ctx, &node.Unstructured, nil, c.logger, c.diffOptions)
+			if err != nil {
+				c.logger.Debug("Cannot calculate removal diff (continuing)",
+					"resource", resourceID,
+					"error", err)
+
+				return
+			}
+
+			if diff != nil {
+				diffKey := diff.GetDiffKey()
+				removedDiffs[diffKey] = diff
 			}
 		}
 
 		// Continue recursively traversing children
 		for _, child := range node.Children {
-			findRemovedResources(child)
+			findRemovedResources(node, child)
 		}
 	}
 
 	// Start the traversal from the root's children to skip the XR itself
 	for _, child := range resourceTree.Children {
-		findRemovedResources(child)
+		findRemovedResources(resourceTree, child)
+	}
+
+	if len(errs) > 0 {
+		return nil, errors.Join(errs...)
 	}
 
 	c.logger.Debug("Found resources to be removed", "count", len(removedDiffs))
 
 	return removedDiffs, nil
+}
+
+// garbageCollected reports whether Crossplane would garbage collect node, which composite composed as
+// resName: whether composite controls node, and its render no longer desires resName. See
+// CalculateRemovedResourceDiffs.
+func garbageCollected(composite, node *resource.Resource, resName string, rendered dtypes.RenderedResources) bool {
+	// ObserveComposedResources skips a resource another controller owns, and
+	// GarbageCollectComposedResources never deletes one with no controller reference.
+	ctrl := metav1.GetControllerOf(&node.Unstructured)
+	if ctrl == nil || ctrl.UID != composite.Unstructured.GetUID() {
+		return false
+	}
+
+	return !rendered.Desires(identityOf(&composite.Unstructured), resName)
 }
 
 // dryRunCreateAddition computes the post-apply form of a resource that does not yet exist, by

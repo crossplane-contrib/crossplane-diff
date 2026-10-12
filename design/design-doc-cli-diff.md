@@ -250,6 +250,9 @@ The integration test cases cover:
 - **Composed Resource Deleted Out of Band**: Verifies, for both `xr` and `comp`, that a composed resource the XR still
   references but which no longer exists is left out of the observed state with a warning, rather than silently dropped.
   The fatal case (a child that cannot be read) is unit-tested only, since envtest grants the harness every permission.
+- **API Version Change Is Not a Removal**: Verifies, for both `xr` and `comp`, that a composed resource the XR names
+  in its `resourceRefs` at `v1beta1`, which the new revision renders at `v1beta2`, is not reported as removed, and
+  that a field change rendered alongside the version change is one modification rather than an error (#552).
 
 ### 4.6 Resource Naming Patterns
 
@@ -948,17 +951,45 @@ type DiffCalculator interface {
     CalculateDiffs(ctx context.Context, xr *cmp.Unstructured, desired render.CompositionOutputs) (map[string]*dt.ResourceDiff, error)
 
     // CalculateNonRemovalDiffs computes diffs for everything in the rendered set, returning the diffs and
-    // a set of rendered resource keys. Splitting this from removal detection lets nested XRs be processed
-    // before any "missing from render" decisions are made (a nested XR may render additional resources
-    // that the parent's render does not see).
+    // what was rendered (types.RenderedResources, below). Splitting this from removal detection lets nested
+    // XRs be processed before any "missing from render" decisions are made (a nested XR may render
+    // additional resources that the parent's render does not see).
     // xr is diffed exactly as passed in — for DefaultDiffProcessor, the authored XR (§7.1) — never as rendered.
-    CalculateNonRemovalDiffs(ctx context.Context, xr *cmp.Unstructured, desired render.CompositionOutputs) (map[string]*dt.ResourceDiff, map[string]bool, error)
+    CalculateNonRemovalDiffs(ctx context.Context, xr *cmp.Unstructured, desired render.CompositionOutputs) (map[string]*dt.ResourceDiff, types.RenderedResources, error)
 
-    // CalculateRemovedResourceDiffs identifies resources that exist in the cluster under this XR but are
-    // absent from the merged set of rendered resource keys, and produces removal diffs for them.
-    CalculateRemovedResourceDiffs(ctx context.Context, xr *un.Unstructured, renderedResources map[string]bool) (map[string]*dt.ResourceDiff, error)
+    // CalculateRemovedResourceDiffs identifies the composed resources in the cluster under this XR that
+    // Crossplane would garbage collect, given the merged renders, and produces removal diffs for them.
+    CalculateRemovedResourceDiffs(ctx context.Context, xr *un.Unstructured, rendered types.RenderedResources) (map[string]*dt.ResourceDiff, error)
 }
 ```
+
+`types.RenderedResources` (in `cmd/diff/types`, so the calculator's mock can name it) records each rendered composed
+resource under two identities, because its two consumers mean different things by "the same resource":
+
+- its **diff key**, i.e. Kubernetes identity. `InputValidator.RecordRender` receives these (`Keys()`), since two inputs
+  reaching one object conflict whatever composed them (§6.7a);
+- its **composition resource name** (`crossplane.io/composition-resource-name`), as desired by the composite whose
+  render produced it (`AddDesired`/`Desires`, keyed by the composite's version-independent identity). A composition
+  resource name is unique only within its composite, so a root XR and a nested XR may both use `bucket`. The composite
+  recorded is the one render consumed (`desired.CompositeResource`): for a claim, its backing XR.
+
+**Removal detection matches Crossplane's garbage collector.** In crossplane v2.4.2
+(`internal/controller/apiextensions/composite/composition_functions.go`), `ExistingComposedResourceObserver.
+ObserveComposedResources` observes each resource in a composite's `resourceRefs`, keyed by its composition resource
+name, skipping any another controller owns. `DeletingComposedResourceGarbageCollector.GarbageCollectComposedResources`
+then deletes each observed resource whose name is not a key of the desired resources, unless it has no controller
+reference. `CalculateRemovedResourceDiffs` applies the same rule. It walks the XR's resource tree, and treats a composed
+resource as removed only when its controller reference names the composite it hangs from in the tree (by UID) and that
+composite's render no longer desires its composition resource name. A composite that was not rendered, such as a nested
+XR being removed, desires nothing, so what it composed is removed with it.
+
+Matching is deliberately not by diff key. A resource Crossplane composed at `v1beta1`, which a new revision renders at
+`v1beta2`, is still named at `v1beta1` in the XR's `resourceRefs`, so a key match would report it removed. Crossplane
+updates it in place. The false removal also contradicted the resource's own modification at `v1beta2`, which made `xr`
+refuse to combine the two diffs of one object (#552). The reverse case is an error. If a composite stops rendering one
+composition resource name but renders the same object again under another, Crossplane garbage collects the object
+before it applies the new rendering, so it would delete the object and create it again. No single diff shows that, so
+the XR fails.
 
 The two-phase split (`CalculateNonRemovalDiffs` + `CalculateRemovedResourceDiffs`) is load-bearing: when an XR contains
 nested XRs, the parent must finish processing its children before the framework can decide what counts as "removed".
@@ -1638,7 +1669,9 @@ contract:
   object twice, under two composition resource names or at two API versions — never reaches this check, because
   the per-XR diff map would collapse or split it; `CalculateNonRemovalDiffs` fails that XR instead (#505), since
   Crossplane applies both renderings with one field manager in no fixed order and no single diff predicts the
-  result. Because `comp` diffs each affected XR through the same calculator, it fails such an XR too.
+  result. Because `comp` diffs each affected XR through the same calculator, it fails such an XR too. Nor does a
+  resource whose API version a new revision changes: removal detection matches what an XR composed to its render
+  by composition resource name (§6.3.1), so the old version is not reported as a removal beside the new one (#552).
 - `xrDiffWire` — one entry in the `xrs[]` array, per input XR/claim in input order: an `xr` identity object, a
   `status` (`"changed"` / `"unchanged"` / `"error"` — the same `XRStatus` enum comp uses; `"filtered"` does not apply
   to `xr`), its own `summary`, its own `changes[]`, and (for a failed XR) its own `errors[]`.
@@ -1984,9 +2017,13 @@ The client layer provides interfaces to interact with Kubernetes and Crossplane 
       against the apiserver's view of the desired state — a dry-run apply for a resource that already exists, a dry-run
       create for an addition (§6.3.2). A resource the dry run could not reach falls back to rendered output plus
       locally predicted CRD defaults (§6.5a) and is marked; one the cluster refuses fails the XR.
-    - Once the whole tree has been processed, `DiffCalculator.CalculateRemovedResourceDiffs` identifies resources that
-      exist in the cluster under this XR but no longer appear in the rendered set. These are built straight from cluster
-      state and never carry a `DryRunInfo` — there is no desired state to preview.
+    - Once the whole tree has been processed, `DiffCalculator.CalculateRemovedResourceDiffs` identifies the resources
+      Crossplane would garbage collect: each composed resource in the cluster that the composite it hangs from in the
+      resource tree controls, and whose composition resource name that composite's render no longer desires (§6.3.1).
+      Nested XRs' renders are merged into their parent's before this runs, so each nested XR's resources are matched
+      against its own render. A resource rendered at a new API version is therefore updated in place, not removed.
+      Removals are built straight from cluster state and never carry a `DryRunInfo` — there is no desired state to
+      preview.
     - The `DiffRenderer` (human-readable or structured) formats and displays the result.
 5. `Cleanup` tears down any function containers / networks created during rendering. This is essential — without it,
    Docker resources leak for the lifetime of the process.

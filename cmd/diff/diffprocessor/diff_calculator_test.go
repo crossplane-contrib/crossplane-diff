@@ -2,6 +2,7 @@ package diffprocessor
 
 import (
 	"context"
+	"sort"
 	"strings"
 	"testing"
 
@@ -11,6 +12,7 @@ import (
 	dt "github.com/crossplane-contrib/crossplane-diff/cmd/diff/renderer/types"
 	tu "github.com/crossplane-contrib/crossplane-diff/cmd/diff/testutils"
 	dtypes "github.com/crossplane-contrib/crossplane-diff/cmd/diff/types"
+	"github.com/crossplane/cli/v2/cmd/crossplane/common/resource"
 	"github.com/crossplane/cli/v2/cmd/crossplane/render"
 	gcmp "github.com/google/go-cmp/cmp"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -1058,6 +1060,7 @@ func TestDefaultDiffCalculator_CalculateDiffs(t *testing.T) {
 
 	// Create existing resources for the client to find
 	existingXRBuilder := tu.NewResource("example.org/v1", "XR", "test-xr").
+		WithUID("xr-uid").
 		WithSpecField("field", "old-value")
 	existingXR := existingXRBuilder.Build()
 	existingXrUComp := existingXRBuilder.BuildUComposite()
@@ -1065,8 +1068,34 @@ func TestDefaultDiffCalculator_CalculateDiffs(t *testing.T) {
 	existingComposed := tu.NewResource("example.org/v1", "Composed", "cpd-1").
 		WithCompositeOwner("test-xr").
 		WithCompositionResourceName("resource-1").
+		ControlledBy(existingXR).
 		WithSpecField("field", "old-value").
 		Build()
+
+	// cpd-1 as the XR's resourceRefs (and so its resource tree) name it after it was composed at v1beta1,
+	// before a revision moved it to v1beta2. The apiserver serves the one object at both versions.
+	composedAt := func(apiVersion, value string) *tu.ResourceBuilder {
+		return tu.NewResource(apiVersion, "Composed", "cpd-1").
+			WithCompositeOwner("test-xr").
+			WithCompositionResourceName("resource-1").
+			WithSpecField("field", value)
+	}
+	observedAtV1beta1 := composedAt("example.org/v1beta1", "old-value").ControlledBy(existingXR).Build()
+	existingAtV1beta2 := composedAt("example.org/v1beta2", "old-value").ControlledBy(existingXR).Build()
+
+	// apiVersionBump sets up the cluster for a render that moves cpd-1 from v1beta1 to v1beta2.
+	apiVersionBump := func(t *testing.T) (k8.ApplyClient, xp.ResourceTreeClient, ResourceManager) {
+		t.Helper()
+
+		resourceClient := tu.NewMockResourceClient().
+			WithResourcesExist(existingXR, observedAtV1beta1, existingAtV1beta2).
+			WithResourcesFoundByLabel([]*un.Unstructured{existingAtV1beta2}, "crossplane.io/composite", "test-xr").
+			Build()
+
+		return tu.NewMockApplyClient().WithSuccessfulDryRun().Build(),
+			tu.NewMockResourceTreeClient().WithResourceTreeFromXRAndComposed(existingXR, []*un.Unstructured{observedAtV1beta1}).Build(),
+			NewResourceManager(resourceClient, tu.NewMockDefinitionClient().Build(), tu.NewMockResourceTreeClient().Build(), tu.TestLogger(t, false))
+	}
 
 	tests := map[string]struct {
 		setupMocks    func(t *testing.T) (k8.ApplyClient, xp.ResourceTreeClient, ResourceManager)
@@ -1194,6 +1223,7 @@ func TestDefaultDiffCalculator_CalculateDiffs(t *testing.T) {
 				extraComposedResource := tu.NewResource("example.org/v1", "Composed", "cpd-2").
 					WithCompositeOwner("test-xr").
 					WithCompositionResourceName("resource-to-be-removed").
+					ControlledBy(existingXR).
 					WithSpecField("field", "value").
 					Build()
 
@@ -1241,6 +1271,7 @@ func TestDefaultDiffCalculator_CalculateDiffs(t *testing.T) {
 				existingComposedWithOldValue := tu.NewResource("example.org/v1", "Composed", "cpd-1").
 					WithCompositeOwner("test-xr").
 					WithCompositionResourceName("resource-1").
+					ControlledBy(existingXR).
 					WithSpecField("field", "old-value").
 					Build()
 
@@ -1248,6 +1279,7 @@ func TestDefaultDiffCalculator_CalculateDiffs(t *testing.T) {
 				extraResource := tu.NewResource("example.org/v1", "Composed", "resource-to-remove").
 					WithCompositeOwner("test-xr").
 					WithCompositionResourceName("resource-to-remove").
+					ControlledBy(existingXR).
 					Build()
 
 				// Create mock apply client
@@ -1294,6 +1326,34 @@ func TestDefaultDiffCalculator_CalculateDiffs(t *testing.T) {
 				"example.org/v1/Composed//resource-to-remove": dt.DiffTypeRemoved,
 			},
 			wantErr: false,
+		},
+		// #552: Crossplane matches what a composite composed to what it renders by composition resource
+		// name, so moving a resource to a new API version updates it in place. The version it was composed
+		// at, which the XR's resourceRefs still name, must not be reported as removed.
+		"APIVersionBumpAloneIsNoChange": {
+			setupMocks: apiVersionBump,
+			inputXR:    modifiedXr,
+			renderedOut: render.CompositionOutputs{
+				CompositeResource: renderedXR,
+				ComposedResources: []cpd.Unstructured{*composedAt("example.org/v1beta2", "old-value").BuildUComposed()},
+			},
+			expectedDiffs: map[string]dt.DiffType{
+				"example.org/v1/XR//test-xr": dt.DiffTypeModified,
+			},
+		},
+		"APIVersionBumpWithFieldChangeIsOneModification": {
+			setupMocks: apiVersionBump,
+			inputXR:    modifiedXr,
+			renderedOut: render.CompositionOutputs{
+				CompositeResource: renderedXR,
+				ComposedResources: []cpd.Unstructured{*composedAt("example.org/v1beta2", "new-value").BuildUComposed()},
+			},
+			// One diff for the object, at the version it is rendered at: no removal at the old version to
+			// contradict it.
+			expectedDiffs: map[string]dt.DiffType{
+				"example.org/v1/XR//test-xr":          dt.DiffTypeModified,
+				"example.org/v1beta2/Composed//cpd-1": dt.DiffTypeModified,
+			},
 		},
 		"SameObjectUnderTwoResourceNamesFails": {
 			setupMocks: func(t *testing.T) (k8.ApplyClient, xp.ResourceTreeClient, ResourceManager) {
@@ -1440,106 +1500,173 @@ func TestDefaultDiffCalculator_CalculateDiffs(t *testing.T) {
 func TestDefaultDiffCalculator_CalculateRemovedResourceDiffs(t *testing.T) {
 	ctx := t.Context()
 
-	// Create a test XR
+	// The XR as the cluster holds it: removal detection reads it from the resource tree, UID and all.
 	xr := tu.NewResource("example.org/v1", "XR", "test-xr").
+		WithUID("xr-uid").
 		Build()
 
-	// Create a resource tree with two resources
-	resourceToKeep := tu.NewResource("example.org/v1", "Composed", "resource-to-keep").
-		WithCompositeOwner("test-xr").
-		WithCompositionResourceName("resource-to-keep").
-		Build()
+	// composedBy is a resource owner composed under the given composition resource name, as Crossplane leaves
+	// it: controlled by owner, labelled with the root composite, and (by being in the tree) in owner's
+	// resourceRefs.
+	composedBy := func(owner *un.Unstructured, apiVersion, name, resourceName string) *tu.ResourceBuilder {
+		return tu.NewResource(apiVersion, "Composed", name).
+			WithCompositeOwner(xr.GetName()).
+			WithCompositionResourceName(resourceName).
+			ControlledBy(owner)
+	}
 
-	resourceToRemove := tu.NewResource("example.org/v1", "Composed", "resource-to-remove").
-		WithCompositeOwner("test-xr").
-		WithCompositionResourceName("resource-to-remove").
+	resourceToKeep := composedBy(xr, "example.org/v1", "resource-to-keep", "keep").Build()
+	resourceToRemove := composedBy(xr, "example.org/v1", "resource-to-remove", "remove").Build()
+
+	// A nested XR, and a resource it composed under a composition resource name its parent also uses.
+	nestedXR := tu.NewResource("example.org/v1", "XNested", "nested-xr").
+		WithUID("nested-uid").
+		WithCompositeOwner(xr.GetName()).
+		WithCompositionResourceName("nested").
+		ControlledBy(xr).
 		Build()
+	nestedChild := composedBy(nestedXR, "example.org/v1", "nested-child", "keep").Build()
+
+	// renderOf is one composite's render: the composite, and the composed resources it desired.
+	type renderOf struct {
+		composite *un.Unstructured
+		desired   []*un.Unstructured
+	}
+
+	// rendered records renders as CalculateNonRemovalDiffs and ProcessNestedXRs do.
+	rendered := func(renders ...renderOf) dtypes.RenderedResources {
+		var r dtypes.RenderedResources
+
+		for _, rd := range renders {
+			for _, d := range rd.desired {
+				r.AddDesired(identityOf(rd.composite), d.GetAnnotations()["crossplane.io/composition-resource-name"])
+				r.AddKey(dt.MakeDiffKeyFromResource(d))
+			}
+		}
+
+		return r
+	}
+
+	tree := func(root *un.Unstructured, children ...*tu.TreeNodeBuilder) xp.ResourceTreeClient {
+		return tu.NewMockResourceTreeClient().
+			WithGetResourceTree(func(context.Context, *un.Unstructured) (*resource.Resource, error) {
+				return tu.NewTreeNode(root).WithChildren(children...).Build(), nil
+			}).
+			Build()
+	}
+
+	type want struct {
+		Removed []string // diff keys, sorted
+		Err     string   // a substring of the error; empty for none
+	}
 
 	tests := map[string]struct {
-		setupMocks        func(t *testing.T) (k8.ApplyClient, xp.ResourceTreeClient, ResourceManager)
-		renderedResources map[string]bool
-		expectedRemoved   []string
-		wantErr           bool
+		reason   string
+		tree     xp.ResourceTreeClient
+		rendered dtypes.RenderedResources
+		want     want
 	}{
 		"IdentifiesRemovedResources": {
-			setupMocks: func(t *testing.T) (k8.ApplyClient, xp.ResourceTreeClient, ResourceManager) {
-				t.Helper()
-
-				// Create a mock apply client (not used in this test)
-				applyClient := tu.NewMockApplyClient().Build()
-
-				// Create a resource tree client that returns a tree with both resources
-				resourceTreeClient := tu.NewMockResourceTreeClient().
-					WithResourceTreeFromXRAndComposed(
-						xr,
-						[]*un.Unstructured{resourceToKeep, resourceToRemove},
-					).
-					Build()
-
-				// Create a resource manager (not directly used in this test)
-				resourceClient := tu.NewMockResourceClient().Build()
-				resourceManager := NewResourceManager(resourceClient, tu.NewMockDefinitionClient().Build(), tu.NewMockResourceTreeClient().Build(), tu.TestLogger(t, false))
-
-				return applyClient, resourceTreeClient, resourceManager
-			},
-			// Only include the "resource-to-keep" in rendered resources
-			renderedResources: map[string]bool{
-				"example.org/v1/Composed//resource-to-keep": true,
-				// "example.org/v1/Composed//resource-to-remove" intentionally not included
-			},
-			expectedRemoved: []string{"resource-to-remove"},
-			wantErr:         false,
+			reason:   "A resource whose composition resource name the XR no longer desires is removed.",
+			tree:     tree(xr, tu.NewTreeNode(resourceToKeep), tu.NewTreeNode(resourceToRemove)),
+			rendered: rendered(renderOf{xr, []*un.Unstructured{resourceToKeep}}),
+			want:     want{Removed: []string{"example.org/v1/Composed//resource-to-remove"}},
 		},
 		"NoRemovedResources": {
-			setupMocks: func(t *testing.T) (k8.ApplyClient, xp.ResourceTreeClient, ResourceManager) {
-				t.Helper()
-
-				// Create a mock apply client (not used in this test)
-				applyClient := tu.NewMockApplyClient().Build()
-
-				// Create a resource tree client that returns a tree with both resources
-				resourceTreeClient := tu.NewMockResourceTreeClient().
-					WithResourceTreeFromXRAndComposed(
-						xr,
-						[]*un.Unstructured{resourceToKeep, resourceToRemove},
-					).
-					Build()
-
-				// Create a resource manager (not directly used in this test)
-				resourceClient := tu.NewMockResourceClient().Build()
-				resourceManager := NewResourceManager(resourceClient, tu.NewMockDefinitionClient().Build(), tu.NewMockResourceTreeClient().Build(), tu.TestLogger(t, false))
-
-				return applyClient, resourceTreeClient, resourceManager
-			},
-			// Include all resources in rendered resources (nothing to remove)
-			renderedResources: map[string]bool{
-				"example.org/v1/Composed//resource-to-keep":   true,
-				"example.org/v1/Composed//resource-to-remove": true,
-			},
-			expectedRemoved: []string{},
-			wantErr:         false,
+			reason:   "Nothing is removed while the XR desires every composition resource name it composed.",
+			tree:     tree(xr, tu.NewTreeNode(resourceToKeep), tu.NewTreeNode(resourceToRemove)),
+			rendered: rendered(renderOf{xr, []*un.Unstructured{resourceToKeep, resourceToRemove}}),
+			want:     want{},
+		},
+		"APIVersionChangeIsNotRemoval": {
+			reason: "Crossplane matches what it observed to what is desired by composition resource name, so a " +
+				"resource rendered at a new API version is updated in place, not deleted (#552).",
+			tree: tree(xr, tu.NewTreeNode(composedBy(xr, "example.org/v1beta1", "migrating", "migrating").Build())),
+			rendered: rendered(renderOf{xr, []*un.Unstructured{
+				composedBy(xr, "example.org/v1beta2", "migrating", "migrating").Build(),
+			}}),
+			want: want{},
+		},
+		"ObjectRenamedUnderSameResourceNameIsNotRemoval": {
+			reason: "What Crossplane matches is the composition resource name; it applies the desired resource " +
+				"under the observed one's name, so nothing is deleted.",
+			tree: tree(xr, tu.NewTreeNode(resourceToKeep)),
+			rendered: rendered(renderOf{xr, []*un.Unstructured{
+				composedBy(xr, "example.org/v1", "resource-renamed", "keep").Build(),
+			}}),
+			want: want{},
+		},
+		"ResourceNameDesiredOnlyByAnotherComposite": {
+			reason: "Composition resource names are unique only within a composite, so the root desiring \"keep\" " +
+				"does not keep the nested XR's \"keep\" once the nested XR no longer desires it.",
+			tree: tree(xr, tu.NewTreeNode(resourceToKeep), tu.NewTreeNode(nestedXR).WithChildren(tu.NewTreeNode(nestedChild))),
+			rendered: rendered(
+				renderOf{xr, []*un.Unstructured{resourceToKeep, nestedXR}},
+				renderOf{nestedXR, nil},
+			),
+			want: want{Removed: []string{"example.org/v1/Composed//nested-child"}},
+		},
+		"NestedXRKeepsWhatItDesires": {
+			reason: "A nested XR's composed resources are matched against the nested XR's own render.",
+			tree:   tree(xr, tu.NewTreeNode(resourceToKeep), tu.NewTreeNode(nestedXR).WithChildren(tu.NewTreeNode(nestedChild))),
+			rendered: rendered(
+				renderOf{xr, []*un.Unstructured{resourceToKeep, nestedXR}},
+				renderOf{nestedXR, []*un.Unstructured{nestedChild}},
+			),
+			want: want{},
+		},
+		"RemovedNestedXRTakesItsResourcesWithIt": {
+			reason:   "A nested XR the root no longer desires is removed, and with it everything it composed.",
+			tree:     tree(xr, tu.NewTreeNode(resourceToKeep), tu.NewTreeNode(nestedXR).WithChildren(tu.NewTreeNode(nestedChild))),
+			rendered: rendered(renderOf{xr, []*un.Unstructured{resourceToKeep}}),
+			want: want{Removed: []string{
+				"example.org/v1/Composed//nested-child",
+				"example.org/v1/XNested//nested-xr",
+			}},
+		},
+		"ClaimRootMatchesAgainstItsBackingXR": {
+			reason: "A claim's tree reaches the composed resources through its backing XR, which composed them.",
+			tree: tree(
+				tu.NewResource("example.org/v1", "Claim", "test-claim").InNamespace("ns").Build(),
+				tu.NewTreeNode(xr).WithChildren(tu.NewTreeNode(resourceToKeep), tu.NewTreeNode(resourceToRemove)),
+			),
+			rendered: rendered(renderOf{xr, []*un.Unstructured{resourceToKeep}}),
+			want:     want{Removed: []string{"example.org/v1/Composed//resource-to-remove"}},
+		},
+		"UncontrolledResourceIsNotRemoved": {
+			reason: "Crossplane never garbage collects a resource with no controller reference, since it cannot " +
+				"prove it composed it.",
+			tree: tree(xr, tu.NewTreeNode(tu.NewResource("example.org/v1", "Composed", "uncontrolled").
+				WithCompositeOwner(xr.GetName()).
+				WithCompositionResourceName("remove").
+				Build())),
+			rendered: rendered(renderOf{xr, nil}),
+			want:     want{},
+		},
+		"ResourceControlledByAnotherIsNotRemoved": {
+			reason: "Crossplane does not observe a resource another controller owns, so never garbage collects it.",
+			tree: tree(xr, tu.NewTreeNode(composedBy(
+				tu.NewResource("example.org/v1", "XR", "other-xr").WithUID("other-uid").Build(),
+				"example.org/v1", "foreign", "remove").Build())),
+			rendered: rendered(renderOf{xr, nil}),
+			want:     want{},
+		},
+		"ObjectRenderedAgainUnderAnotherResourceNameFails": {
+			reason: "Crossplane deletes what it composed as \"remove\" before it applies the object again as " +
+				"\"other\", so it would delete and recreate it. No single diff for the object predicts that.",
+			tree: tree(xr, tu.NewTreeNode(resourceToRemove)),
+			rendered: rendered(renderOf{xr, []*un.Unstructured{
+				composedBy(xr, "example.org/v1", "resource-to-remove", "other").Build(),
+			}}),
+			want: want{Err: `XR/test-xr composed Composed/resource-to-remove as "remove", which it no longer ` +
+				`renders, but it renders the same object again under another composition resource name`},
 		},
 		"ErrorGettingResourceTree": {
-			setupMocks: func(t *testing.T) (k8.ApplyClient, xp.ResourceTreeClient, ResourceManager) {
-				t.Helper()
-
-				// Create a mock apply client (not used in this test)
-				applyClient := tu.NewMockApplyClient().Build()
-
-				// Create a resource tree client that returns an error
-				resourceTreeClient := tu.NewMockResourceTreeClient().
-					WithFailedResourceTreeFetch("failed to get resource tree").
-					Build()
-
-				// Create a resource manager (not directly used in this test)
-				resourceClient := tu.NewMockResourceClient().Build()
-				resourceManager := NewResourceManager(resourceClient, tu.NewMockDefinitionClient().Build(), tu.NewMockResourceTreeClient().Build(), tu.TestLogger(t, false))
-
-				return applyClient, resourceTreeClient, resourceManager
-			},
-			renderedResources: map[string]bool{},
-			expectedRemoved:   []string{},
-			wantErr:           true,
+			reason: "A tree that cannot be fetched fails removal detection.",
+			tree: tu.NewMockResourceTreeClient().
+				WithFailedResourceTreeFetch("failed to get resource tree").
+				Build(),
+			want: want{Err: "cannot get resource tree"},
 		},
 	}
 
@@ -1547,64 +1674,40 @@ func TestDefaultDiffCalculator_CalculateRemovedResourceDiffs(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			logger := tu.TestLogger(t, false)
 
-			// Setup mocks
-			applyClient, resourceTreeClient, resourceManager := tt.setupMocks(t)
-
-			// Create a diff calculator with the mocks
 			calculator := NewDiffCalculator(
-				applyClient,
+				tu.NewMockApplyClient().Build(),
 				tu.NewMockAccessChecker().Build(),
-				resourceTreeClient,
-				resourceManager,
+				tt.tree,
+				NewResourceManager(tu.NewMockResourceClient().Build(), tu.NewMockDefinitionClient().Build(), tu.NewMockResourceTreeClient().Build(), logger),
 				logger,
 				renderer.DefaultDiffOptions(),
 				DryRunOnAll,
 				&tu.MockDefaulter{},
 			)
 
-			// Call the method under test
-			diffs, err := calculator.CalculateRemovedResourceDiffs(ctx, xr, tt.renderedResources)
+			diffs, err := calculator.CalculateRemovedResourceDiffs(ctx, xr, tt.rendered)
 
-			if tt.wantErr {
-				if err == nil {
-					t.Errorf("CalculateRemovedResourceDiffs() expected error but got none")
-				}
+			var got want
 
-				return
-			}
-
-			// Even if we expect a warning-level error, we shouldn't get an actual error return
 			if err != nil {
-				t.Errorf("CalculateRemovedResourceDiffs() unexpected error: %v", err)
-				return
+				got.Err = err.Error()
+				if tt.want.Err != "" && strings.Contains(got.Err, tt.want.Err) {
+					got.Err = tt.want.Err // matched as a substring
+				}
 			}
 
-			// Check that the correct resources were identified for removal
-			if diff := gcmp.Diff(len(tt.expectedRemoved), len(diffs)); diff != "" {
-				t.Errorf("CalculateRemovedResourceDiffs() number of removed resources mismatch (-want +got):\n%s", diff)
-
-				// Log what we found for debugging
-				for key := range diffs {
-					t.Logf("Found resource to remove: %s", key)
+			for key, d := range diffs {
+				if d.DiffType != dt.DiffTypeRemoved {
+					t.Errorf("%s\nCalculateRemovedResourceDiffs(): %s has diff type %s, want %s", tt.reason, key, d.DiffType, dt.DiffTypeRemoved)
 				}
 
-				return
+				got.Removed = append(got.Removed, key)
 			}
 
-			// Verify each expected removed resource is in the result
-			for _, name := range tt.expectedRemoved {
-				found := false
+			sort.Strings(got.Removed)
 
-				for key, diff := range diffs {
-					if strings.Contains(key, name) && diff.DiffType == dt.DiffTypeRemoved {
-						found = true
-						break
-					}
-				}
-
-				if !found {
-					t.Errorf("Expected to find %s marked for removal but did not", name)
-				}
+			if diff := gcmp.Diff(tt.want, got); diff != "" {
+				t.Errorf("%s\nCalculateRemovedResourceDiffs(): -want, +got:\n%s", tt.reason, diff)
 			}
 		})
 	}
@@ -2197,5 +2300,110 @@ func TestCalculateNonRemovalDiffs_NilCompositeResource(t *testing.T) {
 	want := "render produced no composite resource (possible fatal pipeline error)"
 	if err.Error() != want {
 		t.Errorf("error message = %q, want %q", err.Error(), want)
+	}
+}
+
+// TestDefaultDiffCalculator_CalculateNonRemovalDiffsRendered checks what CalculateNonRemovalDiffs records as
+// rendered, which removal detection relies on: every resource's diff key, and each composition resource name
+// as desired by the composite render consumed.
+func TestDefaultDiffCalculator_CalculateNonRemovalDiffsRendered(t *testing.T) {
+	xr := tu.NewResource("example.org/v1", "XR", "test-xr").InNamespace("ns").Build()
+	backingXR := tu.NewResource("example.org/v1", "XR", "test-claim-abcde").Build()
+	claim := tu.NewResource("example.org/v1", "Claim", "test-claim").InNamespace("ns").Build()
+
+	composed := func(name, resourceName string) *un.Unstructured {
+		return tu.NewResource("example.org/v1", "Composed", name).
+			InNamespace("ns").
+			WithCompositionResourceName(resourceName).
+			Build()
+	}
+
+	a, b := composed("a", "res-a"), composed("b", "res-b")
+
+	// A rendered resource with neither name nor generateName cannot be diffed, but is still desired.
+	unnamed := tu.NewResource("example.org/v1", "Composed", "").WithCompositionResourceName("res-unnamed").Build()
+
+	rendered := func(composite *un.Unstructured, desired []*un.Unstructured, keys ...*un.Unstructured) dtypes.RenderedResources {
+		var r dtypes.RenderedResources
+
+		for _, d := range desired {
+			r.AddDesired(identityOf(composite), d.GetAnnotations()["crossplane.io/composition-resource-name"])
+		}
+
+		for _, k := range keys {
+			r.AddKey(dt.MakeDiffKeyFromResource(k))
+		}
+
+		return r
+	}
+
+	asComposite := func(u *un.Unstructured) *cmp.Unstructured {
+		c := cmp.New()
+		c.SetUnstructuredContent(u.DeepCopy().Object)
+
+		return c
+	}
+
+	asComposed := func(us ...*un.Unstructured) []cpd.Unstructured {
+		out := make([]cpd.Unstructured, 0, len(us))
+		for _, u := range us {
+			out = append(out, cpd.Unstructured{Unstructured: *u.DeepCopy()})
+		}
+
+		return out
+	}
+
+	tests := map[string]struct {
+		reason  string
+		payload *un.Unstructured
+		desired render.CompositionOutputs
+		want    dtypes.RenderedResources
+	}{
+		"XR": {
+			reason:  "An XR's composed resources are recorded as desired by the XR.",
+			payload: xr,
+			desired: render.CompositionOutputs{CompositeResource: asComposite(xr), ComposedResources: asComposed(a, b)},
+			want:    rendered(xr, []*un.Unstructured{a, b}, a, b),
+		},
+		"Claim": {
+			reason: "A claim's composed resources are recorded as desired by the backing XR that render consumed, " +
+				"which is the composite that composes them, not by the claim.",
+			payload: claim,
+			desired: render.CompositionOutputs{CompositeResource: asComposite(backingXR), ComposedResources: asComposed(a)},
+			want:    rendered(backingXR, []*un.Unstructured{a}, a),
+		},
+		"UndiffableResourceIsStillDesired": {
+			reason:  "The composite desires a resource it cannot be diffed, so what it composed under that name is kept.",
+			payload: xr,
+			desired: render.CompositionOutputs{CompositeResource: asComposite(xr), ComposedResources: asComposed(a, unnamed)},
+			want:    rendered(xr, []*un.Unstructured{a, unnamed}, a),
+		},
+	}
+
+	for name, tt := range tests {
+		t.Run(name, func(t *testing.T) {
+			logger := tu.TestLogger(t, false)
+			resourceClient := tu.NewMockResourceClient().WithResourcesExist(xr, claim, a, b).Build()
+
+			calculator := NewDiffCalculator(
+				tu.NewMockApplyClient().WithSuccessfulDryRun().Build(),
+				tu.NewMockAccessChecker().Build(),
+				tu.NewMockResourceTreeClient().WithEmptyResourceTree().Build(),
+				NewResourceManager(resourceClient, tu.NewMockDefinitionClient().Build(), tu.NewMockResourceTreeClient().Build(), logger),
+				logger,
+				renderer.DefaultDiffOptions(),
+				DryRunOnAll,
+				&tu.MockDefaulter{},
+			)
+
+			_, got, err := calculator.CalculateNonRemovalDiffs(t.Context(), asComposite(tt.payload), tt.desired)
+			if err != nil {
+				t.Fatalf("%s\nCalculateNonRemovalDiffs(): unexpected error: %v", tt.reason, err)
+			}
+
+			if diff := gcmp.Diff(tt.want, got, gcmp.AllowUnexported(dtypes.RenderedResources{})); diff != "" {
+				t.Errorf("%s\nCalculateNonRemovalDiffs(): -want, +got:\n%s", tt.reason, diff)
+			}
+		})
 	}
 }

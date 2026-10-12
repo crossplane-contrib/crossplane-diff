@@ -877,8 +877,8 @@ func (m *MockCredentialClient) FetchCompositionCredentials(ctx context.Context, 
 type MockDiffCalculator struct {
 	CalculateDiffFn                 func(context.Context, *un.Unstructured, *un.Unstructured) (*dt.ResourceDiff, error)
 	CalculateDiffsFn                func(context.Context, *cmp.Unstructured, render.CompositionOutputs) (map[string]*dt.ResourceDiff, error)
-	CalculateNonRemovalDiffsFn      func(context.Context, *cmp.Unstructured, render.CompositionOutputs) (map[string]*dt.ResourceDiff, map[string]bool, error)
-	CalculateRemovedResourceDiffsFn func(context.Context, *un.Unstructured, map[string]bool) (map[string]*dt.ResourceDiff, error)
+	CalculateNonRemovalDiffsFn      func(context.Context, *cmp.Unstructured, render.CompositionOutputs) (map[string]*dt.ResourceDiff, types.RenderedResources, error)
+	CalculateRemovedResourceDiffsFn func(context.Context, *un.Unstructured, types.RenderedResources) (map[string]*dt.ResourceDiff, error)
 }
 
 // CalculateDiff implements DiffCalculator.
@@ -900,18 +900,18 @@ func (m *MockDiffCalculator) CalculateDiffs(ctx context.Context, xr *cmp.Unstruc
 }
 
 // CalculateNonRemovalDiffs implements DiffCalculator.
-func (m *MockDiffCalculator) CalculateNonRemovalDiffs(ctx context.Context, xr *cmp.Unstructured, desired render.CompositionOutputs) (map[string]*dt.ResourceDiff, map[string]bool, error) {
+func (m *MockDiffCalculator) CalculateNonRemovalDiffs(ctx context.Context, xr *cmp.Unstructured, desired render.CompositionOutputs) (map[string]*dt.ResourceDiff, types.RenderedResources, error) {
 	if m.CalculateNonRemovalDiffsFn != nil {
 		return m.CalculateNonRemovalDiffsFn(ctx, xr, desired)
 	}
 
-	return nil, nil, nil
+	return nil, types.RenderedResources{}, nil
 }
 
 // CalculateRemovedResourceDiffs implements DiffCalculator.
-func (m *MockDiffCalculator) CalculateRemovedResourceDiffs(ctx context.Context, xr *un.Unstructured, renderedResources map[string]bool) (map[string]*dt.ResourceDiff, error) {
+func (m *MockDiffCalculator) CalculateRemovedResourceDiffs(ctx context.Context, xr *un.Unstructured, rendered types.RenderedResources) (map[string]*dt.ResourceDiff, error) {
 	if m.CalculateRemovedResourceDiffsFn != nil {
-		return m.CalculateRemovedResourceDiffsFn(ctx, xr, renderedResources)
+		return m.CalculateRemovedResourceDiffsFn(ctx, xr, rendered)
 	}
 
 	return nil, nil
