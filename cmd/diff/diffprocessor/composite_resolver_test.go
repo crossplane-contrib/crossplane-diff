@@ -382,9 +382,11 @@ func TestInheritClusterFields(t *testing.T) {
 				t.Errorf("%s\ninheritClusterFields() (-want +got):\n%s", tt.reason, diff)
 			}
 
-			// The copy must be deep: later writes to the effective XR (comp seeding a predicted name, say)
-			// must reach neither the input nor the cluster's object.
-			SetCompositionRevisionRefName(got, "mutated")
+			// The copy must be deep: later writes to the effective XR (the ref to the revision it renders,
+			// say) must reach neither the input nor the cluster's object.
+			for _, path := range [][]string{{"spec", "crossplane", "compositionRevisionRef"}, {"spec", "compositionRevisionRef"}} {
+				_ = un.SetNestedField(got.Object, "mutated", append(path, "name")...)
+			}
 
 			if diff := gcmp.Diff(authoredBefore, tt.authored); diff != "" {
 				t.Errorf("%s\ninheritClusterFields() aliased the input (-before +after):\n%s", tt.reason, diff)

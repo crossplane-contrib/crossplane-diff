@@ -1,0 +1,20 @@
+# A Manual composite of the revision-templating composition, pinned to an older CompositionRevision than
+# the one existing-xr-revision-ref.yaml tracks. A Manual composite never re-points, so applying an edit of
+# its composition leaves it on this revision, and a template reading the revision name must keep reading
+# this one. Kept for analysis only under --include-manual.
+#
+# Like the Automatic sibling, the suffix is deliberately not seven hex characters, so the pattern a
+# predicted name is asserted against cannot match it.
+apiVersion: ns.diff.example.org/v1alpha1
+kind: XNopResource
+metadata:
+  name: pinned-revision-ref-resource
+  namespace: default
+spec:
+  coolField: pinned-revision-ref-existing-value
+  crossplane:
+    compositionRef:
+      name: xrevisionrefs.diff.example.org
+    compositionUpdatePolicy: Manual
+    compositionRevisionRef:
+      name: xrevisionrefs.diff.example.org-pinnedref

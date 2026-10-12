@@ -760,7 +760,7 @@ func TestDefaultDiffProcessor_PerformDiff(t *testing.T) {
 			processor := NewDiffProcessor(k8sClients, xpClients, opts...)
 
 			// Create a mock composition provider that uses the same mock composition client
-			compositionProvider := func(ctx context.Context, res *un.Unstructured) (*apiextensionsv1.Composition, error) {
+			compositionProvider := func(ctx context.Context, res *un.Unstructured) (types.ResolvedComposition, error) {
 				return xpClients.Composition.FindMatchingComposition(ctx, res)
 			}
 			_, err := processor.PerformDiff(ctx, tt.resources, compositionProvider)
@@ -1074,7 +1074,7 @@ func TestDefaultDiffProcessor_PerformDiff_Groups(t *testing.T) {
 
 			processor := NewDiffProcessor(k8sClients, xpClients, opts...)
 
-			_, err := processor.PerformDiff(ctx, tt.resources, func(ctx context.Context, res *un.Unstructured) (*apiextensionsv1.Composition, error) {
+			_, err := processor.PerformDiff(ctx, tt.resources, func(ctx context.Context, res *un.Unstructured) (types.ResolvedComposition, error) {
 				return xpClients.Composition.FindMatchingComposition(ctx, res)
 			})
 
@@ -1249,7 +1249,7 @@ func TestDefaultDiffProcessor_PerformDiff_StderrErrorOutput(t *testing.T) {
 	)
 
 	// Create composition provider using mock client
-	compositionProvider := func(ctx context.Context, res *un.Unstructured) (*apiextensionsv1.Composition, error) {
+	compositionProvider := func(ctx context.Context, res *un.Unstructured) (types.ResolvedComposition, error) {
 		return xpClients.Composition.FindMatchingComposition(ctx, res)
 	}
 
@@ -3036,7 +3036,7 @@ func TestDefaultDiffProcessor_ProcessNestedXRs(t *testing.T) {
 			// Initialize if needed
 			if len(tt.composedResources) > 0 {
 				// Mock composition provider that returns a composition
-				compositionProvider := func(ctx context.Context, res *un.Unstructured) (*apiextensionsv1.Composition, error) {
+				compositionProvider := func(ctx context.Context, res *un.Unstructured) (types.ResolvedComposition, error) {
 					return xpClients.Composition.FindMatchingComposition(ctx, res)
 				}
 
@@ -3503,11 +3503,11 @@ func TestDefaultDiffProcessor_DiffSingleResource_WithObservedResources(t *testin
 			}
 
 			// Call DiffSingleResource
-			compositionProvider := func(ctx context.Context, res *un.Unstructured) (*apiextensionsv1.Composition, error) {
+			compositionProvider := func(ctx context.Context, res *un.Unstructured) (types.ResolvedComposition, error) {
 				return xpClients.Composition.FindMatchingComposition(ctx, res)
 			}
 
-			diffs, err := processor.(*DefaultDiffProcessor).DiffSingleResource(ctx, xr, compositionProvider, types.XRDiffOptions{})
+			diffs, err := processor.(*DefaultDiffProcessor).DiffSingleResource(ctx, xr, compositionProvider)
 
 			// Check error expectations
 			if (err != nil) != tt.wantErr {
@@ -3544,6 +3544,147 @@ func TestDefaultDiffProcessor_DiffSingleResource_WithObservedResources(t *testin
 			// Verify diffs were returned (even if empty)
 			if diffs == nil {
 				t.Errorf("DiffSingleResource() returned nil diffs, expected non-nil map")
+			}
+		})
+	}
+}
+
+// TestDefaultDiffProcessor_DiffSingleResource_RevisionRef covers how the revision the composition
+// provider resolves reaches render. Crossplane's composite reconciler writes the revision it selects to
+// compositionRevisionRef before it composes, creating the ref when there is none, so the render input
+// carries that name, at the path the composite's schema puts it. An unknown revision leaves the ref as
+// the composite has it.
+func TestDefaultDiffProcessor_DiffSingleResource_RevisionRef(t *testing.T) {
+	composition := tu.NewComposition("test-composition").
+		WithCompositeTypeRef("example.org/v1", "XR").
+		WithPipelineMode().
+		WithPipelineStep("step1", "function-test", nil).
+		Build()
+
+	functions := []pkgv1.Function{{ObjectMeta: metav1.ObjectMeta{Name: "function-test"}}}
+
+	staleRef := map[string]any{"name": "test-composition-0ld0001"}
+
+	tests := map[string]struct {
+		reason string
+		// scope is the XRD's spec.scope, which decides the composite's schema.
+		scope string
+		// spec is the composite's spec, in the cluster and as supplied.
+		spec         map[string]any
+		revisionName string
+		// wantSpec is the spec of the composite render is handed.
+		wantSpec map[string]any
+	}{
+		"ModernRefIsOverwritten": {
+			reason:       "A ref naming another revision is pointed at the resolved one.",
+			scope:        "Namespaced",
+			spec:         map[string]any{"crossplane": map[string]any{"compositionRevisionRef": staleRef}},
+			revisionName: "test-composition-abc1234",
+			wantSpec: map[string]any{"crossplane": map[string]any{
+				"compositionRevisionRef": map[string]any{"name": "test-composition-abc1234"},
+			}},
+		},
+		"ModernRefIsCreated": {
+			reason:       "A composite with no ref gets one, as the reconciler writes it, under spec.crossplane.",
+			scope:        "Cluster",
+			spec:         map[string]any{"field": "value"},
+			revisionName: "test-composition-abc1234",
+			wantSpec: map[string]any{
+				"field":      "value",
+				"crossplane": map[string]any{"compositionRevisionRef": map[string]any{"name": "test-composition-abc1234"}},
+			},
+		},
+		"LegacyRefIsCreated": {
+			reason:       "A legacy composite keeps its Crossplane fields directly under spec, so the ref is created there.",
+			scope:        "LegacyCluster",
+			spec:         map[string]any{"field": "value"},
+			revisionName: "test-composition-abc1234",
+			wantSpec: map[string]any{
+				"field":                  "value",
+				"compositionRevisionRef": map[string]any{"name": "test-composition-abc1234"},
+			},
+		},
+		"UnknownRevisionLeavesTheRefAsItIs": {
+			reason:   "With no revision resolved, the composite keeps the ref it has; no name is made up.",
+			scope:    "Namespaced",
+			spec:     map[string]any{"crossplane": map[string]any{"compositionRevisionRef": staleRef}},
+			wantSpec: map[string]any{"crossplane": map[string]any{"compositionRevisionRef": staleRef}},
+		},
+	}
+
+	for name, tt := range tests {
+		t.Run(name, func(t *testing.T) {
+			xr := tu.NewResource("example.org/v1", "XR", "test-xr").WithSpec(tt.spec).Build()
+
+			xrd := tu.NewXRD("xrs.example.org", "example.org", "XR").
+				WithPlural("xrs").
+				WithSingular("xr").
+				WithVersion("v1", true, true).
+				BuildAsUnstructured()
+			_ = un.SetNestedField(xrd.Object, tt.scope, "spec", "scope")
+
+			xrCRD := tu.NewCRD("xrs.example.org", "example.org", "XR").
+				WithListKind("XRList").
+				WithPlural("xrs").
+				WithSingular("xr").
+				WithVersion("v1", true, true).
+				WithStandardSchema("field").
+				Build()
+
+			k8sClients := k8.Clients{
+				Apply:    tu.NewMockApplyClient().WithSuccessfulDryRun().Build(),
+				Resource: tu.NewMockResourceClient().WithResourcesExist(xr).Build(),
+				Schema: tu.NewMockSchemaClient().
+					WithNoResourcesRequiringCRDs().
+					WithSuccessfulCRDFetch(xrCRD).
+					WithSuccessfulCRDByNameFetch("xrs.example.org", xrCRD).
+					Build(),
+				Type: tu.NewMockTypeConverter().Build(),
+			}
+
+			xpClients := xp.Clients{
+				Composition: tu.NewMockCompositionClient().Build(),
+				Credential:  &tu.MockCredentialClient{},
+				Definition:  tu.NewMockDefinitionClient().WithXRDForXR(xrd).Build(),
+				Environment: tu.NewMockEnvironmentClient().WithNoEnvironmentConfigs().Build(),
+				Function:    tu.NewMockFunctionClient().WithSuccessfulFunctionsFetch(functions).Build(),
+				ResourceTree: tu.NewMockResourceTreeClient().
+					WithGetResourceTree(func(context.Context, *un.Unstructured) (*resource.Resource, error) {
+						return tu.NewTreeNode(xr).Build(), nil
+					}).
+					Build(),
+			}
+
+			var rendered map[string]any
+
+			opts := append(testProcessorOptions(t),
+				WithRenderFunc(func(_ context.Context, _ logging.Logger, in RenderInputs) (render.CompositionOutputs, error) {
+					rendered, _, _ = un.NestedMap(in.CompositeResource.Object, "spec")
+					return render.CompositionOutputs{CompositeResource: in.CompositeResource}, nil
+				}),
+				WithSchemaValidatorFactory(func(k8.SchemaClient, k8.ResourceClient, xp.DefinitionClient, logging.Logger) SchemaValidator {
+					return &tu.MockSchemaValidator{
+						ValidateResourcesFn: func(context.Context, *un.Unstructured, []cpd.Unstructured) error { return nil },
+					}
+				}),
+				WithDiffCalculatorFactory(NewDiffCalculator),
+			)
+			processor := NewDiffProcessor(k8sClients, xpClients, opts...)
+
+			if err := processor.Initialize(t.Context()); err != nil {
+				t.Fatalf("Initialize(): %v", err)
+			}
+
+			provider := func(context.Context, *un.Unstructured) (types.ResolvedComposition, error) {
+				return types.ResolvedComposition{Composition: composition, RevisionName: tt.revisionName}, nil
+			}
+
+			if _, err := processor.DiffSingleResource(t.Context(), xr, provider); err != nil {
+				t.Fatalf("%s\nDiffSingleResource(): unexpected error: %v", tt.reason, err)
+			}
+
+			if diff := gcmp.Diff(tt.wantSpec, rendered); diff != "" {
+				t.Errorf("%s\nDiffSingleResource(): render input spec (-want +got):\n%s", tt.reason, diff)
 			}
 		})
 	}

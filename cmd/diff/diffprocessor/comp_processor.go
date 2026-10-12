@@ -414,9 +414,9 @@ func (p *DefaultCompDiffProcessor) processSingleComposition(ctx context.Context,
 	// Partition XRs by whether they would adopt the diffed composition's resulting revision. This is
 	// local (no renders), and every path below needs it: the composites that would adopt the new
 	// revision are exactly the ones that would re-point at it, and the ones that would not are a
-	// consequence of applying this composition in their own right.
-	// Only the re-pointing composites are seeded below: a Manual composite kept by --include-manual stays
-	// pinned, so seeding it would render it against a revision it never uses.
+	// consequence of applying this composition in their own right. The same classification decides, in
+	// cliCompositionRevision, which composites are rendered with the new revision's name: a Manual
+	// composite kept by --include-manual stays pinned, so it never is.
 	keptXRs, droppedXRs, repointingXRs, err := p.partitionXRsByUpdatePolicy(affectedXRs, newComp, pred)
 	if err != nil {
 		return nil, err
@@ -498,9 +498,9 @@ func (p *DefaultCompDiffProcessor) processSingleComposition(ctx context.Context,
 	// render sees each composite's *existing* compositionRevisionRef, so a composition template reading
 	// the revision name produces the stale one and a real change goes unreported. See issue #474.
 	//
-	// When the name is not predictable we render unseeded — the pre-#474 behaviour — and say so, rather
-	// than seed a guess. Seeding a name we invented would manufacture a downstream diff on a converged
-	// cluster for exactly the compositions this feature exists to serve.
+	// When the name is not predictable we render with the refs the composites have — the pre-#474
+	// behaviour — and say so, rather than guess one. Rendering with a name we invented would manufacture
+	// a downstream diff on a converged cluster for exactly the compositions this feature exists to serve.
 	revisionName := ""
 
 	switch {
@@ -515,7 +515,7 @@ func (p *DefaultCompDiffProcessor) processSingleComposition(ctx context.Context,
 	// Process kept XRs and collect diffs to determine which ones have changes
 	p.config.Logger.Debug("Processing XRs to collect diff information", "count", len(keptXRs))
 
-	xrResults := p.collectXRDiffs(ctx, keptXRs, newComp, repointingXRs, revisionName)
+	xrResults := p.collectXRDiffs(ctx, keptXRs, newComp, revisionName, predictedRevisionLabels(newComp, pred))
 
 	// Build impact analysis and counts from results for the kept set, then merge in any
 	// already-appended filtered entries.
@@ -531,10 +531,10 @@ func (p *DefaultCompDiffProcessor) processSingleComposition(ctx context.Context,
 
 // collectXRDiffs processes XRs and collects their diffs, returning results for each XR.
 //
-// Each composite in repointing is rendered with revisionName as the revision it points at, unless
-// revisionName is empty (unpredictable). The others, a Manual composite kept by --include-manual, stay
-// pinned, so they are rendered against the revision they already name. See types.XRDiffOptions.
-func (p *DefaultCompDiffProcessor) collectXRDiffs(ctx context.Context, xrs []*un.Unstructured, newComp *un.Unstructured, repointing map[string]bool, revisionName string) map[string]*XRDiffResult {
+// revisionName is the name of the CompositionRevision applying newComp would leave its composites on,
+// or empty when that is not predictable; revisionLabels is the label set that revision would carry. See
+// cliCompositionRevision for which composites are rendered with that name.
+func (p *DefaultCompDiffProcessor) collectXRDiffs(ctx context.Context, xrs []*un.Unstructured, newComp *un.Unstructured, revisionName string, revisionLabels map[string]string) map[string]*XRDiffResult {
 	// Convert the CLI composition to typed once for reuse
 	cliComp := &apiextensionsv1.Composition{}
 	if err := runtime.DefaultUnstructuredConverter.FromUnstructured(newComp.Object, cliComp); err != nil {
@@ -580,7 +580,7 @@ func (p *DefaultCompDiffProcessor) collectXRDiffs(ctx context.Context, xrs []*un
 	//
 	// The provider is handed the effective composite (see CompositeResolver), so a root claim reaches it
 	// as its backing XR, whose key is not in rootResourceKeys: Check 2 matches it by type instead.
-	compositionProvider := func(ctx context.Context, res *un.Unstructured) (*apiextensionsv1.Composition, error) {
+	compositionProvider := func(ctx context.Context, res *un.Unstructured) (dtypes.ResolvedComposition, error) {
 		resGVK := res.GroupVersionKind()
 		resAPIVersion := resGVK.GroupVersion().String()
 		resKind := resGVK.Kind
@@ -594,7 +594,7 @@ func (p *DefaultCompDiffProcessor) collectXRDiffs(ctx context.Context, xrs []*un
 				"resource", resourceID,
 				"composition", cliComp.GetName())
 
-			return cliComp, nil
+			return p.cliCompositionRevision(res, cliComp, revisionName, revisionLabels)
 		}
 
 		// Check 2: Does this resource's type match the CLI composition's target type?
@@ -604,7 +604,7 @@ func (p *DefaultCompDiffProcessor) collectXRDiffs(ctx context.Context, xrs []*un
 				"resource", resourceID,
 				"composition", cliComp.GetName())
 
-			return cliComp, nil
+			return p.cliCompositionRevision(res, cliComp, revisionName, revisionLabels)
 		}
 
 		// This is a nested XR with a different type - look up its composition from the cluster
@@ -623,12 +623,7 @@ func (p *DefaultCompDiffProcessor) collectXRDiffs(ctx context.Context, xrs []*un
 	for _, xr := range xrs {
 		resourceID := dt.MakeDiffKeyFromResource(xr)
 
-		var opts dtypes.XRDiffOptions
-		if repointing[resourceID] {
-			opts.RevisionName = revisionName
-		}
-
-		diffs, err := p.xrProc.DiffSingleResource(ctx, xr, compositionProvider, opts)
+		diffs, err := p.xrProc.DiffSingleResource(ctx, xr, compositionProvider)
 		if err != nil {
 			p.config.Logger.Debug("Failed to process resource", "resource", resourceID, "error", err)
 
@@ -647,6 +642,31 @@ func (p *DefaultCompDiffProcessor) collectXRDiffs(ctx context.Context, xrs []*un
 	}
 
 	return results
+}
+
+// cliCompositionRevision resolves a composite that is rendered against cliComp, the diffed composition.
+// Its revision is the one applying that composition leaves it on, named revisionName, for a composite
+// that would re-point at it as classifyXR decides; revisionLabels is the label set that revision would
+// carry, which a compositionRevisionSelector is matched against. For any other composite the revision
+// is left unknown, so it keeps the ref it has: one that is Manual (#479), being deleted, or whose
+// compositionRevisionSelector rejects that revision. So does every composite when revisionName is
+// empty, i.e. not predictable (#474).
+func (p *DefaultCompDiffProcessor) cliCompositionRevision(res *un.Unstructured, cliComp *apiextensionsv1.Composition, revisionName string, revisionLabels map[string]string) (dtypes.ResolvedComposition, error) {
+	resolved := dtypes.ResolvedComposition{Composition: cliComp}
+	if revisionName == "" {
+		return resolved, nil
+	}
+
+	disposition, err := p.classifyXR(res, revisionLabels, cliComp.GetLabels())
+	if err != nil {
+		return dtypes.ResolvedComposition{}, err
+	}
+
+	if disposition.filtered == nil && !disposition.pinnedToRevision {
+		resolved.RevisionName = revisionName
+	}
+
+	return resolved, nil
 }
 
 // compositionComparison is the result of comparing a proposed composition against its in-cluster

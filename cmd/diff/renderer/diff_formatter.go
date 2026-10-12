@@ -80,24 +80,6 @@ type DiffOptions struct {
 	// per composition, omitting the full YAML diff body. Only consumed by the
 	// human-readable composition diff renderer; structured output is unaffected.
 	MinimizeComposition bool
-
-	// SeededRevisionRef records that the compositionRevisionRef on the objects being diffed was
-	// written by this tool rather than read from the cluster — comp seeds each re-pointing composite
-	// with the name of the CompositionRevision the diffed composition would produce, so that a
-	// template reading that name renders the value it would really get. It is provenance, not a user
-	// preference: no flag sets it, and the xr command leaves it false so a user's own hand-edited
-	// revision pin is still shown.
-	//
-	// When set, the ref paths are stripped from the rendered diff. That looks like the anti-pattern
-	// ForVerdict exists to prevent, and is not: the fact being suppressed — that applying the
-	// composition creates a revision which N composites re-point to — is reported unconditionally and
-	// per-composition as RevisionImpact, so only its N-fold duplicate *presentation* is hidden. What
-	// is emphatically not suppressed is any *derived* change: a composed resource whose template
-	// propagates the revision name still shows a diff, and still flips its composite to "changed".
-	// Surfacing exactly those is the reason the seeding exists. Without the suppression, every
-	// revision-creating change would instead add one bookkeeping field per composite and exit 3 — the
-	// GitOps-gate problem issue #472's exit-code decision was made to avoid. See issue #474.
-	SeededRevisionRef bool
 }
 
 // DefaultDiffOptions returns the default options with colors enabled.
@@ -655,17 +637,6 @@ func cleanupForDiff(obj *un.Unstructured, logger logging.Logger, options DiffOpt
 		PathLastAppliedConfiguration,
 	}
 
-	// seededRevisionRefPaths are the v1 and v2 homes of a composite's compositionRevisionRef. They are
-	// display-only too, but conditionally so: they are suppressed only when this tool wrote the value
-	// (comp's revision seeding), never when it merely read one from the cluster. See
-	// DiffOptions.SeededRevisionRef for why hiding a tool-authored field is not the anti-pattern it
-	// resembles. Listing both paths unconditionally is safe — removeNestedPath is a no-op for a path
-	// the object does not have, and seeding only ever writes to the path the composite already used.
-	seededRevisionRefPaths := []string{
-		"spec.compositionRevisionRef",
-		"spec.crossplane.compositionRevisionRef",
-	}
-
 	// Remove display-only paths (unless this is a verdict), then the caller's. Duplicates between
 	// the two are harmless: removeNestedPath is a no-op once the path is gone.
 	stripPaths := func(paths []string) {
@@ -678,10 +649,6 @@ func cleanupForDiff(obj *un.Unstructured, logger logging.Logger, options DiffOpt
 
 	if !options.ForVerdict {
 		stripPaths(displayOnlyIgnoredPaths)
-
-		if options.SeededRevisionRef {
-			stripPaths(seededRevisionRefPaths)
-		}
 	}
 
 	stripPaths(options.IgnorePaths)

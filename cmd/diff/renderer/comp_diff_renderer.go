@@ -252,9 +252,10 @@ func (r *DefaultCompDiffRenderer) renderFilteredUnderSkip(comp *CompositionDiff)
 }
 
 // revisionImpactMessage reports the revision churn applying this composition causes, for the run where
-// the composites *were* evaluated. It is what keeps a downstream diff interpretable: with the
-// composites' own compositionRevisionRef suppressed from display, a composed resource whose template
-// reads the revision name would otherwise change with no visible cause. See issue #474.
+// the composites *were* evaluated. It is what keeps a downstream diff interpretable: the composites' own
+// compositionRevisionRef is never shown changing (the new ref reaches only their render input), so a
+// composed resource whose template reads the revision name would otherwise change with no visible
+// cause. See issue #474.
 //
 // Deliberately does NOT name the revision, even though PredictedRevisionName is available here. The
 // name's suffix is a hash of the composition's content, so putting it in human output would make

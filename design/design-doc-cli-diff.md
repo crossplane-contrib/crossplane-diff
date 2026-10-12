@@ -287,6 +287,14 @@ The integration test cases cover:
   `defaultCompositionUpdatePolicy` is `Manual`: the XR is defaulted before its composition is resolved, so a new XR
   naming a revision renders that revision. The default is set on the XRD fixture, and the CRD that declares it is
   generated from that XRD by upstream xcrd, as in a real cluster.
+- **Resolved Revision Reaches the Ref (`xr`)**: `AutomaticXRWithLaggingRevisionRefRendersLatestRevisionAndName` diffs an
+  unchanged `Automatic` XR whose cluster ref still names the older of two revisions. Crossplane writes the revision it
+  selects to the ref before composing, so the composed resource shows the latest revision's template *and* its name
+  (#536); before, the latest template rendered with the stale name. `TestDefaultDiffProcessor_DiffSingleResource_RevisionRef`
+  pins the write on the render input: a stale ref is overwritten, a missing one is created at the path the composite's
+  schema puts it (`spec.crossplane.*`, or `spec.*` for a legacy XR), and an unknown revision leaves the ref as it is.
+  `TestDefaultCompositionClient_ResolveCompositionFromRevisions` pins which revision is selected, and
+  `TestDefaultCompositionClient_FindMatchingComposition` that its name is returned with the composition.
 
 ### 4.9 Claim Handling
 
@@ -365,7 +373,8 @@ The `comp` subcommand has its own set of integration tests:
   spec) whose template reads the CompositionRevision name off the composite and propagates it into a composed resource.
   The rendered output genuinely changes, so the run exits 3 — where before the fix, rendering the composite with its
   *existing* `compositionRevisionRef`, it reported the composite as unchanged with no downstream changes and exited 0.
-  Stop applying `XRDiffOptions.RevisionName` and this is what fails. It also pins the two things that keep the result
+  Stop `comp`'s composition provider resolving the predicted revision, or the processor writing a resolved revision to
+  the ref, and this is what fails. It also pins the two things that keep the result
   readable: `predictedRevisionName` is matched by pattern (`^…-[0-9a-f]{7}$`) rather than literally, so editing the
   fixture is not a test failure, and the composite's own `spec.crossplane.compositionRevisionRef` diff is deliberately
   *absent*. `ClaimRevisionNamePropagatesToComposedResource` is the claim variant: the name must reach the backing XR's
@@ -376,11 +385,12 @@ The `comp` subcommand has its own set of integration tests:
   upstream's `>=` truncation guards at both bounds (63 characters for the hash label value, 7 for the name suffix) and
   the `"unknown"` sentinel `Composition.Hash()` returns on a marshal error, which is shorter than either bound.
   `TestDefaultCompDiffProcessor_partitionXRsByUpdatePolicy` (its `wantRepointing`) and
-  `TestDefaultCompDiffProcessor_collectXRDiffs_RevisionName` cover which composites are given the name (`Manual`-policy
-  ones are not, and none when it is unpredictable), and that the supplied composites — the cluster's objects — are never
-  mutated. `TestSetCompositionRevisionRefName` pins that seeding
-  overwrites an existing ref on either the v1 or the v2 path, preferring v2 when a pathological object carries both, and
-  never *creates* a ref that isn't already present. `AutomaticSelectorOnCompositionHash_Kept` pins the other consumer of
+  `TestDefaultCompDiffProcessor_collectXRDiffs_RevisionName` cover which composites the provider resolves to the name
+  (a re-pointing one, and a claim through its backing XR; not a `Manual` one, nor one whose selector rejects the new
+  revision, and none when it is unpredictable), and that the supplied composites — the cluster's objects — are never
+  mutated. `RevisionNameReachesOnlyRepointingCompositesWithIncludeManual` covers the `Manual` case end-to-end: under
+  `--include-manual` the Automatic composite's downstream shows the predicted name while a `Manual` composite pinned
+  to an older revision renders unchanged. `AutomaticSelectorOnCompositionHash_Kept` pins the other consumer of
   the prediction: a composite whose `compositionRevisionSelector` keys on `crossplane.io/composition-hash` is now kept
   rather than dropped as a selector mismatch. The unpredictable case is covered on both sides of the skip:
   `revisionNamePredictable` is folded into `TestDefaultCompDiffProcessor_calculateCompositionDiff`'s want-struct across
@@ -623,8 +633,8 @@ type DiffProcessor interface {
     PerformDiff(ctx context.Context, resources []*un.Unstructured, compositionProvider types.CompositionProvider) (bool, error)
 
     // DiffSingleResource processes one resource and returns its diffs without rendering them.
-    // Used by CompDiffProcessor to drive per-XR diffs. opts adjusts how that resource is rendered.
-    DiffSingleResource(ctx context.Context, res *un.Unstructured, compositionProvider types.CompositionProvider, opts types.XRDiffOptions) (map[string]*dt.ResourceDiff, error)
+    // Used by CompDiffProcessor to drive per-XR diffs.
+    DiffSingleResource(ctx context.Context, res *un.Unstructured, compositionProvider types.CompositionProvider) (map[string]*dt.ResourceDiff, error)
 
     // Initialize loads required resources like CRDs.
     Initialize(ctx context.Context) error
@@ -641,26 +651,39 @@ type Cleaner interface {
 }
 ```
 
-A `CompositionProvider` is `func(ctx, *Unstructured) (*apiextensionsv1.Composition, error)`. The `xr` subcommand passes a
+A `CompositionProvider` is `func(ctx, *Unstructured) (types.ResolvedComposition, error)`. The `xr` subcommand passes a
 provider that looks up matching compositions in the cluster; the `comp` subcommand passes one backed by the updated
 composition file under test, so the same per-XR diff machinery serves both flows. The provider is handed the
 effective composite, defaulted (§6.4a, §7.1), never the raw input: for a claim, that is its backing XR.
 
 ```go
-// XRDiffOptions adjusts how DiffSingleResource diffs one composite (in cmd/diff/types). The zero value
-// diffs it as the cluster would reconcile it today.
-type XRDiffOptions struct {
-    // RevisionName, when set, is the CompositionRevision the composite would point at once the diffed
-    // change is applied. It is applied to the effective composite's existing compositionRevisionRef
-    // (never creating one), for the named composite only, not for XRs nested beneath it.
+// ResolvedComposition is what a CompositionProvider resolves for one composite (in cmd/diff/types).
+type ResolvedComposition struct {
+    // Composition is the composition to render the composite against.
+    Composition *apiextensionsv1.Composition
+
+    // RevisionName is the CompositionRevision Composition comes from. Empty means unknown (a composition
+    // with no revisions yet, say), and the composite then keeps the ref it has.
     RevisionName string
 }
 ```
 
-`comp` sets `RevisionName` for a composite that would re-point at the revision the diffed composition creates (§6.2
-step 3a). It is an explicit argument rather than a value on the context or a field seeded onto the input, because the
-input is the cluster's object and, for a claim, the ref that matters is on the backing XR, which only the processor
-sees.
+The provider is the one source of truth for which revision applies. Crossplane's composite reconciler resolves a
+revision, writes it to the composite's `compositionRevisionRef`, and only then composes (`APIRevisionFetcher.Fetch`
+returns the current ref untouched only for a `Manual` composite that already has one; otherwise it sets the ref to the
+latest revision, creating it if absent). The processor mirrors that: when `RevisionName` is set it writes it to the
+render input's `compositionRevisionRef`, creating the ref if there is none, at the path the composite's schema puts it
+(`spec.crossplane.*`, or `spec.*` for a legacy XR; the same schema decision render uses). So a template reading the
+revision name sees the revision that rendered it (#536). Only the render input carries it: the dry-run payload stays the
+composite as authored (§6.4a), and a name is never made up when the provider does not know one.
+
+- The cluster lookup (`CompositionClient.FindMatchingComposition`) names the revision `resolveCompositionFromRevisions`
+  selects for a composite that references its composition by name, which every composite Crossplane has reconciled
+  does: under `Automatic`, the latest matching its `compositionRevisionSelector`; under `Manual`, the pinned one, or
+  the latest when there is no ref yet. A composition with no revisions, or one chosen by label selector or by type,
+  resolves none.
+- `comp`'s provider names the revision the diffed composition would produce for a composite rendered against it that
+  would re-point at that revision (§6.2 step 3a).
 
 The `DefaultDiffProcessor` uses several subcomponents:
 
@@ -853,19 +876,17 @@ type CompDiffProcessor interface {
    their existing `compositionRevisionRef` — the behaviour before issue #474 — meant a template propagating the revision
    name produced the *stale* one, the resulting composed resource matched the cluster, and a real change was reported as
    no change at all with exit code 0. The default `--analyze-on` setting could not observe its own flagship consequence.
-   So `predictRevision` derives the identity from Crossplane's own exported `Composition.Hash()`, and
-   `collectXRDiffs` passes the resulting name to `DiffSingleResource` as `XRDiffOptions.RevisionName` (§6.1.1) for each
-   re-pointing composite. The processor applies it to the effective composite (§6.4a), after the cluster's ref has been
-   inherited and before defaulting, so it reaches the render but never the dry-run payload. For a claim the effective
+   So `predictRevision` derives the identity from Crossplane's own exported `Composition.Hash()`, and `comp`'s
+   composition provider returns the resulting name as the `RevisionName` of the proposed composition (§6.1.1) for each
+   composite that would re-point at it. `cliCompositionRevision` decides that with `classifyXR`, the same rule that
+   partitions the composites, applied to the effective composite the provider is handed. The processor writes the
+   name to the render input's ref, so it reaches the render but never the dry-run payload. For a claim the effective
    composite is the backing XR: the claim's own ref is never propagated under `Automatic`, so a name seeded onto the
    claim would reach nothing. The cluster's objects are never mutated — the impact analysis and removal detection
    still read identity from them — and only composites that would genuinely re-point are given the name. A
-   `Manual`-policy composite surfaced by `--include-manual` is not one of them: it keeps its own ref,
-   `resolveCompositionFromRevisions` honours that ref, so seeding it would change *which* revision renders for it.
-   `SetCompositionRevisionRefName` additionally never *creates* a ref that isn't already present — an existing ref is
-   the only case with a stale value to correct, and its presence proves the path is one the composite's schema accepts,
-   where inventing a path could fail validation for a composite that renders fine today. A composite not yet tracking a
-   revision therefore keeps rendering no ref at all, exactly as before.
+   `Manual`-policy composite surfaced by `--include-manual` is not one of them: it stays pinned to its own ref, so
+   seeding it would render it with a revision it never uses. Nor is an `Automatic` one whose
+   `compositionRevisionSelector` rejects the new revision. Either keeps the ref it has.
 
    The name is the one thing this tool mirrors from upstream rather than calling: the `<composition>-<hash[:7]>`
    derivation lives in `NewCompositionRevision`, inside an `internal/` package, while the hash it consumes comes from
@@ -891,8 +912,8 @@ type CompDiffProcessor interface {
    absent, and only when the file does not carry the annotation itself). If so, a client-side apply recomputes the same
    value, the patch is empty and kubectl writes nothing, and server-side apply leaves it alone — so the composition is
    reported `ChangeScopeNone` with no revision created (issue #500). Otherwise the annotation is stale and a re-apply
-   genuinely rewrites it. In that case `PredictedRevisionName` is omitted, the composites are
-   rendered unseeded (the pre-#474 behaviour), and a warning says so. The alternative — seeding a name the tool invented
+   genuinely rewrites it. In that case `PredictedRevisionName` is omitted, the provider resolves no revision, the
+   composites are rendered with the refs they have (the pre-#474 behaviour), and a warning says so. The alternative — seeding a name the tool invented
    — would manufacture a downstream diff on a converged cluster for exactly the compositions this feature exists to
    serve. Note what is deliberately *not* claimed when the guard fires: `CreatesRevision` stays true. The delta is real,
    and a stale annotation genuinely would be rewritten and mint a revision; it is only the revision's *identity* that is
@@ -1199,7 +1220,9 @@ func (r *CompositeResolver) Resolve(ctx context.Context, authored *cmp.Unstructu
 The processor calls it once per composite, before anything reads the composite's composition, revision or policy
 (§7.1). A nested XR's cluster copy is the one `ProcessNestedXRs` already found (among its parent's observed resources,
 or by its fallback lookup), so it is not fetched again. The `DiffCalculator` still fetches each composite once more for
-its own dry run (§6.3).
+its own dry run (§6.3). The `compositionRevisionRef` Effective carries is what the composition provider sees, and so
+what a `Manual` pin is resolved from; once the provider has resolved a revision, the processor points the render input's
+ref at it (§6.1.1), as the reconciler would before composing.
 
 ### 6.5 SchemaValidator
 
@@ -1520,27 +1543,15 @@ and is visible in classification, summary counts, and rendered bodies alike. The
 `renderer.PathLastAppliedConfiguration`, because a second caller has to name the same path and the two must not drift:
 comp's revision-name prediction asks whether it is the *only* thing a composition differs by (§6.2 step 3a).
 
-There is a second display-only suppression, and unlike the first it is **conditional**: the composite's own
-`compositionRevisionRef` (both homes — the v1 `spec.compositionRevisionRef` and the v2
-`spec.crossplane.compositionRevisionRef`) is stripped only when `DiffOptions.SeededRevisionRef` is set. That flag is
-*provenance*, not a user preference: it records that the value on the object being diffed was written by this tool
-rather than read from the cluster. `comp` seeds each re-pointing composite with the name of the CompositionRevision the
-diffed composition would produce, so that a template reading that name renders the value it would really get (§6.2 step
-3a); `xr` leaves the flag false, which is why a user's own hand-edited revision pin is still shown there. No flag sets
-it — `makeDefaultCompProc` passes `dp.WithSeededRevisionRef(true)` on the shared option slice, which is also how the
-composition processor and the XR processor it delegates downstream diffs to are guaranteed to agree.
-
-Suppressing a field this tool itself wrote looks like precisely the anti-pattern `ForVerdict` exists to prevent, and is
-not one, because the *fact* is not suppressed anywhere. That applying the composition creates a revision which N
-composites re-point to is reported unconditionally and per-composition as `RevisionImpact` (§6.8.3), so all that is
-hidden is its N-fold duplicate *presentation* — one identical bookkeeping field per composite, saying what one typed
-field already says once. Nor is anything *derived* from the seeded value hidden: a composed resource whose template
-propagates the revision name still shows its diff, and still flips its composite to `changed`. Surfacing exactly those
-is the entire reason the seeding exists. Without the suppression, every revision-creating change would add one field per
-composite and exit 3 — reintroducing the GitOps-gate problem that `CompositionDiff.HasChanges` excludes `RevisionImpact`
-to avoid. `cleanupForDiff` accordingly takes the whole `DiffOptions` rather than the two fields it was previously handed
-(`IgnorePaths`, `ForVerdict`); a conditional suppression is the second thing it has to read off the options, and a third
-positional parameter is how that starts going wrong.
+A composite's own `compositionRevisionRef` needs no suppression, although this tool writes it. The ref the composition
+provider resolves (the predicted one under `comp`, §6.2 step 3a) is written only to the render input (§6.1.1), never to
+the composite's dry-run payload, which is the composite as authored (§6.4a). So the composite's diff never shows the
+tool-written ref; there is one bookkeeping field per composite only if the user's own input changes it, and then it is
+the user's change and is shown. What a re-point does is reported once per composition as `RevisionImpact` (§6.8.3), and
+anything *derived* from the ref, such as a composed resource whose template propagates the revision name, shows its
+diff and flips its composite to `changed`. (Until #536 a `DiffOptions.SeededRevisionRef` flag stripped the ref paths
+from `comp`'s diffs; once the payload became the authored composite in #538 it had nothing left to strip, and it was
+removed.)
 
 #### 6.8.3 Structured output types
 
@@ -1669,8 +1680,8 @@ contract:
   `RepointedComposites` counts composites that *re-point*, which is not the same as composites whose rendered output
   changes; re-pointing alone usually renders identically.
   `PredictedRevisionName` is what makes a downstream change interpretable when it does not: a composed resource whose
-  template reads the revision name shows a diff with no other visible cause (the composite's own ref being suppressed
-  from display, §6.8.2), and this names the cause. It is populated even when `CreatesRevision` is false, where it names
+  template reads the revision name shows a diff with no other visible cause (the composite's own ref is never shown
+  changing, because it is written only to the render input, §6.8.2), and this names the cause. It is populated even when `CreatesRevision` is false, where it names
   the existing revision the composites already track — the same name by construction, since an unchanged composition
   hashes to the same value. The human renderer deliberately does *not* print the name (`revisionImpactMessage` reports
   the churn without it): the suffix is a hash of the composition's content, so printing it would make otherwise-stable
@@ -1914,13 +1925,16 @@ The client layer provides interfaces to interact with Kubernetes and Crossplane 
       `compositionRef`, `compositionRevisionRef`, `compositionUpdatePolicy` where the input omits them) or, for a
       claim, its backing XR with the claim's spec synced in. This runs first, because everything after it that reads
       the composite's composition, revision or update policy must agree on them.
-    - For `comp`, `XRDiffOptions.RevisionName` is applied to the effective composite (never creating a ref), and the
-      result is defaulted by the strict `Defaulter` (§6.5a). Inheriting comes before defaulting, so a default never
-      overrides what the cluster holds.
-    - The `DiffProcessor` resolves the matching composition from that defaulted effective composite (or, for `comp`,
-      takes the proposed one supplied via the `CompositionProvider`). A `Manual` composite therefore resolves to the
+    - The effective composite is defaulted by the strict `Defaulter` (§6.5a). Inheriting comes before defaulting, so a
+      default never overrides what the cluster holds.
+    - The `DiffProcessor` resolves the matching composition, and the revision it comes from, from that defaulted
+      effective composite (or, for `comp`, takes the proposed one supplied via the `CompositionProvider`, with the
+      predicted revision for a composite that would re-point at it). A `Manual` composite therefore resolves to the
       revision it is pinned to, whether the pin is in the input or only in the cluster, and an XRD-defaulted `Manual`
       policy applies to a new XR.
+    - When a revision was resolved, the render input's `compositionRevisionRef` is pointed at it, creating the ref if
+      there is none, as Crossplane's composite reconciler does before composing (§6.1.1). An `Automatic` composite whose
+      ref lags a newer revision is therefore rendered from that revision and sees its name (#536).
     - The processor keeps three views of the XR. The **authored** XR is the input as written, plus a synthesized name
       for a `generateName`-only XR and, for a nested XR, its cluster identity; it is never modified, and it is what is
       validated and dry-run applied (for a claim, the claim itself). The **render** XR is the defaulted effective
@@ -2004,14 +2018,14 @@ The client layer provides interfaces to interact with Kubernetes and Crossplane 
       the composites discovered and the `FilterReason` breakdown from the drop step above cost nothing to establish, so
       they are reported before stopping (`AffectedResources` always, plus the individual `filtered` entries in
       `--resource` mode).
-    - Pass the predicted revision name, as `XRDiffOptions.RevisionName`, for every composite that would actually
-      re-point — the kept set minus those pinned by a `Manual` `compositionUpdatePolicy`, which adopt nothing — so that a
-      composition template reading `.observed.composite.resource.spec.crossplane.compositionRevisionRef.name` renders
-      the value it would really get rather than the stale one. The processor applies it to the effective composite
-      (for a claim, the backing XR), so it reaches render but never the dry-run payload. Skipped, with a warning, when
-      the name is not predictable (§6.2 step 3a). Anything derived from the name is shown.
     - For each remaining XR, run the XR diff workflow above, using a `CompositionProvider` that returns the proposed
-      composition for the affected XR's GVK and the cluster's composition for any nested XRs of a different kind.
+      composition for the affected XR's GVK and the cluster's composition for any nested XRs of a different kind. With
+      the proposed composition it returns the predicted revision name for every composite that would actually re-point —
+      not one pinned by a `Manual` `compositionUpdatePolicy`, which adopts nothing — so that a composition template
+      reading `.observed.composite.resource.spec.crossplane.compositionRevisionRef.name` renders the value it would
+      really get rather than the stale one. The processor writes it to the render input's ref (for a claim, the backing
+      XR's), so it reaches render but never the dry-run payload. No name is returned, with a warning, when it is not
+      predictable (§6.2 step 3a). Anything derived from the name is shown.
 4. Aggregate per-XR results into a `CompDiffOutput` (composition diff + `XRImpact` list +
    `AffectedResourcesSummary`) and render via the `CompDiffRenderer`.
 
@@ -2593,7 +2607,7 @@ cmd/
 │   ├── renderer/                  # DiffRenderer, CompDiffRenderer, structured (JSON/YAML) renderers
 │   ├── ref/                       # Composite-ref parsing for `comp --resource`
 │   ├── kubecfg/                   # kubeconfig resolution helpers
-│   ├── types/                     # Shared types (CompositionProvider, XRDiffOptions, etc.)
+│   ├── types/                     # Shared types (CompositionProvider, ResolvedComposition, etc.)
 │   ├── testutils/                 # Mock builders, structured-assertion helpers used by tests
 │   │   └── envtestreaper/         # Kills envtest servers orphaned by earlier test runs
 │   └── versioncmd/                # `version` subcommand
