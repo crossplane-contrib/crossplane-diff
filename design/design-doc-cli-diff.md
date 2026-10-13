@@ -454,7 +454,9 @@ The `comp` subcommand has its own set of integration tests:
   counts failed composites, they assert the depth message reaches the failing composite's impact entry.
 - **Two-phase Diff**: Verifies that resources rendered only by nested XRs are not falsely flagged as removals.
 - **`--eventual-state`**: Tests multi-stage compositions (e.g., function-sequencer / `function-conditional`) whose
-  full effect requires multiple reconciliation cycles.
+  full effect requires multiple reconciliation cycles. Each gating composition is covered both for a new XR and for an
+  existing XR whose first stage exists but is not Ready yet, which must still reveal the later stage (#564); and an XR
+  whose stages are all Ready shows only its real changes.
 
 ### 4.13 Claim Edge Cases
 
@@ -2119,8 +2121,8 @@ The client layer provides interfaces to interact with Kubernetes and Crossplane 
     - It returns the desired state with the XR, composed resources, and `RequiredResources` / `RequiredSchemas`
       selectors describing what additional inputs the functions need on the next pass
 3. The `DiffProcessor` resolves any new requirements via the `RequirementsProvider` and reruns the render function if
-   the requirement set grew. Under `--eventual-state` it additionally synthesizes Ready conditions on rendered composed
-   resources between iterations to model multi-stage compositions.
+   the requirement set grew. Under `--eventual-state` it additionally synthesizes Ready conditions on the observed state
+   of every rendered composed resource between iterations to model multi-stage compositions (§9.5.6.2).
 4. The rendered resources are validated and used for diff calculation.
 
 ## 8. Implementation Details
@@ -2565,8 +2567,8 @@ multi-stage compositions reaching steady state). The current implementation is a
 ```go
 // RenderToStableState iteratively renders the composition pipeline until either:
 //   - the requirements set stabilises (synthesizeReady=false, the default), or
-//   - no new composed resources appear and Ready conditions stabilise (synthesizeReady=true,
-//     used by --eventual-state).
+//   - every rendered composed resource is observed Ready and no new requirements appear
+//     (synthesizeReady=true, used by --eventual-state).
 //
 // Between iterations it resolves any new RequiredResources via the RequirementsProvider and,
 // when synthesizeReady is true, synthesises Ready=True conditions on observed composed resources
@@ -2583,9 +2585,32 @@ func (p *DefaultDiffProcessor) RenderToStableState(
 ```
 
 The loop is bounded by `MaxRenderIterations` (configurable via `--max-iterations`). The default-mode termination
-criterion is "no new requirements were discovered on this iteration"; the eventual-state termination criterion is "no
-new composed resources appeared and the Ready set has not changed". Both modes share the same body, with the
-`synthesizeReady` flag selecting between them.
+criterion is "no new requirements were discovered on this iteration". The eventual-state criterion is that nothing
+would change once every composed resource is Ready: no new requirements were discovered, and every resource the
+iteration rendered is already observed with `Ready=True`. Both modes share the same body, with the `synthesizeReady`
+flag selecting between them.
+
+Under eventual state, an iteration that does not meet the criterion builds the next render's observed state with every
+rendered composed resource Ready (`synthesizeReadyObserved`):
+
+- A rendered resource that is **not observed yet** enters as rendered, with `Ready=True` added.
+- A rendered resource that **is observed but not Ready** keeps its observed copy, with only its Ready condition
+  replaced. The rest of its status is real cluster state a composition may read (`status.atProvider`, say), which the
+  rendered copy lacks. This is the case of an existing XR whose first stage is still provisioning: Crossplane creates
+  the next stage once it becomes Ready, so stopping here, as the loop did until #564, under-reports the diff.
+- A rendered resource that is **already Ready** is left exactly as observed, so synthesis is idempotent and an XR
+  whose composed resources are all Ready is stable after one render. Observed resources the render did not produce
+  are left untouched. The observed set holds only resources the XR controls (see `extractComposedResourcesFromTree`),
+  so nothing else is ever made Ready.
+
+Synthesized Ready reaches only the next render's observed state. The caller's observed resources (which nested-XR
+identity lookup reuses) are never modified, and the diff is computed from the final render's output against the
+cluster, so a synthesized condition is never part of a dry-run payload or a cluster-state comparison.
+
+The loop terminates for any composition with finitely many composed resources. Requirements only accumulate, and an
+eventual-state iteration that discovers none but is not yet stable makes at least one more rendered resource Ready;
+synthesis never takes Ready away. A composition that keeps producing new resources hits `MaxRenderIterations` and
+fails with the "did not stabilize" error.
 
 ##### 9.5.6.3 Composed-Resource Namespace Handling
 

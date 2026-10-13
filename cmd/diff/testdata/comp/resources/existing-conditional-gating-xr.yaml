@@ -10,3 +10,5 @@ spec:
   crossplane:
     compositionRef:
       name: conditional-gating-composition
+    compositionRevisionRef:
+      name: conditional-gating-composition-2b8c5ab

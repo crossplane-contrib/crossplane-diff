@@ -31,6 +31,7 @@ import (
 	cmp "github.com/crossplane/crossplane-runtime/v2/pkg/resource/unstructured/composite"
 
 	apiextensionsv1 "github.com/crossplane/crossplane/apis/v2/apiextensions/v1"
+	xpv2 "github.com/crossplane/crossplane/apis/v2/core/v2"
 	pkgv1 "github.com/crossplane/crossplane/apis/v2/pkg/v1"
 )
 
@@ -888,8 +889,11 @@ func renderName(res *un.Unstructured) (string, bool) {
 // synthesizes Ready status on composed resources between iterations.
 //
 // When synthesizeReady is false (normal mode), the loop terminates once requirements are resolved.
-// When synthesizeReady is true (eventual-state mode), the loop continues until no new composed
-// resources appear, synthesizing Ready=True between iterations to reveal function-sequencer stages.
+// When synthesizeReady is true (eventual-state mode), the loop continues until every rendered
+// composed resource is observed Ready and no new requirements appear, synthesizing Ready=True on
+// the observed state between iterations to reveal stages gated on readiness (function-sequencer).
+// Synthesized Ready reaches only the next render's observed state: observedResources itself, and
+// the cluster state the diff is later computed against, are never modified.
 func (p *DefaultDiffProcessor) RenderToStableState(
 	ctx context.Context,
 	xr *cmp.Unstructured,
@@ -1113,7 +1117,18 @@ func (p *DefaultDiffProcessor) checkStability(
 	return p.checkRequirementsResolved(newReqCount, resourceID, iteration, totalRequired, observed)
 }
 
-// checkStabilityWithReadySynthesis checks stability in eventual-state mode.
+// checkStabilityWithReadySynthesis checks stability in eventual-state mode, where stable means that
+// nothing would change once every composed resource is Ready: the iteration resolved no new
+// requirements, and every resource it rendered is already observed with Ready=True. Any other
+// iteration makes the rendered resources Ready in the observed state the next render sees, so that a
+// stage gated on an earlier stage's readiness (function-sequencer, or a template's own Ready check)
+// renders. A resource that already exists in the cluster but is not Ready yet needs that as much as
+// one this render composed for the first time: Crossplane creates the next stage once it is Ready,
+// whichever it is (#564).
+//
+// This terminates within the caller's iteration cap for any composition with finitely many composed
+// resources: an unstable iteration that resolves no new requirement makes at least one more rendered
+// resource Ready, and synthesis never takes Ready away again.
 func (p *DefaultDiffProcessor) checkStabilityWithReadySynthesis(
 	output render.CompositionOutputs,
 	observed []cpd.Unstructured,
@@ -1121,9 +1136,12 @@ func (p *DefaultDiffProcessor) checkStabilityWithReadySynthesis(
 	resourceID string,
 	iteration int,
 ) stabilityResult {
-	newComposed := findNewComposedResources(output.ComposedResources, observed)
+	nextObserved, readinessChanges, err := synthesizeReadyObserved(observed, output.ComposedResources)
+	if err != nil {
+		return stabilityResult{err: errors.Wrapf(err, "failed to synthesize Ready status at iteration %d", iteration)}
+	}
 
-	if len(newComposed) == 0 && newReqCount == 0 {
+	if readinessChanges == 0 && newReqCount == 0 {
 		p.config.Logger.Debug("Reached stable state",
 			"resource", resourceID,
 			"iterations", iteration,
@@ -1132,18 +1150,10 @@ func (p *DefaultDiffProcessor) checkStabilityWithReadySynthesis(
 		return stabilityResult{stable: true, nextObserved: observed}
 	}
 
-	// Synthesize Ready status and merge into observed for next iteration
-	readyResources, err := synthesizeReadyStatus(output.ComposedResources)
-	if err != nil {
-		return stabilityResult{err: errors.Wrapf(err, "failed to synthesize Ready status at iteration %d", iteration)}
-	}
-
-	nextObserved := mergeObservedResources(observed, readyResources)
-
 	p.config.Logger.Debug("Synthesized Ready status for next iteration",
 		"resource", resourceID,
 		"iteration", iteration,
-		"newComposedCount", len(newComposed),
+		"readinessChanges", readinessChanges,
 		"newReqCount", newReqCount,
 		"totalObserved", len(nextObserved))
 
@@ -1175,27 +1185,6 @@ func (p *DefaultDiffProcessor) checkRequirementsResolved(
 	return stabilityResult{stable: false, nextObserved: observed}
 }
 
-// findNewComposedResources identifies resources in rendered that don't exist in observed.
-func findNewComposedResources(rendered, observed []cpd.Unstructured) []cpd.Unstructured {
-	observedKeys := make(map[string]bool)
-
-	for _, obs := range observed {
-		key := composedResourceKey(&obs)
-		observedKeys[key] = true
-	}
-
-	var newResources []cpd.Unstructured
-
-	for _, res := range rendered {
-		key := composedResourceKey(&res)
-		if !observedKeys[key] {
-			newResources = append(newResources, res)
-		}
-	}
-
-	return newResources
-}
-
 // composedResourceKey creates a unique key for a composed resource based on its
 // composition-resource-name annotation and GVK.
 func composedResourceKey(res *cpd.Unstructured) string {
@@ -1205,21 +1194,47 @@ func composedResourceKey(res *cpd.Unstructured) string {
 	return compResName + "/" + gvk.Group + "/" + gvk.Version + "/" + gvk.Kind
 }
 
-// synthesizeReadyStatus adds Ready=True condition to all resources.
-func synthesizeReadyStatus(resources []cpd.Unstructured) ([]cpd.Unstructured, error) {
-	result := make([]cpd.Unstructured, len(resources))
-	now := metav1.Now()
-
-	for i, res := range resources {
-		copied := res.DeepCopy()
-		result[i] = *copied
-
-		if err := setReadyCondition(&result[i], now); err != nil {
-			return nil, errors.Wrapf(err, "cannot set Ready condition on resource %s", res.GetName())
-		}
+// synthesizeReadyObserved returns the observed state the next eventual-state render sees once every
+// rendered composed resource is Ready, and how many rendered resources that changed the readiness of.
+//
+// A rendered resource that is already observed keeps its observed copy, with only its Ready condition
+// set: the rest of its status (status.atProvider, say) is real cluster state a composition may read,
+// and the rendered copy has none of it. A rendered resource that is not observed yet enters as
+// rendered, plus Ready, as there is nothing else to go on. An observed resource that is already Ready
+// is left exactly as it is, so synthesis is idempotent; and observed resources the render no longer
+// produced are left untouched. Neither input is modified: synthesized Ready must reach only the next
+// render's observed state, never the caller's copy of the cluster state.
+func synthesizeReadyObserved(observed, rendered []cpd.Unstructured) ([]cpd.Unstructured, int, error) {
+	byKey := make(map[string]cpd.Unstructured, len(observed)+len(rendered))
+	for _, obs := range observed {
+		byKey[composedResourceKey(&obs)] = obs
 	}
 
-	return result, nil
+	now := metav1.Now()
+	changes := 0
+
+	for _, res := range rendered {
+		key := composedResourceKey(&res)
+
+		base, ok := byKey[key]
+		if ok && base.GetCondition(xpv2.TypeReady).Status == corev1.ConditionTrue {
+			continue
+		}
+
+		if !ok {
+			base = res
+		}
+
+		ready := base.DeepCopy()
+		if err := setReadyCondition(ready, now); err != nil {
+			return nil, 0, errors.Wrapf(err, "cannot set Ready condition on resource %s", res.GetName())
+		}
+
+		byKey[key] = *ready
+		changes++
+	}
+
+	return slices.Collect(maps.Values(byKey)), changes, nil
 }
 
 // setReadyCondition sets a Ready=True condition on the resource's status.conditions field.
@@ -1253,23 +1268,6 @@ func setReadyCondition(res *cpd.Unstructured, now metav1.Time) error {
 	}
 
 	return nil
-}
-
-// mergeObservedResources merges newResources with existing observed resources.
-func mergeObservedResources(existing, newResources []cpd.Unstructured) []cpd.Unstructured {
-	result := make(map[string]cpd.Unstructured)
-
-	for _, res := range existing {
-		key := composedResourceKey(&res)
-		result[key] = res
-	}
-
-	for _, res := range newResources {
-		key := composedResourceKey(&res)
-		result[key] = res
-	}
-
-	return slices.Collect(maps.Values(result))
 }
 
 // removeNamespacesFromClusterScopedResources removes namespaces from cluster-scoped resources.

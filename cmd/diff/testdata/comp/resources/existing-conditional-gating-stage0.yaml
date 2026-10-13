@@ -1,0 +1,14 @@
+# The stage0 resource conditional-gating-composition.yaml composed for existing-conditional-gating-xr.yaml.
+# It has no Ready condition yet, so stage1 stays gated until --eventual-state synthesizes one.
+apiVersion: ns.nop.example.org/v1alpha1
+kind: XDownstreamResource
+metadata:
+  annotations:
+    crossplane.io/composition-resource-name: stage0-resource
+  labels:
+    crossplane.io/composite: conditional-gating-test
+  name: 0-stage0-resource
+  namespace: default
+spec:
+  forProvider:
+    configData: existing-value

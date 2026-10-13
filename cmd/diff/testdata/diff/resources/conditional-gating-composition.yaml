@@ -11,7 +11,9 @@
 #   synthesizeReady flips rendered stage0 Ready=True and merges into observed
 #   iter 2: observed.resources[stage0-resource].resource.status.conditions has
 #           Ready=True -> renders stage0+stage1
-#   iter 3: renders stage0+stage1 again; newComposed=[] -> stable
+#   iter 3: renders stage0+stage1 again; both are observed Ready -> stable
+# For an existing XR whose stage0 is observed but not Ready, iter 1 synthesizes
+# its Ready on the observed copy, and the flow continues the same way (#564).
 #
 # Flow without eventual-state: iter 1 only. Renders stage0. Stable immediately.
 apiVersion: apiextensions.crossplane.io/v1

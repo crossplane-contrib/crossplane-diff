@@ -2134,8 +2134,52 @@ func TestDefaultDiffProcessor_RenderToStableState_SynthesizeReady(t *testing.T) 
 
 	functions := []pkgv1.Function{{ObjectMeta: metav1.ObjectMeta{Name: "test-function"}}}
 
+	// Fixtures for an XR that already exists: its stage0 is observed in the cluster, and stage1
+	// renders only once observed stage0 is Ready, the way function-sequencer or a template's own
+	// Ready check gates it (#564).
+	stage0 := func() *tu.ResourceBuilder {
+		return tu.NewResource("example.org/v1", "StagedResource", "stage0").WithCompositionResourceName("stage0")
+	}
+	stage1 := func() *tu.ResourceBuilder {
+		return tu.NewResource("example.org/v1", "StagedResource", "stage1").WithCompositionResourceName("stage1")
+	}
+
+	// stage0 as a provider leaves it while it is still provisioning: it has real status, but is not Ready.
+	observedStage0NotReady := *stage0().
+		WithStatusField("atProvider", map[string]any{"id": "real-id"}).
+		WithCondition("Ready", "False", "Creating").
+		BuildUComposed()
+	observedStage0Ready := *stage0().WithCondition("Ready", "True", "Available").BuildUComposed()
+	observedStage1Ready := *stage1().WithCondition("Ready", "True", "Available").BuildUComposed()
+
+	// gatedRender renders stage0, and stage1 too once observed stage0 is Ready and passes unlocks.
+	gatedRender := func(unlocks func(observedStage0 *cpd.Unstructured) bool) func() RenderFn {
+		return func() RenderFn {
+			return func(_ context.Context, _ logging.Logger, in RenderInputs) (render.CompositionOutputs, error) {
+				resources := []cpd.Unstructured{*stage0().BuildUComposed()}
+
+				for i := range in.ObservedResources {
+					obs := &in.ObservedResources[i]
+					if obs.GetName() == "stage0" && hasReadyCondition(&obs.Unstructured) && unlocks(obs) {
+						resources = append(resources, *stage1().BuildUComposed())
+					}
+				}
+
+				return render.CompositionOutputs{CompositeResource: in.CompositeResource, ComposedResources: resources}, nil
+			}
+		}
+	}
+	anyReadyStage0 := func(*cpd.Unstructured) bool { return true }
+	// A composition can read an observed resource's status (a template wiring stage1 to
+	// status.atProvider.id, say), so synthesis must leave it as the cluster has it.
+	stage0KeepsItsObservedID := func(obs *cpd.Unstructured) bool {
+		id, _, _ := un.NestedString(obs.Object, "status", "atProvider", "id")
+		return id == "real-id"
+	}
+
 	tests := map[string]struct {
 		setupRenderFunc      func() RenderFn
+		observed             []cpd.Unstructured
 		wantComposedCount    int
 		wantRenderIterations int
 		wantErr              bool
@@ -2219,6 +2263,33 @@ func TestDefaultDiffProcessor_RenderToStableState_SynthesizeReady(t *testing.T) 
 			wantRenderIterations: 4, // Stage1 -> Stage2 -> Stage3 -> verify stable
 			wantErr:              false,
 		},
+		"ObservedNotReadyResourceIsMadeReady": {
+			// stage0 exists but is not Ready, and nothing new renders on the first pass. Stability
+			// still requires synthesizing its Ready, which unlocks stage1.
+			setupRenderFunc:      gatedRender(anyReadyStage0),
+			observed:             []cpd.Unstructured{observedStage0NotReady},
+			wantComposedCount:    2, // stage0 + stage1
+			wantRenderIterations: 3, // stage0 made Ready -> stage1 new, made Ready -> verify stable
+			wantErr:              false,
+		},
+		"SynthesisKeepsObservedResourceStatus": {
+			// stage1 also needs stage0's observed status.atProvider.id, which the rendered copy of
+			// stage0 lacks: synthesis must flip Ready on the observed copy, not replace it.
+			setupRenderFunc:      gatedRender(stage0KeepsItsObservedID),
+			observed:             []cpd.Unstructured{observedStage0NotReady},
+			wantComposedCount:    2,
+			wantRenderIterations: 3,
+			wantErr:              false,
+		},
+		"ObservedReadyResourcesAreStableAtOnce": {
+			// Every rendered resource is already observed Ready, so synthesis would change nothing and
+			// the first render is the eventual state.
+			setupRenderFunc:      gatedRender(anyReadyStage0),
+			observed:             []cpd.Unstructured{observedStage0Ready, observedStage1Ready},
+			wantComposedCount:    2,
+			wantRenderIterations: 1,
+			wantErr:              false,
+		},
 		"MaxIterationsExceeded": {
 			setupRenderFunc: func() RenderFn {
 				resourceNum := 0
@@ -2279,8 +2350,19 @@ func TestDefaultDiffProcessor_RenderToStableState_SynthesizeReady(t *testing.T) 
 			baseOpts = append(baseOpts, customOpts...)
 			processor := NewDiffProcessor(k8.Clients{}, xp.Clients{Definition: tu.NewMockDefinitionClient().Build()}, baseOpts...)
 
+			// Synthesized Ready is for the next render only: the caller's observed state must come back
+			// exactly as it went in.
+			var observedBefore []cpd.Unstructured
+			for i := range tt.observed {
+				observedBefore = append(observedBefore, *tt.observed[i].DeepCopy())
+			}
+
 			// Call with synthesizeReady=true
-			output, err := processor.(*DefaultDiffProcessor).RenderToStableState(ctx, xr, composition, functions, "XR/test-xr", nil, true)
+			output, err := processor.(*DefaultDiffProcessor).RenderToStableState(ctx, xr, composition, functions, "XR/test-xr", tt.observed, true)
+
+			if diff := gcmp.Diff(observedBefore, tt.observed); diff != "" {
+				t.Errorf("RenderToStableState() modified the observed resources it was given (-before +after):\n%s", diff)
+			}
 
 			if tt.wantErr {
 				if err == nil {
