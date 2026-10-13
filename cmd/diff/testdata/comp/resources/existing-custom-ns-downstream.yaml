@@ -5,8 +5,6 @@ metadata:
   namespace: custom-namespace
   annotations:
     crossplane.io/composition-resource-name: nop-resource
-  labels:
-    crossplane.io/composite: custom-namespace-resource
 spec:
   forProvider:
     configData: custom-ns-existing-value

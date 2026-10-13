@@ -4,8 +4,6 @@ apiVersion: ns.diff.example.org/v1alpha1
 kind: XNopResource
 metadata:
   name: selector-bound
-  labels:
-    crossplane.io/composite: selector-bound
   namespace: default
 spec:
   coolField: existing-value
@@ -15,6 +13,4 @@ spec:
         binding: shared
     compositionRef:
       name: selector-bound-a
-    compositionRevisionRef:
-      name: selector-bound-a-dc464c8
     compositionUpdatePolicy: Automatic

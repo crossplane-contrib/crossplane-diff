@@ -5,10 +5,6 @@ metadata:
   name: automatic-claim-a1b2c
   annotations:
     crossplane.io/composition-resource-name: nop-resource
-  labels:
-    crossplane.io/composite: automatic-claim-a1b2c
-    crossplane.io/claim-name: automatic-claim
-    crossplane.io/claim-namespace: existing-namespace
 spec:
   forProvider:
     configData: v2:xpinneds.pinned.diff.example.org-806289b:existing-value

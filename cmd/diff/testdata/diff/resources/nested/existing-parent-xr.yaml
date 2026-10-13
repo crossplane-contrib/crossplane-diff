@@ -3,13 +3,9 @@ apiVersion: ns.nested.example.org/v1alpha1
 kind: XParentResource
 metadata:
   name: test-parent
-  labels:
-    crossplane.io/composite: test-parent
   namespace: default
 spec:
   parentField: "existing-value"
   crossplane:
     compositionRef:
       name: xparentresources.nested.example.org
-    compositionRevisionRef:
-      name: xparentresources.nested.example.org-f2af16a

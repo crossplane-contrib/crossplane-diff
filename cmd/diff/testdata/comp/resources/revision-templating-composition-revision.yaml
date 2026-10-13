@@ -1,14 +1,12 @@
-# The CompositionRevision Crossplane creates for revision-templating-composition.yaml,
-# named and labelled from its hash as Crossplane names it. envtest runs no Crossplane controllers,
-# so it must be declared. Revision 2, the latest: the Automatic XR in existing-xr-revision-ref.yaml
-# tracks it. revision-templating-composition-older-revision.yaml is revision 1.
+# The CompositionRevision Crossplane creates for revision-templating-composition.yaml, declared rather
+# than left to the harness because it is revision 2, the latest:
+# revision-templating-composition-older-revision.yaml is revision 1. The Automatic XR in
+# existing-xr-revision-ref.yaml tracks it.
 apiVersion: apiextensions.crossplane.io/v1
 kind: CompositionRevision
 metadata:
-  name: xrevisionrefs.diff.example.org-e36719b
   labels:
     crossplane.io/composition-name: xrevisionrefs.diff.example.org
-    crossplane.io/composition-hash: e36719ba3a7eb92e2b7bf1dd0afc9415edee9ba3de69c6dfce1c370686a3574
 spec:
   revision: 2
   compositeTypeRef:

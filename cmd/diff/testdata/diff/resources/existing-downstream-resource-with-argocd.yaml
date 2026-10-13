@@ -7,7 +7,6 @@ metadata:
     kubectl.kubernetes.io/last-applied-configuration: |
       {"apiVersion":"ns.nop.example.org/v1alpha1","kind":"XDownstreamResource"}
   labels:
-    crossplane.io/composite: test-resource
     argocd.argoproj.io/instance: test-app
   name: test-resource
   namespace: default

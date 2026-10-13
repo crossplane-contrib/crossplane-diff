@@ -9,8 +9,6 @@ metadata:
   namespace: default
   annotations:
     crossplane.io/composition-resource-name: nop-resource
-  labels:
-    crossplane.io/composite: pinned-revision-ref-resource
 spec:
   forProvider:
     configData: xrevisionrefs.diff.example.org-0d65896

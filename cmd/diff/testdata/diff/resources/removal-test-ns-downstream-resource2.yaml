@@ -3,8 +3,6 @@ kind: XDownstreamResource
 metadata:
   annotations:
     crossplane.io/composition-resource-name: resource2
-  labels:
-    crossplane.io/composite: test-resource
   name: resource-to-be-removed
   namespace: default
 spec:

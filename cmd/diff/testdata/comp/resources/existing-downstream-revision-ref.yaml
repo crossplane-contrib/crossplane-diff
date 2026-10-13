@@ -13,8 +13,6 @@ metadata:
   namespace: default
   annotations:
     crossplane.io/composition-resource-name: nop-resource
-  labels:
-    crossplane.io/composite: revision-ref-resource
 spec:
   forProvider:
     configData: xrevisionrefs.diff.example.org-e36719b

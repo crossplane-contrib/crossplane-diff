@@ -5,8 +5,6 @@ apiVersion: ns.diff.example.org/v1alpha1
 kind: XNopResource
 metadata:
   name: test-resource
-  labels:
-    crossplane.io/composite: test-resource
   namespace: default
 spec:
   coolField: existing-value
@@ -14,5 +12,3 @@ spec:
   crossplane:
     compositionRef:
       name: multistep-fatal-after-extra-res.diff.example.org
-    compositionRevisionRef:
-      name: multistep-fatal-after-extra-res.diff.example.org-8dd5371

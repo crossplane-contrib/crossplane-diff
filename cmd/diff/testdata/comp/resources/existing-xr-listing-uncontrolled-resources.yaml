@@ -6,16 +6,12 @@ apiVersion: ns.diff.example.org/v1alpha1
 kind: XNopResource
 metadata:
   name: test-resource
-  labels:
-    crossplane.io/composite: test-resource
   namespace: default
 spec:
   coolField: "existing-value"
   crossplane:
     compositionRef:
       name: removal-test-composition
-    compositionRevisionRef:
-      name: removal-test-composition-517d4d6
     compositionUpdatePolicy: Automatic
     resourceRefs:
       - apiVersion: ns.nop.example.org/v1alpha1

@@ -1,5 +1,5 @@
-# The in-cluster xapimigrateresources.example.org: its spec is that of its latest revision,
-# api-version-composition-revision-v2.yaml, which renders the resource at v1beta2.
+# The in-cluster xapimigrateresources.example.org, which renders the resource at v1beta2. The harness
+# creates its latest revision from it; api-version-composition-revision-v1.yaml is the earlier one.
 apiVersion: apiextensions.crossplane.io/v1
 kind: Composition
 metadata:

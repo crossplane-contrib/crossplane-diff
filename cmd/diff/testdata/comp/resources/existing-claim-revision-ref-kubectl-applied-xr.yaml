@@ -1,13 +1,9 @@
 # existing-claim-revision-ref-xr.yaml where the composition was applied with a client-side `kubectl
-# apply`, so it tracks claim-revision-templating-composition-kubectl-applied-revision.yaml.
+# apply`. Composition.Hash() covers annotations, so the revision it tracks has a different name.
 apiVersion: diff.example.org/v1alpha1
 kind: XNop
 metadata:
   name: revision-ref-claim-xr
-  labels:
-    crossplane.io/composite: revision-ref-claim-xr
-    crossplane.io/claim-name: revision-ref-claim
-    crossplane.io/claim-namespace: test-namespace
 spec:
   claimRef:
     apiVersion: diff.example.org/v1alpha1
@@ -17,5 +13,3 @@ spec:
   coolField: revision-ref-claim-value
   compositionRef:
     name: xrevisionrefclaims.diff.example.org
-  compositionRevisionRef:
-    name: xrevisionrefclaims.diff.example.org-329a7cd

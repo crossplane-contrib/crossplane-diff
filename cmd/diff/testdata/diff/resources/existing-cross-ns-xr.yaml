@@ -2,8 +2,6 @@ apiVersion: ns.diff.example.org/v1alpha1
 kind: XNopResource
 metadata:
   name: test-cross-ns-resource
-  labels:
-    crossplane.io/composite: test-cross-ns-resource
   namespace: default
 spec:
   coolField: existing-cross-ns-value
@@ -11,5 +9,3 @@ spec:
   crossplane:
     compositionRef:
       name: xnopresources.cross-namespace.example.org
-    compositionRevisionRef:
-      name: xnopresources.cross-namespace.example.org-48ee62c

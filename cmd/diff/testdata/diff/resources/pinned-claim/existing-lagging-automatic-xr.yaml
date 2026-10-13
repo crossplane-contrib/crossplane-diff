@@ -7,8 +7,6 @@ apiVersion: pinned.diff.example.org/v1alpha1
 kind: XPinned
 metadata:
   name: lagging-xr
-  labels:
-    crossplane.io/composite: lagging-xr
 spec:
   coolField: existing-value
   compositionUpdatePolicy: Automatic

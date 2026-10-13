@@ -3,8 +3,6 @@ kind: XDownstreamResource
 metadata:
   name: manual-resource
   namespace: default
-  labels:
-    crossplane.io/composite: manual-resource
   annotations:
     crossplane.io/composition-resource-name: nop-resource
 spec:

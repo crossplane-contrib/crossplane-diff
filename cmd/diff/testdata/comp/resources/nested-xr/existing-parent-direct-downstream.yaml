@@ -6,8 +6,6 @@ metadata:
   namespace: default
   annotations:
     crossplane.io/composition-resource-name: direct-resource
-  labels:
-    crossplane.io/composite: test-parent
 spec:
   forProvider:
     configData: parent-parent-value

@@ -7,8 +7,6 @@ metadata:
   namespace: default
   annotations:
     crossplane.io/composition-resource-name: nop-resource-v2
-  labels:
-    crossplane.io/composite: v2-resource
 spec:
   forProvider:
     configData: v2-updated-v2-existing-value

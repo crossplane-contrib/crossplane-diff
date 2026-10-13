@@ -2,13 +2,9 @@ apiVersion: ns.diff.example.org/v1alpha1
 kind: XNopResource
 metadata:
   name: sequencer-gating-test
-  labels:
-    crossplane.io/composite: sequencer-gating-test
   namespace: default
 spec:
   coolField: existing-value
   crossplane:
     compositionRef:
       name: sequencer-gating-composition
-    compositionRevisionRef:
-      name: sequencer-gating-composition-6845979

@@ -1,10 +1,8 @@
 apiVersion: apiextensions.crossplane.io/v1
 kind: CompositionRevision
 metadata:
-  name: xapimigrateresources.example.org-2067855
   labels:
     crossplane.io/composition-name: xapimigrateresources.example.org
-    crossplane.io/composition-hash: 20678552f323c4f854192494c6df38a77c55acce6c958120cd58ac25a3f9eec
 spec:
   revision: 1
   compositeTypeRef:
