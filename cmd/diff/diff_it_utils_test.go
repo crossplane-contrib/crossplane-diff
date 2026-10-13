@@ -1020,8 +1020,12 @@ func revisionIdentity(compName, hash string) (string, string) {
 	return compName + "-" + hash[:min(7, len(hash))], hash
 }
 
-// composedLabels are the labels RenderComposedResourceMetadata copies from an XR to what it composes.
-var composedLabels = []string{"crossplane.io/composite", "crossplane.io/claim-name", "crossplane.io/claim-namespace"}
+// The labels Crossplane gives an XR and everything composed beneath it.
+const (
+	labelComposite      = "crossplane.io/composite"
+	labelClaimName      = "crossplane.io/claim-name"
+	labelClaimNamespace = "crossplane.io/claim-namespace"
+)
 
 // crossplaneDefaults fills in, on each fixture a case sets up, what Crossplane would have written to it
 // wherever the fixture leaves it out, just as envtestCRDs derives XR and claim CRDs from their XRDs. A
@@ -1048,8 +1052,9 @@ func newCrossplaneDefaults(c client.Client, crds []*extv1.CustomResourceDefiniti
 //   - a CompositionRevision's name and hash label, which NewCompositionRevision derives from the
 //     Composition it was cut from: the one its crossplane.io/composition-name label names, with the
 //     revision's own spec, labels and annotations;
-//   - an XR's crossplane.io/composite label, its own name; or, on a resource an XR composes (a nested XR
-//     included), the XR's composite and claim labels, as RenderComposedResourceMetadata copies them;
+//   - an XR's crossplane.io/composite label, its own name, and for a claim's backing XR the claim labels
+//     the claim syncer sets from the claim its claimRef names; or, on a resource an XR composes (a nested
+//     XR included), the XR's composite and claim labels, as RenderComposedResourceMetadata copies them;
 //   - the compositionRevisionRef of an XR that names a Composition but neither a revision nor a
 //     revision selector: the Composition's current revision, which reconcileCompositionRevisions creates.
 func (d *crossplaneDefaults) fill(ctx context.Context, o, parent *un.Unstructured) error {
@@ -1058,17 +1063,27 @@ func (d *crossplaneDefaults) fill(ctx context.Context, o, parent *un.Unstructure
 		return d.nameRevision(ctx, o)
 	}
 
-	labels := map[string]string{}
+	var composite, claimName, claimNamespace string
 
 	switch {
 	case parent != nil:
-		for _, k := range composedLabels {
-			if v, ok := parent.GetLabels()[k]; ok {
-				labels[k] = v
-			}
-		}
+		composite = parent.GetLabels()[labelComposite]
+		claimName, claimNamespace = parent.GetLabels()[labelClaimName], parent.GetLabels()[labelClaimNamespace]
 	case d.xrKinds[gk]:
-		labels["crossplane.io/composite"] = o.GetName()
+		composite = o.GetName()
+		// The claim syncer labels a claim's backing XR with the claim, which its claimRef names.
+		claimName, _, _ = un.NestedString(o.Object, "spec", "claimRef", "name")
+		claimNamespace, _, _ = un.NestedString(o.Object, "spec", "claimRef", "namespace")
+	}
+
+	labels := map[string]string{}
+	if composite != "" {
+		labels[labelComposite] = composite
+	}
+
+	// Like RenderComposedResourceMetadata, set the claim labels only as a pair.
+	if claimName != "" && claimNamespace != "" {
+		labels[labelClaimName], labels[labelClaimNamespace] = claimName, claimNamespace
 	}
 
 	maps.Copy(labels, o.GetLabels())

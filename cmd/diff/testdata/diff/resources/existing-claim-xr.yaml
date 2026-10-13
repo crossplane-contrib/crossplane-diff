@@ -5,9 +5,6 @@ kind: XNopResource
 metadata:
   name: test-claim-82crv
   generateName: test-claim-
-  labels:
-    crossplane.io/claim-name: test-claim
-    crossplane.io/claim-namespace: existing-namespace
 spec:
   coolField: existing-value
   compositionUpdatePolicy: Automatic

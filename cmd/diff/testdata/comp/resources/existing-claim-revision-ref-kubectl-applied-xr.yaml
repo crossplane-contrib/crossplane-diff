@@ -4,9 +4,6 @@ apiVersion: diff.example.org/v1alpha1
 kind: XNop
 metadata:
   name: revision-ref-claim-xr
-  labels:
-    crossplane.io/claim-name: revision-ref-claim
-    crossplane.io/claim-namespace: test-namespace
 spec:
   claimRef:
     apiVersion: diff.example.org/v1alpha1

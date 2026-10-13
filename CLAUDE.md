@@ -419,8 +419,10 @@ As with the XR and claim CRDs, the harness (in `cmd/diff/diff_it_utils_test.go`)
 before it creates each `setupFiles` or `crossplaneManagedResources` fixture, `crossplaneDefaults.fill` fills in
 whatever the fixture leaves out:
 
-- an XR's `crossplane.io/composite` label, its own name; and on a resource an XR composes, nested XRs included, that
-  XR's composite and claim labels, as `RenderComposedResourceMetadata` copies them;
+- an XR's `crossplane.io/composite` label, its own name, and on a claim's backing XR the `crossplane.io/claim-name`
+  and `crossplane.io/claim-namespace` labels the claim syncer sets from the claim its `spec.claimRef` names; and on a
+  resource an XR composes, nested XRs included, that XR's composite and claim labels, as
+  `RenderComposedResourceMetadata` copies them (so an unclaimed XR's tree gets no claim labels);
 - an XR's `compositionRevisionRef`, when it names a Composition but neither a revision nor a revision selector: that
   Composition's current revision;
 - a CompositionRevision's name and hash label, from the Composition its `crossplane.io/composition-name` label names

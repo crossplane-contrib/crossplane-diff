@@ -210,8 +210,9 @@ adopted, is set up as a plain fixture, and only on purpose.
 
 What else Crossplane would have written, the harness derives rather than requires, as it derives XR and claim CRDs
 from XRDs: just before it creates each `setupFiles` or `crossplaneManagedResources` fixture, it fills in whatever the
-fixture leaves out. An XR gets its own `crossplane.io/composite` label, and a resource an XR composes (a nested XR
-included) gets that XR's composite and claim labels, as `RenderComposedResourceMetadata` copies them. An XR that names
+fixture leaves out. An XR gets its own `crossplane.io/composite` label, and a claim's backing XR the claim labels the
+claim syncer sets from its `spec.claimRef`; a resource an XR composes (a nested XR included) gets that XR's composite
+and claim labels, as `RenderComposedResourceMetadata` copies them. An XR that names
 a composition but neither a revision nor a revision selector gets a `compositionRevisionRef` to that composition's
 current revision. A CompositionRevision fixture without a name is named and hash-labelled as `NewCompositionRevision`
 would name it, from the Composition its `crossplane.io/composition-name` label names and its own spec, labels and

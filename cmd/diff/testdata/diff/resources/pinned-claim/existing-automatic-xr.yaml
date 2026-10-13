@@ -3,9 +3,6 @@ apiVersion: pinned.diff.example.org/v1alpha1
 kind: XPinned
 metadata:
   name: automatic-claim-a1b2c
-  labels:
-    crossplane.io/claim-name: automatic-claim
-    crossplane.io/claim-namespace: existing-namespace
 spec:
   coolField: existing-value
   compositionUpdatePolicy: Automatic
