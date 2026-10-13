@@ -1460,13 +1460,15 @@ Four implementations are wired up at the CLI layer based on configuration:
 `Cleanup` is responsible for terminating any function containers the provider has started; it is invoked by the
 processor's `Cleanup`.
 
-All three providers also apply the `render.crossplane.io/runtime-docker-network` annotation to every returned function
-package when the `CROSSPLANE_DIFF_DOCKER_NETWORK` environment variable is set. This is the user-facing knob for running
-`crossplane-diff` inside a Docker container (e.g. a GitHub Actions container job): the spawned function containers join
-the caller's network instead of the default Docker bridge, where they would be unreachable from the caller. The
-annotation is applied on every `GetFunctionsForComposition` call, including cache hits in `CachedFunctionProvider`, so
-the env var works correctly regardless of when it is set relative to cache population. Any non-empty value the user
-has pre-set on a function package is preserved.
+The providers do not handle Docker networking. `CROSSPLANE_DIFF_DOCKER_NETWORK` is the user-facing knob for running
+`crossplane-diff` inside a Docker container (e.g. a GitHub Actions container job), so that the spawned function
+containers join the caller's network instead of the default Docker bridge, where they would be unreachable from the
+caller. `NewEngineRenderFn` reads it once and passes it to the upstream docker engine as
+`render.EngineFlags.CrossplaneDockerNetwork`. The engine runs the crossplane-render container on that network, and its
+`Setup` applies the `render.crossplane.io/runtime-docker-network` annotation to each function before its runtime
+starts. Any non-empty value the user has pre-set on a function package is preserved. When the variable is unset,
+the first `Setup` creates a temporary network for the run and the engine's cleanup removes it (see `EngineRenderFn`
+in §9.5.3).
 
 ### 6.7a InputValidator
 
