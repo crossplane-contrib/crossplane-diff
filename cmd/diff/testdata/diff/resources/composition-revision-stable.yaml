@@ -1,10 +1,13 @@
+# An earlier revision of xnopresources.diff.example.org, from when the composition carried the
+# channel=stable label. Named and labelled from the hash of the composition it was made from, as
+# Crossplane names it. The XR in existing-xr-selector-stable.yaml tracks it.
 apiVersion: apiextensions.crossplane.io/v1
 kind: CompositionRevision
 metadata:
-  name: xnopresources.diff.example.org-stable01
+  name: xnopresources.diff.example.org-1623e01
   labels:
     crossplane.io/composition-name: xnopresources.diff.example.org
-    crossplane.io/composition-hash: stable01
+    crossplane.io/composition-hash: 1623e01b1e37604e869239ea60bf7d873aa7d25413c36e555d21e2f1e33a9f6
     channel: stable
 spec:
   revision: 1

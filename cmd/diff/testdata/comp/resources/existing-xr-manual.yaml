@@ -11,5 +11,5 @@ spec:
     compositionRef:
       name: xnopresources.diff.example.org
     compositionRevisionRef:
-      name: xnopresources.diff.example.org-abc123
+      name: xnopresources.diff.example.org-9382a6d
     compositionUpdatePolicy: Manual

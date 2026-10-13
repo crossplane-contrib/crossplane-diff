@@ -1,10 +1,13 @@
+# The CompositionRevision Crossplane creates for v2-xrd-with-v1-paths-composition.yaml,
+# named and labelled from its hash as Crossplane names it. envtest runs no Crossplane controllers,
+# so it must be declared. The XR in existing-v2xrd-v1paths-xr.yaml tracks it.
 apiVersion: apiextensions.crossplane.io/v1
 kind: CompositionRevision
 metadata:
-  name: xnopresources.v2withv1paths.diff.example.org-abc123
+  name: xnopresources.v2withv1paths.diff.example.org-f920803
   labels:
     crossplane.io/composition-name: xnopresources.v2withv1paths.diff.example.org
-    crossplane.io/composition-hash: abc123
+    crossplane.io/composition-hash: f920803cab67fdb146eb87692ca2d6ea4d6fdce28ddd188183e0e58227b790c
 spec:
   revision: 1
   compositeTypeRef:

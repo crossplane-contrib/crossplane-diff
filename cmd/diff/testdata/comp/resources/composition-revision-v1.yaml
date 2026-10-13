@@ -1,10 +1,14 @@
+# The CompositionRevision Crossplane creates for original-composition.yaml,
+# named and labelled from its hash as Crossplane names it. envtest runs no Crossplane controllers,
+# so it must be declared. The XRs that use original-composition.yaml track it, and
+# existing-xr-manual.yaml is pinned to it.
 apiVersion: apiextensions.crossplane.io/v1
 kind: CompositionRevision
 metadata:
-  name: xnopresources.diff.example.org-abc123
+  name: xnopresources.diff.example.org-9382a6d
   labels:
     crossplane.io/composition-name: xnopresources.diff.example.org
-    crossplane.io/composition-hash: abc123
+    crossplane.io/composition-hash: 9382a6d638f6053d77b8944e8aa30855a390b202caa36a2f4e5a409fb9bd86c
 spec:
   revision: 1
   compositeTypeRef:

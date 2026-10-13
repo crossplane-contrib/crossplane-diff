@@ -1,11 +1,13 @@
-# Parent composition revision
+# The CompositionRevision Crossplane creates for parent-composition.yaml,
+# named and labelled from its hash as Crossplane names it. envtest runs no Crossplane controllers,
+# so it must be declared. The XR in existing-parent-xr.yaml tracks it.
 apiVersion: apiextensions.crossplane.io/v1
 kind: CompositionRevision
 metadata:
-  name: xparentresources.nested.example.org-default
+  name: xparentresources.nested.example.org-f2af16a
   labels:
     crossplane.io/composition-name: xparentresources.nested.example.org
-    crossplane.io/composition-hash: default
+    crossplane.io/composition-hash: f2af16a4bb0261903ad94fec23367ac1bf14e78f506e28b04c0627bfd27b27f
 spec:
   revision: 1
   compositeTypeRef:
