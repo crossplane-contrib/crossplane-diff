@@ -5,7 +5,6 @@ metadata:
   namespace: default
   annotations:
     crossplane.io/composition-resource-name: network
-    gotemplating.fn.crossplane.io/composition-resource-name: network
   labels:
     crossplane.io/composite: mixed-test-xr-3
 spec:

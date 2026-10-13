@@ -2,6 +2,8 @@ apiVersion: ns.diff.example.org/v1alpha1
 kind: XEnvResource
 metadata:
   name: test-env-resource
+  labels:
+    crossplane.io/composite: test-env-resource
 spec:
   compositionUpdatePolicy: Automatic
   configKey: "existing-config-value"

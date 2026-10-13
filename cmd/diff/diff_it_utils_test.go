@@ -248,6 +248,17 @@ type HierarchicalOwnershipRelation struct {
 	OwnedFiles map[string]*HierarchicalOwnershipRelation // Map of owned file paths to their own relationships
 }
 
+// composes is the one-level HierarchicalOwnershipRelation: an XR and the composed resources it
+// controls. Spell out the struct only for a tree deeper than that, i.e. one with nested XRs.
+func composes(xrFile string, composedFiles ...string) HierarchicalOwnershipRelation {
+	owned := make(map[string]*HierarchicalOwnershipRelation, len(composedFiles))
+	for _, f := range composedFiles {
+		owned[f] = nil
+	}
+
+	return HierarchicalOwnershipRelation{OwnerFile: xrFile, OwnedFiles: owned}
+}
+
 // setOwnerReference adds an owner reference to the resource.
 func setOwnerReference(resource, owner *un.Unstructured) {
 	// Create owner reference
@@ -273,22 +284,16 @@ func addResourceRef(parent, child *un.Unstructured, xrAPIVersion XrdAPIVersion) 
 		"name":       child.GetName(),
 	}
 
-	// If the child has a namespace, include it
-	if ns := child.GetNamespace(); ns != "" {
+	// A namespaced XR composes only in its own namespace, so its resourceRefs have no namespace field
+	// (xcrd omits it from the schema); a cluster-scoped XR's name the namespace of a namespaced child.
+	if ns := child.GetNamespace(); ns != "" && parent.GetNamespace() == "" {
 		ref["namespace"] = ns
 	}
 
-	var resourceRefsPath []string
-
-	switch xrAPIVersion {
-	case V1:
-		resourceRefsPath = []string{"spec", "resourceRefs"}
-	case V2:
-		resourceRefsPath = []string{"spec", "crossplane", "resourceRefs"}
-	}
+	path := resourceRefsPath(xrAPIVersion)
 
 	// Get current resourceRefs or initialize if not present
-	resourceRefs, found, err := un.NestedSlice(parent.Object, resourceRefsPath...)
+	resourceRefs, found, err := un.NestedSlice(parent.Object, path...)
 	if err != nil {
 		return errors.Wrap(err, "cannot get resourceRefs from parent")
 	}
@@ -297,10 +302,19 @@ func addResourceRef(parent, child *un.Unstructured, xrAPIVersion XrdAPIVersion) 
 		resourceRefs = []any{}
 	}
 
+	// A fixture may already list the reference, as Crossplane would have written it; don't repeat it.
+	for _, existing := range resourceRefs {
+		if m, ok := existing.(map[string]any); ok &&
+			m["apiVersion"] == ref["apiVersion"] && m["kind"] == ref["kind"] &&
+			m["name"] == ref["name"] && m["namespace"] == ref["namespace"] {
+			return nil
+		}
+	}
+
 	// Add the new reference and update the parent
 	resourceRefs = append(resourceRefs, ref)
 
-	return un.SetNestedSlice(parent.Object, resourceRefs, resourceRefsPath...)
+	return un.SetNestedSlice(parent.Object, resourceRefs, path...)
 }
 
 // applyResourcesFromFiles loads and applies resources from YAML files
@@ -629,8 +643,11 @@ func createAllResourcesInHierarchy(ctx context.Context, c client.Client,
 	parentChildRelationships map[string]string,
 ) error {
 	for _, hierarchy := range hierarchies {
-		// Create the owner resource first
-		_, err := createResourceFromFile(ctx, c, hierarchy.OwnerFile, createdResources)
+		// Create the owner resource first. Only a root is still uncreated here, since a nested owner was
+		// applied as its parent's composed resource before the recursion reached it. A root XR is
+		// created the way a user's manifest would be, never under Crossplane's composed field manager:
+		// its spec belongs to whoever applied it.
+		_, err := createResourceFromFile(ctx, c, hierarchy.OwnerFile, createdResources, "")
 		if err != nil {
 			return err
 		}
@@ -641,7 +658,7 @@ func createAllResourcesInHierarchy(ctx context.Context, c client.Client,
 			parentChildRelationships[ownedFile] = hierarchy.OwnerFile
 
 			// Create the owned resource without setting references
-			_, err := createResourceFromFile(ctx, c, ownedFile, createdResources)
+			_, err := createResourceFromFile(ctx, c, ownedFile, createdResources, CrossplaneFieldManager)
 			if err != nil {
 				return err
 			}
@@ -667,11 +684,12 @@ func createAllResourcesInHierarchy(ctx context.Context, c client.Client,
 	return nil
 }
 
-// createResourceFromFile creates a resource from a file using Server-Side Apply (SSA) with the
-// CrossplaneFieldManager. This more closely simulates how Crossplane applies composed resources
-// in production, enabling tests to accurately detect SSA-related behaviors like field removal.
+// createResourceFromFile creates the one resource a file holds. With a fieldManager it is applied with
+// Server-Side Apply (SSA) under that manager: pass CrossplaneFieldManager for a composed resource, as
+// Crossplane applies composed resources in production, so tests see SSA-related behaviors like field
+// removal. With none it is created plainly, as a setup file is.
 func createResourceFromFile(ctx context.Context, c client.Client, path string,
-	createdResources map[string]*un.Unstructured,
+	createdResources map[string]*un.Unstructured, fieldManager string,
 ) (*un.Unstructured, error) {
 	// Check if we've already processed this resource
 	if resource, exists := createdResources[path]; exists {
@@ -684,16 +702,19 @@ func createResourceFromFile(ctx context.Context, c client.Client, path string,
 		return nil, err
 	}
 
-	if len(resources) == 0 {
-		return nil, fmt.Errorf("no resources found in file %s", path)
+	// The hierarchy is keyed by file, so a second document would silently go unowned.
+	if len(resources) != 1 {
+		return nil, fmt.Errorf("file %s holds %d resources; an ownership hierarchy needs exactly one per file", path, len(resources))
 	}
 
 	resource := resources[0]
 
-	// Apply the resource using SSA with Crossplane field manager.
-	// This simulates how Crossplane applies composed resources in production.
-	if err := applyResourceWithSSA(ctx, c, resource, CrossplaneFieldManager); err != nil {
-		return nil, fmt.Errorf("failed to apply resource with SSA: %w", err)
+	if fieldManager != "" {
+		if err := applyResourceWithSSA(ctx, c, resource, fieldManager); err != nil {
+			return nil, fmt.Errorf("failed to apply resource with SSA: %w", err)
+		}
+	} else if err := createResources(ctx, c, resources); err != nil {
+		return nil, err
 	}
 
 	// Get the resource back from the server
@@ -799,12 +820,30 @@ func addResourceRefAndUpdate(ctx context.Context, c client.Client,
 
 	// Use a separate field manager for resource refs to avoid conflicts with the
 	// Crossplane field manager that created the resource via SSA.
+	want, _, _ := un.NestedSlice(latestOwner.Object, resourceRefsPath(xrdAPIVersion)...)
+
 	err = c.Update(ctx, latestOwner, client.FieldOwner("diff.test"))
 	if err != nil {
 		return fmt.Errorf("failed to update owner with resource reference: %w", err)
 	}
 
+	// The apiserver prunes a field its schema lacks, so resourceRefs written at the wrong API version's
+	// path would vanish silently and leave the XR composing nothing.
+	if got, _, _ := un.NestedSlice(latestOwner.Object, resourceRefsPath(xrdAPIVersion)...); len(got) != len(want) {
+		return fmt.Errorf("%s %s kept %d of %d resourceRefs at %v: is the test case's xrdAPIVersion that of the XRD?",
+			owner.GetKind(), owner.GetName(), len(got), len(want), resourceRefsPath(xrdAPIVersion))
+	}
+
 	return nil
+}
+
+// resourceRefsPath is where an XR of the given XRD API version lists its composed resources.
+func resourceRefsPath(xrdAPIVersion XrdAPIVersion) []string {
+	if xrdAPIVersion == V1 {
+		return []string{"spec", "resourceRefs"}
+	}
+
+	return []string{"spec", "crossplane", "resourceRefs"}
 }
 
 // localCrossplaneBinary returns the absolute path to a locally-built

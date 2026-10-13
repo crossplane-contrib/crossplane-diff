@@ -11,6 +11,8 @@ apiVersion: ns.diff.example.org/v1alpha1
 kind: XNopResource
 metadata:
   name: revision-ref-resource
+  labels:
+    crossplane.io/composite: revision-ref-resource
   namespace: default
 spec:
   coolField: revision-ref-existing-value

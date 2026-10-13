@@ -48,11 +48,17 @@ type fieldManagerApply struct {
 
 // IntegrationTestCase represents a common test case structure for both XR and composition diff tests.
 type IntegrationTestCase struct {
-	reason                     string // Description of what this test validates
-	setupFiles                 []string
-	deleteAfterSetup           []string                        // Files whose resources are deleted after setup; with a finalizer this leaves them Terminating
-	crossplaneManagedResources []HierarchicalOwnershipRelation // Resources applied via SSA with Crossplane field manager
-	// fieldManagerApplies are server-side applied, in order, after setupFiles, each under its own
+	reason           string // Description of what this test validates
+	setupFiles       []string
+	deleteAfterSetup []string // Files whose resources are deleted after setup; with a finalizer this leaves them Terminating
+	// crossplaneManagedResources are the XRs that exist in the cluster, with what they compose. Every
+	// composed resource is server-side applied under Crossplane's composed field manager and given a
+	// controller ownerReference to its XR's real UID, and each XR lists its composed resources in its
+	// resourceRefs, as Crossplane leaves them. Use composes() for an XR without nested XRs. Put a
+	// composed resource in setupFiles instead only when it deliberately has no controlling XR.
+	crossplaneManagedResources []HierarchicalOwnershipRelation
+	// fieldManagerApplies are server-side applied, in order, after setupFiles and
+	// crossplaneManagedResources, each under its own
 	// field manager. Use it when a test depends on which manager owns a field: a plain Create
 	// records only the test client as owner, and the apiserver drops managedFields supplied on Create.
 	fieldManagerApplies    []fieldManagerApply
@@ -242,6 +248,22 @@ func runIntegrationTest(t *testing.T, testType DiffTestType, tt IntegrationTestC
 		t.Fatalf("failed to setup resources: %v", err)
 	}
 
+	// Default to v2 API version for XR resources unless otherwise specified
+	xrdAPIVersion := V2
+	if tt.xrdAPIVersion != V2 {
+		xrdAPIVersion = tt.xrdAPIVersion
+	}
+
+	// Apply Crossplane-managed resources (XRs, composed resources) using SSA with Crossplane field manager.
+	// These resources simulate what Crossplane actually manages in production. They are in place before
+	// fieldManagerApplies run, since those model another manager writing to objects that already exist.
+	if len(tt.crossplaneManagedResources) > 0 {
+		err := applyHierarchicalOwnership(ctx, tu.TestLogger(t, false), k8sClient, xrdAPIVersion, tt.crossplaneManagedResources)
+		if err != nil {
+			t.Fatalf("failed to setup Crossplane-managed resources: %v", err)
+		}
+	}
+
 	for _, a := range tt.fieldManagerApplies {
 		resources, err := readResourcesFromFile(a.file)
 		if err != nil {
@@ -252,21 +274,6 @@ func runIntegrationTest(t *testing.T, testType DiffTestType, tt IntegrationTestC
 			if err := applyResourceWithSSA(ctx, k8sClient, r, a.fieldManager); err != nil {
 				t.Fatalf("failed to setup field-managed resources: %v", err)
 			}
-		}
-	}
-
-	// Default to v2 API version for XR resources unless otherwise specified
-	xrdAPIVersion := V2
-	if tt.xrdAPIVersion != V2 {
-		xrdAPIVersion = tt.xrdAPIVersion
-	}
-
-	// Apply Crossplane-managed resources (XRs, composed resources) using SSA with Crossplane field manager.
-	// These resources simulate what Crossplane actually manages in production.
-	if len(tt.crossplaneManagedResources) > 0 {
-		err := applyHierarchicalOwnership(ctx, tu.TestLogger(t, false), k8sClient, xrdAPIVersion, tt.crossplaneManagedResources)
-		if err != nil {
-			t.Fatalf("failed to setup Crossplane-managed resources: %v", err)
 		}
 	}
 
@@ -913,9 +920,13 @@ func TestDiffIntegration(t *testing.T) {
 				"testdata/diff/resources/composition.yaml",
 				"testdata/diff/resources/composition-revision-default.yaml",
 				"testdata/diff/resources/functions.yaml",
-				"testdata/diff/resources/existing-downstream-resource.yaml",
-				"testdata/diff/resources/existing-xr.yaml",
 				"testdata/diff/resources/rejecting-admission-policy.yaml",
+			},
+			crossplaneManagedResources: []HierarchicalOwnershipRelation{
+				composes(
+					"testdata/diff/resources/existing-xr.yaml",
+					"testdata/diff/resources/existing-downstream-resource.yaml",
+				),
 			},
 			awaitAdmissionDenialFor: "testdata/diff/resources/admission-policy-canary.yaml",
 			inputFiles:              []string{"testdata/diff/modified-xr.yaml"},
@@ -973,9 +984,13 @@ func TestDiffIntegration(t *testing.T) {
 				"testdata/diff/resources/composition.yaml",
 				"testdata/diff/resources/composition-revision-default.yaml",
 				"testdata/diff/resources/functions.yaml",
-				// put an existing XR in the cluster to diff against
-				"testdata/diff/resources/existing-downstream-resource.yaml",
-				"testdata/diff/resources/existing-xr.yaml",
+			},
+			// put an existing XR in the cluster to diff against
+			crossplaneManagedResources: []HierarchicalOwnershipRelation{
+				composes(
+					"testdata/diff/resources/existing-xr.yaml",
+					"testdata/diff/resources/existing-downstream-resource.yaml",
+				),
 			},
 			inputFiles: []string{"testdata/diff/modified-xr.yaml"},
 			expectedOutput: `
@@ -1000,6 +1015,8 @@ func TestDiffIntegration(t *testing.T) {
   apiVersion: ns.diff.example.org/v1alpha1
   kind: XNopResource
   metadata:
+    labels:
+      crossplane.io/composite: test-resource
     name: test-resource
     namespace: default
   spec:
@@ -1021,9 +1038,13 @@ Summary: 2 modified`,
 				"testdata/diff/resources/composition.yaml",
 				"testdata/diff/resources/composition-revision-default.yaml",
 				"testdata/diff/resources/functions.yaml",
-				// put an existing resource with different ArgoCD annotations
-				"testdata/diff/resources/existing-downstream-resource-with-argocd.yaml",
-				"testdata/diff/resources/existing-xr-with-argocd.yaml",
+			},
+			// put an existing resource with different ArgoCD annotations
+			crossplaneManagedResources: []HierarchicalOwnershipRelation{
+				composes(
+					"testdata/diff/resources/existing-xr-with-argocd.yaml",
+					"testdata/diff/resources/existing-downstream-resource-with-argocd.yaml",
+				),
 			},
 			inputFiles: []string{"testdata/diff/xr-with-argocd-annotations.yaml"},
 			ignorePaths: []string{
@@ -1049,8 +1070,12 @@ Summary: 2 modified`,
 				"testdata/diff/resources/composition.yaml",
 				"testdata/diff/resources/composition-revision-default.yaml",
 				"testdata/diff/resources/functions.yaml",
-				"testdata/diff/resources/existing-downstream-resource-with-argocd.yaml",
-				"testdata/diff/resources/existing-xr-with-argocd.yaml",
+			},
+			crossplaneManagedResources: []HierarchicalOwnershipRelation{
+				composes(
+					"testdata/diff/resources/existing-xr-with-argocd.yaml",
+					"testdata/diff/resources/existing-downstream-resource-with-argocd.yaml",
+				),
 			},
 			inputFiles: []string{"testdata/diff/xr-with-argocd-mixed-changes.yaml"},
 			ignorePaths: []string{
@@ -1169,10 +1194,15 @@ Summary: 2 modified`,
 				"testdata/diff/resources/env-composition.yaml",
 				"testdata/diff/resources/functions.yaml",
 				"testdata/diff/resources/environment-config-v1beta1.yaml",
-				"testdata/diff/resources/existing-env-downstream-resource.yaml",
-				"testdata/diff/resources/existing-env-xr.yaml",
 			},
-			inputFiles: []string{"testdata/diff/modified-env-xr.yaml"},
+			crossplaneManagedResources: []HierarchicalOwnershipRelation{
+				composes(
+					"testdata/diff/resources/existing-env-xr.yaml",
+					"testdata/diff/resources/existing-env-downstream-resource.yaml",
+				),
+			},
+			xrdAPIVersion: V1, // the XRD is v1, so Crossplane writes the XR's resourceRefs at spec.resourceRefs
+			inputFiles:    []string{"testdata/diff/modified-env-xr.yaml"},
 			expectedStructuredOutput: tu.ExpectDiff().
 				WithSummary(0, 2, 0).
 				WithModifiedResource("XDownstreamEnvResource", "test-env-resource", "").
@@ -1193,9 +1223,13 @@ Summary: 2 modified`,
 				"testdata/diff/resources/functions.yaml",
 				"testdata/diff/resources/external-resource-configmap.yaml",
 				"testdata/diff/resources/external-res-fn-composition.yaml",
-				"testdata/diff/resources/existing-xr-with-external-dep.yaml",
-				"testdata/diff/resources/existing-downstream-with-external-dep.yaml",
 				"testdata/diff/resources/external-named-clusterrole.yaml",
+			},
+			crossplaneManagedResources: []HierarchicalOwnershipRelation{
+				composes(
+					"testdata/diff/resources/existing-xr-with-external-dep.yaml",
+					"testdata/diff/resources/existing-downstream-with-external-dep.yaml",
+				),
 			},
 			inputFiles: []string{"testdata/diff/modified-xr-with-external-dep.yaml"},
 			expectedStructuredOutput: tu.ExpectDiff().
@@ -1225,8 +1259,12 @@ Summary: 2 modified`,
 				"testdata/diff/resources/functions.yaml",
 				"testdata/diff/resources/external-resource-configmap.yaml",
 				"testdata/diff/resources/external-res-gotpl-composition.yaml",
-				"testdata/diff/resources/existing-xr-with-external-dep.yaml",
-				"testdata/diff/resources/existing-downstream-with-external-dep.yaml",
+			},
+			crossplaneManagedResources: []HierarchicalOwnershipRelation{
+				composes(
+					"testdata/diff/resources/existing-xr-with-external-dep.yaml",
+					"testdata/diff/resources/existing-downstream-with-external-dep.yaml",
+				),
 			},
 			inputFiles: []string{"testdata/diff/modified-xr-with-external-dep.yaml"},
 			expectedStructuredOutput: tu.ExpectDiff().
@@ -1330,8 +1368,12 @@ Summary: 2 modified`,
 				"testdata/diff/resources/functions.yaml",
 				"testdata/diff/resources/external-resource-configmap.yaml",
 				"testdata/diff/resources/multistep-fatal-after-extra-res-composition.yaml",
-				"testdata/diff/resources/existing-xr-with-external-dep.yaml",
-				"testdata/diff/resources/existing-downstream-with-external-dep.yaml",
+			},
+			crossplaneManagedResources: []HierarchicalOwnershipRelation{
+				composes(
+					"testdata/diff/resources/existing-xr-with-external-dep.yaml",
+					"testdata/diff/resources/existing-downstream-with-external-dep.yaml",
+				),
 			},
 			inputFiles:            []string{"testdata/diff/modified-xr-with-external-dep.yaml"},
 			expectedError:         true,
@@ -1367,8 +1409,12 @@ Summary: 2 modified`,
 				"testdata/diff/resources/functions.yaml",
 				"testdata/diff/resources/external-resource-configmap.yaml",
 				"testdata/diff/resources/unguarded-external-res-gotpl-composition.yaml",
-				"testdata/diff/resources/existing-xr-with-external-dep.yaml",
-				"testdata/diff/resources/existing-downstream-with-external-dep.yaml",
+			},
+			crossplaneManagedResources: []HierarchicalOwnershipRelation{
+				composes(
+					"testdata/diff/resources/existing-xr-with-external-dep.yaml",
+					"testdata/diff/resources/existing-downstream-with-external-dep.yaml",
+				),
 			},
 			inputFiles:            []string{"testdata/diff/modified-xr-with-external-dep.yaml"},
 			expectedError:         true,
@@ -1383,9 +1429,13 @@ Summary: 2 modified`,
 				"testdata/diff/resources/functions.yaml",
 				"testdata/diff/resources/cross-namespace-configmap.yaml",
 				"testdata/diff/resources/cross-namespace-fn-composition.yaml",
-				"testdata/diff/resources/existing-cross-ns-xr.yaml",
-				"testdata/diff/resources/existing-cross-ns-downstream.yaml",
 				"testdata/diff/resources/external-named-clusterrole.yaml",
+			},
+			crossplaneManagedResources: []HierarchicalOwnershipRelation{
+				composes(
+					"testdata/diff/resources/existing-cross-ns-xr.yaml",
+					"testdata/diff/resources/existing-cross-ns-downstream.yaml",
+				),
 			},
 			inputFiles: []string{"testdata/diff/modified-cross-ns-xr.yaml"},
 			expectedStructuredOutput: tu.ExpectDiff().
@@ -1474,6 +1524,8 @@ Summary: 2 modified`,
   apiVersion: legacycluster.diff.example.org/v1alpha1
   kind: XNopResource
   metadata:
+    labels:
+      crossplane.io/composite: test-resource
     name: test-resource
   spec:
     compositionUpdatePolicy: Automatic
@@ -1494,12 +1546,15 @@ Summary: 2 modified, 2 removed`,
 			reason: "Function-sequencer should NOT hide resources that already exist in the cluster (fix for issue #259)",
 			crossplaneManagedResources: []HierarchicalOwnershipRelation{
 				{
-					OwnerFile: "testdata/diff/resources/sequencer-xr.yaml",
+					OwnerFile: "testdata/diff/resources/existing-sequencer-xr.yaml",
 					OwnedFiles: map[string]*HierarchicalOwnershipRelation{
 						// Stage 0 resource - exists in cluster
 						"testdata/diff/resources/sequencer-stage0-downstream.yaml": nil,
 						// Stage 1 resource - exists in cluster, should NOT be hidden by sequencer
-						// because observed resources are passed correctly to the function pipeline
+						// because observed resources are passed correctly to the function pipeline.
+						// Stage 0 has no Ready condition, so the sequencer would gate stage 1 if it
+						// were not observed: this case depends on the XR's own composed resources
+						// reaching render as observed state.
 						"testdata/diff/resources/sequencer-stage1-downstream.yaml": nil,
 					},
 				},
@@ -1676,6 +1731,32 @@ Summary: 2 modified, 2 removed`,
 			expectedError:    false,
 			expectedExitCode: dp.ExitCodeDiffDetected,
 		},
+		// The generateName counterpart of NewXRWithExistingComposedResource. A new XR renders its composed
+		// resource with only a generateName, and nothing is observed for it, so no name identifies the
+		// existing resource: only its crossplane.io/composite label and composition-resource-name
+		// annotation can. ResourceWithGenerateName cannot reach that lookup, because there the XR exists and
+		// render names the resource after the observed one.
+		"NewXRAdoptsOrphanedGenerateNamedComposedResource": {
+			reason:       "A new XR's generateName composed resource is matched to an existing orphan by its composite label",
+			outputFormat: "json",
+			setupFiles: []string{
+				"testdata/diff/resources/xrd.yaml",
+				"testdata/diff/resources/functions.yaml",
+				"testdata/diff/resources/generated-name-composition.yaml",
+				// Deliberately not in crossplaneManagedResources: an orphan has no controller
+				// ownerReference (the garbage collector strips it when the XR is deleted with
+				// --cascade=orphan) and no XR lists it, but it keeps its labels and annotations.
+				"testdata/diff/resources/existing-downstream-with-generated-name.yaml",
+			},
+			inputFiles: []string{"testdata/diff/new-xr.yaml"},
+			expectedStructuredOutput: tu.ExpectDiff().
+				WithSummary(1, 1, 0).
+				WithAddedResource("XNopResource", "test-resource", "default").
+				And().
+				WithModifiedResource("XDownstreamResource", "test-resource-abc123", "default").
+				WithFieldChange("spec.forProvider.configData", "existing-value", "new-value"),
+			expectedExitCode: dp.ExitCodeDiffDetected,
+		},
 		// A generateName-only input next to an ordinary one is an ordinary invocation. The unnamed input
 		// has no identity, so input validation must not mistake it for the named XR's claim: an XR with
 		// no claimRef has an empty reference identity too, and the two must not match.
@@ -1822,7 +1903,10 @@ Summary: 2 modified, 2 removed`,
 				"testdata/diff/resources/xrd.yaml",
 				"testdata/diff/resources/composition.yaml",
 				"testdata/diff/resources/functions.yaml",
-				// Pre-existing composed resource; no backing XR in the cluster.
+				// Pre-existing composed resource; no backing XR in the cluster. Deliberately not in
+				// crossplaneManagedResources: an orphaned resource has no controller ownerReference (the
+				// garbage collector strips it when the XR is deleted with --cascade=orphan), and adopting
+				// exactly such a resource is what this case tests.
 				"testdata/diff/resources/existing-downstream-resource.yaml",
 			},
 			inputFiles: []string{"testdata/diff/new-xr.yaml"},
@@ -1844,9 +1928,13 @@ Summary: 2 modified, 2 removed`,
 				"testdata/diff/resources/composition.yaml",
 				"testdata/diff/resources/composition-revision-default.yaml",
 				"testdata/diff/resources/functions.yaml",
-				// Add an existing XR and downstream resource to test modification
-				"testdata/diff/resources/existing-xr.yaml",
-				"testdata/diff/resources/existing-downstream-resource.yaml",
+			},
+			// Add an existing XR and downstream resource to test modification
+			crossplaneManagedResources: []HierarchicalOwnershipRelation{
+				composes(
+					"testdata/diff/resources/existing-xr.yaml",
+					"testdata/diff/resources/existing-downstream-resource.yaml",
+				),
 			},
 			inputFiles: []string{
 				"testdata/diff/first-xr.yaml",
@@ -2029,10 +2117,15 @@ Summary: 2 modified, 2 removed`,
 				"testdata/diff/resources/functions.yaml",
 				// Add existing resources for comparison
 				"testdata/diff/resources/existing-claim.yaml",
-				"testdata/diff/resources/existing-claim-xr.yaml",
-				"testdata/diff/resources/existing-claim-downstream-resource.yaml",
 			},
-			inputFiles: []string{"testdata/diff/modified-claim.yaml"},
+			crossplaneManagedResources: []HierarchicalOwnershipRelation{
+				composes(
+					"testdata/diff/resources/existing-claim-xr.yaml",
+					"testdata/diff/resources/existing-claim-downstream-resource.yaml",
+				),
+			},
+			xrdAPIVersion: V1, // the XRD is v1, so Crossplane writes the XR's resourceRefs at spec.resourceRefs
+			inputFiles:    []string{"testdata/diff/modified-claim.yaml"},
 			expectedStructuredOutput: tu.ExpectDiff().
 				// The composed resource is labelled with the backing XR the claim's resourceRef names, so it
 				// already belongs to this claim: no ownership advisory (#534).
@@ -2058,9 +2151,14 @@ Summary: 2 modified, 2 removed`,
 				"testdata/diff/resources/claim-composition-revision.yaml",
 				"testdata/diff/resources/functions.yaml",
 				"testdata/diff/resources/existing-claim.yaml",
-				"testdata/diff/resources/existing-claim-xr.yaml",
-				"testdata/diff/resources/existing-claim-downstream-resource.yaml",
 			},
+			crossplaneManagedResources: []HierarchicalOwnershipRelation{
+				composes(
+					"testdata/diff/resources/existing-claim-xr.yaml",
+					"testdata/diff/resources/existing-claim-downstream-resource.yaml",
+				),
+			},
+			xrdAPIVersion: V1, // the XRD is v1, so Crossplane writes the XR's resourceRefs at spec.resourceRefs
 			fieldManagerApplies: []fieldManagerApply{
 				{file: "testdata/diff/resources/existing-claim-defaulted-fields-other-manager.yaml", fieldManager: "platform-operator"},
 			},
@@ -2190,6 +2288,9 @@ Summary: 2 modified, 2 removed`,
 				"testdata/diff/resources/composition-with-crd-defaulted-downstream.yaml",
 				"testdata/diff/resources/functions.yaml",
 			},
+			// The composed resource deliberately has no controlling XR, as after its XR was deleted with
+			// --cascade=orphan: the XR is new, and what this case pins is the composed resource's field
+			// managers, which an orphan keeps. Giving it an XR would make the XR modified rather than new.
 			fieldManagerApplies: []fieldManagerApply{
 				{
 					file:         "testdata/diff/resources/existing-defaulted-downstream-composed.yaml",
@@ -2432,10 +2533,19 @@ Summary: 2 modified, 2 removed`,
 				// XRD for downstream managed resource
 				"testdata/diff/resources/xdownstreamenvresource-xrd.yaml",
 				"testdata/diff/resources/functions.yaml",
-				// Existing resources
-				"testdata/diff/resources/nested/existing-parent-xr.yaml",
-				"testdata/diff/resources/nested/existing-child-xr.yaml",
-				"testdata/diff/resources/nested/existing-managed-resource.yaml",
+			},
+			// Existing resources: the parent XR composes the child XR, which composes the managed resource
+			crossplaneManagedResources: []HierarchicalOwnershipRelation{
+				{
+					OwnerFile: "testdata/diff/resources/nested/existing-parent-xr.yaml",
+					OwnedFiles: map[string]*HierarchicalOwnershipRelation{
+						"testdata/diff/resources/nested/existing-child-xr.yaml": {
+							OwnedFiles: map[string]*HierarchicalOwnershipRelation{
+								"testdata/diff/resources/nested/existing-managed-resource.yaml": nil,
+							},
+						},
+					},
+				},
 			},
 			inputFiles: []string{"testdata/diff/modified-nested-xr.yaml"},
 			expectedStructuredOutput: tu.ExpectDiff().
@@ -2466,9 +2576,18 @@ Summary: 2 modified, 2 removed`,
 				"testdata/diff/resources/nested/child-composition-revision.yaml",
 				"testdata/diff/resources/xdownstreamenvresource-xrd.yaml",
 				"testdata/diff/resources/functions.yaml",
-				"testdata/diff/resources/nested/existing-parent-xr.yaml",
-				"testdata/diff/resources/nested/existing-child-xr.yaml",
-				"testdata/diff/resources/nested/existing-managed-resource.yaml",
+			},
+			crossplaneManagedResources: []HierarchicalOwnershipRelation{
+				{
+					OwnerFile: "testdata/diff/resources/nested/existing-parent-xr.yaml",
+					OwnedFiles: map[string]*HierarchicalOwnershipRelation{
+						"testdata/diff/resources/nested/existing-child-xr.yaml": {
+							OwnedFiles: map[string]*HierarchicalOwnershipRelation{
+								"testdata/diff/resources/nested/existing-managed-resource.yaml": nil,
+							},
+						},
+					},
+				},
 			},
 			fieldManagerApplies: []fieldManagerApply{
 				{file: "testdata/diff/resources/nested/existing-child-xr-tier-other-manager.yaml", fieldManager: "platform-operator"},
@@ -2498,8 +2617,12 @@ Summary: 2 modified, 2 removed`,
 				"testdata/diff/resources/composition-revision-v2.yaml",
 				"testdata/diff/resources/composition-v2.yaml", // Current composition is v2
 				"testdata/diff/resources/functions.yaml",
-				"testdata/diff/resources/existing-xr-manual-v1.yaml",
-				"testdata/diff/resources/existing-downstream-manual-v1.yaml",
+			},
+			crossplaneManagedResources: []HierarchicalOwnershipRelation{
+				composes(
+					"testdata/diff/resources/existing-xr-manual-v1.yaml",
+					"testdata/diff/resources/existing-downstream-manual-v1.yaml",
+				),
 			},
 			inputFiles: []string{"testdata/diff/modified-xr-manual-v1.yaml"},
 			expectedStructuredOutput: tu.ExpectDiff().
@@ -2521,8 +2644,13 @@ Summary: 2 modified, 2 removed`,
 				"testdata/diff/resources/composition-revision-v2.yaml",
 				"testdata/diff/resources/composition-v2.yaml", // Current composition is v2
 				"testdata/diff/resources/functions.yaml",
-				"testdata/diff/resources/existing-xr-automatic.yaml",         // Still on v1
-				"testdata/diff/resources/existing-downstream-automatic.yaml", // v1 data
+			},
+			crossplaneManagedResources: []HierarchicalOwnershipRelation{
+				// The XR is still on v1, and its composed resource holds v1's data.
+				composes(
+					"testdata/diff/resources/existing-xr-automatic.yaml",
+					"testdata/diff/resources/existing-downstream-automatic.yaml",
+				),
 			},
 			inputFiles: []string{"testdata/diff/modified-xr-automatic.yaml"},
 			expectedStructuredOutput: tu.ExpectDiff().
@@ -2548,8 +2676,12 @@ Summary: 2 modified, 2 removed`,
 				"testdata/diff/resources/composition-revision-preview.yaml", // revision 2, channel=preview (newest)
 				"testdata/diff/resources/composition-v2.yaml",               // current composition
 				"testdata/diff/resources/functions.yaml",
-				"testdata/diff/resources/existing-xr-selector-stable.yaml",
-				"testdata/diff/resources/existing-downstream-selector-stable.yaml",
+			},
+			crossplaneManagedResources: []HierarchicalOwnershipRelation{
+				composes(
+					"testdata/diff/resources/existing-xr-selector-stable.yaml",
+					"testdata/diff/resources/existing-downstream-selector-stable.yaml",
+				),
 			},
 			inputFiles: []string{"testdata/diff/modified-xr-selector-stable.yaml"},
 			expectedStructuredOutput: tu.ExpectDiff().
@@ -2589,8 +2721,12 @@ Summary: 2 modified, 2 removed`,
 				"testdata/diff/resources/composition-revision-v2.yaml",
 				"testdata/diff/resources/composition-v2.yaml",
 				"testdata/diff/resources/functions.yaml",
-				"testdata/diff/resources/existing-xr-manual-v1.yaml",
-				"testdata/diff/resources/existing-downstream-manual-v1.yaml",
+			},
+			crossplaneManagedResources: []HierarchicalOwnershipRelation{
+				composes(
+					"testdata/diff/resources/existing-xr-manual-v1.yaml",
+					"testdata/diff/resources/existing-downstream-manual-v1.yaml",
+				),
 			},
 			inputFiles: []string{"testdata/diff/modified-xr-manual-upgrade-to-v2.yaml"},
 			expectedStructuredOutput: tu.ExpectDiff().
@@ -2687,8 +2823,12 @@ Summary: 2 modified, 2 removed`,
 				"testdata/diff/resources/composition-revision-v2.yaml",
 				"testdata/diff/resources/composition-v2.yaml",
 				"testdata/diff/resources/functions.yaml",
-				"testdata/diff/resources/existing-xr-manual-v1.yaml",
-				"testdata/diff/resources/existing-downstream-manual-v1.yaml",
+			},
+			crossplaneManagedResources: []HierarchicalOwnershipRelation{
+				composes(
+					"testdata/diff/resources/existing-xr-manual-v1.yaml",
+					"testdata/diff/resources/existing-downstream-manual-v1.yaml",
+				),
 			},
 			inputFiles: []string{"testdata/diff/modified-xr-switch-to-automatic.yaml"},
 			expectedStructuredOutput: tu.ExpectDiff().
@@ -2733,8 +2873,12 @@ Summary: 2 modified, 2 removed`,
 				"testdata/diff/resources/legacy-composition-revision-v2.yaml",
 				"testdata/diff/resources/legacy-composition-v2.yaml",
 				"testdata/diff/resources/functions.yaml",
-				"testdata/diff/resources/existing-legacy-xr-manual-v1.yaml",
-				"testdata/diff/resources/existing-legacy-downstream-manual-v1.yaml",
+			},
+			crossplaneManagedResources: []HierarchicalOwnershipRelation{
+				composes(
+					"testdata/diff/resources/existing-legacy-xr-manual-v1.yaml",
+					"testdata/diff/resources/existing-legacy-downstream-manual-v1.yaml",
+				),
 			},
 			inputFiles: []string{"testdata/diff/modified-legacy-xr-manual-upgrade-to-v2.yaml"},
 			expectedStructuredOutput: tu.ExpectDiff().
@@ -2759,8 +2903,12 @@ Summary: 2 modified, 2 removed`,
 				"testdata/diff/resources/xrd.yaml",
 				"testdata/comp/resources/revision-templating-composition.yaml",
 				"testdata/diff/resources/functions.yaml",
-				"testdata/comp/resources/existing-xr-revision-ref.yaml",
-				"testdata/comp/resources/existing-downstream-revision-ref.yaml",
+			},
+			crossplaneManagedResources: []HierarchicalOwnershipRelation{
+				composes(
+					"testdata/comp/resources/existing-xr-revision-ref.yaml",
+					"testdata/comp/resources/existing-downstream-revision-ref.yaml",
+				),
 			},
 			inputFiles:               []string{"testdata/diff/existing-xr-revision-ref-omitted.yaml"},
 			expectedStructuredOutput: tu.ExpectDiff().WithSummary(0, 0, 0),
@@ -2780,8 +2928,12 @@ Summary: 2 modified, 2 removed`,
 				"testdata/diff/resources/composition-revision-v2.yaml",
 				"testdata/diff/resources/composition-v2.yaml", // Current composition is v2
 				"testdata/diff/resources/functions.yaml",
-				"testdata/diff/resources/existing-xr-manual-v1.yaml",
-				"testdata/diff/resources/existing-downstream-manual-v1.yaml",
+			},
+			crossplaneManagedResources: []HierarchicalOwnershipRelation{
+				composes(
+					"testdata/diff/resources/existing-xr-manual-v1.yaml",
+					"testdata/diff/resources/existing-downstream-manual-v1.yaml",
+				),
 			},
 			inputFiles: []string{"testdata/diff/modified-xr-manual-v1-omits-revision-ref.yaml"},
 			expectedStructuredOutput: tu.ExpectDiff().
@@ -2805,8 +2957,12 @@ Summary: 2 modified, 2 removed`,
 				"testdata/diff/resources/legacy-composition-revision-v2.yaml",
 				"testdata/diff/resources/legacy-composition-v2.yaml",
 				"testdata/diff/resources/functions.yaml",
-				"testdata/diff/resources/existing-legacy-xr-manual-v1.yaml",
-				"testdata/diff/resources/existing-legacy-downstream-manual-v1.yaml",
+			},
+			crossplaneManagedResources: []HierarchicalOwnershipRelation{
+				composes(
+					"testdata/diff/resources/existing-legacy-xr-manual-v1.yaml",
+					"testdata/diff/resources/existing-legacy-downstream-manual-v1.yaml",
+				),
 			},
 			inputFiles: []string{"testdata/diff/modified-legacy-xr-manual-v1-omits-revision-ref.yaml"},
 			expectedStructuredOutput: tu.ExpectDiff().
@@ -2833,9 +2989,18 @@ Summary: 2 modified, 2 removed`,
 				"testdata/diff/resources/nested/child-revision-templating-composition.yaml",
 				"testdata/diff/resources/xdownstreamenvresource-xrd.yaml",
 				"testdata/diff/resources/functions.yaml",
-				"testdata/diff/resources/nested/existing-parent-xr.yaml",
-				"testdata/diff/resources/nested/existing-child-xr-revision-ref.yaml",
-				"testdata/diff/resources/nested/existing-managed-resource-revision-ref.yaml",
+			},
+			crossplaneManagedResources: []HierarchicalOwnershipRelation{
+				{
+					OwnerFile: "testdata/diff/resources/nested/existing-parent-xr.yaml",
+					OwnedFiles: map[string]*HierarchicalOwnershipRelation{
+						"testdata/diff/resources/nested/existing-child-xr-revision-ref.yaml": {
+							OwnedFiles: map[string]*HierarchicalOwnershipRelation{
+								"testdata/diff/resources/nested/existing-managed-resource-revision-ref.yaml": nil,
+							},
+						},
+					},
+				},
 			},
 			inputFiles: []string{"testdata/diff/modified-nested-xr.yaml"},
 			expectedStructuredOutput: tu.ExpectDiff().
@@ -2861,7 +3026,14 @@ Summary: 2 modified, 2 removed`,
 				"testdata/diff/resources/functions.yaml",
 				"testdata/diff/resources/pinned-claim/existing-automatic.yaml",
 			},
-			inputFiles: []string{"testdata/diff/unchanged-automatic-pinned-claim.yaml"},
+			crossplaneManagedResources: []HierarchicalOwnershipRelation{
+				composes(
+					"testdata/diff/resources/pinned-claim/existing-automatic-xr.yaml",
+					"testdata/diff/resources/pinned-claim/existing-automatic-downstream.yaml",
+				),
+			},
+			xrdAPIVersion: V1, // the XRD is v1, so Crossplane writes the XR's resourceRefs at spec.resourceRefs
+			inputFiles:    []string{"testdata/diff/unchanged-automatic-pinned-claim.yaml"},
 			// No warnings either: the composed resource belongs to the claim's backing XR (#534).
 			expectedStructuredOutput: tu.ExpectDiff().WithNoWarnings().WithSummary(0, 0, 0),
 			expectedExitCode:         dp.ExitCodeSuccess,
@@ -2880,7 +3052,14 @@ Summary: 2 modified, 2 removed`,
 				"testdata/diff/resources/functions.yaml",
 				"testdata/diff/resources/pinned-claim/existing-manual.yaml",
 			},
-			inputFiles: []string{"testdata/diff/modified-manual-pinned-claim.yaml"},
+			crossplaneManagedResources: []HierarchicalOwnershipRelation{
+				composes(
+					"testdata/diff/resources/pinned-claim/existing-manual-xr.yaml",
+					"testdata/diff/resources/pinned-claim/existing-manual-downstream.yaml",
+				),
+			},
+			xrdAPIVersion: V1, // the XRD is v1, so Crossplane writes the XR's resourceRefs at spec.resourceRefs
+			inputFiles:    []string{"testdata/diff/modified-manual-pinned-claim.yaml"},
 			expectedStructuredOutput: tu.ExpectDiff().
 				// The composed resource is labelled with the backing XR's name, which the claim's resourceRef
 				// names, so it already belongs to this claim: no ownership advisory (#534).
@@ -2906,9 +3085,15 @@ Summary: 2 modified, 2 removed`,
 			setupFiles: []string{
 				"testdata/diff/resources/pinned-claim/definitions.yaml",
 				"testdata/diff/resources/functions.yaml",
-				"testdata/diff/resources/pinned-claim/existing-lagging-automatic-xr.yaml",
 			},
-			inputFiles: []string{"testdata/diff/unchanged-lagging-automatic-xr.yaml"},
+			crossplaneManagedResources: []HierarchicalOwnershipRelation{
+				composes(
+					"testdata/diff/resources/pinned-claim/existing-lagging-automatic-xr.yaml",
+					"testdata/diff/resources/pinned-claim/existing-lagging-automatic-downstream.yaml",
+				),
+			},
+			xrdAPIVersion: V1, // the XRD is v1, so Crossplane writes the XR's resourceRefs at spec.resourceRefs
+			inputFiles:    []string{"testdata/diff/unchanged-lagging-automatic-xr.yaml"},
 			expectedStructuredOutput: tu.ExpectDiff().
 				WithSummary(0, 1, 0).
 				WithModifiedResource("XDownstreamResource", "lagging-xr", "").
@@ -2949,6 +3134,12 @@ Summary: 2 modified, 2 removed`,
 				"testdata/diff/resources/functions.yaml",
 				"testdata/diff/resources/selector-bound/setup.yaml",
 			},
+			crossplaneManagedResources: []HierarchicalOwnershipRelation{
+				composes(
+					"testdata/diff/resources/selector-bound/existing-xr.yaml",
+					"testdata/diff/resources/selector-bound/existing-downstream.yaml",
+				),
+			},
 			inputFiles: []string{"testdata/diff/modified-xr-selector-bound.yaml"},
 			expectedStructuredOutput: tu.ExpectDiff().
 				WithSummary(0, 2, 0).
@@ -2968,8 +3159,12 @@ Summary: 2 modified, 2 removed`,
 				"testdata/diff/resources/v2-xrd-with-v1-paths-composition.yaml",
 				"testdata/diff/resources/v2-xrd-with-v1-paths-composition-revision.yaml",
 				"testdata/diff/resources/functions.yaml",
-				"testdata/diff/resources/existing-v2xrd-v1paths-xr.yaml",
-				"testdata/diff/resources/existing-v2xrd-v1paths-downstream.yaml",
+			},
+			crossplaneManagedResources: []HierarchicalOwnershipRelation{
+				composes(
+					"testdata/diff/resources/existing-v2xrd-v1paths-xr.yaml",
+					"testdata/diff/resources/existing-v2xrd-v1paths-downstream.yaml",
+				),
 			},
 			inputFiles: []string{"testdata/diff/resources/modified-v2xrd-v1paths-xr.yaml"},
 			expectedStructuredOutput: tu.ExpectDiff().
@@ -2993,6 +3188,7 @@ Summary: 2 modified, 2 removed`,
 				"testdata/diff/resources/claim-nested/parent-definition.yaml",
 				"testdata/diff/resources/claim-nested/child-definition.yaml",
 				"testdata/diff/resources/claim-nested/parent-composition.yaml",
+				"testdata/diff/resources/claim-nested/parent-composition-revision.yaml",
 				"testdata/diff/resources/claim-nested/child-composition.yaml",
 				"testdata/diff/resources/functions.yaml",
 				"testdata/diff/resources/claim-nested/existing-claim.yaml",
@@ -3009,6 +3205,7 @@ Summary: 2 modified, 2 removed`,
 					},
 				},
 			},
+			xrdAPIVersion: V1, // the XRDs are v1, so Crossplane writes the XRs' resourceRefs at spec.resourceRefs
 			inputFiles: []string{
 				"testdata/diff/modified-claim-nested.yaml",
 				"testdata/diff/resources/claim-nested/existing-parent-xr.yaml",
@@ -3028,6 +3225,7 @@ Summary: 2 modified, 2 removed`,
 				"testdata/diff/resources/claim-nested/child-definition.yaml",
 				// Compositions for parent and child
 				"testdata/diff/resources/claim-nested/parent-composition.yaml",
+				"testdata/diff/resources/claim-nested/parent-composition-revision.yaml",
 				"testdata/diff/resources/claim-nested/child-composition.yaml",
 				"testdata/diff/resources/functions.yaml",
 				// Claim is set up separately (not via owner refs - it uses spec.resourceRef to link to backing XR)
@@ -3280,11 +3478,17 @@ func TestCompDiffIntegration(t *testing.T) {
 				"testdata/comp/resources/xrd.yaml",
 				"testdata/comp/resources/original-composition.yaml",
 				"testdata/comp/resources/functions.yaml",
-				// Add existing XRs that use the composition
-				"testdata/comp/resources/existing-xr-1.yaml",
-				"testdata/comp/resources/existing-downstream-1.yaml",
-				"testdata/comp/resources/existing-xr-2.yaml",
-				"testdata/comp/resources/existing-downstream-2.yaml",
+			},
+			// Add existing XRs that use the composition
+			crossplaneManagedResources: []HierarchicalOwnershipRelation{
+				composes(
+					"testdata/comp/resources/existing-xr-1.yaml",
+					"testdata/comp/resources/existing-downstream-1.yaml",
+				),
+				composes(
+					"testdata/comp/resources/existing-xr-2.yaml",
+					"testdata/comp/resources/existing-downstream-2.yaml",
+				),
 			},
 			// New composition files that will be diffed
 			inputFiles: []string{"testdata/comp/updated-composition.yaml"},
@@ -3350,7 +3554,6 @@ Summary: 2 resources with changes
   metadata:
     annotations:
       crossplane.io/composition-resource-name: nop-resource
-      gotemplating.fn.crossplane.io/composition-resource-name: nop-resource
     labels:
       crossplane.io/composite: another-resource
     name: another-resource
@@ -3369,7 +3572,6 @@ Summary: 2 resources with changes
   metadata:
     annotations:
       crossplane.io/composition-resource-name: nop-resource
-      gotemplating.fn.crossplane.io/composition-resource-name: nop-resource
     labels:
       crossplane.io/composite: test-resource
     name: test-resource
@@ -3501,9 +3703,13 @@ Summary: 2 modified`,
 				"testdata/comp/resources/xrd.yaml",
 				"testdata/comp/resources/original-composition.yaml",
 				"testdata/comp/resources/functions.yaml",
-				// Add existing XR with ArgoCD annotations
-				"testdata/comp/resources/existing-xr-with-argocd.yaml",
-				"testdata/comp/resources/existing-downstream-with-argocd.yaml",
+			},
+			// Add existing XR with ArgoCD annotations
+			crossplaneManagedResources: []HierarchicalOwnershipRelation{
+				composes(
+					"testdata/comp/resources/existing-xr-with-argocd.yaml",
+					"testdata/comp/resources/existing-downstream-with-argocd.yaml",
+				),
 			},
 			inputFiles: []string{"testdata/comp/composition-no-changes.yaml"},
 			namespace:  "default",
@@ -3547,8 +3753,12 @@ All composite resources are up-to-date. No downstream resource changes detected.
 				"testdata/comp/resources/xrd.yaml",
 				"testdata/comp/resources/original-composition.yaml",
 				"testdata/comp/resources/functions.yaml",
-				"testdata/comp/resources/existing-xr-1.yaml",
-				"testdata/comp/resources/existing-downstream-1.yaml",
+			},
+			crossplaneManagedResources: []HierarchicalOwnershipRelation{
+				composes(
+					"testdata/comp/resources/existing-xr-1.yaml",
+					"testdata/comp/resources/existing-downstream-1.yaml",
+				),
 			},
 			inputFiles: []string{"testdata/comp/composition-no-changes.yaml"},
 			namespace:  "default",
@@ -3588,8 +3798,12 @@ Impact analysis skipped: this composition is identical to the cluster's, so appl
 				"testdata/comp/resources/xrd.yaml",
 				"testdata/comp/resources/original-composition-kubectl-applied.yaml",
 				"testdata/comp/resources/functions.yaml",
-				"testdata/comp/resources/existing-xr-1.yaml",
-				"testdata/comp/resources/existing-downstream-1.yaml",
+			},
+			crossplaneManagedResources: []HierarchicalOwnershipRelation{
+				composes(
+					"testdata/comp/resources/existing-xr-1.yaml",
+					"testdata/comp/resources/existing-downstream-1.yaml",
+				),
 			},
 			inputFiles:       []string{"testdata/comp/composition-no-changes.yaml"},
 			namespace:        "default",
@@ -3627,8 +3841,12 @@ Impact analysis skipped: this composition is identical to the cluster's, so appl
 				"testdata/comp/resources/xrd.yaml",
 				"testdata/comp/resources/original-composition-kubectl-applied-current.yaml",
 				"testdata/comp/resources/functions.yaml",
-				"testdata/comp/resources/existing-xr-1.yaml",
-				"testdata/comp/resources/existing-downstream-1.yaml",
+			},
+			crossplaneManagedResources: []HierarchicalOwnershipRelation{
+				composes(
+					"testdata/comp/resources/existing-xr-1.yaml",
+					"testdata/comp/resources/existing-downstream-1.yaml",
+				),
 			},
 			inputFiles:       []string{"testdata/comp/composition-no-changes.yaml"},
 			namespace:        "default",
@@ -3662,8 +3880,12 @@ Impact analysis skipped: this composition is identical to the cluster's, so appl
 				"testdata/comp/resources/xrd.yaml",
 				"testdata/comp/resources/revision-templating-composition.yaml",
 				"testdata/comp/resources/functions.yaml",
-				"testdata/comp/resources/existing-xr-revision-ref.yaml",
-				"testdata/comp/resources/existing-downstream-revision-ref.yaml",
+			},
+			crossplaneManagedResources: []HierarchicalOwnershipRelation{
+				composes(
+					"testdata/comp/resources/existing-xr-revision-ref.yaml",
+					"testdata/comp/resources/existing-downstream-revision-ref.yaml",
+				),
 			},
 			inputFiles:       []string{"testdata/comp/revision-templating-updated-composition.yaml"},
 			namespace:        "default",
@@ -3697,10 +3919,16 @@ Impact analysis skipped: this composition is identical to the cluster's, so appl
 				"testdata/comp/resources/xrd.yaml",
 				"testdata/comp/resources/revision-templating-composition.yaml",
 				"testdata/comp/resources/functions.yaml",
-				"testdata/comp/resources/existing-xr-revision-ref.yaml",
-				"testdata/comp/resources/existing-downstream-revision-ref.yaml",
-				"testdata/comp/resources/existing-xr-pinned-revision-ref.yaml",
-				"testdata/comp/resources/existing-downstream-pinned-revision-ref.yaml",
+			},
+			crossplaneManagedResources: []HierarchicalOwnershipRelation{
+				composes(
+					"testdata/comp/resources/existing-xr-revision-ref.yaml",
+					"testdata/comp/resources/existing-downstream-revision-ref.yaml",
+				),
+				composes(
+					"testdata/comp/resources/existing-xr-pinned-revision-ref.yaml",
+					"testdata/comp/resources/existing-downstream-pinned-revision-ref.yaml",
+				),
 			},
 			inputFiles:       []string{"testdata/comp/revision-templating-updated-composition.yaml"},
 			namespace:        "default",
@@ -3735,9 +3963,14 @@ Impact analysis skipped: this composition is identical to the cluster's, so appl
 				"testdata/comp/resources/functions.yaml",
 				"testdata/comp/resources/test-namespace.yaml",
 				"testdata/comp/resources/existing-claim-revision-ref.yaml",
-				"testdata/comp/resources/existing-claim-revision-ref-xr.yaml",
-				"testdata/comp/resources/existing-claim-revision-ref-downstream.yaml",
 			},
+			crossplaneManagedResources: []HierarchicalOwnershipRelation{
+				composes(
+					"testdata/comp/resources/existing-claim-revision-ref-xr.yaml",
+					"testdata/comp/resources/existing-claim-revision-ref-downstream.yaml",
+				),
+			},
+			xrdAPIVersion:    V1, // the XRD is v1, so Crossplane writes the XR's resourceRefs at spec.resourceRefs
 			inputFiles:       []string{"testdata/comp/claim-revision-templating-updated-composition.yaml"},
 			namespace:        "test-namespace",
 			outputFormat:     "json",
@@ -3769,9 +4002,14 @@ Impact analysis skipped: this composition is identical to the cluster's, so appl
 				"testdata/comp/resources/functions.yaml",
 				"testdata/comp/resources/test-namespace.yaml",
 				"testdata/comp/resources/existing-claim-revision-ref.yaml",
-				"testdata/comp/resources/existing-claim-revision-ref-xr.yaml",
-				"testdata/comp/resources/existing-claim-revision-ref-downstream.yaml",
 			},
+			crossplaneManagedResources: []HierarchicalOwnershipRelation{
+				composes(
+					"testdata/comp/resources/existing-claim-revision-ref-xr.yaml",
+					"testdata/comp/resources/existing-claim-revision-ref-downstream.yaml",
+				),
+			},
+			xrdAPIVersion:          V1, // the XRD is v1, so Crossplane writes the XR's resourceRefs at spec.resourceRefs
 			inputFiles:             []string{"testdata/comp/resources/claim-revision-templating-composition.yaml"},
 			namespace:              "test-namespace",
 			outputFormat:           "json",
@@ -3802,8 +4040,12 @@ Impact analysis skipped: this composition is identical to the cluster's, so appl
 				"testdata/comp/resources/xrd.yaml",
 				"testdata/comp/resources/original-composition-kubectl-applied.yaml",
 				"testdata/comp/resources/functions.yaml",
-				"testdata/comp/resources/existing-xr-1.yaml",
-				"testdata/comp/resources/existing-downstream-1.yaml",
+			},
+			crossplaneManagedResources: []HierarchicalOwnershipRelation{
+				composes(
+					"testdata/comp/resources/existing-xr-1.yaml",
+					"testdata/comp/resources/existing-downstream-1.yaml",
+				),
 			},
 			inputFiles:       []string{"testdata/comp/composition-no-changes.yaml"},
 			namespace:        "default",
@@ -3832,8 +4074,12 @@ Impact analysis skipped: this composition is identical to the cluster's, so appl
 				"testdata/comp/resources/xrd.yaml",
 				"testdata/comp/resources/original-composition.yaml",
 				"testdata/comp/resources/functions.yaml",
-				"testdata/comp/resources/existing-xr-1.yaml",
-				"testdata/comp/resources/existing-downstream-drifted.yaml",
+			},
+			crossplaneManagedResources: []HierarchicalOwnershipRelation{
+				composes(
+					"testdata/comp/resources/existing-xr-1.yaml",
+					"testdata/comp/resources/existing-downstream-drifted.yaml",
+				),
 			},
 			inputFiles:       []string{"testdata/comp/composition-no-changes.yaml"},
 			namespace:        "default",
@@ -3857,12 +4103,18 @@ Impact analysis skipped: this composition is identical to the cluster's, so appl
 				"testdata/comp/resources/functions.yaml",
 				// Create the custom namespace first
 				"testdata/comp/resources/custom-namespace.yaml",
+			},
+			crossplaneManagedResources: []HierarchicalOwnershipRelation{
 				// Add existing XRs in custom namespace (should be included in output)
-				"testdata/comp/resources/existing-custom-ns-xr.yaml",
-				"testdata/comp/resources/existing-custom-ns-downstream.yaml",
+				composes(
+					"testdata/comp/resources/existing-custom-ns-xr.yaml",
+					"testdata/comp/resources/existing-custom-ns-downstream.yaml",
+				),
 				// Add existing XRs in default namespace (should be filtered out)
-				"testdata/comp/resources/existing-xr-1.yaml",
-				"testdata/comp/resources/existing-downstream-1.yaml",
+				composes(
+					"testdata/comp/resources/existing-xr-1.yaml",
+					"testdata/comp/resources/existing-downstream-1.yaml",
+				),
 			},
 			// New composition files that will be diffed
 			inputFiles: []string{"testdata/comp/updated-composition.yaml"},
@@ -3929,7 +4181,6 @@ Summary: 1 resource with changes
   metadata:
     annotations:
       crossplane.io/composition-resource-name: nop-resource
-      gotemplating.fn.crossplane.io/composition-resource-name: nop-resource
     labels:
       crossplane.io/composite: custom-namespace-resource
     name: custom-namespace-resource
@@ -3960,12 +4211,18 @@ Summary: 1 modified`,
 				"testdata/comp/resources/original-composition.yaml",
 				"testdata/comp/resources/original-composition-2.yaml",
 				"testdata/comp/resources/functions.yaml",
+			},
+			crossplaneManagedResources: []HierarchicalOwnershipRelation{
 				// XR using composition 1
-				"testdata/comp/resources/existing-xr-1.yaml",
-				"testdata/comp/resources/existing-downstream-1.yaml",
+				composes(
+					"testdata/comp/resources/existing-xr-1.yaml",
+					"testdata/comp/resources/existing-downstream-1.yaml",
+				),
 				// XR using composition 2
-				"testdata/comp/resources/existing-xr-v2.yaml",
-				"testdata/comp/resources/existing-downstream-v2.yaml",
+				composes(
+					"testdata/comp/resources/existing-xr-v2.yaml",
+					"testdata/comp/resources/existing-downstream-v2.yaml",
+				),
 			},
 			inputFiles: []string{
 				"testdata/comp/updated-composition.yaml",
@@ -4004,11 +4261,17 @@ Summary: 1 modified`,
 				"testdata/comp/resources/original-composition.yaml",
 				"testdata/comp/resources/original-composition-2.yaml",
 				"testdata/comp/resources/functions.yaml",
-				// Add existing XRs that use the compositions
-				"testdata/comp/resources/existing-xr-1.yaml",
-				"testdata/comp/resources/existing-downstream-1.yaml",
-				"testdata/comp/resources/existing-xr-2.yaml",
-				"testdata/comp/resources/existing-downstream-2.yaml",
+			},
+			// Add existing XRs that use the compositions
+			crossplaneManagedResources: []HierarchicalOwnershipRelation{
+				composes(
+					"testdata/comp/resources/existing-xr-1.yaml",
+					"testdata/comp/resources/existing-downstream-1.yaml",
+				),
+				composes(
+					"testdata/comp/resources/existing-xr-2.yaml",
+					"testdata/comp/resources/existing-downstream-2.yaml",
+				),
 			},
 			// Multiple composition files that will be diffed
 			inputFiles: []string{
@@ -4077,7 +4340,6 @@ Summary: 2 resources with changes
   metadata:
     annotations:
       crossplane.io/composition-resource-name: nop-resource
-      gotemplating.fn.crossplane.io/composition-resource-name: nop-resource
     labels:
       crossplane.io/composite: another-resource
     name: another-resource
@@ -4096,7 +4358,6 @@ Summary: 2 resources with changes
   metadata:
     annotations:
       crossplane.io/composition-resource-name: nop-resource
-      gotemplating.fn.crossplane.io/composition-resource-name: nop-resource
     labels:
       crossplane.io/composite: test-resource
     name: test-resource
@@ -4132,12 +4393,18 @@ Impact analysis skipped: this composition is identical to the cluster's, so appl
 				"testdata/comp/resources/original-composition.yaml",
 				"testdata/comp/resources/composition-revision-v1.yaml",
 				"testdata/comp/resources/functions.yaml",
+			},
+			crossplaneManagedResources: []HierarchicalOwnershipRelation{
 				// Add existing XR with Automatic policy (should be included)
-				"testdata/comp/resources/existing-xr-1.yaml",
-				"testdata/comp/resources/existing-downstream-1.yaml",
+				composes(
+					"testdata/comp/resources/existing-xr-1.yaml",
+					"testdata/comp/resources/existing-downstream-1.yaml",
+				),
 				// Add existing XR with Manual policy (should be filtered out by default)
-				"testdata/comp/resources/existing-xr-manual.yaml",
-				"testdata/comp/resources/existing-downstream-manual.yaml",
+				composes(
+					"testdata/comp/resources/existing-xr-manual.yaml",
+					"testdata/comp/resources/existing-downstream-manual.yaml",
+				),
 			},
 			// Updated composition
 			inputFiles: []string{"testdata/comp/updated-composition.yaml"},
@@ -4203,7 +4470,6 @@ Summary: 1 resource with changes
   metadata:
     annotations:
       crossplane.io/composition-resource-name: nop-resource
-      gotemplating.fn.crossplane.io/composition-resource-name: nop-resource
     labels:
       crossplane.io/composite: test-resource
     name: test-resource
@@ -4321,9 +4587,13 @@ All composite resources are up-to-date. No downstream resource changes detected.
 				"testdata/comp/resources/xrd.yaml",
 				"testdata/comp/resources/original-composition.yaml",
 				"testdata/comp/resources/functions.yaml",
-				// Add existing XRs that use different compositions (won't be affected)
-				"testdata/comp/resources/existing-xr-1.yaml",
-				"testdata/comp/resources/existing-downstream-1.yaml",
+			},
+			// Add existing XRs that use different compositions (won't be affected)
+			crossplaneManagedResources: []HierarchicalOwnershipRelation{
+				composes(
+					"testdata/comp/resources/existing-xr-1.yaml",
+					"testdata/comp/resources/existing-downstream-1.yaml",
+				),
 			},
 			// Net-new composition file that doesn't exist in cluster and targets different XR type
 			inputFiles: []string{"testdata/comp/net-new-composition.yaml"},
@@ -4386,11 +4656,17 @@ No XRs found using composition xnewresources.diff.example.org`,
 				"testdata/comp/resources/xrd.yaml",
 				"testdata/comp/resources/status-indicator-composition.yaml",
 				"testdata/comp/resources/functions.yaml",
-				// Add existing XRs that use the composition
-				"testdata/comp/resources/status-xr-1.yaml",
-				"testdata/comp/resources/status-downstream-1.yaml",
-				"testdata/comp/resources/status-xr-2.yaml",
-				"testdata/comp/resources/status-downstream-2.yaml",
+			},
+			// Add existing XRs that use the composition
+			crossplaneManagedResources: []HierarchicalOwnershipRelation{
+				composes(
+					"testdata/comp/resources/status-xr-1.yaml",
+					"testdata/comp/resources/status-downstream-1.yaml",
+				),
+				composes(
+					"testdata/comp/resources/status-xr-2.yaml",
+					"testdata/comp/resources/status-downstream-2.yaml",
+				),
 			},
 			// Updated composition with only metadata change (no downstream impact)
 			inputFiles: []string{"testdata/comp/status-indicator-updated-composition.yaml"},
@@ -4461,21 +4737,29 @@ All composite resources are up-to-date. No downstream resource changes detected.
 				"testdata/comp/resources/xrd.yaml",
 				"testdata/comp/resources/mixed-status-composition.yaml",
 				"testdata/comp/resources/functions.yaml",
+			},
+			crossplaneManagedResources: []HierarchicalOwnershipRelation{
 				// XR 1 with downstream resources (standard tier - will change)
-				"testdata/comp/resources/mixed-xr-1.yaml",
-				"testdata/comp/resources/mixed-downstream-db-1.yaml",
-				"testdata/comp/resources/mixed-downstream-storage-1.yaml",
-				"testdata/comp/resources/mixed-downstream-network-1.yaml",
+				composes(
+					"testdata/comp/resources/mixed-xr-1.yaml",
+					"testdata/comp/resources/mixed-downstream-db-1.yaml",
+					"testdata/comp/resources/mixed-downstream-storage-1.yaml",
+					"testdata/comp/resources/mixed-downstream-network-1.yaml",
+				),
 				// XR 2 with downstream resources (standard tier - will change)
-				"testdata/comp/resources/mixed-xr-2.yaml",
-				"testdata/comp/resources/mixed-downstream-db-2.yaml",
-				"testdata/comp/resources/mixed-downstream-storage-2.yaml",
-				"testdata/comp/resources/mixed-downstream-network-2.yaml",
+				composes(
+					"testdata/comp/resources/mixed-xr-2.yaml",
+					"testdata/comp/resources/mixed-downstream-db-2.yaml",
+					"testdata/comp/resources/mixed-downstream-storage-2.yaml",
+					"testdata/comp/resources/mixed-downstream-network-2.yaml",
+				),
 				// XR 3 with downstream resources (already premium tier - no change)
-				"testdata/comp/resources/mixed-xr-3.yaml",
-				"testdata/comp/resources/mixed-downstream-db-3.yaml",
-				"testdata/comp/resources/mixed-downstream-storage-3.yaml",
-				"testdata/comp/resources/mixed-downstream-network-3.yaml",
+				composes(
+					"testdata/comp/resources/mixed-xr-3.yaml",
+					"testdata/comp/resources/mixed-downstream-db-3.yaml",
+					"testdata/comp/resources/mixed-downstream-storage-3.yaml",
+					"testdata/comp/resources/mixed-downstream-network-3.yaml",
+				),
 			},
 			inputFiles: []string{"testdata/comp/mixed-status-updated-composition.yaml"},
 			namespace:  "default",
@@ -4567,7 +4851,6 @@ Summary: 2 resources with changes, 1 resource unchanged
   metadata:
     annotations:
       crossplane.io/composition-resource-name: database
-      gotemplating.fn.crossplane.io/composition-resource-name: database
     labels:
       crossplane.io/composite: mixed-test-xr-1
     name: mixed-test-xr-1-database
@@ -4589,7 +4872,6 @@ Summary: 2 resources with changes, 1 resource unchanged
   metadata:
     annotations:
       crossplane.io/composition-resource-name: database
-      gotemplating.fn.crossplane.io/composition-resource-name: database
     labels:
       crossplane.io/composite: mixed-test-xr-2
     name: mixed-test-xr-2-database
@@ -4620,17 +4902,25 @@ Summary: 2 modified
 				// XRD, composition, and functions
 				"testdata/comp/resources/claim-xrd.yaml",
 				"testdata/comp/resources/claim-composition.yaml",
+				"testdata/comp/resources/claim-composition-revision.yaml",
 				"testdata/comp/resources/functions.yaml",
 				// Test namespace
 				"testdata/comp/resources/test-namespace.yaml",
 				// Existing Claims and their corresponding XRs
 				"testdata/comp/resources/existing-claim-1.yaml",
-				"testdata/comp/resources/existing-claim-1-xr.yaml",
-				"testdata/comp/resources/existing-claim-downstream-1.yaml",
 				"testdata/comp/resources/existing-claim-2.yaml",
-				"testdata/comp/resources/existing-claim-2-xr.yaml",
-				"testdata/comp/resources/existing-claim-downstream-2.yaml",
 			},
+			crossplaneManagedResources: []HierarchicalOwnershipRelation{
+				composes(
+					"testdata/comp/resources/existing-claim-1-xr.yaml",
+					"testdata/comp/resources/existing-claim-downstream-1.yaml",
+				),
+				composes(
+					"testdata/comp/resources/existing-claim-2-xr.yaml",
+					"testdata/comp/resources/existing-claim-downstream-2.yaml",
+				),
+			},
+			xrdAPIVersion: V1, // the XRD is v1, so Crossplane writes the XR's resourceRefs at spec.resourceRefs
 			// Updated composition that will be diffed
 			inputFiles: []string{"testdata/comp/updated-claim-composition.yaml"},
 			namespace:  "test-namespace",
@@ -4694,7 +4984,6 @@ Summary: 2 resources with changes
   metadata:
     annotations:
       crossplane.io/composition-resource-name: nop-resource
-      gotemplating.fn.crossplane.io/composition-resource-name: nop-resource
     labels:
       crossplane.io/claim-name: test-claim-1
       crossplane.io/claim-namespace: test-namespace
@@ -4714,7 +5003,6 @@ Summary: 2 resources with changes
   metadata:
     annotations:
       crossplane.io/composition-resource-name: nop-resource
-      gotemplating.fn.crossplane.io/composition-resource-name: nop-resource
     labels:
       crossplane.io/claim-name: test-claim-2
       crossplane.io/claim-namespace: test-namespace
@@ -4812,7 +5100,6 @@ Summary: 1 resource with changes
   metadata:
     annotations:
       crossplane.io/composition-resource-name: nop-resource
--     gotemplating.fn.crossplane.io/composition-resource-name: nop-resource
     labels:
       crossplane.io/composite: field-removal-test
     name: field-removal-test
@@ -4835,8 +5122,12 @@ Summary: 1 modified`,
 				"testdata/comp/resources/xrd.yaml",
 				"testdata/comp/resources/sha256-composition.yaml",
 				"testdata/comp/resources/functions-sha256.yaml",
-				"testdata/comp/resources/existing-sha256-xr.yaml",
-				"testdata/comp/resources/existing-sha256-downstream.yaml",
+			},
+			crossplaneManagedResources: []HierarchicalOwnershipRelation{
+				composes(
+					"testdata/comp/resources/existing-sha256-xr.yaml",
+					"testdata/comp/resources/existing-sha256-downstream.yaml",
+				),
 			},
 			inputFiles: []string{"testdata/comp/updated-sha256-composition.yaml"},
 			namespace:  "default",
@@ -4900,7 +5191,6 @@ Summary: 1 resource with changes
   metadata:
     annotations:
       crossplane.io/composition-resource-name: nop-resource
-      gotemplating.fn.crossplane.io/composition-resource-name: nop-resource
     labels:
       crossplane.io/composite: sha256-test-resource
     name: sha256-test-resource
@@ -5292,10 +5582,16 @@ Summary: 2 modified`,
 				"testdata/comp/resources/original-composition.yaml",
 				"testdata/comp/resources/composition-revision-v1.yaml",
 				"testdata/comp/resources/functions.yaml",
-				"testdata/comp/resources/existing-xr-1.yaml", // test-resource (default ns)
-				"testdata/comp/resources/existing-downstream-1.yaml",
-				"testdata/comp/resources/existing-xr-2.yaml", // another-resource (default ns)
-				"testdata/comp/resources/existing-downstream-2.yaml",
+			},
+			crossplaneManagedResources: []HierarchicalOwnershipRelation{
+				composes( // test-resource (default ns)
+					"testdata/comp/resources/existing-xr-1.yaml",
+					"testdata/comp/resources/existing-downstream-1.yaml",
+				),
+				composes( // another-resource (default ns)
+					"testdata/comp/resources/existing-xr-2.yaml",
+					"testdata/comp/resources/existing-downstream-2.yaml",
+				),
 			},
 			inputFiles:       []string{"testdata/comp/updated-composition.yaml"},
 			resources:        []string{"default/test-resource"},
@@ -5314,10 +5610,16 @@ Summary: 2 modified`,
 				"testdata/comp/resources/original-composition.yaml",
 				"testdata/comp/resources/composition-revision-v1.yaml",
 				"testdata/comp/resources/functions.yaml",
-				"testdata/comp/resources/existing-xr-1.yaml",
-				"testdata/comp/resources/existing-downstream-1.yaml",
-				"testdata/comp/resources/existing-xr-2.yaml",
-				"testdata/comp/resources/existing-downstream-2.yaml",
+			},
+			crossplaneManagedResources: []HierarchicalOwnershipRelation{
+				composes(
+					"testdata/comp/resources/existing-xr-1.yaml",
+					"testdata/comp/resources/existing-downstream-1.yaml",
+				),
+				composes(
+					"testdata/comp/resources/existing-xr-2.yaml",
+					"testdata/comp/resources/existing-downstream-2.yaml",
+				),
 			},
 			inputFiles:       []string{"testdata/comp/updated-composition.yaml"},
 			resourcesCSV:     "default/test-resource,default/another-resource",
@@ -5338,8 +5640,12 @@ Summary: 2 modified`,
 				"testdata/comp/resources/original-composition.yaml",
 				"testdata/comp/resources/composition-revision-v1.yaml",
 				"testdata/comp/resources/functions.yaml",
-				"testdata/comp/resources/existing-xr-1.yaml",
-				"testdata/comp/resources/existing-downstream-1.yaml",
+			},
+			crossplaneManagedResources: []HierarchicalOwnershipRelation{
+				composes(
+					"testdata/comp/resources/existing-xr-1.yaml",
+					"testdata/comp/resources/existing-downstream-1.yaml",
+				),
 			},
 			inputFiles:            []string{"testdata/comp/updated-composition.yaml"},
 			resources:             []string{"default/does-not-exist"},
@@ -5354,8 +5660,12 @@ Summary: 2 modified`,
 				"testdata/comp/resources/original-composition.yaml",
 				"testdata/comp/resources/composition-revision-v1.yaml",
 				"testdata/comp/resources/functions.yaml",
-				"testdata/comp/resources/existing-xr-manual.yaml",
-				"testdata/comp/resources/existing-downstream-manual.yaml",
+			},
+			crossplaneManagedResources: []HierarchicalOwnershipRelation{
+				composes(
+					"testdata/comp/resources/existing-xr-manual.yaml",
+					"testdata/comp/resources/existing-downstream-manual.yaml",
+				),
 			},
 			inputFiles:       []string{"testdata/comp/updated-composition.yaml"},
 			resources:        []string{"default/manual-resource"},
@@ -5374,8 +5684,12 @@ Summary: 2 modified`,
 				"testdata/comp/resources/original-composition.yaml",
 				"testdata/comp/resources/composition-revision-v1.yaml",
 				"testdata/comp/resources/functions.yaml",
-				"testdata/comp/resources/existing-xr-manual.yaml",
-				"testdata/comp/resources/existing-downstream-manual.yaml",
+			},
+			crossplaneManagedResources: []HierarchicalOwnershipRelation{
+				composes(
+					"testdata/comp/resources/existing-xr-manual.yaml",
+					"testdata/comp/resources/existing-downstream-manual.yaml",
+				),
 			},
 			inputFiles:       []string{"testdata/comp/updated-composition.yaml"},
 			resources:        []string{"default/manual-resource"},

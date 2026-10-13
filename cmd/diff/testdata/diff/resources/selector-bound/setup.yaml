@@ -1,7 +1,8 @@
-# Two compositions that both match one compositionSelector, and a composite Crossplane has already bound
-# to the first, with that composite's composed resource. Crossplane selects a composition once, when
-# the composite has no compositionRef, and never re-selects (composite.APILabelSelectorResolver), so
-# the composite stays on composition A however many compositions its selector matches.
+# Two compositions that both match one compositionSelector. existing-xr.yaml is a composite Crossplane
+# has already bound to the first, and existing-downstream.yaml its composed resource. Crossplane selects
+# a composition once, when the composite has no compositionRef, and never re-selects
+# (composite.APILabelSelectorResolver), so the composite stays on composition A however many
+# compositions its selector matches.
 apiVersion: apiextensions.crossplane.io/v1
 kind: Composition
 metadata:
@@ -71,32 +72,3 @@ spec:
     - step: automatically-detect-ready-composed-resources
       functionRef:
         name: function-auto-ready
----
-apiVersion: ns.diff.example.org/v1alpha1
-kind: XNopResource
-metadata:
-  name: selector-bound
-  namespace: default
-spec:
-  coolField: existing-value
-  crossplane:
-    compositionSelector:
-      matchLabels:
-        binding: shared
-    compositionRef:
-      name: selector-bound-a
-    compositionUpdatePolicy: Automatic
----
-apiVersion: ns.nop.example.org/v1alpha1
-kind: XDownstreamResource
-metadata:
-  name: selector-bound
-  namespace: default
-  annotations:
-    crossplane.io/composition-resource-name: nop-resource
-    gotemplating.fn.crossplane.io/composition-resource-name: nop-resource
-  labels:
-    crossplane.io/composite: selector-bound
-spec:
-  forProvider:
-    configData: a-existing-value

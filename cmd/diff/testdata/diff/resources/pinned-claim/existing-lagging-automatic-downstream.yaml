@@ -1,0 +1,12 @@
+# The composed resource of existing-lagging-automatic-xr.yaml, as revision 1 rendered it.
+apiVersion: nop.example.org/v1alpha1
+kind: XDownstreamResource
+metadata:
+  name: lagging-xr
+  annotations:
+    crossplane.io/composition-resource-name: nop-resource
+  labels:
+    crossplane.io/composite: lagging-xr
+spec:
+  forProvider:
+    configData: v1:xpinneds.pinned.diff.example.org-rev1:existing-value

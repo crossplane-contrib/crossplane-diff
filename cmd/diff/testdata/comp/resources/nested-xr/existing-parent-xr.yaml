@@ -3,6 +3,8 @@ apiVersion: parent.diff.example.org/v1alpha1
 kind: XParentResource
 metadata:
   name: test-parent
+  labels:
+    crossplane.io/composite: test-parent
   namespace: default
 spec:
   parentField: parent-value

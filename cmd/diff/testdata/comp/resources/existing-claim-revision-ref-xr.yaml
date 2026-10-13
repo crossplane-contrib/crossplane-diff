@@ -6,6 +6,7 @@ kind: XNop
 metadata:
   name: revision-ref-claim-xr
   labels:
+    crossplane.io/composite: revision-ref-claim-xr
     crossplane.io/claim-name: revision-ref-claim
     crossplane.io/claim-namespace: test-namespace
 spec:
