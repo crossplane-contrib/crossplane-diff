@@ -1,6 +1,7 @@
 # sequencer-xr.yaml as it stood in the cluster before its coolField was changed, once Crossplane had
 # reconciled it against sequencer-gating-composition.yaml: Crossplane labels every XR with its own
-# name as its composite, and records the composition it selected.
+# name as its composite, and records the composition and the revision (sequencer-gating-composition-revision.yaml)
+# it selected, at spec.crossplane.* as the v2 XRD has them.
 apiVersion: ns.diff.example.org/v1alpha1
 kind: XNopResource
 metadata:
@@ -15,3 +16,5 @@ spec:
   crossplane:
     compositionRef:
       name: sequencer-gating-composition
+    compositionRevisionRef:
+      name: sequencer-gating-composition-6845979

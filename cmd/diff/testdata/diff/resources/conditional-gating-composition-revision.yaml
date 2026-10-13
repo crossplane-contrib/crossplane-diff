@@ -1,9 +1,13 @@
+# The CompositionRevision Crossplane creates for conditional-gating-composition.yaml,
+# named and labelled from its hash as Crossplane names it. envtest runs no Crossplane controllers,
+# so it must be declared. The XR in comp's existing-conditional-gating-xr.yaml tracks it.
 apiVersion: apiextensions.crossplane.io/v1
 kind: CompositionRevision
 metadata:
-  name: conditional-gating-composition-rev-1
+  name: conditional-gating-composition-2b8c5ab
   labels:
     crossplane.io/composition-name: conditional-gating-composition
+    crossplane.io/composition-hash: 2b8c5abd3bbff84efe72f698d6c9182fd7853cd64b1d346eca89de27c486d2e
 spec:
   revision: 1
   compositeTypeRef:
@@ -30,6 +34,11 @@ spec:
             spec:
               forProvider:
                 configData: {{ .observed.composite.resource.spec.coolField }}
+            {{- /* Render stage1 iff observed stage0 has a Ready=True condition.
+                 Access pattern: .observed.resources is the protojson of State.resources
+                 (map<string, Resource> keyed by composition-resource-name).
+                 Compute $ready once, then emit the manifest once to avoid
+                 duplicates if multiple Ready=True conditions ever appear. */ -}}
             {{- $ready := false -}}
             {{- with .observed.resources -}}
               {{- with (index . "stage0-resource") -}}

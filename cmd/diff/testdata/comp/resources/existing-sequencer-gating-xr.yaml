@@ -10,3 +10,5 @@ spec:
   crossplane:
     compositionRef:
       name: sequencer-gating-composition
+    compositionRevisionRef:
+      name: sequencer-gating-composition-6845979
