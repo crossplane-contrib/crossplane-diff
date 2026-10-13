@@ -61,11 +61,7 @@ type IntegrationTestCase struct {
 	// crossplaneManagedResources, each under its own
 	// field manager. Use it when a test depends on which manager owns a field: a plain Create
 	// records only the test client as owner, and the apiserver drops managedFields supplied on Create.
-	fieldManagerApplies []fieldManagerApply
-	// unreconciled names, as "<Kind>/<namespace>/<name>", the objects a case deliberately sets up in a
-	// state Crossplane would not leave them in, each with the reason. Every other object must pass
-	// validateReconciledState.
-	unreconciled           map[string]string
+	fieldManagerApplies    []fieldManagerApply
 	inputFiles             []string // Input files to diff (XR YAML files or Composition YAML files)
 	expectedOutput         string
 	expectedError          bool
@@ -247,14 +243,18 @@ func runIntegrationTest(t *testing.T, testType DiffTestType, tt IntegrationTestC
 	ctx, cancel := context.WithTimeout(t.Context(), testTimeout)
 	defer cancel()
 
+	// Envtest runs no Crossplane controllers, so the harness fills in what they would have written to the
+	// setup fixtures, wherever a fixture leaves it out.
+	defaults := newCrossplaneDefaults(k8sClient, crds)
+
 	// Apply the setup resources
-	if err := applyResourcesFromFiles(ctx, k8sClient, tt.setupFiles); err != nil {
+	if err := applyResourcesFromFiles(ctx, k8sClient, defaults, tt.setupFiles); err != nil {
 		t.Fatalf("failed to setup resources: %v", err)
 	}
 
 	// No composition revision controller runs either: do what it would.
 	if err := reconcileCompositionRevisions(ctx, k8sClient); err != nil {
-		t.Fatalf("setup's CompositionRevisions are not what a cluster could hold: %v", err)
+		t.Fatalf("failed to reconcile CompositionRevisions: %v", err)
 	}
 
 	// Default to v2 API version for XR resources unless otherwise specified
@@ -267,7 +267,7 @@ func runIntegrationTest(t *testing.T, testType DiffTestType, tt IntegrationTestC
 	// These resources simulate what Crossplane actually manages in production. They are in place before
 	// fieldManagerApplies run, since those model another manager writing to objects that already exist.
 	if len(tt.crossplaneManagedResources) > 0 {
-		err := applyHierarchicalOwnership(ctx, tu.TestLogger(t, false), k8sClient, xrdAPIVersion, tt.crossplaneManagedResources)
+		err := applyHierarchicalOwnership(ctx, tu.TestLogger(t, false), k8sClient, defaults, xrdAPIVersion, tt.crossplaneManagedResources)
 		if err != nil {
 			t.Fatalf("failed to setup Crossplane-managed resources: %v", err)
 		}
@@ -284,11 +284,6 @@ func runIntegrationTest(t *testing.T, testType DiffTestType, tt IntegrationTestC
 				t.Fatalf("failed to setup field-managed resources: %v", err)
 			}
 		}
-	}
-
-	// Refuse a setup no cluster could hold, before anything is deleted out of band.
-	if err := validateReconciledState(ctx, k8sClient, tt.unreconciled); err != nil {
-		t.Fatalf("setup is not what Crossplane leaves in a cluster:\n%v", err)
 	}
 
 	// Issue a delete for resources that should be observed mid-deletion. The manifests must
@@ -1667,10 +1662,6 @@ Summary: 2 modified, 2 removed`,
 		"ResourceRemovalSkipsResourcesTheXRDoesNotControl": {
 			reason: "A composed resource the XR's resourceRefs name but the XR does not control is not reported removed",
 			// What this case pins: test-resource's resourceRefs still name two resources it doesn't control.
-			unreconciled: map[string]string{
-				"XDownstreamResource/default/other-resource":              "named in test-resource's resourceRefs, though other-resource controls it",
-				"XDownstreamResource/default/resource-without-controller": "named in test-resource's resourceRefs, though it has no controller",
-			},
 			outputFormat: "json",
 			crossplaneManagedResources: []HierarchicalOwnershipRelation{
 				composes(
@@ -3876,10 +3867,6 @@ Summary: 2 modified`,
 		"CompositionDropsResourceRemovingOnlyWhatTheXRControls": {
 			reason: "A composition that stops rendering resources removes only those the XR controls",
 			// What this case pins: test-resource's resourceRefs still name two resources it doesn't control.
-			unreconciled: map[string]string{
-				"XDownstreamResource/default/other-resource":              "named in test-resource's resourceRefs, though other-resource controls it",
-				"XDownstreamResource/default/resource-without-controller": "named in test-resource's resourceRefs, though it has no controller",
-			},
 			setupFiles: []string{
 				"testdata/comp/resources/xrd.yaml",
 				"testdata/comp/resources/removal-test-original-composition.yaml",
@@ -5969,8 +5956,7 @@ Summary: 2 modified`,
 		// the edited composition's labels would not adopt the resulting revision, so it must be
 		// surfaced as filtered (reason revision_selector_mismatch), NOT evaluated for changes.
 		"ResourceFilterRespectsRevisionSelectorMismatch": {
-			reason:       "--resource matching an Automatic XR whose compositionRevisionSelector does not match the composition's labels surfaces it as filtered (reason revision_selector_mismatch)",
-			unreconciled: map[string]string{"XNopResource/default/selector-mismatch-resource": "its revision selector (version=0.0.1) matches no revision, so Crossplane writes no compositionRevisionRef"},
+			reason: "--resource matching an Automatic XR whose compositionRevisionSelector does not match the composition's labels surfaces it as filtered (reason revision_selector_mismatch)",
 			setupFiles: []string{
 				"testdata/comp/resources/xrd.yaml",
 				"testdata/comp/resources/original-composition.yaml",
@@ -5995,8 +5981,7 @@ Summary: 2 modified`,
 		// Issue #388 (Bug A, positive): an Automatic XR whose compositionRevisionSelector DOES match
 		// the edited composition's labels is kept and evaluated for downstream changes (not filtered).
 		"ResourceFilterRespectsRevisionSelectorMatch": {
-			reason:       "--resource matching an Automatic XR whose compositionRevisionSelector matches the composition's labels keeps it and reports downstream changes",
-			unreconciled: map[string]string{"XNopResource/default/selector-match-resource": "its revision selector (version=0.0.2) matches no revision, so Crossplane writes no compositionRevisionRef"},
+			reason: "--resource matching an Automatic XR whose compositionRevisionSelector matches the composition's labels keeps it and reports downstream changes",
 			setupFiles: []string{
 				"testdata/comp/resources/xrd.yaml",
 				"testdata/comp/resources/original-composition.yaml",

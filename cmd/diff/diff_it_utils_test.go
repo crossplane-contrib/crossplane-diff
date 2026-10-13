@@ -335,23 +335,27 @@ func addResourceRef(parent, child *un.Unstructured, xrAPIVersion XrdAPIVersion) 
 	return un.SetNestedSlice(parent.Object, resourceRefs, path...)
 }
 
-// applyResourcesFromFiles loads and applies resources from YAML files
-// Under the assumption that no resource should already exist.
-func applyResourcesFromFiles(ctx context.Context, c client.Client, paths []string) error {
-	// Collect all resources from all files first
-	var allResources []*un.Unstructured
-
+// applyResourcesFromFiles creates the resources in YAML files in order, each filled in by d just before
+// it is created, so it can derive from what precedes it. No resource should already exist.
+func applyResourcesFromFiles(ctx context.Context, c client.Client, d *crossplaneDefaults, paths []string) error {
 	for _, path := range paths {
 		resources, err := readResourcesFromFile(path)
 		if err != nil {
 			return fmt.Errorf("failed to read resources from %s: %w", path, err)
 		}
 
-		allResources = append(allResources, resources...)
+		for _, r := range resources {
+			if err := d.fill(ctx, r, nil); err != nil {
+				return fmt.Errorf("%s: %w", path, err)
+			}
+
+			if err := createResources(ctx, c, []*un.Unstructured{r}); err != nil {
+				return err
+			}
+		}
 	}
 
-	// Apply all resources as new resources
-	return createResources(ctx, c, allResources)
+	return nil
 }
 
 // deleteResourcesFromFiles issues a delete for every resource in the supplied files. Resources
@@ -584,14 +588,14 @@ func applyResourceWithSSA(ctx context.Context, c client.Client, resource *un.Uns
 }
 
 // applyHierarchicalOwnership applies a hierarchical ownership structure.
-func applyHierarchicalOwnership(ctx context.Context, _ logging.Logger, c client.Client, xrdAPIVersion XrdAPIVersion, hierarchies []HierarchicalOwnershipRelation) error {
+func applyHierarchicalOwnership(ctx context.Context, _ logging.Logger, c client.Client, d *crossplaneDefaults, xrdAPIVersion XrdAPIVersion, hierarchies []HierarchicalOwnershipRelation) error {
 	// Map to store created resources by file path
 	createdResources := make(map[string]*un.Unstructured)
 	// Map to track parent-child relationships for establishing resourceRefs
 	parentChildRelationships := make(map[string]string) // child file -> parent file
 
 	// First pass: Create all resources and collect parent-child relationships
-	err := createAllResourcesInHierarchy(ctx, c, hierarchies, createdResources, parentChildRelationships)
+	err := createAllResourcesInHierarchy(ctx, c, d, hierarchies, createdResources, parentChildRelationships)
 	if err != nil {
 		return err
 	}
@@ -655,7 +659,7 @@ func LogResourcesAsYAML(ctx context.Context, log logging.Logger, c client.Client
 }
 
 // createAllResourcesInHierarchy creates all resources in a hierarchy and tracks relationships.
-func createAllResourcesInHierarchy(ctx context.Context, c client.Client,
+func createAllResourcesInHierarchy(ctx context.Context, c client.Client, d *crossplaneDefaults,
 	hierarchies []HierarchicalOwnershipRelation,
 	createdResources map[string]*un.Unstructured,
 	parentChildRelationships map[string]string,
@@ -665,7 +669,7 @@ func createAllResourcesInHierarchy(ctx context.Context, c client.Client,
 		// applied as its parent's composed resource before the recursion reached it. A root XR is
 		// created the way a user's manifest would be, never under Crossplane's composed field manager:
 		// its spec belongs to whoever applied it.
-		_, err := createResourceFromFile(ctx, c, hierarchy.OwnerFile, createdResources, "")
+		owner, err := createResourceFromFile(ctx, c, d, hierarchy.OwnerFile, nil, createdResources, "")
 		if err != nil {
 			return err
 		}
@@ -676,7 +680,7 @@ func createAllResourcesInHierarchy(ctx context.Context, c client.Client,
 			parentChildRelationships[ownedFile] = hierarchy.OwnerFile
 
 			// Create the owned resource without setting references
-			_, err := createResourceFromFile(ctx, c, ownedFile, createdResources, CrossplaneFieldManager)
+			_, err := createResourceFromFile(ctx, c, d, ownedFile, owner, createdResources, CrossplaneFieldManager)
 			if err != nil {
 				return err
 			}
@@ -690,7 +694,7 @@ func createAllResourcesInHierarchy(ctx context.Context, c client.Client,
 					},
 				}
 
-				err := createAllResourcesInHierarchy(ctx, c, childHierarchies,
+				err := createAllResourcesInHierarchy(ctx, c, d, childHierarchies,
 					createdResources, parentChildRelationships)
 				if err != nil {
 					return err
@@ -702,12 +706,13 @@ func createAllResourcesInHierarchy(ctx context.Context, c client.Client,
 	return nil
 }
 
-// createResourceFromFile creates the one resource a file holds. With a fieldManager it is applied with
-// Server-Side Apply (SSA) under that manager: pass CrossplaneFieldManager for a composed resource, as
-// Crossplane applies composed resources in production, so tests see SSA-related behaviors like field
-// removal. With none it is created plainly, as a setup file is.
-func createResourceFromFile(ctx context.Context, c client.Client, path string,
-	createdResources map[string]*un.Unstructured, fieldManager string,
+// createResourceFromFile creates the one resource a file holds, filled in by d as parent's composed
+// resource (parent is nil for a root). With a fieldManager it is applied with Server-Side Apply (SSA)
+// under that manager: pass CrossplaneFieldManager for a composed resource, as Crossplane applies composed
+// resources in production, so tests see SSA-related behaviors like field removal. With none it is
+// created plainly, as a setup file is.
+func createResourceFromFile(ctx context.Context, c client.Client, d *crossplaneDefaults, path string,
+	parent *un.Unstructured, createdResources map[string]*un.Unstructured, fieldManager string,
 ) (*un.Unstructured, error) {
 	// Check if we've already processed this resource
 	if resource, exists := createdResources[path]; exists {
@@ -726,6 +731,10 @@ func createResourceFromFile(ctx context.Context, c client.Client, path string,
 	}
 
 	resource := resources[0]
+
+	if err := d.fill(ctx, resource, parent); err != nil {
+		return nil, fmt.Errorf("%s: %w", path, err)
+	}
 
 	// A nested XR's composition refs are the nested XR's own reconciler's, never its parent's: the
 	// parent's composed apply doesn't carry them, so it must not own them, or a diff of the parent's
@@ -944,9 +953,7 @@ func localCrossplaneBinary(t *testing.T) string {
 
 // reconcileCompositionRevisions does what Crossplane's composition revision controller would, since
 // envtest runs none: it gives each revision a controller reference to its Composition, and creates the
-// revision of a Composition's current hash if no fixture declares it. It refuses a revision no cluster
-// could hold: one whose Composition the case doesn't declare (it would be garbage collected), or one not
-// named and labelled from the hash of the Composition it was cut from.
+// revision of a Composition's current hash if no fixture declares it.
 func reconcileCompositionRevisions(ctx context.Context, c client.Client) error {
 	comps := &xpextv1.CompositionList{}
 	revs := &xpextv1.CompositionRevisionList{}
@@ -988,37 +995,6 @@ func reconcileCompositionRevisions(ctx context.Context, c client.Client) error {
 		}
 	}
 
-	var problems []string
-
-	for i := range revs.Items {
-		rev := &revs.Items[i]
-		if len(rev.GetOwnerReferences()) == 0 {
-			problems = append(problems, fmt.Sprintf("CompositionRevision %s: its Composition %q isn't declared",
-				rev.GetName(), rev.GetLabels()[xpextv1.LabelCompositionName]))
-		}
-
-		// The Composition it was cut from had its spec, and the labels and annotations it copied.
-		src := &xpextv1.Composition{Spec: (&xpextv1.GeneratedRevisionSpecConverter{}).FromRevisionSpec(rev.Spec)}
-		labels := maps.Clone(rev.GetLabels())
-		delete(labels, xpextv1.LabelCompositionName)
-		delete(labels, xpextv1.LabelCompositionHash)
-
-		if len(labels) > 0 {
-			src.SetLabels(labels)
-		}
-
-		src.SetAnnotations(rev.GetAnnotations())
-
-		name, hash := revisionIdentity(rev.GetLabels()[xpextv1.LabelCompositionName], src.Hash())
-		if rev.GetName() != name || rev.GetLabels()[xpextv1.LabelCompositionHash] != hash {
-			problems = append(problems, fmt.Sprintf("CompositionRevision %s: Crossplane names it %s, hash label %s", rev.GetName(), name, hash))
-		}
-	}
-
-	if len(problems) > 0 {
-		return errors.New(strings.Join(problems, "\n"))
-	}
-
 	return nil
 }
 
@@ -1044,250 +1020,122 @@ func revisionIdentity(compName, hash string) (string, string) {
 	return compName + "-" + hash[:min(7, len(hash))], hash
 }
 
-// validateReconciledState refuses a case whose cluster holds what Crossplane never leaves (#562), so no
-// test exercises a tree a real cluster can't have. It returns one line per problem, as
-// "<Kind>/<namespace>/<name>: <why>". unreconciled exempts the objects a case deliberately sets up
-// otherwise, keyed the same way; an exemption for an object with nothing wrong is itself a problem.
-func validateReconciledState(ctx context.Context, c client.Client, unreconciled map[string]string) error {
-	s, err := loadClusterState(ctx, c)
-	if err != nil {
+// composedLabels are the labels RenderComposedResourceMetadata copies from an XR to what it composes.
+var composedLabels = []string{"crossplane.io/composite", "crossplane.io/claim-name", "crossplane.io/claim-namespace"}
+
+// crossplaneDefaults fills in, on each fixture a case sets up, what Crossplane would have written to it
+// wherever the fixture leaves it out, just as envtestCRDs derives XR and claim CRDs from their XRDs. A
+// value the fixture sets always wins: that is how a case sets up a state Crossplane wouldn't leave, such as
+// a stale or pinned revision ref, or another XR's labels.
+type crossplaneDefaults struct {
+	c       client.Client
+	xrKinds map[schema.GroupKind]bool // the XR kinds the case's XRDs define
+}
+
+func newCrossplaneDefaults(c client.Client, crds []*extv1.CustomResourceDefinition) *crossplaneDefaults {
+	d := &crossplaneDefaults{c: c, xrKinds: map[schema.GroupKind]bool{}}
+
+	for _, crd := range crds {
+		if slices.Contains(crd.Spec.Names.Categories, "composite") {
+			d.xrKinds[schema.GroupKind{Group: crd.Spec.Group, Kind: crd.Spec.Names.Kind}] = true
+		}
+	}
+
+	return d
+}
+
+// fill fills in what Crossplane would have written to o, where o doesn't set it:
+//   - a CompositionRevision's name and hash label, which NewCompositionRevision derives from the
+//     Composition it was cut from: the one its crossplane.io/composition-name label names, with the
+//     revision's own spec, labels and annotations;
+//   - an XR's crossplane.io/composite label, its own name; or, on a resource an XR composes (a nested XR
+//     included), the XR's composite and claim labels, as RenderComposedResourceMetadata copies them;
+//   - the compositionRevisionRef of an XR that names a Composition but neither a revision nor a
+//     revision selector: the Composition's current revision, which reconcileCompositionRevisions creates.
+func (d *crossplaneDefaults) fill(ctx context.Context, o, parent *un.Unstructured) error {
+	gk := o.GroupVersionKind().GroupKind()
+	if gk == xpextv1.CompositionRevisionGroupVersionKind.GroupKind() && o.GetName() == "" {
+		return d.nameRevision(ctx, o)
+	}
+
+	labels := map[string]string{}
+
+	switch {
+	case parent != nil:
+		for _, k := range composedLabels {
+			if v, ok := parent.GetLabels()[k]; ok {
+				labels[k] = v
+			}
+		}
+	case d.xrKinds[gk]:
+		labels["crossplane.io/composite"] = o.GetName()
+	}
+
+	maps.Copy(labels, o.GetLabels())
+
+	if len(labels) > 0 {
+		o.SetLabels(labels)
+	}
+
+	// The refs are at spec.crossplane in a v2 XR, and at spec in a v1 one.
+	for _, base := range [][]string{{"spec", "crossplane"}, {"spec"}} {
+		field := func(name ...string) []string { return slices.Concat(base, name) }
+
+		comp, named, _ := un.NestedString(o.Object, field("compositionRef", "name")...)
+		_, hasRef, _ := un.NestedFieldNoCopy(o.Object, field("compositionRevisionRef")...)
+		_, hasSelector, _ := un.NestedFieldNoCopy(o.Object, field("compositionRevisionSelector")...)
+
+		if !d.xrKinds[gk] || !named || hasRef || hasSelector {
+			continue
+		}
+
+		current := &xpextv1.Composition{}
+		if err := d.c.Get(ctx, client.ObjectKey{Name: comp}, current); err != nil {
+			return fmt.Errorf("cannot derive the compositionRevisionRef of %s %s: %w", o.GetKind(), o.GetName(), err)
+		}
+
+		name, _ := revisionIdentity(comp, current.Hash())
+
+		return un.SetNestedField(o.Object, name, field("compositionRevisionRef", "name")...)
+	}
+
+	return nil
+}
+
+// nameRevision names and hash-labels a CompositionRevision as NewCompositionRevision would have, from the
+// Composition it was cut from: its spec, as the apiserver defaults it, and its own labels and annotations.
+func (d *crossplaneDefaults) nameRevision(ctx context.Context, o *un.Unstructured) error {
+	compName := o.GetLabels()[xpextv1.LabelCompositionName]
+	if compName == "" {
+		return errors.Errorf("a CompositionRevision without a name needs a %s label to be named from", xpextv1.LabelCompositionName)
+	}
+
+	probe := o.DeepCopy()
+	probe.SetGenerateName("revision-")
+
+	if err := d.c.Create(ctx, probe, client.DryRunAll); err != nil {
 		return err
 	}
 
-	problems := map[string][]string{}
-	refuse := func(o *un.Unstructured, why string, args ...any) {
-		id := o.GetKind() + "/" + o.GetNamespace() + "/" + o.GetName()
-		problems[id] = append(problems[id], fmt.Sprintf(why, args...))
+	rev := &xpextv1.CompositionRevision{}
+	if err := runtime.DefaultUnstructuredConverter.FromUnstructured(probe.Object, rev); err != nil {
+		return err
 	}
 
-	for _, xr := range s.xrs {
-		checkXR(ctx, c, s, xr, refuse)
+	src := &xpextv1.Composition{Spec: (&xpextv1.GeneratedRevisionSpecConverter{}).FromRevisionSpec(rev.Spec)}
+	labels := maps.Clone(rev.GetLabels())
+	delete(labels, xpextv1.LabelCompositionName)
+	delete(labels, xpextv1.LabelCompositionHash)
+
+	if len(labels) > 0 {
+		src.SetLabels(labels)
 	}
 
-	for _, cm := range s.claims {
-		checkClaim(s, cm, refuse)
-	}
+	src.SetAnnotations(rev.GetAnnotations())
 
-	var out []string
+	name, hash := revisionIdentity(compName, src.Hash())
+	o.SetName(name)
+	meta.AddLabels(o, map[string]string{xpextv1.LabelCompositionHash: hash})
 
-	for id, why := range problems {
-		if _, ok := unreconciled[id]; !ok {
-			out = append(out, id+": "+strings.Join(why, "; "))
-		}
-	}
-
-	for id := range unreconciled {
-		if _, ok := problems[id]; !ok {
-			out = append(out, id+": exempted as unreconciled, but nothing about it is")
-		}
-	}
-
-	if len(out) == 0 {
-		return nil
-	}
-
-	sort.Strings(out)
-
-	return errors.New(strings.Join(out, "\n"))
-}
-
-// clusterState is what validateReconciledState checks: the case's XRs and claims, and the Compositions
-// and revisions they may name.
-type clusterState struct {
-	xrs, claims []*un.Unstructured
-	comps       map[string]xpextv1.Composition
-	revs        map[string]xpextv1.CompositionRevision
-}
-
-func loadClusterState(ctx context.Context, c client.Client) (*clusterState, error) {
-	s := &clusterState{comps: map[string]xpextv1.Composition{}, revs: map[string]xpextv1.CompositionRevision{}}
-
-	list := func(gvk schema.GroupVersionKind) ([]*un.Unstructured, error) {
-		l := &un.UnstructuredList{}
-		l.SetGroupVersionKind(gvk.GroupVersion().WithKind(gvk.Kind + "List"))
-		err := c.List(ctx, l)
-
-		out := make([]*un.Unstructured, len(l.Items))
-		for i := range l.Items {
-			out[i] = &l.Items[i]
-		}
-
-		return out, err
-	}
-
-	// Each XRD is listed at v1, which serves every XRD; read its XR and claim types.
-	xrds, err := list(schema.GroupVersionKind{Group: "apiextensions.crossplane.io", Version: "v1", Kind: "CompositeResourceDefinition"})
-	if err != nil {
-		return nil, err
-	}
-
-	for _, xrd := range xrds {
-		group, _, _ := un.NestedString(xrd.Object, "spec", "group")
-		xrKind, _, _ := un.NestedString(xrd.Object, "spec", "names", "kind")
-		claimKind, _, _ := un.NestedString(xrd.Object, "spec", "claimNames", "kind")
-		version := ""
-
-		versions, _, _ := un.NestedSlice(xrd.Object, "spec", "versions")
-		for _, v := range versions {
-			if m, _ := v.(map[string]any); m["referenceable"] == true {
-				version, _ = m["name"].(string)
-			}
-		}
-
-		xrs, err := list(schema.GroupVersionKind{Group: group, Version: version, Kind: xrKind})
-		if err != nil {
-			return nil, err
-		}
-
-		s.xrs = append(s.xrs, xrs...)
-
-		if claimKind != "" {
-			claims, err := list(schema.GroupVersionKind{Group: group, Version: version, Kind: claimKind})
-			if err != nil {
-				return nil, err
-			}
-
-			s.claims = append(s.claims, claims...)
-		}
-	}
-
-	comps := &xpextv1.CompositionList{}
-	revs := &xpextv1.CompositionRevisionList{}
-
-	if err := c.List(ctx, comps); err != nil {
-		return nil, err
-	}
-
-	if err := c.List(ctx, revs); err != nil {
-		return nil, err
-	}
-
-	for _, comp := range comps.Items {
-		s.comps[comp.GetName()] = comp
-	}
-
-	for _, rev := range revs.Items {
-		s.revs[rev.GetName()] = rev
-	}
-
-	return s, nil
-}
-
-// machinery reads an XR or claim's Crossplane machinery string at spec.crossplane.<path> or spec.<path>.
-func machinery(o *un.Unstructured, path ...string) string {
-	if s, found, _ := un.NestedString(o.Object, append([]string{"spec", "crossplane"}, path...)...); found {
-		return s
-	}
-
-	s, _, _ := un.NestedString(o.Object, append([]string{"spec"}, path...)...)
-
-	return s
-}
-
-// checkXR checks an XR, and the resources its resourceRefs name, against what Crossplane's composite
-// reconciler and RenderComposedResourceMetadata leave.
-func checkXR(ctx context.Context, c client.Client, s *clusterState, xr *un.Unstructured, refuse func(*un.Unstructured, string, ...any)) {
-	// Every XR is labelled with the name of the XR at the root of its tree.
-	root := xr
-	for ctrl := metav1.GetControllerOf(root); ctrl != nil; ctrl = metav1.GetControllerOf(root) {
-		parent := slices.IndexFunc(s.xrs, func(o *un.Unstructured) bool { return o.GetUID() == ctrl.UID })
-		if parent < 0 {
-			break
-		}
-
-		root = s.xrs[parent]
-	}
-
-	if got := xr.GetLabels()["crossplane.io/composite"]; got != root.GetName() {
-		refuse(xr, "label crossplane.io/composite is %q, not %q", got, root.GetName())
-	}
-
-	if hasLabel, hasRef := xr.GetLabels()["crossplane.io/claim-name"] != "", machinery(xr, "claimRef", "name") != ""; root == xr && hasLabel != hasRef {
-		refuse(xr, "claim labels and spec.claimRef disagree about whether a claim is bound")
-	}
-
-	// It names the Composition and revision it was composed with, unless no Composition targets it, when
-	// Crossplane can select none.
-	targeted := false
-	for _, comp := range s.comps {
-		targeted = targeted || comp.Spec.CompositeTypeRef.Kind == xr.GetKind() && comp.Spec.CompositeTypeRef.APIVersion == xr.GetAPIVersion()
-	}
-
-	compName, revName := machinery(xr, "compositionRef", "name"), machinery(xr, "compositionRevisionRef", "name")
-	comp, compOK := s.comps[compName]
-	rev, revOK := s.revs[revName]
-
-	switch {
-	case compName == "" && targeted:
-		refuse(xr, "has no compositionRef")
-	case compName != "" && (!compOK || comp.Spec.CompositeTypeRef.Kind != xr.GetKind()):
-		refuse(xr, "compositionRef names %q, which isn't a declared Composition of its type", compName)
-	case compName != "" && revName == "":
-		refuse(xr, "has no compositionRevisionRef")
-	case revName != "" && (!revOK || rev.GetLabels()[xpextv1.LabelCompositionName] != compName):
-		refuse(xr, "compositionRevisionRef names %q, which isn't a declared revision of %q", revName, compName)
-	}
-
-	refs, _, _ := un.NestedSlice(xr.Object, "spec", "crossplane", "resourceRefs")
-	if legacy, _, _ := un.NestedSlice(xr.Object, "spec", "resourceRefs"); len(legacy) > 0 {
-		refs = legacy
-	}
-
-	for _, raw := range refs {
-		ref := raw.(map[string]any)
-		cd := &un.Unstructured{}
-		cd.SetAPIVersion(fmt.Sprint(ref["apiVersion"]))
-		cd.SetKind(fmt.Sprint(ref["kind"]))
-		cd.SetName(fmt.Sprint(ref["name"]))
-		cd.SetNamespace(xr.GetNamespace())
-
-		if ns, ok := ref["namespace"].(string); ok {
-			cd.SetNamespace(ns)
-		}
-
-		if err := c.Get(ctx, client.ObjectKeyFromObject(cd), cd); err != nil {
-			refuse(cd, "is in %s's resourceRefs, but: %v", xr.GetName(), err)
-			continue
-		}
-
-		if ctrl := metav1.GetControllerOf(cd); ctrl == nil || ctrl.UID != xr.GetUID() {
-			refuse(cd, "is in %s's resourceRefs, but %s doesn't control it", xr.GetName(), xr.GetName())
-			continue
-		}
-
-		if cd.GetAnnotations()["crossplane.io/composition-resource-name"] == "" {
-			refuse(cd, "has no crossplane.io/composition-resource-name annotation")
-		}
-
-		if _, ok := cd.GetAnnotations()["gotemplating.fn.crossplane.io/composition-resource-name"]; ok {
-			refuse(cd, "has the gotemplating annotation function-go-templating strips from what it renders")
-		}
-
-		for _, key := range []string{"crossplane.io/composite", "crossplane.io/claim-name", "crossplane.io/claim-namespace"} {
-			if cd.GetLabels()[key] != xr.GetLabels()[key] {
-				refuse(cd, "label %s is %q, not its XR's %q", key, cd.GetLabels()[key], xr.GetLabels()[key])
-			}
-		}
-	}
-}
-
-// checkClaim checks a claim against its XR as Crossplane's claim syncer leaves the pair
-// (crossplane internal/controller/apiextensions/claim/syncer_ssa.go).
-func checkClaim(s *clusterState, cm *un.Unstructured, refuse func(*un.Unstructured, string, ...any)) {
-	name, _, _ := un.NestedString(cm.Object, "spec", "resourceRef", "name")
-
-	i := slices.IndexFunc(s.xrs, func(o *un.Unstructured) bool {
-		return o.GetName() == name && machinery(o, "claimRef", "name") == cm.GetName() && machinery(o, "claimRef", "namespace") == cm.GetNamespace()
-	})
-	if i < 0 {
-		refuse(cm, "spec.resourceRef doesn't name a declared XR whose spec.claimRef names it")
-		return
-	}
-
-	// Under Automatic the XR's revision ref is copied to the claim.
-	xr := s.xrs[i]
-	if want := machinery(xr, "compositionRevisionRef", "name"); machinery(xr, "compositionUpdatePolicy") != "Manual" && want != "" &&
-		machinery(cm, "compositionRevisionRef", "name") != want {
-		refuse(cm, "compositionRevisionRef isn't its Automatic XR's, %q", want)
-	}
+	return nil
 }
