@@ -1,0 +1,20 @@
+# existing-claim-revision-ref.yaml where the composition was applied with a client-side `kubectl apply`
+# (claim-revision-templating-composition-kubectl-applied.yaml). Composition.Hash() covers annotations,
+# so that composition's revision has another name, which the claim carries like its backing XR,
+# existing-claim-revision-ref-kubectl-applied-xr.yaml.
+apiVersion: diff.example.org/v1alpha1
+kind: NopClaim
+metadata:
+  name: revision-ref-claim
+  namespace: test-namespace
+spec:
+  coolField: revision-ref-claim-value
+  compositeDeletePolicy: Background
+  compositionRef:
+    name: xrevisionrefclaims.diff.example.org
+  compositionRevisionRef:
+    name: xrevisionrefclaims.diff.example.org-329a7cd
+  resourceRef:
+    apiVersion: diff.example.org/v1alpha1
+    kind: XNop
+    name: revision-ref-claim-xr

@@ -2953,6 +2953,7 @@ Summary: 2 modified, 2 removed`,
 			setupFiles: []string{
 				"testdata/diff/resources/xrd.yaml",
 				"testdata/comp/resources/revision-templating-composition.yaml",
+				"testdata/comp/resources/revision-templating-composition-revision.yaml",
 				"testdata/diff/resources/functions.yaml",
 			},
 			crossplaneManagedResources: []HierarchicalOwnershipRelation{
@@ -3039,6 +3040,7 @@ Summary: 2 modified, 2 removed`,
 				"testdata/diff/resources/nested/parent-composition.yaml",
 				"testdata/diff/resources/nested/parent-composition-revision.yaml",
 				"testdata/diff/resources/nested/child-revision-templating-composition.yaml",
+				"testdata/diff/resources/nested/child-revision-templating-composition-revision.yaml",
 				"testdata/diff/resources/xdownstreamenvresource-xrd.yaml",
 				"testdata/diff/resources/functions.yaml",
 			},
@@ -3062,7 +3064,7 @@ Summary: 2 modified, 2 removed`,
 				// The nested XR's own reconciler wrote the ref, not the parent's composed apply, so the
 				// parent's render, which omits it, leaves it in place.
 				WithFieldChange("spec.crossplane.compositionRevisionRef.name",
-					"xchildresources.nested.example.org-current", "xchildresources.nested.example.org-current").
+					"xchildresources.nested.example.org-96afc06", "xchildresources.nested.example.org-96afc06").
 				And().
 				WithModifiedResource("XParentResource", "test-parent", "default").
 				WithFieldChange("spec.parentField", "existing-value", "modified-value"),
@@ -4054,6 +4056,7 @@ Impact analysis skipped: this composition is identical to the cluster's, so appl
 			setupFiles: []string{
 				"testdata/comp/resources/xrd.yaml",
 				"testdata/comp/resources/revision-templating-composition.yaml",
+				"testdata/comp/resources/revision-templating-composition-revision.yaml",
 				"testdata/comp/resources/functions.yaml",
 			},
 			crossplaneManagedResources: []HierarchicalOwnershipRelation{
@@ -4080,8 +4083,10 @@ Impact analysis skipped: this composition is identical to the cluster's, so appl
 				WithDownstreamSummary(0, 1, 0).
 				WithDownstreamResource("modified", "XDownstreamResource", "revision-ref-resource", "default").
 				// The old value is the revision the composite currently tracks; the new one is the predicted
-				// revision, i.e. the thing this whole feature exists to surface.
-				WithFieldValuePattern("spec.forProvider.configData", `^xrevisionrefs\.diff\.example\.org-[0-9a-f]{7}$`),
+				// revision, i.e. the thing this whole feature exists to surface. Both are real revision names,
+				// so both match the pattern above: only the exact values tell them apart.
+				WithFieldChange("spec.forProvider.configData",
+					"xrevisionrefs.diff.example.org-e36719b", "xrevisionrefs.diff.example.org-ec5496c"),
 		},
 		// Issue #536 / #479: the same edit with --include-manual, which keeps a Manual composite for analysis
 		// without making it adopt the new revision. Only the Automatic composite is rendered with the
@@ -4093,6 +4098,8 @@ Impact analysis skipped: this composition is identical to the cluster's, so appl
 			setupFiles: []string{
 				"testdata/comp/resources/xrd.yaml",
 				"testdata/comp/resources/revision-templating-composition.yaml",
+				"testdata/comp/resources/revision-templating-composition-revision.yaml",
+				"testdata/comp/resources/revision-templating-composition-older-revision.yaml",
 				"testdata/comp/resources/functions.yaml",
 			},
 			crossplaneManagedResources: []HierarchicalOwnershipRelation{
@@ -4123,7 +4130,8 @@ Impact analysis skipped: this composition is identical to the cluster's, so appl
 				WithXRImpact("XNopResource", "revision-ref-resource", "default", "changed").
 				WithDownstreamSummary(0, 1, 0).
 				WithDownstreamResource("modified", "XDownstreamResource", "revision-ref-resource", "default").
-				WithFieldValuePattern("spec.forProvider.configData", `^xrevisionrefs\.diff\.example\.org-[0-9a-f]{7}$`),
+				WithFieldChange("spec.forProvider.configData",
+					"xrevisionrefs.diff.example.org-e36719b", "xrevisionrefs.diff.example.org-ec5496c"),
 		},
 		// Issue #498, the claim variant of RevisionNamePropagatesToComposedResource. A claim is rendered from its backing XR with the
 		// claim's spec synced in. Under Automatic the claim's own ref is never propagated (the XR controller
@@ -4135,6 +4143,7 @@ Impact analysis skipped: this composition is identical to the cluster's, so appl
 			setupFiles: []string{
 				"testdata/comp/resources/claim-xrd.yaml",
 				"testdata/comp/resources/claim-revision-templating-composition.yaml",
+				"testdata/comp/resources/claim-revision-templating-composition-revision.yaml",
 				"testdata/comp/resources/functions.yaml",
 				"testdata/comp/resources/test-namespace.yaml",
 				"testdata/comp/resources/existing-claim-revision-ref.yaml",
@@ -4162,7 +4171,8 @@ Impact analysis skipped: this composition is identical to the cluster's, so appl
 				WithDownstreamSummary(0, 1, 0).
 				WithDownstreamResource("modified", "XDownstreamResource", "revision-ref-claim-xr", "").
 				// The old value is the revision the backing XR tracks now; the new one is the predicted name.
-				WithFieldValuePattern("spec.forProvider.configData", `^xrevisionrefclaims\.diff\.example\.org-[0-9a-f]{7}$`),
+				WithFieldChange("spec.forProvider.configData",
+					"xrevisionrefclaims.diff.example.org-98b484d", "xrevisionrefclaims.diff.example.org-55c3a3b"),
 		},
 		// Issue #498, the other half: when nothing is seeded, an Automatic claim renders against the
 		// revision its backing XR tracks now, not against no revision at all. Nothing is seeded here
@@ -4174,14 +4184,15 @@ Impact analysis skipped: this composition is identical to the cluster's, so appl
 			setupFiles: []string{
 				"testdata/comp/resources/claim-xrd.yaml",
 				"testdata/comp/resources/claim-revision-templating-composition-kubectl-applied.yaml",
+				"testdata/comp/resources/claim-revision-templating-composition-kubectl-applied-revision.yaml",
 				"testdata/comp/resources/functions.yaml",
 				"testdata/comp/resources/test-namespace.yaml",
-				"testdata/comp/resources/existing-claim-revision-ref.yaml",
+				"testdata/comp/resources/existing-claim-revision-ref-kubectl-applied.yaml",
 			},
 			crossplaneManagedResources: []HierarchicalOwnershipRelation{
 				composes(
-					"testdata/comp/resources/existing-claim-revision-ref-xr.yaml",
-					"testdata/comp/resources/existing-claim-revision-ref-downstream.yaml",
+					"testdata/comp/resources/existing-claim-revision-ref-kubectl-applied-xr.yaml",
+					"testdata/comp/resources/existing-claim-revision-ref-kubectl-applied-downstream.yaml",
 				),
 			},
 			xrdAPIVersion:          V1, // the XRD is v1, so Crossplane writes the XR's resourceRefs at spec.resourceRefs

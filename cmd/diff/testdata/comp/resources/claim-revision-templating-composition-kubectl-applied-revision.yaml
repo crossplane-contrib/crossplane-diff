@@ -1,0 +1,43 @@
+# The CompositionRevision Crossplane creates for
+# claim-revision-templating-composition-kubectl-applied.yaml, named and labelled from its hash as
+# Crossplane names it, which covers the kubectl annotation the revision copies. envtest runs no
+# Crossplane controllers, so it must be declared. The backing XR in
+# existing-claim-revision-ref-kubectl-applied-xr.yaml tracks it.
+apiVersion: apiextensions.crossplane.io/v1
+kind: CompositionRevision
+metadata:
+  name: xrevisionrefclaims.diff.example.org-329a7cd
+  labels:
+    crossplane.io/composition-name: xrevisionrefclaims.diff.example.org
+    crossplane.io/composition-hash: 329a7cd88c28c4934c1fd6470bc6c7a9a38db80bcc2e12a40f14ca1ec1370c2
+  annotations:
+    kubectl.kubernetes.io/last-applied-configuration: "{\"apiVersion\":\"apiextensions.crossplane.io/v1\",\"kind\":\"Composition\",\"metadata\":{\"name\":\"xrevisionrefclaims.diff.example.org\"},\"spec\":{\"mode\":\"Pipeline\"}}\n"
+spec:
+  revision: 1
+  compositeTypeRef:
+    apiVersion: diff.example.org/v1alpha1
+    kind: XNop
+  mode: Pipeline
+  pipeline:
+    - step: generate-resources
+      functionRef:
+        name: function-go-templating
+      input:
+        apiVersion: template.fn.crossplane.io/v1beta1
+        kind: GoTemplate
+        source: Inline
+        inline:
+          template: |
+            apiVersion: nop.example.org/v1alpha1
+            kind: XDownstreamResource
+            metadata:
+              annotations:
+                gotemplating.fn.crossplane.io/composition-resource-name: nop-resource
+              name: {{ .observed.composite.resource.metadata.name }}
+            spec:
+              forProvider:
+                configData: {{ .observed.composite.resource.spec.compositionRevisionRef.name }}
+                resourceTier: basic
+    - step: automatically-detect-ready-composed-resources
+      functionRef:
+        name: function-auto-ready
