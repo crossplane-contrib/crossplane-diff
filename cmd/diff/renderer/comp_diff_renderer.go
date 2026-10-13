@@ -164,7 +164,7 @@ func (r *DefaultCompDiffRenderer) renderCompositionChanges(comp *CompositionDiff
 
 	// Check for composition processing error first
 	if comp.Error != nil {
-		if _, err := fmt.Fprintf(stdout, "Error processing composition %s: %s\n\n", comp.Name, comp.Error.Error()); err != nil {
+		if _, err := fmt.Fprintf(stdout, "Error processing composition %s: %s\n\n", comp.Name, comp.Error.Message); err != nil {
 			return errors.Wrap(err, "cannot write composition error")
 		}
 
@@ -312,7 +312,7 @@ func (r *DefaultCompDiffRenderer) renderMinimizedCompositionChanges(comp *Compos
 	}
 
 	if comp.Error != nil {
-		if _, err := fmt.Fprintf(stdout, "Error processing composition %s: %s\n\n", comp.Name, comp.Error.Error()); err != nil {
+		if _, err := fmt.Fprintf(stdout, "Error processing composition %s: %s\n\n", comp.Name, comp.Error.Message); err != nil {
 			return errors.Wrap(err, "cannot write composition error")
 		}
 
@@ -568,7 +568,7 @@ func (r *DefaultCompDiffRenderer) buildXRStatusList(impacts []XRImpact) string {
 
 		// Include error details for XRStatusError impacts so users can diagnose issues.
 		if impact.Status == XRStatusError && impact.Error != nil {
-			fmt.Fprintf(&sb, "%s    Error: %s%s\n", color, impact.Error.Error(), colorReset)
+			fmt.Fprintf(&sb, "%s    Error: %s%s\n", color, impact.Error.Message, colorReset)
 		}
 	}
 
@@ -598,8 +598,23 @@ func (r *StructuredCompDiffRenderer) RenderCompDiff(output *CompDiffOutput) erro
 	dryRun := compDryRunWarnings(output)
 
 	// Convert internal representation to JSON output structure
-	jsonOutput := r.buildStructuredCompOutput(output)
-	jsonOutput.Warnings = append(slices.Clone(jsonOutput.Warnings), dryRun...)
+	warnings := append(slices.Clone(output.Warnings), dryRun...)
+
+	var (
+		jsonOutput any
+		errs       []dt.OutputError
+	)
+
+	// Anything but v2, including the empty value, is v1.
+	if r.opts.OutputVersion == OutputVersionV2 {
+		v2 := buildStructuredCompOutputV2(output)
+		v2.Warnings = warnings
+		jsonOutput, errs = v2, v2.Errors
+	} else {
+		v1 := r.buildStructuredCompOutput(output)
+		v1.Warnings = warnings
+		jsonOutput, errs = v1, v1.Errors
+	}
 
 	var (
 		data []byte
@@ -632,7 +647,7 @@ func (r *StructuredCompDiffRenderer) RenderCompDiff(output *CompDiffOutput) erro
 	}
 
 	// Write errors to stderr for human visibility (they're also included in the structured output)
-	for _, e := range output.Errors {
+	for _, e := range errs {
 		if _, err := fmt.Fprintln(r.opts.Stderr, e.FormatError()); err != nil {
 			return errors.Wrap(err, "failed to write error to stderr")
 		}
@@ -644,9 +659,10 @@ func (r *StructuredCompDiffRenderer) RenderCompDiff(output *CompDiffOutput) erro
 // buildStructuredCompOutput converts internal CompDiffOutput to JSON-serializable structure.
 func (r *StructuredCompDiffRenderer) buildStructuredCompOutput(output *CompDiffOutput) *compDiffWire {
 	result := &compDiffWire{
-		Compositions: make([]compositionDiffWire, 0, len(output.Compositions)),
-		Errors:       output.Errors,
-		Warnings:     output.Warnings,
+		OutputVersion: OutputVersionV1,
+		Compositions:  make([]compositionDiffWire, 0, len(output.Compositions)),
+		Errors:        output.Errors,
+		Warnings:      output.Warnings,
 	}
 
 	for _, comp := range output.Compositions {
@@ -668,7 +684,7 @@ func (r *StructuredCompDiffRenderer) buildStructuredCompOutput(output *CompDiffO
 
 		// Include per-composition error if present
 		if comp.Error != nil {
-			jsonComp.Error = comp.Error.Error()
+			jsonComp.Error = comp.Error.Message
 		}
 
 		// Convert composition diff if present and not equal.
@@ -685,7 +701,7 @@ func (r *StructuredCompDiffRenderer) buildStructuredCompOutput(output *CompDiffO
 				FilterDetail:    impact.FilterDetail,
 			}
 			if impact.Error != nil {
-				jsonImpact.Error = impact.Error.Error()
+				jsonImpact.Error = impact.Error.Message
 			}
 
 			if impact.Status == XRStatusChanged && len(impact.Diffs) > 0 {
@@ -693,6 +709,53 @@ func (r *StructuredCompDiffRenderer) buildStructuredCompOutput(output *CompDiffO
 			}
 
 			jsonComp.ImpactAnalysis = append(jsonComp.ImpactAnalysis, jsonImpact)
+		}
+
+		result.Compositions = append(result.Compositions, jsonComp)
+	}
+
+	return result
+}
+
+// buildStructuredCompOutputV2 converts internal CompDiffOutput to the v2 document. Each failed
+// composition's error is appended to the top-level errors, after the processor's, so that list is
+// the union of every error in the document.
+func buildStructuredCompOutputV2(output *CompDiffOutput) *compDiffWireV2 {
+	result := &compDiffWireV2{
+		OutputVersion: OutputVersionV2,
+		Compositions:  make([]compositionDiffWireV2, 0, len(output.Compositions)),
+		Errors:        slices.Clone(output.Errors),
+	}
+
+	for _, comp := range output.Compositions {
+		jsonComp := compositionDiffWireV2{
+			Name:                  comp.Name,
+			AffectedResources:     comp.AffectedResources,
+			ImpactAnalysis:        make([]xrEntryWire, 0, len(comp.ImpactAnalysis)),
+			ImpactAnalysisSkipped: comp.ImpactAnalysisSkipped,
+			MaskedChangesOnly:     comp.MaskedChangesOnly,
+		}
+
+		// As in v1: omit revisionImpact when the comparison never completed. See RevisionImpact.determined.
+		if comp.RevisionImpact.determined() {
+			revisionImpact := comp.RevisionImpact
+			jsonComp.RevisionImpact = &revisionImpact
+		}
+
+		if comp.Error != nil {
+			jsonComp.Errors = []dt.OutputError{*comp.Error}
+			result.Errors = append(result.Errors, *comp.Error)
+		}
+
+		if comp.CompositionDiff != nil && comp.CompositionDiff.DiffType != dt.DiffTypeEqual {
+			jsonComp.CompositionChanges = resourceDiffToChangeDetail(comp.CompositionDiff)
+		}
+
+		for _, impact := range comp.ImpactAnalysis {
+			entry := toXREntry(impact.ObjectReference, impact.Status, impact.Diffs, impact.Error)
+			entry.FilterReason = impact.FilterReason
+			entry.FilterDetail = impact.FilterDetail
+			jsonComp.ImpactAnalysis = append(jsonComp.ImpactAnalysis, entry)
 		}
 
 		result.Compositions = append(result.Compositions, jsonComp)

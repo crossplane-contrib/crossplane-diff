@@ -68,9 +68,17 @@ classDiagram
         +IgnorePaths []string
         +ForVerdict bool
         +MinimizeComposition bool
+        +OutputVersion OutputVersion
+    }
+
+    class OutputVersion {
+        <<enumeration>>
+        OutputVersionV1
+        OutputVersionV2
     }
 
     class StructuredDiffOutput {
+        +OutputVersion OutputVersion
         +Summary Summary
         +Changes []ChangeDetail (deprecated)
         +Errors []OutputError
@@ -79,8 +87,20 @@ classDiagram
     }
 
     class xrDiffWire {
+        <<v1>>
         +XR ObjectReference
         +Status XRStatus
+        +Summary Summary
+        +Changes []ChangeDetail
+        +Errors []OutputError
+    }
+
+    class xrEntryWire {
+        <<v2, xr and comp>>
+        +XR ObjectReference
+        +Status XRStatus
+        +FilterReason FilterReason
+        +FilterDetail string
         +Summary Summary
         +Changes []ChangeDetail
         +Errors []OutputError
@@ -111,7 +131,7 @@ classDiagram
 
     class CompositionDiff {
         +Name string
-        +Error error
+        +Error *OutputError
         +CompositionDiff *ResourceDiff
         +AffectedResources AffectedResourcesSummary
         +ImpactAnalysis []XRImpact
@@ -132,7 +152,7 @@ classDiagram
         +Status XRStatus
         +FilterReason FilterReason
         +FilterDetail string
-        +Error error
+        +Error *OutputError
         +Diffs map[string]*ResourceDiff
     }
 
@@ -162,6 +182,7 @@ classDiagram
     }
 
     class DownstreamChanges {
+        <<v1>>
         +Summary Summary
         +Changes []ChangeDetail
     }
@@ -257,6 +278,12 @@ classDiagram
     xrDiffWire --> ChangeDetail
     xrDiffWire --> XRStatus
     xrDiffWire --> OutputError
+    xrEntryWire --> Summary
+    xrEntryWire --> ChangeDetail
+    xrEntryWire --> XRStatus
+    xrEntryWire --> FilterReason
+    xrEntryWire --> OutputError
+    DiffOptions --> OutputVersion
     CompDiffOutput --> CompositionDiff
     CompDiffOutput --> OutputError
     CompDiffOutput --> OutputWarning

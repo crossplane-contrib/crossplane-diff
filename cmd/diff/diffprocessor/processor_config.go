@@ -102,6 +102,9 @@ type ProcessorConfig struct {
 	// OutputFormat specifies the output format for diffs (diff, json, yaml)
 	OutputFormat renderer.OutputFormat
 
+	// OutputVersion specifies the schema version of structured (json, yaml) output
+	OutputVersion renderer.OutputVersion
+
 	// MaxNestedDepth is the maximum depth for recursive nested XR processing
 	MaxNestedDepth int
 
@@ -248,6 +251,13 @@ func WithCompact(compact bool) ProcessorOption {
 func WithOutputFormat(format renderer.OutputFormat) ProcessorOption {
 	return func(config *ProcessorConfig) {
 		config.OutputFormat = format
+	}
+}
+
+// WithOutputVersion sets the schema version of structured output.
+func WithOutputVersion(version renderer.OutputVersion) ProcessorOption {
+	return func(config *ProcessorConfig) {
+		config.OutputVersion = version
 	}
 }
 
@@ -471,6 +481,10 @@ func (c *ProcessorConfig) GetDiffOptions() renderer.DiffOptions {
 	opts.IgnorePaths = c.IgnorePaths
 	if c.OutputFormat != "" {
 		opts.Format = c.OutputFormat
+	}
+
+	if c.OutputVersion != "" {
+		opts.OutputVersion = c.OutputVersion
 	}
 
 	// Use config's Stdout/Stderr if set, otherwise keep defaults (os.Stdout/os.Stderr)

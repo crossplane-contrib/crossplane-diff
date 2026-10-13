@@ -20,6 +20,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
@@ -32,6 +33,7 @@ import (
 	"github.com/crossplane/cli/v2/cmd/crossplane/render"
 	gcmp "github.com/google/go-cmp/cmp"
 	"github.com/google/go-cmp/cmp/cmpopts"
+	corev1 "k8s.io/api/core/v1"
 	un "k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	k8stypes "k8s.io/apimachinery/pkg/types"
 
@@ -184,14 +186,47 @@ func TestDefaultCompDiffProcessor_DiffComposition(t *testing.T) {
 		}
 	}
 
+	// malformedComp's spec.pipeline is a string, so the composition cannot be converted to typed to
+	// predict its revision and fails to process. The loader rejects such a file before the processor sees
+	// it, so this failure is reachable only here, not from an integration test.
+	malformedComp := func() *un.Unstructured {
+		return tu.NewResource("apiextensions.crossplane.io/v1", "Composition", "test-composition").
+			WithNestedField(map[string]any{"apiVersion": "example.org/v1", "kind": "XResource"}, "spec", "compositeTypeRef").
+			WithNestedField("Pipeline", "spec", "mode").
+			WithNestedField("not-a-list-of-steps", "spec", "pipeline").
+			Build()
+	}
+
 	tests := map[string]struct {
-		compositions []*un.Unstructured
-		namespace    string
-		analyzeOn    AnalyzeOn
-		setupMocks   func() xp.Clients
+		compositions  []*un.Unstructured
+		namespace     string
+		analyzeOn     AnalyzeOn
+		outputFormat  renderer.OutputFormat
+		outputVersion renderer.OutputVersion
+		setupMocks    func() xp.Clients
+		// verifyOutput runs whether or not DiffComposition returns an error, since a failed composition
+		// is still rendered.
 		verifyOutput func(t *testing.T, output string)
 		wantErr      bool
 	}{
+		// In v2 a composition that fails to process carries its error as a structured errors[] entry,
+		// and the top-level errors[] lists it too.
+		"FailedCompositionReportsStructuredErrorsV2": {
+			namespace:     "default",
+			compositions:  []*un.Unstructured{malformedComp()},
+			outputFormat:  renderer.OutputFormatJSON,
+			outputVersion: renderer.OutputVersionV2,
+			setupMocks:    singleXRMocks,
+			verifyOutput: func(t *testing.T, output string) {
+				t.Helper()
+				tu.AssertStructuredCompDiff(t, output, tu.ExpectCompDiff().
+					WithOutputVersion("v2").
+					WithError("Composition/test-composition").
+					WithComposition("test-composition").
+					WithCompositionErrorContaining("cannot convert composition"))
+			},
+			wantErr: true,
+		},
 		"SuccessfulDiff": {
 			namespace:    "default",
 			compositions: []*un.Unstructured{changedComp()},
@@ -420,12 +455,14 @@ func TestDefaultCompDiffProcessor_DiffComposition(t *testing.T) {
 			var stdout bytes.Buffer
 
 			config := ProcessorConfig{
-				Colorize:  false,
-				Compact:   false,
-				AnalyzeOn: tt.analyzeOn,
-				Logger:    logger,
-				Stdout:    &stdout,         // Set stdout in config so renderers can access it
-				Stderr:    &bytes.Buffer{}, // Discard stderr for tests
+				Colorize:      false,
+				Compact:       false,
+				AnalyzeOn:     tt.analyzeOn,
+				OutputFormat:  tt.outputFormat,
+				OutputVersion: tt.outputVersion,
+				Logger:        logger,
+				Stdout:        &stdout,         // Set stdout in config so renderers can access it
+				Stderr:        &bytes.Buffer{}, // Discard stderr for tests
 				RenderFunc: func(_ context.Context, _ logging.Logger, in RenderInputs) (render.CompositionOutputs, error) {
 					return render.CompositionOutputs{
 						CompositeResource: in.CompositeResource,
@@ -448,10 +485,6 @@ func TestDefaultCompDiffProcessor_DiffComposition(t *testing.T) {
 
 			if (err != nil) != tt.wantErr {
 				t.Errorf("DiffComposition() error = %v, wantErr %v", err, tt.wantErr)
-				return
-			}
-
-			if tt.wantErr {
 				return
 			}
 
@@ -1036,6 +1069,85 @@ func TestDefaultCompDiffProcessor_partitionXRsByUpdatePolicy(t *testing.T) {
 // the new name would render it against a revision it never uses. A claim reaches the provider as its
 // backing XR, which is what gets the name. The supplied composites are passed through unmodified: the
 // name is applied to what render consumes, never to the cluster's objects.
+func TestDefaultCompDiffProcessor_buildImpactAnalysis(t *testing.T) {
+	xr := tu.NewResource("example.org/v1", "XResource", "my-xr").WithNamespace("default").Build()
+	ref := corev1.ObjectReference{APIVersion: "example.org/v1", Kind: "XResource", Name: "my-xr", Namespace: "default"}
+
+	failures := []dt.ResourceValidationFailure{{
+		APIVersion: "example.org/v1",
+		Kind:       "Bucket",
+		Name:       "my-bucket",
+		Status:     "invalid",
+		Errors:     []dt.FieldValidationError{{Type: "schema", Field: "spec.region", Message: "Required value"}},
+	}}
+	validationErr := &SchemaValidationError{Message: "validation failed", Failures: failures}
+
+	modified := &dt.ResourceDiff{DiffType: dt.DiffTypeModified}
+
+	tests := map[string]struct {
+		result      *XRDiffResult
+		wantImpact  renderer.XRImpact
+		wantSummary renderer.AffectedResourcesSummary
+	}{
+		// The impact's error is what both the per-XR entry and the top-level errors[] report, so it
+		// must keep the typed validation breakdown rather than flatten it to a message.
+		"ValidationErrorKeepsValidationFailures": {
+			result: &XRDiffResult{Error: validationErr},
+			wantImpact: renderer.XRImpact{
+				ObjectReference: ref,
+				Status:          renderer.XRStatusError,
+				Error: &dt.OutputError{
+					ResourceID:         "XResource/my-xr",
+					Message:            validationErr.Error(),
+					ValidationFailures: failures,
+				},
+			},
+			wantSummary: renderer.AffectedResourcesSummary{Total: 1, WithErrors: 1},
+		},
+		"PlainErrorCarriesOnlyItsMessage": {
+			result: &XRDiffResult{Error: errors.New("render failed")},
+			wantImpact: renderer.XRImpact{
+				ObjectReference: ref,
+				Status:          renderer.XRStatusError,
+				Error:           &dt.OutputError{ResourceID: "XResource/my-xr", Message: "render failed"},
+			},
+			wantSummary: renderer.AffectedResourcesSummary{Total: 1, WithErrors: 1},
+		},
+		"Changed": {
+			result: &XRDiffResult{Diffs: map[string]*dt.ResourceDiff{"Bucket/my-bucket": modified}},
+			wantImpact: renderer.XRImpact{
+				ObjectReference: ref,
+				Status:          renderer.XRStatusChanged,
+				Diffs:           map[string]*dt.ResourceDiff{"Bucket/my-bucket": modified},
+			},
+			wantSummary: renderer.AffectedResourcesSummary{Total: 1, WithChanges: 1},
+		},
+		"NoResultIsUnchanged": {
+			wantImpact:  renderer.XRImpact{ObjectReference: ref, Status: renderer.XRStatusUnchanged},
+			wantSummary: renderer.AffectedResourcesSummary{Total: 1, Unchanged: 1},
+		},
+	}
+
+	for name, tt := range tests {
+		t.Run(name, func(t *testing.T) {
+			results := map[string]*XRDiffResult{}
+			if tt.result != nil {
+				results[dt.MakeDiffKeyFromResource(xr)] = tt.result
+			}
+
+			impacts, summary := (&DefaultCompDiffProcessor{}).buildImpactAnalysis([]*un.Unstructured{xr}, results)
+
+			if diff := gcmp.Diff([]renderer.XRImpact{tt.wantImpact}, impacts); diff != "" {
+				t.Errorf("buildImpactAnalysis() impacts mismatch (-want +got):\n%s", diff)
+			}
+
+			if diff := gcmp.Diff(tt.wantSummary, summary); diff != "" {
+				t.Errorf("buildImpactAnalysis() summary mismatch (-want +got):\n%s", diff)
+			}
+		})
+	}
+}
+
 func TestDefaultCompDiffProcessor_collectXRDiffs_RevisionName(t *testing.T) {
 	const predicted = "comp-abc1234"
 

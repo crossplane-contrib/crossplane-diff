@@ -240,7 +240,7 @@ func (p *DefaultCompDiffProcessor) DiffComposition(ctx context.Context, composit
 			// Include failed composition with error instead of skipping
 			output.Compositions = append(output.Compositions, renderer.CompositionDiff{
 				Name:  compositionID,
-				Error: err,
+				Error: new(NewOutputError(fmt.Sprintf("Composition/%s", compositionID), err)),
 				AffectedResources: renderer.AffectedResourcesSummary{
 					Total:       0,
 					WithChanges: 0,
@@ -261,13 +261,10 @@ func (p *DefaultCompDiffProcessor) DiffComposition(ctx context.Context, composit
 	// Collect XR errors with their resource IDs for top-level errors
 	for _, comp := range output.Compositions {
 		for _, impact := range comp.ImpactAnalysis {
+			// The impact carries the OutputError built when it was created (see buildImpactAnalysis), so the
+			// per-XR entry and this list hold the same error.
 			if impact.Status == renderer.XRStatusError && impact.Error != nil {
-				resourceID := fmt.Sprintf("%s/%s", impact.Kind, impact.Name)
-				// NewOutputError surfaces typed validation failures
-				// via OutputError.ValidationFailures when impact.Error
-				// wraps a SchemaValidationError carrying a structured
-				// Result.
-				output.Errors = append(output.Errors, NewOutputError(resourceID, impact.Error))
+				output.Errors = append(output.Errors, *impact.Error)
 			}
 		}
 	}
@@ -1185,7 +1182,9 @@ func (p *DefaultCompDiffProcessor) buildImpactAnalysis(xrs []*un.Unstructured, r
 		switch {
 		case result != nil && result.HasError():
 			impact.Status = renderer.XRStatusError
-			impact.Error = result.Error
+			// NewOutputError surfaces typed validation failures via OutputError.ValidationFailures
+			// when result.Error wraps a SchemaValidationError carrying a structured Result.
+			impact.Error = new(NewOutputError(fmt.Sprintf("%s/%s", impact.Kind, impact.Name), result.Error))
 			summary.WithErrors++
 		case result != nil && result.HasChanges():
 			impact.Status = renderer.XRStatusChanged

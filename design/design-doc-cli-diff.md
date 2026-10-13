@@ -752,6 +752,8 @@ The `ProcessorConfig` structure provides configuration options:
 
 - `Colorize`, `Compact`: Visual formatting toggles for the human-readable renderer.
 - `OutputFormat`: One of `diff`, `json`, `yaml`. Selects between the human-readable and structured renderers.
+- `OutputVersion`: `v1` (default) or `v2`, from `--output-version`. Selects the structured output schema (§6.8.2);
+  ignored by the human-readable renderers.
 - `MaxNestedDepth`: Recursion limit for nested-XR diff (`--max-nested-depth`) — the number of levels of nesting
   permitted below the XR the user named. Exceeding it fails the diff (see §7.1).
 - `MaxRenderIterations`: Cap on the requirements-discovery loop (`--max-iterations`).
@@ -1612,6 +1614,12 @@ const (
 )
 ```
 
+`OutputVersion` on `ProcessorConfig` (`--output-version`, reaching the renderers as `DiffOptions.OutputVersion`)
+selects the structured schema, `"v1"` (the default; an empty value means v1) or `"v2"`, and has no effect on `diff`.
+The processors build the same internal types either way; only the structured renderers' wire builders differ (§6.8.3).
+Every structured document names its version in a top-level `outputVersion` field; adding it is the only change to
+v1 output.
+
 Under `json`/`yaml`, errors are written to **both** stderr (for human visibility) and the structured output (so CI/CD
 pipelines can parse them programmatically). The structured renderers always emit a valid document — even when every XR
 fails — by attaching errors to an `OutputError` field. `OutputError` uses JSON struct tags only (the YAML library reads
@@ -1658,7 +1666,8 @@ The structured types are split across two files:
 
 - The top-level output types and their components live in `cmd/diff/renderer/structured_renderer.go` alongside the
   structured renderers themselves: `StructuredDiffOutput`, `Summary`, `ChangeDetail`, `CompDiffOutput`,
-  `CompositionDiff`, `RevisionImpact`, `XRImpact`, `XRStatus`, `AffectedResourcesSummary`, `DownstreamChanges`.
+  `CompositionDiff`, `RevisionImpact`, `XRImpact`, `XRStatus`, `AffectedResourcesSummary`, `DownstreamChanges`,
+  `OutputVersion`.
 - The error envelope and the validation-failure types live in `cmd/diff/renderer/types/`: `OutputError`,
   `ResourceValidationFailure`, `FieldValidationError`. These are separated because they're consumed by the
   human-readable renderer too, not just the structured ones.
@@ -1679,8 +1688,8 @@ The structured types are split across two files:
   and no unpredictable synthetic hash reaches output.
 
 The output contract is defined by the JSON/YAML field names (the struct tags), not the Go type identifiers: the
-serialized shaping types are unexported (`compDiffWire`, `compositionDiffWire`, `xrImpactWire`, `xrDiffWire`) and
-follow the same `…Wire` naming convention across `comp` and `xr`. The `…Wire` suffix marks them as the serialized
+serialized shaping types are unexported (v1: `compDiffWire`, `compositionDiffWire`, `xrImpactWire`, `xrDiffWire`;
+v2: `structuredDiffOutputV2`, `compDiffWireV2`, `compositionDiffWireV2`, `xrEntryWire`) and follow the same `…Wire` naming convention across `comp` and `xr`. The `…Wire` suffix marks them as the serialized
 (JSON/YAML) representation, distinct from the rich, exported internal types the processor builds (`CompDiffOutput`,
 `CompositionDiff`, `XRImpact`). `StructuredDiffOutput` and the field-level types it embeds (`Summary`, `ChangeDetail`,
 `OutputError`) remain exported, as they are shared and referenced directly. The fields below are the public output
@@ -1747,13 +1756,23 @@ contract:
 - The `xr` field is a `corev1.ObjectReference` nested under the `xr` key (not inlined), carrying
   `apiVersion`/`kind`/`name`/`namespace`. Reusing the platform-standard type lets consumers unmarshal `xr` straight
   into an `ObjectReference`; its other fields (`uid`/`resourceVersion`/`fieldPath`) are `omitempty` and never populated
-  here, and the renderer projects to only the four identity fields, so they never appear in output. (`comp` also uses
-  `ObjectReference` but inlines it at the top of each `impactAnalysis` entry; converging the two — nested vs inlined —
-  is deferred to the next breaking `comp` change.)
+  here, and the renderer projects to only the four identity fields, so they never appear in output. (`comp`'s v1
+  `xrImpactWire` also uses `ObjectReference` but inlines it at the top of each `impactAnalysis` entry; v2 converges the
+  two, below.)
+- **v2 (`--output-version=v2`).** `xrEntryWire` is the one per-XR entry both commands emit: `xr`'s `xrs[]` and `comp`'s
+  `compositions[].impactAnalysis[]`. It carries the nested `xr` identity, `status`, `filterReason`/`filterDetail` (set
+  only by `comp`, for a filtered XR), `summary` and `changes` (always present; zero and `[]` unless changed) and
+  `errors []OutputError` (set only for an errored XR). A single builder, `toXREntry`, makes it for both commands. The
+  `xr` v2 document (`structuredDiffOutputV2`) is `StructuredDiffOutput` without the deprecated flat `changes`. The
+  `comp` v2 document (`compDiffWireV2` / `compositionDiffWireV2`) keeps the `impactAnalysis` key, replaces the
+  per-composition `error` string with `errors []OutputError`, and also appends each failed composition's error (its
+  `ResourceID` is `Composition/<name>`) to the top-level `errors`, which v1 does not, so that in v2 the top-level list is
+  the union of every error in the document. The v1 types are kept unchanged behind the default.
 - `CompDiffOutput` — composition diff JSON/YAML root: `Compositions []CompositionDiff` (one entry per input
   composition) plus optional top-level `Errors []OutputError` for failures that couldn't be attributed to a single
   composition.
-- `CompositionDiff` — per-composition entry: `Name`, optional `Error`, optional `CompositionDiff *ResourceDiff` (the
+- `CompositionDiff` — per-composition entry: `Name`, optional `Error *OutputError` (built by `comp_processor` with
+  `NewOutputError` and `ResourceID` `Composition/<name>`; v1 serializes only its `Message`), optional `CompositionDiff *ResourceDiff` (the
   composition's own diff against its in-cluster version), `AffectedResources AffectedResourcesSummary`,
   `ImpactAnalysis []XRImpact`, `ImpactAnalysisSkipped` (the composites were deliberately not evaluated because the
   change was smaller than `--analyze-on` asked to analyse; serialized as `impactAnalysisSkipped` so consumers can
@@ -1800,7 +1819,10 @@ contract:
   by reason so the breakdown survives even in default-discovery mode, where individual XR impacts are not surfaced.
 - `XRImpact` — per-XR entry inside `ImpactAnalysis`: embeds `corev1.ObjectReference` (apiVersion/kind/name/namespace),
   carries a `Status`, a `FilterReason` (meaningful only when `Status == "filtered"`), an optional human-readable
-  `FilterDetail`, an optional `Error`, and an optional `Diffs map[string]*ResourceDiff` of downstream changes.
+  `FilterDetail`, an optional `Error *OutputError`, and an optional `Diffs map[string]*ResourceDiff` of downstream
+  changes. `comp_processor` builds `Error` once with `NewOutputError` (so `ValidationFailures` survive) and lists the
+  same value in the top-level `errors`; v1 serializes only its `Message`, v2 the whole envelope. As with `XRDiffGroup`,
+  the pre-converted error keeps `NewOutputError` out of the renderer.
 - `XRStatus` — enumeration: `"changed"`, `"unchanged"`, `"error"`, `"filtered"`. The filtered *outcome* is divorced
   from its *cause*, which is carried separately in `FilterReason` so the reason set can grow without expanding the
   status enum.
@@ -1808,15 +1830,16 @@ contract:
   `--include-manual` re-includes), `"revision_selector_mismatch"` (`compositionRevisionSelector` does not match the
   diffed composition's labels), and `"deleting"` (the XR has a `metadata.deletionTimestamp`). `--include-manual`
   re-includes only `manual_policy`; the other two XRs genuinely would not select the resulting revision.
-- `DownstreamChanges` — the serialized wrapper for an XR's downstream diffs, used inside `xrImpactWire`: a `Summary`
-  plus a `[]ChangeDetail`.
+- `DownstreamChanges` — the serialized wrapper for an XR's downstream diffs, used inside v1's `xrImpactWire` only: a
+  `Summary` plus a `[]ChangeDetail`. v2's `xrEntryWire` carries the two directly.
 - `DryRunInfo` — optional `dryRun` object on a `ChangeDetail`, recording that this resource's desired state did **not**
   go through the apiserver, and why: `Performed` (`performed`), `SkipReason` (`skipReason`, one of `"disabled"` /
   `"forbidden"` / `"webhookUnavailable"` / `"namespaceNotFound"` — §6.3.3) and `Detail` (`detail`, the cluster's own explanation: the
   `SelfSubjectAccessReview`'s reason, or the apiserver's error message). `StorageVersion` (`storageVersion`) is set
   only when the resource's CRD stores it at a version other than the requested one, whose defaults and conversion
   the local prediction does not model (§6.5a). `ChangeDetail` is the shared per-resource wire
-  shape — `xr` reaches it via `Changes`/`xrs[].changes`, `comp` via `DownstreamChanges.Changes` — so one field covers
+  shape — `xr` reaches it via `Changes`/`xrs[].changes`, `comp` via `DownstreamChanges.Changes` (v2:
+  `impactAnalysis[].changes`) — so one field covers
   both commands with no per-command plumbing.
 
   Emitted as a **pointer with `omitempty`, only in the degraded case**: absence means the desired state did reach the
@@ -2184,6 +2207,9 @@ crossplane-diff xr --compact xr.yaml
 # Emit machine-readable output for CI/CD
 crossplane-diff xr --output json xr.yaml
 crossplane-diff xr --output yaml xr.yaml
+
+# Emit the v2 structured schema (shared per-XR entry, no flat changes[]); default v1. Also on comp
+crossplane-diff xr --output json --output-version v2 xr.yaml
 
 # Limit nested-XR recursion
 crossplane-diff xr --max-nested-depth 3 xr.yaml

@@ -92,7 +92,7 @@ func defaultProcessorOptions(fields CommonCmdFields) []dp.ProcessorOption {
 		outputFormat = renderer.OutputFormatDiff
 	}
 
-	opts = append(opts, dp.WithOutputFormat(outputFormat))
+	opts = append(opts, dp.WithOutputFormat(outputFormat), dp.WithOutputVersion(renderer.OutputVersion(fields.OutputVersion)))
 
 	// Add function credentials if provided (empty path with no secrets errors in FunctionCredentials.Decode)
 	if len(fields.FunctionCredentials.Secrets) > 0 {

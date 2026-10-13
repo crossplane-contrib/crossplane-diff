@@ -305,6 +305,8 @@ Flags:
       --verbose                Print verbose logging statements.
       --context=STRING         Kubernetes context to use (defaults to current context).
   -o, --output=diff            Output format: diff (human-readable), json, or yaml.
+      --output-version=v1      Schema version of structured (-o json|yaml) output: v1 or v2.
+                               Has no effect on -o diff. See Output Versions.
       --no-color               Disable colorized output.
       --compact                Show compact diffs with minimal context.
       --max-nested-depth=10    Maximum depth for nested XR recursion.
@@ -370,6 +372,8 @@ Flags:
       --verbose                Print verbose logging statements.
       --context=STRING         Kubernetes context to use (defaults to current context).
   -o, --output=diff            Output format: diff (human-readable), json, or yaml.
+      --output-version=v1      Schema version of structured (-o json|yaml) output: v1 or v2.
+                               Has no effect on -o diff. See Output Versions.
       --no-color               Disable colorized output.
       --compact                Show compact diffs with minimal context.
       --max-nested-depth=10    Maximum depth for nested XR recursion.
@@ -763,12 +767,15 @@ Summary: 1 added, 1 modified, 1 removed
 
 ### Structured Output (JSON/YAML)
 
-For CI/CD pipelines or programmatic processing, use `--output json` or `--output yaml`:
+For CI/CD pipelines or programmatic processing, use `--output json` or `--output yaml`. Every structured document
+names its schema in a top-level `outputVersion` field (`"v1"` or `"v2"`), which `--output-version` selects; see
+[Output Versions](#output-versions) below. The examples here are v1, the default.
 
 **XR Diff JSON output** (`crossplane-diff xr xr.yaml -o json`):
 
 ```json
 {
+  "outputVersion": "v1",
   "summary": {
     "added": 1,
     "modified": 1,
@@ -897,6 +904,7 @@ single-XR invocation renders flat, exactly as before.
 
 ```json
 {
+  "outputVersion": "v1",
   "compositions": [
     {
       "name": "xbuckets.example.org",
@@ -984,7 +992,7 @@ The structured output includes:
   The locally predicted diff defaults against the requested version only, so it may omit that storage version's
   defaults and any conversion through it.
   `dryRun` lives on the shared per-resource change shape, so it appears in `xr`'s `changes[]` and `xrs[].changes[]` and
-  in `comp`'s `impactAnalysis[].downstreamChanges.changes[]` alike:
+  in `comp`'s `impactAnalysis[].downstreamChanges.changes[]` (`impactAnalysis[].changes[]` in v2) alike:
 
   ```json
   {
@@ -1026,7 +1034,7 @@ The structured output includes:
 
   `revisionImpact` is present whenever the composition was compared, **including** when `impactAnalysisSkipped` is true:
   that is the point of it, and it is what keeps `--analyze-on` a cost knob rather than a correctness mode. It is
-  **absent** for a composition that failed to process, whose `error` field says why — the comparison never completed, so
+  **absent** for a composition that failed to process, whose `error` field (`errors[]` in v2) says why — the comparison never completed, so
   neither its scope nor whether it creates a revision was ever determined, and reporting `"changeScope": ""` with
   `"createsRevision": false` would assert otherwise.
 - **Predicted revision name** (comp only): `revisionImpact.predictedRevisionName` is `<composition>-<hash[:7]>`, derived
@@ -1055,7 +1063,48 @@ The structured output includes:
   the key/value pairs from the emitting call site. Distinct from `errors` and with no effect on the exit code; see
   [Warnings](#warnings) above. Entries are in the order raised, except the unverified-addition summaries, which come
   last, sorted, each with a string `count` in its `context`.
-- **Errors**: A top-level `errors` array of `OutputError` objects (see [Validation Errors](#validation-errors) below for the schema and an example), plus per-XR `error` fields in `impactAnalysis` for composition diffs
+- **Errors**: A top-level `errors` array of `OutputError` objects (see [Validation Errors](#validation-errors) below for the schema and an example). Each errored `xrs[]` entry also carries its own `errors[]`. For composition diffs, v1 adds per-XR and per-composition `error` strings; v2 replaces them with `errors[]` arrays of the same `OutputError` objects, and also lists failed compositions in the top-level `errors`
+
+### Output Versions
+
+`--output-version` (default `v1`) selects the schema of `-o json`/`-o yaml` output and has no effect on `-o diff`. Both
+versions carry a top-level `outputVersion` naming the shape, so a wrapper can detect it instead of guessing. v1 is the
+shape shown above. v2 converges the two commands' per-XR entries, so `xr`'s `xrs[]` and `comp`'s
+`compositions[].impactAnalysis[]` hold the same type and one parser handles both:
+
+```json
+{
+  "xr": { "apiVersion": "example.org/v1", "kind": "XBucket", "name": "bucket-3", "namespace": "default" },
+  "status": "error",
+  "summary": { "added": 0, "modified": 0, "removed": 0 },
+  "changes": [],
+  "errors": [ { "resourceID": "XBucket/bucket-3", "message": "...", "validationFailures": [ ... ] } ]
+}
+```
+
+- `xr` holds the XR's `apiVersion`, `kind`, `name` and `namespace`.
+- `status` is `"changed"`, `"unchanged"`, `"error"` or (comp only) `"filtered"`; a filtered entry also carries
+  `filterReason` and, where available, `filterDetail`.
+- `summary` and `changes` are always present: zero counts and `[]` unless the status is `"changed"`.
+- `errors` is present only for an `"error"` entry, and holds the same `OutputError` the top-level `errors[]` lists.
+
+The documents otherwise change as follows:
+
+- **`xr`**: the deprecated flat `changes[]` is removed. The top-level `summary`, `errors` and `warnings` stay; `summary`
+  still counts distinct resources, which the `xrs[]` summaries cannot give you when inputs overlap.
+- **`comp`**: each `impactAnalysis[]` entry is the entry above, replacing v1's inlined identity, `error` string and
+  `downstreamChanges` wrapper. A failed composition carries `errors[]` (an `OutputError` with `resourceID`
+  `Composition/<name>`) instead of an `error` string, and that error is also appended to the top-level `errors`, so in
+  v2 the top-level list is the union of every error in the document:
+
+  ```json
+  {
+    "name": "xbuckets.example.org",
+    "errors": [ { "resourceID": "Composition/xbuckets.example.org", "message": "..." } ],
+    "affectedResources": { "total": 0, "withChanges": 0, "unchanged": 0, "withErrors": 0 },
+    "impactAnalysis": []
+  }
+  ```
 
 ### Validation Errors
 
@@ -1158,7 +1207,7 @@ An `"admission"` failure is reported the same way whether the resource already e
 
 `resourceID` and `validationFailures` are intentionally complementary: `resourceID` anchors the failure to one user-supplied input, while `validationFailures` enumerates every resource (the input itself plus any composed resource) that failed validation under that input. They overlap on `kind`+`name` when the input itself is among the failing resources — that's deliberate, so consumers iterating `validationFailures` never miss an XR-level rejection.
 
-For `comp` output the same `OutputError` structure (including `validationFailures`) appears only in the top-level `errors[]` of the composition-diff JSON. Per-composition and per-XR failures use a simpler `error` string field (under `compositions[]` and `impactAnalysis[]` respectively) — they don't carry the structured validation breakdown.
+For `comp` output in v1 (the default), the same `OutputError` structure (including `validationFailures`) appears only in the top-level `errors[]` of the composition-diff JSON. Per-composition and per-XR failures use a simpler `error` string field (under `compositions[]` and `impactAnalysis[]` respectively) — they don't carry the structured validation breakdown. With `--output-version=v2` they carry `errors[]` arrays of the full `OutputError` instead, including `validationFailures`; see [Output Versions](#output-versions).
 
 ## Exit Codes
 

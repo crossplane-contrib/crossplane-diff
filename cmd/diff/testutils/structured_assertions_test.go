@@ -43,18 +43,17 @@ func TestParseStructuredOutput(t *testing.T) {
 	}
 }
 
-func TestAssertStructuredDiff_Summary(_ *testing.T) {
+func TestAssertStructuredDiff_Summary(t *testing.T) {
 	jsonOutput := `{
 		"summary": {"added": 1, "modified": 2, "removed": 3},
 		"changes": []
 	}`
 
 	// This should pass - matching summary
-	mockT := &testing.T{}
-	AssertStructuredDiff(mockT, jsonOutput, ExpectDiff().WithSummary(1, 2, 3))
+	AssertStructuredDiff(t, jsonOutput, ExpectDiff().WithSummary(1, 2, 3))
 }
 
-func TestAssertStructuredDiff_AddedResource(_ *testing.T) {
+func TestAssertStructuredDiff_AddedResource(t *testing.T) {
 	jsonOutput := `{
 		"summary": {"added": 1, "modified": 0, "removed": 0},
 		"changes": [{
@@ -75,8 +74,7 @@ func TestAssertStructuredDiff_AddedResource(_ *testing.T) {
 		}]
 	}`
 
-	mockT := &testing.T{}
-	AssertStructuredDiff(mockT, jsonOutput,
+	AssertStructuredDiff(t, jsonOutput,
 		ExpectDiff().
 			WithSummary(1, 0, 0).
 			WithAddedResource("XNopResource", "test-resource", "default").
@@ -84,7 +82,7 @@ func TestAssertStructuredDiff_AddedResource(_ *testing.T) {
 			And())
 }
 
-func TestAssertStructuredDiff_ModifiedResource(_ *testing.T) {
+func TestAssertStructuredDiff_ModifiedResource(t *testing.T) {
 	jsonOutput := `{
 		"summary": {"added": 0, "modified": 1, "removed": 0},
 		"changes": [{
@@ -100,8 +98,7 @@ func TestAssertStructuredDiff_ModifiedResource(_ *testing.T) {
 		}]
 	}`
 
-	mockT := &testing.T{}
-	AssertStructuredDiff(mockT, jsonOutput,
+	AssertStructuredDiff(t, jsonOutput,
 		ExpectDiff().
 			WithSummary(0, 1, 0).
 			WithModifiedResource("XNopResource", "test-resource", "default").
@@ -109,7 +106,7 @@ func TestAssertStructuredDiff_ModifiedResource(_ *testing.T) {
 			And())
 }
 
-func TestAssertStructuredDiff_RemovedResource(_ *testing.T) {
+func TestAssertStructuredDiff_RemovedResource(t *testing.T) {
 	jsonOutput := `{
 		"summary": {"added": 0, "modified": 0, "removed": 1},
 		"changes": [{
@@ -130,8 +127,7 @@ func TestAssertStructuredDiff_RemovedResource(_ *testing.T) {
 		}]
 	}`
 
-	mockT := &testing.T{}
-	AssertStructuredDiff(mockT, jsonOutput,
+	AssertStructuredDiff(t, jsonOutput,
 		ExpectDiff().
 			WithSummary(0, 0, 1).
 			WithRemovedResource("XNopResource", "removed-resource", "default").
@@ -139,7 +135,7 @@ func TestAssertStructuredDiff_RemovedResource(_ *testing.T) {
 			And())
 }
 
-func TestAssertStructuredDiff_NamePattern(_ *testing.T) {
+func TestAssertStructuredDiff_NamePattern(t *testing.T) {
 	jsonOutput := `{
 		"summary": {"added": 1, "modified": 0, "removed": 0},
 		"changes": [{
@@ -152,8 +148,7 @@ func TestAssertStructuredDiff_NamePattern(_ *testing.T) {
 		}]
 	}`
 
-	mockT := &testing.T{}
-	AssertStructuredDiff(mockT, jsonOutput,
+	AssertStructuredDiff(t, jsonOutput,
 		ExpectDiff().
 			WithSummary(1, 0, 0).
 			WithAddedResource("XNopResource", "", "default").
@@ -356,7 +351,7 @@ func TestGetNestedFieldWithBracketNotation(t *testing.T) {
 	}
 }
 
-func TestAssertStructuredCompDiff_DownstreamFieldChanges(_ *testing.T) {
+func TestAssertStructuredCompDiff_DownstreamFieldChanges(t *testing.T) {
 	jsonOutput := `{
 		"compositions": [{
 			"name": "test-composition",
@@ -402,8 +397,7 @@ func TestAssertStructuredCompDiff_DownstreamFieldChanges(_ *testing.T) {
 		}]
 	}`
 
-	mockT := &testing.T{}
-	AssertStructuredCompDiff(mockT, jsonOutput,
+	AssertStructuredCompDiff(t, jsonOutput,
 		ExpectCompDiff().
 			WithComposition("test-composition").
 			WithAffectedResources(1, 1, 0, 0).
@@ -500,7 +494,7 @@ func TestFindMatchingDownstreamChange(t *testing.T) {
 	}
 }
 
-func TestAssertStructuredCompDiff_FieldValuePattern(_ *testing.T) {
+func TestAssertStructuredCompDiff_FieldValuePattern(t *testing.T) {
 	jsonOutput := `{
 		"compositions": [{
 			"name": "test-composition",
@@ -545,8 +539,7 @@ func TestAssertStructuredCompDiff_FieldValuePattern(_ *testing.T) {
 		}]
 	}`
 
-	mockT := &testing.T{}
-	AssertStructuredCompDiff(mockT, jsonOutput,
+	AssertStructuredCompDiff(t, jsonOutput,
 		ExpectCompDiff().
 			WithComposition("test-composition").
 			WithAffectedResources(1, 1, 0, 0).
@@ -599,8 +592,8 @@ func TestAssertStructuredDiff_GroupedByXR(t *testing.T) {
 		]
 	}`
 
-	mockT := &testing.T{}
-	AssertStructuredDiff(mockT, jsonOutput,
+	matchT := &testing.T{}
+	AssertStructuredDiff(matchT, jsonOutput,
 		ExpectDiff().
 			WithSummary(0, 1, 0).
 			WithXRs(
@@ -617,7 +610,7 @@ func TestAssertStructuredDiff_GroupedByXR(t *testing.T) {
 			).
 			Build())
 
-	if mockT.Failed() {
+	if matchT.Failed() {
 		t.Errorf("grouped assertions unexpectedly failed on a matching payload")
 	}
 
@@ -686,4 +679,86 @@ func TestAssertStructuredDiff_GroupedByXR(t *testing.T) {
 	if !dupeT.Failed() {
 		t.Errorf("grouped assertions should have failed when two expectations matched one xrs[] entry")
 	}
+}
+
+// TestAssertStructuredCompDiff_V2 asserts a v2 document through the same builders as v1, with the
+// real t so a mismatch fails the test.
+func TestAssertStructuredCompDiff_V2(t *testing.T) {
+	jsonOutput := `{
+		"outputVersion": "v2",
+		"compositions": [{
+			"name": "test-composition",
+			"affectedResources": {"total": 2, "withChanges": 1, "unchanged": 0, "withErrors": 1},
+			"impactAnalysis": [
+				{
+					"xr": {"apiVersion": "test.example.org/v1alpha1", "kind": "XTestResource", "name": "test-xr"},
+					"status": "changed",
+					"summary": {"added": 0, "modified": 1, "removed": 0},
+					"changes": [{
+						"type": "modified",
+						"apiVersion": "nop.crossplane.io/v1alpha1",
+						"kind": "ClusterNopResource",
+						"name": "test-xr-abc123",
+						"diff": {"old": {"spec": {"v": "old"}}, "new": {"spec": {"v": "new"}}}
+					}]
+				},
+				{
+					"xr": {"apiVersion": "test.example.org/v1alpha1", "kind": "XTestResource", "name": "broken-xr"},
+					"status": "error",
+					"summary": {"added": 0, "modified": 0, "removed": 0},
+					"changes": [],
+					"errors": [{"resourceID": "XTestResource/broken-xr", "message": "render failed"}]
+				}
+			]
+		}, {
+			"name": "broken-composition",
+			"errors": [{"resourceID": "Composition/broken-composition", "message": "cannot fetch"}],
+			"affectedResources": {"total": 0, "withChanges": 0, "unchanged": 0, "withErrors": 0},
+			"impactAnalysis": []
+		}],
+		"errors": [
+			{"resourceID": "XTestResource/broken-xr", "message": "render failed"},
+			{"resourceID": "Composition/broken-composition", "message": "cannot fetch"}
+		]
+	}`
+
+	AssertStructuredCompDiff(t, jsonOutput,
+		ExpectCompDiff().
+			WithOutputVersion("v2").
+			WithError("XTestResource/broken-xr").
+			WithError("Composition/broken-composition").
+			WithComposition("test-composition").
+			WithAffectedResources(2, 1, 0, 1).
+			WithXRImpact("XTestResource", "test-xr", "", "changed").
+			WithDownstreamSummary(0, 1, 0).
+			WithDownstreamResource("modified", "ClusterNopResource", "test-xr-abc123", "").
+			WithFieldChange("spec.v", "old", "new").
+			AndXR().
+			AndComp().
+			WithXRImpact("XTestResource", "broken-xr", "", "error").
+			WithErrorContaining("render failed").
+			WithErrorResourceID("XTestResource/broken-xr").
+			AndComposition("broken-composition").
+			WithCompositionErrorContaining("cannot fetch"))
+}
+
+// TestAssertStructuredDiff_V2 asserts a v2 xr document, which has no flat changes[], with the real t.
+func TestAssertStructuredDiff_V2(t *testing.T) {
+	jsonOutput := `{
+		"outputVersion": "v2",
+		"summary": {"added": 1, "modified": 0, "removed": 0},
+		"xrs": [{
+			"xr": {"apiVersion": "example.org/v1", "kind": "XBucket", "name": "b", "namespace": "default"},
+			"status": "changed",
+			"summary": {"added": 1, "modified": 0, "removed": 0},
+			"changes": [{"type": "added", "apiVersion": "v1", "kind": "ConfigMap", "name": "cm", "namespace": "default", "diff": {"spec": {"data": {"k": "v"}}}}]
+		}]
+	}`
+
+	AssertStructuredDiff(t, jsonOutput,
+		ExpectDiff().
+			WithOutputVersion("v2").
+			WithSummary(1, 0, 0).
+			WithXRs(XR("XBucket", "b", "default").Status("changed").Summary(1, 0, 0).
+				Change("added", "ConfigMap", "cm", "default").WithField("data.k", "v")))
 }

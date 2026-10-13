@@ -14,14 +14,16 @@ import (
 	"k8s.io/client-go/util/jsonpath"
 )
 
-// StructuredDiffOutput mirrors renderer.StructuredDiffOutput to avoid import cycles.
-// These types are used only for test assertions.
+// StructuredDiffOutput mirrors the renderer's xr document to avoid import cycles: v1's
+// renderer.StructuredDiffOutput, and v2's structuredDiffOutputV2, which is the same document without
+// changes (Changes is then nil). These types are used only for test assertions.
 type StructuredDiffOutput struct {
-	Summary  Summary         `json:"summary"`
-	Changes  []ChangeDetail  `json:"changes"`
-	Errors   []OutputError   `json:"errors,omitempty"`
-	Warnings []OutputWarning `json:"warnings,omitempty"`
-	Xrs      []XRDiffWire    `json:"xrs"`
+	OutputVersion string          `json:"outputVersion"`
+	Summary       Summary         `json:"summary"`
+	Changes       []ChangeDetail  `json:"changes"`
+	Errors        []OutputError   `json:"errors,omitempty"`
+	Warnings      []OutputWarning `json:"warnings,omitempty"`
+	Xrs           []XRDiffWire    `json:"xrs"`
 }
 
 // OutputWarning mirrors renderer/types.OutputWarning: a non-fatal advisory carried in structured
@@ -31,17 +33,23 @@ type OutputWarning struct {
 	Context map[string]string `json:"context,omitempty"`
 }
 
-// XRDiffWire mirrors the renderer's per-input-XR wire entry (xrDiffWire) in the
-// xrs[] grouped view. XR is a corev1.ObjectReference nested under "xr",
-// matching the renderer — asserting into the same platform type here also
-// exercises that the "xr" object round-trips into an ObjectReference.
-type XRDiffWire struct {
-	XR      corev1.ObjectReference `json:"xr"`
-	Status  string                 `json:"status"`
-	Summary Summary                `json:"summary"`
-	Changes []ChangeDetail         `json:"changes"`
-	Errors  []OutputError          `json:"errors,omitempty"`
+// XREntryWire mirrors the renderer's v2 per-XR entry (xrEntryWire), which both xr's xrs[] and comp's
+// v2 impactAnalysis[] hold. XR is a corev1.ObjectReference nested under "xr", matching the renderer —
+// asserting into the same platform type here also exercises that the "xr" object round-trips into an
+// ObjectReference.
+type XREntryWire struct {
+	XR           corev1.ObjectReference `json:"xr"`
+	Status       string                 `json:"status"`
+	FilterReason string                 `json:"filterReason,omitempty"`
+	FilterDetail string                 `json:"filterDetail,omitempty"`
+	Summary      Summary                `json:"summary"`
+	Changes      []ChangeDetail         `json:"changes"`
+	Errors       []OutputError          `json:"errors,omitempty"`
 }
+
+// XRDiffWire mirrors the renderer's v1 xrs[] entry (xrDiffWire). Its fields are a subset of the v2
+// entry's, the rest of which xr never sets, so one mirror serves both versions.
+type XRDiffWire = XREntryWire
 
 // Summary mirrors renderer.Summary.
 type Summary struct {
@@ -86,6 +94,8 @@ type ExpectedDiff struct {
 	// noWarnings asserts warnings[] is empty. Separate from len(warnings)==0, which means "no opinion".
 	noWarnings bool
 	xrs        []*XRExpectation
+	// outputVersion, when set, asserts the document's outputVersion and the shape that implies.
+	outputVersion string
 }
 
 // warningMatch describes one expected entry in warnings[], shared by the xr and comp builders. Matched
@@ -539,6 +549,14 @@ func (x *XRExpectation) xrExpectation() *XRExpectation { return x }
 
 func (r *ResourceExpectation) xrExpectation() *XRExpectation { return r.xrParent }
 
+// WithOutputVersion asserts the document's outputVersion ("v1" or "v2") and its shape: v1 carries the
+// flat changes[], v2 does not. Under v2, assert changes per XR with WithXRs; the top-level resource
+// expectations (WithAddedResource and friends) read the flat view and so are rejected.
+func (e *ExpectedDiff) WithOutputVersion(version string) *ExpectedDiff {
+	e.outputVersion = version
+	return e
+}
+
 // WithXRs attaches per-input-XR expectations (built via XR(...)) to assert
 // against the xrs[] grouped view, in order.
 func (e *ExpectedDiff) WithXRs(xrs ...xrSpec) *ExpectedDiff {
@@ -642,6 +660,8 @@ func AssertStructuredDiff(t *testing.T, jsonOutput string, e DiffExpectation) {
 		}
 	}
 
+	assertXROutputVersion(t, output, expected)
+
 	// Check each resource expectation against the flat changes[] view.
 	assertResourceExpectations(t, "", output.Changes, expected.resources)
 
@@ -683,6 +703,35 @@ func AssertStructuredDiff(t *testing.T, jsonOutput string, e DiffExpectation) {
 
 	// Check each xrs[] entry expectation.
 	assertXRExpectations(t, output.Xrs, expected.xrs)
+}
+
+// assertXROutputVersion checks the xr document's outputVersion and the presence of the flat changes[]
+// it implies, when the test pinned a version.
+func assertXROutputVersion(t *testing.T, output StructuredDiffOutput, expected *ExpectedDiff) {
+	t.Helper()
+
+	if expected.outputVersion == "" {
+		return
+	}
+
+	if output.OutputVersion != expected.outputVersion {
+		t.Errorf("outputVersion: expected %q, got %q", expected.outputVersion, output.OutputVersion)
+	}
+
+	switch expected.outputVersion {
+	case "v2":
+		if output.Changes != nil {
+			t.Errorf("v2 output carries the v1 flat changes[]: %d entries", len(output.Changes))
+		}
+
+		if len(expected.resources) > 0 {
+			t.Errorf("v2 output has no flat changes[]: assert changes per XR with WithXRs instead")
+		}
+	default:
+		if output.Changes == nil {
+			t.Errorf("v1 output lacks the flat changes[]")
+		}
+	}
 }
 
 // assertWarnings checks each expectation against got, then — if the test pinned any expectations, or
@@ -1237,9 +1286,10 @@ func convertBracketNotation(path string) string {
 
 // StructuredCompDiffOutput mirrors the JSON schema for composition diffs.
 type StructuredCompDiffOutput struct {
-	Compositions []CompositionDiffWire `json:"compositions"`
-	Errors       []OutputError         `json:"errors,omitempty"`
-	Warnings     []OutputWarning       `json:"warnings,omitempty"`
+	OutputVersion string                `json:"outputVersion"`
+	Compositions  []CompositionDiffWire `json:"compositions"`
+	Errors        []OutputError         `json:"errors,omitempty"`
+	Warnings      []OutputWarning       `json:"warnings,omitempty"`
 }
 
 // OutputError mirrors dt.OutputError.
@@ -1270,7 +1320,8 @@ type FieldValidationError struct {
 // CompositionDiffWire mirrors compositionDiffWire from the renderer.
 type CompositionDiffWire struct {
 	Name               string                   `json:"name"`
-	Error              string                   `json:"error,omitempty"`
+	Error              string                   `json:"error,omitempty"`  // v1 only
+	Errors             []OutputError            `json:"errors,omitempty"` // v2 only
 	CompositionChanges *ChangeDetail            `json:"compositionChanges,omitempty"`
 	AffectedResources  AffectedResourcesSummary `json:"affectedResources"`
 	ImpactAnalysis     []XRImpactWire           `json:"impactAnalysis"`
@@ -1301,18 +1352,91 @@ type AffectedResourcesSummary struct {
 	FilteredByDeletion int `json:"filteredByDeletion,omitempty"`
 }
 
-// XRImpactWire mirrors xrImpactWire from the renderer.
+// XRImpactWire mirrors an impactAnalysis[] entry of either version: v1's xrImpactWire (identity
+// inlined, error string, downstreamChanges wrapper) or v2's xrEntryWire (the fields of XREntryWire).
+// The two share only status, filterReason and filterDetail, so a v2 entry leaves the v1-only fields
+// zero and vice versa; assertXRImpactShape checks that. Read it through ref, downstream and
+// errorText, which work for both.
 type XRImpactWire struct {
+	// v1 only.
 	APIVersion        string             `json:"apiVersion,omitempty"`
 	Kind              string             `json:"kind,omitempty"`
 	Name              string             `json:"name,omitempty"`
 	Namespace         string             `json:"namespace,omitempty"`
 	UID               string             `json:"uid,omitempty"`
-	Status            string             `json:"status"`
-	FilterReason      string             `json:"filterReason,omitempty"`
-	FilterDetail      string             `json:"filterDetail,omitempty"`
 	Error             string             `json:"error,omitempty"`
 	DownstreamChanges *DownstreamChanges `json:"downstreamChanges,omitempty"`
+
+	// Both versions.
+	Status       string `json:"status"`
+	FilterReason string `json:"filterReason,omitempty"`
+	FilterDetail string `json:"filterDetail,omitempty"`
+
+	// v2 only. Pointers and nil slices so their absence from a v1 entry is detectable.
+	XR      *corev1.ObjectReference `json:"xr,omitempty"`
+	Summary *Summary                `json:"summary,omitempty"`
+	Changes []ChangeDetail          `json:"changes,omitempty"`
+	Errors  []OutputError           `json:"errors,omitempty"`
+}
+
+// ref returns the entry's XR identity.
+func (x *XRImpactWire) ref() corev1.ObjectReference {
+	if x.XR != nil {
+		return *x.XR
+	}
+
+	return corev1.ObjectReference{APIVersion: x.APIVersion, Kind: x.Kind, Name: x.Name, Namespace: x.Namespace}
+}
+
+// downstream returns the entry's changes, or nil when it lists none, matching v1's absent
+// downstreamChanges.
+func (x *XRImpactWire) downstream() *DownstreamChanges {
+	switch {
+	case x.DownstreamChanges != nil:
+		return x.DownstreamChanges
+	case len(x.Changes) > 0 && x.Summary != nil:
+		return &DownstreamChanges{Summary: *x.Summary, Changes: x.Changes}
+	default:
+		return nil
+	}
+}
+
+// errorText returns the entry's error message: v1's error string, or v2's errors[] messages joined.
+func (x *XRImpactWire) errorText() string {
+	if x.Error != "" {
+		return x.Error
+	}
+
+	msgs := make([]string, 0, len(x.Errors))
+	for _, e := range x.Errors {
+		msgs = append(msgs, e.Message)
+	}
+
+	return strings.Join(msgs, "; ")
+}
+
+// assertXRImpactShape checks an impactAnalysis[] entry carries exactly its version's fields.
+func assertXRImpactShape(t *testing.T, label, version string, x *XRImpactWire) {
+	t.Helper()
+
+	v1Fields := x.Kind != "" || x.APIVersion != "" || x.Name != "" || x.Error != "" || x.DownstreamChanges != nil
+	v2Fields := x.XR != nil || x.Summary != nil || x.Changes != nil || x.Errors != nil
+
+	switch version {
+	case "v2":
+		if v1Fields {
+			t.Errorf("%s: v2 entry carries v1 fields: %+v", label, *x)
+		}
+
+		// summary and changes are always present in v2; changes is [] when there are none.
+		if x.XR == nil || x.Summary == nil || x.Changes == nil {
+			t.Errorf("%s: v2 entry lacks xr, summary or changes: %+v", label, *x)
+		}
+	default:
+		if v2Fields {
+			t.Errorf("%s: v1 entry carries v2 fields: %+v", label, *x)
+		}
+	}
 }
 
 // DownstreamChanges mirrors renderer.DownstreamChanges.
@@ -1343,6 +1467,11 @@ type ExpectedCompDiff struct {
 	warnings     []*CompWarningExpectation
 	// noWarnings asserts warnings[] is empty. Separate from len(warnings)==0, which means "no opinion".
 	noWarnings bool
+	// outputVersion, when set, asserts the document's outputVersion and that every composition and
+	// impactAnalysis[] entry has that version's shape.
+	outputVersion string
+	// errorIDs are resourceIDs the top-level errors[] must contain.
+	errorIDs []string
 }
 
 func (e *ExpectedCompDiff) compExpectation() *ExpectedCompDiff { return e }
@@ -1366,6 +1495,19 @@ func (e *ExpectedCompDiff) WithWarning(messageContains string) *CompWarningExpec
 	e.warnings = append(e.warnings, w)
 
 	return w
+}
+
+// WithOutputVersion asserts the document's outputVersion ("v1" or "v2"), and that each composition and
+// impactAnalysis[] entry carries exactly that version's fields.
+func (e *ExpectedCompDiff) WithOutputVersion(version string) *ExpectedCompDiff {
+	e.outputVersion = version
+	return e
+}
+
+// WithError asserts the top-level errors[] contains an error with the given resourceID.
+func (e *ExpectedCompDiff) WithError(resourceID string) *ExpectedCompDiff {
+	e.errorIDs = append(e.errorIDs, resourceID)
+	return e
 }
 
 // WithNoWarnings asserts that structured output carries no advisories at all. Distinct from simply
@@ -1406,6 +1548,9 @@ type CompositionExpectation struct {
 	// of revisionImpact so a case can assert the name alone, and because the name is usually matched by
 	// pattern (its suffix is a content hash) while the rest are exact.
 	predictedRevisionName *expectedPredictedRevisionName
+	// errorContains, when set, is a substring the composition's error must contain: v1's error string,
+	// or a message in v2's errors[].
+	errorContains string
 }
 
 // expectedRevisionImpact is the expected revisionImpact object for a composition.
@@ -1435,9 +1580,10 @@ type XRImpactExpectation struct {
 	name                string
 	namespace           string
 	anyNameAllowed      bool
-	status              string // "changed", "unchanged", "error", "filtered"
-	filterReason        string // "manual_policy", "revision_selector_mismatch", "deleting"; only checked when set
-	errorContains       string // substring of an "error" impact's Error; only checked when set
+	status              string   // "changed", "unchanged", "error", "filtered"
+	filterReason        string   // "manual_policy", "revision_selector_mismatch", "deleting"; only checked when set
+	errorContains       string   // substring of an "error" impact's Error; only checked when set
+	errorIDs            []string // resourceIDs the entry's v2 errors[] must contain
 	downstreamSummary   *expectedSummary
 	downstreamResources []*DownstreamResourceExpectation
 }
@@ -1542,6 +1688,13 @@ func (c *CompositionExpectation) WithCompositionFieldChange(path string, oldValu
 	return c
 }
 
+// WithCompositionErrorContaining asserts the composition failed with an error containing s: v1's
+// error string, or a message in v2's errors[].
+func (c *CompositionExpectation) WithCompositionErrorContaining(s string) *CompositionExpectation {
+	c.errorContains = s
+	return c
+}
+
 // WithXRImpact adds an expectation for an XR impact.
 func (c *CompositionExpectation) WithXRImpact(kind, name, namespace, status string) *XRImpactExpectation {
 	x := &XRImpactExpectation{
@@ -1573,6 +1726,12 @@ func (x *XRImpactExpectation) WithFilterReason(reason string) *XRImpactExpectati
 // the composite failed rather than only that it did. Only asserted when set.
 func (x *XRImpactExpectation) WithErrorContaining(s string) *XRImpactExpectation {
 	x.errorContains = s
+	return x
+}
+
+// WithErrorResourceID asserts the entry's errors[] (v2 only) holds an error with the given resourceID.
+func (x *XRImpactExpectation) WithErrorResourceID(resourceID string) *XRImpactExpectation {
+	x.errorIDs = append(x.errorIDs, resourceID)
 	return x
 }
 
@@ -1749,6 +1908,14 @@ func AssertStructuredCompDiff(t *testing.T, jsonOutput string, e CompDiffExpecta
 
 	assertWarnings(t, output.Warnings, wantWarnings, expected.noWarnings)
 
+	assertCompOutputVersion(t, output, expected)
+
+	for _, id := range expected.errorIDs {
+		if findMatchingError(output.Errors, id) == nil {
+			t.Errorf("Expected top-level error with resourceID %q not found", id)
+		}
+	}
+
 	// Check each composition expectation
 	for _, expectComp := range expected.compositions {
 		found := findMatchingComposition(output.Compositions, expectComp.name)
@@ -1762,6 +1929,18 @@ func AssertStructuredCompDiff(t *testing.T, jsonOutput string, e CompDiffExpecta
 				expectComp.name, actualComps)
 
 			continue
+		}
+
+		if expectComp.errorContains != "" {
+			var text strings.Builder
+			text.WriteString(found.Error)
+			for _, e := range found.Errors {
+				text.WriteString(e.Message)
+			}
+
+			if !strings.Contains(text.String(), expectComp.errorContains) {
+				t.Errorf("Composition %s: expected error containing %q, got %q", expectComp.name, expectComp.errorContains, text.String())
+			}
 		}
 
 		// Check affected resources counts
@@ -1871,7 +2050,8 @@ func AssertStructuredCompDiff(t *testing.T, jsonOutput string, e CompDiffExpecta
 			if foundXR == nil {
 				actualXRs := make([]string, 0, len(found.ImpactAnalysis))
 				for _, x := range found.ImpactAnalysis {
-					actualXRs = append(actualXRs, fmt.Sprintf("%s/%s (ns=%s, status=%s)", x.Kind, x.Name, x.Namespace, x.Status))
+					ref := x.ref()
+					actualXRs = append(actualXRs, fmt.Sprintf("%s/%s (ns=%s, status=%s)", ref.Kind, ref.Name, ref.Namespace, x.Status))
 				}
 
 				t.Errorf("Composition %s: Expected XR impact %s/%s (ns=%s) not found. Actual XRs: %v",
@@ -1893,42 +2073,51 @@ func AssertStructuredCompDiff(t *testing.T, jsonOutput string, e CompDiffExpecta
 			}
 
 			// Check error message if specified
-			if expectXR.errorContains != "" && !strings.Contains(foundXR.Error, expectXR.errorContains) {
+			if expectXR.errorContains != "" && !strings.Contains(foundXR.errorText(), expectXR.errorContains) {
 				t.Errorf("Composition %s: XR %s/%s: expected error containing %q, got %q",
-					expectComp.name, expectXR.kind, expectXR.name, expectXR.errorContains, foundXR.Error)
+					expectComp.name, expectXR.kind, expectXR.name, expectXR.errorContains, foundXR.errorText())
 			}
 
+			for _, id := range expectXR.errorIDs {
+				if findMatchingError(foundXR.Errors, id) == nil {
+					t.Errorf("Composition %s: XR %s/%s: expected entry error with resourceID %q not found",
+						expectComp.name, expectXR.kind, expectXR.name, id)
+				}
+			}
+
+			downstream := foundXR.downstream()
+
 			// Check downstream summary if specified
-			if expectXR.downstreamSummary != nil && foundXR.DownstreamChanges != nil {
-				if foundXR.DownstreamChanges.Summary.Added != expectXR.downstreamSummary.added {
+			if expectXR.downstreamSummary != nil && downstream != nil {
+				if downstream.Summary.Added != expectXR.downstreamSummary.added {
 					t.Errorf("Composition %s: XR %s/%s: DownstreamChanges.Summary.Added: expected %d, got %d",
-						expectComp.name, expectXR.kind, expectXR.name, expectXR.downstreamSummary.added, foundXR.DownstreamChanges.Summary.Added)
+						expectComp.name, expectXR.kind, expectXR.name, expectXR.downstreamSummary.added, downstream.Summary.Added)
 				}
 
-				if foundXR.DownstreamChanges.Summary.Modified != expectXR.downstreamSummary.modified {
+				if downstream.Summary.Modified != expectXR.downstreamSummary.modified {
 					t.Errorf("Composition %s: XR %s/%s: DownstreamChanges.Summary.Modified: expected %d, got %d",
-						expectComp.name, expectXR.kind, expectXR.name, expectXR.downstreamSummary.modified, foundXR.DownstreamChanges.Summary.Modified)
+						expectComp.name, expectXR.kind, expectXR.name, expectXR.downstreamSummary.modified, downstream.Summary.Modified)
 				}
 
-				if foundXR.DownstreamChanges.Summary.Removed != expectXR.downstreamSummary.removed {
+				if downstream.Summary.Removed != expectXR.downstreamSummary.removed {
 					t.Errorf("Composition %s: XR %s/%s: DownstreamChanges.Summary.Removed: expected %d, got %d",
-						expectComp.name, expectXR.kind, expectXR.name, expectXR.downstreamSummary.removed, foundXR.DownstreamChanges.Summary.Removed)
+						expectComp.name, expectXR.kind, expectXR.name, expectXR.downstreamSummary.removed, downstream.Summary.Removed)
 				}
 			}
 
 			// Check downstream resources with field-level assertions
 			for _, expectRes := range expectXR.downstreamResources {
-				if foundXR.DownstreamChanges == nil {
+				if downstream == nil {
 					t.Errorf("Composition %s: XR %s/%s: expected downstream resource %s/%s but no downstream changes present",
 						expectComp.name, expectXR.kind, expectXR.name, expectRes.kind, expectRes.name)
 
 					continue
 				}
 
-				foundRes := findMatchingDownstreamChange(foundXR.DownstreamChanges.Changes, expectRes)
+				foundRes := findMatchingDownstreamChange(downstream.Changes, expectRes)
 				if foundRes == nil {
-					actualRes := make([]string, 0, len(foundXR.DownstreamChanges.Changes))
-					for _, c := range foundXR.DownstreamChanges.Changes {
+					actualRes := make([]string, 0, len(downstream.Changes))
+					for _, c := range downstream.Changes {
 						actualRes = append(actualRes, fmt.Sprintf("%s/%s (type=%s)", c.Kind, c.Name, c.Type))
 					}
 
@@ -1969,6 +2158,33 @@ func AssertStructuredCompDiff(t *testing.T, jsonOutput string, e CompDiffExpecta
 	}
 }
 
+// assertCompOutputVersion checks the comp document's outputVersion, and that each composition and
+// impactAnalysis[] entry carries exactly that version's fields, when the test pinned a version.
+func assertCompOutputVersion(t *testing.T, output StructuredCompDiffOutput, expected *ExpectedCompDiff) {
+	t.Helper()
+
+	if expected.outputVersion == "" {
+		return
+	}
+
+	if output.OutputVersion != expected.outputVersion {
+		t.Errorf("outputVersion: expected %q, got %q", expected.outputVersion, output.OutputVersion)
+	}
+
+	for _, comp := range output.Compositions {
+		switch {
+		case expected.outputVersion == "v2" && comp.Error != "":
+			t.Errorf("Composition %s: v2 output carries the v1 error string", comp.Name)
+		case expected.outputVersion != "v2" && comp.Errors != nil:
+			t.Errorf("Composition %s: v1 output carries the v2 errors[]", comp.Name)
+		}
+
+		for i := range comp.ImpactAnalysis {
+			assertXRImpactShape(t, fmt.Sprintf("Composition %s: impactAnalysis[%d]", comp.Name, i), expected.outputVersion, &comp.ImpactAnalysis[i])
+		}
+	}
+}
+
 // findMatchingComposition finds a composition by name.
 func findMatchingComposition(comps []CompositionDiffWire, name string) *CompositionDiffWire {
 	for i := range comps {
@@ -1984,11 +2200,13 @@ func findMatchingComposition(comps []CompositionDiffWire, name string) *Composit
 func findMatchingXRImpact(impacts []XRImpactWire, expect *XRImpactExpectation) *XRImpactWire {
 	for i := range impacts {
 		impact := &impacts[i]
-		if impact.Kind != expect.kind {
+
+		ref := impact.ref()
+		if ref.Kind != expect.kind {
 			continue
 		}
 
-		if expect.namespace != "" && impact.Namespace != expect.namespace {
+		if expect.namespace != "" && ref.Namespace != expect.namespace {
 			continue
 		}
 
@@ -1997,7 +2215,7 @@ func findMatchingXRImpact(impacts []XRImpactWire, expect *XRImpactExpectation) *
 			return impact
 		}
 
-		if impact.Name == expect.name {
+		if ref.Name == expect.name {
 			return impact
 		}
 	}
