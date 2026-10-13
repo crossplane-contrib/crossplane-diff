@@ -199,9 +199,17 @@ Crossplane's composed field manager, gives it a controller ownerReference to the
 `RenderComposedResourceMetadata` does, and records it in the XR's `resourceRefs`. That reference is what makes a
 composed resource removable at all: removal detection, like Crossplane's garbage collector, considers only resources
 the composite controls (§6.3.1). Reconciled XR fixtures carry their own
-`crossplane.io/composite` label, claims' backing XRs track a declared CompositionRevision that the claim mirrors under
-Automatic, and composed fixtures omit the annotation function-go-templating strips from its output. A composed
-resource without a controlling XR, such as an orphan being adopted, is set up as a plain fixture, and only on purpose.
+`crossplane.io/composite` label and the `compositionRef` and `compositionRevisionRef` Crossplane's composite reconciler
+writes, naming the composition their case applies and a declared CompositionRevision of it, named from the real
+`Composition.Hash()` as `NewCompositionRevision` names it (#562). Only a direct `compositionRef` resolves a revision
+(§6.1.1), so a fixture without one would exercise a path no reconciled XR takes. A fixture shared by cases
+with different compositions is therefore split per composition, and the few XRs left without a ref model a state in
+which Crossplane writes none (a revision selector no revision matches, a kind no composition targets) and say so. The
+harness writes a nested XR's refs with an Update, as its own reconciler does, rather than in its parent's composed
+apply, so a diff of the parent's render does not report them removed. Claims' backing XRs mirror their revision ref
+onto the claim under Automatic, and composed fixtures omit the annotation function-go-templating strips from its
+output. A composed resource without a controlling XR, such as an orphan being adopted, is set up as a plain fixture,
+and only on purpose.
 
 envtest runs each case's `kube-apiserver` and `etcd` as children of the test binary, and only a deferred
 `Environment.Stop` ends them, which does not run when the binary times out, is killed or is interrupted. Such a run
@@ -269,6 +277,9 @@ The integration test cases cover:
 - **API Version Change Is Not a Removal**: Verifies, for both `xr` and `comp`, that a composed resource the XR names
   in its `resourceRefs` at `v1beta1`, which the new revision renders at `v1beta2`, is not reported as removed, and
   that a field change rendered alongside the version change is one modification rather than an error (#552).
+- **Only Controlled Resources Are Removed**: Verifies, for both `xr` and `comp`, that of the resources an XR's
+  `resourceRefs` name and its render no longer desires, only the one it controls is removed. One that another XR
+  controls, and one with no controller reference, stay, as Crossplane's garbage collector leaves them (#552).
 
 ### 4.6 Resource Naming Patterns
 

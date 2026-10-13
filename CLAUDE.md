@@ -385,10 +385,23 @@ this state, so a fixture that lacks it tests a tree no real cluster has (#542):
 - **A reconciled XR carries its own `crossplane.io/composite: <name>` label**, as Crossplane labels every XR. A new-XR
   input stays as a user would author it; if a test re-applies an existing XR's manifest, keep the cluster copy in its own
   `existing-*.yaml`.
-- **A reconciled XR tracks a CompositionRevision** (`compositionRevisionRef`), which must then be declared as a
-  fixture. Under Automatic, the claim syncer copies the backing XR's ref onto the claim; follow
-  `testdata/diff/resources/existing-claim.yaml` with `existing-claim-xr.yaml`. Not every older XR fixture has one yet:
-  several are shared by cases with different compositions, so a ref (and a `compositionRef`) means per-case copies.
+- **A reconciled XR names its composition and tracks a CompositionRevision of it** (`compositionRef` and
+  `compositionRevisionRef`, at the v1 `spec.*` or v2 `spec.crossplane.*` path its XRD uses), as Crossplane's composite
+  reconciler writes them (#562). Only a direct `compositionRef` resolves a revision, so an XR without one exercises
+  the selector/type path no reconciled XR takes.
+  - Name the composition the case actually applies. If cases with different compositions share an XR fixture, give
+    each its own copy (`existing-removal-test-xr.yaml` beside `existing-xr.yaml`).
+  - Declare the revision as a fixture, named `<composition>-<hash[:7]>` and labelled with the hash from the real
+    `Composition.Hash()`, with the composition's spec verbatim (and its labels and annotations, which
+    `NewCompositionRevision` copies). `testdata/diff/resources/composition-revision-default.yaml` is an example.
+    Composition.Hash() covers annotations, so a kubectl-applied composition has its own revision.
+  - Under Automatic, the claim syncer copies the backing XR's ref onto the claim; follow
+    `testdata/diff/resources/existing-claim.yaml` with `existing-claim-xr.yaml`.
+  - Leave an XR without refs only when Crossplane would write none, and say why in the fixture: a revision selector no
+    revision matches (`testdata/comp/resources/existing-xr-selector-match.yaml`), or a kind no composition targets.
+  - A nested XR's refs are its own reconciler's, which writes them with an Update. The harness applies them that way
+    (`withoutCompositeReconcilerFields`), not in the parent's composed apply, so a diff of the parent's render, which
+    omits them, does not report them removed.
 - **Composed fixtures don't carry `gotemplating.fn.crossplane.io/composition-resource-name`.** function-go-templating
   strips it from what it renders, so no real composed resource has it. Under the composed field manager a fixture that
   kept it would show the annotation as removed.
