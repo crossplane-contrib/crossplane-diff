@@ -1,6 +1,7 @@
 # The CompositionRevision Crossplane creates for removal-test-composition.yaml,
 # named and labelled from its hash as Crossplane names it. envtest runs no Crossplane controllers,
-# so it must be declared. The XR in existing-removal-test-xr.yaml tracks it.
+# so it must be declared. The XRs in existing-removal-test-xr.yaml and
+# existing-xr-listing-uncontrolled-resources.yaml track it.
 apiVersion: apiextensions.crossplane.io/v1
 kind: CompositionRevision
 metadata:

@@ -1635,6 +1635,42 @@ Summary: 2 modified, 2 removed`,
 			expectedError:    false,
 			expectedExitCode: dp.ExitCodeDiffDetected,
 		},
+		// #552: removal mirrors Crossplane's garbage collector, which deletes a composed resource only if
+		// the composite controls it. The XR's resourceRefs name four resources, and its render desires only
+		// the first: one it controls and renders, one it controls and no longer renders, one another XR
+		// controls, and one with no controller reference at all. Only the second is removed.
+		"ResourceRemovalSkipsResourcesTheXRDoesNotControl": {
+			reason:       "A composed resource the XR's resourceRefs name but the XR does not control is not reported removed",
+			outputFormat: "json",
+			crossplaneManagedResources: []HierarchicalOwnershipRelation{
+				composes(
+					"testdata/diff/resources/existing-xr-listing-uncontrolled-resources.yaml",
+					"testdata/diff/resources/removal-test-ns-downstream-resource1.yaml", // still rendered: kept
+					"testdata/diff/resources/removal-test-ns-downstream-resource2.yaml", // no longer rendered: removed
+				),
+				composes(
+					"testdata/diff/resources/existing-other-xr.yaml",
+					"testdata/diff/resources/existing-other-xr-downstream.yaml",
+				),
+			},
+			setupFiles: []string{
+				"testdata/diff/resources/xrd.yaml",
+				"testdata/diff/resources/removal-test-composition.yaml",
+				"testdata/diff/resources/removal-test-composition-revision.yaml",
+				"testdata/diff/resources/composition.yaml",
+				"testdata/diff/resources/composition-revision-default.yaml",
+				"testdata/diff/resources/functions.yaml",
+				// Deliberately not in crossplaneManagedResources: its controller reference was removed, so
+				// no XR controls it, though test-resource's resourceRefs still name it.
+				"testdata/diff/resources/removal-test-ns-downstream-without-controller.yaml",
+			},
+			inputFiles: []string{"testdata/diff/unmodified-xr.yaml"},
+			expectedStructuredOutput: tu.ExpectDiff().
+				WithSummary(0, 0, 1).
+				WithRemovedResource("XDownstreamResource", "resource-to-be-removed", "default").
+				WithField("spec.forProvider.configData", "existing-value"),
+			expectedExitCode: dp.ExitCodeDiffDetected,
+		},
 		"ResourceRemovalHierarchyV2Namespaced": {
 			reason:       "Validates resource removal detection with hierarchy using v2 style resourceRefs and namespaced downstreams",
 			outputFormat: "json",
@@ -3791,6 +3827,46 @@ Summary: 2 modified`,
 				WithXRImpact("XNopResource", "test-resource", "default", "changed").
 				WithDownstreamSummary(1, 0, 0).
 				WithDownstreamResource("added", "XDownstreamResource", "test-resource", "default"),
+		},
+		// The comp side of TestDiffIntegration/ResourceRemovalSkipsResourcesTheXRDoesNotControl (#552):
+		// the updated composition stops rendering resource2, which the XR controls, so it is removed;
+		// the XR's resourceRefs also name a resource another XR controls and one with no controller,
+		// which the composition doesn't render either, and neither of those is removed.
+		"CompositionDropsResourceRemovingOnlyWhatTheXRControls": {
+			reason: "A composition that stops rendering resources removes only those the XR controls",
+			setupFiles: []string{
+				"testdata/comp/resources/xrd.yaml",
+				"testdata/comp/resources/removal-test-original-composition.yaml",
+				"testdata/comp/resources/removal-test-original-composition-revision.yaml",
+				"testdata/diff/resources/composition.yaml",
+				"testdata/diff/resources/composition-revision-default.yaml",
+				"testdata/comp/resources/functions.yaml",
+				// Deliberately not in crossplaneManagedResources: its controller reference was removed, so
+				// no XR controls it, though test-resource's resourceRefs still name it.
+				"testdata/diff/resources/removal-test-ns-downstream-without-controller.yaml",
+			},
+			crossplaneManagedResources: []HierarchicalOwnershipRelation{
+				composes(
+					"testdata/comp/resources/existing-xr-listing-uncontrolled-resources.yaml",
+					"testdata/diff/resources/removal-test-ns-downstream-resource1.yaml", // still rendered: kept
+					"testdata/diff/resources/removal-test-ns-downstream-resource2.yaml", // no longer rendered: removed
+				),
+				composes(
+					"testdata/diff/resources/existing-other-xr.yaml",
+					"testdata/diff/resources/existing-other-xr-downstream.yaml",
+				),
+			},
+			inputFiles:       []string{"testdata/diff/resources/removal-test-composition.yaml"},
+			namespace:        "default",
+			outputFormat:     "json",
+			expectedExitCode: dp.ExitCodeDiffDetected,
+			expectedStructuredCompOutput: tu.ExpectCompDiff().
+				WithComposition("removal-test-composition").
+				WithCompositionModified().
+				WithAffectedResources(1, 1, 0, 0).
+				WithXRImpact("XNopResource", "test-resource", "default", "changed").
+				WithDownstreamSummary(0, 0, 1).
+				WithDownstreamResource("removed", "XDownstreamResource", "resource-to-be-removed", "default"),
 		},
 		"CompositionDiffIgnorePaths": {
 			reason: "Validates that ArgoCD annotations are ignored in composition diffs",

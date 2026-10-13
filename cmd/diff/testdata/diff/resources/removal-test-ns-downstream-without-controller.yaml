@@ -1,0 +1,16 @@
+# A resource test-resource once composed as resource3, whose controller reference has since been
+# removed (say, by a user orphaning it). It keeps its labels and annotations, and the XR's resourceRefs
+# still name it (existing-xr-listing-uncontrolled-resources.yaml).
+apiVersion: ns.nop.example.org/v1alpha1
+kind: XDownstreamResource
+metadata:
+  annotations:
+    crossplane.io/composition-resource-name: resource3
+  generateName: test-resource-
+  labels:
+    crossplane.io/composite: test-resource
+  name: resource-without-controller
+  namespace: default
+spec:
+  forProvider:
+    configData: existing-value
