@@ -21,6 +21,7 @@ import (
 	"testing"
 
 	tu "github.com/crossplane-contrib/crossplane-diff/cmd/diff/testutils"
+	"github.com/crossplane/cli/v2/cmd/crossplane/render"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	apiextensionsv1 "github.com/crossplane/crossplane/apis/v2/apiextensions/v1"
@@ -608,6 +609,95 @@ func TestRegistryOverrideFunctionProvider(t *testing.T) {
 	if fns[1].Spec.Package != "registry.example.com/crossplane-contrib/function-auto-ready:v1.0.0" {
 		t.Errorf("function[1].Spec.Package = %q, want overridden registry", fns[1].Spec.Package)
 	}
+}
+
+func TestUpsertEnvPair(t *testing.T) {
+	tests := []struct {
+		name string
+		cur  string
+		key  string
+		val  string
+		want string
+	}{
+		{name: "empty", cur: "", key: "A", val: "1", want: "A=1"},
+		{name: "append to other key", cur: "FOO=bar", key: "A", val: "1", want: "FOO=bar,A=1"},
+		{name: "replace same key", cur: "A=1", key: "A", val: "2", want: "A=2"},
+		{name: "replace same key among others", cur: "FOO=bar,A=1,BAZ=qux", key: "A", val: "2", want: "FOO=bar,A=2,BAZ=qux"},
+		{name: "ignores blank segments", cur: "FOO=bar,", key: "A", val: "1", want: "FOO=bar,A=1"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := upsertEnvPair(tt.cur, tt.key, tt.val); got != tt.want {
+				t.Errorf("upsertEnvPair(%q, %q, %q) = %q, want %q", tt.cur, tt.key, tt.val, got, tt.want)
+			}
+		})
+	}
+}
+
+// TestEnvInjectingFunctionProvider verifies the decorator injects the env pair
+// into every function's runtime-docker-env annotation, appends to any existing
+// value, and is idempotent across repeated calls (which matters when the inner
+// provider caches and returns the same Function values).
+func TestEnvInjectingFunctionProvider(t *testing.T) {
+	newInner := func(anns map[string]string) FunctionProvider {
+		fn := pkgv1.Function{ObjectMeta: metav1.ObjectMeta{Name: "function-go-templating"}}
+		if anns != nil {
+			fn.Annotations = anns
+		}
+
+		fnClient := tu.NewMockFunctionClient().
+			WithSuccessfulFunctionsFetch([]pkgv1.Function{fn}).
+			Build()
+		// CachedFunctionProvider caches and returns the same values on repeat
+		// calls, so it exercises idempotency of the decorator.
+		return NewCachedFunctionProvider(fnClient, tu.TestLogger(t, false))
+	}
+
+	comp := &apiextensionsv1.Composition{ObjectMeta: metav1.ObjectMeta{Name: "test-composition"}}
+	envs := map[string]string{EnvMaxRecvMessageSize: "16"}
+
+	t.Run("injects when annotation absent", func(t *testing.T) {
+		p := NewEnvInjectingFunctionProvider(newInner(nil), envs, tu.TestLogger(t, false))
+
+		fns, err := p.GetFunctionsForComposition(comp)
+		if err != nil {
+			t.Fatalf("GetFunctionsForComposition() error = %v", err)
+		}
+
+		if got := fns[0].Annotations[render.AnnotationKeyRuntimeEnvironmentVariables]; got != EnvMaxRecvMessageSize+"=16" {
+			t.Errorf("annotation = %q, want %q", got, EnvMaxRecvMessageSize+"=16")
+		}
+	})
+
+	t.Run("appends to existing runtime-docker-env", func(t *testing.T) {
+		p := NewEnvInjectingFunctionProvider(newInner(map[string]string{render.AnnotationKeyRuntimeEnvironmentVariables: "FOO=bar"}), envs, tu.TestLogger(t, false))
+
+		fns, err := p.GetFunctionsForComposition(comp)
+		if err != nil {
+			t.Fatalf("GetFunctionsForComposition() error = %v", err)
+		}
+
+		if got := fns[0].Annotations[render.AnnotationKeyRuntimeEnvironmentVariables]; got != "FOO=bar,"+EnvMaxRecvMessageSize+"=16" {
+			t.Errorf("annotation = %q, want %q", got, "FOO=bar,"+EnvMaxRecvMessageSize+"=16")
+		}
+	})
+
+	t.Run("idempotent across repeated calls", func(t *testing.T) {
+		p := NewEnvInjectingFunctionProvider(newInner(nil), envs, tu.TestLogger(t, false))
+		if _, err := p.GetFunctionsForComposition(comp); err != nil {
+			t.Fatalf("first call error = %v", err)
+		}
+
+		fns, err := p.GetFunctionsForComposition(comp)
+		if err != nil {
+			t.Fatalf("second call error = %v", err)
+		}
+
+		if got := fns[0].Annotations[render.AnnotationKeyRuntimeEnvironmentVariables]; got != EnvMaxRecvMessageSize+"=16" {
+			t.Errorf("annotation after repeat = %q, want single pair %q", got, EnvMaxRecvMessageSize+"=16")
+		}
+	})
 }
 
 func TestGenerateContainerName(t *testing.T) {

@@ -753,6 +753,9 @@ The `ProcessorConfig` structure provides configuration options:
 - `IgnorePaths`: Field paths to suppress from diffs (e.g., status fields known to be reconciler-set).
 - `FunctionCredentials`: Image-pull credentials for private function registries.
 - `FunctionRegistryOverride`: Rewrites function image references to a mirror.
+- `MaxRecvMessageSize`: Max gRPC message size (MB) for render function containers, injected as their
+  `MAX_RECV_MESSAGE_SIZE` env var (`--max-recv-message-size`, or the same-named env var on crossplane-diff itself).
+  Zero leaves the function's own default (4MB for function-sdk-go); only functions that read the variable honor it.
 - `CrossplaneRenderBinary`: Optional path to an external `crossplane render` binary (otherwise the in-process render
   package is used).
 - `CrossplaneVersion`: Optional pinned render version; the docker engine pulls `…/crossplane:<version>` instead of
@@ -1439,7 +1442,7 @@ type FunctionProvider interface {
 }
 ```
 
-Three implementations are wired up at the CLI layer based on configuration:
+Four implementations are wired up at the CLI layer based on configuration:
 
 - **`DefaultFunctionProvider`**: Fetches the function definitions from the cluster on demand. Used when the same
   composition is unlikely to be rendered repeatedly.
@@ -1449,17 +1452,23 @@ Three implementations are wired up at the CLI layer based on configuration:
   is in use.
 - **`RegistryOverrideFunctionProvider`**: Wraps another provider and rewrites function image references to a mirror
   (used with `--function-registry-override`).
+- **`EnvInjectingFunctionProvider`**: Wraps another provider and upserts env pairs into each function's
+  `render.crossplane.io/runtime-docker-env` annotation (used with `--max-recv-message-size`, which injects
+  `MAX_RECV_MESSAGE_SIZE`). Upstream's docker runtime reuses an existing named container without re-applying env, so
+  this relies on `CachedFunctionProvider`'s per-run container names.
 
 `Cleanup` is responsible for terminating any function containers the provider has started; it is invoked by the
 processor's `Cleanup`.
 
-All three providers also apply the `render.crossplane.io/runtime-docker-network` annotation to every returned function
-package when the `CROSSPLANE_DIFF_DOCKER_NETWORK` environment variable is set. This is the user-facing knob for running
-`crossplane-diff` inside a Docker container (e.g. a GitHub Actions container job): the spawned function containers join
-the caller's network instead of the default Docker bridge, where they would be unreachable from the caller. The
-annotation is applied on every `GetFunctionsForComposition` call, including cache hits in `CachedFunctionProvider`, so
-the env var works correctly regardless of when it is set relative to cache population. Any non-empty value the user
-has pre-set on a function package is preserved.
+The providers do not handle Docker networking. `CROSSPLANE_DIFF_DOCKER_NETWORK` is the user-facing knob for running
+`crossplane-diff` inside a Docker container (e.g. a GitHub Actions container job), so that the spawned function
+containers join the caller's network instead of the default Docker bridge, where they would be unreachable from the
+caller. `NewEngineRenderFn` reads it once and passes it to the upstream docker engine as
+`render.EngineFlags.CrossplaneDockerNetwork`. The engine runs the crossplane-render container on that network, and its
+`Setup` applies the `render.crossplane.io/runtime-docker-network` annotation to each function before its runtime
+starts. Any non-empty value the user has pre-set on a function package is preserved. When the variable is unset,
+the first `Setup` creates a temporary network for the run and the engine's cleanup removes it (see `EngineRenderFn`
+in §9.5.3).
 
 ### 6.7a InputValidator
 
@@ -2159,6 +2168,9 @@ crossplane-diff xr --eventual-state xr.yaml
 # resources then show rendered output rather than what the apiserver would store, and say so
 # via dryRun.skipReason in structured output. Default is 'all'. Also on comp.
 crossplane-diff xr --dry-run-on=existing xr.yaml
+
+# Raise render function containers' gRPC max receive size (MB) for very large XRs. Also on comp.
+crossplane-diff xr --max-recv-message-size 16 xr.yaml
 
 # Pin the crossplane render version (minimum v2.3.4) for reproducible diffs
 crossplane-diff xr --crossplane-version v2.3.4 xr.yaml
