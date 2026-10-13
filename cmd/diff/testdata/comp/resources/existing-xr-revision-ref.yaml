@@ -1,13 +1,11 @@
 # A composite with an Automatic update policy, tracking the latest revision of
-# revision-templating-composition.yaml (revision-templating-composition-revision.yaml), as Crossplane's
-# composite reconciler leaves it. Automatic, so it would re-point to the revision a composition edit
+# revision-templating-composition.yaml (revision 2, revision-templating-composition-revision.yaml), as
+# Crossplane's composite reconciler leaves it. Automatic, so it would re-point to the revision a composition edit
 # produces.
 apiVersion: ns.diff.example.org/v1alpha1
 kind: XNopResource
 metadata:
   name: revision-ref-resource
-  labels:
-    crossplane.io/composite: revision-ref-resource
   namespace: default
 spec:
   coolField: revision-ref-existing-value
@@ -15,5 +13,3 @@ spec:
     compositionRef:
       name: xrevisionrefs.diff.example.org
     compositionUpdatePolicy: Automatic
-    compositionRevisionRef:
-      name: xrevisionrefs.diff.example.org-e36719b

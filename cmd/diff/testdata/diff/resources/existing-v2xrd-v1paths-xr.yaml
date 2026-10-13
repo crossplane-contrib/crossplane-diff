@@ -4,15 +4,11 @@ apiVersion: v2withv1paths.diff.example.org/v1alpha1
 kind: XNopResource
 metadata:
   name: test-v2xrd-v1paths
-  labels:
-    crossplane.io/composite: test-v2xrd-v1paths
   namespace: default
 spec:
   # v1-style composition reference (at spec.compositionRef instead of spec.crossplane.compositionRef),
-  # and the revision ref at the same v1-style path, which is what this case is about.
+  # which is what this case is about. The harness derives the revision ref at the same v1-style path.
   compositionRef:
     name: xnopresources.v2withv1paths.diff.example.org
-  compositionRevisionRef:
-    name: xnopresources.v2withv1paths.diff.example.org-f920803
   compositionUpdatePolicy: Automatic
   coolField: existing-value

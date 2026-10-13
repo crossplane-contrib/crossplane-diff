@@ -2,12 +2,8 @@ apiVersion: legacycluster.diff.example.org/v1alpha1
 kind: XNopResource
 metadata:
   name: test-resource
-  labels:
-    crossplane.io/composite: test-resource
 spec:
   compositionRef:
     name: removal-test-composition
-  compositionRevisionRef:
-    name: removal-test-composition-4b6f9f1
   compositionUpdatePolicy: Automatic
   coolField: "existing-value"

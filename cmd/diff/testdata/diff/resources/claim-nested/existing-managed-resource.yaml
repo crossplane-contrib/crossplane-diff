@@ -6,10 +6,6 @@ metadata:
   annotations:
     child-field: existing-parent-value
     crossplane.io/composition-resource-name: nop-resource
-  labels:
-    crossplane.io/claim-name: existing-parent-claim
-    crossplane.io/claim-namespace: default
-    crossplane.io/composite: existing-parent-claim-82crv
 spec:
   forProvider:
     conditionAfter:

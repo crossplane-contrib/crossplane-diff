@@ -2,13 +2,9 @@ apiVersion: ns.diff.example.org/v1alpha1
 kind: XNopResource
 metadata:
   name: another-resource
-  labels:
-    crossplane.io/composite: another-resource
   namespace: default
 spec:
   coolField: another-existing-value
   crossplane:
     compositionRef:
       name: xnopresources.diff.example.org
-    compositionRevisionRef:
-      name: xnopresources.diff.example.org-9382a6d

@@ -1,15 +1,13 @@
 # An earlier revision of revision-templating-composition.yaml, from when the composition carried a
 # channel=stable label it has since dropped: same spec, so only its name differs from revision 2's.
-# Named and labelled from the hash of the composition it was cut from, as Crossplane names it. The
-# Manual XR in existing-xr-pinned-revision-ref.yaml is pinned to it.
+# The harness names and labels it from the hash of the composition it was cut from, as Crossplane does.
+# The Manual XR in existing-xr-pinned-revision-ref.yaml is pinned to it.
 apiVersion: apiextensions.crossplane.io/v1
 kind: CompositionRevision
 metadata:
-  name: xrevisionrefs.diff.example.org-0d65896
   labels:
     channel: "stable"
     crossplane.io/composition-name: xrevisionrefs.diff.example.org
-    crossplane.io/composition-hash: 0d65896833a71cf8200765d398b63baab827bdea34b85320da35da110d90966
 spec:
   revision: 1
   compositeTypeRef:

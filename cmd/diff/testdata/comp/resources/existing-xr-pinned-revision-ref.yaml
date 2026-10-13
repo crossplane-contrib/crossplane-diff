@@ -7,8 +7,6 @@ apiVersion: ns.diff.example.org/v1alpha1
 kind: XNopResource
 metadata:
   name: pinned-revision-ref-resource
-  labels:
-    crossplane.io/composite: pinned-revision-ref-resource
   namespace: default
 spec:
   coolField: pinned-revision-ref-existing-value

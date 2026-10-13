@@ -4,7 +4,6 @@ kind: XPinned
 metadata:
   name: automatic-claim-a1b2c
   labels:
-    crossplane.io/composite: automatic-claim-a1b2c
     crossplane.io/claim-name: automatic-claim
     crossplane.io/claim-namespace: existing-namespace
 spec:
@@ -12,8 +11,6 @@ spec:
   compositionUpdatePolicy: Automatic
   compositionRef:
     name: xpinneds.pinned.diff.example.org
-  compositionRevisionRef:
-    name: xpinneds.pinned.diff.example.org-806289b
   claimRef:
     apiVersion: pinned.diff.example.org/v1alpha1
     kind: Pinned

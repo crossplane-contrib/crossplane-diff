@@ -1,6 +1,7 @@
 # An XRD whose composites default to the Manual update policy, and a composition with two revisions.
 # Each revision's template writes its own version into the composed resource, so the value shows which
-# revision rendered. The composition itself is the newest revision (v2), as it is in a cluster.
+# revision rendered. The composition itself is the newest revision (v2), as it is in a cluster, and the
+# harness creates that revision from it; revision 1 is declared here.
 apiVersion: apiextensions.crossplane.io/v2
 kind: CompositeResourceDefinition
 metadata:
@@ -62,10 +63,8 @@ spec:
 apiVersion: apiextensions.crossplane.io/v1
 kind: CompositionRevision
 metadata:
-  name: xmanualdefaults.manualdefault.diff.example.org-373e832
   labels:
     crossplane.io/composition-name: xmanualdefaults.manualdefault.diff.example.org
-    crossplane.io/composition-hash: 373e832683bba1cb69a94e8eecf3db90a81d8b704c3cd8050c25a88e5100a2e
 spec:
   revision: 1
   compositeTypeRef:
@@ -92,43 +91,6 @@ spec:
             spec:
               forProvider:
                 configData: v1-{{ .observed.composite.resource.spec.coolField }}
-    - step: automatically-detect-ready-composed-resources
-      functionRef:
-        name: function-auto-ready
----
-apiVersion: apiextensions.crossplane.io/v1
-kind: CompositionRevision
-metadata:
-  name: xmanualdefaults.manualdefault.diff.example.org-2e5bbcd
-  labels:
-    crossplane.io/composition-name: xmanualdefaults.manualdefault.diff.example.org
-    crossplane.io/composition-hash: 2e5bbcd3f3696d784200651f01d2f7172796939fb5c06772d6fd50ce00cdaa8
-spec:
-  revision: 2
-  compositeTypeRef:
-    apiVersion: manualdefault.diff.example.org/v1alpha1
-    kind: XManualDefault
-  mode: Pipeline
-  pipeline:
-    - step: generate-resources
-      functionRef:
-        name: function-go-templating
-      input:
-        apiVersion: template.fn.crossplane.io/v1beta1
-        kind: GoTemplate
-        source: Inline
-        inline:
-          template: |
-            apiVersion: ns.nop.example.org/v1alpha1
-            kind: XDownstreamResource
-            metadata:
-              name: {{ .observed.composite.resource.metadata.name }}
-              namespace: {{ .observed.composite.resource.metadata.namespace }}
-              annotations:
-                gotemplating.fn.crossplane.io/composition-resource-name: nop-resource
-            spec:
-              forProvider:
-                configData: v2-{{ .observed.composite.resource.spec.coolField }}
     - step: automatically-detect-ready-composed-resources
       functionRef:
         name: function-auto-ready

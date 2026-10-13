@@ -5,8 +5,6 @@ metadata:
   namespace: default
   annotations:
     crossplane.io/composition-resource-name: api-migrate-resource
-  labels:
-    crossplane.io/composite: test-api-version-xr
 spec:
   forProvider:
     configData: test-value

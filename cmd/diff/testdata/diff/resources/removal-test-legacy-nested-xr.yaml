@@ -7,11 +7,7 @@ metadata:
   name: resource-to-be-removed
   annotations:
     crossplane.io/composition-resource-name: resource2
-  labels:
-    crossplane.io/composite: test-resource
 spec:
   childField: child-value
   compositionRef:
     name: xlegacychildresources.legacycluster.diff.example.org
-  compositionRevisionRef:
-    name: xlegacychildresources.legacycluster.diff.example.org-bf2c887

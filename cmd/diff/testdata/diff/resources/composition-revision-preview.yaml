@@ -1,13 +1,11 @@
 # A later revision of xnopresources.diff.example.org, from when the composition carried the
-# channel=preview label. Named and labelled from the hash of the composition it was made from, as
-# Crossplane names it.
+# channel=preview label. The harness names and labels it from the hash of the composition it was made
+# from, as Crossplane does.
 apiVersion: apiextensions.crossplane.io/v1
 kind: CompositionRevision
 metadata:
-  name: xnopresources.diff.example.org-3532025
   labels:
     crossplane.io/composition-name: xnopresources.diff.example.org
-    crossplane.io/composition-hash: 3532025386dffa7fcd60591aa37d864a9cf13018d4562281edd1d16af9d69a8
     channel: preview
 spec:
   revision: 2

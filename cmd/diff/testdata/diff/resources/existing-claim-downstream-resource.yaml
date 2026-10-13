@@ -3,10 +3,6 @@ kind: XDownstreamResource
 metadata:
   annotations:
     crossplane.io/composition-resource-name: nop-resource
-  labels:
-    crossplane.io/composite: test-claim-82crv
-    crossplane.io/claim-name: test-claim
-    crossplane.io/claim-namespace: existing-namespace
   name: test-claim-82crv
 spec:
   forProvider:

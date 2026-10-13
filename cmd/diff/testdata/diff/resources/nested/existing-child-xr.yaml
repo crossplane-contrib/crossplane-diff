@@ -3,8 +3,6 @@ apiVersion: ns.nested.example.org/v1alpha1
 kind: XChildResource
 metadata:
   name: test-parent-child
-  labels:
-    crossplane.io/composite: test-parent
   annotations:
     crossplane.io/composition-resource-name: child-xr
   namespace: default
@@ -13,5 +11,3 @@ spec:
   crossplane:
     compositionRef:
       name: xchildresources.nested.example.org
-    compositionRevisionRef:
-      name: xchildresources.nested.example.org-254a09a

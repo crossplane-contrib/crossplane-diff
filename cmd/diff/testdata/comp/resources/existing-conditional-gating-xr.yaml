@@ -2,13 +2,9 @@ apiVersion: ns.diff.example.org/v1alpha1
 kind: XNopResource
 metadata:
   name: conditional-gating-test
-  labels:
-    crossplane.io/composite: conditional-gating-test
   namespace: default
 spec:
   coolField: existing-value
   crossplane:
     compositionRef:
       name: conditional-gating-composition
-    compositionRevisionRef:
-      name: conditional-gating-composition-2b8c5ab

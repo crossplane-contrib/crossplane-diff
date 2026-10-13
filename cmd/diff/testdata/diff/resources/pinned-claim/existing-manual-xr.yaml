@@ -4,7 +4,6 @@ kind: XPinned
 metadata:
   name: manual-claim-x1y2z
   labels:
-    crossplane.io/composite: manual-claim-x1y2z
     crossplane.io/claim-name: manual-claim
     crossplane.io/claim-namespace: existing-namespace
 spec:

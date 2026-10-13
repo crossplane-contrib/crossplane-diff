@@ -6,8 +6,6 @@ kind: XDownstreamEnvResource
 metadata:
   annotations:
     crossplane.io/composition-resource-name: env-resource
-  labels:
-    crossplane.io/composite: test-env-resource
   name: test-env-resource
 spec:
   compositionUpdatePolicy: Automatic

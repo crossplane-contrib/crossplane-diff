@@ -2,13 +2,9 @@ apiVersion: ns.diff.example.org/v1alpha1
 kind: XNopResource
 metadata:
   name: status-test-xr-1
-  labels:
-    crossplane.io/composite: status-test-xr-1
   namespace: default
 spec:
   coolField: test-value-1
   crossplane:
     compositionRef:
       name: xstatus.diff.example.org
-    compositionRevisionRef:
-      name: xstatus.diff.example.org-4b3fabc
