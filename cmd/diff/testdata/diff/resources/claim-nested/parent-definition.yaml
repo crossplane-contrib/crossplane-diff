@@ -1,12 +1,12 @@
 apiVersion: apiextensions.crossplane.io/v1
 kind: CompositeResourceDefinition
 metadata:
-  name: xparentnopclaims.claimnested.diff.example.org
+  name: xnopparents.claimnested.diff.example.org
 spec:
   group: claimnested.diff.example.org
   names:
-    kind: XParentNopClaim
-    plural: xparentnopclaims
+    kind: XNopParent
+    plural: xnopparents
   claimNames:
     kind: ParentNopClaim
     plural: parentnopclaims

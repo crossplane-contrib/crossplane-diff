@@ -1,5 +1,5 @@
 apiVersion: claimnested.diff.example.org/v1alpha1
-kind: XChildNopClaim
+kind: XNopChild
 metadata:
   name: existing-parent-claim-82crv-child
   generateName: existing-parent-claim-82crv-
@@ -14,4 +14,4 @@ spec:
   compositionRef:
     name: child-nop-claim-composition
   compositionRevisionRef:
-    name: child-nop-claim-composition-2daafdb
+    name: child-nop-claim-composition-db22ad5

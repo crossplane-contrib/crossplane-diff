@@ -36,9 +36,9 @@
 +   parentField: new-parent-value
 
 ---
-+++ XChildNopClaim/test-parent-claim-(generated)
++++ XNopChild/test-parent-claim-(generated)
 + apiVersion: claimnested.diff.example.org/v1alpha1
-+ kind: XChildNopClaim
++ kind: XNopChild
 + metadata:
 +   annotations:
 +     crossplane.io/composition-resource-name: child-xr

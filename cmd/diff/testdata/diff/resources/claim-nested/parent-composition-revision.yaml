@@ -4,15 +4,15 @@
 apiVersion: apiextensions.crossplane.io/v1
 kind: CompositionRevision
 metadata:
-  name: parent-nop-claim-composition-7c02fc0
+  name: parent-nop-claim-composition-cfac93e
   labels:
     crossplane.io/composition-name: parent-nop-claim-composition
-    crossplane.io/composition-hash: 7c02fc06a62bcb8f7788180a1e556c9526352a2abe0bcfc27377371183d3605
+    crossplane.io/composition-hash: cfac93e9ac7ca771607b6c3802693a2e446c2264e487aa2a208dc25f1d5b657
 spec:
   revision: 1
   compositeTypeRef:
     apiVersion: claimnested.diff.example.org/v1alpha1
-    kind: XParentNopClaim
+    kind: XNopParent
   mode: Pipeline
   pipeline:
     - step: create-child-xr
@@ -25,7 +25,7 @@ spec:
         inline:
           template: |
             apiVersion: claimnested.diff.example.org/v1alpha1
-            kind: XChildNopClaim
+            kind: XNopChild
             metadata:
               generateName: {{ .observed.composite.resource.metadata.name }}-
               namespace: {{ .observed.composite.resource.metadata.namespace }}

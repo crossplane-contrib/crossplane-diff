@@ -3299,7 +3299,7 @@ Summary: 2 modified, 2 removed`,
 				"testdata/diff/resources/claim-nested/existing-parent-xr.yaml",
 			},
 			expectedError: true,
-			expectedErrorContains: "XParentNopClaim/existing-parent-claim-82crv is the XR bound to claim " +
+			expectedErrorContains: "XNopParent/existing-parent-claim-82crv is the XR bound to claim " +
 				"ParentNopClaim/existing-parent-claim, which Crossplane's claim controller writes",
 			expectedExitCode: dp.ExitCodeToolError,
 		},
@@ -3348,12 +3348,12 @@ Summary: 2 modified, 2 removed`,
 				WithModifiedResource("ParentNopClaim", "existing-parent-claim", "default").
 				WithFieldChange("spec.parentField", "existing-parent-value", "modified-parent-value").
 				And().
-				WithModifiedResource("XChildNopClaim", "existing-parent-claim-82crv-child", "").
+				WithModifiedResource("XNopChild", "existing-parent-claim-82crv-child", "").
 				WithFieldChange("spec.childField", "existing-parent-value", "modified-parent-value").
 				// The nested XR's own reconciler wrote its composition refs, not the parent's composed
 				// apply, so the parent's render, which omits them, leaves them in place.
 				WithFieldChange("spec.compositionRef.name", "child-nop-claim-composition", "child-nop-claim-composition").
-				WithFieldChange("spec.compositionRevisionRef.name", "child-nop-claim-composition-2daafdb", "child-nop-claim-composition-2daafdb"),
+				WithFieldChange("spec.compositionRevisionRef.name", "child-nop-claim-composition-db22ad5", "child-nop-claim-composition-db22ad5"),
 			xrdAPIVersion:    V1, // Use V1 style resourceRefs since XRDs have claims
 			expectedError:    false,
 			expectedExitCode: dp.ExitCodeDiffDetected,

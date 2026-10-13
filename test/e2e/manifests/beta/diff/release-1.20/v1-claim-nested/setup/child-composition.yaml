@@ -5,7 +5,7 @@ metadata:
 spec:
   compositeTypeRef:
     apiVersion: claimnested.diff.example.org/v1alpha1
-    kind: XChildNopClaim
+    kind: XNopChild
   mode: Pipeline
   pipeline:
     - step: create-nop-resource
