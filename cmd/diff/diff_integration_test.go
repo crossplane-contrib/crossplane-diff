@@ -3367,6 +3367,71 @@ Summary: 2 modified, 2 removed`,
 				WithField("spec.forProvider.configData", "test-value"),
 			expectedError: false,
 		},
+		// Issue #564: an existing XR whose stage0 exists but is not Ready yet, the normal state of an
+		// XR whose first stage is still provisioning. Nothing renders that is not already observed, so
+		// eventual state used to stop at once and never synthesize stage0's Ready; but Crossplane
+		// composes stage1 as soon as stage0 becomes Ready.
+		"SequencerGatedStageAppearsForExistingXRWithNotReadyStage0WithEventualState": {
+			reason:        "With --eventual-state, stage1 surfaces when stage0 already exists but is not Ready",
+			timeout:       longTimeout, // Multiple simulation iterations need more time
+			outputFormat:  "json",
+			eventualState: true,
+			inputFiles:    []string{"testdata/diff/resources/sequencer-xr.yaml"},
+			setupFiles: []string{
+				"testdata/diff/resources/xrd.yaml",
+				"testdata/diff/resources/sequencer-gating-composition.yaml",
+				"testdata/diff/resources/sequencer-gating-composition-revision.yaml",
+				"testdata/diff/resources/functions.yaml",
+			},
+			crossplaneManagedResources: []HierarchicalOwnershipRelation{
+				composes("testdata/diff/resources/existing-sequencer-gating-xr.yaml", "testdata/diff/resources/existing-sequencer-gating-stage0.yaml"),
+			},
+			expectedExitCode: dp.ExitCodeDiffDetected,
+			// Expect: XR and stage0 modified, stage1 added (unlocked by stage0's synthesized Ready).
+			expectedStructuredOutput: tu.ExpectDiff().
+				WithSummary(1, 2, 0).
+				WithModifiedResource("XNopResource", "sequencer-test", "default").
+				WithFieldChange("spec.coolField", "existing-value", "test-value").
+				And().
+				WithModifiedResource("XDownstreamResource", "0-stage0-resource", "default").
+				WithFieldChange("spec.forProvider.configData", "existing-value", "test-value").
+				And().
+				WithAddedResource("XDownstreamResource", "1-stage1-resource", "default").
+				WithField("spec.forProvider.configData", "test-value"),
+			expectedError: false,
+		},
+		// The converged counterpart: both stages exist and are Ready, so synthesizing Ready changes
+		// nothing and eventual state is the first render. Only the spec changes the input makes show.
+		"EventualStateAddsNothingWhenEveryStageIsReady": {
+			reason:        "With --eventual-state, an XR whose composed resources are all Ready shows only its real changes",
+			timeout:       longTimeout,
+			outputFormat:  "json",
+			eventualState: true,
+			inputFiles:    []string{"testdata/diff/resources/sequencer-xr.yaml"},
+			setupFiles: []string{
+				"testdata/diff/resources/xrd.yaml",
+				"testdata/diff/resources/sequencer-gating-composition.yaml",
+				"testdata/diff/resources/sequencer-gating-composition-revision.yaml",
+				"testdata/diff/resources/functions.yaml",
+			},
+			crossplaneManagedResources: []HierarchicalOwnershipRelation{
+				composes("testdata/diff/resources/existing-sequencer-gating-xr.yaml",
+					"testdata/diff/resources/existing-sequencer-gating-stage0-ready.yaml",
+					"testdata/diff/resources/existing-sequencer-gating-stage1-ready.yaml"),
+			},
+			expectedExitCode: dp.ExitCodeDiffDetected,
+			expectedStructuredOutput: tu.ExpectDiff().
+				WithSummary(0, 3, 0).
+				WithModifiedResource("XNopResource", "sequencer-test", "default").
+				WithFieldChange("spec.coolField", "existing-value", "test-value").
+				And().
+				WithModifiedResource("XDownstreamResource", "0-stage0-resource", "default").
+				WithFieldChange("spec.forProvider.configData", "existing-value", "test-value").
+				And().
+				WithModifiedResource("XDownstreamResource", "1-stage1-resource", "default").
+				WithFieldChange("spec.forProvider.configData", "existing-value", "test-value"),
+			expectedError: false,
+		},
 		// Paired composition-driven gating tests — the fixture conditional-gating-composition.yaml
 		// encodes gating in go-templating itself (no function-sequencer): stage1 is only rendered
 		// when observed stage0 has Ready=True. This isolates eventual-state simulation from
@@ -5403,26 +5468,24 @@ Summary: 2 modified`,
 				"testdata/diff/resources/sequencer-gating-composition.yaml",
 				"testdata/diff/resources/sequencer-gating-composition-revision.yaml",
 				"testdata/diff/resources/functions.yaml",
-				// Pre-existing XR that references sequencer-gating-composition by name so
-				// FindCompositesUsingComposition discovers it.
-				"testdata/comp/resources/existing-sequencer-gating-xr.yaml",
+			},
+			// The XR references sequencer-gating-composition by name, so comp discovers it. It has
+			// composed stage0, which isn't Ready, so stage1 stays gated.
+			crossplaneManagedResources: []HierarchicalOwnershipRelation{
+				composes("testdata/comp/resources/existing-sequencer-gating-xr.yaml", "testdata/comp/resources/existing-sequencer-gating-stage0.yaml"),
 			},
 			inputFiles:       []string{"testdata/comp/updated-sequencer-gating-composition.yaml"},
 			namespace:        "default",
 			expectedExitCode: dp.ExitCodeDiffDetected,
-			// Expect: impact shows stage0 added (its configData changed and it doesn't exist yet);
-			// stage1 is absent from downstream impact because sequencer gates it.
+			// Expect: impact shows stage0 modified (its configData changed); stage1 is absent from
+			// downstream impact because sequencer gates it.
 			expectedStructuredCompOutput: tu.ExpectCompDiff().
 				WithComposition("sequencer-gating-composition").
 				WithCompositionModified().
 				WithXRImpact("XNopResource", "sequencer-gating-test", "default", "changed").
-				WithDownstreamSummary(1, 0, 0).
-				WithDownstreamResource("added", "XDownstreamResource", "0-stage0-resource", "default").
-				// dryRun absence through `comp`: a downstream addition that reached the apiserver
-				// carries no dryRun object. Piggy-backed on an existing case rather than given its
-				// own envtest instance, since it is a pure additional assertion.
-				WithDryRunPerformed().
-				WithField("spec.forProvider.configData", "updated-existing-value"),
+				WithDownstreamSummary(0, 1, 0).
+				WithDownstreamResource("modified", "XDownstreamResource", "0-stage0-resource", "default").
+				WithFieldChange("spec.forProvider.configData", "existing-value", "updated-existing-value"),
 			expectedError: false,
 		},
 		"CompSequencerGatedStageAppearsWithEventualState": {
@@ -5435,21 +5498,29 @@ Summary: 2 modified`,
 				"testdata/diff/resources/sequencer-gating-composition.yaml",
 				"testdata/diff/resources/sequencer-gating-composition-revision.yaml",
 				"testdata/diff/resources/functions.yaml",
-				"testdata/comp/resources/existing-sequencer-gating-xr.yaml",
+			},
+			// The XR has composed stage0, which isn't Ready, so stage1 stays gated until eventual
+			// state synthesizes stage0's Ready (#564).
+			crossplaneManagedResources: []HierarchicalOwnershipRelation{
+				composes("testdata/comp/resources/existing-sequencer-gating-xr.yaml", "testdata/comp/resources/existing-sequencer-gating-stage0.yaml"),
 			},
 			inputFiles:       []string{"testdata/comp/updated-sequencer-gating-composition.yaml"},
 			namespace:        "default",
 			expectedExitCode: dp.ExitCodeDiffDetected,
-			// Expect: impact shows BOTH stage0 and stage1 added (eventual-state unlocks stage1).
+			// Expect: impact shows stage0 modified and stage1 added (eventual-state unlocks stage1).
 			expectedStructuredCompOutput: tu.ExpectCompDiff().
 				WithComposition("sequencer-gating-composition").
 				WithCompositionModified().
 				WithXRImpact("XNopResource", "sequencer-gating-test", "default", "changed").
-				WithDownstreamSummary(2, 0, 0).
-				WithDownstreamResource("added", "XDownstreamResource", "0-stage0-resource", "default").
-				WithField("spec.forProvider.configData", "updated-existing-value").
+				WithDownstreamSummary(1, 1, 0).
+				WithDownstreamResource("modified", "XDownstreamResource", "0-stage0-resource", "default").
+				WithFieldChange("spec.forProvider.configData", "existing-value", "updated-existing-value").
 				AndXR().
 				WithDownstreamResource("added", "XDownstreamResource", "1-stage1-resource", "default").
+				// dryRun absence through `comp`: a downstream addition that reached the apiserver
+				// carries no dryRun object. Piggy-backed on an existing case rather than given its
+				// own envtest instance, since it is a pure additional assertion.
+				WithDryRunPerformed().
 				WithField("spec.forProvider.configData", "updated-existing-value"),
 			expectedError: false,
 		},
@@ -5465,7 +5536,10 @@ Summary: 2 modified`,
 				"testdata/diff/resources/conditional-gating-composition.yaml",
 				"testdata/diff/resources/conditional-gating-composition-revision.yaml",
 				"testdata/diff/resources/functions.yaml",
-				"testdata/comp/resources/existing-conditional-gating-xr.yaml",
+			},
+			// The XR has composed stage0, which isn't Ready, so stage1 stays gated.
+			crossplaneManagedResources: []HierarchicalOwnershipRelation{
+				composes("testdata/comp/resources/existing-conditional-gating-xr.yaml", "testdata/comp/resources/existing-conditional-gating-stage0.yaml"),
 			},
 			inputFiles:       []string{"testdata/comp/updated-conditional-gating-composition.yaml"},
 			namespace:        "default",
@@ -5474,9 +5548,9 @@ Summary: 2 modified`,
 				WithComposition("conditional-gating-composition").
 				WithCompositionModified().
 				WithXRImpact("XNopResource", "conditional-gating-test", "default", "changed").
-				WithDownstreamSummary(1, 0, 0).
-				WithDownstreamResource("added", "XDownstreamResource", "0-stage0-resource", "default").
-				WithField("spec.forProvider.configData", "updated-existing-value"),
+				WithDownstreamSummary(0, 1, 0).
+				WithDownstreamResource("modified", "XDownstreamResource", "0-stage0-resource", "default").
+				WithFieldChange("spec.forProvider.configData", "existing-value", "updated-existing-value"),
 			expectedError: false,
 		},
 		"CompConditionalGatedStageAppearsWithEventualState": {
@@ -5489,7 +5563,11 @@ Summary: 2 modified`,
 				"testdata/diff/resources/conditional-gating-composition.yaml",
 				"testdata/diff/resources/conditional-gating-composition-revision.yaml",
 				"testdata/diff/resources/functions.yaml",
-				"testdata/comp/resources/existing-conditional-gating-xr.yaml",
+			},
+			// The XR has composed stage0, which isn't Ready, so stage1 stays gated until eventual
+			// state synthesizes stage0's Ready (#564).
+			crossplaneManagedResources: []HierarchicalOwnershipRelation{
+				composes("testdata/comp/resources/existing-conditional-gating-xr.yaml", "testdata/comp/resources/existing-conditional-gating-stage0.yaml"),
 			},
 			inputFiles:       []string{"testdata/comp/updated-conditional-gating-composition.yaml"},
 			namespace:        "default",
@@ -5498,9 +5576,9 @@ Summary: 2 modified`,
 				WithComposition("conditional-gating-composition").
 				WithCompositionModified().
 				WithXRImpact("XNopResource", "conditional-gating-test", "default", "changed").
-				WithDownstreamSummary(2, 0, 0).
-				WithDownstreamResource("added", "XDownstreamResource", "0-stage0-resource", "default").
-				WithField("spec.forProvider.configData", "updated-existing-value").
+				WithDownstreamSummary(1, 1, 0).
+				WithDownstreamResource("modified", "XDownstreamResource", "0-stage0-resource", "default").
+				WithFieldChange("spec.forProvider.configData", "existing-value", "updated-existing-value").
 				AndXR().
 				WithDownstreamResource("added", "XDownstreamResource", "1-stage1-resource", "default").
 				WithField("spec.forProvider.configData", "updated-existing-value"),

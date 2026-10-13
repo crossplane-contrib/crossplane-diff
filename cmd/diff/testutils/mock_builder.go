@@ -1571,6 +1571,21 @@ func (b *ResourceBuilder) WithStatusField(name string, value any) *ResourceBuild
 	return b
 }
 
+// WithCondition appends a status condition of the given type and status (e.g. "Ready", "False")
+// to status.conditions, with the given reason.
+func (b *ResourceBuilder) WithCondition(condType, status, reason string) *ResourceBuilder {
+	conditions, _, _ := un.NestedSlice(b.resource.Object, "status", "conditions")
+	conditions = append(conditions, map[string]any{
+		"type":               condType,
+		"status":             status,
+		"reason":             reason,
+		"lastTransitionTime": "2024-01-01T00:00:00Z",
+	})
+	_ = un.SetNestedSlice(b.resource.Object, conditions, "status", "conditions")
+
+	return b
+}
+
 // WithData sets the data field for Secret resources.
 // The byte slices are base64-encoded as they would be in Kubernetes.
 func (b *ResourceBuilder) WithData(data map[string][]byte) *ResourceBuilder {
