@@ -201,7 +201,8 @@ composed resource removable at all: removal detection, like Crossplane's garbage
 the composite controls (§6.3.1). Reconciled XR fixtures carry their own
 `crossplane.io/composite` label and the `compositionRef` and `compositionRevisionRef` Crossplane's composite reconciler
 writes, naming the composition their case applies and a declared CompositionRevision of it, named from the real
-`Composition.Hash()` as `NewCompositionRevision` names it (#562). Only a direct `compositionRef` resolves a revision
+`Composition.Hash()` as `NewCompositionRevision` names it (#562). Every revision fixture is named that way, an older
+one from the composition it was cut from, and no ref names a revision its case doesn't declare. Only a direct `compositionRef` resolves a revision
 (§6.1.1), so a fixture without one would exercise a path no reconciled XR takes. A fixture shared by cases
 with different compositions is therefore split per composition, and the few XRs left without a ref model a state in
 which Crossplane writes none (a revision selector no revision matches, a kind no composition targets) and say so. The

@@ -394,7 +394,10 @@ this state, so a fixture that lacks it tests a tree no real cluster has (#542):
   - Declare the revision as a fixture, named `<composition>-<hash[:7]>` and labelled with the hash from the real
     `Composition.Hash()`, with the composition's spec verbatim (and its labels and annotations, which
     `NewCompositionRevision` copies). `testdata/diff/resources/composition-revision.yaml` is an example.
-    Composition.Hash() covers annotations, so a kubectl-applied composition has its own revision.
+    Composition.Hash() covers annotations, so a kubectl-applied composition has its own revision. Every revision
+    fixture is named this way. One modelling an older revision is named from the composition it was cut from: its own
+    spec, labels and annotations (`testdata/comp/resources/revision-templating-composition-older-revision.yaml`).
+    Never point a ref at a revision the case doesn't declare.
   - Under Automatic, the claim syncer copies the backing XR's ref onto the claim; follow
     `testdata/diff/resources/existing-claim.yaml` with `existing-claim-xr.yaml`.
   - Leave an XR without refs only when Crossplane would write none, and say why in the fixture: a revision selector no
