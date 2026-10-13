@@ -1,10 +1,10 @@
 apiVersion: apiextensions.crossplane.io/v1
 kind: CompositionRevision
 metadata:
-  name: xlegacynopresources.diff.example.org-def456
+  name: xlegacynopresources.diff.example.org-97a39c0
   labels:
     crossplane.io/composition-name: xlegacynopresources.diff.example.org
-    crossplane.io/composition-hash: def456
+    crossplane.io/composition-hash: 97a39c0d1b4d29d439061ea7a5c3774fa71e9ab5020b8a0e44977f796256014
 spec:
   revision: 2
   compositeTypeRef:

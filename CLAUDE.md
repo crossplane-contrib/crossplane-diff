@@ -393,7 +393,7 @@ this state, so a fixture that lacks it tests a tree no real cluster has (#542):
     each its own copy (`existing-removal-test-xr.yaml` beside `existing-xr.yaml`).
   - Declare the revision as a fixture, named `<composition>-<hash[:7]>` and labelled with the hash from the real
     `Composition.Hash()`, with the composition's spec verbatim (and its labels and annotations, which
-    `NewCompositionRevision` copies). `testdata/diff/resources/composition-revision-default.yaml` is an example.
+    `NewCompositionRevision` copies). `testdata/diff/resources/composition-revision.yaml` is an example.
     Composition.Hash() covers annotations, so a kubectl-applied composition has its own revision.
   - Under Automatic, the claim syncer copies the backing XR's ref onto the claim; follow
     `testdata/diff/resources/existing-claim.yaml` with `existing-claim-xr.yaml`.

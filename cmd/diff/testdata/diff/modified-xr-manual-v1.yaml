@@ -8,6 +8,6 @@ spec:
     compositionRef:
       name: xnopresources.diff.example.org
     compositionRevisionRef:
-      name: xnopresources.diff.example.org-abc123
+      name: xnopresources.diff.example.org-911318d
     compositionUpdatePolicy: Manual
   coolField: modified-value

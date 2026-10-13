@@ -918,7 +918,7 @@ func TestDiffIntegration(t *testing.T) {
 			setupFiles: []string{
 				"testdata/diff/resources/xrd.yaml",
 				"testdata/diff/resources/composition.yaml",
-				"testdata/diff/resources/composition-revision-default.yaml",
+				"testdata/diff/resources/composition-revision.yaml",
 				"testdata/diff/resources/functions.yaml",
 				"testdata/diff/resources/rejecting-admission-policy.yaml",
 			},
@@ -982,7 +982,7 @@ func TestDiffIntegration(t *testing.T) {
 			setupFiles: []string{
 				"testdata/diff/resources/xrd.yaml",
 				"testdata/diff/resources/composition.yaml",
-				"testdata/diff/resources/composition-revision-default.yaml",
+				"testdata/diff/resources/composition-revision.yaml",
 				"testdata/diff/resources/functions.yaml",
 			},
 			// put an existing XR in the cluster to diff against
@@ -1040,7 +1040,7 @@ Summary: 2 modified`,
 			setupFiles: []string{
 				"testdata/diff/resources/xrd.yaml",
 				"testdata/diff/resources/composition.yaml",
-				"testdata/diff/resources/composition-revision-default.yaml",
+				"testdata/diff/resources/composition-revision.yaml",
 				"testdata/diff/resources/functions.yaml",
 			},
 			// put an existing resource with different ArgoCD annotations
@@ -1072,7 +1072,7 @@ Summary: 2 modified`,
 			setupFiles: []string{
 				"testdata/diff/resources/xrd.yaml",
 				"testdata/diff/resources/composition.yaml",
-				"testdata/diff/resources/composition-revision-default.yaml",
+				"testdata/diff/resources/composition-revision.yaml",
 				"testdata/diff/resources/functions.yaml",
 			},
 			crossplaneManagedResources: []HierarchicalOwnershipRelation{
@@ -1103,7 +1103,7 @@ Summary: 2 modified`,
 			setupFiles: []string{
 				"testdata/diff/resources/xrd.yaml",
 				"testdata/diff/resources/composition.yaml",
-				"testdata/diff/resources/composition-revision-default.yaml",
+				"testdata/diff/resources/composition-revision.yaml",
 				"testdata/diff/resources/functions.yaml",
 				"testdata/diff/resources/existing-xr.yaml",
 			},
@@ -1128,7 +1128,7 @@ Summary: 2 modified`,
 			setupFiles: []string{
 				"testdata/diff/resources/xrd.yaml",
 				"testdata/diff/resources/composition.yaml",
-				"testdata/diff/resources/composition-revision-default.yaml",
+				"testdata/diff/resources/composition-revision.yaml",
 				"testdata/diff/resources/functions.yaml",
 				"testdata/diff/resources/existing-xr-deleting.yaml",
 			},
@@ -1658,7 +1658,7 @@ Summary: 2 modified, 2 removed`,
 				"testdata/diff/resources/removal-test-composition.yaml",
 				"testdata/diff/resources/removal-test-composition-revision.yaml",
 				"testdata/diff/resources/composition.yaml",
-				"testdata/diff/resources/composition-revision-default.yaml",
+				"testdata/diff/resources/composition-revision.yaml",
 				"testdata/diff/resources/functions.yaml",
 				// Deliberately not in crossplaneManagedResources: its controller reference was removed, so
 				// no XR controls it, though test-resource's resourceRefs still name it.
@@ -1977,7 +1977,7 @@ Summary: 2 modified, 2 removed`,
 			setupFiles: []string{
 				"testdata/diff/resources/xrd.yaml",
 				"testdata/diff/resources/composition.yaml",
-				"testdata/diff/resources/composition-revision-default.yaml",
+				"testdata/diff/resources/composition-revision.yaml",
 				"testdata/diff/resources/functions.yaml",
 			},
 			// Add an existing XR and downstream resource to test modification
@@ -2967,8 +2967,8 @@ Summary: 2 modified, 2 removed`,
 		},
 		// Issue #499, the consequence for which revision renders. The cluster's ref is inherited before the
 		// composition is resolved, so a Manual composite whose input omits the ref stays on the revision it
-		// is pinned to (abc123, the v1 template), as it would in the cluster, instead of being rendered
-		// against the latest one (def456, v2). Compare V2ManualPolicyPinnedRevision, the same change with
+		// is pinned to (-911318d, the v1 template), as it would in the cluster, instead of being rendered
+		// against the latest one (-430f3f3, v2). Compare V2ManualPolicyPinnedRevision, the same change with
 		// the ref spelled out.
 		"V2ManualPolicyOmittedRevisionRefStaysPinned": {
 			reason:       "Validates v2 XR with Manual update policy whose input omits compositionRevisionRef stays on the cluster's pinned revision",
@@ -3097,7 +3097,7 @@ Summary: 2 modified, 2 removed`,
 		// A Manual claim's pin lives on its backing XR: the claim syncer copies the ref back to a claim only
 		// under Automatic. Composition resolution and render must both see that pin. Before, the composition
 		// was resolved from the claim, which names no revision, so the latest one (v2) was chosen, while the
-		// render read the backing XR's ref (rev1): configData became "v2:...-rev1:...", a revision's template
+		// render read the backing XR's ref (revision 1): configData became "v2:...-3d33597:...", a revision's template
 		// paired with another revision's name.
 		"ManualClaimRendersAgainstItsBackingXRsPinnedRevision": {
 			reason:       "A Manual claim whose backing XR is pinned to an older revision renders that revision, with that revision's name",
@@ -3126,14 +3126,14 @@ Summary: 2 modified, 2 removed`,
 				And().
 				WithModifiedResource("XDownstreamResource", "manual-claim-x1y2z", "").
 				WithFieldChange("spec.forProvider.configData",
-					"v1:xpinneds.pinned.diff.example.org-rev1:existing-value",
-					"v1:xpinneds.pinned.diff.example.org-rev1:modified-value"),
+					"v1:xpinneds.pinned.diff.example.org-3d33597:existing-value",
+					"v1:xpinneds.pinned.diff.example.org-3d33597:modified-value"),
 			expectedExitCode: dp.ExitCodeDiffDetected,
 		},
 		// Issue #536. Crossplane's composite reconciler resolves the revision, writes it to
 		// compositionRevisionRef, and then composes, so an Automatic composite whose ref lags behind the
 		// latest revision is composed from the latest one AND sees its name. Before, the latest revision
-		// rendered while the template read the stale ref: configData became "v2:...-rev1:...", a revision's
+		// rendered while the template read the stale ref: configData became "v2:...-3d33597:...", a revision's
 		// template paired with another revision's name.
 		"AutomaticXRWithLaggingRevisionRefRendersLatestRevisionAndName": {
 			reason:       "An Automatic XR whose cluster ref names an older revision renders the latest revision, with that revision's name",
@@ -3154,8 +3154,8 @@ Summary: 2 modified, 2 removed`,
 				WithSummary(0, 1, 0).
 				WithModifiedResource("XDownstreamResource", "lagging-xr", "").
 				WithFieldChange("spec.forProvider.configData",
-					"v1:xpinneds.pinned.diff.example.org-rev1:existing-value",
-					"v2:xpinneds.pinned.diff.example.org-rev2:existing-value"),
+					"v1:xpinneds.pinned.diff.example.org-3d33597:existing-value",
+					"v2:xpinneds.pinned.diff.example.org-806289b:existing-value"),
 			expectedExitCode: dp.ExitCodeDiffDetected,
 		},
 		// An XRD's defaultCompositionUpdatePolicy applies to a new composite before Crossplane resolves its
@@ -3839,7 +3839,7 @@ Summary: 2 modified`,
 				"testdata/comp/resources/removal-test-original-composition.yaml",
 				"testdata/comp/resources/removal-test-original-composition-revision.yaml",
 				"testdata/diff/resources/composition.yaml",
-				"testdata/diff/resources/composition-revision-default.yaml",
+				"testdata/diff/resources/composition-revision.yaml",
 				"testdata/comp/resources/functions.yaml",
 				// Deliberately not in crossplaneManagedResources: its controller reference was removed, so
 				// no XR controls it, though test-resource's resourceRefs still name it.

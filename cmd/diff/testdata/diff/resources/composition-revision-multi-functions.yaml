@@ -1,10 +1,10 @@
 apiVersion: apiextensions.crossplane.io/v1
 kind: CompositionRevision
 metadata:
-  name: xconcurrenttests.diff.example.org-default
+  name: xconcurrenttests.diff.example.org-9930ad3
   labels:
     crossplane.io/composition-name: xconcurrenttests.diff.example.org
-    crossplane.io/composition-hash: default
+    crossplane.io/composition-hash: 9930ad33bd3f5bc36ff1ddd1cfb355485b3da58206f83ca589c68778115c252
 spec:
   revision: 1
   compositeTypeRef:
