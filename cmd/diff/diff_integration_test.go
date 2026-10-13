@@ -1023,6 +1023,10 @@ func TestDiffIntegration(t *testing.T) {
 ` + tu.Red("-   coolField: existing-value") + `
 ` + tu.Green("+   coolField: modified-value") + `
     crossplane:
+      compositionRef:
+        name: xnopresources.diff.example.org
+      compositionRevisionRef:
+        name: xnopresources.diff.example.org-b616215
       compositionUpdatePolicy: Automatic
 
 ---
@@ -1534,6 +1538,10 @@ Summary: 2 modified`,
       crossplane.io/composite: test-resource
     name: test-resource
   spec:
+    compositionRef:
+      name: removal-test-composition
+    compositionRevisionRef:
+      name: removal-test-composition-4b6f9f1
     compositionUpdatePolicy: Automatic
 -   coolField: existing-value
 +   coolField: modified-value
@@ -3015,6 +3023,10 @@ Summary: 2 modified, 2 removed`,
 				WithSummary(0, 2, 0).
 				WithModifiedResource("XChildResource", "test-parent-child", "default").
 				WithFieldChange("spec.childField", "existing-value", "modified-value").
+				// The nested XR's own reconciler wrote the ref, not the parent's composed apply, so the
+				// parent's render, which omits it, leaves it in place.
+				WithFieldChange("spec.crossplane.compositionRevisionRef.name",
+					"xchildresources.nested.example.org-current", "xchildresources.nested.example.org-current").
 				And().
 				WithModifiedResource("XParentResource", "test-parent", "default").
 				WithFieldChange("spec.parentField", "existing-value", "modified-value"),
@@ -3271,7 +3283,11 @@ Summary: 2 modified, 2 removed`,
 				WithFieldChange("spec.parentField", "existing-parent-value", "modified-parent-value").
 				And().
 				WithModifiedResource("XChildNopClaim", "existing-parent-claim-82crv-child", "").
-				WithFieldChange("spec.childField", "existing-parent-value", "modified-parent-value"),
+				WithFieldChange("spec.childField", "existing-parent-value", "modified-parent-value").
+				// The nested XR's own reconciler wrote its composition refs, not the parent's composed
+				// apply, so the parent's render, which omits them, leaves them in place.
+				WithFieldChange("spec.compositionRef.name", "child-nop-claim-composition", "child-nop-claim-composition").
+				WithFieldChange("spec.compositionRevisionRef.name", "child-nop-claim-composition-2daafdb", "child-nop-claim-composition-2daafdb"),
 			xrdAPIVersion:    V1, // Use V1 style resourceRefs since XRDs have claims
 			expectedError:    false,
 			expectedExitCode: dp.ExitCodeDiffDetected,
