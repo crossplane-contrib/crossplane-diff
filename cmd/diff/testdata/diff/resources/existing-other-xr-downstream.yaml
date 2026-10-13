@@ -4,7 +4,6 @@ kind: XDownstreamResource
 metadata:
   annotations:
     crossplane.io/composition-resource-name: nop-resource
-  generateName: other-resource-
   labels:
     crossplane.io/composite: other-resource
   name: other-resource

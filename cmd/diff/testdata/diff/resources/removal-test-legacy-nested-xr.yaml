@@ -1,0 +1,17 @@
+# removal-test-nested-xr.yaml at the legacy (v1) paths: the nested XR removal-test-legacy-composition
+# once composed as resource2. It composes removal-test-legacy-nested-xr-managed.yaml in turn, through
+# the revision the harness creates for removal-test-legacy-child-composition.yaml.
+apiVersion: legacycluster.diff.example.org/v1alpha1
+kind: XLegacyChildResource
+metadata:
+  name: resource-to-be-removed
+  annotations:
+    crossplane.io/composition-resource-name: resource2
+  labels:
+    crossplane.io/composite: test-resource
+spec:
+  childField: child-value
+  compositionRef:
+    name: xlegacychildresources.legacycluster.diff.example.org
+  compositionRevisionRef:
+    name: xlegacychildresources.legacycluster.diff.example.org-bf2c887

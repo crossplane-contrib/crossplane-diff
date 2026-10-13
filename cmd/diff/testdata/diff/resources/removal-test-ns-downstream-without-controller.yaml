@@ -6,7 +6,6 @@ kind: XDownstreamResource
 metadata:
   annotations:
     crossplane.io/composition-resource-name: resource3
-  generateName: test-resource-
   labels:
     crossplane.io/composite: test-resource
   name: resource-without-controller
