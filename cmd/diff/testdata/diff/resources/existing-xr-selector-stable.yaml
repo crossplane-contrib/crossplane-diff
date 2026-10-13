@@ -9,6 +9,8 @@ spec:
   crossplane:
     compositionRef:
       name: xnopresources.diff.example.org
+    compositionRevisionRef:
+      name: xnopresources.diff.example.org-1623e01
     compositionUpdatePolicy: Automatic
     compositionRevisionSelector:
       matchLabels:

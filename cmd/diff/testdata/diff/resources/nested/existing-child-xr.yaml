@@ -10,3 +10,8 @@ metadata:
   namespace: default
 spec:
   childField: "existing-value"
+  crossplane:
+    compositionRef:
+      name: xchildresources.nested.example.org
+    compositionRevisionRef:
+      name: xchildresources.nested.example.org-254a09a

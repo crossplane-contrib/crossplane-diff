@@ -1,3 +1,7 @@
+# Deliberately no compositionRevisionRef. The selector matches no revision in the cluster:
+# original-composition.yaml has no version label, so neither has its one revision. Crossplane cannot
+# select a revision for this XR, so it never writes the ref, and the XR waits for a composition
+# labelled version=0.0.2, like updated-composition-labeled.yaml.
 apiVersion: ns.diff.example.org/v1alpha1
 kind: XNopResource
 metadata:

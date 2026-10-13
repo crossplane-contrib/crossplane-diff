@@ -8,3 +8,8 @@ metadata:
 spec:
   coolField: existing-cross-ns-value
   environment: staging
+  crossplane:
+    compositionRef:
+      name: xnopresources.cross-namespace.example.org
+    compositionRevisionRef:
+      name: xnopresources.cross-namespace.example.org-48ee62c

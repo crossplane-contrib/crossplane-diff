@@ -34,6 +34,20 @@ import (
 // This simulates how Crossplane applies composed resources in production.
 const CrossplaneFieldManager = "apiextensions.crossplane.io/composed/integration-test"
 
+// CompositeReconcilerFieldManager stands for Crossplane's composite reconciler, which records the
+// composition and revision it selects for an XR with an Update of the XR (crossplane
+// internal/controller/apiextensions/composite/api.go), not as part of any composed apply.
+const CompositeReconcilerFieldManager = "crossplane"
+
+// compositeReconcilerFields are the fields the composite reconciler writes that way, at the v2 and v1
+// paths: compositionRef and compositionRevisionRef.
+var compositeReconcilerFields = [][]string{
+	{"spec", "crossplane", "compositionRef"},
+	{"spec", "crossplane", "compositionRevisionRef"},
+	{"spec", "compositionRef"},
+	{"spec", "compositionRevisionRef"},
+}
+
 // Testing data for integration tests
 
 // createTestCompositionWithExtraResources creates a test Composition with a function-extra-resources step.
@@ -709,8 +723,18 @@ func createResourceFromFile(ctx context.Context, c client.Client, path string,
 
 	resource := resources[0]
 
+	// A nested XR's composition refs are the nested XR's own reconciler's, never its parent's: the
+	// parent's composed apply doesn't carry them, so it must not own them, or a diff of the parent's
+	// render would report them removed. Apply them separately, as that reconciler writes them.
+	applied := resource
+
+	var reconcilerFields map[int]any
+	if fieldManager == CrossplaneFieldManager {
+		applied, reconcilerFields = withoutCompositeReconcilerFields(resource)
+	}
+
 	if fieldManager != "" {
-		if err := applyResourceWithSSA(ctx, c, resource, fieldManager); err != nil {
+		if err := applyResourceWithSSA(ctx, c, applied, fieldManager); err != nil {
 			return nil, fmt.Errorf("failed to apply resource with SSA: %w", err)
 		}
 	} else if err := createResources(ctx, c, resources); err != nil {
@@ -728,10 +752,39 @@ func createResourceFromFile(ctx context.Context, c client.Client, path string,
 		return nil, fmt.Errorf("failed to get created resource: %w", err)
 	}
 
+	if len(reconcilerFields) > 0 {
+		for i, v := range reconcilerFields {
+			if err := un.SetNestedField(serverResource.Object, v, compositeReconcilerFields[i]...); err != nil {
+				return nil, fmt.Errorf("cannot set %v on %s: %w", compositeReconcilerFields[i], path, err)
+			}
+		}
+
+		if err := c.Update(ctx, serverResource, client.FieldOwner(CompositeReconcilerFieldManager)); err != nil {
+			return nil, fmt.Errorf("failed to write composite reconciler fields of %s: %w", path, err)
+		}
+	}
+
 	// Store and return the created resource
 	createdResources[path] = serverResource
 
 	return serverResource, nil
+}
+
+// withoutCompositeReconcilerFields returns a copy of resource without the compositeReconcilerFields it
+// sets, and those fields' values keyed by their index in compositeReconcilerFields. resource is not
+// mutated.
+func withoutCompositeReconcilerFields(resource *un.Unstructured) (*un.Unstructured, map[int]any) {
+	out := resource.DeepCopy()
+	removed := map[int]any{}
+
+	for i, path := range compositeReconcilerFields {
+		if v, found, _ := un.NestedFieldCopy(out.Object, path...); found {
+			removed[i] = v
+			un.RemoveNestedField(out.Object, path...)
+		}
+	}
+
+	return out, removed
 }
 
 // applyAllRelationships applies all owner references and resource refs.

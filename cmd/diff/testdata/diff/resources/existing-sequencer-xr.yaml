@@ -11,3 +11,8 @@ metadata:
     crossplane.io/composite: sequencer-test
 spec:
   coolField: "test-value"
+  crossplane:
+    compositionRef:
+      name: sequencer-composition
+    compositionRevisionRef:
+      name: sequencer-composition-eb25773

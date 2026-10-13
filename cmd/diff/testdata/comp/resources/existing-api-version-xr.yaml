@@ -9,5 +9,7 @@ spec:
   crossplane:
     compositionRef:
       name: xapimigrateresources.example.org
+    compositionRevisionRef:
+      name: xapimigrateresources.example.org-079f459
     compositionUpdatePolicy: Automatic
   coolField: test-value

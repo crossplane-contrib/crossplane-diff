@@ -11,3 +11,8 @@ metadata:
     crossplane.io/composite: test-parent
 spec:
   coolField: child-config-value
+  crossplane:
+    compositionRef:
+      name: xnopresources.diff.example.org
+    compositionRevisionRef:
+      name: xnopresources.diff.example.org-9382a6d

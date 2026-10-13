@@ -1,3 +1,6 @@
+# Deliberately no compositionRef or compositionRevisionRef. XDownstreamEnvResource is an XR kind (its
+# XRD is xdownstreamenvresource-xrd.yaml), but no Composition targets it, so Crossplane can select
+# none and never writes either ref. The diff likewise skips rendering it as a nested XR.
 apiVersion: nop.example.org/v1alpha1
 kind: XDownstreamEnvResource
 metadata:

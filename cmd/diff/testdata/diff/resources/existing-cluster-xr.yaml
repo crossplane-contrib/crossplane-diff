@@ -7,3 +7,8 @@ metadata:
     crossplane.io/composite: test-resource
 spec:
   coolField: "existing-value"
+  crossplane:
+    compositionRef:
+      name: removal-test-composition
+    compositionRevisionRef:
+      name: removal-test-composition-988753d

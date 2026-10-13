@@ -10,4 +10,8 @@ metadata:
 spec:
   coolField: "existing-value"
   crossplane:
+    compositionRef:
+      name: xnopresources.diff.example.org
+    compositionRevisionRef:
+      name: xnopresources.diff.example.org-b616215
     compositionUpdatePolicy: Automatic

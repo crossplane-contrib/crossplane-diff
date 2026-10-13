@@ -13,3 +13,5 @@ spec:
   childField: existing-parent-value
   compositionRef:
     name: child-nop-claim-composition
+  compositionRevisionRef:
+    name: child-nop-claim-composition-2daafdb
