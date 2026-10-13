@@ -88,7 +88,8 @@ type OutputError = dt.OutputError
 // StructuredDiffOutput represents the structured output format for diffs.
 // Note: Only JSON tags are used because sigs.k8s.io/yaml uses JSON tags for YAML serialization.
 //
-// This is the v1 document (OutputVersionV1); structuredDiffOutputV2 is the v2 one.
+// This is the v1 document (OutputVersionV1): the v2 document (structuredDiffOutputV2) plus the
+// deprecated flat Changes. It is only ever derived from the v2 one, by structuredDiffOutputV2.v1.
 type StructuredDiffOutput struct {
 	// OutputVersion names the schema of this document.
 	OutputVersion OutputVersion `json:"outputVersion"`
@@ -113,7 +114,7 @@ type StructuredDiffOutput struct {
 	// Xrs groups changes by the input XR/claim that produced them, one entry
 	// per input in input order. This is the recommended view; the flat Changes
 	// field above is deprecated.
-	Xrs []xrDiffWire `json:"xrs"`
+	Xrs []xrEntryWire `json:"xrs"`
 
 	// Warnings is the list of non-fatal advisories raised during the run — things worth knowing that
 	// did not invalidate the diff. Unlike Errors they do NOT affect the exit code, so a consumer
@@ -123,8 +124,8 @@ type StructuredDiffOutput struct {
 	Warnings []dt.OutputWarning `json:"warnings,omitempty"`
 }
 
-// structuredDiffOutputV2 is the v2 (OutputVersionV2) xr document. It is StructuredDiffOutput without
-// the deprecated flat changes[], and its xrs[] entries are the xrEntryWire that comp's v2
+// structuredDiffOutputV2 is the v2 (OutputVersionV2) xr document, and the one the renderer always
+// builds: v1 is derived from it (see v1). Its xrs[] entries are the xrEntryWire that comp's
 // impactAnalysis[] also holds.
 type structuredDiffOutputV2 struct {
 	OutputVersion OutputVersion `json:"outputVersion"`
@@ -135,8 +136,23 @@ type structuredDiffOutputV2 struct {
 	Warnings []dt.OutputWarning `json:"warnings,omitempty"`
 }
 
-// xrEntryWire is the v2 per-XR entry, shared by xr's xrs[] and comp's impactAnalysis[], so one parser
-// handles both. Build it only with toXREntry.
+// v1 projects the document to v1, which differs only by adding the deprecated flat changes[] (see
+// flatChangeSet). That list is passed in because it is not recoverable from the document: it holds
+// each distinct change once, however many input XRs reach it.
+func (d structuredDiffOutputV2) v1(changes []ChangeDetail) StructuredDiffOutput {
+	return StructuredDiffOutput{
+		OutputVersion: OutputVersionV1,
+		Summary:       d.Summary,
+		Changes:       changes,
+		Errors:        d.Errors,
+		Xrs:           d.Xrs,
+		Warnings:      d.Warnings,
+	}
+}
+
+// xrEntryWire is the per-XR entry, shared by xr's xrs[] (in both versions) and comp's v2
+// impactAnalysis[], so one parser handles both. comp's v1 entry is projected from it (see
+// xrEntryWire.v1). Build it only with toXREntry.
 //
 // XR is projected to apiVersion/kind/name/namespace (see toXREntry). Summary and Changes are always
 // present, zero and empty unless Status is changed. FilterReason and FilterDetail are set only by comp,
@@ -210,24 +226,6 @@ func buildXREntries(groups []dt.XRDiffGroup) []xrEntryWire {
 	return out
 }
 
-// xrDiffWire is the v1 (OutputVersionV1) per-input-XR entry in StructuredDiffOutput.Xrs; v2 uses
-// xrEntryWire instead. It carries
-// the input XR's identity, its processing status, and its own summary,
-// changes, and errors.
-//
-// XR is a corev1.ObjectReference nested under the "xr" key (not inlined),
-// carrying apiVersion/kind/name/namespace. Reusing the platform-standard type
-// lets consumers unmarshal the "xr" object straight into an ObjectReference;
-// its other fields (uid/resourceVersion/fieldPath) are omitempty and never
-// populated here, so they do not appear in output.
-type xrDiffWire struct {
-	XR      corev1.ObjectReference `json:"xr"`
-	Status  XRStatus               `json:"status"`
-	Summary Summary                `json:"summary"`
-	Changes []ChangeDetail         `json:"changes"`
-	Errors  []dt.OutputError       `json:"errors,omitempty"`
-}
-
 // Summary contains aggregated counts of changes.
 type Summary struct {
 	Added    int `json:"added"`
@@ -253,10 +251,9 @@ func (s *Summary) increment(t dt.DiffType) {
 
 // ChangeDetail represents a single resource change.
 //
-// This is the shared per-resource wire shape for both commands: the xr command
-// reaches it via xrDiffWire.Changes, the comp command via
-// DownstreamChanges.Changes. A field added here therefore surfaces in both
-// outputs without per-command plumbing.
+// This is the shared per-resource wire shape for both commands and both versions: it is reached
+// via xrEntryWire.Changes, and in comp's v1 via DownstreamChanges.Changes. A field added here
+// therefore surfaces in every output without per-command plumbing.
 type ChangeDetail struct {
 	Type       string         `json:"type"`
 	APIVersion string         `json:"apiVersion"`
@@ -548,26 +545,18 @@ func (r *StructuredDiffRenderer) RenderDiffs(groups []dt.XRDiffGroup, errs []dt.
 	// Grouped view: one entry per input XR, in input order, each complete for its input. Where inputs
 	// overlap, a shared resource appears under each, so the xrs[] summaries can sum to more than the
 	// top-level summary, which counts resources rather than inputs' views of them.
-	var output any
+	v2 := structuredDiffOutputV2{
+		OutputVersion: OutputVersionV2,
+		Summary:       summary,
+		Errors:        errs,
+		Xrs:           buildXREntries(groups),
+		Warnings:      allWarnings,
+	}
 
 	// Anything but v2, including the empty value, is v1.
-	if r.opts.OutputVersion == OutputVersionV2 {
-		output = structuredDiffOutputV2{
-			OutputVersion: OutputVersionV2,
-			Summary:       summary,
-			Errors:        errs,
-			Xrs:           buildXREntries(groups),
-			Warnings:      allWarnings,
-		}
-	} else {
-		output = StructuredDiffOutput{
-			OutputVersion: OutputVersionV1,
-			Summary:       summary,
-			Changes:       changes,
-			Errors:        errs,
-			Xrs:           buildXRGroups(groups),
-			Warnings:      allWarnings,
-		}
+	var output any = v2
+	if r.opts.OutputVersion != OutputVersionV2 {
+		output = v2.v1(changes)
 	}
 
 	var (
@@ -731,64 +720,4 @@ func resourceDiffToChangeDetail(diff *dt.ResourceDiff) *ChangeDetail {
 	}
 
 	return change
-}
-
-// buildXRGroups converts the processor's per-input-XR groups into the xrs[]
-// structured view, preserving input order. Each entry gets its identity, a
-// derived status, and (for changed XRs) its own summary and changes; errored
-// XRs carry their error.
-func buildXRGroups(groups []dt.XRDiffGroup) []xrDiffWire {
-	out := make([]xrDiffWire, 0, len(groups))
-
-	for _, g := range groups {
-		// Project to exactly apiVersion/kind/name/namespace. We use
-		// ObjectReference as the type (so consumers can unmarshal "xr" into the
-		// platform-standard struct), but deliberately omit its other fields:
-		// fieldPath is meaningless for an XR; uid is unstable across
-		// delete/recreate and would mislead consumers tracking an XR across runs
-		// (stable identity is kind/namespace/name); and resourceVersion, if ever
-		// wanted, is a property of the diff run (belongs once at top level), not
-		// per-XR identity.
-		entry := xrDiffWire{
-			XR: corev1.ObjectReference{
-				APIVersion: g.XR.APIVersion,
-				Kind:       g.XR.Kind,
-				Name:       g.XR.Name,
-				Namespace:  g.XR.Namespace,
-			},
-			Changes: []ChangeDetail{},
-		}
-
-		switch {
-		case g.Err != nil:
-			entry.Status = XRStatusError
-			entry.Errors = []dt.OutputError{*g.Err}
-		default:
-			// buildDownstreamChanges returns nil when there are no non-equal
-			// diffs, which is exactly the "unchanged" case.
-			if changes := buildDownstreamChanges(g.Diffs); changes != nil {
-				entry.Status = XRStatusChanged
-				entry.Summary = changes.Summary
-				entry.Changes = changes.Changes
-			} else {
-				entry.Status = XRStatusUnchanged
-			}
-		}
-
-		out = append(out, entry)
-	}
-
-	return out
-}
-
-// buildDownstreamChanges builds DownstreamChanges from a map of ResourceDiffs,
-// returning nil when there are no non-equal changes (the "unchanged" case its
-// callers rely on to derive status).
-func buildDownstreamChanges(diffs map[string]*dt.ResourceDiff) *DownstreamChanges {
-	summary, changes := buildChangeSet(diffs)
-	if len(changes) == 0 {
-		return nil
-	}
-
-	return &DownstreamChanges{Summary: summary, Changes: changes}
 }

@@ -162,8 +162,10 @@ flipping a default, which consumers can prepare for one release ahead by pinning
    renderer can't call `NewOutputError` itself (it lives in `diffprocessor`), and keeping `error` would lose
    `validationFailures`. Do the same for `CompositionDiff.Error`, and in v2 append the composition's `OutputError`
    to the top-level list as well.
-2. Renderer: add `xrEntryWire` with a single `toXREntry` builder that both commands use. Keep `xrDiffWire` and
-   `xrImpactWire` behind v1, and mark them deprecated.
+2. Renderer: add `xrEntryWire` with a single `toXREntry` builder that both commands use. Always build the v2
+   document, and derive v1 from it with projection methods, so v1 can't say anything v2 doesn't. `xr`'s v1 entry is
+   the same `xrEntryWire` (so `xrDiffWire` goes away). Only `comp`'s v1 types (`compDiffWire`, `compositionDiffWire`,
+   `xrImpactWire`, `DownstreamChanges`) remain, as projection targets.
 3. Tests: put the v2 entry type in `testutils/structured_assertions.go` and point `XRImpact` assertions at it when
    v2 is selected. Add table cases in the renderer tests for each status × version, plus one IT for each command with
    `--output-version=v2`.

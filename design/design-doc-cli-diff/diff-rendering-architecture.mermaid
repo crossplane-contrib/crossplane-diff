@@ -83,20 +83,11 @@ classDiagram
         +Changes []ChangeDetail (deprecated)
         +Errors []OutputError
         +Warnings []OutputWarning
-        +Xrs []xrDiffWire
-    }
-
-    class xrDiffWire {
-        <<v1>>
-        +XR ObjectReference
-        +Status XRStatus
-        +Summary Summary
-        +Changes []ChangeDetail
-        +Errors []OutputError
+        +Xrs []xrEntryWire
     }
 
     class xrEntryWire {
-        <<v2, xr and comp>>
+        <<xr v1+v2, comp v2>>
         +XR ObjectReference
         +Status XRStatus
         +FilterReason FilterReason
@@ -273,11 +264,7 @@ classDiagram
     StructuredDiffOutput --> Summary
     StructuredDiffOutput --> ChangeDetail
     StructuredDiffOutput --> OutputError
-    StructuredDiffOutput --> xrDiffWire
-    xrDiffWire --> Summary
-    xrDiffWire --> ChangeDetail
-    xrDiffWire --> XRStatus
-    xrDiffWire --> OutputError
+    StructuredDiffOutput --> xrEntryWire
     xrEntryWire --> Summary
     xrEntryWire --> ChangeDetail
     xrEntryWire --> XRStatus

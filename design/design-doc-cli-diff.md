@@ -1688,8 +1688,8 @@ The structured types are split across two files:
   and no unpredictable synthetic hash reaches output.
 
 The output contract is defined by the JSON/YAML field names (the struct tags), not the Go type identifiers: the
-serialized shaping types are unexported (v1: `compDiffWire`, `compositionDiffWire`, `xrImpactWire`, `xrDiffWire`;
-v2: `structuredDiffOutputV2`, `compDiffWireV2`, `compositionDiffWireV2`, `xrEntryWire`) and follow the same `…Wire` naming convention across `comp` and `xr`. The `…Wire` suffix marks them as the serialized
+serialized shaping types are unexported (v2: `structuredDiffOutputV2`, `compDiffWireV2`, `compositionDiffWireV2`, `xrEntryWire`;
+v1-only: `compDiffWire`, `compositionDiffWire`, `xrImpactWire`) and follow the same `…Wire` naming convention across `comp` and `xr`. The `…Wire` suffix marks them as the serialized
 (JSON/YAML) representation, distinct from the rich, exported internal types the processor builds (`CompDiffOutput`,
 `CompositionDiff`, `XRImpact`). `StructuredDiffOutput` and the field-level types it embeds (`Summary`, `ChangeDetail`,
 `OutputError`) remain exported, as they are shared and referenced directly. The fields below are the public output
@@ -1749,7 +1749,7 @@ contract:
   result. Because `comp` diffs each affected XR through the same calculator, it fails such an XR too. Nor does a
   resource whose API version a new revision changes: removal detection matches what an XR composed to its render
   by composition resource name (§6.3.1), so the old version is not reported as a removal beside the new one (#552).
-- `xrDiffWire` — one entry in the `xrs[]` array, per input XR/claim in input order: an `xr` identity object, a
+- `xrEntryWire` — one entry in the `xrs[]` array (in both versions), per input XR/claim in input order: an `xr` identity object, a
   `status` (`"changed"` / `"unchanged"` / `"error"` — the same `XRStatus` enum comp uses; `"filtered"` does not apply
   to `xr`), its own `summary`, its own `changes[]`, and (for a failed XR) its own `errors[]`.
   An errored XR's error also appears in the top-level union `errors[]`.
@@ -1767,7 +1767,14 @@ contract:
   `comp` v2 document (`compDiffWireV2` / `compositionDiffWireV2`) keeps the `impactAnalysis` key, replaces the
   per-composition `error` string with `errors []OutputError`, and also appends each failed composition's error (its
   `ResourceID` is `Composition/<name>`) to the top-level `errors`, which v1 does not, so that in v2 the top-level list is
-  the union of every error in the document. The v1 types are kept unchanged behind the default.
+  the union of every error in the document.
+- **v1 is a projection of v2.** Both renderers always build the v2 document, and for v1 (the default) derive the v1
+  one from it with `v1()` methods on the v2 types, rather than mapping the internal types a second time. The `xr` v1
+  document adds only the flat `changes` (which the v2 document cannot reproduce, since it lists each distinct change
+  once however many inputs reach it); its `xrs[]` entries are the same `xrEntryWire`, as `xr` never sets the filter
+  fields. `comp`'s v1 inlines `xr`, reduces each `errors[]` to its message as `error`, wraps `summary`/`changes` in
+  `downstreamChanges` only when there are changes, and drops the failed compositions' errors from the top-level list.
+  So v1 cannot say anything v2 does not, and removing v1 means deleting the projections and the v1-only types.
 - `CompDiffOutput` — composition diff JSON/YAML root: `Compositions []CompositionDiff` (one entry per input
   composition) plus optional top-level `Errors []OutputError` for failures that couldn't be attributed to a single
   composition.

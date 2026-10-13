@@ -364,7 +364,7 @@ func TestStructuredDiffRenderer_GroupsByXR(t *testing.T) {
 				Summary:       Summary{Modified: 1},
 				Changes:       []ChangeDetail{bucketChange},
 				Errors:        unionErrs,
-				Xrs: []xrDiffWire{
+				Xrs: []xrEntryWire{
 					{
 						XR:      xrRef("changed-xr"),
 						Status:  XRStatusChanged,
@@ -395,7 +395,7 @@ func TestStructuredDiffRenderer_GroupsByXR(t *testing.T) {
 			want: StructuredDiffOutput{
 				OutputVersion: OutputVersionV1,
 				Changes:       []ChangeDetail{},
-				Xrs: []xrDiffWire{
+				Xrs: []xrEntryWire{
 					{XR: xrRef("unchanged-xr"), Status: XRStatusUnchanged, Changes: []ChangeDetail{}},
 				},
 			},
@@ -465,7 +465,7 @@ func TestStructuredDiffRenderer_GroupsByXR(t *testing.T) {
 				OutputVersion: OutputVersionV1,
 				Summary:       Summary{Modified: 1},
 				Changes:       []ChangeDetail{sharedChange("us-west-2")},
-				Xrs: []xrDiffWire{
+				Xrs: []xrEntryWire{
 					{
 						XR:      xrRef("app-claim"),
 						Status:  XRStatusChanged,
@@ -500,7 +500,7 @@ func TestStructuredDiffRenderer_GroupsByXR(t *testing.T) {
 				OutputVersion: OutputVersionV1,
 				Summary:       Summary{Modified: 2},
 				Changes:       []ChangeDetail{sharedChange("us-west-2"), sharedChange("eu-west-1")},
-				Xrs: []xrDiffWire{
+				Xrs: []xrEntryWire{
 					{
 						XR:      xrRef("app-a"),
 						Status:  XRStatusChanged,
