@@ -198,27 +198,30 @@ the XR's `resourceRefs`) are only exercised if it does (#542). A case lists each
 Crossplane's composed field manager, gives it a controller ownerReference to the XR's real UID, as
 `RenderComposedResourceMetadata` does, and records it in the XR's `resourceRefs`. That reference is what makes a
 composed resource removable at all: removal detection, like Crossplane's garbage collector, considers only resources
-the composite controls (§6.3.1). Reconciled XR fixtures carry their own
-`crossplane.io/composite` label and the `compositionRef` and `compositionRevisionRef` Crossplane's composite reconciler
-writes, naming the composition their case applies and a revision of it named from the real `Composition.Hash()` as
-`NewCompositionRevision` names it (#562). Only a direct `compositionRef` resolves a revision (§6.1.1), so a fixture
-without one would exercise a path no reconciled XR takes, and a fixture shared by cases with different compositions is
-split per composition. The harness writes a nested XR's refs with an Update, as its own reconciler does, rather than in
-its parent's composed apply, so a diff of the parent's render does not report them removed. Only XRs compose: a deeper
-hierarchy is a nested XR, never a managed resource with `resourceRefs`. Composed fixtures carry only what
-`RenderComposedResourceMetadata` and the functions leave: no gotemplating annotation, and a `generateName` only where
-the composition names nothing. A composed resource without a controlling XR, such as an orphan being adopted, is set up
-as a plain fixture, and only on purpose.
+the composite controls (§6.3.1). A reconciled XR fixture names the composition its case applies in `compositionRef`,
+as Crossplane's composite reconciler writes it (#562). Only a direct `compositionRef` resolves a revision (§6.1.1), so a
+fixture without one would exercise a path no reconciled XR takes, and a fixture shared by cases with different
+compositions is split per composition. The harness writes a nested XR's refs with an Update, as its own reconciler
+does, rather than in its parent's composed apply, so a diff of the parent's render does not report them removed. Only
+XRs compose: a deeper hierarchy is a nested XR, never a managed resource with `resourceRefs`. Composed fixtures carry
+only what `RenderComposedResourceMetadata` and the functions leave: no gotemplating annotation, and a `generateName`
+only where the composition names nothing. A composed resource without a controlling XR, such as an orphan being
+adopted, is set up as a plain fixture, and only on purpose.
 
-Two harness steps keep a case's cluster to what Crossplane leaves, and fail the case otherwise. The first does what the
-composition revision controller would, since none runs: it gives each revision a controller reference to its
-Composition and creates the revision of each Composition's current hash that no fixture declares, and it refuses a
-revision without its Composition or not named from the hash of the Composition it was cut from. The second checks a short
-table of rules before the diff runs: each XR's composite label, its `compositionRef` and revision, and its claim binding;
-each composed resource's controller, `composition-resource-name` annotation and labels; and each claim's binding and,
-under Automatic, its revision ref, as the claim syncer leaves them. A case that deliberately sets up something else (an
-ownership takeover, an orphan, a revision selector matching nothing) lists the object in `unreconciled` with the reason;
-an exemption nothing needs fails the case too.
+What else Crossplane would have written, the harness derives rather than requires, as it derives XR and claim CRDs
+from XRDs: just before it creates each `setupFiles` or `crossplaneManagedResources` fixture, it fills in whatever the
+fixture leaves out. An XR gets its own `crossplane.io/composite` label, and a resource an XR composes (a nested XR
+included) gets that XR's composite and claim labels, as `RenderComposedResourceMetadata` copies them. An XR that names
+a composition but neither a revision nor a revision selector gets a `compositionRevisionRef` to that composition's
+current revision. A CompositionRevision fixture without a name is named and hash-labelled as `NewCompositionRevision`
+would name it, from the Composition its `crossplane.io/composition-name` label names and its own spec, labels and
+annotations. A value the fixture sets always wins, which is how a case sets up a state Crossplane would not leave: a
+stale or pinned revision ref, an ownership takeover, a selector matching nothing. `fieldManagerApplies`, partial
+applies under a named manager, and input files are left as written.
+
+The harness also does what the composition revision controller would, since none runs: it gives each revision a
+controller reference to its Composition and creates the revision of each Composition's current hash that no fixture
+declares. A revision fixture is therefore needed only to model history: an older spec, or a revision number above 1.
 
 envtest runs each case's `kube-apiserver` and `etcd` as children of the test binary, and only a deferred
 `Environment.Stop` ends them, which does not run when the binary times out, is killed or is interrupted. Such a run

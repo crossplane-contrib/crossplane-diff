@@ -367,7 +367,8 @@ e2e tests need none of this: they run real Crossplane, which generates the CRDs 
 **Integration Fixtures Look Like Reconciled Cluster State**
 
 envtest runs no Crossplane controllers, so whatever Crossplane would have written to an existing resource has to be in
-the fixture or put there by the harness. Ownership, adoption and lookup logic (`lookupByComposite`, the controller-UID
+the fixture or put there by the harness, which derives most of it (see "The Harness Derives What Crossplane Writes"
+below). Ownership, adoption and lookup logic (`lookupByComposite`, the controller-UID
 filter in `extractComposedResourcesFromTree`, render's check that observed resources are controlled by the XR, and
 removal detection, which like Crossplane's garbage collector only removes what the composite controls) reads exactly
 this state, so a fixture that lacks it tests a tree no real cluster has (#542):
@@ -382,25 +383,24 @@ this state, so a fixture that lacks it tests a tree no real cluster has (#542):
   apiserver prunes them. Each file holds exactly one resource.
 - **Leave a composed resource in `setupFiles` only when it deliberately has no controlling XR** (an orphan being
   adopted, say), and say so in a comment.
-- **A reconciled XR carries its own `crossplane.io/composite: <name>` label**, as Crossplane labels every XR. A new-XR
-  input stays as a user would author it; if a test re-applies an existing XR's manifest, keep the cluster copy in its own
-  `existing-*.yaml`.
-- **A reconciled XR names its composition and tracks a CompositionRevision of it** (`compositionRef` and
-  `compositionRevisionRef`, at the v1 `spec.*` or v2 `spec.crossplane.*` path its XRD uses), as Crossplane's composite
-  reconciler writes them (#562). Only a direct `compositionRef` resolves a revision, so an XR without one exercises
-  the selector/type path no reconciled XR takes.
+- **A new-XR input stays as a user would author it.** The harness fills in only setup fixtures, so if a test re-applies
+  an existing XR's manifest and the cluster copy differs, keep the cluster copy in its own `existing-*.yaml`.
+- **A reconciled XR names its composition** in `compositionRef`, at the v1 `spec.*` or v2 `spec.crossplane.*` path its
+  XRD uses, as Crossplane's composite reconciler writes it (#562), and the harness derives the revision it tracks. Only
+  a direct `compositionRef` resolves a revision, so an XR without one exercises the selector/type path no reconciled XR
+  takes.
   - Name the composition the case actually applies. If cases with different compositions share an XR fixture, give
     each its own copy (`existing-removal-test-xr.yaml` beside `existing-xr.yaml`).
-  - The revision a composite tracks is named `<composition>-<hash[:7]>` and labelled with the hash from the real
+  - Set `compositionRevisionRef` only when it is not the composition's current revision: a Manual XR pinned to an
+    older one, or an Automatic XR whose ref lags. A revision is named `<composition>-<hash[:7]>` from the real
     `Composition.Hash()`, which covers labels and annotations, so a kubectl-applied composition has its own revision.
-    The harness creates the revision of each Composition's current hash (see "The Harness Refuses Impossible Setups"
-    below), so declare a revision fixture only when a test names it or models history. An older revision is named from
-    the composition it was cut from: its own spec, labels and annotations
-    (`testdata/comp/resources/revision-templating-composition-older-revision.yaml`).
-  - Under Automatic, the claim syncer copies the backing XR's ref onto the claim; follow
+  - Declare a revision fixture only to model history: an older spec, or a revision number above 1. Give it the
+    `crossplane.io/composition-name` label of its composition and no name; the harness names it from its own spec,
+    labels and annotations (`testdata/comp/resources/revision-templating-composition-older-revision.yaml`).
+  - Claims are not filled in. Under Automatic, the claim syncer copies the backing XR's ref onto the claim; follow
     `testdata/diff/resources/existing-claim.yaml` with `existing-claim-xr.yaml`.
-  - Leave an XR without refs only when Crossplane would write none, and say why: a revision selector no revision
-    matches (exempted in `unreconciled`), or a kind no composition targets.
+  - Leave an XR without a revision ref only when Crossplane would write none, and say why: a revision selector no
+    revision matches (the harness derives no ref for an XR with a selector), or a kind no composition targets.
   - A nested XR's refs are its own reconciler's, which writes them with an Update. The harness applies them that way
     (`withoutCompositeReconcilerFields`), not in the parent's composed apply, so a diff of the parent's render, which
     omits them, does not report them removed.
@@ -413,31 +413,34 @@ this state, so a fixture that lacks it tests a tree no real cluster has (#542):
   and no `generateName` unless the composition gives the resource no name (`RenderComposedResourceMetadata` sets one
   only then). A root XR or a user's manifest carries no `crossplane.io/composition-resource-name`.
 
-**The Harness Refuses Impossible Setups**
+**The Harness Derives What Crossplane Writes**
 
-Two harness steps (in `cmd/diff/diff_it_utils_test.go`) keep a case's cluster to what Crossplane leaves, and fail the
-case otherwise:
+As with the XR and claim CRDs, the harness (in `cmd/diff/diff_it_utils_test.go`) derives rather than validates. Just
+before it creates each `setupFiles` or `crossplaneManagedResources` fixture, `crossplaneDefaults.fill` fills in
+whatever the fixture leaves out:
 
-- `reconcileCompositionRevisions`, after `setupFiles`, does what the composition revision controller would: it gives
-  each revision a controller reference to its Composition's real UID and creates the revision of a Composition's
-  current hash if no fixture declares it. It refuses a revision whose Composition the case doesn't declare, or one not
-  named and labelled from the hash of the Composition it was cut from.
-- `validateReconciledState`, once everything is set up and before anything is deleted out of band, checks a short table
-  of rules: each XR has its root's composite label, a declared `compositionRef` of its type when a composition targets
-  it, a declared revision of that composition, and claim labels only with a `claimRef`; each resource in an XR's
-  `resourceRefs` is controlled by it, carries `composition-resource-name` and the XR's composite and claim labels, and
-  not the gotemplating annotation; each claim is bound to an XR that names it back, and carries an Automatic XR's
-  revision ref.
+- an XR's `crossplane.io/composite` label, its own name; and on a resource an XR composes, nested XRs included, that
+  XR's composite and claim labels, as `RenderComposedResourceMetadata` copies them;
+- an XR's `compositionRevisionRef`, when it names a Composition but neither a revision nor a revision selector: that
+  Composition's current revision;
+- a CompositionRevision's name and hash label, from the Composition its `crossplane.io/composition-name` label names
+  and its own spec, labels and annotations, as `NewCompositionRevision` names it.
 
-A case that deliberately sets up something else (an ownership takeover, an orphan, an XR whose revision selector matches
-nothing) lists the object in `unreconciled`, keyed `<Kind>/<namespace>/<name>`, with the reason. An entry for an object
-with nothing wrong fails too, so exemptions can't go stale.
+**A value the fixture sets always wins.** That is how a case sets up a state Crossplane would not leave (a stale or
+pinned revision ref, an ownership takeover, an orphan), so there is no exemption list; say why in a comment instead.
+Don't write a field the harness would derive with the same value. `fieldManagerApplies`, which are partial applies
+under a named manager, and input files are left as written.
+
+`reconcileCompositionRevisions`, after `setupFiles`, then does what the composition revision controller would: it gives
+each revision a controller reference to its Composition's real UID and creates the revision of each Composition's
+current hash that no fixture declares.
 
 **Neither Test Suite Reproduces What a Real Client Adds**
 
 No fixture in either suite carries the fields a real client writes, because of how each applies manifests:
 
-- Integration tests (`applyResourcesFromFiles` → `createResources`) use `c.Create` with the fixture verbatim.
+- Integration tests (`applyResourcesFromFiles` → `createResources`) use `c.Create` with the fixture as written, plus
+  only what the harness derives Crossplane would have written.
 - E2E tests (`funcs.ApplyResources` → `ApplyHandler`) use `client.Apply` with a `FieldOwner`, i.e. **server-side**
   apply, which deliberately omits `kubectl.kubernetes.io/last-applied-configuration`.
 
