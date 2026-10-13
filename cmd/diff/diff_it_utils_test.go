@@ -18,11 +18,9 @@ import (
 	tu "github.com/crossplane-contrib/crossplane-diff/cmd/diff/testutils"
 	gyaml "gopkg.in/yaml.v3"
 	extv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
-	"k8s.io/apimachinery/pkg/api/equality"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	un "k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
-	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/util/yaml"
@@ -31,6 +29,7 @@ import (
 
 	"github.com/crossplane/crossplane-runtime/v2/pkg/errors"
 	"github.com/crossplane/crossplane-runtime/v2/pkg/logging"
+	"github.com/crossplane/crossplane-runtime/v2/pkg/meta"
 
 	xpextv1 "github.com/crossplane/crossplane/apis/v2/apiextensions/v1"
 )
@@ -943,49 +942,76 @@ func localCrossplaneBinary(t *testing.T) string {
 	return absPath
 }
 
-// reconcileCompositionRevisions leaves the setup's Compositions and CompositionRevisions as Crossplane's
-// composition revision controller does (crossplane internal/controller/apiextensions/composition): every
-// revision is controlled by its Composition, and a Composition's current hash is its latest revision,
-// creating that revision if no fixture declares it. envtest runs no controllers, so without this a case
-// would see revisions no cluster has: uncontrolled ones, or none at all for a Composition.
-//
-// It also refuses a fixture no cluster could hold: a revision whose Composition the case doesn't declare
-// (Crossplane garbage collects a revision with its Composition), or one not named and labelled from the
-// hash of the Composition it was cut from, as NewCompositionRevision names it.
+// reconcileCompositionRevisions does what Crossplane's composition revision controller would, since
+// envtest runs none: it gives each revision a controller reference to its Composition, and creates the
+// revision of a Composition's current hash if no fixture declares it. It refuses a revision no cluster
+// could hold: one whose Composition the case doesn't declare (it would be garbage collected), or one not
+// named and labelled from the hash of the Composition it was cut from.
 func reconcileCompositionRevisions(ctx context.Context, c client.Client) error {
 	comps := &xpextv1.CompositionList{}
-	if err := c.List(ctx, comps); err != nil {
-		return errors.Wrap(err, "cannot list Compositions")
-	}
-
 	revs := &xpextv1.CompositionRevisionList{}
-	if err := c.List(ctx, revs); err != nil {
-		return errors.Wrap(err, "cannot list CompositionRevisions")
+
+	if err := c.List(ctx, comps); err != nil {
+		return err
 	}
 
-	byName := make(map[string]*xpextv1.Composition, len(comps.Items))
+	if err := c.List(ctx, revs); err != nil {
+		return err
+	}
+
 	for i := range comps.Items {
-		byName[comps.Items[i].GetName()] = &comps.Items[i]
+		comp := &comps.Items[i]
+		_, current := revisionIdentity(comp.GetName(), comp.Hash())
+		owner := meta.AsController(meta.TypedReferenceTo(comp, xpextv1.CompositionGroupVersionKind))
+		latest, found := int64(0), false
+
+		for j := range revs.Items {
+			rev := &revs.Items[j]
+			if rev.GetLabels()[xpextv1.LabelCompositionName] != comp.GetName() {
+				continue
+			}
+
+			latest = max(latest, rev.Spec.Revision)
+			found = found || rev.GetLabels()[xpextv1.LabelCompositionHash] == current
+
+			meta.AddOwnerReference(rev, owner)
+
+			if err := c.Update(ctx, rev); err != nil {
+				return err
+			}
+		}
+
+		if !found {
+			if err := c.Create(ctx, newCompositionRevision(comp, latest+1, owner)); err != nil {
+				return err
+			}
+		}
 	}
 
 	var problems []string
 
 	for i := range revs.Items {
 		rev := &revs.Items[i]
-		compName := rev.GetLabels()[xpextv1.LabelCompositionName]
-
-		if _, ok := byName[compName]; !ok {
-			problems = append(problems, fmt.Sprintf("CompositionRevision %s belongs to Composition %q, which the case doesn't declare; "+
-				"a revision is garbage collected with its Composition", rev.GetName(), compName))
-
-			continue
+		if len(rev.GetOwnerReferences()) == 0 {
+			problems = append(problems, fmt.Sprintf("CompositionRevision %s: its Composition %q isn't declared",
+				rev.GetName(), rev.GetLabels()[xpextv1.LabelCompositionName]))
 		}
 
-		name, hash := revisionIdentity(compName, revisionSource(rev).Hash())
+		// The Composition it was cut from had its spec, and the labels and annotations it copied.
+		src := &xpextv1.Composition{Spec: (&xpextv1.GeneratedRevisionSpecConverter{}).FromRevisionSpec(rev.Spec)}
+		labels := maps.Clone(rev.GetLabels())
+		delete(labels, xpextv1.LabelCompositionName)
+		delete(labels, xpextv1.LabelCompositionHash)
+
+		if len(labels) > 0 {
+			src.SetLabels(labels)
+		}
+
+		src.SetAnnotations(rev.GetAnnotations())
+
+		name, hash := revisionIdentity(rev.GetLabels()[xpextv1.LabelCompositionName], src.Hash())
 		if rev.GetName() != name || rev.GetLabels()[xpextv1.LabelCompositionHash] != hash {
-			problems = append(problems, fmt.Sprintf("CompositionRevision %s (hash label %q) is not named from the hash of the "+
-				"Composition it was cut from: Crossplane would name it %s with hash label %q",
-				rev.GetName(), rev.GetLabels()[xpextv1.LabelCompositionHash], name, hash))
+			problems = append(problems, fmt.Sprintf("CompositionRevision %s: Crossplane names it %s, hash label %s", rev.GetName(), name, hash))
 		}
 	}
 
@@ -993,152 +1019,66 @@ func reconcileCompositionRevisions(ctx context.Context, c client.Client) error {
 		return errors.New(strings.Join(problems, "\n"))
 	}
 
-	for i := range comps.Items {
-		if err := reconcileRevisionsOf(ctx, c, &comps.Items[i], revs.Items); err != nil {
-			return err
-		}
-	}
-
 	return nil
 }
 
-// reconcileRevisionsOf does for one Composition what the composition revision controller's Reconcile
-// does: control each of its revisions, then make its current hash its latest revision.
-func reconcileRevisionsOf(ctx context.Context, c client.Client, comp *xpextv1.Composition, all []xpextv1.CompositionRevision) error {
-	owner := metav1.OwnerReference{
-		APIVersion:         xpextv1.CompositionGroupVersionKind.GroupVersion().String(),
-		Kind:               xpextv1.CompositionGroupVersionKind.Kind,
-		Name:               comp.GetName(),
-		UID:                comp.GetUID(),
-		Controller:         new(true),
-		BlockOwnerDeletion: new(true),
-	}
-
-	var (
-		latest int64
-		mine   []*xpextv1.CompositionRevision
-	)
-
-	for i := range all {
-		if all[i].GetLabels()[xpextv1.LabelCompositionName] != comp.GetName() {
-			continue
-		}
-
-		mine = append(mine, &all[i])
-		latest = max(latest, all[i].Spec.Revision)
-	}
-
-	_, current := revisionIdentity(comp.GetName(), comp.Hash())
-	matched := false
-
-	for _, rev := range mine {
-		rev.SetOwnerReferences([]metav1.OwnerReference{owner})
-
-		// A revision matching the current Composition that isn't the latest is promoted to be the latest.
-		if rev.GetLabels()[xpextv1.LabelCompositionHash] == current {
-			matched = true
-
-			if rev.Spec.Revision != latest {
-				rev.Spec.Revision = latest + 1
-			}
-		}
-
-		if err := c.Update(ctx, rev); err != nil {
-			return errors.Wrapf(err, "cannot update CompositionRevision %s", rev.GetName())
-		}
-	}
-
-	if matched {
-		return nil
-	}
-
-	rev := newCompositionRevision(comp, latest+1)
-	rev.SetOwnerReferences([]metav1.OwnerReference{owner})
-
-	return errors.Wrapf(c.Create(ctx, rev), "cannot create the CompositionRevision of Composition %s", comp.GetName())
-}
-
 // newCompositionRevision is crossplane's composition.NewCompositionRevision, which is internal.
-func newCompositionRevision(comp *xpextv1.Composition, revision int64) *xpextv1.CompositionRevision {
+func newCompositionRevision(comp *xpextv1.Composition, revision int64, owner metav1.OwnerReference) *xpextv1.CompositionRevision {
 	name, hash := revisionIdentity(comp.GetName(), comp.Hash())
 
-	labels := maps.Clone(comp.GetLabels())
-	if labels == nil {
-		labels = map[string]string{}
-	}
-
-	labels[xpextv1.LabelCompositionName] = comp.GetName()
-	labels[xpextv1.LabelCompositionHash] = hash
-
-	spec := (&xpextv1.GeneratedRevisionSpecConverter{}).ToRevisionSpec(comp.Spec)
-	spec.Revision = revision
-
-	rev := &xpextv1.CompositionRevision{Spec: spec}
+	rev := &xpextv1.CompositionRevision{Spec: (&xpextv1.GeneratedRevisionSpecConverter{}).ToRevisionSpec(comp.Spec)}
+	rev.Spec.Revision = revision
 	rev.SetName(name)
-	rev.SetLabels(labels)
-
-	if a := comp.GetAnnotations(); len(a) > 0 {
-		rev.SetAnnotations(maps.Clone(a))
-	}
+	rev.SetLabels(maps.Clone(comp.GetLabels()))
+	meta.AddLabels(rev, map[string]string{xpextv1.LabelCompositionName: comp.GetName(), xpextv1.LabelCompositionHash: hash})
+	rev.SetAnnotations(maps.Clone(comp.GetAnnotations()))
+	meta.AddOwnerReference(rev, owner)
 
 	return rev
 }
 
-// revisionSource is the Composition a revision was cut from, as far as its hash is concerned: the
-// revision's spec, and its labels and annotations, which NewCompositionRevision copies from the
-// Composition, without the two labels it stamps.
-func revisionSource(rev *xpextv1.CompositionRevision) *xpextv1.Composition {
-	comp := &xpextv1.Composition{Spec: (&xpextv1.GeneratedRevisionSpecConverter{}).FromRevisionSpec(rev.Spec)}
-
-	labels := maps.Clone(rev.GetLabels())
-	delete(labels, xpextv1.LabelCompositionName)
-	delete(labels, xpextv1.LabelCompositionHash)
-
-	if len(labels) > 0 {
-		comp.SetLabels(labels)
-	}
-
-	comp.SetAnnotations(rev.GetAnnotations())
-
-	return comp
+// revisionIdentity is the name and hash label NewCompositionRevision gives the revision of a Composition
+// with the given name and Composition.Hash().
+func revisionIdentity(compName, hash string) (string, string) {
+	hash = hash[:min(63, len(hash))]
+	return compName + "-" + hash[:min(7, len(hash))], hash
 }
 
-// xrType is one composite resource type an XRD in the case defines, and its claim type if it has one.
-type xrType struct {
-	xr, claim schema.GroupVersionKind // claim is zero when the XRD offers no claim
-}
-
-// validateReconciledState refuses a case whose cluster holds what Crossplane would never leave, so a test
-// can't exercise a tree no real cluster has (#562). It checks every XR, claim and composed resource the
-// setup created, every Composition's Functions, and reports each object it would refuse as
-// "<Kind>/<namespace>/<name>: <why>". unreconciled names the objects a case deliberately sets up in a state
-// Crossplane would not leave, each with the reason; listing one that isn't refused is itself refused, so
-// a stale exemption can't linger.
+// validateReconciledState refuses a case whose cluster holds what Crossplane never leaves (#562), so no
+// test exercises a tree a real cluster can't have. It returns one line per problem, as
+// "<Kind>/<namespace>/<name>: <why>". unreconciled exempts the objects a case deliberately sets up
+// otherwise, keyed the same way; an exemption for an object with nothing wrong is itself a problem.
 func validateReconciledState(ctx context.Context, c client.Client, unreconciled map[string]string) error {
-	v := &realismValidator{ctx: ctx, c: c, problems: map[string][]string{}}
-	if err := v.load(); err != nil {
+	s, err := loadClusterState(ctx, c)
+	if err != nil {
 		return err
 	}
 
-	v.checkFunctions()
-	v.checkXRs()
-	v.checkClaims()
+	problems := map[string][]string{}
+	refuse := func(o *un.Unstructured, why string, args ...any) {
+		id := o.GetKind() + "/" + o.GetNamespace() + "/" + o.GetName()
+		problems[id] = append(problems[id], fmt.Sprintf(why, args...))
+	}
+
+	for _, xr := range s.xrs {
+		checkXR(ctx, c, s, xr, refuse)
+	}
+
+	for _, cm := range s.claims {
+		checkClaim(s, cm, refuse)
+	}
 
 	var out []string
 
-	for id, why := range v.problems {
-		if _, ok := unreconciled[id]; ok {
-			continue
-		}
-
-		for _, w := range why {
-			out = append(out, id+": "+w)
+	for id, why := range problems {
+		if _, ok := unreconciled[id]; !ok {
+			out = append(out, id+": "+strings.Join(why, "; "))
 		}
 	}
 
 	for id := range unreconciled {
-		if _, ok := v.problems[id]; !ok {
-			out = append(out, id+": listed as deliberately unreconciled, but nothing about it is")
+		if _, ok := problems[id]; !ok {
+			out = append(out, id+": exempted as unreconciled, but nothing about it is")
 		}
 	}
 
@@ -1151,437 +1091,203 @@ func validateReconciledState(ctx context.Context, c client.Client, unreconciled 
 	return errors.New(strings.Join(out, "\n"))
 }
 
-type realismValidator struct {
-	ctx      context.Context
-	c        client.Client
-	problems map[string][]string
-
-	types     []xrType
-	comps     map[string]*xpextv1.Composition
-	revs      map[string]*xpextv1.CompositionRevision
-	functions map[string]bool
-	xrs       []*un.Unstructured
-	xrsByUID  map[string]*un.Unstructured
+// clusterState is what validateReconciledState checks: the case's XRs and claims, and the Compositions
+// and revisions they may name.
+type clusterState struct {
+	xrs, claims []*un.Unstructured
+	comps       map[string]xpextv1.Composition
+	revs        map[string]xpextv1.CompositionRevision
 }
 
-func objectID(o *un.Unstructured) string {
-	return o.GetKind() + "/" + o.GetNamespace() + "/" + o.GetName()
-}
+func loadClusterState(ctx context.Context, c client.Client) (*clusterState, error) {
+	s := &clusterState{comps: map[string]xpextv1.Composition{}, revs: map[string]xpextv1.CompositionRevision{}}
 
-func (v *realismValidator) refuse(o *un.Unstructured, format string, args ...any) {
-	id := objectID(o)
-	v.problems[id] = append(v.problems[id], fmt.Sprintf(format, args...))
-}
+	list := func(gvk schema.GroupVersionKind) ([]*un.Unstructured, error) {
+		l := &un.UnstructuredList{}
+		l.SetGroupVersionKind(gvk.GroupVersion().WithKind(gvk.Kind + "List"))
+		err := c.List(ctx, l)
 
-func (v *realismValidator) list(gvk schema.GroupVersionKind) ([]*un.Unstructured, error) {
-	l := &un.UnstructuredList{}
-	l.SetGroupVersionKind(gvk.GroupVersion().WithKind(gvk.Kind + "List"))
-
-	if err := v.c.List(v.ctx, l); err != nil {
-		return nil, errors.Wrapf(err, "cannot list %s", gvk)
-	}
-
-	out := make([]*un.Unstructured, 0, len(l.Items))
-	for i := range l.Items {
-		out = append(out, &l.Items[i])
-	}
-
-	return out, nil
-}
-
-func (v *realismValidator) load() error {
-	for _, version := range []string{"v1", "v2"} {
-		xrds, err := v.list(schema.GroupVersionKind{Group: "apiextensions.crossplane.io", Version: version, Kind: "CompositeResourceDefinition"})
-		if err != nil {
-			return err
+		out := make([]*un.Unstructured, len(l.Items))
+		for i := range l.Items {
+			out[i] = &l.Items[i]
 		}
 
-		for _, xrd := range xrds {
-			if version == "v2" && xrd.GetAnnotations()["internal.crossplane.io/converted-from"] != "" {
-				continue
+		return out, err
+	}
+
+	// Each XRD is listed at v1, which serves every XRD; read its XR and claim types.
+	xrds, err := list(schema.GroupVersionKind{Group: "apiextensions.crossplane.io", Version: "v1", Kind: "CompositeResourceDefinition"})
+	if err != nil {
+		return nil, err
+	}
+
+	for _, xrd := range xrds {
+		group, _, _ := un.NestedString(xrd.Object, "spec", "group")
+		xrKind, _, _ := un.NestedString(xrd.Object, "spec", "names", "kind")
+		claimKind, _, _ := un.NestedString(xrd.Object, "spec", "claimNames", "kind")
+		version := ""
+
+		versions, _, _ := un.NestedSlice(xrd.Object, "spec", "versions")
+		for _, v := range versions {
+			if m, _ := v.(map[string]any); m["referenceable"] == true {
+				version, _ = m["name"].(string)
+			}
+		}
+
+		xrs, err := list(schema.GroupVersionKind{Group: group, Version: version, Kind: xrKind})
+		if err != nil {
+			return nil, err
+		}
+
+		s.xrs = append(s.xrs, xrs...)
+
+		if claimKind != "" {
+			claims, err := list(schema.GroupVersionKind{Group: group, Version: version, Kind: claimKind})
+			if err != nil {
+				return nil, err
 			}
 
-			t := xrTypeOf(xrd)
-			if !slices.Contains(v.types, t) {
-				v.types = append(v.types, t)
-			}
+			s.claims = append(s.claims, claims...)
 		}
 	}
 
 	comps := &xpextv1.CompositionList{}
-	if err := v.c.List(v.ctx, comps); err != nil {
-		return errors.Wrap(err, "cannot list Compositions")
-	}
-
-	v.comps = map[string]*xpextv1.Composition{}
-	for i := range comps.Items {
-		v.comps[comps.Items[i].GetName()] = &comps.Items[i]
-	}
-
 	revs := &xpextv1.CompositionRevisionList{}
-	if err := v.c.List(v.ctx, revs); err != nil {
-		return errors.Wrap(err, "cannot list CompositionRevisions")
+
+	if err := c.List(ctx, comps); err != nil {
+		return nil, err
 	}
 
-	v.revs = map[string]*xpextv1.CompositionRevision{}
-	for i := range revs.Items {
-		v.revs[revs.Items[i].GetName()] = &revs.Items[i]
+	if err := c.List(ctx, revs); err != nil {
+		return nil, err
 	}
 
-	fns, err := v.list(schema.GroupVersionKind{Group: "pkg.crossplane.io", Version: "v1", Kind: "Function"})
-	if err != nil {
-		return err
+	for _, comp := range comps.Items {
+		s.comps[comp.GetName()] = comp
 	}
 
-	v.functions = map[string]bool{}
-	for _, fn := range fns {
-		v.functions[fn.GetName()] = true
+	for _, rev := range revs.Items {
+		s.revs[rev.GetName()] = rev
 	}
 
-	v.xrsByUID = map[string]*un.Unstructured{}
-
-	for _, t := range v.types {
-		xrs, err := v.list(t.xr)
-		if err != nil {
-			return err
-		}
-
-		for _, xr := range xrs {
-			v.xrs = append(v.xrs, xr)
-			v.xrsByUID[string(xr.GetUID())] = xr
-		}
-	}
-
-	return nil
+	return s, nil
 }
 
-// xrTypeOf reads the XR and claim types an XRD (v1 or v2, as unstructured) defines.
-func xrTypeOf(xrd *un.Unstructured) xrType {
-	group, _, _ := un.NestedString(xrd.Object, "spec", "group")
-	kind, _, _ := un.NestedString(xrd.Object, "spec", "names", "kind")
-	claimKind, _, _ := un.NestedString(xrd.Object, "spec", "claimNames", "kind")
-
-	version := ""
-
-	versions, _, _ := un.NestedSlice(xrd.Object, "spec", "versions")
-	for _, raw := range versions {
-		if m, ok := raw.(map[string]any); ok && m["referenceable"] == true {
-			version, _ = m["name"].(string)
-		}
+// machinery reads an XR or claim's Crossplane machinery string at spec.crossplane.<path> or spec.<path>.
+func machinery(o *un.Unstructured, path ...string) string {
+	if s, found, _ := un.NestedString(o.Object, append([]string{"spec", "crossplane"}, path...)...); found {
+		return s
 	}
 
-	t := xrType{
-		xr: schema.GroupVersionKind{Group: group, Version: version, Kind: kind},
-	}
-
-	if claimKind != "" {
-		t.claim = schema.GroupVersionKind{Group: group, Version: version, Kind: claimKind}
-	}
-
-	return t
-}
-
-// machinery reads a Crossplane machinery field of an XR or claim at whichever of spec.crossplane.<field>
-// and spec.<field> it has.
-func machinery(o *un.Unstructured, path ...string) (any, bool) {
-	for _, prefix := range [][]string{{"spec", "crossplane"}, {"spec"}} {
-		if val, found, _ := un.NestedFieldNoCopy(o.Object, append(append([]string{}, prefix...), path...)...); found {
-			return val, true
-		}
-	}
-
-	return nil, false
-}
-
-func machineryString(o *un.Unstructured, path ...string) string {
-	val, _ := machinery(o, path...)
-	s, _ := val.(string)
+	s, _, _ := un.NestedString(o.Object, append([]string{"spec"}, path...)...)
 
 	return s
 }
 
-func (v *realismValidator) checkFunctions() {
-	for _, comp := range v.comps {
-		for _, step := range comp.Spec.Pipeline {
-			if !v.functions[step.FunctionRef.Name] {
-				o := &un.Unstructured{}
-				o.SetKind("Composition")
-				o.SetName(comp.GetName())
-				v.refuse(o, "step %q uses Function %q, which the case doesn't declare", step.Step, step.FunctionRef.Name)
-			}
-		}
-	}
-}
-
-// rootOf is the XR at the top of xr's composition tree: xr itself unless an XR controls it.
-func (v *realismValidator) rootOf(xr *un.Unstructured) *un.Unstructured {
-	for range 32 {
-		ctrl := metav1.GetControllerOf(xr)
-		if ctrl == nil {
-			return xr
+// checkXR checks an XR, and the resources its resourceRefs name, against what Crossplane's composite
+// reconciler and RenderComposedResourceMetadata leave.
+func checkXR(ctx context.Context, c client.Client, s *clusterState, xr *un.Unstructured, refuse func(*un.Unstructured, string, ...any)) {
+	// Every XR is labelled with the name of the XR at the root of its tree.
+	root := xr
+	for ctrl := metav1.GetControllerOf(root); ctrl != nil; ctrl = metav1.GetControllerOf(root) {
+		parent := slices.IndexFunc(s.xrs, func(o *un.Unstructured) bool { return o.GetUID() == ctrl.UID })
+		if parent < 0 {
+			break
 		}
 
-		parent, ok := v.xrsByUID[string(ctrl.UID)]
-		if !ok {
-			return xr
-		}
-
-		xr = parent
+		root = s.xrs[parent]
 	}
 
-	return xr
-}
-
-func (v *realismValidator) checkXRs() {
-	for _, xr := range v.xrs {
-		v.checkXRMetadata(xr)
-		v.checkCompositionRefs(xr)
-		v.checkComposed(xr)
-	}
-}
-
-func (v *realismValidator) checkXRMetadata(xr *un.Unstructured) {
-	// Every XR is labelled with the name of the XR at the root of its tree (composite/api.go,
-	// APINamingConfigurator, and RenderComposedResourceMetadata for a nested XR).
-	if want := v.rootOf(xr).GetName(); xr.GetLabels()["crossplane.io/composite"] != want {
-		v.refuse(xr, "label crossplane.io/composite is %q; Crossplane labels it %q", xr.GetLabels()["crossplane.io/composite"], want)
+	if got := xr.GetLabels()["crossplane.io/composite"]; got != root.GetName() {
+		refuse(xr, "label crossplane.io/composite is %q, not %q", got, root.GetName())
 	}
 
-	// An XR bound to a claim names it in claimRef and carries its claim labels.
-	claimName := xr.GetLabels()["crossplane.io/claim-name"]
-
-	ref, hasRef := machinery(xr, "claimRef")
-	if (claimName != "") != hasRef && metav1.GetControllerOf(xr) == nil {
-		v.refuse(xr, "claim labels and spec.claimRef disagree about whether a claim is bound (claim-name label %q, claimRef %v)", claimName, ref)
+	if hasLabel, hasRef := xr.GetLabels()["crossplane.io/claim-name"] != "", machinery(xr, "claimRef", "name") != ""; root == xr && hasLabel != hasRef {
+		refuse(xr, "claim labels and spec.claimRef disagree about whether a claim is bound")
 	}
-}
 
-func (v *realismValidator) checkCompositionRefs(xr *un.Unstructured) {
+	// It names the Composition and revision it was composed with, unless no Composition targets it, when
+	// Crossplane can select none.
 	targeted := false
-
-	for _, comp := range v.comps {
-		if comp.Spec.CompositeTypeRef.APIVersion == xr.GetAPIVersion() && comp.Spec.CompositeTypeRef.Kind == xr.GetKind() {
-			targeted = true
-		}
+	for _, comp := range s.comps {
+		targeted = targeted || comp.Spec.CompositeTypeRef.Kind == xr.GetKind() && comp.Spec.CompositeTypeRef.APIVersion == xr.GetAPIVersion()
 	}
 
-	compName := machineryString(xr, "compositionRef", "name")
+	compName, revName := machinery(xr, "compositionRef", "name"), machinery(xr, "compositionRevisionRef", "name")
+	comp, compOK := s.comps[compName]
+	rev, revOK := s.revs[revName]
 
 	switch {
 	case compName == "" && targeted:
-		v.refuse(xr, "has no compositionRef, which Crossplane's composite reconciler writes once it selects a Composition")
-		return
-	case compName == "":
-		return
+		refuse(xr, "has no compositionRef")
+	case compName != "" && (!compOK || comp.Spec.CompositeTypeRef.Kind != xr.GetKind()):
+		refuse(xr, "compositionRef names %q, which isn't a declared Composition of its type", compName)
+	case compName != "" && revName == "":
+		refuse(xr, "has no compositionRevisionRef")
+	case revName != "" && (!revOK || rev.GetLabels()[xpextv1.LabelCompositionName] != compName):
+		refuse(xr, "compositionRevisionRef names %q, which isn't a declared revision of %q", revName, compName)
 	}
 
-	comp, ok := v.comps[compName]
-	if !ok {
-		v.refuse(xr, "compositionRef names Composition %q, which the case doesn't declare", compName)
-		return
+	refs, _, _ := un.NestedSlice(xr.Object, "spec", "crossplane", "resourceRefs")
+	if legacy, _, _ := un.NestedSlice(xr.Object, "spec", "resourceRefs"); len(legacy) > 0 {
+		refs = legacy
 	}
 
-	if comp.Spec.CompositeTypeRef.APIVersion != xr.GetAPIVersion() || comp.Spec.CompositeTypeRef.Kind != xr.GetKind() {
-		v.refuse(xr, "compositionRef names Composition %q, which composes %s %s", compName, comp.Spec.CompositeTypeRef.APIVersion, comp.Spec.CompositeTypeRef.Kind)
-	}
-
-	revName := machineryString(xr, "compositionRevisionRef", "name")
-	if revName == "" {
-		if !v.noRevisionSelectable(xr, compName) {
-			v.refuse(xr, "has no compositionRevisionRef, which Crossplane's composite reconciler writes once it selects a CompositionRevision")
-		}
-
-		return
-	}
-
-	rev, ok := v.revs[revName]
-	if !ok {
-		v.refuse(xr, "compositionRevisionRef names CompositionRevision %q, which the case doesn't declare", revName)
-		return
-	}
-
-	if rev.GetLabels()[xpextv1.LabelCompositionName] != compName {
-		v.refuse(xr, "compositionRevisionRef names %q, a revision of %q rather than of its Composition %q", revName, rev.GetLabels()[xpextv1.LabelCompositionName], compName)
-	}
-}
-
-// noRevisionSelectable reports whether Crossplane could select no revision of compName for xr, so it
-// writes no compositionRevisionRef: its compositionRevisionSelector matches none.
-func (v *realismValidator) noRevisionSelectable(xr *un.Unstructured, compName string) bool {
-	raw, ok := machinery(xr, "compositionRevisionSelector")
-	if !ok {
-		return false
-	}
-
-	ls := &metav1.LabelSelector{}
-	if err := runtime.DefaultUnstructuredConverter.FromUnstructured(raw.(map[string]any), ls); err != nil {
-		return false
-	}
-
-	sel, err := metav1.LabelSelectorAsSelector(ls)
-	if err != nil {
-		return false
-	}
-
-	for _, rev := range v.revs {
-		if rev.GetLabels()[xpextv1.LabelCompositionName] == compName && sel.Matches(labels.Set(rev.GetLabels())) {
-			return false
-		}
-	}
-
-	return true
-}
-
-// checkComposed checks each resource xr's resourceRefs name against the metadata Crossplane's
-// RenderComposedResourceMetadata gives a composed resource.
-func (v *realismValidator) checkComposed(xr *un.Unstructured) {
-	refs, _ := machinery(xr, "resourceRefs")
-	list, _ := refs.([]any)
-
-	for _, raw := range list {
-		ref, _ := raw.(map[string]any)
-		apiVersion, _ := ref["apiVersion"].(string)
-		kind, _ := ref["kind"].(string)
-		name, _ := ref["name"].(string)
-		namespace, _ := ref["namespace"].(string)
-
-		if namespace == "" {
-			namespace = xr.GetNamespace()
-		}
-
+	for _, raw := range refs {
+		ref := raw.(map[string]any)
 		cd := &un.Unstructured{}
-		cd.SetAPIVersion(apiVersion)
-		cd.SetKind(kind)
+		cd.SetAPIVersion(fmt.Sprint(ref["apiVersion"]))
+		cd.SetKind(fmt.Sprint(ref["kind"]))
+		cd.SetName(fmt.Sprint(ref["name"]))
+		cd.SetNamespace(xr.GetNamespace())
 
-		if err := v.c.Get(v.ctx, client.ObjectKey{Namespace: namespace, Name: name}, cd); err != nil {
-			v.refuse(xr, "resourceRefs names %s %s/%s, which the case doesn't declare (%v)", kind, namespace, name, err)
+		if ns, ok := ref["namespace"].(string); ok {
+			cd.SetNamespace(ns)
+		}
+
+		if err := c.Get(ctx, client.ObjectKeyFromObject(cd), cd); err != nil {
+			refuse(cd, "is in %s's resourceRefs, but: %v", xr.GetName(), err)
 			continue
 		}
 
 		if ctrl := metav1.GetControllerOf(cd); ctrl == nil || ctrl.UID != xr.GetUID() {
-			v.refuse(cd, "is named in %s's resourceRefs, but that XR doesn't control it", objectID(xr))
+			refuse(cd, "is in %s's resourceRefs, but %s doesn't control it", xr.GetName(), xr.GetName())
 			continue
 		}
 
-		annotations := cd.GetAnnotations()
-		if annotations["crossplane.io/composition-resource-name"] == "" {
-			v.refuse(cd, "has no crossplane.io/composition-resource-name annotation, which Crossplane sets on every composed resource")
+		if cd.GetAnnotations()["crossplane.io/composition-resource-name"] == "" {
+			refuse(cd, "has no crossplane.io/composition-resource-name annotation")
 		}
 
-		if _, ok := annotations["gotemplating.fn.crossplane.io/composition-resource-name"]; ok {
-			v.refuse(cd, "carries gotemplating.fn.crossplane.io/composition-resource-name, which function-go-templating strips from what it renders")
+		if _, ok := cd.GetAnnotations()["gotemplating.fn.crossplane.io/composition-resource-name"]; ok {
+			refuse(cd, "has the gotemplating annotation function-go-templating strips from what it renders")
 		}
 
-		cdLabels := cd.GetLabels()
 		for _, key := range []string{"crossplane.io/composite", "crossplane.io/claim-name", "crossplane.io/claim-namespace"} {
-			if cdLabels[key] != xr.GetLabels()[key] {
-				v.refuse(cd, "label %s is %q, but its XR's is %q; Crossplane copies it from the XR", key, cdLabels[key], xr.GetLabels()[key])
+			if cd.GetLabels()[key] != xr.GetLabels()[key] {
+				refuse(cd, "label %s is %q, not its XR's %q", key, cd.GetLabels()[key], xr.GetLabels()[key])
 			}
 		}
-
-		if xr.GetNamespace() != "" && cd.GetNamespace() != "" && cd.GetNamespace() != xr.GetNamespace() {
-			v.refuse(cd, "is in namespace %q, but a namespaced XR composes only in its own (%q)", cd.GetNamespace(), xr.GetNamespace())
-		}
 	}
 }
 
-// checkClaims checks each claim against its backing XR, as Crossplane's claim syncer leaves the pair
+// checkClaim checks a claim against its XR as Crossplane's claim syncer leaves the pair
 // (crossplane internal/controller/apiextensions/claim/syncer_ssa.go).
-func (v *realismValidator) checkClaims() {
-	for _, t := range v.types {
-		if t.claim.Empty() {
-			continue
-		}
+func checkClaim(s *clusterState, cm *un.Unstructured, refuse func(*un.Unstructured, string, ...any)) {
+	name, _, _ := un.NestedString(cm.Object, "spec", "resourceRef", "name")
 
-		claims, err := v.list(t.claim)
-		if err != nil {
-			continue
-		}
-
-		for _, cm := range claims {
-			v.checkClaim(cm)
-		}
-	}
-}
-
-func (v *realismValidator) checkClaim(cm *un.Unstructured) {
-	ref, _, _ := un.NestedMap(cm.Object, "spec", "resourceRef")
-	if ref == nil {
-		v.refuse(cm, "has no spec.resourceRef: the claim syncer binds a claim to its XR before it creates the XR")
+	i := slices.IndexFunc(s.xrs, func(o *un.Unstructured) bool {
+		return o.GetName() == name && machinery(o, "claimRef", "name") == cm.GetName() && machinery(o, "claimRef", "namespace") == cm.GetNamespace()
+	})
+	if i < 0 {
+		refuse(cm, "spec.resourceRef doesn't name a declared XR whose spec.claimRef names it")
 		return
 	}
 
-	var xr *un.Unstructured
-
-	for _, candidate := range v.xrs {
-		if candidate.GetAPIVersion() == ref["apiVersion"] && candidate.GetKind() == ref["kind"] && candidate.GetName() == ref["name"] {
-			xr = candidate
-		}
+	// Under Automatic the XR's revision ref is copied to the claim.
+	xr := s.xrs[i]
+	if want := machinery(xr, "compositionRevisionRef", "name"); machinery(xr, "compositionUpdatePolicy") != "Manual" && want != "" &&
+		machinery(cm, "compositionRevisionRef", "name") != want {
+		refuse(cm, "compositionRevisionRef isn't its Automatic XR's, %q", want)
 	}
-
-	if xr == nil {
-		v.refuse(cm, "spec.resourceRef names %v %v %v, which the case doesn't declare", ref["apiVersion"], ref["kind"], ref["name"])
-		return
-	}
-
-	claimRef, _, _ := un.NestedMap(xr.Object, "spec", "claimRef")
-	if claimRef["name"] != cm.GetName() || claimRef["namespace"] != cm.GetNamespace() || claimRef["kind"] != cm.GetKind() {
-		v.refuse(cm, "its XR %s names claim %v in spec.claimRef", objectID(xr), claimRef)
-	}
-
-	if xr.GetLabels()["crossplane.io/claim-name"] != cm.GetName() || xr.GetLabels()["crossplane.io/claim-namespace"] != cm.GetNamespace() {
-		v.refuse(cm, "its XR %s is not labelled with its name and namespace", objectID(xr))
-	}
-
-	// A composition ref propagates XR -> claim when the claim has none, claim -> XR when it has one.
-	if xrComp := machineryString(xr, "compositionRef", "name"); xrComp != "" {
-		if got := machineryString(cm, "compositionRef", "name"); got != xrComp {
-			v.refuse(cm, "compositionRef is %q, but its XR's is %q, which the claim syncer keeps in step", got, xrComp)
-		}
-	}
-
-	xrRev := machineryString(xr, "compositionRevisionRef", "name")
-	claimRev := machineryString(cm, "compositionRevisionRef", "name")
-
-	switch machineryString(xr, "compositionUpdatePolicy") {
-	case "Manual":
-		// Under Manual the claim's ref propagates claim -> XR.
-		if claimRev != "" && claimRev != xrRev {
-			v.refuse(cm, "compositionRevisionRef is %q, but under Manual the claim syncer gives its XR the same ref (it has %q)", claimRev, xrRev)
-		}
-	default:
-		// Under Automatic the XR's ref propagates XR -> claim.
-		if xrRev != "" && claimRev != xrRev {
-			v.refuse(cm, "compositionRevisionRef is %q, but under Automatic the claim syncer copies its XR's, %q", claimRev, xrRev)
-		}
-	}
-
-	// The claim syncer copies the claim's spec, minus the claim-only fields, onto the XR.
-	spec, _, _ := un.NestedMap(cm.Object, "spec")
-	for key, val := range spec {
-		switch key {
-		case "resourceRef", "compositeDeletePolicy", "compositionRef", "compositionRevisionRef", "compositionSelector",
-			"compositionRevisionSelector", "compositionUpdatePolicy", "writeConnectionSecretToRef", "publishConnectionDetailsTo":
-			continue
-		}
-
-		if got, found, _ := un.NestedFieldNoCopy(xr.Object, "spec", key); !found || !equality.Semantic.DeepEqual(got, val) {
-			v.refuse(cm, "spec.%s is %v, but its XR's is %v; the claim syncer copies it onto the XR", key, val, got)
-		}
-	}
-}
-
-// revisionIdentity is the name and hash label NewCompositionRevision gives the revision of a Composition
-// with the given name and Composition.Hash().
-func revisionIdentity(compName, hash string) (string, string) {
-	if len(hash) >= 63 {
-		hash = hash[:63]
-	}
-
-	suffix := hash
-	if len(suffix) >= 7 {
-		suffix = suffix[:7]
-	}
-
-	return compName + "-" + suffix, hash
 }

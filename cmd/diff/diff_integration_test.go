@@ -5949,7 +5949,8 @@ Summary: 2 modified`,
 		// the edited composition's labels would not adopt the resulting revision, so it must be
 		// surfaced as filtered (reason revision_selector_mismatch), NOT evaluated for changes.
 		"ResourceFilterRespectsRevisionSelectorMismatch": {
-			reason: "--resource matching an Automatic XR whose compositionRevisionSelector does not match the composition's labels surfaces it as filtered (reason revision_selector_mismatch)",
+			reason:       "--resource matching an Automatic XR whose compositionRevisionSelector does not match the composition's labels surfaces it as filtered (reason revision_selector_mismatch)",
+			unreconciled: map[string]string{"XNopResource/default/selector-mismatch-resource": "its revision selector (version=0.0.1) matches no revision, so Crossplane writes no compositionRevisionRef"},
 			setupFiles: []string{
 				"testdata/comp/resources/xrd.yaml",
 				"testdata/comp/resources/original-composition.yaml",
@@ -5974,7 +5975,8 @@ Summary: 2 modified`,
 		// Issue #388 (Bug A, positive): an Automatic XR whose compositionRevisionSelector DOES match
 		// the edited composition's labels is kept and evaluated for downstream changes (not filtered).
 		"ResourceFilterRespectsRevisionSelectorMatch": {
-			reason: "--resource matching an Automatic XR whose compositionRevisionSelector matches the composition's labels keeps it and reports downstream changes",
+			reason:       "--resource matching an Automatic XR whose compositionRevisionSelector matches the composition's labels keeps it and reports downstream changes",
+			unreconciled: map[string]string{"XNopResource/default/selector-match-resource": "its revision selector (version=0.0.2) matches no revision, so Crossplane writes no compositionRevisionRef"},
 			setupFiles: []string{
 				"testdata/comp/resources/xrd.yaml",
 				"testdata/comp/resources/original-composition.yaml",
