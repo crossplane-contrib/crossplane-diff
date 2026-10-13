@@ -10,6 +10,11 @@ metadata:
     crossplane.io/claim-namespace: default
     crossplane.io/composite: existing-parent-claim-82crv
 spec:
+  claimRef:
+    apiVersion: claimnested.diff.example.org/v1alpha1
+    kind: ParentNopClaim
+    name: existing-parent-claim
+    namespace: default
   parentField: existing-parent-value
   compositionUpdatePolicy: Automatic
   compositionRef:

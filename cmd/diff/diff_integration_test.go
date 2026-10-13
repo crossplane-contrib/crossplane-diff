@@ -61,7 +61,11 @@ type IntegrationTestCase struct {
 	// crossplaneManagedResources, each under its own
 	// field manager. Use it when a test depends on which manager owns a field: a plain Create
 	// records only the test client as owner, and the apiserver drops managedFields supplied on Create.
-	fieldManagerApplies    []fieldManagerApply
+	fieldManagerApplies []fieldManagerApply
+	// unreconciled names, as "<Kind>/<namespace>/<name>", the objects a case deliberately sets up in a
+	// state Crossplane would not leave them in, each with the reason. Every other object must pass
+	// validateReconciledState.
+	unreconciled           map[string]string
 	inputFiles             []string // Input files to diff (XR YAML files or Composition YAML files)
 	expectedOutput         string
 	expectedError          bool
@@ -280,6 +284,11 @@ func runIntegrationTest(t *testing.T, testType DiffTestType, tt IntegrationTestC
 				t.Fatalf("failed to setup field-managed resources: %v", err)
 			}
 		}
+	}
+
+	// Refuse a setup no cluster could hold, before anything is deleted out of band.
+	if err := validateReconciledState(ctx, k8sClient, tt.unreconciled); err != nil {
+		t.Fatalf("setup is not what Crossplane leaves in a cluster:\n%v", err)
 	}
 
 	// Issue a delete for resources that should be observed mid-deletion. The manifests must
@@ -1645,7 +1654,12 @@ Summary: 2 modified, 2 removed`,
 		// the first: one it controls and renders, one it controls and no longer renders, one another XR
 		// controls, and one with no controller reference at all. Only the second is removed.
 		"ResourceRemovalSkipsResourcesTheXRDoesNotControl": {
-			reason:       "A composed resource the XR's resourceRefs name but the XR does not control is not reported removed",
+			reason: "A composed resource the XR's resourceRefs name but the XR does not control is not reported removed",
+			// What this case pins: test-resource's resourceRefs still name two resources it doesn't control.
+			unreconciled: map[string]string{
+				"XDownstreamResource/default/other-resource":              "named in test-resource's resourceRefs, though other-resource controls it",
+				"XDownstreamResource/default/resource-without-controller": "named in test-resource's resourceRefs, though it has no controller",
+			},
 			outputFormat: "json",
 			crossplaneManagedResources: []HierarchicalOwnershipRelation{
 				composes(
@@ -2379,6 +2393,7 @@ Summary: 2 modified, 2 removed`,
 			},
 			fieldManagerApplies: []fieldManagerApply{
 				{file: "testdata/diff/xr-with-missing-defaults.yaml", fieldManager: "kubectl"},
+				{file: "testdata/diff/resources/existing-xr-with-defaults-reconciled.yaml", fieldManager: CompositeReconcilerFieldManager},
 				{file: "testdata/diff/resources/existing-xr-with-defaults-other-manager.yaml", fieldManager: "platform-operator"},
 			},
 			expectedStructuredOutput: tu.ExpectDiff().WithSummary(0, 0, 0),
@@ -3843,6 +3858,11 @@ Summary: 2 modified`,
 		// which the composition doesn't render either, and neither of those is removed.
 		"CompositionDropsResourceRemovingOnlyWhatTheXRControls": {
 			reason: "A composition that stops rendering resources removes only those the XR controls",
+			// What this case pins: test-resource's resourceRefs still name two resources it doesn't control.
+			unreconciled: map[string]string{
+				"XDownstreamResource/default/other-resource":              "named in test-resource's resourceRefs, though other-resource controls it",
+				"XDownstreamResource/default/resource-without-controller": "named in test-resource's resourceRefs, though it has no controller",
+			},
 			setupFiles: []string{
 				"testdata/comp/resources/xrd.yaml",
 				"testdata/comp/resources/removal-test-original-composition.yaml",
