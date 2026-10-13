@@ -68,19 +68,30 @@ classDiagram
         +IgnorePaths []string
         +ForVerdict bool
         +MinimizeComposition bool
+        +OutputVersion OutputVersion
+    }
+
+    class OutputVersion {
+        <<enumeration>>
+        OutputVersionV1
+        OutputVersionV2
     }
 
     class StructuredDiffOutput {
+        +OutputVersion OutputVersion
         +Summary Summary
         +Changes []ChangeDetail (deprecated)
         +Errors []OutputError
         +Warnings []OutputWarning
-        +Xrs []xrDiffWire
+        +Xrs []xrEntryWire
     }
 
-    class xrDiffWire {
+    class xrEntryWire {
+        <<xr v1+v2, comp v2>>
         +XR ObjectReference
         +Status XRStatus
+        +FilterReason FilterReason
+        +FilterDetail string
         +Summary Summary
         +Changes []ChangeDetail
         +Errors []OutputError
@@ -111,7 +122,7 @@ classDiagram
 
     class CompositionDiff {
         +Name string
-        +Error error
+        +Error *OutputError
         +CompositionDiff *ResourceDiff
         +AffectedResources AffectedResourcesSummary
         +ImpactAnalysis []XRImpact
@@ -132,7 +143,7 @@ classDiagram
         +Status XRStatus
         +FilterReason FilterReason
         +FilterDetail string
-        +Error error
+        +Error *OutputError
         +Diffs map[string]*ResourceDiff
     }
 
@@ -162,6 +173,7 @@ classDiagram
     }
 
     class DownstreamChanges {
+        <<v1>>
         +Summary Summary
         +Changes []ChangeDetail
     }
@@ -252,11 +264,13 @@ classDiagram
     StructuredDiffOutput --> Summary
     StructuredDiffOutput --> ChangeDetail
     StructuredDiffOutput --> OutputError
-    StructuredDiffOutput --> xrDiffWire
-    xrDiffWire --> Summary
-    xrDiffWire --> ChangeDetail
-    xrDiffWire --> XRStatus
-    xrDiffWire --> OutputError
+    StructuredDiffOutput --> xrEntryWire
+    xrEntryWire --> Summary
+    xrEntryWire --> ChangeDetail
+    xrEntryWire --> XRStatus
+    xrEntryWire --> FilterReason
+    xrEntryWire --> OutputError
+    DiffOptions --> OutputVersion
     CompDiffOutput --> CompositionDiff
     CompDiffOutput --> OutputError
     CompDiffOutput --> OutputWarning

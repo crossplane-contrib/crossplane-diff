@@ -4,6 +4,9 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"maps"
+	"reflect"
+	"slices"
 	"strings"
 	"testing"
 
@@ -328,12 +331,17 @@ func TestStructuredDiffRenderer_GroupsByXR(t *testing.T) {
 	unionErrs := []dt.OutputError{{ResourceID: "XBucket/broken-xr", Message: "cannot get composition"}}
 
 	cases := map[string]struct {
-		groups []dt.XRDiffGroup
-		errs   []dt.OutputError
-		// The whole output asserted as one value: flat back-compat view
-		// (aggregate summary + merged changes + union errors) plus the
+		groups  []dt.XRDiffGroup
+		errs    []dt.OutputError
+		version OutputVersion
+		// The whole output asserted as one value, as the document type of the selected version
+		// (StructuredDiffOutput for v1, structuredDiffOutputV2 for v2). For v1: the flat
+		// back-compat view (aggregate summary + merged changes + union errors) plus the
 		// per-input-XR xrs[] view, in input order.
-		want StructuredDiffOutput
+		want any
+		// wantKeys is the document's top-level JSON keys, which pins that v1 differs from before
+		// only by outputVersion and that v2 drops the flat changes[].
+		wantKeys []string
 	}{
 		"ChangedUnchangedAndErrored": {
 			groups: []dt.XRDiffGroup{
@@ -352,10 +360,11 @@ func TestStructuredDiffRenderer_GroupsByXR(t *testing.T) {
 			},
 			errs: unionErrs,
 			want: StructuredDiffOutput{
-				Summary: Summary{Modified: 1},
-				Changes: []ChangeDetail{bucketChange},
-				Errors:  unionErrs,
-				Xrs: []xrDiffWire{
+				OutputVersion: OutputVersionV1,
+				Summary:       Summary{Modified: 1},
+				Changes:       []ChangeDetail{bucketChange},
+				Errors:        unionErrs,
+				Xrs: []xrEntryWire{
 					{
 						XR:      xrRef("changed-xr"),
 						Status:  XRStatusChanged,
@@ -375,6 +384,66 @@ func TestStructuredDiffRenderer_GroupsByXR(t *testing.T) {
 					},
 				},
 			},
+			wantKeys: []string{"changes", "errors", "outputVersion", "summary", "xrs"},
+		},
+		// An explicit v1 is the same document as the default.
+		"ExplicitV1": {
+			groups: []dt.XRDiffGroup{
+				{XR: xrRef("unchanged-xr"), Diffs: map[string]*dt.ResourceDiff{"equal": equalOnly}},
+			},
+			version: OutputVersionV1,
+			want: StructuredDiffOutput{
+				OutputVersion: OutputVersionV1,
+				Changes:       []ChangeDetail{},
+				Xrs: []xrEntryWire{
+					{XR: xrRef("unchanged-xr"), Status: XRStatusUnchanged, Changes: []ChangeDetail{}},
+				},
+			},
+			wantKeys: []string{"changes", "outputVersion", "summary", "xrs"},
+		},
+		// v2 drops the flat changes[] and emits the shared per-XR entry for each status xr produces.
+		"V2ChangedUnchangedAndErrored": {
+			groups: []dt.XRDiffGroup{
+				{
+					XR:    xrRef("changed-xr"),
+					Diffs: map[string]*dt.ResourceDiff{"changed": changed},
+				},
+				{
+					XR:    xrRef("unchanged-xr"),
+					Diffs: map[string]*dt.ResourceDiff{"equal": equalOnly},
+				},
+				{
+					XR:  xrRef("broken-xr"),
+					Err: &dt.OutputError{ResourceID: "XBucket/broken-xr", Message: "cannot get composition"},
+				},
+			},
+			errs:    unionErrs,
+			version: OutputVersionV2,
+			want: structuredDiffOutputV2{
+				OutputVersion: OutputVersionV2,
+				Summary:       Summary{Modified: 1},
+				Errors:        unionErrs,
+				Xrs: []xrEntryWire{
+					{
+						XR:      xrRef("changed-xr"),
+						Status:  XRStatusChanged,
+						Summary: Summary{Modified: 1},
+						Changes: []ChangeDetail{bucketChange},
+					},
+					{
+						XR:      xrRef("unchanged-xr"),
+						Status:  XRStatusUnchanged,
+						Changes: []ChangeDetail{},
+					},
+					{
+						XR:      xrRef("broken-xr"),
+						Status:  XRStatusError,
+						Changes: []ChangeDetail{},
+						Errors:  []dt.OutputError{{ResourceID: "XBucket/broken-xr", Message: "cannot get composition"}},
+					},
+				},
+			},
+			wantKeys: []string{"errors", "outputVersion", "summary", "xrs"},
 		},
 		// One resource reached through two inputs' renders with the same rendering, through one
 		// controller. It is one change, so the flat view (summary and changes[]) counts and lists it once,
@@ -393,9 +462,10 @@ func TestStructuredDiffRenderer_GroupsByXR(t *testing.T) {
 				},
 			},
 			want: StructuredDiffOutput{
-				Summary: Summary{Modified: 1},
-				Changes: []ChangeDetail{sharedChange("us-west-2")},
-				Xrs: []xrDiffWire{
+				OutputVersion: OutputVersionV1,
+				Summary:       Summary{Modified: 1},
+				Changes:       []ChangeDetail{sharedChange("us-west-2")},
+				Xrs: []xrEntryWire{
 					{
 						XR:      xrRef("app-claim"),
 						Status:  XRStatusChanged,
@@ -427,9 +497,10 @@ func TestStructuredDiffRenderer_GroupsByXR(t *testing.T) {
 				},
 			},
 			want: StructuredDiffOutput{
-				Summary: Summary{Modified: 2},
-				Changes: []ChangeDetail{sharedChange("us-west-2"), sharedChange("eu-west-1")},
-				Xrs: []xrDiffWire{
+				OutputVersion: OutputVersionV1,
+				Summary:       Summary{Modified: 2},
+				Changes:       []ChangeDetail{sharedChange("us-west-2"), sharedChange("eu-west-1")},
+				Xrs: []xrEntryWire{
 					{
 						XR:      xrRef("app-a"),
 						Status:  XRStatusChanged,
@@ -455,19 +526,31 @@ func TestStructuredDiffRenderer_GroupsByXR(t *testing.T) {
 			opts.Format = OutputFormatJSON
 			opts.Stdout = &buf
 			opts.Stderr = &bytes.Buffer{}
+			opts.OutputVersion = tc.version
 
 			r := NewStructuredDiffRenderer(tu.TestLogger(t, false), opts)
 			if err := r.RenderDiffs(tc.groups, tc.errs, nil); err != nil {
 				t.Fatalf("RenderDiffs() failed: %v", err)
 			}
 
-			var output StructuredDiffOutput
-			if err := json.Unmarshal(buf.Bytes(), &output); err != nil {
+			output := reflect.New(reflect.TypeOf(tc.want))
+			if err := json.Unmarshal(buf.Bytes(), output.Interface()); err != nil {
 				t.Fatalf("Failed to parse JSON: %v\nOutput: %s", err, buf.String())
 			}
 
-			if diff := cmp.Diff(tc.want, output); diff != "" {
+			if diff := cmp.Diff(tc.want, output.Elem().Interface()); diff != "" {
 				t.Errorf("structured output mismatch (-want +got):\n%s", diff)
+			}
+
+			if tc.wantKeys != nil {
+				var doc map[string]json.RawMessage
+				if err := json.Unmarshal(buf.Bytes(), &doc); err != nil {
+					t.Fatalf("Failed to parse JSON: %v", err)
+				}
+
+				if diff := cmp.Diff(tc.wantKeys, slices.Sorted(maps.Keys(doc))); diff != "" {
+					t.Errorf("top-level keys mismatch (-want +got):\n%s", diff)
+				}
 			}
 		})
 	}

@@ -3,7 +3,7 @@ package renderer
 import (
 	"bytes"
 	"encoding/json"
-	"errors"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -209,7 +209,7 @@ func sharedCompDiffFixtures() []testCompDiffFixture {
 					},
 					{
 						Name:           "broken.example.org",
-						Error:          errors.New("cannot calculate composition diff"),
+						Error:          &dt.OutputError{Message: "cannot calculate composition diff"},
 						ImpactAnalysis: []XRImpact{},
 					},
 				},
@@ -379,7 +379,7 @@ func TestDefaultCompDiffRenderer_RenderCompDiff(t *testing.T) {
 			output: &CompDiffOutput{
 				Compositions: []CompositionDiff{{
 					Name:  "error-comp",
-					Error: errors.New("failed to fetch composition from cluster"),
+					Error: &dt.OutputError{Message: "failed to fetch composition from cluster"},
 					AffectedResources: AffectedResourcesSummary{
 						Total:       0,
 						WithChanges: 0,
@@ -549,7 +549,7 @@ func TestDefaultCompDiffRenderer_RenderCompDiff(t *testing.T) {
 			output: &CompDiffOutput{
 				Compositions: []CompositionDiff{{
 					Name:           "error-comp",
-					Error:          errors.New("boom"),
+					Error:          &dt.OutputError{Message: "boom"},
 					ImpactAnalysis: []XRImpact{},
 				}},
 			},
@@ -768,7 +768,7 @@ func TestCompDiffOutput_JSONSchema(t *testing.T) {
 					},
 				},
 				{ObjectReference: corev1.ObjectReference{APIVersion: "example.org/v1", Kind: "XBucket", Name: "bucket-2"}, Status: XRStatusUnchanged},
-				{ObjectReference: corev1.ObjectReference{APIVersion: "example.org/v1", Kind: "XBucket", Name: "bucket-3"}, Status: XRStatusError, Error: errors.New("render failed")},
+				{ObjectReference: corev1.ObjectReference{APIVersion: "example.org/v1", Kind: "XBucket", Name: "bucket-3"}, Status: XRStatusError, Error: &dt.OutputError{ResourceID: "XBucket/bucket-3", Message: "render failed"}},
 			},
 		}},
 	}
@@ -1274,5 +1274,150 @@ func TestCompositionDiff_HasChanges_FilteredOnly(t *testing.T) {
 	}
 	if c.HasChanges() {
 		t.Errorf("CompositionDiff with only filtered impacts should not be HasChanges()")
+	}
+}
+
+// TestStructuredCompDiffRenderer_OutputVersions renders each per-XR status, and a failed composition,
+// under each output version, and asserts the whole document plus what reaches stderr.
+func TestStructuredCompDiffRenderer_OutputVersions(t *testing.T) {
+	ref := func(name string) corev1.ObjectReference {
+		return corev1.ObjectReference{APIVersion: "example.org/v1", Kind: "XBucket", Name: name}
+	}
+	addedBucket := &dt.ResourceDiff{
+		DiffType:     dt.DiffTypeAdded,
+		ResourceName: "new-bucket",
+		Gvk:          schema.GroupVersionKind{Group: "s3.aws.upbound.io", Version: "v1beta1", Kind: "Bucket"},
+		Desired:      bothViews(&un.Unstructured{Object: map[string]any{"apiVersion": "s3.aws.upbound.io/v1beta1", "kind": "Bucket"}}),
+	}
+	addedChange := ChangeDetail{
+		Type:       dt.DiffTypeWordAdded,
+		APIVersion: "s3.aws.upbound.io/v1beta1",
+		Kind:       "Bucket",
+		Name:       "new-bucket",
+		Diff:       map[string]any{dt.DiffKeySpec: map[string]any{"apiVersion": "s3.aws.upbound.io/v1beta1", "kind": "Bucket"}},
+	}
+	xrErr := &dt.OutputError{
+		ResourceID:         "XBucket/bucket-3",
+		Message:            "render failed",
+		ValidationFailures: []dt.ResourceValidationFailure{{APIVersion: "example.org/v1", Kind: "XBucket", Name: "bucket-3", Status: "invalid", Errors: []dt.FieldValidationError{{Type: "schema", Field: "spec.size", Message: "must be positive"}}}},
+	}
+	compErr := &dt.OutputError{ResourceID: "Composition/xbroken.example.org", Message: "cannot fetch composition"}
+	revisionImpact := RevisionImpact{ChangeScope: "spec", CreatesRevision: true, RepointedComposites: 3}
+	affected := AffectedResourcesSummary{Total: 4, WithChanges: 1, Unchanged: 1, WithErrors: 1, FilteredBySelector: 1}
+
+	output := &CompDiffOutput{
+		Compositions: []CompositionDiff{
+			{
+				Name:              "xbuckets.example.org",
+				AffectedResources: affected,
+				RevisionImpact:    revisionImpact,
+				ImpactAnalysis: []XRImpact{
+					{ObjectReference: ref("bucket-1"), Status: XRStatusChanged, Diffs: map[string]*dt.ResourceDiff{"s3.aws.upbound.io/v1beta1/Bucket//new-bucket": addedBucket}},
+					{ObjectReference: ref("bucket-2"), Status: XRStatusUnchanged},
+					{ObjectReference: ref("bucket-3"), Status: XRStatusError, Error: xrErr},
+					{ObjectReference: ref("bucket-4"), Status: XRStatusFiltered, FilterReason: FilterReasonRevisionSelectorMismatch, FilterDetail: "selector mismatch"},
+				},
+			},
+			{
+				Name:           "xbroken.example.org",
+				Error:          compErr,
+				ImpactAnalysis: []XRImpact{},
+			},
+		},
+		// The processor lists each errored XR's OutputError at top level.
+		Errors: []dt.OutputError{*xrErr},
+	}
+
+	cases := map[string]struct {
+		version OutputVersion
+		// want is the whole document, as the type of the selected version.
+		want       any
+		wantStderr []string
+	}{
+		"DefaultIsV1": {
+			want: compDiffWire{
+				OutputVersion: OutputVersionV1,
+				Compositions: []compositionDiffWire{
+					{
+						Name:              "xbuckets.example.org",
+						AffectedResources: affected,
+						RevisionImpact:    &revisionImpact,
+						ImpactAnalysis: []xrImpactWire{
+							{ObjectReference: ref("bucket-1"), Status: XRStatusChanged, DownstreamChanges: &DownstreamChanges{Summary: Summary{Added: 1}, Changes: []ChangeDetail{addedChange}}},
+							{ObjectReference: ref("bucket-2"), Status: XRStatusUnchanged},
+							{ObjectReference: ref("bucket-3"), Status: XRStatusError, Error: "render failed"},
+							{ObjectReference: ref("bucket-4"), Status: XRStatusFiltered, FilterReason: FilterReasonRevisionSelectorMismatch, FilterDetail: "selector mismatch"},
+						},
+					},
+					{
+						Name:           "xbroken.example.org",
+						Error:          "cannot fetch composition",
+						ImpactAnalysis: []xrImpactWire{},
+					},
+				},
+				// v1 does not list the failed composition here.
+				Errors: []dt.OutputError{*xrErr},
+			},
+			wantStderr: []string{xrErr.FormatError()},
+		},
+		"V2": {
+			version: OutputVersionV2,
+			want: compDiffWireV2{
+				OutputVersion: OutputVersionV2,
+				Compositions: []compositionDiffWireV2{
+					{
+						Name:              "xbuckets.example.org",
+						AffectedResources: affected,
+						RevisionImpact:    &revisionImpact,
+						ImpactAnalysis: []xrEntryWire{
+							{XR: ref("bucket-1"), Status: XRStatusChanged, Summary: Summary{Added: 1}, Changes: []ChangeDetail{addedChange}},
+							{XR: ref("bucket-2"), Status: XRStatusUnchanged, Changes: []ChangeDetail{}},
+							{XR: ref("bucket-3"), Status: XRStatusError, Changes: []ChangeDetail{}, Errors: []dt.OutputError{*xrErr}},
+							{XR: ref("bucket-4"), Status: XRStatusFiltered, FilterReason: FilterReasonRevisionSelectorMismatch, FilterDetail: "selector mismatch", Changes: []ChangeDetail{}},
+						},
+					},
+					{
+						Name:           "xbroken.example.org",
+						Errors:         []dt.OutputError{*compErr},
+						ImpactAnalysis: []xrEntryWire{},
+					},
+				},
+				// v2 appends the failed composition, so the list is the union of the document's errors.
+				Errors: []dt.OutputError{*xrErr, *compErr},
+			},
+			wantStderr: []string{xrErr.FormatError(), compErr.FormatError()},
+		},
+	}
+
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			var stdout, stderr bytes.Buffer
+
+			opts := DefaultDiffOptions()
+			opts.Format = OutputFormatJSON
+			opts.Stdout = &stdout
+			opts.Stderr = &stderr
+
+			if tc.version != "" {
+				opts.OutputVersion = tc.version
+			}
+
+			if err := NewStructuredCompDiffRenderer(tu.TestLogger(t, false), opts).RenderCompDiff(output); err != nil {
+				t.Fatalf("RenderCompDiff() failed: %v", err)
+			}
+
+			got := reflect.New(reflect.TypeOf(tc.want))
+			if err := json.Unmarshal(stdout.Bytes(), got.Interface()); err != nil {
+				t.Fatalf("Failed to unmarshal: %v\nOutput: %s", err, stdout.String())
+			}
+
+			if diff := gcmp.Diff(tc.want, got.Elem().Interface()); diff != "" {
+				t.Errorf("structured output mismatch (-want +got):\n%s", diff)
+			}
+
+			if diff := gcmp.Diff(tc.wantStderr, strings.Split(strings.TrimSpace(stderr.String()), "\n")); diff != "" {
+				t.Errorf("stderr mismatch (-want +got):\n%s", diff)
+			}
+		})
 	}
 }

@@ -164,7 +164,7 @@ func (r *DefaultCompDiffRenderer) renderCompositionChanges(comp *CompositionDiff
 
 	// Check for composition processing error first
 	if comp.Error != nil {
-		if _, err := fmt.Fprintf(stdout, "Error processing composition %s: %s\n\n", comp.Name, comp.Error.Error()); err != nil {
+		if _, err := fmt.Fprintf(stdout, "Error processing composition %s: %s\n\n", comp.Name, comp.Error.Message); err != nil {
 			return errors.Wrap(err, "cannot write composition error")
 		}
 
@@ -312,7 +312,7 @@ func (r *DefaultCompDiffRenderer) renderMinimizedCompositionChanges(comp *Compos
 	}
 
 	if comp.Error != nil {
-		if _, err := fmt.Fprintf(stdout, "Error processing composition %s: %s\n\n", comp.Name, comp.Error.Error()); err != nil {
+		if _, err := fmt.Fprintf(stdout, "Error processing composition %s: %s\n\n", comp.Name, comp.Error.Message); err != nil {
 			return errors.Wrap(err, "cannot write composition error")
 		}
 
@@ -568,7 +568,7 @@ func (r *DefaultCompDiffRenderer) buildXRStatusList(impacts []XRImpact) string {
 
 		// Include error details for XRStatusError impacts so users can diagnose issues.
 		if impact.Status == XRStatusError && impact.Error != nil {
-			fmt.Fprintf(&sb, "%s    Error: %s%s\n", color, impact.Error.Error(), colorReset)
+			fmt.Fprintf(&sb, "%s    Error: %s%s\n", color, impact.Error.Message, colorReset)
 		}
 	}
 
@@ -598,8 +598,21 @@ func (r *StructuredCompDiffRenderer) RenderCompDiff(output *CompDiffOutput) erro
 	dryRun := compDryRunWarnings(output)
 
 	// Convert internal representation to JSON output structure
-	jsonOutput := r.buildStructuredCompOutput(output)
-	jsonOutput.Warnings = append(slices.Clone(jsonOutput.Warnings), dryRun...)
+	warnings := append(slices.Clone(output.Warnings), dryRun...)
+
+	v2 := buildStructuredCompOutput(output)
+	v2.Warnings = warnings
+
+	// Anything but v2, including the empty value, is v1.
+	var (
+		jsonOutput any = v2
+		errs           = v2.Errors
+	)
+
+	if r.opts.OutputVersion != OutputVersionV2 {
+		v1 := v2.v1()
+		jsonOutput, errs = v1, v1.Errors
+	}
 
 	var (
 		data []byte
@@ -632,7 +645,7 @@ func (r *StructuredCompDiffRenderer) RenderCompDiff(output *CompDiffOutput) erro
 	}
 
 	// Write errors to stderr for human visibility (they're also included in the structured output)
-	for _, e := range output.Errors {
+	for _, e := range errs {
 		if _, err := fmt.Fprintln(r.opts.Stderr, e.FormatError()); err != nil {
 			return errors.Wrap(err, "failed to write error to stderr")
 		}
@@ -641,19 +654,21 @@ func (r *StructuredCompDiffRenderer) RenderCompDiff(output *CompDiffOutput) erro
 	return nil
 }
 
-// buildStructuredCompOutput converts internal CompDiffOutput to JSON-serializable structure.
-func (r *StructuredCompDiffRenderer) buildStructuredCompOutput(output *CompDiffOutput) *compDiffWire {
-	result := &compDiffWire{
-		Compositions: make([]compositionDiffWire, 0, len(output.Compositions)),
-		Errors:       output.Errors,
-		Warnings:     output.Warnings,
+// buildStructuredCompOutput converts internal CompDiffOutput to the v2 document, from which v1 is
+// derived (see compDiffWireV2.v1). Each failed composition's error is appended to the top-level
+// errors, after the processor's, so that list is the union of every error in the document.
+func buildStructuredCompOutput(output *CompDiffOutput) *compDiffWireV2 {
+	result := &compDiffWireV2{
+		OutputVersion: OutputVersionV2,
+		Compositions:  make([]compositionDiffWireV2, 0, len(output.Compositions)),
+		Errors:        slices.Clone(output.Errors),
 	}
 
 	for _, comp := range output.Compositions {
-		jsonComp := compositionDiffWire{
+		jsonComp := compositionDiffWireV2{
 			Name:                  comp.Name,
 			AffectedResources:     comp.AffectedResources,
-			ImpactAnalysis:        make([]xrImpactWire, 0, len(comp.ImpactAnalysis)),
+			ImpactAnalysis:        make([]xrEntryWire, 0, len(comp.ImpactAnalysis)),
 			ImpactAnalysisSkipped: comp.ImpactAnalysisSkipped,
 			MaskedChangesOnly:     comp.MaskedChangesOnly,
 		}
@@ -666,39 +681,99 @@ func (r *StructuredCompDiffRenderer) buildStructuredCompOutput(output *CompDiffO
 			jsonComp.RevisionImpact = &revisionImpact
 		}
 
-		// Include per-composition error if present
 		if comp.Error != nil {
-			jsonComp.Error = comp.Error.Error()
+			jsonComp.Errors = []dt.OutputError{*comp.Error}
+			result.Errors = append(result.Errors, *comp.Error)
 		}
 
-		// Convert composition diff if present and not equal.
 		if comp.CompositionDiff != nil && comp.CompositionDiff.DiffType != dt.DiffTypeEqual {
 			jsonComp.CompositionChanges = resourceDiffToChangeDetail(comp.CompositionDiff)
 		}
 
-		// Convert each XR impact
 		for _, impact := range comp.ImpactAnalysis {
-			jsonImpact := xrImpactWire{
-				ObjectReference: impact.ObjectReference,
-				Status:          impact.Status,
-				FilterReason:    impact.FilterReason,
-				FilterDetail:    impact.FilterDetail,
-			}
-			if impact.Error != nil {
-				jsonImpact.Error = impact.Error.Error()
-			}
-
-			if impact.Status == XRStatusChanged && len(impact.Diffs) > 0 {
-				jsonImpact.DownstreamChanges = buildDownstreamChanges(impact.Diffs)
-			}
-
-			jsonComp.ImpactAnalysis = append(jsonComp.ImpactAnalysis, jsonImpact)
+			entry := toXREntry(impact.ObjectReference, impact.Status, impact.Diffs, impact.Error)
+			entry.FilterReason = impact.FilterReason
+			entry.FilterDetail = impact.FilterDetail
+			jsonComp.ImpactAnalysis = append(jsonComp.ImpactAnalysis, entry)
 		}
 
 		result.Compositions = append(result.Compositions, jsonComp)
 	}
 
 	return result
+}
+
+// v1 projects the document to v1. Its compositions and their impactAnalysis[] entries take the v1
+// shape, and its top-level errors drop the failed compositions' errors, which v1 reports only on the
+// composition. buildStructuredCompOutput appends those last, one per failed composition, so they are
+// the list's tail.
+func (d *compDiffWireV2) v1() *compDiffWire {
+	failed := 0
+	result := &compDiffWire{
+		OutputVersion: OutputVersionV1,
+		Compositions:  make([]compositionDiffWire, 0, len(d.Compositions)),
+		Warnings:      d.Warnings,
+	}
+
+	for _, comp := range d.Compositions {
+		if len(comp.Errors) > 0 {
+			failed++
+		}
+
+		result.Compositions = append(result.Compositions, comp.v1())
+	}
+
+	result.Errors = d.Errors[:len(d.Errors)-failed]
+
+	return result
+}
+
+// v1 projects a composition to v1, where its error is a string rather than errors[].
+func (c compositionDiffWireV2) v1() compositionDiffWire {
+	result := compositionDiffWire{
+		Name:                  c.Name,
+		Error:                 firstErrorMessage(c.Errors),
+		CompositionChanges:    c.CompositionChanges,
+		AffectedResources:     c.AffectedResources,
+		ImpactAnalysis:        make([]xrImpactWire, 0, len(c.ImpactAnalysis)),
+		ImpactAnalysisSkipped: c.ImpactAnalysisSkipped,
+		MaskedChangesOnly:     c.MaskedChangesOnly,
+		RevisionImpact:        c.RevisionImpact,
+	}
+
+	for _, entry := range c.ImpactAnalysis {
+		result.ImpactAnalysis = append(result.ImpactAnalysis, entry.v1())
+	}
+
+	return result
+}
+
+// v1 projects the entry to comp's v1 impactAnalysis[] entry: identity inlined, the error as a string,
+// and summary and changes wrapped in downstreamChanges, present only when there are changes.
+func (e xrEntryWire) v1() xrImpactWire {
+	result := xrImpactWire{
+		ObjectReference: e.XR,
+		Status:          e.Status,
+		FilterReason:    e.FilterReason,
+		FilterDetail:    e.FilterDetail,
+		Error:           firstErrorMessage(e.Errors),
+	}
+
+	if e.Status == XRStatusChanged && len(e.Changes) > 0 {
+		result.DownstreamChanges = &DownstreamChanges{Summary: e.Summary, Changes: e.Changes}
+	}
+
+	return result
+}
+
+// firstErrorMessage returns the message of the one error v2 carries where v1 had an error string, or
+// "" when there is none.
+func firstErrorMessage(errs []dt.OutputError) string {
+	if len(errs) == 0 {
+		return ""
+	}
+
+	return errs[0].Message
 }
 
 // formatXRStatusSummary generates the summary line with correct pluralization.
