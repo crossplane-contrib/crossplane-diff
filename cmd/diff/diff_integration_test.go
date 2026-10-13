@@ -1114,6 +1114,9 @@ Summary: 2 modified`,
 		"ModifiedXRCreatesDownstream": {
 			reason:       "Shows diff when modified XR creates new downstream resource",
 			outputFormat: "json",
+			// The XR has its composition refs but no composed resource yet: Crossplane selects the
+			// composition and revision before it composes, so this is an XR whose first compose has not
+			// created its resource (a function error, say). That is what makes the resource an addition.
 			setupFiles: []string{
 				"testdata/diff/resources/xrd.yaml",
 				"testdata/diff/resources/composition.yaml",
@@ -1144,14 +1147,17 @@ Summary: 2 modified`,
 				"testdata/diff/resources/composition.yaml",
 				"testdata/diff/resources/composition-revision.yaml",
 				"testdata/diff/resources/functions.yaml",
-				"testdata/diff/resources/existing-xr-deleting.yaml",
+			},
+			// A Terminating XR still has the resource it composed until garbage collection removes it.
+			crossplaneManagedResources: []HierarchicalOwnershipRelation{
+				composes("testdata/diff/resources/existing-xr-deleting.yaml", "testdata/diff/resources/existing-downstream-resource.yaml"),
 			},
 			deleteAfterSetup: []string{"testdata/diff/resources/existing-xr-deleting.yaml"},
 			inputFiles:       []string{"testdata/diff/modified-xr.yaml"},
 			expectedStructuredOutput: tu.ExpectDiff().
-				WithSummary(1, 1, 0).
-				WithAddedResource("XDownstreamResource", "test-resource", "default").
-				WithField("spec.forProvider.configData", "modified-value").
+				WithSummary(0, 2, 0).
+				WithModifiedResource("XDownstreamResource", "test-resource", "default").
+				WithFieldChange("spec.forProvider.configData", "existing-value", "modified-value").
 				And().
 				WithModifiedResource("XNopResource", "test-resource", "default").
 				WithFieldChange("spec.coolField", "existing-value", "modified-value").
@@ -5752,7 +5758,8 @@ Summary: 2 modified`,
 		// changes[] and `comp` via impactAnalysis[].downstreamChanges.changes[] — one shared wire
 		// shape, but only an assertion through the comp renderer proves comp actually populates it.
 		// The composed resource is deliberately absent from the setup so the impact is an ADDITION,
-		// which is the only kind of change the dryRun field applies to.
+		// which is the only kind of change the dryRun field applies to: the XR has its composition
+		// refs, but its first compose has not created its resource.
 		"CompDownstreamAdditionReportsDryRunSkippedWhenDryRunOnExisting": {
 			reason:       "`comp` structured output carries dryRun.skipReason on a downstream addition when --dry-run-on=existing",
 			outputFormat: "json",
