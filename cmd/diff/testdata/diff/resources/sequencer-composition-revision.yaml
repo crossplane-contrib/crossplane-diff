@@ -1,9 +1,13 @@
+# The CompositionRevision Crossplane creates for sequencer-composition.yaml,
+# named and labelled from its hash as Crossplane names it. envtest runs no Crossplane controllers,
+# so it must be declared. The XR in existing-sequencer-xr.yaml tracks it.
 apiVersion: apiextensions.crossplane.io/v1
 kind: CompositionRevision
 metadata:
-  name: sequencer-composition-rev-1
+  name: sequencer-composition-eb25773
   labels:
     crossplane.io/composition-name: sequencer-composition
+    crossplane.io/composition-hash: eb2577391ff4a1f23f88cbb0bc6a5d4e829b1c0fb1833dad175ae315cba0a73
 spec:
   revision: 1
   compositeTypeRef:

@@ -12,4 +12,4 @@ spec:
     compositionRef:
       name: xmanualdefaults.manualdefault.diff.example.org
     compositionRevisionRef:
-      name: xmanualdefaults.manualdefault.diff.example.org-rev1
+      name: xmanualdefaults.manualdefault.diff.example.org-373e832

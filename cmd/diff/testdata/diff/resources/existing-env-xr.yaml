@@ -5,5 +5,9 @@ metadata:
   labels:
     crossplane.io/composite: test-env-resource
 spec:
+  compositionRef:
+    name: xenvresources.diff.example.org
+  compositionRevisionRef:
+    name: xenvresources.diff.example.org-fe2e10c
   compositionUpdatePolicy: Automatic
   configKey: "existing-config-value"

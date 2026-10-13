@@ -6,6 +6,6 @@ spec:
   compositionRef:
     name: xlegacynopresources.diff.example.org
   compositionRevisionRef:
-    name: xlegacynopresources.diff.example.org-def456
+    name: xlegacynopresources.diff.example.org-97a39c0
   compositionUpdatePolicy: Manual
   coolField: modified-value

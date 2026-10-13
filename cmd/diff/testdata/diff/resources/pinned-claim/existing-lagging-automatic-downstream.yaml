@@ -9,4 +9,4 @@ metadata:
     crossplane.io/composite: lagging-xr
 spec:
   forProvider:
-    configData: v1:xpinneds.pinned.diff.example.org-rev1:existing-value
+    configData: v1:xpinneds.pinned.diff.example.org-3d33597:existing-value

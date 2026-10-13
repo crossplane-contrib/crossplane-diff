@@ -63,10 +63,10 @@ spec:
 apiVersion: apiextensions.crossplane.io/v1
 kind: CompositionRevision
 metadata:
-  name: xpinneds.pinned.diff.example.org-rev1
+  name: xpinneds.pinned.diff.example.org-3d33597
   labels:
     crossplane.io/composition-name: xpinneds.pinned.diff.example.org
-    crossplane.io/composition-hash: rev1
+    crossplane.io/composition-hash: 3d33597f89367d85748b3c4c05016f1b7fc9909280cc74fcc05322dd33e5525
 spec:
   revision: 1
   compositeTypeRef:
@@ -99,10 +99,10 @@ spec:
 apiVersion: apiextensions.crossplane.io/v1
 kind: CompositionRevision
 metadata:
-  name: xpinneds.pinned.diff.example.org-rev2
+  name: xpinneds.pinned.diff.example.org-806289b
   labels:
     crossplane.io/composition-name: xpinneds.pinned.diff.example.org
-    crossplane.io/composition-hash: rev2
+    crossplane.io/composition-hash: 806289bb8974a1b342a30a2ff412bbf924588e9b994ec993cee8ed3e76aafa6
 spec:
   revision: 2
   compositeTypeRef:

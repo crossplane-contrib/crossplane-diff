@@ -12,3 +12,5 @@ spec:
   crossplane:
     compositionRef:
       name: xcycleas.cycle.example.org
+    compositionRevisionRef:
+      name: xcycleas.cycle.example.org-e7860b5

@@ -8,3 +8,8 @@ metadata:
   namespace: default
 spec:
   parentField: "existing-value"
+  crossplane:
+    compositionRef:
+      name: xparentresources.nested.example.org
+    compositionRevisionRef:
+      name: xparentresources.nested.example.org-f2af16a

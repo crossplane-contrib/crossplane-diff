@@ -14,5 +14,5 @@ metadata:
     crossplane.io/claim-namespace: test-namespace
 spec:
   forProvider:
-    configData: xrevisionrefclaims.diff.example.org-staleref
+    configData: xrevisionrefclaims.diff.example.org-98b484d
     resourceTier: basic

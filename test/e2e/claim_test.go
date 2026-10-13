@@ -250,7 +250,7 @@ func TestDiffExistingClaimWithNestedXRs(t *testing.T) {
 
 				// Verify the diff shows modified resources:
 				// 1. The Claim (ParentNopClaim)
-				// 2. The nested child XR (XChildNopClaim)
+				// 2. The nested child XR (XNopChild)
 				// 3. The composed managed resource from child (see composedNopKind)
 				// Note: The backing XRs are not shown in claim diffs, only claims and nested XRs
 				AssertStructuredDiff(t, jsonOutput, tu.ExpectDiff().
@@ -260,7 +260,7 @@ func TestDiffExistingClaimWithNestedXRs(t *testing.T) {
 					And().
 					WithModifiedResource("ParentNopClaim", "existing-parent-claim", "default").
 					And().
-					WithModifiedResource("XChildNopClaim", "", "").
+					WithModifiedResource("XNopChild", "", "").
 					WithAnyName().
 					And())
 

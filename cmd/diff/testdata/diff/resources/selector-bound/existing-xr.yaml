@@ -15,4 +15,6 @@ spec:
         binding: shared
     compositionRef:
       name: selector-bound-a
+    compositionRevisionRef:
+      name: selector-bound-a-dc464c8
     compositionUpdatePolicy: Automatic

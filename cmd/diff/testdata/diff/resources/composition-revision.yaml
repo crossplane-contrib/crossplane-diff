@@ -1,10 +1,14 @@
+# The CompositionRevision Crossplane creates for composition.yaml,
+# named and labelled from its hash as Crossplane names it. envtest runs no Crossplane controllers,
+# so it must be declared. The XRs in existing-xr.yaml, existing-xr-deleting.yaml,
+# existing-xr-with-argocd.yaml and existing-other-xr.yaml track it.
 apiVersion: apiextensions.crossplane.io/v1
 kind: CompositionRevision
 metadata:
-  name: xnopresources.diff.example.org-default
+  name: xnopresources.diff.example.org-b616215
   labels:
     crossplane.io/composition-name: xnopresources.diff.example.org
-    crossplane.io/composition-hash: default
+    crossplane.io/composition-hash: b6162153aaf39292b08dc7d04bc2432186a771c067f80cd37153ed985c86d4d
 spec:
   revision: 1
   compositeTypeRef:
@@ -20,6 +24,7 @@ spec:
         kind: GoTemplate
         source: Inline
         inline:
+          # add namespace to serve v2
           template: |
             apiVersion: ns.nop.example.org/v1alpha1
             kind: XDownstreamResource

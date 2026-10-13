@@ -199,9 +199,26 @@ Crossplane's composed field manager, gives it a controller ownerReference to the
 `RenderComposedResourceMetadata` does, and records it in the XR's `resourceRefs`. That reference is what makes a
 composed resource removable at all: removal detection, like Crossplane's garbage collector, considers only resources
 the composite controls (§6.3.1). Reconciled XR fixtures carry their own
-`crossplane.io/composite` label, claims' backing XRs track a declared CompositionRevision that the claim mirrors under
-Automatic, and composed fixtures omit the annotation function-go-templating strips from its output. A composed
-resource without a controlling XR, such as an orphan being adopted, is set up as a plain fixture, and only on purpose.
+`crossplane.io/composite` label and the `compositionRef` and `compositionRevisionRef` Crossplane's composite reconciler
+writes, naming the composition their case applies and a revision of it named from the real `Composition.Hash()` as
+`NewCompositionRevision` names it (#562). Only a direct `compositionRef` resolves a revision (§6.1.1), so a fixture
+without one would exercise a path no reconciled XR takes, and a fixture shared by cases with different compositions is
+split per composition. The harness writes a nested XR's refs with an Update, as its own reconciler does, rather than in
+its parent's composed apply, so a diff of the parent's render does not report them removed. Only XRs compose: a deeper
+hierarchy is a nested XR, never a managed resource with `resourceRefs`. Composed fixtures carry only what
+`RenderComposedResourceMetadata` and the functions leave: no gotemplating annotation, and a `generateName` only where
+the composition names nothing. A composed resource without a controlling XR, such as an orphan being adopted, is set up
+as a plain fixture, and only on purpose.
+
+Two harness steps keep a case's cluster to what Crossplane leaves, and fail the case otherwise. The first does what the
+composition revision controller would, since none runs: it gives each revision a controller reference to its
+Composition and creates the revision of each Composition's current hash that no fixture declares, and it refuses a
+revision without its Composition or not named from the hash of the Composition it was cut from. The second checks a short
+table of rules before the diff runs: each XR's composite label, its `compositionRef` and revision, and its claim binding;
+each composed resource's controller, `composition-resource-name` annotation and labels; and each claim's binding and,
+under Automatic, its revision ref, as the claim syncer leaves them. A case that deliberately sets up something else (an
+ownership takeover, an orphan, a revision selector matching nothing) lists the object in `unreconciled` with the reason;
+an exemption nothing needs fails the case too.
 
 envtest runs each case's `kube-apiserver` and `etcd` as children of the test binary, and only a deferred
 `Environment.Stop` ends them, which does not run when the binary times out, is killed or is interrupted. Such a run
@@ -262,13 +279,17 @@ The integration test cases cover:
 - **Resource Removal Detection**: Tests that resources which would be removed by a change are correctly identified and
   shown in the diff output.
 - **Hierarchical Resource Relationships**: Verifies that parent-child relationships between resources are correctly
-  understood, including cascading removal of child resources when a parent would be removed.
+  understood, including cascading removal of what a nested XR composes when the nested XR itself would be removed, at
+  the v2 `spec.crossplane.resourceRefs` and the legacy `spec.resourceRefs` paths.
 - **Composed Resource Deleted Out of Band**: Verifies, for both `xr` and `comp`, that a composed resource the XR still
   references but which no longer exists is left out of the observed state with a warning, rather than silently dropped.
   The fatal case (a child that cannot be read) is unit-tested only, since envtest grants the harness every permission.
 - **API Version Change Is Not a Removal**: Verifies, for both `xr` and `comp`, that a composed resource the XR names
   in its `resourceRefs` at `v1beta1`, which the new revision renders at `v1beta2`, is not reported as removed, and
   that a field change rendered alongside the version change is one modification rather than an error (#552).
+- **Only Controlled Resources Are Removed**: Verifies, for both `xr` and `comp`, that of the resources an XR's
+  `resourceRefs` name and its render no longer desires, only the one it controls is removed. One that another XR
+  controls, and one with no controller reference, stay, as Crossplane's garbage collector leaves them (#552).
 
 ### 4.6 Resource Naming Patterns
 

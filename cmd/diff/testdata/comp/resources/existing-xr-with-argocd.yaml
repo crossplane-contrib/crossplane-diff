@@ -13,3 +13,5 @@ spec:
   crossplane:
     compositionRef:
       name: xnopresources.diff.example.org
+    compositionRevisionRef:
+      name: xnopresources.diff.example.org-9382a6d

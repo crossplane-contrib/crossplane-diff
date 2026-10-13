@@ -3,7 +3,5 @@ kind: XNopResource
 metadata:
   name: sequencer-test
   namespace: default
-  annotations:
-    crossplane.io/composition-resource-name: ""
 spec:
   coolField: "test-value"

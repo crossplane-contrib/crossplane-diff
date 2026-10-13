@@ -1,9 +1,10 @@
 apiVersion: apiextensions.crossplane.io/v1
 kind: CompositionRevision
 metadata:
-  name: claim-composition-with-claimref-abc123
+  name: claim-composition-with-claimref-5ba06fd
   labels:
     crossplane.io/composition-name: claim-composition-with-claimref
+    crossplane.io/composition-hash: 5ba06fd56a4d1899c86f19d36b8623b8d6eb02512bf431071695c55c0ebdb60
 spec:
   revision: 1
   compositeTypeRef:

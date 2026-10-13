@@ -1,0 +1,13 @@
+# The resource composition.yaml composes for existing-other-xr.yaml, which controls it.
+apiVersion: ns.nop.example.org/v1alpha1
+kind: XDownstreamResource
+metadata:
+  annotations:
+    crossplane.io/composition-resource-name: nop-resource
+  labels:
+    crossplane.io/composite: other-resource
+  name: other-resource
+  namespace: default
+spec:
+  forProvider:
+    configData: other-value

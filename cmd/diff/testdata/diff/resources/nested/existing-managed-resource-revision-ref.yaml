@@ -14,4 +14,4 @@ metadata:
     crossplane.io/composite: test-parent
 spec:
   forProvider:
-    configData: xchildresources.nested.example.org-current
+    configData: xchildresources.nested.example.org-96afc06

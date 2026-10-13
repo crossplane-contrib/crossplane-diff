@@ -10,6 +10,6 @@ spec:
     compositionRef:
       name: xapimigrateresources.example.org
     compositionRevisionRef:
-      name: xapimigrateresources.example.org-v1
+      name: xapimigrateresources.example.org-2067855
     compositionUpdatePolicy: Manual
   coolField: test-value

@@ -1,4 +1,5 @@
-# A cluster-scoped XR using unverified-cluster-composition.yaml.
+# A cluster-scoped XR using unverified-cluster-composition.yaml. It has composed nothing: the
+# composition renders ConfigMaps into a namespace that does not exist, so Crossplane cannot create them.
 apiVersion: diff.example.org/v1alpha1
 kind: XNopResource
 metadata:
@@ -10,3 +11,5 @@ spec:
   crossplane:
     compositionRef:
       name: xnopresources-unverified.diff.example.org
+    compositionRevisionRef:
+      name: xnopresources-unverified.diff.example.org-89e6a48

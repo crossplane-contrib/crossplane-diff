@@ -1,7 +1,7 @@
-# existing-child-xr.yaml as Crossplane's composite reconciler leaves it once it has selected a revision:
-# carrying spec.crossplane.compositionRevisionRef. Its composition
-# (child-revision-templating-composition.yaml) reads that name into the managed resource, so a nested
-# render that did not inherit the ref would report the managed resource as changing.
+# existing-child-xr.yaml as Crossplane's composite reconciler leaves it once it has selected
+# child-revision-templating-composition.yaml and its revision: carrying spec.crossplane.compositionRef
+# and compositionRevisionRef. That composition reads the revision name into the managed resource, so a
+# nested render that did not inherit the refs would report the managed resource as changing.
 apiVersion: ns.nested.example.org/v1alpha1
 kind: XChildResource
 metadata:
@@ -14,6 +14,8 @@ metadata:
 spec:
   childField: "existing-value"
   crossplane:
+    compositionRef:
+      name: xchildresources.nested.example.org
     compositionUpdatePolicy: Automatic
     compositionRevisionRef:
-      name: xchildresources.nested.example.org-current
+      name: xchildresources.nested.example.org-96afc06

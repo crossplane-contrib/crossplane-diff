@@ -15,7 +15,7 @@ spec:
   compositionRef:
     name: claim-composition
   compositionRevisionRef:
-    name: claim-composition-default
+    name: claim-composition-caff3a7
   claimRef:
     apiVersion: diff.example.org/v1alpha1
     kind: NopClaim

@@ -1,0 +1,16 @@
+# existing-claim-revision-ref-downstream.yaml as rendered from the revision
+# existing-claim-revision-ref-kubectl-applied-xr.yaml tracks, so configData holds that revision's name.
+apiVersion: nop.example.org/v1alpha1
+kind: XDownstreamResource
+metadata:
+  name: revision-ref-claim-xr
+  annotations:
+    crossplane.io/composition-resource-name: nop-resource
+  labels:
+    crossplane.io/composite: revision-ref-claim-xr
+    crossplane.io/claim-name: revision-ref-claim
+    crossplane.io/claim-namespace: test-namespace
+spec:
+  forProvider:
+    configData: xrevisionrefclaims.diff.example.org-329a7cd
+    resourceTier: basic

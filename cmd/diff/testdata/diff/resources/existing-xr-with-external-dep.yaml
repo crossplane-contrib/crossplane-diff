@@ -8,3 +8,8 @@ metadata:
 spec:
   coolField: existing-value
   environment: staging
+  crossplane:
+    compositionRef:
+      name: xnopresources.diff.example.org
+    compositionRevisionRef:
+      name: xnopresources.diff.example.org-2deebbc

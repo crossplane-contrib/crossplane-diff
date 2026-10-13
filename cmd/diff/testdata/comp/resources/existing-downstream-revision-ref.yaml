@@ -2,15 +2,10 @@
 # currently tracks. configData therefore holds that revision's name, which is exactly what makes the
 # revision-propagating change observable: re-render against the new revision and this value must move.
 #
-# Two details make this fixture a real discriminator rather than one that passes either way:
-#
-#   - It carries crossplane.io/composition-resource-name as well as the gotemplating one. The render
-#     adds the former, so a fixture omitting it shows an annotation diff on EVERY run — which would
-#     report the resource as modified whether or not the revision name propagated. (That is the "fixture
-#     artifact" the sibling comp tests note; here it would silently defeat the test.)
-#   - The stale suffix is deliberately NOT seven hex characters. A predicted name is
-#     "<composition>-<hash[:7]>", so a placeholder like "-0000000" would match the very pattern the
-#     test asserts the new value against, and the assertion would hold even with nothing seeded.
+# It carries crossplane.io/composition-resource-name, which the render adds, so that it is a real
+# discriminator: a fixture omitting it shows an annotation diff on EVERY run, which would report the
+# resource as modified whether or not the revision name propagated. Its value is a real revision name,
+# which matches the predicted-name pattern too, so the tests pin the exact old and new value.
 apiVersion: ns.nop.example.org/v1alpha1
 kind: XDownstreamResource
 metadata:
@@ -22,5 +17,5 @@ metadata:
     crossplane.io/composite: revision-ref-resource
 spec:
   forProvider:
-    configData: xrevisionrefs.diff.example.org-staleref
+    configData: xrevisionrefs.diff.example.org-e36719b
     resourceTier: basic

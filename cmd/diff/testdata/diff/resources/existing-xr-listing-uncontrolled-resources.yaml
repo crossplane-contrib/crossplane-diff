@@ -1,0 +1,27 @@
+# existing-removal-test-xr.yaml whose resourceRefs still name two composed resources it no longer
+# controls: one another XR (existing-other-xr.yaml) now controls, and one whose controller reference
+# was removed. Crossplane's garbage collector deletes only a resource the composite controls, so
+# neither is removed although the composition no longer renders them. The harness appends the
+# resources this XR does control.
+apiVersion: ns.diff.example.org/v1alpha1
+kind: XNopResource
+metadata:
+  name: test-resource
+  labels:
+    crossplane.io/composite: test-resource
+  namespace: default
+spec:
+  coolField: "existing-value"
+  crossplane:
+    compositionRef:
+      name: removal-test-composition
+    compositionRevisionRef:
+      name: removal-test-composition-b790fbb
+    compositionUpdatePolicy: Automatic
+    resourceRefs:
+      - apiVersion: ns.nop.example.org/v1alpha1
+        kind: XDownstreamResource
+        name: other-resource
+      - apiVersion: ns.nop.example.org/v1alpha1
+        kind: XDownstreamResource
+        name: resource-without-controller

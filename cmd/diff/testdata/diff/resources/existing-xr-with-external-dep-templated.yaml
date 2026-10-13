@@ -1,0 +1,17 @@
+# existing-xr-with-external-dep.yaml as Crossplane leaves it once external-res-gotpl-composition.yaml
+# has composed it, so it tracks that composition and its revision.
+apiVersion: ns.diff.example.org/v1alpha1
+kind: XNopResource
+metadata:
+  name: test-resource
+  labels:
+    crossplane.io/composite: test-resource
+  namespace: default
+spec:
+  coolField: existing-value
+  environment: staging
+  crossplane:
+    compositionRef:
+      name: templated-extra-resources.diff.example.org
+    compositionRevisionRef:
+      name: templated-extra-resources.diff.example.org-d038aba

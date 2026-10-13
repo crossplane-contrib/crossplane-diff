@@ -27,11 +27,6 @@ spec:
                     configData:
                       type: string
                       description: "Configuration data for the resource"
-                crossplane:
-                  type: object
-                  properties:
-                    compositeDeletePolicy:
-                      type: string
             status:
               type: object
               properties:
@@ -69,11 +64,6 @@ spec:
                     configData:
                       type: string
                       description: "Configuration data for the resource"
-                crossplane:
-                  type: object
-                  properties:
-                    compositeDeletePolicy:
-                      type: string
             status:
               type: object
               properties:

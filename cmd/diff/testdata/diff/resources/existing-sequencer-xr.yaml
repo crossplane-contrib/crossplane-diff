@@ -5,9 +5,12 @@ kind: XNopResource
 metadata:
   name: sequencer-test
   namespace: default
-  annotations:
-    crossplane.io/composition-resource-name: ""
   labels:
     crossplane.io/composite: sequencer-test
 spec:
   coolField: "test-value"
+  crossplane:
+    compositionRef:
+      name: sequencer-composition
+    compositionRevisionRef:
+      name: sequencer-composition-eb25773

@@ -1,9 +1,10 @@
 # testdata/comp/resources/existing-xr-revision-ref.yaml exactly as a user would write it: unchanged,
-# but without the compositionRevisionRef that Crossplane's composite reconciler wrote into the cluster
-# copy. Applying this leaves that ref where it is, so nothing would change — and the composition this
-# composite uses (testdata/comp/resources/revision-templating-composition.yaml) reads the revision name
-# into a composed resource, which makes a render that drops the ref show a spurious change. See issue
-# #499.
+# but without the compositionRef and compositionRevisionRef that Crossplane's composite reconciler
+# wrote into the cluster copy. Applying this leaves those refs where they are, so nothing would change —
+# and the composition this composite uses (testdata/comp/resources/revision-templating-composition.yaml)
+# reads the revision name into a composed resource. Only the inherited compositionRef resolves the
+# revision whose name render must see, so a render that drops the cluster's refs shows a spurious
+# change. See issue #499.
 apiVersion: ns.diff.example.org/v1alpha1
 kind: XNopResource
 metadata:
@@ -12,6 +13,4 @@ metadata:
 spec:
   coolField: revision-ref-existing-value
   crossplane:
-    compositionRef:
-      name: xrevisionrefs.diff.example.org
     compositionUpdatePolicy: Automatic

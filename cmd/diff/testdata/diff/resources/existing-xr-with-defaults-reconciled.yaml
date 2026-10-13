@@ -1,0 +1,16 @@
+# What Crossplane's composite reconciler writes to xr-with-missing-defaults.yaml once it has reconciled
+# it: its own composite label, and the composition and revision it selected (the revision the harness
+# creates for composition-with-defaults.yaml, as the revision controller does).
+apiVersion: ns.diff.example.org/v1alpha1
+kind: XTestDefaultResource
+metadata:
+  name: test-resource-with-defaults
+  namespace: default
+  labels:
+    crossplane.io/composite: test-resource-with-defaults
+spec:
+  crossplane:
+    compositionRef:
+      name: xdefaultresources.ns.diff.example.org
+    compositionRevisionRef:
+      name: xdefaultresources.ns.diff.example.org-d0e5887

@@ -8,8 +8,11 @@ metadata:
     crossplane.io/composite: test-v2xrd-v1paths
   namespace: default
 spec:
-  # v1-style composition reference (at spec.compositionRef instead of spec.crossplane.compositionRef)
+  # v1-style composition reference (at spec.compositionRef instead of spec.crossplane.compositionRef),
+  # and the revision ref at the same v1-style path, which is what this case is about.
   compositionRef:
     name: xnopresources.v2withv1paths.diff.example.org
+  compositionRevisionRef:
+    name: xnopresources.v2withv1paths.diff.example.org-f920803
   compositionUpdatePolicy: Automatic
   coolField: existing-value

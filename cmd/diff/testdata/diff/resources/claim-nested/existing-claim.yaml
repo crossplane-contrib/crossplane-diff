@@ -10,9 +10,9 @@ spec:
     name: parent-nop-claim-composition
   # Copied back from the backing XR, as the claim syncer does under the XR's Automatic update policy.
   compositionRevisionRef:
-    name: parent-nop-claim-composition-7c02fc0
+    name: parent-nop-claim-composition-cfac93e
   # Bound to its backing XR, existing-parent-xr.yaml, as Crossplane's claim syncer binds it.
   resourceRef:
     apiVersion: claimnested.diff.example.org/v1alpha1
-    kind: XParentNopClaim
+    kind: XNopParent
     name: existing-parent-claim-82crv

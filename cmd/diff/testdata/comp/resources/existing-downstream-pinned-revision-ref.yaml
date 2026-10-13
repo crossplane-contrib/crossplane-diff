@@ -13,5 +13,5 @@ metadata:
     crossplane.io/composite: pinned-revision-ref-resource
 spec:
   forProvider:
-    configData: xrevisionrefs.diff.example.org-pinnedref
+    configData: xrevisionrefs.diff.example.org-0d65896
     resourceTier: basic

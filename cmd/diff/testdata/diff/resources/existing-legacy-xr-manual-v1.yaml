@@ -8,6 +8,6 @@ spec:
   compositionRef:
     name: xlegacynopresources.diff.example.org
   compositionRevisionRef:
-    name: xlegacynopresources.diff.example.org-abc123
+    name: xlegacynopresources.diff.example.org-2f488b6
   compositionUpdatePolicy: Manual
   coolField: existing-value

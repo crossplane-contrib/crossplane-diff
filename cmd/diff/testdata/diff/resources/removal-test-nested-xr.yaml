@@ -1,0 +1,19 @@
+# The nested XR the removal-test compositions once composed as resource2, as Crossplane left it: its
+# root's composite label, and the composition and revision of its own kind it was composed with. It
+# composes removal-test-nested-xr-managed.yaml in turn, so removing it removes that too.
+apiVersion: ns.nested.example.org/v1alpha1
+kind: XChildResource
+metadata:
+  name: resource-to-be-removed
+  namespace: default
+  annotations:
+    crossplane.io/composition-resource-name: resource2
+  labels:
+    crossplane.io/composite: test-resource
+spec:
+  childField: child-value
+  crossplane:
+    compositionRef:
+      name: xchildresources.nested.example.org
+    compositionRevisionRef:
+      name: xchildresources.nested.example.org-254a09a

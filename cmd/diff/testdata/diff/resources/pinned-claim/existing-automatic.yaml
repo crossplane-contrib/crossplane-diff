@@ -12,7 +12,7 @@ spec:
   compositionRef:
     name: xpinneds.pinned.diff.example.org
   compositionRevisionRef:
-    name: xpinneds.pinned.diff.example.org-rev2
+    name: xpinneds.pinned.diff.example.org-806289b
   resourceRef:
     apiVersion: pinned.diff.example.org/v1alpha1
     kind: XPinned

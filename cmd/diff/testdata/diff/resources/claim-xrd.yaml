@@ -26,26 +26,5 @@ spec:
                 tier:
                   type: string
                   default: standard
-                publishConnectionDetailsTo:
-                  type: object
-                  properties:
-                    name:
-                      type: string
-                    configRef:
-                      type: object
-                      properties:
-                        name:
-                          type: string
-                    metadata:
-                      type: object
-                      properties:
-                        labels:
-                          type: object
-                          additionalProperties:
-                            type: string
-                        annotations:
-                          type: object
-                          additionalProperties:
-                            type: string
                 writeConnectionSecretsToNamespace:
                   type: string

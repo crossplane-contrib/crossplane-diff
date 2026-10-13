@@ -11,3 +11,8 @@ metadata:
   - composite.apiextensions.crossplane.io
 spec:
   coolField: "existing-value"
+  crossplane:
+    compositionRef:
+      name: xnopresources.diff.example.org
+    compositionRevisionRef:
+      name: xnopresources.diff.example.org-b616215

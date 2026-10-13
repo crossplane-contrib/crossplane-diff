@@ -10,3 +10,5 @@ spec:
   crossplane:
     compositionRef:
       name: xnopresources-sha256.diff.example.org
+    compositionRevisionRef:
+      name: xnopresources-sha256.diff.example.org-1c56c69

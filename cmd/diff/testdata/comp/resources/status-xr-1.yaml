@@ -10,3 +10,5 @@ spec:
   crossplane:
     compositionRef:
       name: xstatus.diff.example.org
+    compositionRevisionRef:
+      name: xstatus.diff.example.org-4b3fabc

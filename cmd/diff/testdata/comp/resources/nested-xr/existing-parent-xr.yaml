@@ -12,3 +12,5 @@ spec:
   crossplane:
     compositionRef:
       name: xparentresources.parent.diff.example.org
+    compositionRevisionRef:
+      name: xparentresources.parent.diff.example.org-2c8ca41

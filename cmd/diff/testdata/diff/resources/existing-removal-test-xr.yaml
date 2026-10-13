@@ -1,0 +1,17 @@
+# existing-xr.yaml as Crossplane leaves it once removal-test-composition.yaml has composed it, so it
+# tracks that composition and its revision.
+apiVersion: ns.diff.example.org/v1alpha1
+kind: XNopResource
+metadata:
+  name: test-resource
+  labels:
+    crossplane.io/composite: test-resource
+  namespace: default
+spec:
+  coolField: "existing-value"
+  crossplane:
+    compositionRef:
+      name: removal-test-composition
+    compositionRevisionRef:
+      name: removal-test-composition-b790fbb
+    compositionUpdatePolicy: Automatic

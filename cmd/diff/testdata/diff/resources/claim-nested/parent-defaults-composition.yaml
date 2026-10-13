@@ -9,7 +9,7 @@ metadata:
 spec:
   compositeTypeRef:
     apiVersion: claimnested.diff.example.org/v1alpha1
-    kind: XParentNopClaim
+    kind: XNopParent
   mode: Pipeline
   pipeline:
     - step: render-defaults
