@@ -26,6 +26,7 @@ import (
 	"time"
 
 	xp "github.com/crossplane-contrib/crossplane-diff/cmd/diff/client/crossplane"
+	"github.com/crossplane/cli/v2/cmd/crossplane/render"
 	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/api/types/filters"
 	"github.com/docker/docker/client"
@@ -365,11 +366,6 @@ func (p *RegistryOverrideFunctionProvider) Cleanup(ctx context.Context) error {
 // functions that don't simply ignore it.
 const EnvMaxRecvMessageSize = "MAX_RECV_MESSAGE_SIZE"
 
-// annKeyRuntimeDockerEnv mirrors crossplane/cli render's
-// AnnotationKeyRuntimeEnvironmentVariables: a comma-separated list of key=value
-// pairs set as env on the function's render container.
-const annKeyRuntimeDockerEnv = "render.crossplane.io/runtime-docker-env"
-
 // EnvInjectingFunctionProvider wraps another FunctionProvider and upserts a set
 // of env pairs into each function's runtime-docker-env annotation before
 // returning them. Used to raise the function gRPC max-recv-message-size so large
@@ -406,16 +402,16 @@ func (p *EnvInjectingFunctionProvider) GetFunctionsForComposition(comp *apiexten
 			fns[i].Annotations = make(map[string]string)
 		}
 
-		cur := fns[i].Annotations[annKeyRuntimeDockerEnv]
+		cur := fns[i].Annotations[render.AnnotationKeyRuntimeEnvironmentVariables]
 		for k, v := range p.envs {
 			cur = upsertEnvPair(cur, k, v)
 		}
 
-		fns[i].Annotations[annKeyRuntimeDockerEnv] = cur
+		fns[i].Annotations[render.AnnotationKeyRuntimeEnvironmentVariables] = cur
 
 		p.logger.Debug("Injected function runtime env",
 			"function", fns[i].GetName(),
-			annKeyRuntimeDockerEnv, cur)
+			render.AnnotationKeyRuntimeEnvironmentVariables, cur)
 	}
 
 	return fns, nil

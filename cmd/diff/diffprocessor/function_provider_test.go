@@ -21,6 +21,7 @@ import (
 	"testing"
 
 	tu "github.com/crossplane-contrib/crossplane-diff/cmd/diff/testutils"
+	"github.com/crossplane/cli/v2/cmd/crossplane/render"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	apiextensionsv1 "github.com/crossplane/crossplane/apis/v2/apiextensions/v1"
@@ -664,20 +665,20 @@ func TestEnvInjectingFunctionProvider(t *testing.T) {
 			t.Fatalf("GetFunctionsForComposition() error = %v", err)
 		}
 
-		if got := fns[0].Annotations[annKeyRuntimeDockerEnv]; got != EnvMaxRecvMessageSize+"=16" {
+		if got := fns[0].Annotations[render.AnnotationKeyRuntimeEnvironmentVariables]; got != EnvMaxRecvMessageSize+"=16" {
 			t.Errorf("annotation = %q, want %q", got, EnvMaxRecvMessageSize+"=16")
 		}
 	})
 
 	t.Run("appends to existing runtime-docker-env", func(t *testing.T) {
-		p := NewEnvInjectingFunctionProvider(newInner(map[string]string{annKeyRuntimeDockerEnv: "FOO=bar"}), envs, tu.TestLogger(t, false))
+		p := NewEnvInjectingFunctionProvider(newInner(map[string]string{render.AnnotationKeyRuntimeEnvironmentVariables: "FOO=bar"}), envs, tu.TestLogger(t, false))
 
 		fns, err := p.GetFunctionsForComposition(comp)
 		if err != nil {
 			t.Fatalf("GetFunctionsForComposition() error = %v", err)
 		}
 
-		if got := fns[0].Annotations[annKeyRuntimeDockerEnv]; got != "FOO=bar,"+EnvMaxRecvMessageSize+"=16" {
+		if got := fns[0].Annotations[render.AnnotationKeyRuntimeEnvironmentVariables]; got != "FOO=bar,"+EnvMaxRecvMessageSize+"=16" {
 			t.Errorf("annotation = %q, want %q", got, "FOO=bar,"+EnvMaxRecvMessageSize+"=16")
 		}
 	})
@@ -693,7 +694,7 @@ func TestEnvInjectingFunctionProvider(t *testing.T) {
 			t.Fatalf("second call error = %v", err)
 		}
 
-		if got := fns[0].Annotations[annKeyRuntimeDockerEnv]; got != EnvMaxRecvMessageSize+"=16" {
+		if got := fns[0].Annotations[render.AnnotationKeyRuntimeEnvironmentVariables]; got != EnvMaxRecvMessageSize+"=16" {
 			t.Errorf("annotation after repeat = %q, want single pair %q", got, EnvMaxRecvMessageSize+"=16")
 		}
 	})
