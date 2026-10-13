@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"maps"
 	"os"
 	"path/filepath"
 	"sort"
@@ -936,4 +937,179 @@ func localCrossplaneBinary(t *testing.T) string {
 	}
 
 	return absPath
+}
+
+// reconcileCompositionRevisions leaves the setup's Compositions and CompositionRevisions as Crossplane's
+// composition revision controller does (crossplane internal/controller/apiextensions/composition): every
+// revision is controlled by its Composition, and a Composition's current hash is its latest revision,
+// creating that revision if no fixture declares it. envtest runs no controllers, so without this a case
+// would see revisions no cluster has: uncontrolled ones, or none at all for a Composition.
+//
+// It also refuses a fixture no cluster could hold: a revision whose Composition the case doesn't declare
+// (Crossplane garbage collects a revision with its Composition), or one not named and labelled from the
+// hash of the Composition it was cut from, as NewCompositionRevision names it.
+func reconcileCompositionRevisions(ctx context.Context, c client.Client) error {
+	comps := &xpextv1.CompositionList{}
+	if err := c.List(ctx, comps); err != nil {
+		return errors.Wrap(err, "cannot list Compositions")
+	}
+
+	revs := &xpextv1.CompositionRevisionList{}
+	if err := c.List(ctx, revs); err != nil {
+		return errors.Wrap(err, "cannot list CompositionRevisions")
+	}
+
+	byName := make(map[string]*xpextv1.Composition, len(comps.Items))
+	for i := range comps.Items {
+		byName[comps.Items[i].GetName()] = &comps.Items[i]
+	}
+
+	var problems []string
+
+	for i := range revs.Items {
+		rev := &revs.Items[i]
+		compName := rev.GetLabels()[xpextv1.LabelCompositionName]
+
+		if _, ok := byName[compName]; !ok {
+			problems = append(problems, fmt.Sprintf("CompositionRevision %s belongs to Composition %q, which the case doesn't declare; "+
+				"a revision is garbage collected with its Composition", rev.GetName(), compName))
+
+			continue
+		}
+
+		name, hash := revisionIdentity(compName, revisionSource(rev).Hash())
+		if rev.GetName() != name || rev.GetLabels()[xpextv1.LabelCompositionHash] != hash {
+			problems = append(problems, fmt.Sprintf("CompositionRevision %s (hash label %q) is not named from the hash of the "+
+				"Composition it was cut from: Crossplane would name it %s with hash label %q",
+				rev.GetName(), rev.GetLabels()[xpextv1.LabelCompositionHash], name, hash))
+		}
+	}
+
+	if len(problems) > 0 {
+		return errors.New(strings.Join(problems, "\n"))
+	}
+
+	for i := range comps.Items {
+		if err := reconcileRevisionsOf(ctx, c, &comps.Items[i], revs.Items); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+// reconcileRevisionsOf does for one Composition what the composition revision controller's Reconcile
+// does: control each of its revisions, then make its current hash its latest revision.
+func reconcileRevisionsOf(ctx context.Context, c client.Client, comp *xpextv1.Composition, all []xpextv1.CompositionRevision) error {
+	owner := metav1.OwnerReference{
+		APIVersion:         xpextv1.CompositionGroupVersionKind.GroupVersion().String(),
+		Kind:               xpextv1.CompositionGroupVersionKind.Kind,
+		Name:               comp.GetName(),
+		UID:                comp.GetUID(),
+		Controller:         new(true),
+		BlockOwnerDeletion: new(true),
+	}
+
+	var (
+		latest int64
+		mine   []*xpextv1.CompositionRevision
+	)
+
+	for i := range all {
+		if all[i].GetLabels()[xpextv1.LabelCompositionName] != comp.GetName() {
+			continue
+		}
+
+		mine = append(mine, &all[i])
+		latest = max(latest, all[i].Spec.Revision)
+	}
+
+	_, current := revisionIdentity(comp.GetName(), comp.Hash())
+	matched := false
+
+	for _, rev := range mine {
+		rev.SetOwnerReferences([]metav1.OwnerReference{owner})
+
+		// A revision matching the current Composition that isn't the latest is promoted to be the latest.
+		if rev.GetLabels()[xpextv1.LabelCompositionHash] == current {
+			matched = true
+
+			if rev.Spec.Revision != latest {
+				rev.Spec.Revision = latest + 1
+			}
+		}
+
+		if err := c.Update(ctx, rev); err != nil {
+			return errors.Wrapf(err, "cannot update CompositionRevision %s", rev.GetName())
+		}
+	}
+
+	if matched {
+		return nil
+	}
+
+	rev := newCompositionRevision(comp, latest+1)
+	rev.SetOwnerReferences([]metav1.OwnerReference{owner})
+
+	return errors.Wrapf(c.Create(ctx, rev), "cannot create the CompositionRevision of Composition %s", comp.GetName())
+}
+
+// newCompositionRevision is crossplane's composition.NewCompositionRevision, which is internal.
+func newCompositionRevision(comp *xpextv1.Composition, revision int64) *xpextv1.CompositionRevision {
+	name, hash := revisionIdentity(comp.GetName(), comp.Hash())
+
+	labels := maps.Clone(comp.GetLabels())
+	if labels == nil {
+		labels = map[string]string{}
+	}
+
+	labels[xpextv1.LabelCompositionName] = comp.GetName()
+	labels[xpextv1.LabelCompositionHash] = hash
+
+	spec := (&xpextv1.GeneratedRevisionSpecConverter{}).ToRevisionSpec(comp.Spec)
+	spec.Revision = revision
+
+	rev := &xpextv1.CompositionRevision{Spec: spec}
+	rev.SetName(name)
+	rev.SetLabels(labels)
+
+	if a := comp.GetAnnotations(); len(a) > 0 {
+		rev.SetAnnotations(maps.Clone(a))
+	}
+
+	return rev
+}
+
+// revisionSource is the Composition a revision was cut from, as far as its hash is concerned: the
+// revision's spec, and its labels and annotations, which NewCompositionRevision copies from the
+// Composition, without the two labels it stamps.
+func revisionSource(rev *xpextv1.CompositionRevision) *xpextv1.Composition {
+	comp := &xpextv1.Composition{Spec: (&xpextv1.GeneratedRevisionSpecConverter{}).FromRevisionSpec(rev.Spec)}
+
+	labels := maps.Clone(rev.GetLabels())
+	delete(labels, xpextv1.LabelCompositionName)
+	delete(labels, xpextv1.LabelCompositionHash)
+
+	if len(labels) > 0 {
+		comp.SetLabels(labels)
+	}
+
+	comp.SetAnnotations(rev.GetAnnotations())
+
+	return comp
+}
+
+// revisionIdentity is the name and hash label NewCompositionRevision gives the revision of a Composition
+// with the given name and Composition.Hash().
+func revisionIdentity(compName, hash string) (string, string) {
+	if len(hash) >= 63 {
+		hash = hash[:63]
+	}
+
+	suffix := hash
+	if len(suffix) >= 7 {
+		suffix = suffix[:7]
+	}
+
+	return compName + "-" + suffix, hash
 }

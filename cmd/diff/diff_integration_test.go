@@ -248,6 +248,11 @@ func runIntegrationTest(t *testing.T, testType DiffTestType, tt IntegrationTestC
 		t.Fatalf("failed to setup resources: %v", err)
 	}
 
+	// No composition revision controller runs either: do what it would.
+	if err := reconcileCompositionRevisions(ctx, k8sClient); err != nil {
+		t.Fatalf("setup's CompositionRevisions are not what a cluster could hold: %v", err)
+	}
+
 	// Default to v2 API version for XR resources unless otherwise specified
 	xrdAPIVersion := V2
 	if tt.xrdAPIVersion != V2 {
@@ -2813,6 +2818,7 @@ Summary: 2 modified, 2 removed`,
 				// (not a composite), and an XRD would make it composite.
 				"testdata/diff/resources/api-version-composition-revision-v1.yaml",
 				"testdata/diff/resources/api-version-composition-revision-v2.yaml",
+				"testdata/diff/resources/api-version-composition.yaml",
 				"testdata/diff/resources/functions.yaml",
 			},
 			crossplaneManagedResources: []HierarchicalOwnershipRelation{
@@ -2844,6 +2850,7 @@ Summary: 2 modified, 2 removed`,
 				"testdata/diff/resources/xrd.yaml",
 				"testdata/diff/resources/api-version-composition-revision-v1.yaml",
 				"testdata/diff/resources/api-version-composition-revision-v2.yaml",
+				"testdata/diff/resources/api-version-composition.yaml",
 				"testdata/diff/resources/functions.yaml",
 			},
 			crossplaneManagedResources: []HierarchicalOwnershipRelation{
