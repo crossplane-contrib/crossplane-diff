@@ -3,8 +3,6 @@ kind: XNopResource
 metadata:
   name: sequencer-envconfig-test
   namespace: default
-  annotations:
-    crossplane.io/composition-resource-name: ""
 spec:
   crossplane:
     compositionRef:
