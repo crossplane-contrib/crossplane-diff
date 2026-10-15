@@ -25,10 +25,12 @@ import (
 	"testing"
 
 	cerrdefs "github.com/containerd/errdefs"
-	"github.com/docker/docker/api/types/container"
-	"github.com/docker/docker/api/types/network"
+	"github.com/crossplane/cli/v2/cmd/crossplane/render"
 	gcmp "github.com/google/go-cmp/cmp"
 	"github.com/google/go-cmp/cmp/cmpopts"
+	"github.com/moby/moby/api/types/container"
+	"github.com/moby/moby/api/types/network"
+	"github.com/moby/moby/client"
 
 	"github.com/crossplane/crossplane-runtime/v2/pkg/errors"
 	"github.com/crossplane/crossplane-runtime/v2/pkg/logging"
@@ -41,15 +43,19 @@ const (
 	liveID  = "1111111111111111"
 )
 
-// fakeDocker records every call a Run makes, in order, and ignores list filters: the Run must decide
-// for itself which containers are its to remove, so a fake that pre-filters would hide exactly the bug
-// these tests exist to catch.
+// fakeDocker records every call a Run makes, in order. It applies list filters the way the Docker daemon
+// does (a resource matches only if it carries every label=key=value pair, and any other filter term
+// fails the test), because the filter is what decides which resources are the Run's: the fixtures
+// below hold resources that must not match, so a wrong filter removes them.
 type fakeDocker struct {
+	t *testing.T
+
 	containers       []container.Summary
+	networks         []network.Summary
 	listErr          error
 	removeErr        map[string]error // by container ID
-	networkRemoveErr map[string]error // by network name
-	networkCreateErr error
+	networkListErr   error
+	networkRemoveErr map[string]error // by network ID
 
 	calls []string
 }
@@ -58,29 +64,72 @@ func (f *fakeDocker) record(call string) {
 	f.calls = append(f.calls, call)
 }
 
-func (f *fakeDocker) ContainerList(_ context.Context, _ container.ListOptions) ([]container.Summary, error) {
-	f.record("list containers")
-	return f.containers, f.listErr
+// matches reports whether labels satisfy filters as the Docker daemon's MatchKVList does.
+func (f *fakeDocker) matches(filters client.Filters, labels map[string]string) bool {
+	for term, values := range filters {
+		if term != "label" {
+			f.t.Errorf("unexpected Docker list filter term %q", term)
+			return false
+		}
+
+		for v := range values {
+			k, want, hasValue := strings.Cut(v, "=")
+			got, ok := labels[k]
+
+			if !ok || (hasValue && got != want) {
+				return false
+			}
+		}
+	}
+
+	return true
 }
 
-func (f *fakeDocker) ContainerRemove(_ context.Context, id string, opts container.RemoveOptions) error {
+func (f *fakeDocker) ContainerList(_ context.Context, opts client.ContainerListOptions) (client.ContainerListResult, error) {
+	f.record("list containers")
+
+	if !opts.All {
+		f.t.Error("ContainerList without All would miss stopped containers")
+	}
+
+	var res client.ContainerListResult
+
+	for _, c := range f.containers {
+		if f.matches(opts.Filters, c.Labels) {
+			res.Items = append(res.Items, c)
+		}
+	}
+
+	return res, f.listErr
+}
+
+func (f *fakeDocker) ContainerRemove(_ context.Context, id string, opts client.ContainerRemoveOptions) (client.ContainerRemoveResult, error) {
 	if !opts.Force {
 		f.record("remove container " + id + " without force")
 	} else {
 		f.record("remove container " + id)
 	}
 
-	return f.removeErr[id]
+	return client.ContainerRemoveResult{}, f.removeErr[id]
 }
 
-func (f *fakeDocker) NetworkCreate(_ context.Context, name string, opts network.CreateOptions) (network.CreateResponse, error) {
-	f.record("create network " + name + " " + opts.Driver + " " + LabelRunID + "=" + opts.Labels[LabelRunID])
-	return network.CreateResponse{ID: "id-" + name}, f.networkCreateErr
+func (f *fakeDocker) NetworkList(_ context.Context, opts client.NetworkListOptions) (client.NetworkListResult, error) {
+	f.record("list networks")
+
+	var res client.NetworkListResult
+
+	for _, n := range f.networks {
+		if f.matches(opts.Filters, n.Labels) {
+			res.Items = append(res.Items, n)
+		}
+	}
+
+	return res, f.networkListErr
 }
 
-func (f *fakeDocker) NetworkRemove(_ context.Context, name string) error {
-	f.record("remove network " + name)
-	return f.networkRemoveErr[name]
+func (f *fakeDocker) NetworkRemove(_ context.Context, id string, _ client.NetworkRemoveOptions) (client.NetworkRemoveResult, error) {
+	f.record("remove network " + id)
+	return client.NetworkRemoveResult{}, f.networkRemoveErr[id]
 }
 
 func (f *fakeDocker) Close() error {
@@ -111,53 +160,65 @@ func (a *advisories) count() int {
 	return len(a.msgs)
 }
 
-// fixture returns a container as the Docker API lists it: names carry a leading slash.
-func fixture(id, name string, networks ...string) container.Summary {
-	c := container.Summary{ID: id, NetworkSettings: &container.NetworkSettingsSummary{Networks: map[string]*network.EndpointSettings{}}}
-	if name != "" {
-		c.Names = []string{"/" + name}
-	}
+// session returns the labels the upstream render engine puts on what it creates for session id.
+func session(id string) map[string]string {
+	return map[string]string{render.LabelKeyManagedBy: render.LabelValueManagedByCrossplane, render.LabelKeySession: id}
+}
 
-	for _, n := range networks {
-		c.NetworkSettings.Networks[n] = &network.EndpointSettings{}
-	}
+// ctr returns a container as the Docker API lists it: names carry a leading slash.
+func ctr(id, name string, labels map[string]string) container.Summary {
+	return container.Summary{ID: id, Names: []string{"/" + name}, Labels: labels}
+}
 
-	return c
+func netw(id, name string, labels map[string]string) network.Summary {
+	return network.Summary{Network: network.Network{ID: id, Name: name, Labels: labels}}
 }
 
 // hostContainers is a Docker host shared by a dead run, a live run, this run, and things crossplane-diff
 // does not own.
 var hostContainers = []container.Summary{
-	// The dead run: a function container on its network, the render container that ran on that
-	// network (unnamed, so it is recognised by network alone), and a function container started for
-	// the local render engine (on no network of ours, so it is recognised by name alone).
-	fixture("dead-fn", "function-go-templating-v0.11.0-diff-"+deadID, networkName(deadID)),
-	fixture("dead-render", "modest_haibt", networkName(deadID)),
-	fixture("dead-fn-local", "function-auto-ready-v0.4.2-diff-"+deadID, "bridge"),
+	// The dead run: a function container and the render container that was running when it died.
+	ctr("dead-fn", "festive_curran", session(deadID)),
+	ctr("dead-render", "modest_haibt", session(deadID)),
 
 	// A second dead run.
-	fixture("dead2-fn", "function-auto-ready-v0.4.2-diff-"+dead2ID, networkName(dead2ID)),
+	ctr("dead2-fn", "silly_ritchie", session(dead2ID)),
 
 	// A live run, and this run.
-	fixture("live-fn", "function-go-templating-v0.11.0-diff-"+liveID, networkName(liveID)),
-	fixture("live-render", "festive_curran", networkName(liveID)),
-	fixture("self-fn", "function-go-templating-v0.11.0-diff-"+selfID, networkName(selfID)),
+	ctr("live-fn", "nervous_lewin", session(liveID)),
+	ctr("self-fn", "charming_elion", session(selfID)),
 
-	// Not crossplane-diff's to judge: containers from versions that predate run ownership, another
-	// tool's render containers, names that merely contain a run ID, and an unrelated container.
-	fixture("legacy", "function-auto-ready-v0.4.2-comp-10cb1f47", "crossplane-render-dhpl9ndf"),
-	fixture("other-tool", "function-auto-ready-v0.7.0-render", "crossplane-render"),
-	fixture("id-not-suffix", deadID+"-diff-function", "bridge"),
-	fixture("id-mid-name", "function-x-diff-"+deadID+"-copy", "bridge"),
-	fixture("unrelated", "charming_elion", "host"),
-	{ID: "no-network-settings", Names: []string{"/silly_ritchie"}},
+	// Not crossplane-diff's to judge: a container from a version that named function containers for
+	// their run instead of labelling them, `crossplane render` run by hand (its own session), a
+	// container that claims the session but not crossplane's management, and an unrelated container.
+	ctr("legacy", "function-go-templating-v0.11.0-diff-"+deadID, nil),
+	ctr("other-render", "function-auto-ready", session("a1b2c3d4e5f6")),
+	ctr("session-only", "focused_turing", map[string]string{render.LabelKeySession: deadID}),
+	ctr("unrelated", "vibrant_hopper", map[string]string{"app": "db"}),
+}
+
+// hostNetworks is the same host's networks.
+var hostNetworks = []network.Summary{
+	netw("dead-net", "crossplane-render-dhpl9ndf", session(deadID)),
+	netw("dead2-net", "crossplane-render-x7k2m9qp", session(dead2ID)),
+	netw("live-net", "crossplane-render-q4w8e2rt", session(liveID)),
+	netw("self-net", "crossplane-render-z9y8x7w6", session(selfID)),
+
+	// Not crossplane-diff's to judge: a network from a version that named the network for its run, one
+	// the user supplied with CROSSPLANE_DIFF_DOCKER_NETWORK (render never labels it), and one that
+	// claims the session but not crossplane's management.
+	netw("legacy-net", "crossplane-diff-"+deadID, map[string]string{"crossplane-diff.io/run-id": deadID}),
+	netw("user-net", "github_network_123", nil),
+	netw("session-only-net", "lookalike", map[string]string{render.LabelKeySession: deadID}),
 }
 
 // newTestRun returns a Run with a fixed ID whose leases live in dir.
-func newTestRun(t *testing.T, dir string, docker *fakeDocker, ownsNetwork bool, log logging.Logger) *Run {
+func newTestRun(t *testing.T, dir string, docker *fakeDocker, log logging.Logger) *Run {
 	t.Helper()
 
-	r := New(dir, func() (Docker, error) { return docker, nil }, ownsNetwork, log)
+	docker.t = t
+
+	r := New(dir, func() (Docker, error) { return docker, nil }, log)
 	r.id = selfID
 
 	return r
@@ -220,38 +281,40 @@ func TestRunStart(t *testing.T) {
 		advisories int
 	}
 
+	host := fakeDocker{containers: hostContainers, networks: hostNetworks}
+
 	tests := map[string]struct {
 		reason string
 
-		dead        []string // runs that died, leaving their lease behind
-		live        []string // runs that are still running
-		otherFiles  []string // files in the lease directory that are not leases
-		docker      fakeDocker
-		ownsNetwork bool
+		dead       []string // runs that died, leaving their lease behind
+		live       []string // runs that are still running
+		otherFiles []string // files in the lease directory that are not leases
+		docker     fakeDocker
 
 		want want
 	}{
 		"NothingLeftBehindMakesNoDockerCalls": {
 			reason: "With no dead run to reclaim, starting a run must not cost a Docker call.",
 			live:   []string{liveID},
-			docker: fakeDocker{containers: hostContainers},
+			docker: host,
 			want: want{
 				files: []string{liveID + ".lock", selfID + ".lock"},
 			},
 		},
 		"ReapsOnlyTheDeadRunsResources": {
-			reason: "A dead run's containers — named, or on its network — are removed, then its network, then its " +
-				"lease. A live run's, this run's and unowned containers are left alone.",
+			reason: "A dead run's containers are removed, then its network, then its lease. A live run's, this " +
+				"run's, and anything without both of the dead run's labels (including resources named for it by " +
+				"earlier versions) are left alone.",
 			dead:   []string{deadID},
 			live:   []string{liveID},
-			docker: fakeDocker{containers: hostContainers},
+			docker: host,
 			want: want{
 				calls: []string{
 					"list containers",
 					"remove container dead-fn",
 					"remove container dead-render",
-					"remove container dead-fn-local",
-					"remove network " + networkName(deadID),
+					"list networks",
+					"remove network dead-net",
 				},
 				files: []string{liveID + ".lock", selfID + ".lock"},
 			},
@@ -259,17 +322,18 @@ func TestRunStart(t *testing.T) {
 		"ReapsEveryDeadRun": {
 			reason: "Every dead run is reclaimed, each one's containers before its network.",
 			dead:   []string{deadID, dead2ID},
-			docker: fakeDocker{containers: hostContainers},
+			docker: host,
 			want: want{
 				calls: []string{
 					"list containers",
 					"remove container dead-fn",
 					"remove container dead-render",
-					"remove container dead-fn-local",
-					"remove network " + networkName(deadID),
+					"list networks",
+					"remove network dead-net",
 					"list containers",
 					"remove container dead2-fn",
-					"remove network " + networkName(dead2ID),
+					"list networks",
+					"remove network dead2-net",
 				},
 				files: []string{selfID + ".lock"},
 			},
@@ -280,6 +344,7 @@ func TestRunStart(t *testing.T) {
 			dead: []string{deadID},
 			docker: fakeDocker{
 				containers: hostContainers,
+				networks:   hostNetworks,
 				removeErr:  map[string]error{"dead-fn": errors.New("daemon says no")},
 			},
 			want: want{
@@ -287,7 +352,6 @@ func TestRunStart(t *testing.T) {
 					"list containers",
 					"remove container dead-fn",
 					"remove container dead-render",
-					"remove container dead-fn-local",
 				},
 				files:      []string{deadID + ".lock", selfID + ".lock"},
 				advisories: 1,
@@ -298,46 +362,67 @@ func TestRunStart(t *testing.T) {
 			dead:   []string{deadID},
 			docker: fakeDocker{
 				containers:       hostContainers,
-				networkRemoveErr: map[string]error{networkName(deadID): errors.New("has active endpoints")},
+				networks:         hostNetworks,
+				networkRemoveErr: map[string]error{"dead-net": errors.New("has active endpoints")},
 			},
 			want: want{
 				calls: []string{
 					"list containers",
 					"remove container dead-fn",
 					"remove container dead-render",
-					"remove container dead-fn-local",
-					"remove network " + networkName(deadID),
+					"list networks",
+					"remove network dead-net",
 				},
 				files:      []string{deadID + ".lock", selfID + ".lock"},
 				advisories: 1,
 			},
 		},
 		"ResourcesAlreadyGoneCountAsReaped": {
-			reason: "A container or network that no longer exists is already reclaimed, e.g. a run that used the " +
-				"local render engine never created a network.",
+			reason: "A container or network that no longer exists, e.g. removed by a concurrent reaper or by " +
+				"Docker itself between the list and the remove, is already reclaimed.",
 			dead: []string{deadID},
 			docker: fakeDocker{
 				containers:       hostContainers,
+				networks:         hostNetworks,
 				removeErr:        map[string]error{"dead-fn": cerrdefs.ErrNotFound},
-				networkRemoveErr: map[string]error{networkName(deadID): cerrdefs.ErrNotFound},
+				networkRemoveErr: map[string]error{"dead-net": cerrdefs.ErrNotFound},
 			},
 			want: want{
 				calls: []string{
 					"list containers",
 					"remove container dead-fn",
 					"remove container dead-render",
-					"remove container dead-fn-local",
-					"remove network " + networkName(deadID),
+					"list networks",
+					"remove network dead-net",
 				},
 				files: []string{selfID + ".lock"},
 			},
 		},
-		"ListFailureKeepsLeases": {
+		"ContainerListFailureKeepsLeases": {
 			reason: "If Docker cannot be listed nothing is removed and the next run retries.",
 			dead:   []string{deadID},
 			docker: fakeDocker{listErr: errors.New("cannot connect to the Docker daemon")},
 			want: want{
 				calls:      []string{"list containers"},
+				files:      []string{deadID + ".lock", selfID + ".lock"},
+				advisories: 1,
+			},
+		},
+		"NetworkListFailureKeepsLeases": {
+			reason: "If networks cannot be listed the lease is kept, so the next run removes the network.",
+			dead:   []string{deadID},
+			docker: fakeDocker{
+				containers:     hostContainers,
+				networks:       hostNetworks,
+				networkListErr: errors.New("cannot connect to the Docker daemon"),
+			},
+			want: want{
+				calls: []string{
+					"list containers",
+					"remove container dead-fn",
+					"remove container dead-render",
+					"list networks",
+				},
 				files:      []string{deadID + ".lock", selfID + ".lock"},
 				advisories: 1,
 			},
@@ -349,25 +434,9 @@ func TestRunStart(t *testing.T) {
 				"not-a-run-id.lock",
 				deadID + "-123.tmp",
 			},
-			docker: fakeDocker{containers: hostContainers},
+			docker: host,
 			want: want{
 				files: []string{deadID + "-123.tmp", "not-a-run-id.lock", "notes.txt", selfID + ".lock"},
-			},
-		},
-		"CreatesItsLabelledNetworkAfterReaping": {
-			reason: "A run that owns its render network creates it, labelled with its run ID, only after " +
-				"reclaiming dead runs, so it cannot be mistaken for theirs.",
-			dead:        []string{dead2ID},
-			docker:      fakeDocker{containers: hostContainers},
-			ownsNetwork: true,
-			want: want{
-				calls: []string{
-					"list containers",
-					"remove container dead2-fn",
-					"remove network " + networkName(dead2ID),
-					"create network " + networkName(selfID) + " bridge " + LabelRunID + "=" + selfID,
-				},
-				files: []string{selfID + ".lock"},
 			},
 		},
 	}
@@ -391,7 +460,7 @@ func TestRunStart(t *testing.T) {
 			}
 
 			log := &advisories{}
-			r := newTestRun(t, dir, &tt.docker, tt.ownsNetwork, log)
+			r := newTestRun(t, dir, &tt.docker, log)
 
 			if err := r.Start(t.Context()); err != nil {
 				t.Fatalf("\n%s\nStart(...): unexpected error: %v", tt.reason, err)
@@ -416,15 +485,20 @@ func TestRunLifecycle(t *testing.T) {
 		calls      []string
 		files      []string
 		advisories int
-		startErr   bool
 	}
 
 	ownContainers := []container.Summary{
-		fixture("self-fn", "function-go-templating-v0.11.0-diff-"+selfID, networkName(selfID)),
-		fixture("self-render", "nervous_lewin", networkName(selfID)),
-		fixture("self-fn-local", "function-auto-ready-v0.4.2-diff-"+selfID),
-		fixture("live-fn", "function-go-templating-v0.11.0-diff-"+liveID, networkName(liveID)),
-		fixture("unrelated", "charming_elion", "host"),
+		ctr("self-fn", "festive_curran", session(selfID)),
+		ctr("self-render", "nervous_lewin", session(selfID)),
+		ctr("live-fn", "modest_haibt", session(liveID)),
+		ctr("legacy", "function-go-templating-v0.11.0-diff-"+selfID, nil),
+		ctr("unrelated", "charming_elion", nil),
+	}
+
+	ownNetworks := []network.Summary{
+		netw("self-net", "crossplane-render-z9y8x7w6", session(selfID)),
+		netw("live-net", "crossplane-render-q4w8e2rt", session(liveID)),
+		netw("user-net", "github_network_123", nil),
 	}
 
 	tests := map[string]struct {
@@ -436,62 +510,75 @@ func TestRunLifecycle(t *testing.T) {
 		want want
 	}{
 		"NeverStartedTouchesNothing": {
-			reason: "A run that never rendered created nothing, so closing it makes no Docker call.",
-			docker: fakeDocker{containers: ownContainers},
-			want:   want{files: []string{}},
+			reason: "A run that never rendered created nothing, so closing it makes no Docker call; the engine's " +
+				"own cleanup still runs.",
+			docker: fakeDocker{containers: ownContainers, networks: ownNetworks},
+			want:   want{calls: []string{"engine cleanup", "engine cleanup"}, files: []string{}},
 		},
-		"CloseRemovesOwnContainersThenNetworkThenLease": {
-			reason: "Closing sweeps everything the run started, including what upstream cleanup left behind, " +
-				"removes its network once nothing is attached, then gives up its lease.",
-			docker: fakeDocker{containers: ownContainers},
+		"CloseRemovesOwnContainersThenEngineCleanupThenNetworksThenLease": {
+			reason: "Closing sweeps every container labelled with the run's session, including what upstream " +
+				"cleanup left behind, lets the engine remove its network once nothing is attached, removes any " +
+				"of the run's networks still left, then gives up its lease. A network the user supplied carries " +
+				"no session label, so it is never removed.",
+			docker: fakeDocker{containers: ownContainers, networks: ownNetworks},
 			start:  true,
 			want: want{
 				calls: []string{
-					"create network " + networkName(selfID) + " bridge " + LabelRunID + "=" + selfID,
 					"list containers",
 					"remove container self-fn",
 					"remove container self-render",
-					"remove container self-fn-local",
-					"remove network " + networkName(selfID),
+					"engine cleanup",
+					"list networks",
+					"remove network self-net",
 					"close",
+					"engine cleanup",
+				},
+				files: []string{},
+			},
+		},
+		"EngineAlreadyRemovedItsNetwork": {
+			reason: "When the engine's cleanup removed its network, the network may still be listed, or gone by the " +
+				"time it is removed. Either way it is reclaimed.",
+			docker: fakeDocker{
+				containers:       ownContainers,
+				networks:         ownNetworks,
+				networkRemoveErr: map[string]error{"self-net": cerrdefs.ErrNotFound},
+			},
+			start: true,
+			want: want{
+				calls: []string{
+					"list containers",
+					"remove container self-fn",
+					"remove container self-render",
+					"engine cleanup",
+					"list networks",
+					"remove network self-net",
+					"close",
+					"engine cleanup",
 				},
 				files: []string{},
 			},
 		},
 		"FailedSweepLeavesLeaseForTheNextRun": {
 			reason: "If the run cannot remove its own containers, its lease stays behind (unlocked) so the next " +
-				"run reclaims them.",
+				"run reclaims them. The engine's cleanup still runs.",
 			docker: fakeDocker{
 				containers: ownContainers,
+				networks:   ownNetworks,
 				removeErr:  map[string]error{"self-render": errors.New("removal already in progress")},
 			},
 			start: true,
 			want: want{
 				calls: []string{
-					"create network " + networkName(selfID) + " bridge " + LabelRunID + "=" + selfID,
 					"list containers",
 					"remove container self-fn",
 					"remove container self-render",
-					"remove container self-fn-local",
+					"engine cleanup",
 					"close",
+					"engine cleanup",
 				},
 				files:      []string{selfID + ".lock"},
 				advisories: 1,
-			},
-		},
-		"NetworkCreateFailureFailsStartButStillCleansUp": {
-			reason: "Rendering cannot proceed without the network, so Start fails; Close still releases the lease.",
-			docker: fakeDocker{networkCreateErr: errors.New("all predefined address pools have been fully subnetted")},
-			start:  true,
-			want: want{
-				calls: []string{
-					"create network " + networkName(selfID) + " bridge " + LabelRunID + "=" + selfID,
-					"list containers",
-					"remove network " + networkName(selfID),
-					"close",
-				},
-				files:    []string{},
-				startErr: true,
 			},
 		},
 	}
@@ -500,22 +587,24 @@ func TestRunLifecycle(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			dir := t.TempDir()
 			log := &advisories{}
-			r := newTestRun(t, dir, &tt.docker, true, log)
+			r := newTestRun(t, dir, &tt.docker, log)
 
-			var startErr error
 			if tt.start {
 				// Starting twice is starting once: the engine calls Start for every new batch of functions.
-				startErr = r.Start(t.Context())
-				if startErr == nil {
-					startErr = r.Start(t.Context())
+				for range 2 {
+					if err := r.Start(t.Context()); err != nil {
+						t.Fatalf("\n%s\nStart(...): unexpected error: %v", tt.reason, err)
+					}
 				}
 			}
 
-			r.Close(t.Context())
-			// Closing twice is closing once: the processor's Cleanup runs before rendering and again on exit.
-			r.Close(t.Context())
+			release := func() { tt.docker.record("engine cleanup") }
 
-			got := want{calls: tt.docker.calls, files: dirEntries(t, dir), advisories: log.count(), startErr: startErr != nil}
+			r.Close(t.Context(), release)
+			// Closing twice is closing once: the processor's Cleanup runs before rendering and again on exit.
+			r.Close(t.Context(), release)
+
+			got := want{calls: tt.docker.calls, files: dirEntries(t, dir), advisories: log.count()}
 			if diff := gcmp.Diff(tt.want, got, gcmp.AllowUnexported(want{}), sortedFiles); diff != "" {
 				t.Errorf("\n%s\nStart(...)/Close(...): -want, +got:\n%s", tt.reason, diff)
 			}
@@ -528,7 +617,7 @@ func TestRunLifecycle(t *testing.T) {
 // run is gone, its lease is free.
 func TestRunLeaseIsHeldWhileStarted(t *testing.T) {
 	dir := t.TempDir()
-	r := newTestRun(t, dir, &fakeDocker{}, false, &advisories{})
+	r := newTestRun(t, dir, &fakeDocker{}, &advisories{})
 
 	if err := r.Start(t.Context()); err != nil {
 		t.Fatalf("Start(...): %v", err)
@@ -555,22 +644,14 @@ func TestRunLeaseIsHeldWhileStarted(t *testing.T) {
 	_ = f.Close()
 }
 
-func TestRunNames(t *testing.T) {
-	r := New(t.TempDir(), func() (Docker, error) { return &fakeDocker{}, nil }, false, &advisories{})
+func TestRunID(t *testing.T) {
+	r := New(t.TempDir(), nil, &advisories{})
 
-	if !validRunID(r.id) {
-		t.Fatalf("New(...) generated run ID %q, want %d lowercase hex characters", r.id, runIDLength)
+	if !validRunID(r.ID()) {
+		t.Fatalf("New(...) generated run ID %q, want %d lowercase hex characters", r.ID(), runIDLength)
 	}
 
-	if got, want := r.NetworkName(), "crossplane-diff-"+r.id; got != want {
-		t.Errorf("NetworkName() = %q, want %q", got, want)
-	}
-
-	if got := r.ContainerName("xpkg.io/crossplane-contrib/function-go-templating:v0.11.0"); !strings.HasSuffix(got, "-diff-"+r.id) {
-		t.Errorf("ContainerName(...) = %q, want suffix %q", got, "-diff-"+r.id)
-	}
-
-	if other := New(t.TempDir(), nil, false, &advisories{}); other.id == r.id {
-		t.Errorf("New(...) generated the same run ID %q twice", r.id)
+	if other := New(t.TempDir(), nil, &advisories{}); other.ID() == r.ID() {
+		t.Errorf("New(...) generated the same run ID %q twice", r.ID())
 	}
 }

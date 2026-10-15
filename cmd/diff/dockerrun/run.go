@@ -14,14 +14,15 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-// Package dockerrun ties the Docker resources a crossplane-diff run creates — function containers and
-// the render network — to that run, and reclaims the ones left behind by runs that died without
-// cleaning up (SIGKILL, OOM, a second Ctrl+C, a CI runner tearing down the job).
+// Package dockerrun ties the Docker resources a crossplane-diff run creates — function containers, the
+// render container and the render network — to that run, and reclaims the ones left behind by runs that
+// died without cleaning up (SIGKILL, OOM, a second Ctrl+C, a CI runner tearing down the job).
 //
-// Ownership is carried by names: the upstream Docker runtime cannot label a function container, but it
-// does let the caller name it, so every function container a run starts ends in "-diff-<run ID>", and
-// the render network the run creates is "crossplane-diff-<run ID>" (also labelled). The run's render
-// containers are unnamed, so they are recognised by being on that network.
+// Ownership is carried by labels. A run's ID is the session ID it hands the upstream render engine
+// (render.EngineFlags.SessionID), which labels every container and network the engine creates
+// render.crossplane.io/session=<run ID>, alongside render.crossplane.io/managed-by=crossplane-cli. A
+// run's resources are exactly the ones carrying both labels with its ID, so a container or network that
+// lacks either, such as one created before session labels existed, is never touched.
 //
 // Liveness is a lease: a run holds an exclusive lock on "<run ID>.lock" in the user's cache directory
 // for as long as it has resources. The operating system drops the lock when the process exits however
@@ -41,20 +42,16 @@ import (
 	"time"
 
 	cerrdefs "github.com/containerd/errdefs"
-	"github.com/docker/docker/api/types/container"
-	"github.com/docker/docker/api/types/network"
-	"github.com/docker/docker/client"
+	"github.com/crossplane/cli/v2/cmd/crossplane/render"
+	"github.com/moby/moby/client"
 
 	"github.com/crossplane/crossplane-runtime/v2/pkg/errors"
 	"github.com/crossplane/crossplane-runtime/v2/pkg/logging"
 )
 
 const (
-	// LabelRunID labels the render network a run creates with the ID of that run.
-	LabelRunID = "crossplane-diff.io/run-id"
-
-	// runIDLength is the length of a run ID: 16 lowercase hex characters (64 random bits), so a name
-	// ending in one cannot belong to anything but that run.
+	// runIDLength is the length of a run ID: 16 lowercase hex characters (64 random bits), so a session
+	// label carrying one cannot belong to anything but that run.
 	runIDLength = 16
 
 	leaseExt = ".lock"
@@ -65,17 +62,17 @@ const (
 
 // Docker is the subset of the Docker API client a Run uses.
 type Docker interface {
-	ContainerList(ctx context.Context, options container.ListOptions) ([]container.Summary, error)
-	ContainerRemove(ctx context.Context, containerID string, options container.RemoveOptions) error
-	NetworkCreate(ctx context.Context, name string, options network.CreateOptions) (network.CreateResponse, error)
-	NetworkRemove(ctx context.Context, networkID string) error
+	ContainerList(ctx context.Context, options client.ContainerListOptions) (client.ContainerListResult, error)
+	ContainerRemove(ctx context.Context, containerID string, options client.ContainerRemoveOptions) (client.ContainerRemoveResult, error)
+	NetworkList(ctx context.Context, options client.NetworkListOptions) (client.NetworkListResult, error)
+	NetworkRemove(ctx context.Context, networkID string, options client.NetworkRemoveOptions) (client.NetworkRemoveResult, error)
 	Close() error
 }
 
 // NewDockerClient returns a Docker API client configured from the environment, the same way the
 // upstream render engine configures its own.
 func NewDockerClient() (Docker, error) {
-	return client.NewClientWithOpts(client.FromEnv, client.WithAPIVersionNegotiation())
+	return client.New(client.FromEnv)
 }
 
 // DefaultLeaseDir is where runs keep their leases: a per-user directory, so one user's runs never judge
@@ -92,11 +89,10 @@ func DefaultLeaseDir() string {
 // Run is one crossplane-diff run's claim on the Docker resources it creates. It is not safe for
 // concurrent use; the render engine that owns it serializes access.
 type Run struct {
-	id          string
-	dir         string
-	newDocker   func() (Docker, error)
-	ownsNetwork bool
-	log         logging.Logger
+	id        string
+	dir       string
+	newDocker func() (Docker, error)
+	log       logging.Logger
 
 	// docker is set while the run is started.
 	docker Docker
@@ -105,29 +101,23 @@ type Run struct {
 }
 
 // New returns a Run that keeps its lease in dir ("" disables leasing and reaping) and talks to Docker
-// through a client from newDocker. ownsNetwork says whether the run creates the render network itself,
-// which it does unless the user supplied one or the render engine needs none. New does no I/O.
-func New(dir string, newDocker func() (Docker, error), ownsNetwork bool, log logging.Logger) *Run {
+// through a client from newDocker. New does no I/O.
+func New(dir string, newDocker func() (Docker, error), log logging.Logger) *Run {
 	b := make([]byte, runIDLength/2)
 	_, _ = rand.Read(b) // Never returns an error.
 
-	return &Run{id: hex.EncodeToString(b), dir: dir, newDocker: newDocker, ownsNetwork: ownsNetwork, log: log}
+	return &Run{id: hex.EncodeToString(b), dir: dir, newDocker: newDocker, log: log}
 }
 
-// NetworkName is the name of the render network this run creates when it owns one.
-func (r *Run) NetworkName() string {
-	return networkName(r.id)
-}
-
-// ContainerName is the name of the container this run starts for a function package.
-func (r *Run) ContainerName(pkg string) string {
-	return containerName(pkg, r.id)
+// ID is the run's ID. It must be the render engine's session ID: the session label is what makes a
+// container or network this run's.
+func (r *Run) ID() string {
+	return r.id
 }
 
 // Start prepares the run to create Docker resources; call it before starting any. It takes the run's
-// lease, reclaims what dead runs left behind, and creates the run's render network if it owns one.
-// Leasing and reaping are best effort: a failure there is at most a warning. Only failing to create
-// the render network is an error, since rendering needs it. Start is a no-op on a started run.
+// lease and reclaims what dead runs left behind. Both are best effort: a failure there is at most a
+// warning. Only failing to create a Docker client is an error. Start is a no-op on a started run.
 func (r *Run) Start(ctx context.Context) error {
 	if r.docker != nil {
 		return nil
@@ -152,33 +142,32 @@ func (r *Run) Start(ctx context.Context) error {
 		r.reapDead(ctx)
 	}
 
-	if !r.ownsNetwork {
-		return nil
-	}
-
-	name := r.NetworkName()
-	if _, err := docker.NetworkCreate(ctx, name, network.CreateOptions{
-		Driver: "bridge",
-		Labels: map[string]string{LabelRunID: r.id},
-	}); err != nil {
-		return errors.Wrapf(err, "cannot create Docker network %q", name)
-	}
-
 	return nil
 }
 
-// Close removes every container and the network this run created, then gives up its lease. It
-// removes what upstream cleanup should already have removed too, so a container upstream leaves behind
-// does not outlive the run. If anything cannot be removed the lease file is kept, so the next run
-// reclaims it, and a warning is raised. Close is a no-op on a run that is not started.
-func (r *Run) Close(ctx context.Context) {
+// Close removes every container this run created, calls release, then removes every network of the
+// run still left and gives up its lease. release is the render engine's own cleanup: it removes the
+// network the engine created, which it can only do once no container is attached, so it runs between
+// the two. Close removes what upstream cleanup should already have removed too, so a container or
+// network upstream leaves behind does not outlive the run. If anything cannot be removed the lease file
+// is kept, so the next run reclaims it, and a warning is raised. On a run that is not started, Close
+// only calls release.
+func (r *Run) Close(ctx context.Context, release func()) {
 	if r.docker == nil {
+		release()
 		return
 	}
 
-	err := r.reap(ctx, r.id)
+	err := r.removeContainers(ctx, r.id)
+
+	release()
+
+	if err == nil {
+		err = r.removeNetworks(ctx, r.id)
+	}
+
 	if err != nil {
-		r.log.Info("Some function containers could not be cleaned up; the next crossplane-diff run will retry",
+		r.log.Info("Some Docker containers or networks this run created could not be cleaned up; the next crossplane-diff run will retry",
 			"error", err)
 	}
 
@@ -214,7 +203,13 @@ func (r *Run) reapDead(ctx context.Context) {
 			continue
 		}
 
-		err := r.reap(ctx, id)
+		err := r.removeContainers(ctx, id)
+		if err == nil {
+			// A container still attached would make removing its network fail, so networks wait for
+			// every container to be gone.
+			err = r.removeNetworks(ctx, id)
+		}
+
 		if err != nil {
 			errs = append(errs, errors.Wrapf(err, "run %s", id))
 		} else {
@@ -225,64 +220,55 @@ func (r *Run) reapDead(ctx context.Context) {
 	}
 
 	if len(errs) > 0 {
-		r.log.Info("Cannot clean up function containers left behind by an earlier crossplane-diff run; the next run will retry",
+		r.log.Info("Cannot clean up Docker containers or networks left behind by an earlier crossplane-diff run; the next run will retry",
 			"error", errors.Join(errs...))
 	}
 }
 
-// reap removes run id's containers, then its network.
-func (r *Run) reap(ctx context.Context, id string) error {
-	containers, err := r.docker.ContainerList(ctx, container.ListOptions{All: true})
+// removeContainers removes every container of run id, running or not.
+func (r *Run) removeContainers(ctx context.Context, id string) error {
+	res, err := r.docker.ContainerList(ctx, client.ContainerListOptions{All: true, Filters: sessionFilter(id)})
 	if err != nil {
 		return errors.Wrap(err, "cannot list Docker containers")
 	}
 
 	var errs []error
 
-	for _, c := range containers {
-		if !ownedBy(c, id) {
-			continue
-		}
-
+	for _, c := range res.Items {
 		// Force stops the container if it is still running.
-		if err := r.docker.ContainerRemove(ctx, c.ID, container.RemoveOptions{Force: true}); err != nil && !cerrdefs.IsNotFound(err) {
+		if _, err := r.docker.ContainerRemove(ctx, c.ID, client.ContainerRemoveOptions{Force: true}); err != nil && !cerrdefs.IsNotFound(err) {
 			errs = append(errs, errors.Wrapf(err, "cannot remove container %s", c.ID))
 		}
 	}
 
-	if len(errs) > 0 {
-		// A container still attached would make removing the network fail anyway.
-		return errors.Join(errs...)
-	}
-
-	// A run that used the local render engine, or a network the user supplied, created no network.
-	if err := r.docker.NetworkRemove(ctx, networkName(id)); err != nil && !cerrdefs.IsNotFound(err) {
-		return errors.Wrapf(err, "cannot remove network %s", networkName(id))
-	}
-
-	return nil
+	return errors.Join(errs...)
 }
 
-// ownedBy reports whether container c belongs to run id: it carries the run's name suffix, or it is
-// attached to the run's network (the run's unnamed render containers).
-func ownedBy(c container.Summary, id string) bool {
-	for _, n := range c.Names {
-		if strings.HasSuffix(strings.TrimPrefix(n, "/"), containerSuffix(id)) {
-			return true
+// removeNetworks removes every network of run id. A run that used the local render engine, or a
+// network the user supplied, has none.
+func (r *Run) removeNetworks(ctx context.Context, id string) error {
+	res, err := r.docker.NetworkList(ctx, client.NetworkListOptions{Filters: sessionFilter(id)})
+	if err != nil {
+		return errors.Wrap(err, "cannot list Docker networks")
+	}
+
+	var errs []error
+
+	for _, n := range res.Items {
+		if _, err := r.docker.NetworkRemove(ctx, n.ID, client.NetworkRemoveOptions{}); err != nil && !cerrdefs.IsNotFound(err) {
+			errs = append(errs, errors.Wrapf(err, "cannot remove network %s", n.Name))
 		}
 	}
 
-	if c.NetworkSettings == nil {
-		return false
-	}
-
-	_, ok := c.NetworkSettings.Networks[networkName(id)]
-
-	return ok
+	return errors.Join(errs...)
 }
 
-func networkName(id string) string {
-	return "crossplane-diff-" + id
+// sessionFilter matches what the upstream render engine created for run id. Docker requires every label
+// filter to match, so a resource is matched only if it carries both labels.
+func sessionFilter(id string) client.Filters {
+	return make(client.Filters).Add("label",
+		render.LabelKeySession+"="+id,
+		render.LabelKeyManagedBy+"="+render.LabelValueManagedByCrossplane)
 }
 
 func validRunID(id string) bool {

@@ -104,13 +104,13 @@ type EngineRenderFn struct {
 	// startRuntimes / stopRuntimes are seams for testing. They default to the
 	// real render package functions.
 	startRuntimes func(ctx context.Context, log logging.Logger, fns []pkgv1.Function) (*render.FunctionAddresses, error)
-	stopRuntimes  func(log logging.Logger, fa *render.FunctionAddresses)
+	stopRuntimes  func(ctx context.Context, fa *render.FunctionAddresses) error
 
-	// run ties the function containers and render network this engine creates
-	// to this process, so that a later run reclaims them if this one dies
-	// without cleaning up (#525). It names every function container, creates
-	// the render network when the docker engine needs one, and removes both in
-	// Cleanup. nil disables all of that, for tests that stub the engine out.
+	// run ties the containers and render network this engine creates to this
+	// process, so that a later run reclaims them if this one dies without
+	// cleaning up (#525). Its ID is the engine's session ID, so everything the
+	// engine creates is labelled with it, and it removes all of it in Cleanup.
+	// nil disables all of that, for tests that stub the engine out.
 	run *dockerrun.Run
 }
 
@@ -132,15 +132,15 @@ type EngineRenderFn struct {
 // wrap them. Our EngineRenderFn.Render still expects (rsp != nil, err != nil)
 // on pipeline fatal and surfaces both — see the comment there.
 //
-// The docker engine always renders on a Docker network it hands to
-// render.EngineFlags.CrossplaneDockerNetwork (crossplane/cli#65): the docker
-// engine then runs the crossplane-render container on that network AND
-// annotates each fn at Setup time so its container joins it too. Normally that
-// is a network this run creates and removes itself (see renderNetwork), rather
-// than the one the upstream engine would create, which carries nothing tying
-// it to the run that made it. CROSSPLANE_DIFF_DOCKER_NETWORK, read once here,
-// names the user's network instead — closing both halves of the
-// "crossplane-diff inside a container" case (crossplane/cli#75).
+// The docker engine renders on a Docker network: by default one it creates in
+// its first Setup and removes in that Setup's cleanup, labelled with the run's
+// session. CROSSPLANE_DIFF_DOCKER_NETWORK, read once here, names the user's
+// network instead, passed as render.EngineFlags.CrossplaneDockerNetwork
+// (crossplane/cli#65): the engine then runs the crossplane-render container on
+// it AND annotates each fn at Setup time so its container joins it too —
+// closing both halves of the "crossplane-diff inside a container" case
+// (crossplane/cli#75). The engine never creates or removes that network, and
+// neither does the run: it carries no session label.
 func NewEngineRenderFn(log logging.Logger, binaryPath, version, image string) *EngineRenderFn {
 	// Normalize before the value reaches EngineFlags: upstream formats it into
 	// the tag verbatim and only v-prefixed tags are published, so the bare form
@@ -158,22 +158,15 @@ func NewEngineRenderFn(log logging.Logger, binaryPath, version, image string) *E
 		log.Info(w)
 	}
 
-	// The run's ID is fixed here, so the engine can be told the name of a
-	// network that is only created when the first function starts.
-	network := os.Getenv(EnvDockerNetwork)
-	ownsNetwork := ownsRenderNetwork(binaryPath, network)
-
-	run := dockerrun.New(dockerrun.DefaultLeaseDir(), dockerrun.NewDockerClient, ownsNetwork, log)
-	if ownsNetwork {
-		network = run.NetworkName()
-	}
+	run := dockerrun.New(dockerrun.DefaultLeaseDir(), dockerrun.NewDockerClient, log)
 
 	return &EngineRenderFn{
 		engine: render.NewEngineFromFlags(&render.EngineFlags{
 			CrossplaneBinary:        binaryPath,
 			CrossplaneVersion:       version,
 			CrossplaneImage:         image,
-			CrossplaneDockerNetwork: network,
+			CrossplaneDockerNetwork: os.Getenv(EnvDockerNetwork),
+			SessionID:               run.ID(),
 		}, log),
 		image:         resolveRenderImage(binaryPath, version, image),
 		log:           log,
@@ -181,14 +174,6 @@ func NewEngineRenderFn(log logging.Logger, binaryPath, version, image string) *E
 		stopRuntimes:  render.StopFunctionRuntimes,
 		run:           run,
 	}
-}
-
-// ownsRenderNetwork reports whether the run creates (and so removes) the
-// network the render engine uses. It does not when CROSSPLANE_DIFF_DOCKER_NETWORK
-// names the user's network, nor for the local engine, which renders on the host
-// and reaches functions through published ports.
-func ownsRenderNetwork(binaryPath, envNetwork string) bool {
-	return binaryPath == "" && envNetwork == ""
 }
 
 // RenderImage returns the fully-resolved render image reference the engine will
@@ -265,12 +250,15 @@ func (e *EngineRenderFn) Render(ctx context.Context, log logging.Logger, in Rend
 			return render.CompositionOutputs{}, errors.Wrap(err, "cannot setup render engine")
 		}
 
+		// Keep the cleanup even if starting fails: the network it removes can
+		// only go once Cleanup has removed the containers that did start
+		// (their cleanup policy leaves them to the run), and the engine keeps
+		// using the network it created in later Setups, so it must outlive
+		// a failed start.
+		e.cleanups = append(e.cleanups, cleanup)
+
 		fa, startErr := e.startRuntimes(ctx, log, newFns)
 		if startErr != nil {
-			// Roll back this Setup. If this call created the environment,
-			// cleanup releases it; otherwise cleanup is a no-op and no
-			// harm is done.
-			cleanup()
 			return render.CompositionOutputs{}, errors.Wrap(startErr, "cannot start function runtimes")
 		}
 
@@ -280,7 +268,6 @@ func (e *EngineRenderFn) Render(ctx context.Context, log logging.Logger, in Rend
 		}
 
 		maps.Copy(e.addrs, fa.Addresses())
-		e.cleanups = append(e.cleanups, cleanup)
 	}
 
 	// Build request with addresses for in.Functions only — the binary needs
@@ -379,13 +366,15 @@ func (e *EngineRenderFn) staleRenderBackendHint(err error) string {
 		e.image, MinCrossplaneRenderVersion, e.image)
 }
 
-// claimForRun prepares the run before anything is created for fns (reclaiming
-// what dead runs left behind, taking this run's lease and creating its
-// network). It then names fns' containers for the run, which is what lets a
-// later run recognise them, and leaves them for the run to remove
-// (dockerrun.Run.Close) rather than stopped one by one upstream. The
-// annotations are copied: a function may share its map with the caller's,
-// e.g. a FunctionProvider's cache. A no-op when there is no run.
+// claimForRun prepares the run before anything is created for fns (taking
+// this run's lease and reclaiming what dead runs left behind). It then gives
+// fns' containers the run's session, which is what lets a later run recognise
+// them, and leaves them for the run to remove (dockerrun.Run.Close) rather
+// than stopped one by one upstream. The engine's Setup would add the session
+// too, but keeps one a function already carries, which would hide its
+// container from the run, so it is set here. The annotations are copied: a
+// function may share its map with the caller's, e.g. a FunctionProvider's
+// cache, and Setup adds to them in place. A no-op when there is no run.
 func (e *EngineRenderFn) claimForRun(ctx context.Context, fns []pkgv1.Function) error {
 	if e.run == nil {
 		return nil
@@ -401,7 +390,7 @@ func (e *EngineRenderFn) claimForRun(ctx context.Context, fns []pkgv1.Function) 
 			annotations = make(map[string]string, 2)
 		}
 
-		annotations[render.AnnotationKeyRuntimeNamedContainer] = e.run.ContainerName(fns[i].Spec.Package)
+		annotations[render.AnnotationKeyRuntimeDockerSession] = e.run.ID()
 		annotations[render.AnnotationKeyRuntimeDockerCleanup] = string(render.AnnotationValueRuntimeDockerCleanupOrphan)
 		fns[i].SetAnnotations(annotations)
 	}
@@ -409,19 +398,22 @@ func (e *EngineRenderFn) claimForRun(ctx context.Context, fns []pkgv1.Function) 
 	return nil
 }
 
-// Cleanup stops every function runtime started across the engine's lifetime
-// and runs the cleanups accumulated from each engine.Setup call in LIFO
-// order, then has the run remove every container and the network it created.
-// Upstream cleanup is engine-specific and, with the run supplying the docker
-// engine's network, amounts to no-op cleanups; the run's own sweep also
-// catches containers upstream fails to remove. Idempotent and safe to call
-// when Render was never invoked.
+// Cleanup stops every function runtime started across the engine's lifetime,
+// then has the run remove every container labelled with its session, run the
+// cleanups accumulated from each engine.Setup call in LIFO order (removing the
+// network the engine created, now that nothing is attached), and remove any
+// of its networks still left. The run's own sweep also catches what upstream
+// fails to remove. Idempotent and safe to call when Render was never invoked.
 func (e *EngineRenderFn) Cleanup(ctx context.Context) error {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
 	for _, fa := range e.addrsList {
-		e.stopRuntimes(e.log, fa)
+		// The run's sweep below removes whatever this leaves behind, and
+		// warns if it cannot.
+		if err := e.stopRuntimes(ctx, fa); err != nil {
+			e.log.Debug("Error stopping function runtimes", "error", err)
+		}
 	}
 
 	e.addrsList = nil
@@ -432,15 +424,19 @@ func (e *EngineRenderFn) Cleanup(ctx context.Context) error {
 	// at most one cleanup is real (the one that created the environment,
 	// if any); the rest are no-ops. LIFO matches the natural deferred-
 	// cleanup shape and is correct even if a future engine wants ordering.
-	for _, v := range slices.Backward(e.cleanups) {
-		v()
+	release := func() {
+		for _, v := range slices.Backward(e.cleanups) {
+			v()
+		}
+	}
+
+	if e.run != nil {
+		e.run.Close(ctx, release)
+	} else {
+		release()
 	}
 
 	e.cleanups = nil
-
-	if e.run != nil {
-		e.run.Close(ctx)
-	}
 
 	return nil
 }
