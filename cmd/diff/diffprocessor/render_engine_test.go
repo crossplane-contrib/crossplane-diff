@@ -861,7 +861,7 @@ func (d recordingDocker) Close() error {
 // TestEngineRenderFn_RunOwnsFunctionContainers pins how the engine ties what it starts to its run
 // (#525): the run is prepared (lease taken, dead runs reaped) before the engine sets up or starts
 // anything; every function container carries the run's session, overriding one the function carries,
-// and is left for the run to remove; and Cleanup removes the run's containers before the engine's own
+// is never given a name another run's container could already have, and is left for the run to remove; and Cleanup removes the run's containers before the engine's own
 // cleanup removes its network, then sweeps any network of the run left over. The caller's Function
 // objects are not modified. A failed start keeps the engine's cleanup for Cleanup, after the containers
 // that did start are removed, and the error carries no partial state.
@@ -975,9 +975,10 @@ func TestEngineRenderFn_RunOwnsFunctionContainers(t *testing.T) {
 				},
 				{
 					ObjectMeta: metav1.ObjectMeta{Name: "fn-auto-ready", Annotations: map[string]string{
-						"example.org/keep":                       "me",
-						render.AnnotationKeyRuntimeDockerCleanup: string(render.AnnotationValueRuntimeDockerCleanupRemove),
-						render.AnnotationKeyRuntimeDockerSession: "someone-elses",
+						"example.org/keep":                        "me",
+						render.AnnotationKeyRuntimeDockerCleanup:  string(render.AnnotationValueRuntimeDockerCleanupRemove),
+						render.AnnotationKeyRuntimeDockerSession:  "someone-elses",
+						render.AnnotationKeyRuntimeNamedContainer: "shared-auto-ready",
 					}},
 					Spec: pkgv1.FunctionSpec{PackageSpec: pkgv1.PackageSpec{Package: autoReady}},
 				},
@@ -1006,9 +1007,10 @@ func TestEngineRenderFn_RunOwnsFunctionContainers(t *testing.T) {
 			}
 
 			wantCaller := map[string]string{
-				"example.org/keep":                       "me",
-				render.AnnotationKeyRuntimeDockerCleanup: string(render.AnnotationValueRuntimeDockerCleanupRemove),
-				render.AnnotationKeyRuntimeDockerSession: "someone-elses",
+				"example.org/keep":                        "me",
+				render.AnnotationKeyRuntimeDockerCleanup:  string(render.AnnotationValueRuntimeDockerCleanupRemove),
+				render.AnnotationKeyRuntimeDockerSession:  "someone-elses",
+				render.AnnotationKeyRuntimeNamedContainer: "shared-auto-ready",
 			}
 			if diff := gcmp.Diff(wantCaller, callerAnnotations); diff != "" {
 				t.Errorf("\n%s\nRender(...) modified the caller's Function annotations, -want, +got:\n%s", tt.reason, diff)

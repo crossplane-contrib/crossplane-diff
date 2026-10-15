@@ -372,7 +372,11 @@ func (e *EngineRenderFn) staleRenderBackendHint(err error) string {
 // them, and leaves them for the run to remove (dockerrun.Run.Close) rather
 // than stopped one by one upstream. The engine's Setup would add the session
 // too, but keeps one a function already carries, which would hide its
-// container from the run, so it is set here. The annotations are copied: a
+// container from the run, so it is set here. A container name a function
+// carries is dropped: the docker runtime reuses an existing container of that
+// name without relabelling it, so concurrent runs would share one container
+// that the first to finish removes, and a container another run created
+// would never carry this run's session. The annotations are copied: a
 // function may share its map with the caller's, e.g. a FunctionProvider's
 // cache, and Setup adds to them in place. A no-op when there is no run.
 func (e *EngineRenderFn) claimForRun(ctx context.Context, fns []pkgv1.Function) error {
@@ -390,6 +394,7 @@ func (e *EngineRenderFn) claimForRun(ctx context.Context, fns []pkgv1.Function) 
 			annotations = make(map[string]string, 2)
 		}
 
+		delete(annotations, render.AnnotationKeyRuntimeNamedContainer)
 		annotations[render.AnnotationKeyRuntimeDockerSession] = e.run.ID()
 		annotations[render.AnnotationKeyRuntimeDockerCleanup] = string(render.AnnotationValueRuntimeDockerCleanupOrphan)
 		fns[i].SetAnnotations(annotations)
