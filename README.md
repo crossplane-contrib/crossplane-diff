@@ -725,23 +725,25 @@ jobs:
 ```
 
 The env var is read once per run. The network it names belongs to the caller: `crossplane-diff` uses it but never
-creates or removes it. If the env var is unset, each run renders on a network of its own (see below), which is
-appropriate for the common case of running `crossplane-diff` directly on a host with Docker installed. Any
+creates or removes it, even though its function containers are removed as usual (see below). If the env var is unset,
+each run renders on a network of its own, which is appropriate for the common case of running `crossplane-diff` directly on a host with Docker installed. Any
 `runtime-docker-network` value already set on a function package is preserved.
 
 #### Function containers left behind by a run that died
 
-Each run names its function containers `<function>-<version>-diff-<run ID>` and, unless
-`CROSSPLANE_DIFF_DOCKER_NETWORK` is set, renders on a Docker network named `crossplane-diff-<run ID>` (labelled
-`crossplane-diff.io/run-id=<run ID>`). It removes both when it exits, including after the first Ctrl+C or SIGTERM.
-While it runs it holds a lock on `<user cache dir>/crossplane-diff/runs/<run ID>.lock` (`~/.cache` on Linux,
+Each run has a random run ID. Every function container, render container and render network the run creates is labelled
+`render.crossplane.io/session=<run ID>` and `render.crossplane.io/managed-by=crossplane-cli`. Unless
+`CROSSPLANE_DIFF_DOCKER_NETWORK` is set, the render network is one the Crossplane render engine creates, named
+`crossplane-render-<suffix>`. The run removes its containers and network when it exits, including after the first
+Ctrl+C or SIGTERM. While it runs it holds a lock on `<user cache dir>/crossplane-diff/runs/<run ID>.lock` (`~/.cache` on Linux,
 `~/Library/Caches` on macOS). The operating system releases that lock when the process exits, however it exits.
 
 A run that dies without cleaning up (SIGKILL, an OOM kill, a second Ctrl+C, a CI runner tearing down the job) leaves
 its containers, its network and its lock file behind. The next run on the same machine, by the same user, finds the
 lock file unlocked and removes what that run left before it starts any containers of its own. A run that is still
 alive, such as a concurrent run in another terminal or worktree, keeps its lock, so its containers are never touched.
-Neither are containers and networks that `crossplane-diff` did not name, including other users'. Reclaiming is best
+Neither are containers and networks without both of a dead run's labels, including other users' and a network named
+by `CROSSPLANE_DIFF_DOCKER_NETWORK`. Reclaiming is best
 effort. If it fails, you get a warning, the lock file stays and a later run tries again. It never fails the diff.
 
 Limitations:
@@ -750,9 +752,9 @@ Limitations:
   socket cannot see a previous job's lock file, so it leaves that job's containers alone.
 - On Windows a run removes its own containers when it exits, but runs do not take locks, so nothing is reclaimed
   after a run dies.
-- Older versions of `crossplane-diff` named containers `<function>-<version>-comp-<id>` and let the render engine
-  create `crossplane-render-<suffix>` networks. Neither records which run owns it, so they are not reclaimed. Once no
-  older `crossplane-diff` is running, remove them by hand. Leaked networks eventually make Docker fail with `all
+- Containers and networks created by older versions of `crossplane-diff` (named `<function>-<version>-comp-<id>` and
+  `crossplane-render-<suffix>`) carry no session label, so they are never reclaimed. Once no older `crossplane-diff` is
+  running, remove them by hand. Leaked networks eventually make Docker fail with `all
   predefined address pools have been fully subnetted`.
 
 ## Output Format

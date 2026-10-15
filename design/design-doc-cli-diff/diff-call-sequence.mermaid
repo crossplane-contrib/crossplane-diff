@@ -53,7 +53,7 @@ sequenceDiagram
             DP->>DP: RenderToStableState(ctx, renderXR, comp, fns, id, observed, eventualState)
             loop Until requirements stabilise (or steady state under --eventual-state)
                 DP->>Render: Render(ctx, inputs)
-                Note over Render: Before starting a function for the first time - take this run's lease, reclaim dead runs' containers and networks, create this run's network, name each container for the run
+                Note over Render: Before starting a function for the first time - take this run's lease, reclaim dead runs' containers and networks, then the engine creates a network labelled with this run's session and each container is labelled with it too
                 Render-->>DP: CompositionOutputs (incl. RequiredResources)
                 alt Has unresolved RequiredResources
                     DP->>ReqProv: ResolveSelectors(ctx, selectors, ns)
@@ -104,7 +104,7 @@ sequenceDiagram
     end
     DP->>FnProv: Cleanup(ctx)
     DP->>Render: Cleanup(ctx)
-    Note over Render: The run removes its function containers, then its network, then releases its lease
+    Note over Render: The run removes its labelled containers, the engine removes its network, the run removes any of its networks left, then releases its lease
     alt comp subcommand
         CDP->>Renderer: RenderCompDiff(output)
     else xr subcommand

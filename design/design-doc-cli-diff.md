@@ -1507,16 +1507,24 @@ reuses it for every later render in the run. It ties everything it creates to th
 that a run that dies without cleaning up (SIGKILL, an OOM kill, a second Ctrl+C, a CI runner tearing down the job) does
 not leak them for good (#525):
 
-- **Naming.** The upstream Docker runtime cannot label a function container, but it honours the
-  `render.crossplane.io/runtime-docker-name` annotation. The engine sets that annotation on a copy of every function
-  to `<function>-<version>-diff-<run ID>`, where the run ID is 64 random bits. It also sets
-  `runtime-docker-cleanup: Orphan`, so the run removes its containers in one sweep instead of upstream stopping them
-  one by one.
-- **Network.** Upstream's docker engine would create a `crossplane-render-<suffix>` network that carries nothing tying
-  it to the run that made it. The engine passes `crossplane-diff-<run ID>` to it as the network to use instead, and the
-  run creates that network itself, labelled `crossplane-diff.io/run-id`. The run's unnamed render containers are
-  recognised by being attached to it. When `CROSSPLANE_DIFF_DOCKER_NETWORK` names the user's network, the engine uses
-  that network but never creates or removes it. The local engine needs no network.
+- **Labels.** The run ID (64 random bits) is the render engine's session ID: the engine passes it as
+  `render.EngineFlags.SessionID` (crossplane/cli#431), so the docker engine labels its render containers and the
+  `crossplane-render-<suffix>` network it creates `render.crossplane.io/session=<run ID>`, beside the
+  `render.crossplane.io/managed-by=crossplane-cli` label it puts on everything it creates. The engine also sets the
+  `render.crossplane.io/runtime-docker-session` annotation on a copy of every function, which labels its container the
+  same way. Upstream's Setup would add that annotation too, but keeps one a function already carries, which would hide
+  its container from the run, so the engine overrides it. It sets `runtime-docker-cleanup: Orphan` the same way, so the
+  run removes its containers in one forced sweep instead of upstream stopping them one by one with a grace period.
+  It drops a `runtime-docker-name` annotation from the copy: the Docker runtime reuses an existing container of that
+  name without relabelling it, so concurrent runs would share a container the first to finish removes.
+  A run's resources are exactly those carrying both labels with its ID; the run matches them with Docker label filters.
+- **Network.** The docker engine creates its network in its first Setup and removes it in that Setup's cleanup, which
+  can only succeed once no container is attached. So the engine keeps that cleanup even when starting functions fails,
+  and `dockerrun.Run.Close` runs it between removing the run's containers and sweeping the run's networks, which
+  tolerates the network being gone already. When `CROSSPLANE_DIFF_DOCKER_NETWORK` names the user's network, the docker
+  engine uses it but creates no network, and the run never removes it, since it carries no session label. The
+  containers on it do, so they are removed as usual. The local engine needs no network; its function containers carry
+  the session label too.
 - **Liveness.** A run holds an exclusive `flock` on `<user cache dir>/crossplane-diff/runs/<run ID>.lock` while it has
   resources. The lease is locked under a temporary name before it is renamed into place, so it is never visible
   unlocked. The kernel drops the lock when the process exits, however it exits, so a lease that can be locked belongs
@@ -1525,19 +1533,23 @@ not leak them for good (#525):
   engines an integration-test binary runs at once, because a `flock` belongs to the open file and not the process. A
   per-user directory keeps one user's runs from judging another's.
 - **Reaping.** On its first render, before it creates anything, a run takes its lease and checks every other lease in
-  the directory. For each lease it can lock, it removes that run's containers (by name suffix or network membership),
-  then its network, then the lease file. With no dead run there is no Docker call at all: the check is a directory
+  the directory. For each lease it can lock, it removes that run's containers (`ContainerList` with `All` and both
+  label filters, then a forced remove of each), then its networks (`NetworkList` with the same filters), then the lease
+  file. With no dead run there is no Docker call at all: the check is a directory
   listing and one non-blocking `flock` per lease. On exit (`dockerrun.Run.Close`, from `EngineRenderFn.Cleanup`) the
-  run sweeps its own resources the same way, which also catches containers upstream cleanup failed to remove, then
-  deletes its lease. Every failure is best effort: it is logged as a warning, the lease file is kept so a later run
+  run sweeps its own resources the same way, which also catches containers and networks upstream cleanup failed to
+  remove, then deletes its lease. Every failure is best effort: it is logged as a warning, the lease file is kept so a later run
   retries, and the diff is not failed.
 
 Limitations: a run can only reclaim runs that share its cache directory, so a fresh CI container sharing only the
 host's Docker socket leaves an earlier job's resources alone. A lease does not record which Docker daemon its run
 used, so a run pointed at a different daemon (`DOCKER_HOST`, `docker context`) finds nothing to remove there and
 retires the lease, leaving the dead run's resources on the first daemon. Windows is unsupported, since a file that is
-open there cannot be renamed or removed. Containers and `crossplane-render-*` networks from versions before #525 carry no owner
-and are never reclaimed.
+open there cannot be renamed or removed. Containers and `crossplane-render-*` networks from versions before #525 carry no
+session label and are never reclaimed.
+
+`SessionID` is not in a crossplane/cli release yet, so go.mod pins `github.com/crossplane/cli/v2` to the commit that
+merged crossplane/cli#431. Move it to the first release that contains it.
 
 ### 6.7a InputValidator
 
@@ -2001,7 +2013,7 @@ identity (`{"a": "b=c"}` and `{"a=b": "c"}` are distinct).
 
 **Draining late advisories.** A warning only reaches structured output if it is raised before the
 renderer reads the collected slice. Teardown is the awkward case: the processor's `Cleanup` can raise
-the leftover-container advisory (today from the render engine's run sweep, §6.7.2; originally from
+the leftover-container advisory (today from the render engine's run sweep of containers and networks, §6.7.2; originally from
 `FunctionProvider.Cleanup`), and it was invoked solely from the command layer's `defer`, which runs
 at command exit — after `PerformDiff`/`DiffComposition` have already serialized `warnings[]`. That made
 one advisory permanently stderr-only, contradicting this section's own contract. Both processors
@@ -2566,9 +2578,8 @@ This rendering layer:
 - Maintains compatibility with the Crossplane rendering mechanism
 - Carries the XRD so the upstream binary can pick the right composite schema (Legacy v1 / Modern v2) for the input XR's
   GVK, making dry-run apply succeed and the rendered desired state comparable against cluster state
-- Owns the run's Docker resources: it names every function container for the run, supplies the docker engine's
-  network rather than letting upstream create an unattributable one, and reclaims dead runs' leftovers before it starts
-  anything (§6.7.2)
+- Owns the run's Docker resources: it hands the engine the run's ID as its session ID, so every container and network
+  the engine creates is labelled with the run, and reclaims dead runs' leftovers before it starts anything (§6.7.2)
 
 #### 9.5.4 Resource Tree Evaluation
 
@@ -2784,8 +2795,7 @@ been removed.)
     changed sees the old value.
 16. **Wider Reclamation of Dead Runs' Resources**: The run reaper (§6.7.2) only sees runs that share its cache
     directory and does not run on Windows. Reclaiming across CI containers that share one Docker daemon would need the
-    lease to live where every client can reach it, or a liveness signal Docker itself can observe. Labelling function
-    containers directly would also need the upstream Docker runtime to accept labels.
+    lease to live where every client can reach it, or a liveness signal Docker itself can observe.
 
 These enhancements would expand the utility of the Diff command and make it more accessible to all user personas.
 
@@ -2816,8 +2826,8 @@ cmd/
 │   │                              #   defaulter, resource manager, composite resolver,
 │   │                              #   requirements provider, function provider,
 │   │                              #   WarningLogger (advisory channel)
-│   ├── dockerrun/                 # Run ownership of function containers and the render
-│   │                              #   network; reaps dead runs' resources (§6.7.2)
+│   ├── dockerrun/                 # Run ownership of the render session's labelled
+│   │                              #   containers and network; reaps dead runs' (§6.7.2)
 │   ├── client/
 │   │   ├── kubernetes/            # apply_client.go (DryRunApply / DryRunCreate),
 │   │   │                          #   access_client.go (AccessChecker, SSAR-backed),
