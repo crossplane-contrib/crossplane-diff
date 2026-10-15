@@ -3,11 +3,17 @@ package testutils
 import (
 	"context"
 	"io"
+	"slices"
+	"strings"
 
+	cerrdefs "github.com/containerd/errdefs"
 	dt "github.com/crossplane-contrib/crossplane-diff/cmd/diff/renderer/types"
 	"github.com/crossplane-contrib/crossplane-diff/cmd/diff/types"
 	"github.com/crossplane/cli/v2/cmd/crossplane/common/resource"
 	"github.com/crossplane/cli/v2/cmd/crossplane/render"
+	"github.com/moby/moby/api/types/container"
+	"github.com/moby/moby/api/types/network"
+	"github.com/moby/moby/client"
 	extv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	un "k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -969,3 +975,194 @@ func (m *MockFunctionProvider) Cleanup(ctx context.Context) error {
 
 	return nil
 }
+
+// region Docker daemon fake
+
+// FakeDocker is an in-memory Docker daemon: it holds containers and networks, and implements the subset
+// of the Docker API client that dockerrun.Docker names. It behaves as the daemon does wherever the
+// difference would change which resources are left: listing applies label filters (a resource matches
+// only if it carries every one) and, without All, lists only running containers; a running container
+// is only removed with Force; and a network is not removed while a container is attached to it. A test
+// sets up the host, runs the code, and asserts what is left.
+type FakeDocker struct {
+	Containers []container.Summary
+	Networks   []network.Summary
+
+	// ListErr and NetworkListErr fail every container and network list.
+	ListErr, NetworkListErr error
+	// RemoveErr fails removing the container or network with that ID, which stays.
+	RemoveErr map[string]error
+	// Vanished holds the IDs of containers and networks that are listed but gone by the time they are
+	// removed, as when a concurrent run removed them first.
+	Vanished map[string]bool
+}
+
+// DockerSession returns the labels the upstream render engine puts on what it creates for session id.
+func DockerSession(id string) map[string]string {
+	return map[string]string{render.LabelKeyManagedBy: render.LabelValueManagedByCrossplane, render.LabelKeySession: id}
+}
+
+// DockerContainer returns a container in state, carrying labels and attached to the named networks.
+func DockerContainer(id string, state container.ContainerState, labels map[string]string, networks ...string) container.Summary {
+	c := container.Summary{ID: id, State: state, Labels: labels, NetworkSettings: &container.NetworkSettingsSummary{}}
+	if len(networks) > 0 {
+		c.NetworkSettings.Networks = make(map[string]*network.EndpointSettings, len(networks))
+		for _, n := range networks {
+			c.NetworkSettings.Networks[n] = &network.EndpointSettings{}
+		}
+	}
+
+	return c
+}
+
+// DockerNetwork returns a network carrying labels. Its ID is its name.
+func DockerNetwork(name string, labels map[string]string) network.Summary {
+	return network.Summary{Network: network.Network{ID: name, Name: name, Labels: labels}}
+}
+
+// ContainerIDs returns the IDs of the containers on the host, sorted.
+func (f *FakeDocker) ContainerIDs() []string {
+	ids := make([]string, 0, len(f.Containers))
+	for _, c := range f.Containers {
+		ids = append(ids, c.ID)
+	}
+
+	slices.Sort(ids)
+
+	return ids
+}
+
+// NetworkNames returns the names of the networks on the host, sorted.
+func (f *FakeDocker) NetworkNames() []string {
+	names := make([]string, 0, len(f.Networks))
+	for _, n := range f.Networks {
+		names = append(names, n.Name)
+	}
+
+	slices.Sort(names)
+
+	return names
+}
+
+// ContainerList lists the containers matching opts' filters; without opts.All, only running ones.
+func (f *FakeDocker) ContainerList(_ context.Context, opts client.ContainerListOptions) (client.ContainerListResult, error) {
+	var res client.ContainerListResult
+
+	if f.ListErr != nil {
+		return res, f.ListErr
+	}
+
+	for _, c := range f.Containers {
+		ok, err := matchesDockerFilters(opts.Filters, c.Labels)
+		if err != nil {
+			return client.ContainerListResult{}, err
+		}
+
+		if ok && (opts.All || c.State == container.StateRunning) {
+			res.Items = append(res.Items, c)
+		}
+	}
+
+	return res, nil
+}
+
+// ContainerRemove removes the container with ID id.
+func (f *FakeDocker) ContainerRemove(_ context.Context, id string, opts client.ContainerRemoveOptions) (client.ContainerRemoveResult, error) {
+	i := slices.IndexFunc(f.Containers, func(c container.Summary) bool { return c.ID == id })
+
+	switch {
+	case i < 0:
+		return client.ContainerRemoveResult{}, errors.Wrapf(cerrdefs.ErrNotFound, "no such container: %s", id)
+	case f.Vanished[id]:
+		f.Containers = slices.Delete(f.Containers, i, i+1)
+		return client.ContainerRemoveResult{}, errors.Wrapf(cerrdefs.ErrNotFound, "no such container: %s", id)
+	case f.RemoveErr[id] != nil:
+		return client.ContainerRemoveResult{}, f.RemoveErr[id]
+	case f.Containers[i].State == container.StateRunning && !opts.Force:
+		return client.ContainerRemoveResult{}, errors.Wrapf(cerrdefs.ErrConflict, "container %s is running: stop it or force the removal", id)
+	}
+
+	f.Containers = slices.Delete(f.Containers, i, i+1)
+
+	return client.ContainerRemoveResult{}, nil
+}
+
+// NetworkList lists the networks matching opts' filters.
+func (f *FakeDocker) NetworkList(_ context.Context, opts client.NetworkListOptions) (client.NetworkListResult, error) {
+	var res client.NetworkListResult
+
+	if f.NetworkListErr != nil {
+		return res, f.NetworkListErr
+	}
+
+	for _, n := range f.Networks {
+		ok, err := matchesDockerFilters(opts.Filters, n.Labels)
+		if err != nil {
+			return client.NetworkListResult{}, err
+		}
+
+		if ok {
+			res.Items = append(res.Items, n)
+		}
+	}
+
+	return res, nil
+}
+
+// NetworkRemove removes the network with ID or name id, unless a container is attached to it.
+func (f *FakeDocker) NetworkRemove(_ context.Context, id string, _ client.NetworkRemoveOptions) (client.NetworkRemoveResult, error) {
+	i := slices.IndexFunc(f.Networks, func(n network.Summary) bool { return n.ID == id || n.Name == id })
+	if i < 0 {
+		return client.NetworkRemoveResult{}, errors.Wrapf(cerrdefs.ErrNotFound, "network %s not found", id)
+	}
+
+	n := f.Networks[i]
+
+	switch {
+	case f.Vanished[n.ID]:
+		f.Networks = slices.Delete(f.Networks, i, i+1)
+		return client.NetworkRemoveResult{}, errors.Wrapf(cerrdefs.ErrNotFound, "network %s not found", id)
+	case f.RemoveErr[n.ID] != nil:
+		return client.NetworkRemoveResult{}, f.RemoveErr[n.ID]
+	case slices.ContainsFunc(f.Containers, func(c container.Summary) bool {
+		if c.NetworkSettings == nil {
+			return false
+		}
+
+		_, attached := c.NetworkSettings.Networks[n.Name]
+
+		return attached
+	}):
+		return client.NetworkRemoveResult{}, errors.Wrapf(cerrdefs.ErrConflict, "error while removing network: network %s has active endpoints", n.Name)
+	}
+
+	f.Networks = slices.Delete(f.Networks, i, i+1)
+
+	return client.NetworkRemoveResult{}, nil
+}
+
+// Close does nothing: the fake holds no connection.
+func (f *FakeDocker) Close() error {
+	return nil
+}
+
+// matchesDockerFilters reports whether labels satisfy filters as the daemon's label filter does. The
+// fake supports no other filter term, so it fails a list that uses one rather than ignore it.
+func matchesDockerFilters(filters client.Filters, labels map[string]string) (bool, error) {
+	for term, values := range filters {
+		if term != "label" {
+			return false, errors.Errorf("fake Docker daemon does not support the %q list filter", term)
+		}
+
+		for v := range values {
+			k, want, hasValue := strings.Cut(v, "=")
+			if got, ok := labels[k]; !ok || (hasValue && got != want) {
+				return false, nil
+			}
+		}
+	}
+
+	return true, nil
+}
+
+// endregion

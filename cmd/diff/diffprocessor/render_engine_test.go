@@ -19,12 +19,16 @@ package diffprocessor
 import (
 	"context"
 	"io"
+	"maps"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
 
 	"github.com/crossplane-contrib/crossplane-diff/cmd/diff/dockerrun"
+	tu "github.com/crossplane-contrib/crossplane-diff/cmd/diff/testutils"
 	"github.com/crossplane/cli/v2/cmd/crossplane/render"
 	renderv1alpha1 "github.com/crossplane/cli/v2/proto/render/v1alpha1"
 	gcmp "github.com/google/go-cmp/cmp"
@@ -826,95 +830,59 @@ func TestEngineRenderFn_StaleRenderImageHint(t *testing.T) {
 	}
 }
 
-// recordingDocker is a dockerrun.Docker that appends every call to a shared event log, so a test can
-// assert how Docker calls interleave with the render engine's. It lists one container and one network
-// for whatever session it is asked about.
-type recordingDocker struct {
-	events *[]string
-}
-
-func (d recordingDocker) ContainerList(context.Context, client.ContainerListOptions) (client.ContainerListResult, error) {
-	*d.events = append(*d.events, "list containers")
-	return client.ContainerListResult{Items: []container.Summary{{ID: "fn"}}}, nil
-}
-
-func (d recordingDocker) ContainerRemove(_ context.Context, id string, _ client.ContainerRemoveOptions) (client.ContainerRemoveResult, error) {
-	*d.events = append(*d.events, "remove container "+id)
-	return client.ContainerRemoveResult{}, nil
-}
-
-func (d recordingDocker) NetworkList(context.Context, client.NetworkListOptions) (client.NetworkListResult, error) {
-	*d.events = append(*d.events, "list networks")
-	return client.NetworkListResult{Items: []network.Summary{{Network: network.Network{ID: "net"}}}}, nil
-}
-
-func (d recordingDocker) NetworkRemove(_ context.Context, id string, _ client.NetworkRemoveOptions) (client.NetworkRemoveResult, error) {
-	*d.events = append(*d.events, "remove network "+id)
-	return client.NetworkRemoveResult{}, nil
-}
-
-func (d recordingDocker) Close() error {
-	*d.events = append(*d.events, "close")
-	return nil
-}
-
 // TestEngineRenderFn_RunOwnsFunctionContainers pins how the engine ties what it starts to its run
-// (#525): the run is prepared (lease taken, dead runs reaped) before the engine sets up or starts
-// anything; every function container carries the run's session, overriding one the function carries,
-// is never given a name another run's container could already have, and is left for the run to remove; and Cleanup removes the run's containers before the engine's own
-// cleanup removes its network, then sweeps any network of the run left over. The caller's Function
-// objects are not modified. A failed start keeps the engine's cleanup for Cleanup, after the containers
-// that did start are removed, and the error carries no partial state.
+// (#525), by what a fake Docker host holds afterwards. Upstream labels each function container with the
+// session its Function's annotation names, and the engine's Setup creates a network for the run that its
+// cleanup removes, which the daemon refuses while a container is still attached. Every function is started
+// with the run's session, overriding one it carries, with no container name another run's container could
+// already have, and left for the run to remove. The run's lease is held before the engine creates anything,
+// so a run killed mid-render is reclaimable. Cleanup leaves nothing of the run behind, and removes its
+// containers before the engine's cleanup, which therefore succeeds. The caller's Function objects are not
+// modified. A function that fails to start still has its network removed by Cleanup.
 func TestEngineRenderFn_RunOwnsFunctionContainers(t *testing.T) {
 	const (
 		templating = "xpkg.crossplane.io/crossplane-contrib/function-go-templating:v0.11.0"
 		autoReady  = "xpkg.crossplane.io/crossplane-contrib/function-auto-ready:v0.4.2"
+		engineNet  = "crossplane-render-net"
 	)
 
 	orphan := string(render.AnnotationValueRuntimeDockerCleanupOrphan)
 
 	type want struct {
-		events    []string
-		renderErr bool
+		// Started is the annotations of each function the engine handed upstream to start.
+		Started map[string]map[string]string
+		// Containers and Networks are what the host holds after Cleanup.
+		Containers []string
+		Networks   []string
+
+		LeaseHeldAtSetup    bool
+		EngineCleanupFailed bool
+		RenderErr           bool
 	}
 
 	tests := map[string]struct {
 		reason   string
-		startErr error
+		startErr error // fails starting every function after the first
 		want     want
 	}{
 		"Rendered": {
-			reason: "A successful render's containers are removed before the engine's cleanup runs.",
+			reason: "A rendered run's containers and network are all gone after Cleanup, and the engine's own " +
+				"cleanup could remove its network.",
 			want: want{
-				events: []string{
-					"engine setup",
-					"start runtimes",
-					"stop runtimes",
-					"list containers",
-					"remove container fn",
-					"engine cleanup",
-					"list networks",
-					"remove network net",
-					"close",
-				},
+				Containers:       []string{"unrelated"},
+				Networks:         []string{"user-net"},
+				LeaseHeldAtSetup: true,
 			},
 		},
 		"StartFailed": {
-			reason: "A function that fails to start leaves the engine's cleanup (its network) for Cleanup, which " +
-				"runs it only once the containers that did start are gone.",
+			reason: "A function that fails to start leaves the engine's network for Cleanup, which removes it " +
+				"once the containers that did start are gone.",
 			startErr: errors.New("cannot pull image"),
 			want: want{
-				events: []string{
-					"engine setup",
-					"start runtimes",
-					"list containers",
-					"remove container fn",
-					"engine cleanup",
-					"list networks",
-					"remove network net",
-					"close",
-				},
-				renderErr: true,
+				Containers:       []string{"unrelated"},
+				Networks:         []string{"user-net"},
+				LeaseHeldAtSetup: true,
+				RenderErr:        true,
 			},
 		},
 	}
@@ -922,16 +890,28 @@ func TestEngineRenderFn_RunOwnsFunctionContainers(t *testing.T) {
 	for name, tt := range tests {
 		t.Run(name, func(t *testing.T) {
 			ctx := t.Context()
+			leases := t.TempDir()
 
-			var events []string
+			docker := &tu.FakeDocker{
+				Containers: []container.Summary{tu.DockerContainer("unrelated", container.StateRunning, nil)},
+				Networks:   []network.Summary{tu.DockerNetwork("user-net", nil)},
+			}
+			run := dockerrun.New(leases, func() (dockerrun.Docker, error) { return docker, nil }, logging.NewNopLogger())
 
-			run := dockerrun.New(t.TempDir(), func() (dockerrun.Docker, error) { return recordingDocker{events: &events}, nil },
-				logging.NewNopLogger())
+			got := want{Started: map[string]map[string]string{}}
 
 			mock := &render.MockEngine{
 				MockSetup: func(_ context.Context, _ []pkgv1.Function) (func(), error) {
-					events = append(events, "engine setup")
-					return func() { events = append(events, "engine cleanup") }, nil
+					_, err := os.Stat(filepath.Join(leases, run.ID()+".lock"))
+					got.LeaseHeldAtSetup = err == nil
+
+					docker.Networks = append(docker.Networks, tu.DockerNetwork(engineNet, tu.DockerSession(run.ID())))
+
+					return func() {
+						if _, err := docker.NetworkRemove(ctx, engineNet, client.NetworkRemoveOptions{}); err != nil {
+							got.EngineCleanupFailed = true
+						}
+					}, nil
 				},
 				MockRender: func(_ context.Context, req *renderv1alpha1.RenderRequest) (*renderv1alpha1.RenderResponse, error) {
 					return &renderv1alpha1.RenderResponse{
@@ -942,29 +922,28 @@ func TestEngineRenderFn_RunOwnsFunctionContainers(t *testing.T) {
 				},
 			}
 
-			started := map[string]map[string]string{}
-
 			e := &EngineRenderFn{
 				engine: mock,
 				log:    logging.NewNopLogger(),
 				run:    run,
+				// Starts a running container per function, labelled with the session its annotation names and
+				// attached to the engine's network, as the docker runtime does.
 				startRuntimes: func(_ context.Context, _ logging.Logger, fns []pkgv1.Function) (*render.FunctionAddresses, error) {
-					events = append(events, "start runtimes")
+					for i, fn := range fns {
+						if i > 0 && tt.startErr != nil {
+							return nil, tt.startErr
+						}
 
-					for _, fn := range fns {
-						started[fn.GetName()] = fn.GetAnnotations()
-					}
-
-					if tt.startErr != nil {
-						return nil, tt.startErr
+						got.Started[fn.GetName()] = fn.GetAnnotations()
+						session := fn.GetAnnotations()[render.AnnotationKeyRuntimeDockerSession]
+						docker.Containers = append(docker.Containers,
+							tu.DockerContainer(fn.GetName(), container.StateRunning, tu.DockerSession(session), engineNet))
 					}
 
 					return &render.FunctionAddresses{}, nil
 				},
-				stopRuntimes: func(_ context.Context, _ *render.FunctionAddresses) error {
-					events = append(events, "stop runtimes")
-					return nil
-				},
+				// The orphan cleanup policy leaves containers to the run, so stopping them removes nothing.
+				stopRuntimes: func(context.Context, *render.FunctionAddresses) error { return nil },
 			}
 
 			in := minimalRenderInputs()
@@ -983,45 +962,38 @@ func TestEngineRenderFn_RunOwnsFunctionContainers(t *testing.T) {
 					Spec: pkgv1.FunctionSpec{PackageSpec: pkgv1.PackageSpec{Package: autoReady}},
 				},
 			}
-			callerAnnotations := in.Functions[1].GetAnnotations()
+			callerAnnotations := maps.Clone(in.Functions[1].GetAnnotations())
 
 			_, err := e.Render(ctx, logging.NewNopLogger(), in)
+			got.RenderErr = err != nil
 
 			if cerr := e.Cleanup(ctx); cerr != nil {
 				t.Fatalf("\n%s\nCleanup(...): unexpected error: %v", tt.reason, cerr)
 			}
 
-			wantStarted := map[string]map[string]string{
+			got.Containers = docker.ContainerIDs()
+			got.Networks = docker.NetworkNames()
+
+			tt.want.Started = map[string]map[string]string{
 				"fn-templating": {
 					render.AnnotationKeyRuntimeDockerSession: run.ID(),
 					render.AnnotationKeyRuntimeDockerCleanup: orphan,
 				},
-				"fn-auto-ready": {
+			}
+			if tt.startErr == nil {
+				tt.want.Started["fn-auto-ready"] = map[string]string{
 					"example.org/keep":                       "me",
 					render.AnnotationKeyRuntimeDockerSession: run.ID(),
 					render.AnnotationKeyRuntimeDockerCleanup: orphan,
-				},
-			}
-			if diff := gcmp.Diff(wantStarted, started); diff != "" {
-				t.Errorf("\n%s\nRender(...): annotations of the functions started, -want, +got:\n%s", tt.reason, diff)
+				}
 			}
 
-			wantCaller := map[string]string{
-				"example.org/keep":                        "me",
-				render.AnnotationKeyRuntimeDockerCleanup:  string(render.AnnotationValueRuntimeDockerCleanupRemove),
-				render.AnnotationKeyRuntimeDockerSession:  "someone-elses",
-				render.AnnotationKeyRuntimeNamedContainer: "shared-auto-ready",
+			if diff := gcmp.Diff(tt.want, got); diff != "" {
+				t.Errorf("\n%s\nRender(...)/Cleanup(...): -want, +got:\n%s", tt.reason, diff)
 			}
-			if diff := gcmp.Diff(wantCaller, callerAnnotations); diff != "" {
+
+			if diff := gcmp.Diff(callerAnnotations, in.Functions[1].GetAnnotations()); diff != "" {
 				t.Errorf("\n%s\nRender(...) modified the caller's Function annotations, -want, +got:\n%s", tt.reason, diff)
-			}
-
-			if diff := gcmp.Diff(tt.want.events, events); diff != "" {
-				t.Errorf("\n%s\nRender(...)/Cleanup(...): order of engine and Docker calls, -want, +got:\n%s", tt.reason, diff)
-			}
-
-			if gotErr := err != nil; gotErr != tt.want.renderErr {
-				t.Errorf("\n%s\nRender(...): error = %v, want error: %t", tt.reason, err, tt.want.renderErr)
 			}
 		})
 	}
