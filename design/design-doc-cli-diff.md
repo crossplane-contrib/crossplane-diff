@@ -1485,7 +1485,7 @@ Four implementations are wired up at the CLI layer based on configuration:
 - **`EnvInjectingFunctionProvider`**: Wraps another provider and upserts env pairs into each function's
   `render.crossplane.io/runtime-docker-env` annotation (used with `--max-recv-message-size`, which injects
   `MAX_RECV_MESSAGE_SIZE`). Upstream's docker runtime reuses an existing named container without re-applying env, so
-  this relies on `CachedFunctionProvider`'s per-run container names.
+  this relies on every run starting its own unnamed containers (§6.7.2).
 
 Providers only resolve functions; none starts a container, so each built-in `Cleanup` is a no-op (the
 `RegistryOverrideFunctionProvider` delegates to the provider it wraps). `Cleaner` stays on the interface so a provider

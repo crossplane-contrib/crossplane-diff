@@ -161,7 +161,9 @@ cmd/diff/
 
 3. **Lazy Loading and Caching**
    - `CachedFunctionProvider`: Lazy-loads functions per composition, caches by composition name
-   - Docker container reuse: Adds annotations to enable container reuse across renders
+   - Function container reuse: a processor's `EngineRenderFn` starts each function's container once and reuses it for
+     every render that processor does. Containers are never shared across processors or runs (#570 tracks sharing them
+     across integration-test cases)
    - Caching decisions made at CLI layer, not embedded in processors
 
 4. **Composition Pipeline**

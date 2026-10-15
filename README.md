@@ -726,8 +726,9 @@ jobs:
 
 The env var is read once per run. The network it names belongs to the caller: `crossplane-diff` uses it but never
 creates or removes it, even though its function containers are removed as usual (see below). If the env var is unset,
-each run renders on a network of its own, which is appropriate for the common case of running `crossplane-diff` directly on a host with Docker installed. Any
-`runtime-docker-network` value already set on a function package is preserved.
+each run renders on a network of its own, which is appropriate for the common case of running `crossplane-diff`
+directly on a host with Docker installed. Any `runtime-docker-network` value already set on a function package is
+preserved.
 
 #### Function containers left behind by a run that died
 
