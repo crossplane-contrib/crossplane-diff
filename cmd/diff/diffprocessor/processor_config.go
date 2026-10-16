@@ -11,8 +11,15 @@ import (
 	"github.com/crossplane/crossplane-runtime/v2/pkg/logging"
 )
 
-// DefaultMaxRenderIterations is the default maximum render iterations.
-const DefaultMaxRenderIterations = 20
+const (
+	// DefaultMaxNestedDepth is the default maximum depth for recursive nested XR processing. The
+	// processor constructors apply it, and the CLI's --max-nested-depth default must match it.
+	DefaultMaxNestedDepth = 10
+
+	// DefaultMaxRenderIterations is the default maximum render iterations. The processor constructors
+	// apply it, and the CLI's --max-iterations default must match it.
+	DefaultMaxRenderIterations = 20
+)
 
 // AnalyzeOn names the smallest composition change that triggers per-composite impact analysis.
 // The values are ordered from least to most eager.

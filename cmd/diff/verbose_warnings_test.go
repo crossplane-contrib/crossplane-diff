@@ -60,6 +60,7 @@ func parseWithWarningLogger(t *testing.T, stderr io.Writer, args ...string) (*ko
 
 	opts := append([]kong.Option{
 		kong.Name("crossplane-diff"),
+		engineLimitVars(),
 		// AfterApply on the concrete commands needs an *AppContext binding; a zero value is
 		// sufficient because processor construction at parse time is in-memory (no cluster
 		// connection until Run).

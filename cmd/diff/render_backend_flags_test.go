@@ -64,6 +64,7 @@ func parseArgs(t *testing.T, args ...string) (*cli, error) {
 
 	parser, err := kong.New(c,
 		kong.Name("crossplane-diff"),
+		engineLimitVars(),
 		kong.BindTo(warnings, (*logging.Logger)(nil)),
 		kong.Bind(warnings),
 		// AfterApply on the concrete commands needs an *AppContext binding; a
