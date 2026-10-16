@@ -147,7 +147,7 @@ type CommonCmdFields struct {
 // air-gapped registries the flag exists to serve. Those references draw a warning
 // instead, raised where the engine is built (see
 // diffprocessor.UncomparableRenderImageWarning) so it travels the same advisory
-// channel as warnings raised mid-diff.
+// channel as advisories raised mid-diff.
 //
 // See diffprocessor.MinCrossplaneRenderVersion / crossplane-diff#399, #480.
 func (c *CommonCmdFields) Validate() error {
@@ -169,40 +169,49 @@ func (c *CommonCmdFields) GetKubeContext() KubeContext {
 	return c.Context
 }
 
-// warningLoggerBindings returns the kong options that provide the *dp.WarningLogger and its
-// logging.Logger view. The WarningLogger is what makes non-fatal advisories visible: Info calls
-// become stderr warnings and are collected for structured output. It wraps a logger that discards
-// Debug tracing, or a zap logger under --verbose.
+// loggingBindings returns the kong options that provide the run's logging.Logger and its
+// *dp.AdvisoryCollector. The logger is for tracing: it discards everything, or is a zap logger under
+// --verbose. The collector is what makes non-fatal advisories visible: each one raised is written to
+// stderr and collected for structured output.
 //
-// kong calls a provider every time a dependency is requested, so the provider memoizes its result:
-// one instance (and therefore one sink) serves every consumer. The closure scopes that cache to one
-// parser rather than the process. The logging.Logger binding is derived from the WarningLogger, so the
-// two can never resolve to different instances. c.Verbose is read when the provider first runs, which
-// is after flags are applied.
-func warningLoggerBindings(c *cli, stderr io.Writer) []kong.Option {
-	var inst *dp.WarningLogger
+// kong calls a provider every time a dependency is requested, so each provider memoizes its result:
+// one collector serves every consumer, so structured output reports what stderr printed, and the
+// logger is built (and controller-runtime's logger set) once. The closures scope those caches to one
+// parser rather than the process. c.Verbose is read when the logger provider first runs, which is
+// after flags are applied.
+func loggingBindings(c *cli, stderr io.Writer) []kong.Option {
+	var (
+		logger     logging.Logger
+		advisories *dp.AdvisoryCollector
+	)
 
-	provide := func() *dp.WarningLogger {
-		if inst != nil {
-			return inst
+	provideLogger := func() logging.Logger {
+		if logger != nil {
+			return logger
 		}
 
-		wrapped := logging.NewNopLogger()
+		logger = logging.NewNopLogger()
 
 		if c.Verbose {
 			zapLogger := zap.New(zap.UseDevMode(true))
 			log.SetLogger(zapLogger)
-			wrapped = logging.NewLogrLogger(zapLogger)
+			logger = logging.NewLogrLogger(zapLogger)
 		}
 
-		inst = dp.NewWarningLogger(wrapped, stderr)
+		return logger
+	}
 
-		return inst
+	provideAdvisories := func() *dp.AdvisoryCollector {
+		if advisories == nil {
+			advisories = dp.NewAdvisoryCollector(stderr)
+		}
+
+		return advisories
 	}
 
 	return []kong.Option{
-		kong.BindToProvider(provide),
-		kong.BindToProvider(func(w *dp.WarningLogger) logging.Logger { return w }),
+		kong.BindToProvider(provideLogger),
+		kong.BindToProvider(provideAdvisories),
 	}
 }
 
@@ -241,8 +250,8 @@ func main() {
 	// exits immediately with code 1, which may leave containers behind for the next run to reclaim.
 	sigCtx := signals.SetupSignalHandler()
 
-	// The *dp.WarningLogger and its logging.Logger view come first; see warningLoggerBindings.
-	opts := append(warningLoggerBindings(c, os.Stderr),
+	// The logging.Logger and *dp.AdvisoryCollector come first; see loggingBindings.
+	opts := append(loggingBindings(c, os.Stderr),
 		kong.Name("crossplane-diff"),
 		engineLimitVars(),
 		kong.Description("A command line tool for diffing  Crossplane resources."),

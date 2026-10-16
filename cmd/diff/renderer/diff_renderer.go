@@ -37,7 +37,7 @@ type DiffRenderer interface {
 	//
 	// The warnings parameter carries non-fatal advisories for structured output only. Unlike errors,
 	// warnings have ALREADY been written to stderr, at the moment they were raised (see
-	// diffprocessor.WarningLogger) — emitting them at render time instead would lose any warning
+	// diffprocessor.AdvisoryCollector) — emitting them at render time instead would lose any warning
 	// raised during a run that fails before rendering, and would report them out of chronological
 	// order with the work that produced them. The human renderer therefore ignores this parameter.
 	//

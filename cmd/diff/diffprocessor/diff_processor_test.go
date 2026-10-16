@@ -1056,7 +1056,7 @@ func TestDefaultDiffProcessor_PerformDiff_Groups(t *testing.T) {
 			)
 
 			if v := tt.validator; v != nil {
-				opts = append(opts, WithInputValidatorFactory(func(logging.Logger, []*un.Unstructured) InputValidator {
+				opts = append(opts, WithInputValidatorFactory(func(dt.Advisories, []*un.Unstructured) InputValidator {
 					return &tu.MockInputValidator{
 						ToRenderFn: func() []types.ValidatedInput { return v.toRender },
 						RecordRenderFn: func(i int, rendered map[string]bool, err error) {
@@ -1128,7 +1128,7 @@ func TestDefaultDiffProcessor_PerformDiff_LateWarningsReachStructuredOutput(t *t
 
 	var stdout, stderr bytes.Buffer
 
-	warnings := NewWarningLogger(tu.TestLogger(t, false), &stderr)
+	advisories := NewAdvisoryCollector(&stderr)
 
 	k8sClients := k8.Clients{
 		Apply:    tu.NewMockApplyClient().Build(),
@@ -1151,17 +1151,16 @@ func TestDefaultDiffProcessor_PerformDiff_LateWarningsReachStructuredOutput(t *t
 
 	processor := NewDiffProcessor(k8sClients, xpClients,
 		append(testProcessorOptions(t),
-			WithLogger(warnings),
-			WithWarnings(warnings),
+			WithAdvisories(advisories),
 			WithOutputFormat(renderer.OutputFormatJSON),
 			WithStdout(&stdout),
 			WithStderr(&stderr),
 			// Stands in for CachedFunctionProvider.Cleanup raising its advisory when a container could
 			// not be removed; the point under test is WHEN cleanup runs, not how it detects leftovers.
-			WithFunctionProviderFactory(func(_ xp.FunctionClient, logger logging.Logger) FunctionProvider {
+			WithFunctionProviderFactory(func(xp.FunctionClient, logging.Logger) FunctionProvider {
 				return &tu.MockFunctionProvider{
 					CleanupFn: func(context.Context) error {
-						logger.Info(advisory, "errors", 1)
+						advisories.Raise(dt.OutputWarning{Message: advisory, Context: map[string]string{"errors": "1"}})
 						return nil
 					},
 				}
@@ -1279,7 +1278,7 @@ func TestDefaultDiffProcessor_PerformDiff_StderrErrorOutput(t *testing.T) {
 
 // TestDefaultDiffProcessor_warnIfDeleting covers the `xr`-side counterpart to comp's deleting-XR
 // exclusion (issue #452). `xr` diffs exactly the resource the user named, so a deleting cluster copy
-// is warned about rather than skipped. The warning travels through the WarningLogger channel, so this
+// is warned about rather than skipped. The warning travels through the advisory channel, so this
 // asserts both halves of the dual emission: the stderr line and the collected structured warning.
 // Only top-level XRs are flagged, and an explicitly-null deletionTimestamp is not mistaken for a
 // deleting resource.
@@ -1326,13 +1325,13 @@ func TestDefaultDiffProcessor_warnIfDeleting(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			var stderrBuf bytes.Buffer
 
-			warnings := NewWarningLogger(tu.TestLogger(t, false), &stderrBuf)
+			advisories := NewAdvisoryCollector(&stderrBuf)
 
 			processor := &DefaultDiffProcessor{
 				config: ProcessorConfig{
-					Stderr:   &stderrBuf,
-					Logger:   warnings,
-					Warnings: warnings,
+					Stderr:     &stderrBuf,
+					Logger:     tu.TestLogger(t, false),
+					Advisories: advisories,
 				},
 			}
 
@@ -1342,7 +1341,7 @@ func TestDefaultDiffProcessor_warnIfDeleting(t *testing.T) {
 				t.Errorf("stderr mismatch (-want +got):\n%s", diff)
 			}
 
-			if diff := gcmp.Diff(tt.wantWarnings, processor.collectedWarnings()); diff != "" {
+			if diff := gcmp.Diff(tt.wantWarnings, advisories.Advisories()); diff != "" {
 				t.Errorf("collected warnings mismatch (-want +got):\n%s", diff)
 			}
 		})
@@ -4017,16 +4016,15 @@ func TestResolveFunctionCredentials(t *testing.T) {
 				},
 			}
 
-			// A real WarningLogger, so the assertion covers the whole advisory channel — message,
-			// machine-readable context, and the sink's dedup — rather than just "an Info happened".
-			var stderr bytes.Buffer
-
-			warnings := NewWarningLogger(tu.TestLogger(t, false), &stderr)
+			// A real AdvisoryCollector, so the assertion covers the whole advisory channel — message,
+			// machine-readable context, and the collector's dedup.
+			advisories := NewAdvisoryCollector(nil)
 
 			processor := &DefaultDiffProcessor{
 				credentialClient: credentialClient,
 				config: ProcessorConfig{
-					Logger:              warnings,
+					Logger:              tu.TestLogger(t, false),
+					Advisories:          advisories,
 					FunctionCredentials: tc.cliCredentials,
 				},
 			}
@@ -4067,7 +4065,7 @@ func TestResolveFunctionCredentials(t *testing.T) {
 				t.Errorf("\n%s\nmerged credentials mismatch (-want +got):\n%s", tc.reason, diff)
 			}
 
-			if diff := gcmp.Diff(tc.wantAdvisories, warnings.Warnings()); diff != "" {
+			if diff := gcmp.Diff(tc.wantAdvisories, advisories.Advisories()); diff != "" {
 				t.Errorf("\n%s\nadvisories mismatch (-want +got):\n%s", tc.reason, diff)
 			}
 		})

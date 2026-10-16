@@ -108,6 +108,10 @@ func NewCompDiffProcessor(xrProc DiffProcessor, compositionClient xp.Composition
 		option(&config)
 	}
 
+	if config.Advisories == nil {
+		config.Advisories = NewAdvisoryCollector(config.Stderr)
+	}
+
 	// NOTE: We intentionally do NOT default config.RenderFunc here.
 	//
 	// WithRenderFunc is operation-scoped: the same opts slice flows into
@@ -277,7 +281,7 @@ func (p *DefaultCompDiffProcessor) DiffComposition(ctx context.Context, composit
 
 	// Attach any advisories raised during the run. They have already reached stderr when raised; this
 	// carries them into structured output.
-	output.Warnings = p.collectedWarnings()
+	output.Warnings = p.config.Advisories.Advisories()
 
 	// Counted before the interruption entry is added: it is not an XR failure.
 	totalXRErrors := len(output.Errors)
@@ -506,9 +510,10 @@ func (p *DefaultCompDiffProcessor) processSingleComposition(ctx context.Context,
 	case comparison.revisionNamePredictable:
 		revisionName = pred.name
 	case comparison.changed():
-		p.config.Logger.Info(
-			"Could not predict the name of the CompositionRevision this composition would create, because it differs from the cluster's only by the annotation a client-side `kubectl apply` writes — whose post-apply value depends on how you apply, not on the file. Composites were rendered with their existing compositionRevisionRef, so if any of your composition templates read the revision name, a resulting change was not detected. Apply with `--server-side` (or via Argo/Flux) to make it predictable.",
-			"composition", newComp.GetName())
+		p.config.Advisories.Raise(dt.OutputWarning{
+			Message: "Could not predict the name of the CompositionRevision this composition would create, because it differs from the cluster's only by the annotation a client-side `kubectl apply` writes — whose post-apply value depends on how you apply, not on the file. Composites were rendered with their existing compositionRevisionRef, so if any of your composition templates read the revision name, a resulting change was not detected. Apply with `--server-side` (or via Argo/Flux) to make it predictable.",
+			Context: map[string]string{"composition": newComp.GetName()},
+		})
 	}
 
 	// Process kept XRs and collect diffs to determine which ones have changes

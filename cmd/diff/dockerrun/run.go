@@ -42,6 +42,7 @@ import (
 	"time"
 
 	cerrdefs "github.com/containerd/errdefs"
+	dt "github.com/crossplane-contrib/crossplane-diff/cmd/diff/renderer/types"
 	"github.com/crossplane/cli/v2/cmd/crossplane/render"
 	"github.com/moby/moby/client"
 
@@ -93,6 +94,8 @@ type Run struct {
 	dir       string
 	newDocker func() (Docker, error)
 	log       logging.Logger
+	// advisories is where a failure to clean up is reported, since it leaves Docker resources behind.
+	advisories dt.Advisories
 
 	// docker is set while the run is started.
 	docker Docker
@@ -102,11 +105,11 @@ type Run struct {
 
 // New returns a Run that keeps its lease in dir ("" disables leasing and reaping) and talks to Docker
 // through a client from newDocker. New does no I/O.
-func New(dir string, newDocker func() (Docker, error), log logging.Logger) *Run {
+func New(dir string, newDocker func() (Docker, error), log logging.Logger, advisories dt.Advisories) *Run {
 	b := make([]byte, runIDLength/2)
 	_, _ = rand.Read(b) // Never returns an error.
 
-	return &Run{id: hex.EncodeToString(b), dir: dir, newDocker: newDocker, log: log}
+	return &Run{id: hex.EncodeToString(b), dir: dir, newDocker: newDocker, log: log, advisories: advisories}
 }
 
 // ID is the run's ID. It must be the render engine's session ID: the session label is what makes a
@@ -167,8 +170,10 @@ func (r *Run) Close(ctx context.Context, release func()) {
 	}
 
 	if err != nil {
-		r.log.Info("Some Docker containers or networks this run created could not be cleaned up; the next crossplane-diff run will retry",
-			"error", err)
+		r.advisories.Raise(dt.OutputWarning{
+			Message: "Some Docker containers or networks this run created could not be cleaned up; the next crossplane-diff run will retry",
+			Context: map[string]string{"error": err.Error()},
+		})
 	}
 
 	releaseLease(r.lease, leasePath(r.dir, r.id), err == nil)
@@ -220,8 +225,10 @@ func (r *Run) reapDead(ctx context.Context) {
 	}
 
 	if len(errs) > 0 {
-		r.log.Info("Cannot clean up Docker containers or networks left behind by an earlier crossplane-diff run; the next run will retry",
-			"error", errors.Join(errs...))
+		r.advisories.Raise(dt.OutputWarning{
+			Message: "Cannot clean up Docker containers or networks left behind by an earlier crossplane-diff run; the next run will retry",
+			Context: map[string]string{"error": errors.Join(errs...).Error()},
+		})
 	}
 }
 
