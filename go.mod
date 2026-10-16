@@ -11,7 +11,7 @@ require (
 	github.com/crossplane/crossplane/v2 v2.4.2
 	github.com/google/go-cmp v0.7.0
 	github.com/google/go-containerregistry v0.22.1
-	github.com/moby/moby/api v1.56.0
+	github.com/moby/moby/api v1.56.1
 	github.com/moby/moby/client v0.5.1
 	github.com/pkg/errors v0.9.1
 	github.com/sergi/go-diff v1.4.0
