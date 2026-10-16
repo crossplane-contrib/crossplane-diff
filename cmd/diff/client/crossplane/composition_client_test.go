@@ -2202,3 +2202,27 @@ func TestDefaultCompositionClient_lookupRef(t *testing.T) {
 		})
 	}
 }
+
+func TestSentinelsSurviveWrapping(t *testing.T) {
+	tests := map[string]struct {
+		err  error
+		want error
+	}{
+		"NoMatchingComposition": {
+			err:  errors.Wrap(errors.Errorf("%w for %s", ErrNoMatchingComposition, "example.org/v1, Kind=XR1"), "cannot get composition"),
+			want: ErrNoMatchingComposition,
+		},
+		"NoCompositionRevisions": {
+			err:  errors.Wrap(errors.Errorf("%w for composition %s", ErrNoCompositionRevisions, "comp"), "cannot resolve"),
+			want: ErrNoCompositionRevisions,
+		},
+	}
+
+	for name, tt := range tests {
+		t.Run(name, func(t *testing.T) {
+			if !errors.Is(tt.err, tt.want) {
+				t.Errorf("errors.Is(%v, %v) = false, want true", tt.err, tt.want)
+			}
+		})
+	}
+}

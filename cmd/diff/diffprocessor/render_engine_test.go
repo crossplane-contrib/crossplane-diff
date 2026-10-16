@@ -998,3 +998,19 @@ func TestEngineRenderFn_RunOwnsFunctionContainers(t *testing.T) {
 		})
 	}
 }
+
+func TestClassifyRenderError(t *testing.T) {
+	stale := errors.Wrap(errors.New("crossplane: error: unexpected argument internal"), "cannot render")
+
+	if got := classifyRenderError(stale); !errors.Is(got, ErrStaleRenderBackend) || !errors.Is(got, stale) || got.Error() == "" {
+		t.Errorf("classifyRenderError(stale) = %v, want ErrStaleRenderBackend preserving the original", got)
+	}
+
+	if got := classifyRenderError(errors.New("boom")); errors.Is(got, ErrStaleRenderBackend) {
+		t.Errorf("classifyRenderError(unrelated) wrongly classified: %v", got)
+	}
+
+	if got := classifyRenderError(nil); got != nil {
+		t.Errorf("classifyRenderError(nil) = %v, want nil", got)
+	}
+}

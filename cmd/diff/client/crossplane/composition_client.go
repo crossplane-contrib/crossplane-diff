@@ -59,6 +59,15 @@ type CompositionClient interface {
 	FindComposites(ctx context.Context, comp *un.Unstructured, opts dtypes.FindCompositesOptions) ([]*un.Unstructured, error)
 }
 
+var (
+	// ErrNoCompositionRevisions reports that a composition has no CompositionRevisions (it is new
+	// or unpublished).
+	ErrNoCompositionRevisions = errors.New("no composition revisions found")
+
+	// ErrNoMatchingComposition reports that no composition targets a composite's GVK.
+	ErrNoMatchingComposition = errors.New("no composition found")
+)
+
 // DefaultCompositionClient implements CompositionClient.
 type DefaultCompositionClient struct {
 	resourceClient   kubernetes.ResourceClient
@@ -240,7 +249,7 @@ func (c *DefaultCompositionClient) resolveCompositionFromRevisions(
 		latest, err := c.revisionClient.GetLatestRevisionForComposition(ctx, compositionName, selector)
 		if err != nil {
 			// Check if this is a "no revisions found" case (new/unpublished composition)
-			if strings.Contains(err.Error(), "no composition revisions found") {
+			if errors.Is(err, ErrNoCompositionRevisions) {
 				c.logger.Debug("No revisions found for composition (likely unpublished), falling back to composition directly",
 					"compositionName", compositionName,
 					"resource", resourceID)
@@ -301,7 +310,7 @@ func (c *DefaultCompositionClient) resolveCompositionFromRevisions(
 		latest, err := c.revisionClient.GetLatestRevisionForComposition(ctx, compositionName, nil)
 		if err != nil {
 			// Check if this is a "no revisions found" case (new/unpublished composition)
-			if strings.Contains(err.Error(), "no composition revisions found") {
+			if errors.Is(err, ErrNoCompositionRevisions) {
 				c.logger.Debug("No revisions found for composition (likely unpublished), falling back to composition directly",
 					"compositionName", compositionName,
 					"resource", resourceID)
@@ -722,7 +731,7 @@ func (c *DefaultCompositionClient) findByTypeReference(ctx context.Context, _ *u
 		c.logger.Debug("No matching composition found",
 			"targetGVK", targetGVK.String())
 
-		return nil, errors.Errorf("no composition found for %s", targetGVK.String())
+		return nil, errors.Errorf("%w for %s", ErrNoMatchingComposition, targetGVK.String())
 	}
 
 	if len(compatibleCompositions) > 1 {
