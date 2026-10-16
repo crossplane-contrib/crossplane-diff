@@ -37,7 +37,7 @@ type FunctionProvider interface {
 	GetFunctionsForComposition(comp *apiextensionsv1.Composition) ([]pkgv1.Function, error)
 
 	// Cleaner stops and removes any resources created during function execution.
-	// For providers that don't create resources (like DefaultFunctionProvider), this is a no-op.
+	// For providers that don't create resources (like the wrappers), this is a no-op.
 	Cleaner
 }
 
@@ -49,40 +49,6 @@ type FunctionProvider interface {
 // to join it at Setup time. This is needed when crossplane-diff runs
 // inside a Docker container (e.g. a GitHub Actions container job).
 const EnvDockerNetwork = "CROSSPLANE_DIFF_DOCKER_NETWORK"
-
-// DefaultFunctionProvider fetches functions from the cluster on each call.
-// This is appropriate for the xr command where each XR is processed independently.
-type DefaultFunctionProvider struct {
-	fnClient xp.FunctionClient
-	logger   logging.Logger
-}
-
-// NewDefaultFunctionProvider creates a new DefaultFunctionProvider.
-func NewDefaultFunctionProvider(fnClient xp.FunctionClient, logger logging.Logger) FunctionProvider {
-	return &DefaultFunctionProvider{
-		fnClient: fnClient,
-		logger:   logger,
-	}
-}
-
-// GetFunctionsForComposition fetches functions from the cluster.
-func (p *DefaultFunctionProvider) GetFunctionsForComposition(comp *apiextensionsv1.Composition) ([]pkgv1.Function, error) {
-	p.logger.Debug("Fetching functions from pipeline", "composition", comp.GetName())
-
-	fns, err := p.fnClient.GetFunctionsFromPipeline(comp)
-	if err != nil {
-		return nil, errors.Wrap(err, "cannot get functions from pipeline")
-	}
-
-	p.logger.Debug("Fetched functions from pipeline", "composition", comp.GetName(), "count", len(fns))
-
-	return fns, nil
-}
-
-// Cleanup is a no-op for DefaultFunctionProvider as it doesn't create any resources.
-func (p *DefaultFunctionProvider) Cleanup(_ context.Context) error {
-	return nil
-}
 
 // CachedFunctionProvider lazy-loads functions and caches them by composition name.
 // This is appropriate for the comp command, where many XRs use the same composition:

@@ -1472,10 +1472,8 @@ type FunctionProvider interface {
 }
 ```
 
-Four implementations are wired up at the CLI layer based on configuration:
+Three implementations are wired up at the CLI layer based on configuration:
 
-- **`DefaultFunctionProvider`**: Fetches the function definitions from the cluster on demand. Used when the same
-  composition is unlikely to be rendered repeatedly.
 - **`CachedFunctionProvider`**: Lazy-loads functions per composition and caches them by composition name. Composition
   diff renders the same composition many times (once per affected XR), so the cluster is asked for a composition's
   functions once per run. The factory selection happens at the CLI layer; the processors are oblivious to which

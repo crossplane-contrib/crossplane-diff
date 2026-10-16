@@ -64,7 +64,6 @@ type DiffProcessor interface {
 
 // DefaultDiffProcessor implements DiffProcessor with modular components.
 type DefaultDiffProcessor struct {
-	compClient           xp.CompositionClient
 	credentialClient     xp.CredentialClient
 	defClient            xp.DefinitionClient
 	schemaClient         k8.SchemaClient
@@ -135,7 +134,6 @@ func NewDiffProcessor(k8cs k8.Clients, xpcs xp.Clients, opts ...ProcessorOption)
 	}
 
 	processor := &DefaultDiffProcessor{
-		compClient:           xpcs.Composition,
 		credentialClient:     xpcs.Credential,
 		defClient:            xpcs.Definition,
 		schemaClient:         k8cs.Schema,
