@@ -3,7 +3,10 @@ package crossplane
 import (
 	"context"
 	"fmt"
+	"maps"
+	"slices"
 	"strings"
+	"sync"
 
 	"github.com/crossplane-contrib/crossplane-diff/cmd/diff/client/core"
 	"github.com/crossplane-contrib/crossplane-diff/cmd/diff/client/kubernetes"
@@ -75,9 +78,10 @@ type DefaultCompositionClient struct {
 	revisionClient   CompositionRevisionClient
 	logger           logging.Logger
 
-	// Cache of compositions
-	compositions map[string]*apiextensionsv1.Composition
-	gvks         []schema.GroupVersionKind
+	// Cache of compositions, guarded by compositionsMu.
+	compositions   map[string]*apiextensionsv1.Composition
+	compositionsMu sync.RWMutex
+	gvks           []schema.GroupVersionKind
 }
 
 // NewCompositionClient creates a new DefaultCompositionClient.
@@ -114,11 +118,13 @@ func (c *DefaultCompositionClient) Initialize(ctx context.Context) error {
 	}
 
 	// Store in cache
+	c.compositionsMu.Lock()
 	for _, comp := range comps {
 		c.compositions[comp.GetName()] = comp
 	}
+	c.compositionsMu.Unlock()
 
-	c.logger.Debug("Composition client initialized", "compositionsCount", len(c.compositions))
+	c.logger.Debug("Composition client initialized", "compositionsCount", len(comps))
 
 	return nil
 }
@@ -169,7 +175,11 @@ func (c *DefaultCompositionClient) ListCompositions(ctx context.Context) ([]*api
 // GetComposition gets a composition by name.
 func (c *DefaultCompositionClient) GetComposition(ctx context.Context, name string) (*apiextensionsv1.Composition, error) {
 	// Check cache first
-	if comp, ok := c.compositions[name]; ok {
+	c.compositionsMu.RLock()
+	comp, ok := c.compositions[name]
+	c.compositionsMu.RUnlock()
+
+	if ok {
 		return comp, nil
 	}
 
@@ -186,15 +196,26 @@ func (c *DefaultCompositionClient) GetComposition(ctx context.Context, name stri
 	}
 
 	// Convert to typed # TODO:  troublesome because typed has a version
-	comp := &apiextensionsv1.Composition{}
+	comp = &apiextensionsv1.Composition{}
 	if err := runtime.DefaultUnstructuredConverter.FromUnstructured(unComp.Object, comp); err != nil {
 		return nil, errors.Wrap(err, "cannot convert unstructured to Composition")
 	}
 
 	// Update cache
+	c.compositionsMu.Lock()
 	c.compositions[name] = comp
+	c.compositionsMu.Unlock()
 
 	return comp, nil
+}
+
+// cachedCompositions returns the cached compositions, so a caller can range over them while
+// another goroutine adds to the cache.
+func (c *DefaultCompositionClient) cachedCompositions() []*apiextensionsv1.Composition {
+	c.compositionsMu.RLock()
+	defer c.compositionsMu.RUnlock()
+
+	return slices.Collect(maps.Values(c.compositions))
 }
 
 // getCompositionRevisionRef reads the compositionRevisionRef from an XR/Claim spec.
@@ -667,14 +688,15 @@ func (c *DefaultCompositionClient) findByLabelSelector(ctx context.Context, xrd,
 		var matchingCompositions []*apiextensionsv1.Composition
 
 		// Get all compositions if we haven't loaded them yet
-		if len(c.compositions) == 0 {
+		cached := c.cachedCompositions()
+		if len(cached) == 0 {
 			if _, err := c.ListCompositions(ctx); err != nil {
 				return nil, errors.Wrap(err, "cannot list compositions to match selector")
 			}
 		}
 
 		// Search through all compositions looking for compatible ones with matching labels
-		for _, comp := range c.compositions {
+		for _, comp := range cached {
 			// Check if this composition is for the right XR type
 			if c.isCompositionCompatible(comp, targetGVK) {
 				// Check if labels match
@@ -712,7 +734,8 @@ func (c *DefaultCompositionClient) findByLabelSelector(ctx context.Context, xrd,
 // findByTypeReference attempts to find a composition by matching the type reference.
 func (c *DefaultCompositionClient) findByTypeReference(ctx context.Context, _ *un.Unstructured, targetGVK schema.GroupVersionKind, resourceID string) (*apiextensionsv1.Composition, error) {
 	// Get all compositions if we haven't loaded them yet
-	if len(c.compositions) == 0 {
+	cached := c.cachedCompositions()
+	if len(cached) == 0 {
 		if _, err := c.ListCompositions(ctx); err != nil {
 			return nil, errors.Wrap(err, "cannot list compositions to match type")
 		}
@@ -721,7 +744,7 @@ func (c *DefaultCompositionClient) findByTypeReference(ctx context.Context, _ *u
 	// Find all compositions that match this target type
 	var compatibleCompositions []*apiextensionsv1.Composition
 
-	for _, comp := range c.compositions {
+	for _, comp := range cached {
 		if c.isCompositionCompatible(comp, targetGVK) {
 			compatibleCompositions = append(compatibleCompositions, comp)
 		}

@@ -213,7 +213,7 @@ func TestWarningLogger_ConcurrentInfo(t *testing.T) {
 // told, so it is collapsed in BOTH channels. Conversely, a warning whose context differs in any pair
 // is a distinct occurrence and must still fire every time; the ownership-theft advisory in
 // resource_manager.go depends on that, since it is raised once per composed resource with the
-// resource's identity in its context.
+// resource's identity in its context. It also covers the order Warnings returns them in.
 func TestWarningLogger_Dedup(t *testing.T) {
 	type call struct {
 		msg string
@@ -287,6 +287,22 @@ func TestWarningLogger_Dedup(t *testing.T) {
 			wantWarnings: []dt.OutputWarning{
 				{Message: "first advisory", Context: map[string]string{"resource": "Bucket/one"}},
 				{Message: "second advisory", Context: map[string]string{"resource": "Bucket/one"}},
+			},
+		},
+		"WarningsSortedNotInRaisingOrder": {
+			reason: "Concurrent diffs raise warnings in a scheduling-dependent order, so Warnings sorts by message, then context; stderr keeps raising order",
+			calls: []call{
+				{msg: "second advisory", kv: []any{"resource", "Bucket/two"}},
+				{msg: "second advisory", kv: []any{"resource", "Bucket/one"}},
+				{msg: "first advisory"},
+			},
+			wantStderr: "WARNING: second advisory (resource=Bucket/two)\n" +
+				"WARNING: second advisory (resource=Bucket/one)\n" +
+				"WARNING: first advisory\n",
+			wantWarnings: []dt.OutputWarning{
+				{Message: "first advisory"},
+				{Message: "second advisory", Context: map[string]string{"resource": "Bucket/one"}},
+				{Message: "second advisory", Context: map[string]string{"resource": "Bucket/two"}},
 			},
 		},
 		"ContextSplitCannotForgeAMatch": {

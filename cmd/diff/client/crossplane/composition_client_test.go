@@ -3,6 +3,7 @@ package crossplane
 import (
 	"context"
 	"strings"
+	"sync"
 	"testing"
 
 	tu "github.com/crossplane-contrib/crossplane-diff/cmd/diff/testutils"
@@ -2224,5 +2225,46 @@ func TestSentinelsSurviveWrapping(t *testing.T) {
 				t.Errorf("errors.Is(%v, %v) = false, want true", tt.err, tt.want)
 			}
 		})
+	}
+}
+
+// TestDefaultCompositionClient_ConcurrentUse fetches compositions into the cache from several
+// goroutines while others read the whole cache, as concurrent diffs do. Run it with -race.
+func TestDefaultCompositionClient_ConcurrentUse(t *testing.T) {
+	ctx := t.Context()
+
+	names := []string{"comp-a", "comp-b", "comp-c", "comp-d"}
+
+	cluster := make([]*un.Unstructured, 0, len(names))
+	for _, name := range names {
+		cluster = append(cluster, tu.NewComposition(name).WithCompositeTypeRef("example.org/v1", "XR1").BuildAsUnstructured())
+	}
+
+	c := &DefaultCompositionClient{
+		resourceClient: tu.NewMockResourceClient().WithResourcesExist(cluster...).Build(),
+		logger:         tu.TestLogger(t, false),
+		compositions:   map[string]*apiextensionsv1.Composition{},
+	}
+
+	var wg sync.WaitGroup
+	for _, name := range names {
+		wg.Go(func() {
+			comp, err := c.GetComposition(ctx, name)
+			if err != nil {
+				t.Errorf("GetComposition(%q): %v", name, err)
+				return
+			}
+
+			if comp.GetName() != name {
+				t.Errorf("GetComposition(%q) returned %q", name, comp.GetName())
+			}
+		})
+		wg.Go(func() { _ = c.cachedCompositions() })
+	}
+
+	wg.Wait()
+
+	if got := len(c.cachedCompositions()); got != len(names) {
+		t.Errorf("cached compositions = %d, want %d", got, len(names))
 	}
 }

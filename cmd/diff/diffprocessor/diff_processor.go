@@ -102,7 +102,7 @@ func NewDiffProcessor(k8cs k8.Clients, xpcs xp.Clients, opts ...ProcessorOption)
 	}
 
 	// Default the render function to an engine-backed implementation if the
-	// caller didn't override it. Serialization is handled inside engineRenderFn.
+	// caller didn't override it. It is safe for concurrent renders; see EngineRenderFn.
 	// We retain the pointer so Cleanup can release the Docker network and
 	// function runtimes owned by the engine.
 	var defaultEngineFn *EngineRenderFn
@@ -452,9 +452,6 @@ func (p *DefaultDiffProcessor) diffSingleResourceInternal(ctx context.Context, r
 		p.config.Logger.Debug("Failed to get functions", "resource", resourceID, "error", err)
 		return nil, types.RenderedResources{}, errors.Wrap(err, "cannot get functions for composition")
 	}
-
-	// Note: Serialization mutex prevents concurrent Docker operations.
-	// In e2e tests, named Docker containers (via annotations) reuse containers across renders.
 
 	renderXR := cmp.New()
 	renderXR.SetUnstructuredContent(defaultedXR.Object)

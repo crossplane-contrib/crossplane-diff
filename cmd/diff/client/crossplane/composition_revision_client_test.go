@@ -4,6 +4,7 @@ import (
 	"context"
 	"maps"
 	"strings"
+	"sync"
 	"testing"
 
 	tu "github.com/crossplane-contrib/crossplane-diff/cmd/diff/testutils"
@@ -663,4 +664,57 @@ func TestDefaultCompositionRevisionClient_GetCompositionFromRevision(t *testing.
 			}
 		})
 	}
+}
+
+// TestDefaultCompositionRevisionClient_ConcurrentUse loads several compositions' revisions into the
+// cache from concurrent goroutines while others look revisions up by name, as concurrent diffs do.
+// Run it with -race.
+func TestDefaultCompositionRevisionClient_ConcurrentUse(t *testing.T) {
+	ctx := t.Context()
+
+	compositions := []string{"comp-a", "comp-b", "comp-c", "comp-d"}
+
+	mockResource := tu.NewMockResourceClient().
+		WithGetResourcesByLabel(func(_ context.Context, _ schema.GroupVersionKind, _ string, sel metav1.LabelSelector) ([]*un.Unstructured, error) {
+			comp := sel.MatchLabels[LabelCompositionName]
+			rev := &apiextensionsv1.CompositionRevision{
+				ObjectMeta: metav1.ObjectMeta{Name: comp + "-rev1", Labels: map[string]string{LabelCompositionName: comp}},
+				Spec:       apiextensionsv1.CompositionRevisionSpec{Revision: 1},
+			}
+
+			obj, err := runtime.DefaultUnstructuredConverter.ToUnstructured(rev)
+			if err != nil {
+				return nil, err
+			}
+
+			return []*un.Unstructured{{Object: obj}}, nil
+		}).
+		WithResourceNotFound().
+		Build()
+
+	c := &DefaultCompositionRevisionClient{
+		resourceClient:         mockResource,
+		logger:                 tu.TestLogger(t, false),
+		revisions:              map[string]*apiextensionsv1.CompositionRevision{},
+		revisionsByComposition: map[string][]*apiextensionsv1.CompositionRevision{},
+	}
+
+	var wg sync.WaitGroup
+	for _, comp := range compositions {
+		wg.Go(func() {
+			rev, err := c.GetLatestRevisionForComposition(ctx, comp, nil)
+			if err != nil {
+				t.Errorf("GetLatestRevisionForComposition(%q): %v", comp, err)
+				return
+			}
+
+			if want := comp + "-rev1"; rev.GetName() != want {
+				t.Errorf("GetLatestRevisionForComposition(%q) = %q, want %q", comp, rev.GetName(), want)
+			}
+		})
+		// Not yet cached when it runs first, so it may miss; only the cache access matters here.
+		wg.Go(func() { _, _ = c.GetCompositionRevision(ctx, comp+"-rev1") })
+	}
+
+	wg.Wait()
 }

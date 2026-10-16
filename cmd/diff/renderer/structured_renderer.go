@@ -119,8 +119,9 @@ type StructuredDiffOutput struct {
 	// Warnings is the list of non-fatal advisories raised during the run — things worth knowing that
 	// did not invalidate the diff. Unlike Errors they do NOT affect the exit code, so a consumer
 	// gating on failure should read Errors. Warnings are not grouped per input XR because they
-	// originate deep in the call stack, below the point where the owning input is known. They are in
-	// the order raised, followed by the renderer's summary of unverified additions (see dryRunWarnings).
+	// originate deep in the call stack, below the point where the owning input is known. They are
+	// sorted by message, then context, followed by the renderer's summary of unverified additions (see
+	// dryRunWarnings).
 	Warnings []dt.OutputWarning `json:"warnings,omitempty"`
 }
 
