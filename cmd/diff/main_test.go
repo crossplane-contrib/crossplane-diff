@@ -1,18 +1,14 @@
 package main
 
 import (
-	"context"
 	"fmt"
 	"os"
-	"os/exec"
-	"strings"
 	"testing"
-	"time"
 
 	"github.com/crossplane-contrib/crossplane-diff/cmd/diff/testutils/envtestreaper"
 )
 
-// TestMain runs before all tests and cleans up after all tests complete.
+// TestMain runs before all tests.
 func TestMain(m *testing.M) {
 	// Kill envtest servers that an earlier run left behind when it died abnormally.
 	envtestreaper.Reap(func(format string, args ...any) { fmt.Fprintf(os.Stderr, format+"\n", args...) })
@@ -20,34 +16,6 @@ func TestMain(m *testing.M) {
 	// Run all tests
 	exitCode := m.Run()
 
-	// Clean up orphaned function containers after tests complete
-	cleanupFunctionContainers()
-
 	// Exit with the test suite's exit code
 	os.Exit(exitCode)
-}
-
-// cleanupFunctionContainers removes the named function containers used by integration tests.
-func cleanupFunctionContainers() {
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-
-	// Use exec.CommandContext to run docker command
-	cmd := exec.CommandContext(ctx, "docker", "ps", "-a", "-q", "--filter", "name=-it$")
-
-	output, err := cmd.Output()
-	if err != nil {
-		// Docker might not be available or no containers found - that's okay
-		return
-	}
-
-	containerIDs := strings.Fields(string(output))
-	if len(containerIDs) == 0 {
-		return
-	}
-
-	// Remove the containers
-	args := append([]string{"rm", "-f"}, containerIDs...)
-	cleanupCmd := exec.CommandContext(ctx, "docker", args...)
-	_ = cleanupCmd.Run() // Ignore errors during cleanup
 }
