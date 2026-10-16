@@ -141,6 +141,7 @@ cmd/diff/
 │   ├── requirements_provider.go  # Resolves composition requirements
 │   ├── function_provider.go  # Provides functions for composition pipeline
 │   └── processor_config.go   # Configuration and dependency injection
+├── dockerrun/                # Ties a run's function containers and network to it; reaps dead runs'
 ├── renderer/                 # Crossplane render pipeline wrapper
 ├── testutils/                # Test helpers and mock builders
 └── types/                    # Shared types and interfaces
@@ -160,7 +161,9 @@ cmd/diff/
 
 3. **Lazy Loading and Caching**
    - `CachedFunctionProvider`: Lazy-loads functions per composition, caches by composition name
-   - Docker container reuse: Adds annotations to enable container reuse across renders
+   - Function container reuse: a processor's `EngineRenderFn` starts each function's container once and reuses it for
+     every render that processor does. Containers are never shared across processors or runs (#570 tracks sharing them
+     across integration-test cases)
    - Caching decisions made at CLI layer, not embedded in processors
 
 4. **Composition Pipeline**
@@ -173,9 +176,18 @@ cmd/diff/
 
 **Function Pipeline Integration**
 - Functions fetched from cluster or provided via factory
-- Function containers are removed by the processor's `Cleanup`, which also runs on the first Ctrl+C/SIGTERM. A run
-  that dies without cleanup (SIGKILL, OOM, a second Ctrl+C) can leave them behind; reaping those is #525
-- Functions are tied to compositions; cached provider reuses containers across XR renders
+- `EngineRenderFn` owns the run's Docker resources through `cmd/diff/dockerrun` (#525): the run ID is the render
+  engine's session ID (`render.EngineFlags.SessionID`, crossplane/cli#431), so every function container, render
+  container and engine-created `crossplane-render-*` network is labelled `render.crossplane.io/session=<run ID>` and
+  `render.crossplane.io/managed-by=crossplane-cli`. The processor's `Cleanup` (which also runs on the first
+  Ctrl+C/SIGTERM) removes the run's containers, then lets the engine remove its network, then removes any of the
+  run's networks still left. A `CROSSPLANE_DIFF_DOCKER_NETWORK` network carries no label and is never removed
+- A run holds a `flock` on `<user cache dir>/crossplane-diff/runs/<run ID>.lock` while it has resources. Before it
+  starts any containers, a run removes the containers and networks labelled with every run whose lock file it can
+  lock, i.e. whose process is dead (SIGKILL, OOM, a second Ctrl+C). Live runs and resources without both labels are
+  never touched
+- Functions are tied to compositions; the cached provider caches the cluster fetch, and the engine reuses each
+  function's container across XR renders
 
 **Resource Validation**
 - Schema validation against CRDs/XRDs before diffing

@@ -1,18 +1,12 @@
 ---
 # TODO:  when updating these, ensure you also update the list of pulled images in Earthfile/go-test
 #
-# Named Docker containers for performance optimization in integration tests.
-# The 'runtime-docker-name' annotation enables container reuse across multiple test cases.
-# The 'runtime-docker-cleanup: Orphan' annotation leaves containers running after render completes,
-# allowing subsequent tests to reuse them instead of creating new ones.
-# Containers are automatically cleaned up after the test suite completes via TestMain.
+# No Docker runtime annotations: the render engine labels each function's container with its run, drops any container
+# name, and removes the containers when the run ends.
 apiVersion: pkg.crossplane.io/v1beta1
 kind: Function
 metadata:
   name: function-go-templating
-  annotations:
-    render.crossplane.io/runtime-docker-name: "function-go-templating-v0.11.0-it"
-    render.crossplane.io/runtime-docker-cleanup: "Orphan"
 spec:
   package: xpkg.crossplane.io/crossplane-contrib/function-go-templating:v0.11.0
 ---
@@ -20,9 +14,6 @@ apiVersion: pkg.crossplane.io/v1beta1
 kind: Function
 metadata:
   name: function-auto-ready
-  annotations:
-    render.crossplane.io/runtime-docker-name: "function-auto-ready-v0.4.2-it"
-    render.crossplane.io/runtime-docker-cleanup: "Orphan"
 spec:
   package: xpkg.crossplane.io/crossplane-contrib/function-auto-ready:v0.4.2
 ---
@@ -30,9 +21,6 @@ apiVersion: pkg.crossplane.io/v1beta1
 kind: Function
 metadata:
   name: function-environment-configs
-  annotations:
-    render.crossplane.io/runtime-docker-name: "function-environment-configs-v0.4.0-it"
-    render.crossplane.io/runtime-docker-cleanup: "Orphan"
 spec:
   package: xpkg.crossplane.io/crossplane-contrib/function-environment-configs:v0.4.0
 ---
@@ -40,8 +28,5 @@ apiVersion: pkg.crossplane.io/v1beta1
 kind: Function
 metadata:
   name: function-extra-resources
-  annotations:
-    render.crossplane.io/runtime-docker-name: "function-extra-resources-v0.2.0-it"
-    render.crossplane.io/runtime-docker-cleanup: "Orphan"
 spec:
   package: xpkg.crossplane.io/crossplane-contrib/function-extra-resources:v0.2.0
