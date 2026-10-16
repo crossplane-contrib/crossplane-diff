@@ -148,7 +148,9 @@ func (c *DefaultFunctionClient) GetFunctionsFromPipeline(comp *apiextensionsv1.C
 		c.logger.Debug("Found function for step",
 			"step", step.Step,
 			"function_name", fn.GetName())
-		functions = append(functions, fn)
+		// A copy, so a caller that modifies what it gets (a function's annotations, its package)
+		// does not modify this cache, which concurrent callers share.
+		functions = append(functions, *fn.DeepCopy())
 	}
 
 	c.logger.Debug("Retrieved functions from pipeline",

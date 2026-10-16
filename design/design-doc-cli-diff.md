@@ -1477,7 +1477,9 @@ Three implementations are wired up at the CLI layer based on configuration:
 - **`CachedFunctionProvider`**: Lazy-loads functions per composition and caches them by composition name. Composition
   diff renders the same composition many times (once per affected XR), so the cluster is asked for a composition's
   functions once per run. The factory selection happens at the CLI layer; the processors are oblivious to which
-  strategy is in use.
+  strategy is in use. It is safe for concurrent use, and each call returns its own deep copy, because the wrapping
+  providers below and the render engine modify the functions they are given; `FunctionClient.GetFunctionsFromPipeline`
+  copies out of its cache for the same reason.
 - **`RegistryOverrideFunctionProvider`**: Wraps another provider and rewrites function image references to a mirror
   (used with `--function-registry-override`).
 - **`EnvInjectingFunctionProvider`**: Wraps another provider and upserts env pairs into each function's
@@ -2008,6 +2010,12 @@ warning site is one it should follow anyway: **put what distinguishes one occurr
 context**, since context is what a machine consumer reads. `warningKey` renders the message and each
 sorted context pair with `%q` so a value containing the separators cannot forge another warning's
 identity (`{"a": "b=c"}` and `{"a=b": "c"}` are distinct).
+
+**Order.** `Warnings` returns the collected warnings sorted by `warningKey` (message, then sorted context), not in
+the order they were raised. Raising order depends on scheduling once XRs are diffed concurrently (#579), and output
+must not; sorting by the identity key also keeps two runs that raise the same warnings byte-identical. The stderr
+line is still written when a warning is raised. The renderer appends its unverified-addition summaries after the
+sorted list.
 
 **Draining late advisories.** A warning only reaches structured output if it is raised before the
 renderer reads the collected slice. Teardown is the awkward case: the processor's `Cleanup` can raise
@@ -2578,6 +2586,15 @@ This rendering layer:
   GVK, making dry-run apply succeed and the rendered desired state comparable against cluster state
 - Owns the run's Docker resources: it hands the engine the run's ID as its session ID, so every container and network
   the engine creates is labelled with the run, and reclaims dead runs' leftovers before it starts anything (§6.7.2)
+- Is safe for concurrent renders (#579). Its mutex guards only function startup (`startFunctions`: the engine's `Setup`,
+  starting the new functions' runtimes, and the bookkeeping of what is running at which address) and `Cleanup`; it is
+  never held across `engine.Render`, so renders run in parallel. A function that concurrent renders both need is
+  started once: the second caller waits on the mutex, then finds it running. Startup has to be serialized anyway,
+  because upstream's docker engine `Setup` is not safe for concurrent use (its first call records the network it
+  creates). The rest of the processor is safe for concurrent `DiffSingleResource` calls too: every lazily filled
+  cache is mutex-guarded (composition, revision, XRD, CRD, access-review, GVR and requirements caches), and the
+  function client's cache, filled by `Initialize`, is only read afterwards. `WarningLogger.Warnings` sorts what it
+  returns (§6.8.1), so concurrent work raising warnings in a different order does not change the output
 
 #### 9.5.4 Resource Tree Evaluation
 

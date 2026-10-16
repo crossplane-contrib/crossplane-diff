@@ -68,8 +68,10 @@ type RenderInputs struct {
 }
 
 // EngineRenderFn is the default RenderFn implementation. It lazily starts
-// function runtimes on first use, reuses them across subsequent calls, and
-// serializes concurrent renders with an internal mutex.
+// function runtimes on first use and reuses them across subsequent calls. It is
+// safe for concurrent use: mu guards only the function-startup bookkeeping, so
+// renders run in parallel and a function needed by concurrent renders is
+// started once.
 //
 // A single `xr` invocation can render against XRs from multiple compositions
 // whose function pipelines overlap but aren't identical. Engine.Setup
@@ -93,8 +95,11 @@ type EngineRenderFn struct {
 	// addrs is the merged Addresses() map from every startRuntimes call.
 	// Filtered to in.Functions when building each render request.
 	addrs map[string]string
-	mu    sync.Mutex
-	log   logging.Logger
+	// mu serializes starting functions (engine.Setup, startRuntimes) and
+	// tearing them down (Cleanup), and guards cleanups, addrsList,
+	// startedNames and addrs. It is never held across engine.Render.
+	mu  sync.Mutex
+	log logging.Logger
 
 	// image is the fully-resolved render image reference the engine will pull,
 	// or "" when a local binary backend was selected. Written once at
@@ -203,82 +208,16 @@ func resolveRenderImage(binaryPath, version, image string) string {
 	}
 }
 
-// Render performs one render. It is safe for concurrent use — calls are
-// serialized internally. Setup runs only on invocations that introduce
-// previously-unseen functions; renders whose fns are all already running
-// skip straight to building the request. See the EngineRenderFn docstring
-// for the per-batch Setup contract this relies on.
+// Render performs one render. It is safe for concurrent use: only starting
+// functions is serialized (see startFunctions); the render itself runs
+// unlocked, so concurrent renders proceed in parallel. Setup runs only on
+// invocations that introduce previously-unseen functions; renders whose fns
+// are all already running skip straight to building the request. See the
+// EngineRenderFn docstring for the per-batch Setup contract this relies on.
 func (e *EngineRenderFn) Render(ctx context.Context, log logging.Logger, in RenderInputs) (render.CompositionOutputs, error) {
-	e.mu.Lock()
-	defer e.mu.Unlock()
-
-	if e.addrs == nil {
-		e.addrs = make(map[string]string)
-	}
-
-	if e.startedNames == nil {
-		e.startedNames = make(map[string]struct{})
-	}
-
-	// Identify functions we haven't started yet. Dedup is by function name —
-	// independent of whether the address map has an entry, so test stubs that
-	// return an empty *FunctionAddresses don't mistakenly re-trigger Start.
-	newFns := make([]pkgv1.Function, 0, len(in.Functions))
-	for i := range in.Functions {
-		if _, ok := e.startedNames[in.Functions[i].GetName()]; ok {
-			continue
-		}
-
-		newFns = append(newFns, in.Functions[i])
-	}
-
-	// Only call Setup when there's actually a new batch to integrate.
-	// Renders where all fns are already running (newFns is empty) have no
-	// work for the engine and would just accumulate no-op cleanups in the
-	// slice for the lifetime of the engine.
-	if len(newFns) > 0 {
-		if err := e.claimForRun(ctx, newFns); err != nil {
-			return render.CompositionOutputs{}, err
-		}
-
-		// Setup integrates newFns into the engine's environment. Whether
-		// this call creates the environment or only adds to one that
-		// already exists is the engine's concern; we just hold onto
-		// whatever cleanup it gives back and let Cleanup walk them LIFO.
-		cleanup, err := e.engine.Setup(ctx, newFns)
-		if err != nil {
-			return render.CompositionOutputs{}, errors.Wrap(err, "cannot setup render engine")
-		}
-
-		// Keep the cleanup even if starting fails: the network it removes can
-		// only go once Cleanup has removed the containers that did start
-		// (their cleanup policy leaves them to the run), and the engine keeps
-		// using the network it created in later Setups, so it must outlive
-		// a failed start.
-		e.cleanups = append(e.cleanups, cleanup)
-
-		fa, startErr := e.startRuntimes(ctx, log, newFns)
-		if startErr != nil {
-			return render.CompositionOutputs{}, errors.Wrap(startErr, "cannot start function runtimes")
-		}
-
-		e.addrsList = append(e.addrsList, fa)
-		for i := range newFns {
-			e.startedNames[newFns[i].GetName()] = struct{}{}
-		}
-
-		maps.Copy(e.addrs, fa.Addresses())
-	}
-
-	// Build request with addresses for in.Functions only — the binary needs
-	// addresses for this render's pipeline, not for every function we've
-	// ever started.
-	fnAddrs := make(map[string]string, len(in.Functions))
-	for i := range in.Functions {
-		name := in.Functions[i].GetName()
-		if a, ok := e.addrs[name]; ok {
-			fnAddrs[name] = a
-		}
+	fnAddrs, err := e.startFunctions(ctx, log, in.Functions)
+	if err != nil {
+		return render.CompositionOutputs{}, err
 	}
 
 	req, err := render.BuildCompositeRequest(render.CompositionInputs{
@@ -331,6 +270,96 @@ func (e *EngineRenderFn) Render(ctx context.Context, log logging.Logger, in Rend
 	}
 
 	return out, nil
+}
+
+// startFunctions starts whichever of fns are not running yet and returns the
+// addresses of all of fns. It holds mu throughout, so concurrent callers that
+// need the same not-yet-started function start it once: the second waits, then
+// finds it running. Upstream's docker engine Setup is not safe for concurrent
+// use either (its first call records the network it creates), so Setup must be
+// serialized anyway. Every render takes mu after the Setup that started its
+// functions released it, so what that Setup wrote is visible to the unlocked
+// engine.Render that follows.
+//
+// ponytail: a composition with an empty pipeline starts nothing, so its render
+// is not ordered after the first Setup; rendered concurrently with that Setup,
+// it races on the docker engine's network field. Only the first Setup of a run
+// writes it, and only without CROSSPLANE_DIFF_DOCKER_NETWORK. Upgrade (e.g. a
+// once-guarded first Setup) if empty pipelines get diffed concurrently.
+func (e *EngineRenderFn) startFunctions(ctx context.Context, log logging.Logger, fns []pkgv1.Function) (map[string]string, error) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
+	if e.addrs == nil {
+		e.addrs = make(map[string]string)
+	}
+
+	if e.startedNames == nil {
+		e.startedNames = make(map[string]struct{})
+	}
+
+	// Identify functions we haven't started yet. Dedup is by function name —
+	// independent of whether the address map has an entry, so test stubs that
+	// return an empty *FunctionAddresses don't mistakenly re-trigger Start.
+	newFns := make([]pkgv1.Function, 0, len(fns))
+	for i := range fns {
+		if _, ok := e.startedNames[fns[i].GetName()]; ok {
+			continue
+		}
+
+		newFns = append(newFns, fns[i])
+	}
+
+	// Only call Setup when there's actually a new batch to integrate.
+	// Renders where all fns are already running (newFns is empty) have no
+	// work for the engine and would just accumulate no-op cleanups in the
+	// slice for the lifetime of the engine.
+	if len(newFns) > 0 {
+		if err := e.claimForRun(ctx, newFns); err != nil {
+			return nil, err
+		}
+
+		// Setup integrates newFns into the engine's environment. Whether
+		// this call creates the environment or only adds to one that
+		// already exists is the engine's concern; we just hold onto
+		// whatever cleanup it gives back and let Cleanup walk them LIFO.
+		cleanup, err := e.engine.Setup(ctx, newFns)
+		if err != nil {
+			return nil, errors.Wrap(err, "cannot setup render engine")
+		}
+
+		// Keep the cleanup even if starting fails: the network it removes can
+		// only go once Cleanup has removed the containers that did start
+		// (their cleanup policy leaves them to the run), and the engine keeps
+		// using the network it created in later Setups, so it must outlive
+		// a failed start.
+		e.cleanups = append(e.cleanups, cleanup)
+
+		fa, startErr := e.startRuntimes(ctx, log, newFns)
+		if startErr != nil {
+			return nil, errors.Wrap(startErr, "cannot start function runtimes")
+		}
+
+		e.addrsList = append(e.addrsList, fa)
+		for i := range newFns {
+			e.startedNames[newFns[i].GetName()] = struct{}{}
+		}
+
+		maps.Copy(e.addrs, fa.Addresses())
+	}
+
+	// Addresses for fns only — the binary needs addresses for this render's
+	// pipeline, not for every function we've ever started. Copied, because
+	// the render reads them after mu is released.
+	fnAddrs := make(map[string]string, len(fns))
+	for i := range fns {
+		name := fns[i].GetName()
+		if a, ok := e.addrs[name]; ok {
+			fnAddrs[name] = a
+		}
+	}
+
+	return fnAddrs, nil
 }
 
 // errStaleRenderBackend is the kong usage error a crossplane CLI predating

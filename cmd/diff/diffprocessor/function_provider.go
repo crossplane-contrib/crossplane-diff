@@ -19,6 +19,7 @@ package diffprocessor
 import (
 	"context"
 	"strings"
+	"sync"
 
 	xp "github.com/crossplane-contrib/crossplane-diff/cmd/diff/client/crossplane"
 	"github.com/crossplane/cli/v2/cmd/crossplane/render"
@@ -55,8 +56,13 @@ const EnvDockerNetwork = "CROSSPLANE_DIFF_DOCKER_NETWORK"
 // the cluster is asked for a composition's functions once, however many XRs render it.
 // The function containers themselves are started, reused across renders and removed
 // by the render engine, which names them for the run that owns them (see EngineRenderFn).
+//
+// It is safe for concurrent use, and every call returns its own copy of the functions: the
+// providers that wrap it (RegistryOverrideFunctionProvider, EnvInjectingFunctionProvider) and the
+// render engine modify the functions they are given.
 type CachedFunctionProvider struct {
 	fnClient xp.FunctionClient
+	mu       sync.Mutex
 	cache    map[string][]pkgv1.Function
 	logger   logging.Logger
 }
@@ -74,9 +80,14 @@ func NewCachedFunctionProvider(fnClient xp.FunctionClient, logger logging.Logger
 func (p *CachedFunctionProvider) GetFunctionsForComposition(comp *apiextensionsv1.Composition) ([]pkgv1.Function, error) {
 	compName := comp.GetName()
 
+	// Held across the fetch, which only reads the function client's in-memory cache, so each
+	// composition is fetched once.
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
 	if cached, ok := p.cache[compName]; ok {
 		p.logger.Debug("Using cached functions", "composition", compName, "count", len(cached))
-		return cached, nil
+		return deepCopyFunctions(cached), nil
 	}
 
 	// Cache miss - fetch and cache functions
@@ -91,7 +102,17 @@ func (p *CachedFunctionProvider) GetFunctionsForComposition(comp *apiextensionsv
 
 	p.cache[compName] = fns
 
-	return fns, nil
+	return deepCopyFunctions(fns), nil
+}
+
+// deepCopyFunctions returns a copy of fns that shares no maps or slices with it.
+func deepCopyFunctions(fns []pkgv1.Function) []pkgv1.Function {
+	out := make([]pkgv1.Function, len(fns))
+	for i := range fns {
+		fns[i].DeepCopyInto(&out[i])
+	}
+
+	return out
 }
 
 // Cleanup is a no-op for CachedFunctionProvider: the render engine owns the containers.

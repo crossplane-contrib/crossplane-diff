@@ -17,7 +17,10 @@ limitations under the License.
 package diffprocessor
 
 import (
+	"strconv"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 
 	tu "github.com/crossplane-contrib/crossplane-diff/cmd/diff/testutils"
@@ -450,4 +453,52 @@ func TestEnvInjectingFunctionProvider(t *testing.T) {
 			t.Errorf("annotation after repeat = %q, want single pair %q", got, EnvMaxRecvMessageSize+"=16")
 		}
 	})
+}
+
+// TestCachedFunctionProvider_ConcurrentUse has concurrent callers ask for one composition's
+// functions and modify what they get, as the render engine does when it annotates functions it
+// starts. The composition is fetched once, and no caller's change reaches another's or the cache.
+// Run it with -race.
+func TestCachedFunctionProvider_ConcurrentUse(t *testing.T) {
+	functions := []pkgv1.Function{{ObjectMeta: metav1.ObjectMeta{Name: "function-test", Annotations: map[string]string{}}}}
+
+	var fetches atomic.Int32
+
+	fnClient := tu.NewMockFunctionClient().
+		WithFunctionsFetchCallback(func() ([]pkgv1.Function, error) {
+			fetches.Add(1)
+			return functions, nil
+		}).
+		Build()
+
+	provider := NewCachedFunctionProvider(fnClient, tu.TestLogger(t, false))
+	comp := &apiextensionsv1.Composition{ObjectMeta: metav1.ObjectMeta{Name: "test-composition"}}
+
+	var wg sync.WaitGroup
+	for i := range 8 {
+		wg.Go(func() {
+			fns, err := provider.GetFunctionsForComposition(comp)
+			if err != nil {
+				t.Errorf("GetFunctionsForComposition(): %v", err)
+				return
+			}
+
+			fns[0].Annotations["caller"] = strconv.Itoa(i)
+		})
+	}
+
+	wg.Wait()
+
+	if got := fetches.Load(); got != 1 {
+		t.Errorf("fetches = %d, want 1", got)
+	}
+
+	fns, err := provider.GetFunctionsForComposition(comp)
+	if err != nil {
+		t.Fatalf("GetFunctionsForComposition(): %v", err)
+	}
+
+	if diff := gcmp.Diff(map[string]string{}, fns[0].Annotations); diff != "" {
+		t.Errorf("a caller's change reached the cache (-want +got):\n%s", diff)
+	}
 }

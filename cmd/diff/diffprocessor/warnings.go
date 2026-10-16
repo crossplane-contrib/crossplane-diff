@@ -77,7 +77,7 @@ import (
 // A zero WarningLogger is not usable; construct one with NewWarningLogger.
 type WarningLogger struct {
 	// sink is shared by every logger derived via WithValues, so warnings raised through a derived
-	// logger are collected once, centrally, in emission order.
+	// logger are collected once, centrally.
 	sink *warningSink
 
 	// values are the accumulated WithValues key/value pairs for this logger, prepended to the
@@ -150,8 +150,9 @@ func (l *WarningLogger) WithValues(keysAndValues ...any) logging.Logger {
 	}
 }
 
-// Warnings returns the warnings collected so far, in emission order. The returned slice is a copy,
-// so callers may retain it while more warnings are raised.
+// Warnings returns the warnings collected so far, sorted by message and then context (by warningKey),
+// so the order does not depend on the order concurrent work raised them in. The returned slice is a
+// copy, so callers may retain it while more warnings are raised.
 func (l *WarningLogger) Warnings() []dt.OutputWarning {
 	l.sink.mu.Lock()
 	defer l.sink.mu.Unlock()
@@ -162,6 +163,7 @@ func (l *WarningLogger) Warnings() []dt.OutputWarning {
 
 	out := make([]dt.OutputWarning, len(l.sink.warnings))
 	copy(out, l.sink.warnings)
+	slices.SortFunc(out, func(a, b dt.OutputWarning) int { return strings.Compare(warningKey(a), warningKey(b)) })
 
 	return out
 }
