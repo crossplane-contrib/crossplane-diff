@@ -246,7 +246,7 @@ func (c *DefaultCompositionRevisionClient) GetLatestRevisionForComposition(ctx c
 	}
 
 	if len(revisions) == 0 {
-		return nil, errors.Errorf("no composition revisions found for composition %s", compositionName)
+		return nil, errors.Errorf("%w for composition %s", ErrNoCompositionRevisions, compositionName)
 	}
 
 	// Filter to revisions whose labels match the selector (Crossplane selects among these).

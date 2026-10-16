@@ -805,8 +805,7 @@ func (p *DefaultDiffProcessor) ProcessNestedXRs(
 			// Note: It's valid to have an XRD in Crossplane without a composition attached to it.
 			// In such cases, we skip recursive processing of the nested XR but allow the overall
 			// diff operation to continue. The diff for the nested XR itself will still be shown.
-			errMsg := err.Error()
-			if strings.Contains(errMsg, "cannot get composition") && strings.Contains(errMsg, "no composition found") {
+			if errors.Is(err, xp.ErrNoMatchingComposition) {
 				p.config.Logger.Info("Skipping nested XR processing due to missing composition",
 					"nestedXR", nestedResourceID,
 					"parentXR", parentResourceID,
