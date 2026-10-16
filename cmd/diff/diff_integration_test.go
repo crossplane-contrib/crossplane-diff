@@ -414,18 +414,14 @@ func runIntegrationTest(t *testing.T, testType DiffTestType, tt IntegrationTestC
 			cmd = &XRCmd{}
 		}
 
-		// Wrap the logger the way main() does, so the warning channel is exercised: Info calls land on
-		// stderr AND in structured output, rather than being silently dropped by the test logger.
-		warnings := dp.NewWarningLogger(logger, &stderr)
+		// Bind an advisory collector the way main() does, so advisories land on stderr AND in
+		// structured output.
+		advisories := dp.NewAdvisoryCollector(&stderr)
 		exitCode = &ExitCode{}
 
 		// Create AppContext from the test environment's config, per run like everything else, so a
 		// second run starts with cold client caches just as a second invocation of the CLI would.
-		//
-		// The WRAPPER goes in, not the bare logger: AppContext is what builds the clients, so passing
-		// `logger` here left every client-originated advisory (the credential shortfall, for one) invisible
-		// to integration tests even though production binds the wrapper (main.go). Issue #488, item 5.
-		appCtx, err := NewAppContext(cfg, warnings)
+		appCtx, err := NewAppContext(cfg, logger)
 		if err != nil {
 			t.Fatalf("failed to create app context: %v", err)
 		}
@@ -436,8 +432,8 @@ func runIntegrationTest(t *testing.T, testType DiffTestType, tt IntegrationTestC
 			kong.Bind(appCtx),
 			kong.Bind(exitCode),
 			kong.BindTo(context.Background(), (*context.Context)(nil)),
-			kong.Bind(warnings),
-			kong.BindTo(warnings, (*logging.Logger)(nil)),
+			kong.Bind(advisories),
+			kong.BindTo(logger, (*logging.Logger)(nil)),
 		)
 		if err != nil {
 			t.Fatalf("failed to create kong parser: %v", err)

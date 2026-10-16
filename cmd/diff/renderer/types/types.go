@@ -425,8 +425,8 @@ func (e OutputError) FormatError() string {
 // stderr for humans and included in structured output for machines — but deliberately do NOT affect
 // the exit code. A consumer gating on failure checks errors[], not warnings[].
 //
-// Context carries the log key/value pairs from the emitting call site (e.g. which composition, how
-// many credentials were fetched). It is a map rather than being flattened into Message so machine
+// Context carries the details of the occurrence from the raising call site (e.g. which composition,
+// which secrets are missing). It is a map rather than being flattened into Message so machine
 // consumers can read the individual values instead of parsing prose. Unlike OutputError there is no
 // ResourceID: warnings originate deep in the call stack, where the user-supplied input that led
 // there is not known, so the anchoring information lives in Context under whatever key the call
@@ -434,6 +434,15 @@ func (e OutputError) FormatError() string {
 type OutputWarning struct {
 	Message string            `json:"message"`
 	Context map[string]string `json:"context,omitempty"`
+}
+
+// Advisories is the channel for user-facing advisories. A component that discovers something the
+// user should know, but that does not fail the diff, raises it here rather than logging it: logging
+// is tracing, shown only under --verbose, while an advisory reaches stderr and structured output's
+// warnings[]. Put whatever distinguishes one occurrence from another in Context, because the
+// implementation may drop an advisory identical to one already raised.
+type Advisories interface {
+	Raise(w OutputWarning)
 }
 
 // FormatWarning renders the warning as a single human-readable stderr line, mirroring

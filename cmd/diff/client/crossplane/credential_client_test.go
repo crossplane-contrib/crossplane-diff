@@ -196,11 +196,9 @@ func TestDefaultCredentialClient_FetchCompositionCredentials(t *testing.T) {
 
 	for name, tt := range tests {
 		t.Run(name, func(t *testing.T) {
-			logger := tu.NewAdvisoryCapturingLogger(t)
-
 			c := &DefaultCredentialClient{
 				resourceClient: &tt.mockResource,
-				logger:         logger,
+				logger:         tu.TestLogger(t, false),
 			}
 
 			result, err := c.FetchCompositionCredentials(ctx, tt.composition)
@@ -220,13 +218,6 @@ func TestDefaultCredentialClient_FetchCompositionCredentials(t *testing.T) {
 				return
 			case err != nil:
 				t.Fatalf("\n%s\nFetchCompositionCredentials(): unexpected error: %v", tt.reason, err)
-			}
-
-			// The client reports shortfalls as data and raises no advisory of its own: the advisory lives
-			// in resolveFunctionCredentials, which is the only layer that knows what --function-credentials
-			// already supplied. Warning here would fire at users who had already solved the problem.
-			if advisories := logger.Advisories(); len(advisories) != 0 {
-				t.Errorf("\n%s\nexpected no advisory from the credential client, got %v", tt.reason, advisories)
 			}
 
 			if diff := cmp.Diff(tt.wantAbsent, result.Absent); diff != "" {

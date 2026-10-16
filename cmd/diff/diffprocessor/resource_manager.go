@@ -44,15 +44,17 @@ type DefaultResourceManager struct {
 	defClient  xp.DefinitionClient
 	treeClient xp.ResourceTreeClient
 	logger     logging.Logger
+	advisories dt.Advisories
 }
 
 // NewResourceManager creates a new DefaultResourceManager.
-func NewResourceManager(client k8.ResourceClient, defClient xp.DefinitionClient, treeClient xp.ResourceTreeClient, logger logging.Logger) ResourceManager {
+func NewResourceManager(client k8.ResourceClient, defClient xp.DefinitionClient, treeClient xp.ResourceTreeClient, logger logging.Logger, advisories dt.Advisories) ResourceManager {
 	return &DefaultResourceManager{
 		client:     client,
 		defClient:  defClient,
 		treeClient: treeClient,
 		logger:     logger,
+		advisories: advisories,
 	}
 }
 
@@ -170,16 +172,16 @@ func (m *DefaultResourceManager) checkCompositeOwnership(ctx context.Context, cu
 		return
 	}
 
-	// Info is the advisory level per logging.Logger's own contract, so this reaches the user via
-	// stderr and structured output rather than being buried in --verbose tracing. See WarningLogger.
-	m.logger.Info(
+	m.advisories.Raise(dt.OutputWarning{
 		// TODO:  should we fail by default here?  maybe require a --force flag to proceed?
-		"Resource already belongs to another composite.  Applying this diff will assume ownership!",
-		"resource", fmt.Sprintf("%s/%s", current.GetKind(), current.GetName()),
-		"namespace", current.GetNamespace(),
-		"currentOwner", owner,
-		"newOwner", newOwner,
-	)
+		Message: "Resource already belongs to another composite.  Applying this diff will assume ownership!",
+		Context: map[string]string{
+			"resource":     fmt.Sprintf("%s/%s", current.GetKind(), current.GetName()),
+			"namespace":    current.GetNamespace(),
+			"currentOwner": owner,
+			"newOwner":     newOwner,
+		},
+	})
 }
 
 // compositeLabelValue returns the crossplane.io/composite label Crossplane gives composite's composed
@@ -697,14 +699,15 @@ func (m *DefaultResourceManager) extractComposedResourcesFromTree(tree *resource
 				return errors.Wrapf(node.Error, "cannot fetch composed resource %s from the cluster", m.treeNodeID(node))
 			}
 
-			// Info is the advisory level per logging.Logger's own contract, so this reaches the user via
-			// stderr and structured output rather than being buried in --verbose tracing. See WarningLogger.
 			// The context deliberately omits the XR: a nested XR's grandchild is walked once for the top
-			// XR and again for the nested XR, and identical warnings collapse into one.
-			m.logger.Info(treeNodeNotFoundWarning,
-				"resource", fmt.Sprintf("%s/%s", node.Unstructured.GetKind(), node.Unstructured.GetName()),
-				"namespace", node.Unstructured.GetNamespace(),
-			)
+			// XR and again for the nested XR, and identical advisories collapse into one.
+			m.advisories.Raise(dt.OutputWarning{
+				Message: treeNodeNotFoundWarning,
+				Context: map[string]string{
+					"resource":  fmt.Sprintf("%s/%s", node.Unstructured.GetKind(), node.Unstructured.GetName()),
+					"namespace": node.Unstructured.GetNamespace(),
+				},
+			})
 
 			// A node that could not be fetched has no children to walk.
 			return nil
