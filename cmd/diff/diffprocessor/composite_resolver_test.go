@@ -239,7 +239,7 @@ func TestCompositeResolver_Resolve(t *testing.T) {
 
 			authoredBefore := tt.authored.DeepCopy()
 
-			got, err := NewCompositeResolver(tt.resources, defs, tu.TestLogger(t, false)).Resolve(t.Context(), tt.authored, tt.existing)
+			got, err := NewCompositeResolver(tt.resources, defs, tu.TestLogger(t, false), NewAdvisoryCollector(nil)).Resolve(t.Context(), tt.authored, tt.existing)
 
 			if tt.wantErr {
 				if err == nil {

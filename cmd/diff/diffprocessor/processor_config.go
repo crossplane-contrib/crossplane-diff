@@ -6,6 +6,7 @@ import (
 	xp "github.com/crossplane-contrib/crossplane-diff/cmd/diff/client/crossplane"
 	k8 "github.com/crossplane-contrib/crossplane-diff/cmd/diff/client/kubernetes"
 	"github.com/crossplane-contrib/crossplane-diff/cmd/diff/renderer"
+	dt "github.com/crossplane-contrib/crossplane-diff/cmd/diff/renderer/types"
 	corev1 "k8s.io/api/core/v1"
 
 	"github.com/crossplane/crossplane-runtime/v2/pkg/logging"
@@ -116,12 +117,11 @@ type ProcessorConfig struct {
 	// output always includes full compositionChanges.
 	MinimizeComposition bool
 
-	// Warnings is the source of non-fatal advisories to include in structured output. It is the same
-	// *WarningLogger that Logger is set to when the CLI wires one up; keeping a typed handle avoids
-	// type-asserting the Logger back to its concrete type at drain time. Nil is valid and means no
-	// warnings are collected — the human-visible stderr line is emitted by the WarningLogger itself,
-	// so leaving this unset only affects structured output.
-	Warnings *WarningLogger
+	// Advisories is the channel user-facing advisories are raised on, and drained from for structured
+	// output. Pass the same collector to every processor of one run (the CLI passes one set of options to
+	// both), so the composition processor's output includes what its XR processor raised. Unset, each
+	// processor collects its own, writing to Stderr.
+	Advisories *AdvisoryCollector
 
 	// AnalyzeOn is the smallest composition change that triggers per-composite impact analysis.
 	// Evaluating a composite costs one function render, so this is a cost knob — it never suppresses
@@ -202,7 +202,7 @@ type ProcessorConfig struct {
 // ComponentFactories contains factory functions for creating processor components.
 type ComponentFactories struct {
 	// ResourceManager creates a ResourceManager
-	ResourceManager func(client k8.ResourceClient, defClient xp.DefinitionClient, treeClient xp.ResourceTreeClient, logger logging.Logger) ResourceManager
+	ResourceManager func(client k8.ResourceClient, defClient xp.DefinitionClient, treeClient xp.ResourceTreeClient, logger logging.Logger, advisories dt.Advisories) ResourceManager
 
 	// SchemaValidator creates a SchemaValidator
 	SchemaValidator func(schema k8.SchemaClient, resource k8.ResourceClient, def xp.DefinitionClient, logger logging.Logger) SchemaValidator
@@ -275,11 +275,10 @@ func WithIncludeManual(includeManual bool) ProcessorOption {
 	}
 }
 
-// WithWarnings sets the collector whose warnings are included in structured output. Pass the same
-// *WarningLogger that was supplied to WithLogger.
-func WithWarnings(warnings *WarningLogger) ProcessorOption {
+// WithAdvisories sets the collector advisories are raised on and drained from for structured output.
+func WithAdvisories(advisories *AdvisoryCollector) ProcessorOption {
 	return func(config *ProcessorConfig) {
-		config.Warnings = warnings
+		config.Advisories = advisories
 	}
 }
 
@@ -416,7 +415,7 @@ func WithCrossplaneImage(image string) ProcessorOption {
 }
 
 // WithResourceManagerFactory sets the ResourceManager factory function.
-func WithResourceManagerFactory(factory func(k8.ResourceClient, xp.DefinitionClient, xp.ResourceTreeClient, logging.Logger) ResourceManager) ProcessorOption {
+func WithResourceManagerFactory(factory func(k8.ResourceClient, xp.DefinitionClient, xp.ResourceTreeClient, logging.Logger, dt.Advisories) ResourceManager) ProcessorOption {
 	return func(config *ProcessorConfig) {
 		config.Factories.ResourceManager = factory
 	}

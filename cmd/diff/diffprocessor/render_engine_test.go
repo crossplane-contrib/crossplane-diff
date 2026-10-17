@@ -18,7 +18,6 @@ package diffprocessor
 
 import (
 	"context"
-	"io"
 	"maps"
 	"os"
 	"path/filepath"
@@ -676,7 +675,7 @@ func TestNewEngineRenderFn_ResolvedRenderImage(t *testing.T) {
 
 	for name, tt := range tests {
 		t.Run(name, func(t *testing.T) {
-			e := NewEngineRenderFn(logging.NewNopLogger(), tt.binaryPath, tt.version, tt.image)
+			e := NewEngineRenderFn(logging.NewNopLogger(), NewAdvisoryCollector(nil), tt.binaryPath, tt.version, tt.image)
 
 			if diff := gcmp.Diff(tt.want, e.RenderImage()); diff != "" {
 				t.Errorf("RenderImage() mismatch (-want +got):\n%s", diff)
@@ -718,11 +717,11 @@ func TestNewEngineRenderFn_UncomparableImageWarns(t *testing.T) {
 
 	for name, tt := range tests {
 		t.Run(name, func(t *testing.T) {
-			warnings := NewWarningLogger(logging.NewNopLogger(), io.Discard)
+			advisories := NewAdvisoryCollector(nil)
 
-			NewEngineRenderFn(warnings, "", tt.version, tt.image)
+			NewEngineRenderFn(logging.NewNopLogger(), advisories, "", tt.version, tt.image)
 
-			got := warnings.Warnings()
+			got := advisories.Advisories()
 
 			if !tt.wantWarning {
 				if len(got) != 0 {
@@ -896,7 +895,7 @@ func TestEngineRenderFn_RunOwnsFunctionContainers(t *testing.T) {
 				Containers: []container.Summary{tu.DockerContainer("unrelated", container.StateRunning, nil)},
 				Networks:   []network.Summary{tu.DockerNetwork("user-net", nil)},
 			}
-			run := dockerrun.New(leases, func() (dockerrun.Docker, error) { return docker, nil }, logging.NewNopLogger())
+			run := dockerrun.New(leases, func() (dockerrun.Docker, error) { return docker, nil }, logging.NewNopLogger(), NewAdvisoryCollector(nil))
 
 			got := want{Started: map[string]map[string]string{}}
 

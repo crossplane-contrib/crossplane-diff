@@ -26,6 +26,7 @@ import (
 	"sync"
 
 	"github.com/crossplane-contrib/crossplane-diff/cmd/diff/dockerrun"
+	dt "github.com/crossplane-contrib/crossplane-diff/cmd/diff/renderer/types"
 	"github.com/crossplane/cli/v2/cmd/crossplane/render"
 	corev1 "k8s.io/api/core/v1"
 	kunstructured "k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -141,7 +142,7 @@ type EngineRenderFn struct {
 // closing both halves of the "crossplane-diff inside a container" case
 // (crossplane/cli#75). The engine never creates or removes that network, and
 // neither does the run: it carries no session label.
-func NewEngineRenderFn(log logging.Logger, binaryPath, version, image string) *EngineRenderFn {
+func NewEngineRenderFn(log logging.Logger, advisories dt.Advisories, binaryPath, version, image string) *EngineRenderFn {
 	// Normalize before the value reaches EngineFlags: upstream formats it into
 	// the tag verbatim and only v-prefixed tags are published, so the bare form
 	// ValidateMinRenderVersion accepts would otherwise pass validation and then
@@ -155,10 +156,10 @@ func NewEngineRenderFn(log logging.Logger, binaryPath, version, image string) *E
 	// check, and the user should hear that rather than assume the minimum was
 	// enforced. Advisory only — an unverifiable reference is not an invalid one.
 	if w := UncomparableRenderImageWarning(image); w != "" {
-		log.Info(w)
+		advisories.Raise(dt.OutputWarning{Message: w})
 	}
 
-	run := dockerrun.New(dockerrun.DefaultLeaseDir(), dockerrun.NewDockerClient, log)
+	run := dockerrun.New(dockerrun.DefaultLeaseDir(), dockerrun.NewDockerClient, log, advisories)
 
 	return &EngineRenderFn{
 		engine: render.NewEngineFromFlags(&render.EngineFlags{

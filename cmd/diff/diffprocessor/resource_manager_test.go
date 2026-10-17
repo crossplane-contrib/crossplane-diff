@@ -340,7 +340,7 @@ func TestDefaultResourceManager_FetchCurrentObject(t *testing.T) {
 			// Create the resource manager
 			resourceClient := tt.setupResourceClient()
 
-			rm := NewResourceManager(resourceClient, tt.defClient, tu.NewMockResourceTreeClient().Build(), tu.TestLogger(t, false))
+			rm := NewResourceManager(resourceClient, tt.defClient, tu.NewMockResourceTreeClient().Build(), tu.TestLogger(t, false), NewAdvisoryCollector(nil))
 
 			// Call the method under test
 			current, isNew, err := rm.FetchCurrentObject(ctx, tt.composite, tt.desired)
@@ -727,7 +727,7 @@ func TestDefaultResourceManager_UpdateOwnerRefs(t *testing.T) {
 	for name, tt := range tests {
 		t.Run(name, func(t *testing.T) {
 			// Create the resource manager
-			rm := NewResourceManager(tu.NewMockResourceClient().Build(), tt.defClient, tu.NewMockResourceTreeClient().Build(), tu.TestLogger(t, false))
+			rm := NewResourceManager(tu.NewMockResourceClient().Build(), tt.defClient, tu.NewMockResourceTreeClient().Build(), tu.TestLogger(t, false), NewAdvisoryCollector(nil))
 
 			// Need to create a copy of the child to avoid modifying test data
 			child := tt.child.DeepCopy()
@@ -1040,21 +1040,19 @@ func TestDefaultResourceManager_checkCompositeOwnership(t *testing.T) {
 
 	for name, tt := range tests {
 		t.Run(name, func(t *testing.T) {
-			// The ownership notice is raised with logger.Info, which the WarningLogger turns into a
-			// user-facing warning. Wrapping the logger here is what makes wantLog assertable — before
-			// the warning channel existed this test could only check that the call did not panic.
 			var stderr bytes.Buffer
 
-			warnings := NewWarningLogger(tu.TestLogger(t, false), &stderr)
+			advisories := NewAdvisoryCollector(&stderr)
 
 			rm := &DefaultResourceManager{
-				defClient: defClient,
-				logger:    warnings,
+				defClient:  defClient,
+				logger:     tu.TestLogger(t, false),
+				advisories: advisories,
 			}
 
 			rm.checkCompositeOwnership(t.Context(), tt.current, tt.composite)
 
-			got := warnings.Warnings()
+			got := advisories.Advisories()
 
 			if tt.wantContext == nil {
 				if len(got) != 0 {
@@ -1470,17 +1468,16 @@ func TestDefaultResourceManager_FetchObservedResources(t *testing.T) {
 	for name, tt := range tests {
 		t.Run(name, func(t *testing.T) {
 			// Use the constructor and interface type to test via the public API
-			warnings := NewWarningLogger(tu.TestLogger(t, false), nil)
+			advisories := NewAdvisoryCollector(nil)
 			rm := NewResourceManager(
-				nil, // client not used by FetchObservedResources
-				nil, // defClient not used by FetchObservedResources
+				nil,
+				nil,
 				tt.setupTreeClient(),
-				warnings,
-			)
+				tu.TestLogger(t, false), advisories)
 
 			observed, err := rm.FetchObservedResources(ctx, &cmp.Unstructured{Unstructured: *tt.xr})
 
-			if diff := gcmp.Diff(tt.wantWarnings, warnings.Warnings()); diff != "" {
+			if diff := gcmp.Diff(tt.wantWarnings, advisories.Advisories()); diff != "" {
 				t.Errorf("FetchObservedResources() warnings mismatch (-want +got):\n%s", diff)
 			}
 

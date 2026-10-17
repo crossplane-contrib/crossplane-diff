@@ -6,6 +6,7 @@ import (
 	"maps"
 
 	xp "github.com/crossplane-contrib/crossplane-diff/cmd/diff/client/crossplane"
+	dt "github.com/crossplane-contrib/crossplane-diff/cmd/diff/renderer/types"
 	clixrgen "github.com/crossplane/cli/v2/cmd/crossplane/xr"
 	un "k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -70,14 +71,15 @@ func (c EffectiveComposite) Composed() *un.Unstructured {
 // before the composition is resolved, so that composition resolution and render agree on which
 // revision, composition and update policy apply.
 type CompositeResolver struct {
-	resources ResourceManager
-	defs      xp.DefinitionClient
-	logger    logging.Logger
+	resources  ResourceManager
+	defs       xp.DefinitionClient
+	logger     logging.Logger
+	advisories dt.Advisories
 }
 
 // NewCompositeResolver creates a CompositeResolver.
-func NewCompositeResolver(resources ResourceManager, defs xp.DefinitionClient, logger logging.Logger) *CompositeResolver {
-	return &CompositeResolver{resources: resources, defs: defs, logger: logger}
+func NewCompositeResolver(resources ResourceManager, defs xp.DefinitionClient, logger logging.Logger, advisories dt.Advisories) *CompositeResolver {
+	return &CompositeResolver{resources: resources, defs: defs, logger: logger, advisories: advisories}
 }
 
 // Resolve computes the effective composite for authored. existing is authored's cluster copy when the
@@ -170,12 +172,15 @@ func (r *CompositeResolver) backingXR(ctx context.Context, claim *cmp.Unstructur
 	}
 
 	if backing == nil {
-		// Info is the advisory level: the user should know the composed resources are diffed as though
-		// they were all new.
-		r.logger.Info("The claim's backing XR does not exist in the cluster; diffing as though Crossplane will create it",
-			"claim", fmt.Sprintf("%s/%s", claim.GetKind(), claim.GetName()),
-			"namespace", claim.GetNamespace(),
-			"backingXR", fmt.Sprintf("%s/%s", ref.kind, ref.name))
+		// The user should know the composed resources are diffed as though they were all new.
+		r.advisories.Raise(dt.OutputWarning{
+			Message: "The claim's backing XR does not exist in the cluster; diffing as though Crossplane will create it",
+			Context: map[string]string{
+				"claim":     fmt.Sprintf("%s/%s", claim.GetKind(), claim.GetName()),
+				"namespace": claim.GetNamespace(),
+				"backingXR": fmt.Sprintf("%s/%s", ref.kind, ref.name),
+			},
+		})
 
 		synthetic, err := r.synthesizeBackingXR(ctx, claim, ref.name)
 
