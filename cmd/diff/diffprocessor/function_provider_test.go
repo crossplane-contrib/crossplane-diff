@@ -29,83 +29,6 @@ import (
 	pkgv1 "github.com/crossplane/crossplane/apis/v2/pkg/v1"
 )
 
-func TestNewDefaultFunctionProvider(t *testing.T) {
-	fnClient := tu.NewMockFunctionClient().Build()
-	logger := tu.TestLogger(t, false)
-
-	provider := NewDefaultFunctionProvider(fnClient, logger)
-
-	if provider == nil {
-		t.Fatal("NewDefaultFunctionProvider() returned nil")
-	}
-
-	if _, ok := provider.(*DefaultFunctionProvider); !ok {
-		t.Errorf("NewDefaultFunctionProvider() returned wrong type: %T", provider)
-	}
-}
-
-func TestDefaultFunctionProvider_GetFunctionsForComposition(t *testing.T) {
-	tests := map[string]struct {
-		setupMocks func() *tu.MockFunctionClientBuilder
-		wantErr    bool
-		wantCount  int
-	}{
-		"SuccessfulFetch": {
-			setupMocks: func() *tu.MockFunctionClientBuilder {
-				functions := []pkgv1.Function{
-					{ObjectMeta: metav1.ObjectMeta{Name: "function-1"}},
-					{ObjectMeta: metav1.ObjectMeta{Name: "function-2"}},
-				}
-
-				return tu.NewMockFunctionClient().
-					WithSuccessfulFunctionsFetch(functions)
-			},
-			wantErr:   false,
-			wantCount: 2,
-		},
-		"FailedFetch": {
-			setupMocks: func() *tu.MockFunctionClientBuilder {
-				return tu.NewMockFunctionClient().
-					WithFailedFunctionsFetch("function fetch error")
-			},
-			wantErr:   true,
-			wantCount: 0,
-		},
-		"NoFunctions": {
-			setupMocks: func() *tu.MockFunctionClientBuilder {
-				return tu.NewMockFunctionClient().
-					WithNoFunctions()
-			},
-			wantErr:   false,
-			wantCount: 0,
-		},
-	}
-
-	for name, tt := range tests {
-		t.Run(name, func(t *testing.T) {
-			fnClient := tt.setupMocks().Build()
-			logger := tu.TestLogger(t, false)
-
-			provider := NewDefaultFunctionProvider(fnClient, logger)
-
-			comp := &apiextensionsv1.Composition{
-				ObjectMeta: metav1.ObjectMeta{Name: "test-composition"},
-			}
-
-			fns, err := provider.GetFunctionsForComposition(comp)
-
-			if (err != nil) != tt.wantErr {
-				t.Errorf("GetFunctionsForComposition() error = %v, wantErr %v", err, tt.wantErr)
-				return
-			}
-
-			if len(fns) != tt.wantCount {
-				t.Errorf("GetFunctionsForComposition() returned %d functions, want %d", len(fns), tt.wantCount)
-			}
-		})
-	}
-}
-
 func TestNewCachedFunctionProvider(t *testing.T) {
 	fnClient := tu.NewMockFunctionClient().Build()
 	logger := tu.TestLogger(t, false)
@@ -414,7 +337,7 @@ func TestRegistryOverrideFunctionProvider(t *testing.T) {
 		Build()
 
 	logger := tu.TestLogger(t, false)
-	inner := NewDefaultFunctionProvider(fnClient, logger)
+	inner := NewCachedFunctionProvider(fnClient, logger)
 
 	provider := NewRegistryOverrideFunctionProvider(inner, "registry.example.com", logger)
 
