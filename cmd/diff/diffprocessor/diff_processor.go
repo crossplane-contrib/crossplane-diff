@@ -86,11 +86,14 @@ type DefaultDiffProcessor struct {
 // NewDiffProcessor creates a new DefaultDiffProcessor with the provided options.
 func NewDiffProcessor(k8cs k8.Clients, xpcs xp.Clients, opts ...ProcessorOption) DiffProcessor {
 	// Create default configuration
-	// Note: Behavior defaults (Colorize, Compact, MaxNestedDepth) are intentionally
-	// not set here. They should be provided via ProcessorOptions from the CLI layer.
+	// Note: Presentation defaults (Colorize, Compact) are intentionally not set here. They should be
+	// provided via ProcessorOptions from the CLI layer. Engine limits default here so a caller that
+	// doesn't go through the CLI gets the same limits.
 	config := ProcessorConfig{
-		Stderr: os.Stderr,
-		Logger: logging.NewNopLogger(),
+		MaxNestedDepth:      DefaultMaxNestedDepth,
+		MaxRenderIterations: DefaultMaxRenderIterations,
+		Stderr:              os.Stderr,
+		Logger:              logging.NewNopLogger(),
 	}
 
 	// Apply all provided options

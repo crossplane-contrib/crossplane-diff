@@ -433,6 +433,7 @@ func runIntegrationTest(t *testing.T, testType DiffTestType, tt IntegrationTestC
 		// Create a Kong context with stdout
 		parser, err := kong.New(cmd,
 			kong.Writers(&stdout, &stderr),
+			engineLimitVars(),
 			kong.Bind(appCtx),
 			kong.Bind(exitCode),
 			kong.BindTo(context.Background(), (*context.Context)(nil)),

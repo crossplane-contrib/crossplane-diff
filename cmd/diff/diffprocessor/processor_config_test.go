@@ -39,6 +39,42 @@ func TestNewDiffProcessor(t *testing.T) {
 	}
 }
 
+// TestProcessorsDefaultEngineLimits verifies a caller that bypasses the CLI still gets the CLI's
+// engine limits, and that an explicit option overrides them.
+func TestProcessorsDefaultEngineLimits(t *testing.T) {
+	type limits struct{ MaxNestedDepth, MaxRenderIterations int }
+
+	defaults := limits{DefaultMaxNestedDepth, DefaultMaxRenderIterations}
+
+	xr := func(opts ...ProcessorOption) limits {
+		c := NewDiffProcessor(k8.Clients{}, xp.Clients{}, opts...).(*DefaultDiffProcessor).config
+		return limits{c.MaxNestedDepth, c.MaxRenderIterations}
+	}
+	comp := func(opts ...ProcessorOption) limits {
+		c := NewCompDiffProcessor(nil, nil, opts...).(*DefaultCompDiffProcessor).config
+		return limits{c.MaxNestedDepth, c.MaxRenderIterations}
+	}
+
+	tests := map[string]struct {
+		got  func(...ProcessorOption) limits
+		opts []ProcessorOption
+		want limits
+	}{
+		"XRDefaults":     {got: xr, want: defaults},
+		"CompDefaults":   {got: comp, want: defaults},
+		"XROverridden":   {got: xr, opts: []ProcessorOption{WithMaxNestedDepth(3), WithMaxRenderIterations(4)}, want: limits{3, 4}},
+		"CompOverridden": {got: comp, opts: []ProcessorOption{WithMaxNestedDepth(3), WithMaxRenderIterations(4)}, want: limits{3, 4}},
+	}
+
+	for name, tt := range tests {
+		t.Run(name, func(t *testing.T) {
+			if diff := gcmp.Diff(tt.want, tt.got(tt.opts...)); diff != "" {
+				t.Errorf("limits mismatch (-want +got):\n%s", diff)
+			}
+		})
+	}
+}
+
 func TestDiffOptions(t *testing.T) {
 	tests := []struct {
 		name     string

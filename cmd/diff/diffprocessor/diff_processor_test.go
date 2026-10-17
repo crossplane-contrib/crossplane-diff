@@ -215,8 +215,6 @@ func testProcessorOptions(t *testing.T) []ProcessorOption {
 	return []ProcessorOption{
 		WithColorize(false),
 		WithCompact(false),
-		WithMaxNestedDepth(10),
-		WithMaxRenderIterations(DefaultMaxRenderIterations),
 		WithLogger(tu.TestLogger(t, false)),
 		WithRenderFunc(func(_ context.Context, _ logging.Logger, in RenderInputs) (render.CompositionOutputs, error) {
 			return render.CompositionOutputs{CompositeResource: in.CompositeResource}, nil

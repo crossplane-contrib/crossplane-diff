@@ -22,6 +22,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strconv"
 	"time"
 
 	"github.com/alecthomas/kong"
@@ -38,7 +39,7 @@ import (
 	"github.com/crossplane/crossplane-runtime/v2/pkg/logging"
 )
 
-var _ = kong.Must(&cli{})
+var _ = kong.Must(&cli{}, engineLimitVars())
 
 type verboseFlag bool
 
@@ -92,6 +93,15 @@ func (f *FunctionCredentials) Decode(ctx *kong.DecodeContext) error {
 	return nil
 }
 
+// engineLimitVars supplies the ${max_nested_depth} and ${max_iterations} defaults referenced by
+// CommonCmdFields, so the CLI and library callers of diffprocessor share one definition.
+func engineLimitVars() kong.Option {
+	return kong.Vars{
+		"max_nested_depth": strconv.Itoa(dp.DefaultMaxNestedDepth),
+		"max_iterations":   strconv.Itoa(dp.DefaultMaxRenderIterations),
+	}
+}
+
 // CommonCmdFields contains common fields shared by both XR and Comp commands.
 // It implements ContextProvider to allow providers to access the context value
 // after flag parsing completes.
@@ -102,8 +112,8 @@ type CommonCmdFields struct {
 	OutputVersion            string              `default:"v1"                                                                                      enum:"v1,v2"                                                                                                                                                 help:"Schema version of structured (-o json|yaml) output (v1 or v2). Has no effect on -o diff."                                                                                                                                                                                              name:"output-version"`
 	NoColor                  bool                `help:"Disable colorized output."                                                                  name:"no-color"`
 	Compact                  bool                `help:"Show compact diffs with minimal context."                                                   name:"compact"`
-	MaxNestedDepth           int                 `default:"10"                                                                                      help:"Maximum depth for nested XR recursion."                                                                                                                name:"max-nested-depth"`
-	MaxIterations            int                 `default:"20"                                                                                      help:"Maximum render iterations for requirements resolution or eventual-state simulation. Increase for complex pipelines that need more cycles to converge." name:"max-iterations"`
+	MaxNestedDepth           int                 `default:"${max_nested_depth}"                                                                       help:"Maximum depth for nested XR recursion."                                                                                                                name:"max-nested-depth"`
+	MaxIterations            int                 `default:"${max_iterations}"                                                                         help:"Maximum render iterations for requirements resolution or eventual-state simulation. Increase for complex pipelines that need more cycles to converge." name:"max-iterations"`
 	Timeout                  time.Duration       `default:"1m"                                                                                      help:"How long to run before timing out."`
 	IgnorePaths              []string            `help:"Paths to ignore in diffs (e.g., 'metadata.annotations[argocd.argoproj.io/tracking-id]')."   name:"ignore-paths"`
 	FunctionCredentials      FunctionCredentials `help:"A YAML file or directory of YAML files specifying Secret credentials to pass to Functions." name:"function-credentials"                                                                                                                                  placeholder:"PATH"`
@@ -234,6 +244,7 @@ func main() {
 	// The *dp.WarningLogger and its logging.Logger view come first; see warningLoggerBindings.
 	opts := append(warningLoggerBindings(c, os.Stderr),
 		kong.Name("crossplane-diff"),
+		engineLimitVars(),
 		kong.Description("A command line tool for diffing  Crossplane resources."),
 		// Binding a variable to kong context makes it available to all commands
 		// at runtime.
