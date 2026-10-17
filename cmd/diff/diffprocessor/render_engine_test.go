@@ -26,6 +26,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/crossplane-contrib/crossplane-diff/cmd/diff/dockerrun"
 	tu "github.com/crossplane-contrib/crossplane-diff/cmd/diff/testutils"
@@ -64,13 +65,13 @@ func newTestRenderFn(mock *render.MockEngine, startCalls, stopCalls *int32) *Eng
 	}
 }
 
-// The three tests below (HappyPath, CleanupIdempotent, Serialization) each
+// The three tests below (HappyPath, CleanupIdempotent, ConcurrentRenders) each
 // exercise a distinct lifecycle property of EngineRenderFn — they're not
 // data-variant cases of a single operation. HappyPath asserts setup-once /
 // reuse semantics across two sequential renders. CleanupIdempotent asserts
-// teardown counts after 0/1/2 cleanup calls. Serialization spawns concurrent
-// goroutines and asserts the internal mutex never lets two renders enter the
-// engine at the same time. Forcing these into a table would require per-row
+// teardown counts after 0/1/2 cleanup calls. ConcurrentRenders spawns concurrent
+// goroutines and asserts their renders are inside the engine at the same time
+// while the function they share starts once. Forcing these into a table would require per-row
 // setup hooks, per-row assertion sets, and per-row concurrency primitives —
 // the rows would share almost nothing. Procedural tests read more clearly
 // here.
@@ -222,35 +223,37 @@ func TestEngineRenderFn_CleanupIdempotent(t *testing.T) {
 	}
 }
 
-func TestEngineRenderFn_Serialization(t *testing.T) {
+func TestEngineRenderFn_ConcurrentRenders(t *testing.T) {
 	ctx := t.Context()
 
-	// inFlight tracks concurrent entries to the engine's Render; must never exceed 1.
-	var (
-		inFlight      atomic.Int32
-		maxInFlight   atomic.Int32
-		renderEntered = make(chan struct{})
-		allowReturn   = make(chan struct{})
-	)
+	const renders = 4
+
+	// Each render waits inside the engine until every render is inside it, so the test only passes
+	// if no lock is held across engine.Render. A serialized implementation times out instead.
+	var inside sync.WaitGroup
+	inside.Add(renders)
+
+	allInside := make(chan struct{})
+	go func() {
+		inside.Wait()
+		close(allInside)
+	}()
+
+	var setupCalls atomic.Int32
 
 	mock := &render.MockEngine{
+		MockSetup: func(_ context.Context, _ []pkgv1.Function) (func(), error) {
+			setupCalls.Add(1)
+			return func() {}, nil
+		},
 		MockRender: func(_ context.Context, req *renderv1alpha1.RenderRequest) (*renderv1alpha1.RenderResponse, error) {
-			n := inFlight.Add(1)
+			inside.Done()
 
-			for {
-				m := maxInFlight.Load()
-				if n <= m || maxInFlight.CompareAndSwap(m, n) {
-					break
-				}
-			}
-			// Signal arrival on the first goroutine only so we can release it deterministically.
 			select {
-			case renderEntered <- struct{}{}:
-			default:
+			case <-allInside:
+			case <-time.After(10 * time.Second):
+				return nil, errors.New("renders did not overlap: another render never entered the engine")
 			}
-
-			<-allowReturn
-			inFlight.Add(-1)
 
 			return &renderv1alpha1.RenderResponse{
 				Output: &renderv1alpha1.RenderResponse_Composite{
@@ -267,35 +270,23 @@ func TestEngineRenderFn_Serialization(t *testing.T) {
 	e := newTestRenderFn(mock, &startCalls, &stopCalls)
 
 	var wg sync.WaitGroup
-	wg.Add(2)
-
-	go func() {
-		defer wg.Done()
-
-		if _, err := e.Render(ctx, logging.NewNopLogger(), minimalRenderInputs()); err != nil {
-			t.Errorf("goroutine A Render: %v", err)
-		}
-	}()
-	go func() {
-		defer wg.Done()
-
-		if _, err := e.Render(ctx, logging.NewNopLogger(), minimalRenderInputs()); err != nil {
-			t.Errorf("goroutine B Render: %v", err)
-		}
-	}()
-
-	// Wait for one goroutine to have entered engine.Render, then release both in order.
-	<-renderEntered
-	// At this moment, at most one render is inside engine.Render.
-	if got := inFlight.Load(); got != 1 {
-		t.Fatalf("inFlight on first entry = %d, want 1", got)
+	for range renders {
+		wg.Go(func() {
+			if _, err := e.Render(ctx, logging.NewNopLogger(), minimalRenderInputs()); err != nil {
+				t.Errorf("Render: %v", err)
+			}
+		})
 	}
 
-	close(allowReturn)
 	wg.Wait()
 
-	if got := maxInFlight.Load(); got != 1 {
-		t.Fatalf("maxInFlight across two concurrent Render calls = %d, want 1", got)
+	// Every render needs fn-default; it must be set up and started once, not once per render.
+	if got := setupCalls.Load(); got != 1 {
+		t.Errorf("engine.Setup calls = %d, want 1", got)
+	}
+
+	if got := atomic.LoadInt32(&startCalls); got != 1 {
+		t.Errorf("startRuntimes calls = %d, want 1", got)
 	}
 }
 

@@ -1090,7 +1090,7 @@ The structured output includes:
   suppressed for readability). Applying it still creates a new CompositionRevision, which `revisionImpact` reports.
 - **Warnings**: A top-level `warnings` array of non-fatal advisories, each with a `message` and an optional `context` map of
   the key/value pairs from the emitting call site. Distinct from `errors` and with no effect on the exit code; see
-  [Warnings](#warnings) above. Entries are in the order raised, except the unverified-addition summaries, which come
+  [Warnings](#warnings) above. Entries are sorted by message, then context, except the unverified-addition summaries, which come
   last, sorted, each with a string `count` in its `context`.
 - **Errors**: A top-level `errors` array of `OutputError` objects (see [Validation Errors](#validation-errors) below for the schema and an example). Each errored `xrs[]` entry also carries its own `errors[]`. For composition diffs, v1 adds per-XR and per-composition `error` strings; v2 replaces them with `errors[]` arrays of the same `OutputError` objects, and also lists failed compositions in the top-level `errors`
 

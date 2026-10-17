@@ -3,6 +3,7 @@ package crossplane
 import (
 	"context"
 	"sort"
+	"sync"
 
 	"github.com/crossplane-contrib/crossplane-diff/cmd/diff/client/core"
 	"github.com/crossplane-contrib/crossplane-diff/cmd/diff/client/kubernetes"
@@ -54,6 +55,8 @@ type DefaultCompositionRevisionClient struct {
 	resourceClient kubernetes.ResourceClient
 	logger         logging.Logger
 
+	// cacheMu guards revisions and revisionsByComposition.
+	cacheMu sync.RWMutex
 	// Cache of composition revisions by name (for individual revision lookups)
 	revisions map[string]*apiextensionsv1.CompositionRevision
 	// Cache of revisions per composition (lazy-loaded on demand)
@@ -176,7 +179,11 @@ func (c *DefaultCompositionRevisionClient) ListCompositionRevisions(ctx context.
 // GetCompositionRevision gets a composition revision by name.
 func (c *DefaultCompositionRevisionClient) GetCompositionRevision(ctx context.Context, name string) (*apiextensionsv1.CompositionRevision, error) {
 	// Check cache first
-	if rev, ok := c.revisions[name]; ok {
+	c.cacheMu.RLock()
+	rev, ok := c.revisions[name]
+	c.cacheMu.RUnlock()
+
+	if ok {
 		return rev, nil
 	}
 
@@ -193,13 +200,15 @@ func (c *DefaultCompositionRevisionClient) GetCompositionRevision(ctx context.Co
 	}
 
 	// Convert to typed
-	rev := &apiextensionsv1.CompositionRevision{}
+	rev = &apiextensionsv1.CompositionRevision{}
 	if err := runtime.DefaultUnstructuredConverter.FromUnstructured(unRev.Object, rev); err != nil {
 		return nil, errors.Wrap(err, "cannot convert unstructured to CompositionRevision")
 	}
 
 	// Update cache
+	c.cacheMu.Lock()
 	c.revisions[name] = rev
+	c.cacheMu.Unlock()
 
 	return rev, nil
 }
@@ -207,7 +216,11 @@ func (c *DefaultCompositionRevisionClient) GetCompositionRevision(ctx context.Co
 // revisionsForComposition returns all CompositionRevisions for the named composition, loading and
 // caching them (by composition and by name) on first access.
 func (c *DefaultCompositionRevisionClient) revisionsForComposition(ctx context.Context, compositionName string) ([]*apiextensionsv1.CompositionRevision, error) {
-	if cached, ok := c.revisionsByComposition[compositionName]; ok {
+	c.cacheMu.RLock()
+	cached, ok := c.revisionsByComposition[compositionName]
+	c.cacheMu.RUnlock()
+
+	if ok {
 		return cached, nil
 	}
 
@@ -217,6 +230,9 @@ func (c *DefaultCompositionRevisionClient) revisionsForComposition(ctx context.C
 	if err != nil {
 		return nil, errors.Wrap(err, "cannot list composition revisions")
 	}
+
+	c.cacheMu.Lock()
+	defer c.cacheMu.Unlock()
 
 	// Cache by name for individual lookups.
 	for _, rev := range revisions {
