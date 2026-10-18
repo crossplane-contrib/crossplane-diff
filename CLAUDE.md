@@ -164,6 +164,12 @@ cmd/diff/
    - Function container reuse: a processor's `EngineRenderFn` starts each function's container once and reuses it for
      every render that processor does. Containers are never shared across processors or runs (#570 tracks sharing them
      across integration-test cases)
+   - Concurrency: one processor's `DiffSingleResource` is safe to call from concurrent goroutines (#579). Its caches
+     are mutex-guarded, `EngineRenderFn` serializes only function startup (a function concurrent renders share starts
+     once) and never holds its lock across a render, and `WarningLogger.Warnings` returns warnings sorted, not in the
+     order concurrent work raised them. A cache's getter returns what concurrent callers may modify as a copy
+     (`CachedFunctionProvider`, `FunctionClient.GetFunctionsFromPipeline`). `TestDiffSingleResourceConcurrent` checks
+     concurrent diffs match sequential ones under `go test -race`
    - Caching decisions made at CLI layer, not embedded in processors
 
 4. **Composition Pipeline**

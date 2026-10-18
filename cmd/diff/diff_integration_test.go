@@ -4,19 +4,27 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"io"
 	"path/filepath"
 	run "runtime"
+	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/alecthomas/kong"
 	dp "github.com/crossplane-contrib/crossplane-diff/cmd/diff/diffprocessor"
+	dt "github.com/crossplane-contrib/crossplane-diff/cmd/diff/renderer/types"
 	tu "github.com/crossplane-contrib/crossplane-diff/cmd/diff/testutils"
+	"github.com/google/go-cmp/cmp"
+	"github.com/sergi/go-diff/diffmatchpatch"
 	extv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
+	un "k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	cgoscheme "k8s.io/client-go/kubernetes/scheme"
+	"k8s.io/client-go/rest"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/envtest"
 
@@ -149,43 +157,16 @@ func createTestScheme() *runtime.Scheme {
 	return scheme
 }
 
-// runIntegrationTest runs a single integration test case for both XR and composition diff commands.
-func runIntegrationTest(t *testing.T, testType DiffTestType, tt IntegrationTestCase) {
+// startIntegrationCluster starts a test case's envtest cluster and puts its setup state in place:
+// tt's setupFiles, crossplaneManagedResources, fieldManagerApplies and deleteAfterSetup. It returns the
+// cluster's config, a client for it, and a context bounded by the case's timeout, which it also returns.
+// The cluster is stopped and the context cancelled when the test ends.
+func startIntegrationCluster(t *testing.T, testType DiffTestType, tt IntegrationTestCase) (*rest.Config, client.Client, context.Context, time.Duration) {
 	t.Helper()
-
-	t.Parallel() // Enable parallel test execution
-
-	// Validate structured-output config up front so misconfiguration fails loudly
-	// instead of silently routing assertions to the wrong path.
-	if tt.expectedStructuredOutput != nil && tt.expectedStructuredCompOutput != nil {
-		t.Fatalf("test case sets both expectedStructuredOutput and expectedStructuredCompOutput; set only one")
-	}
-
-	if tt.expectedStructuredOutput != nil && testType != XRDiffTest {
-		t.Fatalf("expectedStructuredOutput is only valid for XRDiffTest (got %q)", testType)
-	}
-
-	if tt.expectedStructuredCompOutput != nil && testType != CompositionDiffTest {
-		t.Fatalf("expectedStructuredCompOutput is only valid for CompositionDiffTest (got %q)", testType)
-	}
-
-	// Resolve a local crossplane binary if one is present. When non-empty,
-	// it's threaded into the kong arg slice below as
-	// --crossplane-render-binary=<path> so each parallel subtest has its own
-	// copy with no shared process state. When empty, the diff command falls
-	// through to the docker render engine — slower but works wherever Docker
-	// does (including the Earthfile's go-test target's WITH DOCKER block).
-	crossplaneBin := localCrossplaneBinary(t)
 
 	// Create a fresh scheme for each test to avoid concurrent map access.
 	// Each parallel test needs its own scheme because envtest modifies it during CRD installation.
 	scheme := createTestScheme()
-
-	// Skip test if requested
-	if tt.skip {
-		t.Skip(tt.skipReason)
-		return
-	}
 
 	// Setup a brand new test environment for each test case
 	_, thisFile, _, ok := run.Caller(0)
@@ -223,12 +204,12 @@ func runIntegrationTest(t *testing.T, testType DiffTestType, tt IntegrationTestC
 	}
 
 	// Ensure we clean up at the end of the test
-	defer func() {
+	t.Cleanup(func() {
 		err := testEnv.Stop()
 		if err != nil {
 			t.Logf("failed to stop test environment: %v", err)
 		}
-	}()
+	})
 
 	// Create a controller-runtime client for setup operations
 	k8sClient, err := client.New(cfg, client.Options{Scheme: scheme})
@@ -243,7 +224,7 @@ func runIntegrationTest(t *testing.T, testType DiffTestType, tt IntegrationTestC
 	}
 
 	ctx, cancel := context.WithTimeout(t.Context(), testTimeout)
-	defer cancel()
+	t.Cleanup(cancel)
 
 	// Envtest runs no Crossplane controllers, so the harness fills in what they would have written to the
 	// setup fixtures, wherever a fixture leaves it out.
@@ -294,6 +275,45 @@ func runIntegrationTest(t *testing.T, testType DiffTestType, tt IntegrationTestC
 	if err := deleteResourcesFromFiles(ctx, k8sClient, tt.deleteAfterSetup); err != nil {
 		t.Fatalf("failed to delete resources: %v", err)
 	}
+
+	return cfg, k8sClient, ctx, testTimeout
+}
+
+// runIntegrationTest runs a single integration test case for both XR and composition diff commands.
+func runIntegrationTest(t *testing.T, testType DiffTestType, tt IntegrationTestCase) {
+	t.Helper()
+
+	t.Parallel() // Enable parallel test execution
+
+	// Validate structured-output config up front so misconfiguration fails loudly
+	// instead of silently routing assertions to the wrong path.
+	if tt.expectedStructuredOutput != nil && tt.expectedStructuredCompOutput != nil {
+		t.Fatalf("test case sets both expectedStructuredOutput and expectedStructuredCompOutput; set only one")
+	}
+
+	if tt.expectedStructuredOutput != nil && testType != XRDiffTest {
+		t.Fatalf("expectedStructuredOutput is only valid for XRDiffTest (got %q)", testType)
+	}
+
+	if tt.expectedStructuredCompOutput != nil && testType != CompositionDiffTest {
+		t.Fatalf("expectedStructuredCompOutput is only valid for CompositionDiffTest (got %q)", testType)
+	}
+
+	// Resolve a local crossplane binary if one is present. When non-empty,
+	// it's threaded into the kong arg slice below as
+	// --crossplane-render-binary=<path> so each parallel subtest has its own
+	// copy with no shared process state. When empty, the diff command falls
+	// through to the docker render engine — slower but works wherever Docker
+	// does (including the Earthfile's go-test target's WITH DOCKER block).
+	crossplaneBin := localCrossplaneBinary(t)
+
+	// Skip test if requested
+	if tt.skip {
+		t.Skip(tt.skipReason)
+		return
+	}
+
+	cfg, k8sClient, ctx, testTimeout := startIntegrationCluster(t, testType, tt)
 
 	// Set up the test files
 	testFiles := make([]string, 0, len(tt.inputFiles))
@@ -452,7 +472,7 @@ func runIntegrationTest(t *testing.T, testType DiffTestType, tt IntegrationTestC
 		return kongCtx.Run()
 	}
 
-	err = runOnce()
+	err := runOnce()
 
 	if tt.assertDeterministicAcrossRuns {
 		first := stdout.String()
@@ -5975,4 +5995,126 @@ Summary: 2 modified`,
 			runIntegrationTest(t, CompositionDiffTest, tt)
 		})
 	}
+}
+
+// TestDiffSingleResourceConcurrent diffs several XRs from concurrent goroutines with one processor,
+// against a real apiserver and real functions, and checks each gets the diffs and the run the
+// warnings a sequential run of the same XRs gets. Run it with -race: it is what shows the processor,
+// its caches and its render engine are safe for concurrent use (#579).
+func TestDiffSingleResourceConcurrent(t *testing.T) {
+	t.Parallel()
+
+	tu.SetupKubeTestLogger(t)
+
+	cfg, _, ctx, _ := startIntegrationCluster(t, XRDiffTest, IntegrationTestCase{
+		setupFiles: []string{
+			"testdata/diff/resources/xrd.yaml",
+			"testdata/diff/resources/composition.yaml",
+			"testdata/diff/resources/functions.yaml",
+		},
+		crossplaneManagedResources: []HierarchicalOwnershipRelation{
+			composes(
+				"testdata/diff/resources/existing-xr.yaml",
+				"testdata/diff/resources/existing-downstream-resource.yaml",
+			),
+		},
+	})
+
+	// One modified and one new XR, each diffed several times at once.
+	var inputs []*un.Unstructured
+
+	for _, f := range []string{"testdata/diff/modified-xr.yaml", "testdata/diff/new-xr-second.yaml"} {
+		res, err := readResourcesFromFile(f)
+		if err != nil {
+			t.Fatalf("cannot read %s: %v", f, err)
+		}
+
+		inputs = append(inputs, res...)
+	}
+
+	inputs = slices.Concat(inputs, inputs, inputs)
+
+	// diffAll diffs inputs with a new processor, concurrently or one at a time, and returns each
+	// input's diffs (by index) and the warnings the run raised.
+	diffAll := func(t *testing.T, concurrent bool) ([]map[string]lineDiffs, []dt.OutputWarning) {
+		t.Helper()
+
+		log := tu.TestLogger(t, false)
+
+		appCtx, err := NewAppContext(cfg, log)
+		if err != nil {
+			t.Fatalf("NewAppContext: %v", err)
+		}
+
+		if err := appCtx.Initialize(ctx, log); err != nil {
+			t.Fatalf("AppContext.Initialize: %v", err)
+		}
+
+		warnings := dp.NewWarningLogger(log, io.Discard)
+		// The processor the xr command builds, with its flags' defaults.
+		opts := append(defaultProcessorOptions(CommonCmdFields{
+			NoColor:                true,
+			MaxNestedDepth:         10,
+			MaxIterations:          20,
+			DryRunOn:               string(dp.DryRunOnAll),
+			CrossplaneRenderBinary: localCrossplaneBinary(t),
+		}), dp.WithLogger(warnings), dp.WithWarnings(warnings))
+
+		proc := dp.NewDiffProcessor(appCtx.K8sClients, appCtx.XpClients, opts...)
+		t.Cleanup(func() {
+			if err := proc.Cleanup(context.WithoutCancel(ctx)); err != nil {
+				t.Errorf("Cleanup: %v", err)
+			}
+		})
+
+		if err := proc.Initialize(ctx); err != nil {
+			t.Fatalf("Initialize: %v", err)
+		}
+
+		got := make([]map[string]lineDiffs, len(inputs))
+		diff := func(i int) {
+			diffs, err := proc.DiffSingleResource(ctx, inputs[i].DeepCopy(), appCtx.XpClients.Composition.FindMatchingComposition)
+			if err != nil {
+				t.Errorf("DiffSingleResource(%s): %v", inputs[i].GetName(), err)
+				return
+			}
+
+			got[i] = make(map[string]lineDiffs, len(diffs))
+			for k, d := range diffs {
+				got[i][k] = lineDiffs{Type: d.DiffType, Lines: d.LineDiffs}
+			}
+		}
+
+		var wg sync.WaitGroup
+
+		for i := range inputs {
+			if !concurrent {
+				diff(i)
+				continue
+			}
+
+			wg.Go(func() { diff(i) })
+		}
+
+		wg.Wait()
+
+		return got, warnings.Warnings()
+	}
+
+	wantDiffs, wantWarnings := diffAll(t, false)
+	gotDiffs, gotWarnings := diffAll(t, true)
+
+	if diff := cmp.Diff(wantDiffs, gotDiffs); diff != "" {
+		t.Errorf("concurrent diffs differ from sequential diffs (-sequential +concurrent):\n%s", diff)
+	}
+
+	if diff := cmp.Diff(wantWarnings, gotWarnings); diff != "" {
+		t.Errorf("concurrent warnings differ from sequential warnings (-sequential +concurrent):\n%s", diff)
+	}
+}
+
+// lineDiffs is what TestDiffSingleResourceConcurrent compares of a resource's diff.
+type lineDiffs struct {
+	Type  dt.DiffType
+	Lines []diffmatchpatch.Diff
 }
