@@ -461,6 +461,7 @@ func TestDefaultCompDiffProcessor_DiffComposition(t *testing.T) {
 				OutputFormat:  tt.outputFormat,
 				OutputVersion: tt.outputVersion,
 				Logger:        logger,
+				Advisories:    NewAdvisoryCollector(nil),
 				Stdout:        &stdout,         // Set stdout in config so renderers can access it
 				Stderr:        &bytes.Buffer{}, // Discard stderr for tests
 				RenderFunc: func(_ context.Context, _ logging.Logger, in RenderInputs) (render.CompositionOutputs, error) {
@@ -1699,7 +1700,7 @@ func TestDefaultCompDiffProcessor_DiffComposition_LateWarningsReachStructuredOut
 
 	var stdout, stderr bytes.Buffer
 
-	warnings := NewWarningLogger(tu.TestLogger(t, false), &stderr)
+	advisories := NewAdvisoryCollector(&stderr)
 
 	mockXRProc := &tu.MockDiffProcessor{
 		DiffSingleResourceFn: func(context.Context, *un.Unstructured, types.CompositionProvider) (map[string]*dt.ResourceDiff, error) {
@@ -1708,14 +1709,14 @@ func TestDefaultCompDiffProcessor_DiffComposition_LateWarningsReachStructuredOut
 		// Stands in for the leftover-container advisory raised from the function provider's teardown,
 		// which reaches comp through DefaultCompDiffProcessor.Cleanup -> xrProc.Cleanup.
 		CleanupFn: func(context.Context) error {
-			warnings.Info(advisory, "errors", 1)
+			advisories.Raise(dt.OutputWarning{Message: advisory, Context: map[string]string{"errors": "1"}})
 			return nil
 		},
 	}
 
 	processor := NewCompDiffProcessor(mockXRProc, compClient,
-		WithLogger(warnings),
-		WithWarnings(warnings),
+		WithLogger(tu.TestLogger(t, false)),
+		WithAdvisories(advisories),
 		WithColorize(false),
 		WithCompact(false),
 		WithOutputFormat(renderer.OutputFormatJSON),
@@ -1765,6 +1766,7 @@ func newCompProcessorForTest(t *testing.T, compClient xp.CompositionClient, incl
 	config := ProcessorConfig{
 		IncludeManual: includeManual,
 		Logger:        logger,
+		Advisories:    NewAdvisoryCollector(nil),
 		Stdout:        stdout,
 		Stderr:        stderr,
 		RenderFunc: func(_ context.Context, _ logging.Logger, in RenderInputs) (render.CompositionOutputs, error) {

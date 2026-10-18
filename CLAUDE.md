@@ -166,8 +166,8 @@ cmd/diff/
      across integration-test cases)
    - Concurrency: one processor's `DiffSingleResource` is safe to call from concurrent goroutines (#579). Its caches
      are mutex-guarded, `EngineRenderFn` serializes only function startup (a function concurrent renders share starts
-     once) and never holds its lock across a render, and `WarningLogger.Warnings` returns warnings sorted, not in the
-     order concurrent work raised them. A cache's getter returns what concurrent callers may modify as a copy
+     once) and never holds its lock across a render, and `AdvisoryCollector.Advisories` returns advisories sorted, not
+     in the order concurrent work raised them. A cache's getter returns what concurrent callers may modify as a copy
      (`CachedFunctionProvider`, `FunctionClient.GetFunctionsFromPipeline`). `TestDiffSingleResourceConcurrent` checks
      concurrent diffs match sequential ones under `go test -race`
    - Caching decisions made at CLI layer, not embedded in processors

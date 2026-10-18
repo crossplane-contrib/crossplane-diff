@@ -775,8 +775,8 @@ The `ProcessorConfig` structure provides configuration options:
   no behaviour depends on telling a defaulted value from an explicitly-passed one. It is set from
   `CommonCmdFields.DryRunOn`, which lives on the struct shared by `xr` and `comp`, so both subcommands get the flag;
   `WithDryRunOn` ignores an empty value so the config default survives.
-- `Warnings`: The `*WarningLogger` whose collected advisories are included in structured output. Nil is valid and means
-  warnings reach stderr but not structured output.
+- `Advisories`: The `*AdvisoryCollector` advisories are raised on and drained from for structured output (§6.8.1). The
+  CLI passes one collector to both processors of a run. Unset, each processor builds its own, writing to `Stderr`.
 - `EventualState`: Synthesize composed-resource readiness between render iterations to model the steady state of
   multi-stage compositions (`--eventual-state`).
 - `IgnorePaths`: Field paths to suppress from diffs (e.g., status fields known to be reconciler-set).
@@ -1273,7 +1273,7 @@ type EffectiveComposite struct {
 // Composed is the cluster object whose composed resources Effective observes: Backing for a claim, Cluster otherwise.
 func (c EffectiveComposite) Composed() *un.Unstructured
 
-func NewCompositeResolver(resources ResourceManager, defs xp.DefinitionClient, logger logging.Logger) *CompositeResolver
+func NewCompositeResolver(resources ResourceManager, defs xp.DefinitionClient, logger logging.Logger, advisories dt.Advisories) *CompositeResolver
 
 // Resolve computes the effective composite. existing is Authored's cluster copy when the caller has it already
 // (a nested XR found among its parent's observed resources); otherwise Resolve fetches it.
@@ -1569,7 +1569,7 @@ type InputValidator interface {
     RenderOverlaps(groups []dt.XRDiffGroup) []error
 }
 
-type InputValidatorFactory func(logger logging.Logger, inputs []*un.Unstructured) InputValidator
+type InputValidatorFactory func(advisories dt.Advisories, inputs []*un.Unstructured) InputValidator
 ```
 
 `ValidatedInput` (a resource and its pre-render rejection, if any) lives in `cmd/diff/types` rather than beside the
@@ -1959,45 +1959,38 @@ that failed validation under that input. They overlap on Kind+Name when the inpu
 resources — that's deliberate, so consumers iterating `ValidationFailures` never miss an XR-level rejection.
 `ValidationFailures` is `nil` for non-validation paths (scope check, tool errors, IO errors).
 
-### 6.8.1 WarningLogger — the advisory channel
+### 6.8.1 Advisories — the advisory channel
 
-`WarningLogger` (in `diffprocessor`) is a `logging.Logger` decorator that treats every `Info` call as a
-user-facing warning: it writes the stderr line immediately and collects an `OutputWarning` for
-structured output. `Debug` calls pass through to the wrapped logger untouched.
+An advisory is something the user should know that does not fail the diff: an ownership takeover, a
+resource being deleted, a credential secret that could not be fetched, Docker resources left behind.
+Advisories have a typed channel of their own, `dt.Advisories` (in `renderer/types`), with one method:
 
-It rides on the logger rather than on a dedicated sink parameter because a warning must be raisable
-wherever it is discovered — a client, the resource manager, the render loop — and `logging.Logger` is
-the only cross-cutting dependency already threaded to all of those. Every component factory in
-`ProcessorConfig.ComponentFactories` takes its collaborators plus exactly one `Logger`, so a parallel
-"warning sink" parameter would mean churning every constructor, every factory signature, and every
-`With*Factory` option for no semantic gain.
+```go
+type Advisories interface {
+	Raise(w OutputWarning)
+}
+```
 
-There is no `Warn` level to reach for, and none is missing. `logging.Logger` has exactly two levels by
-design — its package doc states that Crossplane "desires a simpler API with only two levels ... Info
-and Debug" — and it defines `Info` as "messages that Crossplane operators are very likely to be
-concerned with when running Crossplane", against `Debug`'s "when debugging Crossplane". Treating
-`Info` as the advisory level is therefore the interface's documented meaning, not a local convention;
-what `WarningLogger` adds is somewhere for those messages to actually go, on both the human and the
-machine path. The three routine `Info` sites were demoted to `Debug` to bring the codebase in line
-with that contract rather than to establish a new one.
+A component that can discover an advisory takes a `dt.Advisories` alongside its `logging.Logger`: the
+resource manager and composite resolver, the input validator, the render engine and its `dockerrun.Run`,
+and the processors themselves. The logger is for tracing only, `Info` and `Debug` alike, and never
+reaches the user except under `--verbose`. Before #578 advisories were `logger.Info` calls that a
+logger decorator turned into warnings, which made every `Info` user-visible output and let a library
+handed the logger raise warnings nobody chose; the typed channel removes that coupling.
 
-The practical consequence: **a new `logger.Info` call anywhere in the codebase is user-visible
-output.** New tracing must use `Debug`, and a reviewer should treat an added `Info` as a UX change.
+`AdvisoryCollector` (in `diffprocessor`) is the CLI's implementation. `Raise` writes the advisory's
+`WARNING` line to stderr immediately and collects the `OutputWarning` for structured output, in
+emission order. It is safe for concurrent use. The label shown to a human is `WARNING`, not `INFO`,
+deliberately: an operator reading `INFO: applying this diff will assume ownership` would under-weight it.
 
-The label shown to a human is `WARNING`, not `INFO`, deliberately: an operator reading
-`INFO: applying this diff will assume ownership` would under-weight it. The upstream *level* and the
-word presented to a user answer different questions.
+The CLI constructs the collector exactly once, eagerly, in `loggingBindings` (`main.go`), and binds that
+one instance with `kong.Bind`, beside the run's one `logging.Logger` (a zap logger, also set as
+controller-runtime's, muted until the root `cli.AfterApply` raises it to Debug under `--verbose`). Every
+consumer must share the one collector, or structured output would report a different set of advisories
+from the one stderr printed. Both processors are given the collector with `WithAdvisories`.
 
-The CLI constructs the `WarningLogger` exactly once, in a memoized kong provider
-(`warningLoggerBindings` in `main.go`) that runs after flags are parsed and picks the wrapped logger
-from `--verbose` (a discarding logger by default, zap under `--verbose`). kong does not memoize
-providers itself, so the memo is load-bearing: without it each consumer would get its own instance and
-its own sink. The `logging.Logger` binding is derived from the `*WarningLogger` binding, so the two
-always resolve to the same instance. `Info` is deliberately not forwarded to
-the wrapped logger, so a `--verbose` run does not print each warning twice in two formats.
-
-**Identity and deduplication.** The sink keeps one entry per distinct `(message, context)` pair; a
-byte-identical repeat is dropped from *both* channels. This is a property of the sink rather than of
+**Identity and deduplication.** The collector keeps one entry per distinct `(message, context)` pair; a
+byte-identical repeat is dropped from *both* channels. This is a property of the collector rather than of
 any one call site, because the duplication it prevents is structural: several warning sites sit inside
 loops the caller chose, and `resolveFunctionCredentials` in particular runs once per XR while the
 condition it reports (an unfetchable credential secret) is a property of the *composition*. Without
@@ -2006,18 +1999,18 @@ thirty identical `warnings[]` entries. A repeat identical in message and context
 the user has not already been given, so collapsing it loses nothing; warnings that are legitimately
 per-occurrence keep firing because their context differs — `resource_manager.go`'s ownership-theft
 advisory names the composed resource, so each resource is its own entry. The rule this imposes on a new
-warning site is one it should follow anyway: **put what distinguishes one occurrence from another in the
+advisory site is one it should follow anyway: **put what distinguishes one occurrence from another in the
 context**, since context is what a machine consumer reads. `warningKey` renders the message and each
 sorted context pair with `%q` so a value containing the separators cannot forge another warning's
 identity (`{"a": "b=c"}` and `{"a=b": "c"}` are distinct).
 
-**Order.** `Warnings` returns the collected warnings sorted by `warningKey` (message, then sorted context), not in
-the order they were raised. Raising order depends on scheduling once XRs are diffed concurrently (#579), and output
-must not; sorting by the identity key also keeps two runs that raise the same warnings byte-identical. The stderr
-line is still written when a warning is raised. The renderer appends its unverified-addition summaries after the
-sorted list.
+**Order.** `AdvisoryCollector.Advisories` returns the collected advisories sorted by `warningKey` (message, then
+sorted context), not in the order they were raised. Raising order depends on scheduling once XRs are diffed
+concurrently (#579), and output must not; sorting by the identity key also keeps two runs that raise the same
+advisories byte-identical. The stderr line is still written when an advisory is raised. The renderer appends its
+unverified-addition summaries after the sorted list.
 
-**Draining late advisories.** A warning only reaches structured output if it is raised before the
+**Draining late advisories.** An advisory only reaches structured output if it is raised before the
 renderer reads the collected slice. Teardown is the awkward case: the processor's `Cleanup` can raise
 the leftover-container advisory (today from the render engine's run sweep of containers and networks, §6.7.2; originally from
 `FunctionProvider.Cleanup`), and it was invoked solely from the command layer's `defer`, which runs
@@ -2311,7 +2304,7 @@ time via a kong `Validate` hook, failing fast before any cluster work: `--crossp
 reference's tag whenever it parses as a semantic version. A reference whose version is not comparable — pinned
 by digest, tagged with a floating name, or carrying no tag — is accepted rather than refused, because that is
 the shape the mirrored and air-gapped registries the flag exists for actually take; those references instead
-raise `UncomparableRenderImageWarning` through the `WarningLogger`, emitted from `NewEngineRenderFn` so a
+raise `UncomparableRenderImageWarning` on the advisory channel (§6.8.1), emitted from `NewEngineRenderFn` so a
 programmatic `WithCrossplaneImage` caller gets the same advisory as a CLI user.
 
 `EngineRenderFn.RenderImage()` exposes the fully-resolved reference the engine will pull (mirroring upstream's
@@ -2593,8 +2586,8 @@ This rendering layer:
   because upstream's docker engine `Setup` is not safe for concurrent use (its first call records the network it
   creates). The rest of the processor is safe for concurrent `DiffSingleResource` calls too: every lazily filled
   cache is mutex-guarded (composition, revision, XRD, CRD, access-review, GVR and requirements caches), and the
-  function client's cache, filled by `Initialize`, is only read afterwards. `WarningLogger.Warnings` sorts what it
-  returns (§6.8.1), so concurrent work raising warnings in a different order does not change the output
+  function client's cache, filled by `Initialize`, is only read afterwards. `AdvisoryCollector.Advisories` sorts what it
+  returns (§6.8.1), so concurrent work raising advisories in a different order does not change the output
 
 #### 9.5.4 Resource Tree Evaluation
 
@@ -2840,7 +2833,7 @@ cmd/
 │   ├── diffprocessor/             # DiffProcessor, CompDiffProcessor, calculator, validator,
 │   │                              #   defaulter, resource manager, composite resolver,
 │   │                              #   requirements provider, function provider,
-│   │                              #   WarningLogger (advisory channel)
+│   │                              #   AdvisoryCollector (advisory channel)
 │   ├── dockerrun/                 # Run ownership of the render session's labelled
 │   │                              #   containers and network; reaps dead runs' (§6.7.2)
 │   ├── client/

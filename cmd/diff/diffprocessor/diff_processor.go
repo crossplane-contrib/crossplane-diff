@@ -101,13 +101,17 @@ func NewDiffProcessor(k8cs k8.Clients, xpcs xp.Clients, opts ...ProcessorOption)
 		option(&config)
 	}
 
+	if config.Advisories == nil {
+		config.Advisories = NewAdvisoryCollector(config.Stderr)
+	}
+
 	// Default the render function to an engine-backed implementation if the
 	// caller didn't override it. It is safe for concurrent renders; see EngineRenderFn.
 	// We retain the pointer so Cleanup can release the Docker network and
 	// function runtimes owned by the engine.
 	var defaultEngineFn *EngineRenderFn
 	if config.RenderFunc == nil {
-		defaultEngineFn = NewEngineRenderFn(config.Logger, config.CrossplaneRenderBinary, config.CrossplaneVersion, config.CrossplaneImage)
+		defaultEngineFn = NewEngineRenderFn(config.Logger, config.Advisories, config.CrossplaneRenderBinary, config.CrossplaneVersion, config.CrossplaneImage)
 		config.RenderFunc = defaultEngineFn.Render
 	}
 
@@ -118,7 +122,7 @@ func NewDiffProcessor(k8cs k8.Clients, xpcs xp.Clients, opts ...ProcessorOption)
 	diffOpts := config.GetDiffOptions()
 
 	// Create components using factories
-	resourceManager := config.Factories.ResourceManager(k8cs.Resource, xpcs.Definition, xpcs.ResourceTree, config.Logger)
+	resourceManager := config.Factories.ResourceManager(k8cs.Resource, xpcs.Definition, xpcs.ResourceTree, config.Logger, config.Advisories)
 	schemaValidator := config.Factories.SchemaValidator(k8cs.Schema, k8cs.Resource, xpcs.Definition, config.Logger)
 	requirementsProvider := config.Factories.RequirementsProvider(k8cs.Resource, xpcs.Environment, config.Logger)
 	renderDefaulter := config.Factories.Defaulter(k8cs.Schema, xpcs.Definition, StrictDefaulting)
@@ -142,7 +146,7 @@ func NewDiffProcessor(k8cs k8.Clients, xpcs xp.Clients, opts ...ProcessorOption)
 		schemaClient:         k8cs.Schema,
 		resourceClient:       k8cs.Resource,
 		resourceManager:      resourceManager,
-		compositeResolver:    NewCompositeResolver(resourceManager, xpcs.Definition, config.Logger),
+		compositeResolver:    NewCompositeResolver(resourceManager, xpcs.Definition, config.Logger, config.Advisories),
 		config:               config,
 		functionProvider:     functionProvider,
 		schemaValidator:      schemaValidator,
@@ -262,7 +266,7 @@ func (p *DefaultDiffProcessor) PerformDiff(ctx context.Context, resources []*un.
 
 	// Overlapping inputs are settled in three stages by a per-run InputValidator; see input_validator.go.
 	// First, before rendering: the validator says what to render, and which inputs it already rejected.
-	validator := p.config.Factories.InputValidator(p.config.Logger, resources)
+	validator := p.config.Factories.InputValidator(p.config.Advisories, resources)
 	toRender := validator.ToRender()
 
 	for i, in := range toRender {
@@ -349,7 +353,7 @@ func (p *DefaultDiffProcessor) PerformDiff(ctx context.Context, resources []*un.
 
 	// Always render (even if only errors exist) to ensure valid structured output
 	// The renderer will include errors in the structured output and write them to stderr
-	err := p.diffRenderer.RenderDiffs(groups, outputErrors, p.collectedWarnings())
+	err := p.diffRenderer.RenderDiffs(groups, outputErrors, p.config.Advisories.Advisories())
 	if err != nil {
 		p.config.Logger.Debug("Failed to render diffs", "error", err)
 		errs = append(errs, errors.Wrap(err, "failed to render diffs"))
@@ -615,15 +619,15 @@ func (p *DefaultDiffProcessor) warnIfDeleting(existingXRFromCluster *un.Unstruct
 		return
 	}
 
-	// Info is the advisory level per logging.Logger's own contract ("messages that Crossplane
-	// operators are very likely to be concerned with"), so this reaches the user: stderr now, and
-	// structured output at render time. See WarningLogger.
-	//
 	// Normalized to UTC/RFC3339 because metav1.Time renders machine-local by default, which would make
 	// the advisory's text differ between runs on differently-configured machines.
-	p.config.Logger.Info("The resource being diffed is being deleted in the cluster; the diff compares against a resource that is going away",
-		"resource", resourceID,
-		"deletionTimestamp", deletedAt.UTC().Format(time.RFC3339))
+	p.config.Advisories.Raise(dt.OutputWarning{
+		Message: "The resource being diffed is being deleted in the cluster; the diff compares against a resource that is going away",
+		Context: map[string]string{
+			"resource":          resourceID,
+			"deletionTimestamp": deletedAt.UTC().Format(time.RFC3339),
+		},
+	})
 }
 
 // fetchObservedResourcesFromClusterXR fetches observed resources using the cluster XR.
@@ -804,10 +808,14 @@ func (p *DefaultDiffProcessor) ProcessNestedXRs(
 			// In such cases, we skip recursive processing of the nested XR but allow the overall
 			// diff operation to continue. The diff for the nested XR itself will still be shown.
 			if errors.Is(err, xp.ErrNoMatchingComposition) {
-				p.config.Logger.Info("Skipping nested XR processing due to missing composition",
-					"nestedXR", nestedResourceID,
-					"parentXR", parentResourceID,
-					"gvk", nestedXR.GroupVersionKind().String())
+				p.config.Advisories.Raise(dt.OutputWarning{
+					Message: "Skipping nested XR processing due to missing composition",
+					Context: map[string]string{
+						"nestedXR": nestedResourceID,
+						"parentXR": parentResourceID,
+						"gvk":      nestedXR.GroupVersionKind().String(),
+					},
+				})
 				// Continue processing other nested XRs
 				continue
 			}
@@ -1043,10 +1051,14 @@ func (p *DefaultDiffProcessor) resolveFunctionCredentials(ctx context.Context, c
 	if unsatisfied := unsatisfiedCredentials(fetched.Absent, merged); len(unsatisfied) > 0 {
 		// Every remaining secret is by construction one the user has not supplied, so the hint is
 		// actionable in every case that reaches here.
-		p.config.Logger.Info("Some function credential secrets could not be fetched from cluster",
-			"composition", comp.GetName(),
-			"missing", strings.Join(unsatisfied, ","),
-			"hint", "Use --function-credentials to provide secrets that don't exist on cluster")
+		p.config.Advisories.Raise(dt.OutputWarning{
+			Message: "Some function credential secrets could not be fetched from cluster",
+			Context: map[string]string{
+				"composition": comp.GetName(),
+				"missing":     strings.Join(unsatisfied, ","),
+				"hint":        "Use --function-credentials to provide secrets that don't exist on cluster",
+			},
+		})
 	}
 
 	if len(merged) > 0 {

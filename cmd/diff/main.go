@@ -29,7 +29,8 @@ import (
 	dp "github.com/crossplane-contrib/crossplane-diff/cmd/diff/diffprocessor"
 	"github.com/crossplane-contrib/crossplane-diff/cmd/diff/kubecfg"
 	"github.com/crossplane-contrib/crossplane-diff/cmd/diff/versioncmd"
-	"github.com/go-logr/logr"
+	zapraw "go.uber.org/zap"
+	"go.uber.org/zap/zapcore"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/client-go/rest"
 	"sigs.k8s.io/controller-runtime/pkg/log"
@@ -147,7 +148,7 @@ type CommonCmdFields struct {
 // air-gapped registries the flag exists to serve. Those references draw a warning
 // instead, raised where the engine is built (see
 // diffprocessor.UncomparableRenderImageWarning) so it travels the same advisory
-// channel as warnings raised mid-diff.
+// channel as advisories raised mid-diff.
 //
 // See diffprocessor.MinCrossplaneRenderVersion / crossplane-diff#399, #480.
 func (c *CommonCmdFields) Validate() error {
@@ -169,41 +170,31 @@ func (c *CommonCmdFields) GetKubeContext() KubeContext {
 	return c.Context
 }
 
-// warningLoggerBindings returns the kong options that provide the *dp.WarningLogger and its
-// logging.Logger view. The WarningLogger is what makes non-fatal advisories visible: Info calls
-// become stderr warnings and are collected for structured output. It wraps a logger that discards
-// Debug tracing, or a zap logger under --verbose.
+// loggingBindings returns the kong options that bind the run's logging.Logger and its
+// *dp.AdvisoryCollector, both built eagerly: one instance each, shared by every consumer.
 //
-// kong calls a provider every time a dependency is requested, so the provider memoizes its result:
-// one instance (and therefore one sink) serves every consumer. The closure scopes that cache to one
-// parser rather than the process. The logging.Logger binding is derived from the WarningLogger, so the
-// two can never resolve to different instances. c.Verbose is read when the provider first runs, which
-// is after flags are applied.
-func warningLoggerBindings(c *cli, stderr io.Writer) []kong.Option {
-	var inst *dp.WarningLogger
-
-	provide := func() *dp.WarningLogger {
-		if inst != nil {
-			return inst
-		}
-
-		wrapped := logging.NewNopLogger()
-
-		if c.Verbose {
-			zapLogger := zap.New(zap.UseDevMode(true))
-			log.SetLogger(zapLogger)
-			wrapped = logging.NewLogrLogger(zapLogger)
-		}
-
-		inst = dp.NewWarningLogger(wrapped, stderr)
-
-		return inst
-	}
+// The logger is for tracing and is always a zap logger, muted until cli.AfterApply raises its level
+// under --verbose. The collector is what makes non-fatal advisories visible: each one raised is
+// written to stderr and collected for structured output.
+func loggingBindings(stderr io.Writer) []kong.Option {
+	level := zapraw.NewAtomicLevelAt(zapcore.InvalidLevel)
+	zapLogger := zap.New(zap.UseDevMode(true), zap.Level(level))
+	log.SetLogger(zapLogger)
 
 	return []kong.Option{
-		kong.BindToProvider(provide),
-		kong.BindToProvider(func(w *dp.WarningLogger) logging.Logger { return w }),
+		kong.Bind(level),
+		kong.BindTo(logging.NewLogrLogger(zapLogger), (*logging.Logger)(nil)),
+		kong.Bind(dp.NewAdvisoryCollector(stderr)),
 	}
+}
+
+// AfterApply turns tracing on under --verbose, once flags are parsed.
+func (c *cli) AfterApply(level zapraw.AtomicLevel) error { //nolint:unparam // AfterApply requires this signature.
+	if c.Verbose {
+		level.SetLevel(zapcore.DebugLevel)
+	}
+
+	return nil
 }
 
 // BeforeApply binds the CommonCmdFields pointer via the ContextProvider interface.
@@ -231,8 +222,6 @@ type cli struct {
 }
 
 func main() {
-	log.SetLogger(logr.Discard())
-
 	exitCode := &ExitCode{Code: dp.ExitCodeSuccess} // Default to success
 	c := &cli{}
 
@@ -241,8 +230,8 @@ func main() {
 	// exits immediately with code 1, which may leave containers behind for the next run to reclaim.
 	sigCtx := signals.SetupSignalHandler()
 
-	// The *dp.WarningLogger and its logging.Logger view come first; see warningLoggerBindings.
-	opts := append(warningLoggerBindings(c, os.Stderr),
+	// The logging.Logger and *dp.AdvisoryCollector come first; see loggingBindings.
+	opts := append(loggingBindings(os.Stderr),
 		kong.Name("crossplane-diff"),
 		engineLimitVars(),
 		kong.Description("A command line tool for diffing  Crossplane resources."),

@@ -21,24 +21,27 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 
 	"github.com/alecthomas/kong"
 	dp "github.com/crossplane-contrib/crossplane-diff/cmd/diff/diffprocessor"
+	dt "github.com/crossplane-contrib/crossplane-diff/cmd/diff/renderer/types"
+	gcmp "github.com/google/go-cmp/cmp"
+	zapraw "go.uber.org/zap"
+	"go.uber.org/zap/zapcore"
 
 	"github.com/crossplane/crossplane-runtime/v2/pkg/logging"
 )
 
-// parseWithWarningLogger builds a parser over the real cli grammar with the same warning-logger
-// wiring main() uses, parses args, and returns the kong context so a test can see which instance the
-// *dp.WarningLogger and logging.Logger bindings resolve to once parsing (and therefore every
-// BeforeApply/AfterApply hook) has run. Any "<file>" placeholder is replaced with a real temp file so
-// the commands' AfterApply loaders succeed.
+// parseWithLoggingBindings builds a parser over the real cli grammar with the same logger and
+// advisory wiring main() uses, parses args, and returns the kong context so a test can see which
+// instances the logging.Logger and *dp.AdvisoryCollector bindings resolve to once parsing (and
+// therefore every BeforeApply/AfterApply hook) has run. Any "<file>" placeholder is replaced with a
+// real temp file so the commands' AfterApply loaders succeed.
 //
 // It deliberately does not reuse parseArgs from render_backend_flags_test.go: that helper discards
 // the context, which is the only thing this test is interested in.
-func parseWithWarningLogger(t *testing.T, stderr io.Writer, args ...string) (*kong.Context, error) {
+func parseWithLoggingBindings(t *testing.T, stderr io.Writer, args ...string) (*kong.Context, error) {
 	t.Helper()
 
 	tmp := filepath.Join(t.TempDir(), "input.yaml")
@@ -65,7 +68,7 @@ func parseWithWarningLogger(t *testing.T, stderr io.Writer, args ...string) (*ko
 		// sufficient because processor construction at parse time is in-memory (no cluster
 		// connection until Run).
 		kong.Bind(&AppContext{}),
-	}, warningLoggerBindings(c, stderr)...)
+	}, loggingBindings(stderr)...)
 
 	parser, err := kong.New(c, opts...)
 	if err != nil {
@@ -75,21 +78,22 @@ func parseWithWarningLogger(t *testing.T, stderr io.Writer, args ...string) (*ko
 	return parser.Parse(resolved)
 }
 
-// TestWarningLoggerConstructedOnce pins the warning-logger wiring. kong does not memoize providers,
-// so every consumer of *dp.WarningLogger or logging.Logger (the commands' AfterApply, Run, and the
-// AppContext provider) must nonetheless see one instance: it is both what writes to stderr and what
-// structured output collects from, so a split would report one set of warnings and print another,
-// and a second construction would drop anything already collected. That must hold with and without
-// --verbose, which only changes the logger the WarningLogger wraps.
-func TestWarningLoggerConstructedOnce(t *testing.T) {
+// TestLoggingBindings pins the logger and advisory wiring. Every consumer of *dp.AdvisoryCollector
+// (the commands' AfterApply and Run) must see one instance: it is both what writes to stderr and what
+// structured output collects from, so a split would report one set of advisories and print another.
+// The logger is for tracing only: an Info on it must never become an advisory, and it is muted
+// unless --verbose, which raises it to Debug.
+func TestLoggingBindings(t *testing.T) {
 	tests := map[string]struct {
-		args []string
+		args      []string
+		wantDebug bool
 	}{
 		"WithoutVerbose": {
 			args: []string{"comp", "<file>"},
 		},
 		"WithVerbose": {
-			args: []string{"--verbose", "comp", "<file>"},
+			args:      []string{"--verbose", "comp", "<file>"},
+			wantDebug: true,
 		},
 	}
 
@@ -97,48 +101,56 @@ func TestWarningLoggerConstructedOnce(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			var stderr bytes.Buffer
 
-			ctx, err := parseWithWarningLogger(t, &stderr, tt.args...)
+			ctx, err := parseWithLoggingBindings(t, &stderr, tt.args...)
 			if err != nil {
 				t.Fatalf("parse(%v) unexpected error: %v", tt.args, err)
 			}
 
-			resolve := func() (logging.Logger, *dp.WarningLogger) {
+			resolve := func() (logging.Logger, *dp.AdvisoryCollector) {
 				var (
 					l logging.Logger
-					w *dp.WarningLogger
+					a *dp.AdvisoryCollector
 				)
 
-				if _, err := ctx.Call(func(gotL logging.Logger, gotW *dp.WarningLogger) {
-					l, w = gotL, gotW
+				if _, err := ctx.Call(func(gotL logging.Logger, gotA *dp.AdvisoryCollector, level zapraw.AtomicLevel) {
+					l, a = gotL, gotA
+					if got := level.Enabled(zapcore.DebugLevel); got != tt.wantDebug {
+						t.Errorf("Debug enabled = %v, want %v", got, tt.wantDebug)
+					}
+					if level.Enabled(zapcore.FatalLevel) != tt.wantDebug {
+						t.Errorf("Fatal enabled = %v, want %v; the logger must be fully muted without --verbose", !tt.wantDebug, tt.wantDebug)
+					}
 				}); err != nil {
 					t.Fatalf("resolve bindings after parse(%v): %v", tt.args, err)
 				}
 
-				return l, w
+				return l, a
 			}
 
 			firstLogger, first := resolve()
 			if first == nil {
-				t.Fatal("*dp.WarningLogger binding resolved to nil")
+				t.Fatal("*dp.AdvisoryCollector binding resolved to nil")
 			}
 
-			if firstLogger != logging.Logger(first) {
-				t.Errorf("logging.Logger and *dp.WarningLogger bindings resolve to different instances; the logging.Logger is a %T", firstLogger)
-			}
-
-			first.Info("raised after parsing")
+			firstLogger.Info("logged, not advised")
+			first.Raise(dt.OutputWarning{Message: "raised after parsing"})
 
 			secondLogger, second := resolve()
-			if second != first || secondLogger != logging.Logger(first) {
-				t.Fatal("a second resolution produced a different WarningLogger; the provider must construct it once")
+			if second != first {
+				t.Fatal("a second resolution produced a different AdvisoryCollector; bindings must share one instance")
 			}
 
-			if got := second.Warnings(); len(got) != 1 {
-				t.Errorf("WarningLogger holds %d warning(s), want the 1 raised earlier: %+v", len(got), got)
+			if secondLogger != firstLogger {
+				t.Fatal("a second resolution produced a different logging.Logger; bindings must share one instance")
 			}
 
-			if !strings.Contains(stderr.String(), "raised after parsing") {
-				t.Errorf("warning did not reach the stderr writer; got %q", stderr.String())
+			want := []dt.OutputWarning{{Message: "raised after parsing"}}
+			if diff := gcmp.Diff(want, second.Advisories()); diff != "" {
+				t.Errorf("advisories mismatch; a logger Info must not become an advisory (-want +got):\n%s", diff)
+			}
+
+			if diff := gcmp.Diff("WARNING: raised after parsing\n", stderr.String()); diff != "" {
+				t.Errorf("stderr mismatch; a logger Info must not reach the advisory stderr (-want +got):\n%s", diff)
 			}
 		})
 	}

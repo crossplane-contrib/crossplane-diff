@@ -1,7 +1,6 @@
 package diffprocessor
 
 import (
-	"bytes"
 	"testing"
 
 	dt "github.com/crossplane-contrib/crossplane-diff/cmd/diff/renderer/types"
@@ -87,9 +86,9 @@ func TestCheckInputs(t *testing.T) {
 
 	for name, tt := range tests {
 		t.Run(name, func(t *testing.T) {
-			logger := NewWarningLogger(tu.TestLogger(t, false), &bytes.Buffer{})
+			advisories := NewAdvisoryCollector(nil)
 
-			checks := checkInputs(logger, tt.inputs)
+			checks := checkInputs(advisories, tt.inputs)
 
 			got := make([]verdict, 0, len(checks))
 			for _, c := range checks {
@@ -100,7 +99,7 @@ func TestCheckInputs(t *testing.T) {
 				t.Errorf("%s\ncheckInputs(...): -want, +got:\n%s", tt.reason, diff)
 			}
 
-			warnings := logger.Warnings()
+			warnings := advisories.Advisories()
 
 			gotWarnings := make([]string, 0, len(warnings))
 			for _, w := range warnings {
@@ -348,7 +347,7 @@ func TestBundleInputValidatorVerdicts(t *testing.T) {
 
 	for name, tt := range tests {
 		t.Run(name, func(t *testing.T) {
-			v := NewBundleInputValidator(tu.TestLogger(t, false), tt.inputs)
+			v := NewBundleInputValidator(NewAdvisoryCollector(nil), tt.inputs)
 
 			got := want{}
 

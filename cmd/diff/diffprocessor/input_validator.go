@@ -3,6 +3,7 @@ package diffprocessor
 import (
 	"fmt"
 	"sort"
+	"strconv"
 	"strings"
 
 	dt "github.com/crossplane-contrib/crossplane-diff/cmd/diff/renderer/types"
@@ -13,7 +14,6 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 
 	"github.com/crossplane/crossplane-runtime/v2/pkg/errors"
-	"github.com/crossplane/crossplane-runtime/v2/pkg/logging"
 )
 
 // This file validates the xr command's input set. PerformDiff drives an InputValidator through three
@@ -45,7 +45,7 @@ type InputValidator interface {
 }
 
 // InputValidatorFactory creates the InputValidator for one run.
-type InputValidatorFactory func(logger logging.Logger, inputs []*un.Unstructured) InputValidator
+type InputValidatorFactory func(advisories dt.Advisories, inputs []*un.Unstructured) InputValidator
 
 // bundleInputValidator is the default InputValidator. It is a "bundle" validator because it treats the
 // inputs as one change set, to be applied together: any overlap among them — a duplicate, the same object
@@ -62,11 +62,11 @@ type bundleInputValidator struct {
 }
 
 // NewBundleInputValidator returns the default InputValidator for one run over inputs. It has the
-// InputValidatorFactory signature. Stage 1 (checkInputs) runs here, so duplicates are logged once.
-func NewBundleInputValidator(logger logging.Logger, inputs []*un.Unstructured) InputValidator {
+// InputValidatorFactory signature. Stage 1 (checkInputs) runs here, so duplicates are reported once.
+func NewBundleInputValidator(advisories dt.Advisories, inputs []*un.Unstructured) InputValidator {
 	v := &bundleInputValidator{}
 
-	for _, in := range checkInputs(logger, inputs) {
+	for _, in := range checkInputs(advisories, inputs) {
 		if in.duplicate {
 			continue
 		}
@@ -123,7 +123,7 @@ type inputCheck struct {
 // has one clear intent — a fat-fingered command line, or CI enumerating the same file twice — so it is
 // dropped with a warning. The same object twice with different content fails both inputs: applying both
 // would leave whichever is applied last, and the order inputs arrive in (often a glob's) is not intent.
-func checkInputs(logger logging.Logger, resources []*un.Unstructured) []inputCheck {
+func checkInputs(advisories dt.Advisories, resources []*un.Unstructured) []inputCheck {
 	checks := make([]inputCheck, len(resources))
 	first := make(map[string]int, len(resources))
 
@@ -143,8 +143,14 @@ func checkInputs(logger logging.Logger, resources []*un.Unstructured) []inputChe
 
 		if equality.Semantic.DeepEqual(resources[j].Object, res.Object) {
 			checks[i].duplicate = true
-			logger.Info("Ignoring a duplicate input: it is identical to an earlier one",
-				"resource", fmt.Sprintf("%s/%s", res.GetKind(), res.GetName()), "input", i+1, "duplicateOf", j+1)
+			advisories.Raise(dt.OutputWarning{
+				Message: "Ignoring a duplicate input: it is identical to an earlier one",
+				Context: map[string]string{
+					"resource":    fmt.Sprintf("%s/%s", res.GetKind(), res.GetName()),
+					"input":       strconv.Itoa(i + 1),
+					"duplicateOf": strconv.Itoa(j + 1),
+				},
+			})
 
 			continue
 		}

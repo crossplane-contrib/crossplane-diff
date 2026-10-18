@@ -148,12 +148,12 @@ Notes:
 // AfterApply implements kong's AfterApply method to bind command-specific dependencies.
 // AppContext is received via dependency injection - Kong resolves it through the provider chain:
 // ContextProvider (bound in CommonCmdFields.BeforeApply) -> provideRestConfig -> provideAppContext.
-func (c *CompCmd) AfterApply(ctx *kong.Context, log logging.Logger, warnings *dp.WarningLogger, appCtx *AppContext) error {
+func (c *CompCmd) AfterApply(ctx *kong.Context, log logging.Logger, advisories *dp.AdvisoryCollector, appCtx *AppContext) error {
 	if err := c.validateFlags(); err != nil {
 		return err
 	}
 
-	proc := makeDefaultCompProc(c, ctx, appCtx, log, warnings)
+	proc := makeDefaultCompProc(c, ctx, appCtx, log, advisories)
 
 	loader, err := ld.NewCompositeLoader(c.Files)
 	if err != nil {
@@ -166,12 +166,12 @@ func (c *CompCmd) AfterApply(ctx *kong.Context, log logging.Logger, warnings *dp
 	return nil
 }
 
-func makeDefaultCompProc(c *CompCmd, kongCtx *kong.Context, appCtx *AppContext, log logging.Logger, warnings *dp.WarningLogger) dp.CompDiffProcessor {
+func makeDefaultCompProc(c *CompCmd, kongCtx *kong.Context, appCtx *AppContext, log logging.Logger, advisories *dp.AdvisoryCollector) dp.CompDiffProcessor {
 	// Both processors share the same options since they're part of the same command
 	opts := defaultProcessorOptions(c.CommonCmdFields)
 	opts = append(opts,
 		dp.WithLogger(log),
-		dp.WithWarnings(warnings),
+		dp.WithAdvisories(advisories),
 		dp.WithIncludeManual(c.IncludeManual),
 		dp.WithMinimizeComposition(c.MinimizeComposition),
 		dp.WithAnalyzeOn(c.analyzeOn()),
