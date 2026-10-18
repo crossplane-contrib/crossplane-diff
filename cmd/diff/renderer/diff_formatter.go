@@ -293,21 +293,24 @@ func GetLineDiff(oldText, newText string) []diffmatchpatch.Diff {
 	return patch.DiffCharsToLines(diff, lines)
 }
 
+// logIdentity returns the kind/name and namespace to log for a diff, preferring
+// the desired object over the current one.
+func logIdentity(current, desired *un.Unstructured) (string, string) {
+	switch {
+	case desired != nil:
+		return fmt.Sprintf("%s/%s", desired.GetKind(), desired.GetName()), desired.GetNamespace()
+	case current != nil:
+		return fmt.Sprintf("%s/%s", current.GetKind(), current.GetName()), current.GetNamespace()
+	default:
+		return "unknown/unknown", ""
+	}
+}
+
 // GenerateDiffWithOptions produces a structured diff between two unstructured objects.
 func GenerateDiffWithOptions(_ context.Context, current, desired *un.Unstructured, logger logging.Logger, options DiffOptions) (*t.ResourceDiff, error) {
 	var diffType t.DiffType
 
-	// Determine resource identifiers upfront
-	resourceKey := "unknown/unknown"
-	resourceNamespace := ""
-
-	if desired != nil {
-		resourceKey = fmt.Sprintf("%s/%s", desired.GetKind(), desired.GetName())
-		resourceNamespace = desired.GetNamespace()
-	} else if current != nil {
-		resourceKey = fmt.Sprintf("%s/%s", current.GetKind(), current.GetName())
-		resourceNamespace = current.GetNamespace()
-	}
+	resourceKey, resourceNamespace := logIdentity(current, desired)
 
 	logger.Debug("Generating diff", "resource", resourceKey, "namespace", resourceNamespace)
 
