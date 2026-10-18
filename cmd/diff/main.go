@@ -29,7 +29,8 @@ import (
 	dp "github.com/crossplane-contrib/crossplane-diff/cmd/diff/diffprocessor"
 	"github.com/crossplane-contrib/crossplane-diff/cmd/diff/kubecfg"
 	"github.com/crossplane-contrib/crossplane-diff/cmd/diff/versioncmd"
-	"github.com/go-logr/logr"
+	zapraw "go.uber.org/zap"
+	"go.uber.org/zap/zapcore"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/client-go/rest"
 	"sigs.k8s.io/controller-runtime/pkg/log"
@@ -169,50 +170,31 @@ func (c *CommonCmdFields) GetKubeContext() KubeContext {
 	return c.Context
 }
 
-// loggingBindings returns the kong options that provide the run's logging.Logger and its
-// *dp.AdvisoryCollector. The logger is for tracing: it discards everything, or is a zap logger under
-// --verbose. The collector is what makes non-fatal advisories visible: each one raised is written to
-// stderr and collected for structured output.
+// loggingBindings returns the kong options that bind the run's logging.Logger and its
+// *dp.AdvisoryCollector, both built eagerly: one instance each, shared by every consumer.
 //
-// kong calls a provider every time a dependency is requested, so each provider memoizes its result:
-// one collector serves every consumer, so structured output reports what stderr printed, and the
-// logger is built (and controller-runtime's logger set) once. The closures scope those caches to one
-// parser rather than the process. c.Verbose is read when the logger provider first runs, which is
-// after flags are applied.
-func loggingBindings(c *cli, stderr io.Writer) []kong.Option {
-	var (
-		logger     logging.Logger
-		advisories *dp.AdvisoryCollector
-	)
-
-	provideLogger := func() logging.Logger {
-		if logger != nil {
-			return logger
-		}
-
-		logger = logging.NewNopLogger()
-
-		if c.Verbose {
-			zapLogger := zap.New(zap.UseDevMode(true))
-			log.SetLogger(zapLogger)
-			logger = logging.NewLogrLogger(zapLogger)
-		}
-
-		return logger
-	}
-
-	provideAdvisories := func() *dp.AdvisoryCollector {
-		if advisories == nil {
-			advisories = dp.NewAdvisoryCollector(stderr)
-		}
-
-		return advisories
-	}
+// The logger is for tracing and is always a zap logger, muted until cli.AfterApply raises its level
+// under --verbose. The collector is what makes non-fatal advisories visible: each one raised is
+// written to stderr and collected for structured output.
+func loggingBindings(stderr io.Writer) []kong.Option {
+	level := zapraw.NewAtomicLevelAt(zapcore.InvalidLevel)
+	zapLogger := zap.New(zap.UseDevMode(true), zap.Level(level))
+	log.SetLogger(zapLogger)
 
 	return []kong.Option{
-		kong.BindToProvider(provideLogger),
-		kong.BindToProvider(provideAdvisories),
+		kong.Bind(level),
+		kong.BindTo(logging.NewLogrLogger(zapLogger), (*logging.Logger)(nil)),
+		kong.Bind(dp.NewAdvisoryCollector(stderr)),
 	}
+}
+
+// AfterApply turns tracing on under --verbose, once flags are parsed.
+func (c *cli) AfterApply(level zapraw.AtomicLevel) error { //nolint:unparam // AfterApply requires this signature.
+	if c.Verbose {
+		level.SetLevel(zapcore.DebugLevel)
+	}
+
+	return nil
 }
 
 // BeforeApply binds the CommonCmdFields pointer via the ContextProvider interface.
@@ -240,8 +222,6 @@ type cli struct {
 }
 
 func main() {
-	log.SetLogger(logr.Discard())
-
 	exitCode := &ExitCode{Code: dp.ExitCodeSuccess} // Default to success
 	c := &cli{}
 
@@ -251,7 +231,7 @@ func main() {
 	sigCtx := signals.SetupSignalHandler()
 
 	// The logging.Logger and *dp.AdvisoryCollector come first; see loggingBindings.
-	opts := append(loggingBindings(c, os.Stderr),
+	opts := append(loggingBindings(os.Stderr),
 		kong.Name("crossplane-diff"),
 		engineLimitVars(),
 		kong.Description("A command line tool for diffing  Crossplane resources."),

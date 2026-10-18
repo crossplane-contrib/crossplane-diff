@@ -27,6 +27,8 @@ import (
 	dp "github.com/crossplane-contrib/crossplane-diff/cmd/diff/diffprocessor"
 	dt "github.com/crossplane-contrib/crossplane-diff/cmd/diff/renderer/types"
 	gcmp "github.com/google/go-cmp/cmp"
+	zapraw "go.uber.org/zap"
+	"go.uber.org/zap/zapcore"
 
 	"github.com/crossplane/crossplane-runtime/v2/pkg/logging"
 )
@@ -66,7 +68,7 @@ func parseWithLoggingBindings(t *testing.T, stderr io.Writer, args ...string) (*
 		// sufficient because processor construction at parse time is in-memory (no cluster
 		// connection until Run).
 		kong.Bind(&AppContext{}),
-	}, loggingBindings(c, stderr)...)
+	}, loggingBindings(stderr)...)
 
 	parser, err := kong.New(c, opts...)
 	if err != nil {
@@ -76,22 +78,22 @@ func parseWithLoggingBindings(t *testing.T, stderr io.Writer, args ...string) (*
 	return parser.Parse(resolved)
 }
 
-// TestLoggingBindingsConstructedOnce pins the logger and advisory wiring. kong does not memoize
-// providers, so every consumer of *dp.AdvisoryCollector (the commands' AfterApply and Run) must
-// nonetheless see one instance: it is both what writes to stderr and what structured output collects
-// from, so a split would report one set of advisories and print another, and a second construction
-// would drop anything already collected. The logger is memoized too, so controller-runtime's logger is
-// set once. And the logger is for tracing only: an Info on it must never become an advisory. All of
-// that must hold with and without --verbose, which only changes the logger.
-func TestLoggingBindingsConstructedOnce(t *testing.T) {
+// TestLoggingBindings pins the logger and advisory wiring. Every consumer of *dp.AdvisoryCollector
+// (the commands' AfterApply and Run) must see one instance: it is both what writes to stderr and what
+// structured output collects from, so a split would report one set of advisories and print another.
+// The logger is for tracing only: an Info on it must never become an advisory, and it is muted
+// unless --verbose, which raises it to Debug.
+func TestLoggingBindings(t *testing.T) {
 	tests := map[string]struct {
-		args []string
+		args      []string
+		wantDebug bool
 	}{
 		"WithoutVerbose": {
 			args: []string{"comp", "<file>"},
 		},
 		"WithVerbose": {
-			args: []string{"--verbose", "comp", "<file>"},
+			args:      []string{"--verbose", "comp", "<file>"},
+			wantDebug: true,
 		},
 	}
 
@@ -110,8 +112,14 @@ func TestLoggingBindingsConstructedOnce(t *testing.T) {
 					a *dp.AdvisoryCollector
 				)
 
-				if _, err := ctx.Call(func(gotL logging.Logger, gotA *dp.AdvisoryCollector) {
+				if _, err := ctx.Call(func(gotL logging.Logger, gotA *dp.AdvisoryCollector, level zapraw.AtomicLevel) {
 					l, a = gotL, gotA
+					if got := level.Enabled(zapcore.DebugLevel); got != tt.wantDebug {
+						t.Errorf("Debug enabled = %v, want %v", got, tt.wantDebug)
+					}
+					if level.Enabled(zapcore.FatalLevel) != tt.wantDebug {
+						t.Errorf("Fatal enabled = %v, want %v; the logger must be fully muted without --verbose", !tt.wantDebug, tt.wantDebug)
+					}
 				}); err != nil {
 					t.Fatalf("resolve bindings after parse(%v): %v", tt.args, err)
 				}
@@ -129,11 +137,11 @@ func TestLoggingBindingsConstructedOnce(t *testing.T) {
 
 			secondLogger, second := resolve()
 			if second != first {
-				t.Fatal("a second resolution produced a different AdvisoryCollector; the provider must construct it once")
+				t.Fatal("a second resolution produced a different AdvisoryCollector; bindings must share one instance")
 			}
 
 			if secondLogger != firstLogger {
-				t.Fatal("a second resolution produced a different logging.Logger; the provider must construct it once")
+				t.Fatal("a second resolution produced a different logging.Logger; bindings must share one instance")
 			}
 
 			want := []dt.OutputWarning{{Message: "raised after parsing"}}

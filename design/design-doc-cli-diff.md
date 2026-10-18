@@ -1983,10 +1983,10 @@ handed the logger raise warnings nobody chose; the typed channel removes that co
 emission order. It is safe for concurrent use. The label shown to a human is `WARNING`, not `INFO`,
 deliberately: an operator reading `INFO: applying this diff will assume ownership` would under-weight it.
 
-The CLI constructs the collector exactly once, in a memoized kong provider (`loggingBindings` in
-`main.go`), beside the memoized `logging.Logger` provider (a discarding logger by default, zap under
-`--verbose`). kong does not memoize providers itself, so the memo is load-bearing: without it each
-consumer would get its own collector, and structured output would report a different set of advisories
+The CLI constructs the collector exactly once, eagerly, in `loggingBindings` (`main.go`), and binds that
+one instance with `kong.Bind`, beside the run's one `logging.Logger` (a zap logger, also set as
+controller-runtime's, muted until the root `cli.AfterApply` raises it to Debug under `--verbose`). Every
+consumer must share the one collector, or structured output would report a different set of advisories
 from the one stderr printed. Both processors are given the collector with `WithAdvisories`.
 
 **Identity and deduplication.** The collector keeps one entry per distinct `(message, context)` pair; a
