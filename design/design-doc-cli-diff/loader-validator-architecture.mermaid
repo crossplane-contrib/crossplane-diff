@@ -1,38 +1,45 @@
 classDiagram
+    note "Loaders come from upstream crossplane/cli cmd/crossplane/common/load"
+
     class Loader {
         <<interface>>
         +Load() ([]*Unstructured, error)
     }
-    
+
     class CompositeLoader {
         -loaders []Loader
         +Load() ([]*Unstructured, error)
     }
-    
+
+    class MultiLoader {
+        -loaders []Loader
+        +Load() ([]*Unstructured, error)
+    }
+
     class FileLoader {
         -path string
         +Load() ([]*Unstructured, error)
     }
-    
+
     class StdinLoader {
         +Load() ([]*Unstructured, error)
     }
-    
+
     class FolderLoader {
         -path string
         +Load() ([]*Unstructured, error)
     }
-    
-    class LoadYamlStream {
+
+    class YamlStream {
         <<function>>
-        +LoadYamlStream(reader) ([][]byte, error)
+        +YamlStream(reader) ([][]byte, error)
     }
-    
+
     class streamToUnstructured {
         <<function>>
         +streamToUnstructured(stream) ([]*Unstructured, error)
     }
-    
+
     class SchemaValidator {
         <<interface>>
         +ValidateResources(ctx, xr, composed) error
@@ -60,25 +67,25 @@ classDiagram
         +pkgvalidate.SchemaValidate(ctx, resources, crds) (*ValidationResult, error)
     }
 
-    class ApplyCRDDefaults {
-        <<function>>
-        +clixr.ApplyCRDDefaults(obj, apiVersion, crd) error
-    }
-
     CompositeLoader ..|> Loader
+    MultiLoader ..|> Loader
     FileLoader ..|> Loader
     StdinLoader ..|> Loader
     FolderLoader ..|> Loader
 
+    %% NewCompositeLoader builds one loader per source with NewLoader, which
+    %% returns a MultiLoader for a comma-separated source.
     CompositeLoader --> Loader
+    MultiLoader --> Loader
 
-    FileLoader --> LoadYamlStream
-    StdinLoader --> LoadYamlStream
-    FolderLoader --> LoadYamlStream
+    FileLoader --> YamlStream
+    StdinLoader --> YamlStream
+    FolderLoader --> YamlStream
 
-    LoadYamlStream --> streamToUnstructured
+    FileLoader --> streamToUnstructured
+    StdinLoader --> streamToUnstructured
+    FolderLoader --> streamToUnstructured
 
     DefaultSchemaValidator ..|> SchemaValidator
-    DefaultSchemaValidator --> ApplyCRDDefaults
     DefaultSchemaValidator --> SchemaValidate
     DefaultSchemaValidator --> ResolveResourceScope

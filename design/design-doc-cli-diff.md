@@ -394,7 +394,7 @@ The `comp` subcommand has its own set of integration tests:
   analysis (marked `ImpactAnalysisSkipped`, exit code 0 even when the fixtures would otherwise report a downstream
   delta), that `--analyze-on=always` (and its deprecated `--analyze-unchanged` equivalent) evaluates the composites anyway,
   and that a difference confined to a masked field still counts as changed so the analysis is not silently skipped — for
-  both kinds of mask: the user's `--ignore-paths`, and the renderer's display-only suppressions (a cluster-only
+  both kinds of mask: the user's `--ignore-paths`, and the comparison's (package `compare`) display-only suppressions (a cluster-only
   `kubectl.kubernetes.io/last-applied-configuration` annotation). The display-only case is covered at both levels: as a
   comparison verdict in `TestDefaultCompDiffProcessor_calculateCompositionDiff`, and end-to-end through the real CLI
   wiring in `TestCompDiffIntegration/CompositionAppliedWithKubectlEvaluatesXRs`, which is what pins
@@ -596,6 +596,7 @@ The business logic layer containing the core diff functionality, resource manage
 - `CompositeResolver`: Computes the effective composite, what Crossplane would reconcile for an XR or claim
 - `RequirementsProvider`: Resolves environment-config and label-selector requirements between render iterations
 - `FunctionProvider`: Resolves the function set for a composition, with strategies for caching and registry override
+- `compare.GenerateDiff`: Compares two objects into a `ResourceDiff` (cleanup, ignore paths, line diff)
 - `DiffRenderer` / `CompDiffRenderer`: Format and display XR and composition diffs (human-readable or structured
   JSON/YAML)
 - `Render Function`: Handles composition-pipeline rendering; normally a reference to the upstream `render` package
@@ -639,8 +640,8 @@ The actual Kubernetes API server and cluster resources that the command interact
 - Resources in cluster
 - CRDs and schemas
 
-![Clean Layered Architecture](./design-doc-cli-diff/clear-layered-architecture.svg)
-*Figure 2: Clean layered architecture showing the main components in each layer*
+![Layered Architecture](./design-doc-cli-diff/layered-architecture.svg)
+*Figure 2: Layered architecture showing the main components in each layer and the dependencies between layers*
 
 ### 5.3 Data Flow
 
@@ -1056,7 +1057,7 @@ The `DefaultDiffCalculator` handles:
 
 - Retrieving current resources from the cluster (via `ResourceManager`)
 - Round-tripping the desired state through the apiserver to determine the would-be state
-- Generating text-based diffs between current and desired
+- Comparing current and would-be state via `compare.GenerateDiff`
 - Identifying resources that would be removed
 
 ```go
@@ -1741,7 +1742,7 @@ The structured types are split across two files:
   input's `metadata.name`. For an XR supplied with only `metadata.generateName` those differ: `SanitizeXR` synthesizes a
   name, but on a deep copy, so the input stays nameless. `ObjectReference.Name` is `omitempty`, so a nameless identity
   disappears from the wire entirely and two such XRs become indistinguishable. `PerformDiff` therefore resolves the
-  name through `renderName`, the helper `SanitizeXR` itself uses to synthesize it, and renders it the way the diff formatter does
+  name through `renderName`, the helper `SanitizeXR` itself uses to synthesize it, and renders it the way `compare.GenerateDiff` names it
   (`<generateName>(generated)`) — the same string the XR carries in `changes[]`, so the grouped and flat views agree,
   and no unpredictable synthetic hash reaches output.
 
@@ -2919,7 +2920,7 @@ usability and functionality across all user personas.
 ## 14. List of Figures
 
 1. Figure 1: Conceptual layers of the Crossplane Diff command architecture and their responsibilities
-2. Figure 2: Clean layered architecture showing the main components in each layer
+2. Figure 2: Layered architecture showing the main components in each layer and the dependencies between layers
 3. Figure 3: Data flow through the Crossplane Diff command system
 4. Figure 4: DiffProcessor architecture showing its subcomponents and their relationships
 5. Figure 5: Resource loading and validation architecture showing how resources are loaded and validated
