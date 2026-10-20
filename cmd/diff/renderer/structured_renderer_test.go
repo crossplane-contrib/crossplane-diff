@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/crossplane-contrib/crossplane-diff/cmd/diff/compare"
 	dt "github.com/crossplane-contrib/crossplane-diff/cmd/diff/renderer/types"
 	tu "github.com/crossplane-contrib/crossplane-diff/cmd/diff/testutils"
 	"github.com/google/go-cmp/cmp"
@@ -621,7 +622,7 @@ func TestStructuredDiffRenderer_RenderDiffs_ErrorsToStderr(t *testing.T) {
 // and the unconditional cleanup performed for the human diff are also honored
 // when rendering structured (JSON/YAML) output.
 //
-// Each case runs GenerateDiffWithOptions to classify the diff (matching real
+// Each case runs compare.GenerateDiff to classify the diff (matching real
 // CLI flow) and then renders through the structured renderer, then asserts on
 // the parsed structured output.
 func TestStructuredDiffRenderer_RespectsIgnorePaths(t *testing.T) {
@@ -785,12 +786,11 @@ func TestStructuredDiffRenderer_RespectsIgnorePaths(t *testing.T) {
 				// added in defaultProcessorOptions, cmd_utils.go). That default
 				// wiring is covered end-to-end by the IgnorePathsArgoCD
 				// integration test in diff_integration_test.go.
-				diffOpts := DefaultDiffOptions()
-				diffOpts.IgnorePaths = tc.ignorePaths
+				diffOpts := compare.Options{IgnorePaths: tc.ignorePaths}
 
-				rd, err := GenerateDiffWithOptions(context.Background(), tc.current, tc.desired, logger, diffOpts)
+				rd, err := compare.GenerateDiff(context.Background(), tc.current, tc.desired, logger, diffOpts)
 				if err != nil {
-					t.Fatalf("GenerateDiffWithOptions: %v", err)
+					t.Fatalf("compare.GenerateDiff: %v", err)
 				}
 
 				var buf bytes.Buffer

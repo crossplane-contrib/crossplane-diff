@@ -308,7 +308,7 @@ type CompositionDiff struct {
 	// evaluated.
 	ImpactAnalysisSkipped bool
 	// MaskedChangesOnly records that the composition differs from the cluster's only in fields
-	// excluded from the rendered diff — the user's --ignore-paths, or the renderer's display-only
+	// excluded from the rendered diff — the user's --ignore-paths, or the comparison's display-only
 	// suppressions. CompositionDiff is nil in that case, but the composition did change, so the
 	// renderer must not report it as unchanged.
 	MaskedChangesOnly bool

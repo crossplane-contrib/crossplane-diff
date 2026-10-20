@@ -865,7 +865,7 @@ type CompDiffProcessor interface {
    composition differs *at all*. The two come apart whenever a mask hides the only difference, and only the scope is
    allowed to gate step 3a. The scope is computed by re-running the comparison with every mask lifted (only when the
    masked comparison came back equal — the extra comparison is local, no API calls): `--ignore-paths` cleared, and
-   `DiffOptions.ForVerdict` set so the renderer's display-only suppressions stop hiding fields too. Both kinds of mask
+   `compare.Options.ForVerdict` set so the comparison's display-only suppressions stop hiding fields too. Both kinds of mask
    can hide a real difference, so neither may decide the verdict; see §6.8.2. `compositionChangeScope` then decides
    whether the difference reaches the spec by comparing the two `spec` subtrees directly. A composition absent from the
    cluster is `spec` by construction — there is no prior spec. When the displayed diff is empty but the scope is not
@@ -960,7 +960,7 @@ type CompDiffProcessor interface {
    annotation the file itself carries, so the value the cluster ends up holding — which `Hash()` covers — is a function
    of the user's apply *mode*, not of the file: server-side apply leaves it alone, client-side rewrites it.
    `calculateCompositionDiff` establishes this with one more local comparison: the same mask-lifted view, with that
-   single path (`renderer.PathLastAppliedConfiguration`) ignored. Ordering matters, because the annotation must stay in
+   single path (`compare.PathLastAppliedConfiguration`) ignored. Ordering matters, because the annotation must stay in
    the comparison that decides `ChangeScope` — it is a real difference and Crossplane hashes it — and be excluded only
    from this narrower question about identity. Before giving up on the name, `lastAppliedDescribes` checks whether the
    cluster's annotation, parsed as JSON, is semantically the file minus that annotation (empty `annotations` treated as
@@ -1062,7 +1062,7 @@ func NewDiffCalculator(
     tree xp.ResourceTreeClient,
     resourceManager ResourceManager,
     logger logging.Logger,
-    diffOptions renderer.DiffOptions,
+    compareOptions compare.Options,
     dryRunOn DryRunOn,
     predictor Defaulter,
 ) DiffCalculator
@@ -1072,7 +1072,9 @@ The `AccessChecker` and `DryRunOn` are constructor parameters rather than post-c
 cannot exist in a state where it is about to reach the apiserver without knowing what it is permitted to do. The
 `predictor` (a lenient `Defaulter`, §6.5a) is a constructor parameter for the same reason in reverse: it is what the
 calculator shows for an addition when it does *not* reach the apiserver. The `ProcessorConfig.Factories.DiffCalculator`
-factory type carries the same signature.
+factory type carries the same signature. `compareOptions` (from `ProcessorConfig.GetCompareOptions`) carries only
+what decides the comparison, `IgnorePaths` and `ForVerdict`; presentation settings stay in `renderer.DiffOptions`, so
+the calculator does not depend on the renderer package.
 
 #### 6.3.2 Computing the would-be state
 
@@ -1683,13 +1685,13 @@ JSON tags), so the field naming is consistent across formats.
 `metadata.annotations[kubectl.kubernetes.io/last-applied-configuration]`) apply uniformly across output formats.
 
 That last annotation is **display-only** suppression (`displayOnlyIgnoredPaths` in `cleanupForDiff`), handled by the
-renderer rather than prepended to `IgnorePaths` at the CLI layer, so that `IgnorePaths` means exactly "masks the user
+comparison (package `compare`) rather than prepended to `IgnorePaths` at the CLI layer, so that `IgnorePaths` means exactly "masks the user
 asked for". Showing it is useless — it is a multi-KB serialization of the object itself — but suppressing it from
 *display* must not suppress it from a change *verdict*: Crossplane hashes annotations into a composition's identity, so a
-difference here produces a new CompositionRevision (see §6.2 step 3a). `DiffOptions.ForVerdict` exists for exactly this —
+difference here produces a new CompositionRevision (see §6.2 step 3a). `compare.Options.ForVerdict` exists for exactly this —
 it keeps the display-only fields in the comparison, and comp's change verdict sets it alongside clearing `IgnorePaths`.
 The general rule: **a field hidden to keep output readable may never decide whether a change exists.** Cleanup happens
-during diff generation (`GenerateDiffWithOptions`), not in the renderers, and each object is cleaned at most once: the
+during diff generation (`compare.GenerateDiff`), not in the renderers, and each object is cleaned at most once: the
 results are stored on the `ResourceDiff` as `ResourceViews{Raw, Clean}`. `Raw` is the original object (load-bearing for
 removal detection and existing-XR reconstruction); `Clean` is the post-cleanup object. `Clean` is populated only for
 non-equal diffs — the ones that will actually be rendered. Equal diffs render nothing, so they retain only `Raw` and
@@ -1699,7 +1701,7 @@ identical fields under each `xrs[].changes[]`) and performs no cleanup of its ow
 matches what the human diff shows. This matches the semantic-filter
 convention used by ArgoCD (`ignoreDifferences`) and Terraform (`ignore_changes`): ignore is applied once, before output,
 and is visible in classification, summary counts, and rendered bodies alike. The annotation's path is exported as
-`renderer.PathLastAppliedConfiguration`, because a second caller has to name the same path and the two must not drift:
+`compare.PathLastAppliedConfiguration`, because a second caller has to name the same path and the two must not drift:
 comp's revision-name prediction asks whether it is the *only* thing a composition differs by (§6.2 step 3a).
 
 A composite's own `compositionRevisionRef` needs no suppression, although this tool writes it. The ref the composition
@@ -2842,6 +2844,8 @@ cmd/
 │   │   │                          #   ResourceClient, SchemaClient, TypeConverter
 │   │   └── crossplane/            # Composition*, Definition, Environment, Function,
 │   │                              #   Credential, ResourceTree clients
+│   ├── compare/                   # GenerateDiff: structured ResourceDiff between two objects,
+│   │                              #   cleanup and ignore paths (compare.Options)
 │   ├── renderer/                  # DiffRenderer, CompDiffRenderer, structured (JSON/YAML) renderers
 │   ├── ref/                       # Composite-ref parsing for `comp --resource`
 │   ├── kubecfg/                   # kubeconfig resolution helpers

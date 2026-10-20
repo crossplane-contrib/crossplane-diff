@@ -127,7 +127,7 @@ func NewDiffProcessor(k8cs k8.Clients, xpcs xp.Clients, opts ...ProcessorOption)
 	requirementsProvider := config.Factories.RequirementsProvider(k8cs.Resource, xpcs.Environment, config.Logger)
 	renderDefaulter := config.Factories.Defaulter(k8cs.Schema, xpcs.Definition, StrictDefaulting)
 	predictor := config.Factories.Defaulter(k8cs.Schema, xpcs.Definition, LenientDefaulting)
-	diffCalculator := config.Factories.DiffCalculator(k8cs.Apply, k8cs.Access, xpcs.ResourceTree, resourceManager, config.Logger, diffOpts, config.DryRunOn, predictor)
+	diffCalculator := config.Factories.DiffCalculator(k8cs.Apply, k8cs.Access, xpcs.ResourceTree, resourceManager, config.Logger, config.GetCompareOptions(), config.DryRunOn, predictor)
 	diffRenderer := config.Factories.DiffRenderer(config.Logger, diffOpts)
 
 	functionProvider := config.Factories.FunctionProvider(xpcs.Function, config.Logger)
