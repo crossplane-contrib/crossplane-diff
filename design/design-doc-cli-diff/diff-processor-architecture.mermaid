@@ -163,5 +163,11 @@ classDiagram
 
     ProcessorConfig --> ComponentFactories
 
+    class compare {
+        <<package>>
+        +GenerateDiff(ctx, current, desired, logger, Options) (*ResourceDiff, error)
+    }
+
+    DiffCalculator --> compare : cleanup, ignore paths, line diff
     DiffCalculator --> ResourceManager
     DiffCalculator --> Defaulter : lenient, additions without a dry run
