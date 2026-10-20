@@ -1,12 +1,9 @@
 package diffprocessor
 
 import (
-	"io"
-
 	xp "github.com/crossplane-contrib/crossplane-diff/cmd/diff/client/crossplane"
 	k8 "github.com/crossplane-contrib/crossplane-diff/cmd/diff/client/kubernetes"
 	"github.com/crossplane-contrib/crossplane-diff/cmd/diff/compare"
-	"github.com/crossplane-contrib/crossplane-diff/cmd/diff/renderer"
 	dt "github.com/crossplane-contrib/crossplane-diff/cmd/diff/renderer/types"
 	corev1 "k8s.io/api/core/v1"
 
@@ -100,35 +97,19 @@ func (s ChangeScope) triggersAnalysis(on AnalyzeOn) bool {
 	}
 }
 
-// ProcessorConfig contains configuration for the DiffProcessor.
+// ProcessorConfig contains configuration for the DiffProcessor. It holds no presentation state: the
+// processors return reports, and the caller renders them.
 type ProcessorConfig struct {
-	// Colorize determines whether to use colors in the diff output
-	Colorize bool
-
-	// Compact determines whether to show a compact diff format
-	Compact bool
-
-	// OutputFormat specifies the output format for diffs (diff, json, yaml)
-	OutputFormat renderer.OutputFormat
-
-	// OutputVersion specifies the schema version of structured (json, yaml) output
-	OutputVersion renderer.OutputVersion
-
 	// MaxNestedDepth is the maximum depth for recursive nested XR processing
 	MaxNestedDepth int
 
 	// IncludeManual determines whether to include XRs with Manual update policy in composition diffs
 	IncludeManual bool
 
-	// MinimizeComposition collapses composition changes to a single marker line per
-	// composition, omitting the full YAML diff body. Human renderer only; structured
-	// output always includes full compositionChanges.
-	MinimizeComposition bool
-
-	// Advisories is the channel user-facing advisories are raised on, and drained from for structured
-	// output. Pass the same collector to every processor of one run (the CLI passes one set of options to
-	// both), so the composition processor's output includes what its XR processor raised. Unset, each
-	// processor collects its own, writing to Stderr.
+	// Advisories is the channel user-facing advisories are raised on, and drained from into the report.
+	// Pass the same collector to every processor of one run (the CLI passes one set of options to
+	// both), so the composition processor's report includes what its XR processor raised. Unset, each
+	// processor collects its own, writing nowhere; the CLI injects one that also writes to stderr.
 	Advisories *AdvisoryCollector
 
 	// AnalyzeOn is the smallest composition change that triggers per-composite impact analysis.
@@ -166,12 +147,6 @@ type ProcessorConfig struct {
 	// 4MB). When >0 it is injected as the appropriate container env var,
 	//  so large XRs don't trip the default limit under render.
 	MaxRecvMessageSize int
-
-	// Stdout is the writer for diff output (defaults to os.Stdout)
-	Stdout io.Writer
-
-	// Stderr is the writer for error output (defaults to os.Stderr)
-	Stderr io.Writer
 
 	// Logger is the logger to use
 	Logger logging.Logger
@@ -222,12 +197,6 @@ type ComponentFactories struct {
 	// DiffCalculator creates a DiffCalculator
 	DiffCalculator func(apply k8.ApplyClient, access k8.AccessChecker, tree xp.ResourceTreeClient, resourceManager ResourceManager, logger logging.Logger, compareOptions compare.Options, dryRunOn DryRunOn, predictor Defaulter) DiffCalculator
 
-	// DiffRenderer creates a DiffRenderer
-	DiffRenderer func(logger logging.Logger, diffOptions renderer.DiffOptions) renderer.DiffRenderer
-
-	// CompDiffRenderer creates a CompDiffRenderer for composition diffs
-	CompDiffRenderer func(logger logging.Logger, diffRenderer renderer.DiffRenderer, opts renderer.DiffOptions) renderer.CompDiffRenderer
-
 	// RequirementsProvider creates an ExtraResourceProvider
 	RequirementsProvider func(res k8.ResourceClient, def xp.EnvironmentClient, logger logging.Logger) *RequirementsProvider
 
@@ -240,34 +209,6 @@ type ComponentFactories struct {
 
 // ProcessorOption defines a function that can modify a ProcessorConfig.
 type ProcessorOption func(*ProcessorConfig)
-
-// WithColorize sets whether to use colors in diff output.
-func WithColorize(colorize bool) ProcessorOption {
-	return func(config *ProcessorConfig) {
-		config.Colorize = colorize
-	}
-}
-
-// WithCompact sets whether to use compact diff format.
-func WithCompact(compact bool) ProcessorOption {
-	return func(config *ProcessorConfig) {
-		config.Compact = compact
-	}
-}
-
-// WithOutputFormat sets the output format for diffs.
-func WithOutputFormat(format renderer.OutputFormat) ProcessorOption {
-	return func(config *ProcessorConfig) {
-		config.OutputFormat = format
-	}
-}
-
-// WithOutputVersion sets the schema version of structured output.
-func WithOutputVersion(version renderer.OutputVersion) ProcessorOption {
-	return func(config *ProcessorConfig) {
-		config.OutputVersion = version
-	}
-}
 
 // WithMaxNestedDepth sets the maximum depth for recursive nested XR processing.
 func WithMaxNestedDepth(depth int) ProcessorOption {
@@ -307,13 +248,6 @@ func WithDryRunOn(dryRunOn DryRunOn) ProcessorOption {
 		if dryRunOn != "" {
 			config.DryRunOn = dryRunOn
 		}
-	}
-}
-
-// WithMinimizeComposition sets whether to collapse composition changes to a single marker line.
-func WithMinimizeComposition(minimize bool) ProcessorOption {
-	return func(config *ProcessorConfig) {
-		config.MinimizeComposition = minimize
 	}
 }
 
@@ -361,20 +295,6 @@ func WithFunctionRegistryOverride(registry string) ProcessorOption {
 func WithMaxRecvMessageSize(mb int) ProcessorOption {
 	return func(config *ProcessorConfig) {
 		config.MaxRecvMessageSize = mb
-	}
-}
-
-// WithStdout sets the writer for diff output.
-func WithStdout(w io.Writer) ProcessorOption {
-	return func(config *ProcessorConfig) {
-		config.Stdout = w
-	}
-}
-
-// WithStderr sets the writer for error output.
-func WithStderr(w io.Writer) ProcessorOption {
-	return func(config *ProcessorConfig) {
-		config.Stderr = w
 	}
 }
 
@@ -450,13 +370,6 @@ func WithDiffCalculatorFactory(factory func(k8.ApplyClient, k8.AccessChecker, xp
 	}
 }
 
-// WithDiffRendererFactory sets the DiffRenderer factory function.
-func WithDiffRendererFactory(factory func(logging.Logger, renderer.DiffOptions) renderer.DiffRenderer) ProcessorOption {
-	return func(config *ProcessorConfig) {
-		config.Factories.DiffRenderer = factory
-	}
-}
-
 // WithRequirementsProviderFactory sets the RequirementsProvider factory function.
 func WithRequirementsProviderFactory(factory func(k8.ResourceClient, xp.EnvironmentClient, logging.Logger) *RequirementsProvider) ProcessorOption {
 	return func(config *ProcessorConfig) {
@@ -483,33 +396,6 @@ func (c *ProcessorConfig) GetCompareOptions() compare.Options {
 	return compare.Options{IgnorePaths: c.IgnorePaths}
 }
 
-// GetDiffOptions returns DiffOptions based on the ProcessorConfig.
-func (c *ProcessorConfig) GetDiffOptions() renderer.DiffOptions {
-	opts := renderer.DefaultDiffOptions()
-	opts.UseColors = c.Colorize
-	opts.Compact = c.Compact
-	opts.MinimizeComposition = c.MinimizeComposition
-
-	if c.OutputFormat != "" {
-		opts.Format = c.OutputFormat
-	}
-
-	if c.OutputVersion != "" {
-		opts.OutputVersion = c.OutputVersion
-	}
-
-	// Use config's Stdout/Stderr if set, otherwise keep defaults (os.Stdout/os.Stderr)
-	if c.Stdout != nil {
-		opts.Stdout = c.Stdout
-	}
-
-	if c.Stderr != nil {
-		opts.Stderr = c.Stderr
-	}
-
-	return opts
-}
-
 // SetDefaultFactories sets default component factory functions if not already set.
 func (c *ProcessorConfig) SetDefaultFactories() {
 	if c.Factories.ResourceManager == nil {
@@ -526,32 +412,6 @@ func (c *ProcessorConfig) SetDefaultFactories() {
 
 	if c.Factories.DiffCalculator == nil {
 		c.Factories.DiffCalculator = NewDiffCalculator
-	}
-
-	if c.Factories.DiffRenderer == nil {
-		// Set the appropriate renderer factory based on output format
-		switch c.OutputFormat {
-		case renderer.OutputFormatJSON, renderer.OutputFormatYAML:
-			c.Factories.DiffRenderer = renderer.NewStructuredDiffRenderer
-		case renderer.OutputFormatDiff:
-			c.Factories.DiffRenderer = renderer.NewDiffRenderer
-		default:
-			c.Factories.DiffRenderer = renderer.NewDiffRenderer
-		}
-	}
-
-	if c.Factories.CompDiffRenderer == nil {
-		// Set the appropriate renderer factory based on output format
-		switch c.OutputFormat {
-		case renderer.OutputFormatJSON, renderer.OutputFormatYAML:
-			c.Factories.CompDiffRenderer = func(logger logging.Logger, _ renderer.DiffRenderer, opts renderer.DiffOptions) renderer.CompDiffRenderer {
-				return renderer.NewStructuredCompDiffRenderer(logger, opts)
-			}
-		case renderer.OutputFormatDiff:
-			fallthrough
-		default:
-			c.Factories.CompDiffRenderer = renderer.NewDefaultCompDiffRenderer
-		}
 	}
 
 	if c.Factories.RequirementsProvider == nil {

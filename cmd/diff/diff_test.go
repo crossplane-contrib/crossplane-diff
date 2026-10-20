@@ -31,7 +31,6 @@ import (
 	dp "github.com/crossplane-contrib/crossplane-diff/cmd/diff/diffprocessor"
 	"github.com/crossplane-contrib/crossplane-diff/cmd/diff/kubecfg"
 	tu "github.com/crossplane-contrib/crossplane-diff/cmd/diff/testutils"
-	"github.com/crossplane-contrib/crossplane-diff/cmd/diff/types"
 	"github.com/crossplane/cli/v2/cmd/crossplane/common/load"
 	itu "github.com/crossplane/cli/v2/cmd/crossplane/common/load/testutils"
 	"github.com/google/go-cmp/cmp"
@@ -516,9 +515,7 @@ spec:
 			setupProcessor: func() dp.DiffProcessor {
 				return tu.NewMockDiffProcessor().
 					WithSuccessfulInitialize().
-					WithPerformDiff(func(_ context.Context, _ []*un.Unstructured, _ types.CompositionProvider) (bool, error) {
-						return false, errors.New("processing error")
-					}).
+					WithFailedPerformDiff("processing error").
 					Build()
 			},
 			setupLoader: func() *itu.MockLoader {
@@ -623,10 +620,8 @@ spec:
 			setupProcessor: func() dp.DiffProcessor {
 				return tu.NewMockDiffProcessor().
 					WithSuccessfulInitialize().
-					WithPerformDiff(func(_ context.Context, _ []*un.Unstructured, _ types.CompositionProvider) (bool, error) {
-						// For matching resources, we don't produce any output
-						return false, nil
-					}).
+					// For matching resources, we don't produce any output
+					WithSuccessfulPerformDiff().
 					Build()
 			},
 			setupLoader: func() *itu.MockLoader {

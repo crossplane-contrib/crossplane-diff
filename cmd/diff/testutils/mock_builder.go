@@ -1432,29 +1432,36 @@ func (b *DiffProcessorBuilder) WithFailedInitialize(errMsg string) *DiffProcesso
 }
 
 // WithPerformDiff adds an implementation for the PerformDiff method.
-func (b *DiffProcessorBuilder) WithPerformDiff(fn func(context.Context, []*un.Unstructured, dtypes.CompositionProvider) (bool, error)) *DiffProcessorBuilder {
+func (b *DiffProcessorBuilder) WithPerformDiff(fn func(context.Context, []*un.Unstructured, dtypes.CompositionProvider) (*types.XRReport, error)) *DiffProcessorBuilder {
 	b.mock.PerformDiffFn = fn
 	return b
 }
 
 // WithSuccessfulPerformDiff sets a successful PerformDiff implementation with no diffs.
 func (b *DiffProcessorBuilder) WithSuccessfulPerformDiff() *DiffProcessorBuilder {
-	return b.WithPerformDiff(func(context.Context, []*un.Unstructured, dtypes.CompositionProvider) (bool, error) {
-		return false, nil
+	return b.WithPerformDiff(func(context.Context, []*un.Unstructured, dtypes.CompositionProvider) (*types.XRReport, error) {
+		return &types.XRReport{}, nil
 	})
 }
 
-// WithSuccessfulPerformDiffWithChanges sets a successful PerformDiff implementation with diffs.
+// WithSuccessfulPerformDiffWithChanges sets a successful PerformDiff implementation whose report
+// has one added resource.
 func (b *DiffProcessorBuilder) WithSuccessfulPerformDiffWithChanges() *DiffProcessorBuilder {
-	return b.WithPerformDiff(func(context.Context, []*un.Unstructured, dtypes.CompositionProvider) (bool, error) {
-		return true, nil
+	return b.WithPerformDiff(func(context.Context, []*un.Unstructured, dtypes.CompositionProvider) (*types.XRReport, error) {
+		added := &types.ResourceDiff{
+			Gvk:          schema.GroupVersionKind{Group: "example.org", Version: "v1", Kind: "XDownstreamResource"},
+			ResourceName: "added-resource",
+			DiffType:     types.DiffTypeAdded,
+		}
+
+		return &types.XRReport{Groups: []types.XRDiffGroup{{Diffs: map[string]*types.ResourceDiff{added.GetDiffKey(): added}}}}, nil
 	})
 }
 
-// WithFailedPerformDiff sets a failing PerformDiff implementation.
+// WithFailedPerformDiff sets a failing PerformDiff implementation, whose report holds the error.
 func (b *DiffProcessorBuilder) WithFailedPerformDiff(errMsg string) *DiffProcessorBuilder {
-	return b.WithPerformDiff(func(context.Context, []*un.Unstructured, dtypes.CompositionProvider) (bool, error) {
-		return false, errors.New(errMsg)
+	return b.WithPerformDiff(func(context.Context, []*un.Unstructured, dtypes.CompositionProvider) (*types.XRReport, error) {
+		return &types.XRReport{Errors: []types.OutputError{{Message: errMsg}}}, errors.New(errMsg)
 	})
 }
 

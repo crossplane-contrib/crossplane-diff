@@ -153,7 +153,7 @@ func (c *CompCmd) AfterApply(ctx *kong.Context, log logging.Logger, advisories *
 		return err
 	}
 
-	proc := makeDefaultCompProc(c, ctx, appCtx, log, advisories)
+	proc := makeDefaultCompProc(c, appCtx, log, advisories)
 
 	loader, err := ld.NewCompositeLoader(c.Files)
 	if err != nil {
@@ -166,17 +166,14 @@ func (c *CompCmd) AfterApply(ctx *kong.Context, log logging.Logger, advisories *
 	return nil
 }
 
-func makeDefaultCompProc(c *CompCmd, kongCtx *kong.Context, appCtx *AppContext, log logging.Logger, advisories *dp.AdvisoryCollector) dp.CompDiffProcessor {
+func makeDefaultCompProc(c *CompCmd, appCtx *AppContext, log logging.Logger, advisories *dp.AdvisoryCollector) dp.CompDiffProcessor {
 	// Both processors share the same options since they're part of the same command
 	opts := defaultProcessorOptions(c.CommonCmdFields)
 	opts = append(opts,
 		dp.WithLogger(log),
 		dp.WithAdvisories(advisories),
 		dp.WithIncludeManual(c.IncludeManual),
-		dp.WithMinimizeComposition(c.MinimizeComposition),
 		dp.WithAnalyzeOn(c.analyzeOn()),
-		dp.WithStdout(kongCtx.Stdout),
-		dp.WithStderr(kongCtx.Stderr),
 	)
 
 	// Create XR processor first (peer processor)
@@ -187,7 +184,7 @@ func makeDefaultCompProc(c *CompCmd, kongCtx *kong.Context, appCtx *AppContext, 
 }
 
 // Run executes the composition diff command.
-func (c *CompCmd) Run(sigCtx context.Context, _ *kong.Context, log logging.Logger, appCtx *AppContext, proc dp.CompDiffProcessor, loader ld.Loader, exitCode *ExitCode) (err error) {
+func (c *CompCmd) Run(sigCtx context.Context, kongCtx *kong.Context, log logging.Logger, appCtx *AppContext, proc dp.CompDiffProcessor, loader ld.Loader, exitCode *ExitCode) (err error) {
 	ctx, cancel, err := initializeAppContext(sigCtx, c.Timeout, appCtx, log)
 	if err != nil {
 		exitCode.Code = dp.ExitCodeToolError
@@ -220,10 +217,21 @@ func (c *CompCmd) Run(sigCtx context.Context, _ *kong.Context, log logging.Logge
 		return err
 	}
 
-	hasDiffs, err := proc.DiffComposition(ctx, compositions, c.Namespace, parsedRefs)
+	output, err := proc.DiffComposition(ctx, compositions, c.Namespace, parsedRefs)
+
+	// Render the report even when there are errors (e.g. every composition failed), so structured
+	// output stays valid. A render failure takes precedence over the processing error.
+	if output != nil {
+		opts := diffOptions(c.CommonCmdFields, kongCtx)
+		opts.MinimizeComposition = c.MinimizeComposition
+
+		if renderErr := newCompDiffRenderer(log, opts).RenderCompDiff(output); renderErr != nil {
+			err = errors.Wrap(renderErr, "failed to render composition diff")
+		}
+	}
 
 	// Determine exit code based on result
-	exitCode.Code = dp.DetermineExitCode(err, hasDiffs)
+	exitCode.Code = dp.DetermineExitCode(err, output != nil && output.HasChanges())
 	if err != nil {
 		return errors.Wrap(err, "unable to process composition diff")
 	}

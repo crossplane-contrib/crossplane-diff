@@ -68,7 +68,7 @@ Examples:
 // AppContext is received via dependency injection - Kong resolves it through the provider chain:
 // ContextProvider (bound in CommonCmdFields.BeforeApply) -> provideRestConfig -> provideAppContext.
 func (c *XRCmd) AfterApply(ctx *kong.Context, log logging.Logger, advisories *dp.AdvisoryCollector, appCtx *AppContext) error {
-	proc := makeDefaultXRProc(c, ctx, appCtx, log, advisories)
+	proc := makeDefaultXRProc(c, appCtx, log, advisories)
 
 	loader, err := makeDefaultXRLoader(c)
 	if err != nil {
@@ -81,13 +81,11 @@ func (c *XRCmd) AfterApply(ctx *kong.Context, log logging.Logger, advisories *dp
 	return nil
 }
 
-func makeDefaultXRProc(c *XRCmd, kongCtx *kong.Context, appCtx *AppContext, log logging.Logger, advisories *dp.AdvisoryCollector) dp.DiffProcessor {
+func makeDefaultXRProc(c *XRCmd, appCtx *AppContext, log logging.Logger, advisories *dp.AdvisoryCollector) dp.DiffProcessor {
 	opts := defaultProcessorOptions(c.CommonCmdFields)
 	opts = append(opts,
 		dp.WithLogger(log),
 		dp.WithAdvisories(advisories),
-		dp.WithStdout(kongCtx.Stdout),
-		dp.WithStderr(kongCtx.Stderr),
 	)
 
 	return dp.NewDiffProcessor(appCtx.K8sClients, appCtx.XpClients, opts...)
@@ -98,7 +96,7 @@ func makeDefaultXRLoader(c *XRCmd) (ld.Loader, error) {
 }
 
 // Run executes the XR diff command.
-func (c *XRCmd) Run(sigCtx context.Context, _ *kong.Context, log logging.Logger, appCtx *AppContext, proc dp.DiffProcessor, loader ld.Loader, exitCode *ExitCode) (err error) {
+func (c *XRCmd) Run(sigCtx context.Context, kongCtx *kong.Context, log logging.Logger, appCtx *AppContext, proc dp.DiffProcessor, loader ld.Loader, exitCode *ExitCode) (err error) {
 	// the rest config here is provided by a function in main.go that's only invoked for commands that request it
 	// in their arguments.  that means we won't get "can't find kubeconfig" errors for cases where the config isn't asked for.
 
@@ -135,10 +133,20 @@ func (c *XRCmd) Run(sigCtx context.Context, _ *kong.Context, log logging.Logger,
 		return errors.Wrap(err, "cannot initialize diff processor")
 	}
 
-	hasDiffs, err := proc.PerformDiff(ctx, resources, appCtx.XpClients.Composition.FindMatchingComposition)
+	report, err := proc.PerformDiff(ctx, resources, appCtx.XpClients.Composition.FindMatchingComposition)
+
+	// Render the report even when there are errors, so successful XRs are shown and structured
+	// output stays valid. The renderer includes the errors in structured output.
+	if report != nil {
+		diffRenderer := newDiffRenderer(log, diffOptions(c.CommonCmdFields, kongCtx))
+		if renderErr := diffRenderer.RenderDiffs(report.Groups, report.Errors, report.Warnings); renderErr != nil {
+			log.Debug("Failed to render diffs", "error", renderErr)
+			err = withRenderError(err, errors.Wrap(renderErr, "failed to render diffs"))
+		}
+	}
 
 	// Determine exit code based on result
-	exitCode.Code = dp.DetermineExitCode(err, hasDiffs)
+	exitCode.Code = dp.DetermineExitCode(err, report != nil && report.HasChanges())
 	if err != nil {
 		return errors.Wrap(err, "unable to process one or more resources")
 	}

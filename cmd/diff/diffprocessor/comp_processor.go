@@ -20,7 +20,6 @@ import (
 	"context"
 	"fmt"
 	"maps"
-	"os"
 	"time"
 
 	xp "github.com/crossplane-contrib/crossplane-diff/cmd/diff/client/crossplane"
@@ -72,13 +71,15 @@ func (r *XRDiffResult) HasError() bool {
 
 // CompDiffProcessor defines the interface for composition diffing.
 type CompDiffProcessor interface {
-	// DiffComposition processes composition changes and shows impact on existing XRs.
-	// Returns (hasDiffs, error) where hasDiffs indicates if any differences were detected.
+	// DiffComposition processes composition changes and their impact on existing XRs, and returns
+	// the report for the caller to render. The report is non-nil whenever compositions were
+	// processed, even with an error, so it can still be rendered.
 	// When `resources` is non-empty, impact analysis is restricted to the named composites:
 	// each ref is resolved against every supplied composition's (XR GVK, claim GVK) pair via a
 	// preflight pass. If any ref is relevant to no supplied composition, the call fails before
-	// rendering any diffs (CLI input error). When `resources` is empty, behavior is unchanged.
-	DiffComposition(ctx context.Context, compositions []*un.Unstructured, namespace string, resources []k8stypes.NamespacedName) (bool, error)
+	// processing any composition, with a nil report (CLI input error). When `resources` is empty,
+	// behavior is unchanged.
+	DiffComposition(ctx context.Context, compositions []*un.Unstructured, namespace string, resources []k8stypes.NamespacedName) (*renderer.CompDiffOutput, error)
 	Initialize(ctx context.Context) error
 	// Cleaner releases any resources held by the processor (e.g., Docker containers).
 	Cleaner
@@ -89,18 +90,14 @@ type DefaultCompDiffProcessor struct {
 	compositionClient xp.CompositionClient
 	config            ProcessorConfig
 	xrProc            DiffProcessor
-	compDiffRenderer  renderer.CompDiffRenderer
 }
 
 // NewCompDiffProcessor creates a new DefaultCompDiffProcessor.
 func NewCompDiffProcessor(xrProc DiffProcessor, compositionClient xp.CompositionClient, opts ...ProcessorOption) CompDiffProcessor {
 	// Create default configuration
 	config := ProcessorConfig{
-		Colorize:            true,
-		Compact:             false,
 		MaxNestedDepth:      DefaultMaxNestedDepth,
 		MaxRenderIterations: DefaultMaxRenderIterations,
-		Stderr:              os.Stderr,
 		Logger:              logging.NewNopLogger(),
 	}
 
@@ -109,8 +106,9 @@ func NewCompDiffProcessor(xrProc DiffProcessor, compositionClient xp.Composition
 		option(&config)
 	}
 
+	// Unset, advisories are only collected into the report; see NewDiffProcessor.
 	if config.Advisories == nil {
-		config.Advisories = NewAdvisoryCollector(config.Stderr)
+		config.Advisories = NewAdvisoryCollector(nil)
 	}
 
 	// NOTE: We intentionally do NOT default config.RenderFunc here.
@@ -131,18 +129,10 @@ func NewCompDiffProcessor(xrProc DiffProcessor, compositionClient xp.Composition
 	// Set default factories if not provided
 	config.SetDefaultFactories()
 
-	// Create diff renderer first (needed by DefaultCompDiffRenderer for human-readable output)
-	diffOpts := config.GetDiffOptions()
-	diffRenderer := config.Factories.DiffRenderer(config.Logger, diffOpts)
-
-	// Create comp diff renderer using factory
-	compDiffRenderer := config.Factories.CompDiffRenderer(config.Logger, diffRenderer, diffOpts)
-
 	return &DefaultCompDiffProcessor{
 		compositionClient: compositionClient,
 		config:            config,
 		xrProc:            xrProc,
-		compDiffRenderer:  compDiffRenderer,
 	}
 }
 
@@ -166,24 +156,25 @@ func (p *DefaultCompDiffProcessor) Cleanup(ctx context.Context) error {
 	return p.xrProc.Cleanup(ctx)
 }
 
-// DiffComposition processes composition changes and shows impact on existing XRs.
-// Returns (hasDiffs, error) where hasDiffs indicates if any differences were detected.
-func (p *DefaultCompDiffProcessor) DiffComposition(ctx context.Context, compositions []*un.Unstructured, namespace string, resources []k8stypes.NamespacedName) (bool, error) {
+// DiffComposition processes composition changes and their impact on existing XRs, and returns the
+// report for the caller to render. The report is non-nil whenever compositions were processed, even
+// with an error.
+func (p *DefaultCompDiffProcessor) DiffComposition(ctx context.Context, compositions []*un.Unstructured, namespace string, resources []k8stypes.NamespacedName) (*renderer.CompDiffOutput, error) {
 	p.config.Logger.Debug("Processing composition diff",
 		"compositionCount", len(compositions),
 		"namespace", namespace,
 		"resourceCount", len(resources))
 
 	if len(compositions) == 0 {
-		return false, errors.New("no compositions provided")
+		return nil, errors.New("no compositions provided")
 	}
 
 	// When --resource is set, run a preflight pass that resolves every ref against every supplied
-	// composition. If any ref is relevant to no supplied composition, fail loudly BEFORE rendering
-	// any diffs (this is a CLI input error, not a downstream processing failure).
+	// composition. If any ref is relevant to no supplied composition, fail loudly BEFORE processing
+	// any composition (this is a CLI input error, not a downstream processing failure).
 	preflightMatches, err := p.preflightResourceRefs(ctx, compositions, resources)
 	if err != nil {
-		return false, err
+		return nil, err
 	}
 
 	output := &renderer.CompDiffOutput{
@@ -192,8 +183,6 @@ func (p *DefaultCompDiffProcessor) DiffComposition(ctx context.Context, composit
 	}
 
 	var compositionErrors int
-
-	hasDiffs := false
 
 	// Process each composition, filtering out non-Composition objects
 	for _, comp := range compositions {
@@ -257,10 +246,6 @@ func (p *DefaultCompDiffProcessor) DiffComposition(ctx context.Context, composit
 				ImpactAnalysis: []renderer.XRImpact{},
 			})
 		} else {
-			if compResult.HasChanges() {
-				hasDiffs = true
-			}
-
 			output.Compositions = append(output.Compositions, *compResult)
 		}
 	}
@@ -277,35 +262,29 @@ func (p *DefaultCompDiffProcessor) DiffComposition(ctx context.Context, composit
 	}
 
 	// Release resources before draining advisories, so one raised during teardown (leftover function
-	// containers) is collected rather than arriving after the renderer has already read the slice.
+	// containers) is collected rather than arriving after the report has been returned and rendered.
 	CleanupDetached(ctx, p, p.config.Logger)
 
-	// Attach any advisories raised during the run. They have already reached stderr when raised; this
-	// carries them into structured output.
+	// Attach any advisories raised during the run. An injected collector has already echoed them to
+	// stderr when raised; this carries them into structured output.
 	output.Warnings = p.config.Advisories.Advisories()
 
 	// Counted before the interruption entry is added: it is not an XR failure.
 	totalXRErrors := len(output.Errors)
 	output.Errors = withInterruption(ctx, output.Errors)
 
-	// Always render output (even if all compositions failed) to ensure valid structured output
-	// The renderer will include errors in the structured output and write them to stderr
-	if err := p.compDiffRenderer.RenderCompDiff(output); err != nil {
-		return hasDiffs, errors.Wrap(err, "failed to render composition diff")
-	}
-
-	// Check for XR processing errors after rendering (so users see the output first).
-	// Return an error so CI/CD pipelines get a non-zero exit code when impact analysis failed.
+	// Return an error so CI/CD pipelines get a non-zero exit code when impact analysis failed. The
+	// report is returned with it, so the caller still renders it (structured output stays valid).
 	if totalXRErrors > 0 {
-		return hasDiffs, errors.Errorf("impact analysis failed for %d XR(s)", totalXRErrors)
+		return output, errors.Errorf("impact analysis failed for %d XR(s)", totalXRErrors)
 	}
 
 	// Return error if all compositions failed
 	if compositionErrors > 0 && compositionErrors == len(output.Compositions) {
-		return hasDiffs, errors.New("failed to process all compositions")
+		return output, errors.New("failed to process all compositions")
 	}
 
-	return hasDiffs, nil
+	return output, nil
 }
 
 // preflightResourceRefs resolves user --resource refs against every supplied composition before
