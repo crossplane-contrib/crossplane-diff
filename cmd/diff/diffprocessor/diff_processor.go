@@ -273,7 +273,7 @@ func (p *DefaultDiffProcessor) PerformDiff(ctx context.Context, resources []*un.
 		res := in.Resource
 
 		// Attribute the group to the name the XR is rendered under. A synthesized one (generateName
-		// only) is shown the way the diff formatter shows it, "<generateName>(generated)", so the
+		// only) is shown the way compare.GenerateDiff shows it, "<generateName>(generated)", so the
 		// grouped and flat views agree and no unpredictable hash is published (issue #477).
 		name, generated := renderName(res)
 		if generated {

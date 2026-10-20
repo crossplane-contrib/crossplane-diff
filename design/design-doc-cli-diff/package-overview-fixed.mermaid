@@ -10,6 +10,9 @@ classDiagram
         +Namespace string
         +IncludeManual bool
         +Resources []string
+        +MinimizeComposition bool
+        +AnalyzeOn string
+        +AnalyzeUnchanged bool
         +CommonCmdFields
         +Run(ctx, log, appCtx, proc, loader, exitCode) error
     }
@@ -17,6 +20,7 @@ classDiagram
     class CommonCmdFields {
         +Context KubeContext
         +Output string
+        +OutputVersion string
         +NoColor bool
         +Compact bool
         +MaxNestedDepth int
@@ -26,6 +30,10 @@ classDiagram
         +FunctionCredentials FunctionCredentials
         +FunctionRegistryOverride string
         +EventualState bool
+        +MaxRecvMessageSize int
+        +DryRunOn string
+        +CrossplaneVersion string
+        +CrossplaneImage string
         +CrossplaneRenderBinary string
     }
 
@@ -56,6 +64,11 @@ classDiagram
         +CalculateDiffs(ctx, xr, desired) (map[string]*ResourceDiff, error)
         +CalculateNonRemovalDiffs(ctx, xr, desired) (map[string]*ResourceDiff, RenderedResources, error)
         +CalculateRemovedResourceDiffs(ctx, xr, rendered) (map[string]*ResourceDiff, error)
+    }
+
+    class compare {
+        <<package>>
+        +GenerateDiff(ctx, current, desired, logger, options) (*ResourceDiff, error)
     }
 
     class Defaulter {
@@ -93,7 +106,7 @@ classDiagram
 
     class DiffRenderer {
         <<interface>>
-        +RenderDiffs(diffs, errs) error
+        +RenderDiffs(groups, errs, warnings) error
     }
 
     class CompDiffRenderer {
@@ -107,6 +120,7 @@ classDiagram
     }
 
     class KubernetesClients {
+        +Access AccessChecker
         +Apply ApplyClient
         +Resource ResourceClient
         +Schema SchemaClient
@@ -156,6 +170,8 @@ classDiagram
     DiffProcessor --> InputValidator
     DiffProcessor --> DiffRenderer
     CompDiffProcessor --> CompDiffRenderer
+    DiffCalculator --> compare : GenerateDiff
+    CompDiffProcessor --> compare : GenerateDiff, composition diff
 
     AppContext --> KubernetesClients
     AppContext --> CrossplaneClients

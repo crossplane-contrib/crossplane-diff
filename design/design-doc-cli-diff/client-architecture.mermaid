@@ -26,7 +26,7 @@ classDiagram
     }
 
     class DefaultAccessClient {
-        -dynamicClient dynamic.Interface
+        -kube kubeclient.Interface
         -typeConverter TypeConverter
         -logger logging.Logger
         -cache map[accessCacheKey]accessDecision
@@ -37,8 +37,9 @@ classDiagram
         <<interface>>
         +GetResource(ctx, gvk, namespace, name) (*Unstructured, error)
         +ListResources(ctx, gvk, namespace) ([]*Unstructured, error)
-        +GetResourcesByLabel(ctx, namespace, gvk, sel) ([]*Unstructured, error)
-        +GetAllResourcesByLabels(ctx, gvks, selectors) ([]*Unstructured, error)
+        +GetResourcesByLabel(ctx, gvk, namespace, sel) ([]*Unstructured, error)
+        +GetGVKsForGroupKind(ctx, group, kind) ([]GVK, error)
+        +IsNamespacedResource(ctx, gvk) (bool, error)
     }
     
     class DefaultResourceClient {
@@ -119,7 +120,8 @@ classDiagram
         -revisionClient CompositionRevisionClient
         -logger logging.Logger
         -compositions map[string]*Composition
-        -gvks map
+        -compositionsMu sync.RWMutex
+        -gvks []GVK
     }
     
     class DefinitionClient {

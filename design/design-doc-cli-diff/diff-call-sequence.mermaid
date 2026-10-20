@@ -12,6 +12,8 @@ sequenceDiagram
     participant ResMgr as ResourceManager
     participant Validator as SchemaValidator
     participant DiffCalc as DiffCalculator
+    participant Compare as compare.GenerateDiff
+    participant Tree as ResourceTreeClient
     participant K8sAPI as Kubernetes API
     participant Renderer as DiffRenderer / CompDiffRenderer
 
@@ -25,8 +27,17 @@ sequenceDiagram
         Cmd->>CDP: DiffComposition(ctx, comps, ns, resources)
         CDP->>CompClient: FindComposites(ctx, comp, opts)
         CompClient-->>CDP: [affected XRs]
-        CDP->>DiffCalc: CalculateDiff(ctx, currentComp, newComp)
-        DiffCalc-->>CDP: composition-level diff
+        Note over CDP, Compare: Composition-level diff, once per composition, up to three local comparisons
+        CDP->>Compare: GenerateDiff(ctx, currentComp, newComp, logger, Options)
+        Compare-->>CDP: displayed diff (user's --ignore-paths and display masks applied)
+        opt Nothing displayed
+            CDP->>Compare: GenerateDiff(..., Options{IgnorePaths: nil, ForVerdict: true})
+            Compare-->>CDP: did the composition change at all (masks lifted)?
+            opt Changed
+                CDP->>Compare: GenerateDiff(..., Options{IgnorePaths: [last-applied-configuration], ForVerdict: true})
+                Compare-->>CDP: is last-applied-configuration the sole delta (revision name unpredictable)?
+            end
+        end
         Note over CDP, DP: For each affected XR, CDP calls DP.DiffSingleResource with a provider that returns the proposed composition, and the predicted revision name for a composite that would re-point. See per-XR body below.
     else xr subcommand
         Cmd->>DP: Initialize(ctx)
@@ -64,11 +75,8 @@ sequenceDiagram
             end
 
             DP->>DP: removeNamespacesFromClusterScopedResources(...)
-            opt Nested XRs present
-                DP->>DP: ProcessNestedXRs(..., depth+1)
-                DP->>DP: Recurse via diffSingleResourceInternal with the nested XR's cluster copy (err if depth > --max-nested-depth)
-            end
-            DP->>Validator: ValidateResources(authoredXR, composed) / ValidateScopeConstraints
+            DP->>Validator: ValidateResources(authoredXR, composed)
+            Validator->>Validator: ValidateScopeConstraints for each resource
             Validator-->>DP: ok / err (inputs left unmodified)
 
             DP->>DiffCalc: CalculateNonRemovalDiffs(ctx, authoredXR, desired)
@@ -89,12 +97,26 @@ sequenceDiagram
                 else addition, --dry-run-on=existing
                     DiffCalc->>DiffCalc: lenient Defaulter.Default(desired), mark dryRun.skipReason=disabled (+ storageVersion if the CRD stores another version)
                 end
+                DiffCalc->>Compare: GenerateDiff(ctx, current, wouldBeResult, logger, Options)
+                Compare-->>DiffCalc: ResourceDiff
             end
             DiffCalc-->>DP: diffs + rendered (keys, desired resource names per composite)
 
-            DP->>DiffCalc: CalculateRemovedResourceDiffs(ctx, xr, rendered)
-            DiffCalc->>ResMgr: walk live tree, match by composition resource name
-            DiffCalc-->>DP: removal diffs
+            opt Nested XRs present
+                DP->>DP: ProcessNestedXRs(..., depth+1)
+                DP->>DP: Recurse via diffSingleResourceInternal with the nested XR's cluster copy, without removal detection (err if depth > --max-nested-depth)
+                Note over DP: Merge the nested diffs and rendered resources into this XR's, so removal detection sees what nested XRs still compose
+            end
+
+            opt Top-level XR that exists in the cluster
+                DP->>DiffCalc: CalculateRemovedResourceDiffs(ctx, existingXR, rendered)
+                DiffCalc->>Tree: GetResourceTree(ctx, existingXR)
+                Tree-->>DiffCalc: live resource tree
+                Note over DiffCalc: Walk the tree. A composed resource is removed when its composite no longer desires its composition resource name
+                DiffCalc->>Compare: GenerateDiff(ctx, removed, nil, logger, Options)
+                Compare-->>DiffCalc: removal ResourceDiff
+                DiffCalc-->>DP: removal diffs
+            end
         end
     end
 
@@ -108,7 +130,7 @@ sequenceDiagram
     alt comp subcommand
         CDP->>Renderer: RenderCompDiff(output)
     else xr subcommand
-        DP->>Renderer: RenderDiffs(allDiffs, errs)
+        DP->>Renderer: RenderDiffs(groups, errs, warnings)
     end
 
     Renderer-->>Cmd: formatted output
