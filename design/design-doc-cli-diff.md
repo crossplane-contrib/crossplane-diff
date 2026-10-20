@@ -683,9 +683,11 @@ subcomponents. `DefaultCompDiffProcessor` (see §6.2) holds one as a named `xrPr
 ```go
 // DiffProcessor interface for processing resources.
 type DiffProcessor interface {
-    // PerformDiff processes all resources and writes diff output to the configured writer.
-    // Returns (hasDiffs, error); a nil error with hasDiffs=false means everything matched the cluster.
-    PerformDiff(ctx context.Context, resources []*un.Unstructured, compositionProvider types.CompositionProvider) (bool, error)
+    // PerformDiff processes all resources and returns the report for the command to render; it
+    // writes no output itself. The report is non-nil whenever resources were processed, even when
+    // the error is not, so the successful XRs' results are still rendered. Its HasChanges is the
+    // run's "has diffs" verdict.
+    PerformDiff(ctx context.Context, resources []*un.Unstructured, compositionProvider types.CompositionProvider) (*dt.XRReport, error)
 
     // DiffSingleResource processes one resource and returns its diffs without rendering them.
     // Used by CompDiffProcessor to drive per-XR diffs.
@@ -704,7 +706,17 @@ type DiffProcessor interface {
 type Cleaner interface {
     Cleanup(ctx context.Context) error
 }
+
+// XRReport (in renderer/types) is everything a DiffRenderer renders for one xr run.
+type XRReport struct {
+    Groups   []XRDiffGroup   // one per input, in input order
+    Errors   []OutputError   // union: every group's error, overlaps, and the interruption entry
+    Warnings []OutputWarning // the run's advisories, sorted, collected after Cleanup
+}
 ```
+
+The processors compute and the command presents (§6.8.2). `XRCmd.Run` renders the report with the renderer it builds
+from its flags, then derives the exit code from the processor's error and `HasChanges`.
 
 A `CompositionProvider` is `func(ctx, *Unstructured) (types.ResolvedComposition, error)`. The `xr` subcommand passes a
 provider that looks up matching compositions in the cluster; the `comp` subcommand passes one backed by the updated
@@ -748,17 +760,14 @@ The `DefaultDiffProcessor` uses several subcomponents:
 - `schemaValidator`: Validates resources against schemas and enforces scope constraints
 - `renderDefaulter`: The strict `Defaulter` (§6.5a) that defaults the effective composite
 - `diffCalculator`: Calculates differences between resources; holds the lenient `Defaulter` (§6.5a)
-- `diffRenderer`: Formats and displays XR diffs
 - `requirementsProvider`: Handles requirements (env-configs, label selectors) for rendering
 
 #### 6.1.2 Configuration
 
-The `ProcessorConfig` structure provides configuration options:
+The `ProcessorConfig` structure provides configuration options. It holds no presentation settings: `--output`,
+`--output-version`, `--no-color`, `--compact` and the output writers reach only the renderer the command builds
+(§6.8.2).
 
-- `Colorize`, `Compact`: Visual formatting toggles for the human-readable renderer.
-- `OutputFormat`: One of `diff`, `json`, `yaml`. Selects between the human-readable and structured renderers.
-- `OutputVersion`: `v1` (default) or `v2`, from `--output-version`. Selects the structured output schema (§6.8.2);
-  ignored by the human-readable renderers.
 - `MaxNestedDepth`: Recursion limit for nested-XR diff (`--max-nested-depth`) — the number of levels of nesting
   permitted below the XR the user named. Exceeding it fails the diff (see §7.1).
 - `MaxRenderIterations`: Cap on the requirements-discovery loop (`--max-iterations`).
@@ -781,7 +790,8 @@ The `ProcessorConfig` structure provides configuration options:
   `CommonCmdFields.DryRunOn`, which lives on the struct shared by `xr` and `comp`, so both subcommands get the flag;
   `WithDryRunOn` ignores an empty value so the config default survives.
 - `Advisories`: The `*AdvisoryCollector` advisories are raised on and drained from for structured output (§6.8.1). The
-  CLI passes one collector to both processors of a run. Unset, each processor builds its own, writing to `Stderr`.
+  CLI passes one collector to both processors of a run, built with the command's stderr, so each advisory is written
+  there as it is raised. Unset, each processor builds a collect-only one (`NewAdvisoryCollector(nil)`).
 - `EventualState`: Synthesize composed-resource readiness between render iterations to model the steady state of
   multi-stage compositions (`--eventual-state`).
 - `IgnorePaths`: Field paths to suppress from diffs (e.g., status fields known to be reconciler-set).
@@ -799,7 +809,6 @@ The `ProcessorConfig` structure provides configuration options:
 - `CrossplaneImage`: Optional full render image reference (e.g. a private mirror). Mutually exclusive with
   `CrossplaneVersion` and `CrossplaneRenderBinary`. Floor-checked at the CLI layer whenever its tag parses as a
   semantic version; a reference with no comparable version draws a warning instead (see §8.1).
-- `Stdout`, `Stderr`: Output sinks (writers are no longer threaded through method calls).
 - `Logger`: Structured logger, propagated to all subcomponents.
 - `RenderFunc`: Renders a composition pipeline; defaults to the in-process engine.
 - `Factories`: Factory functions for creating subcomponents (used for testing and to swap caching strategies).
@@ -822,9 +831,11 @@ The `CompDiffProcessor` powers the `comp` subcommand. Where `DiffProcessor` answ
 ```go
 // CompDiffProcessor defines the interface for composition diffing.
 type CompDiffProcessor interface {
-    // DiffComposition processes composition changes and shows impact on existing XRs.
-    // When `resources` is non-empty, impact analysis is restricted to the named composites.
-    DiffComposition(ctx context.Context, compositions []*un.Unstructured, namespace string, resources []k8stypes.NamespacedName) (bool, error)
+    // DiffComposition processes composition changes and returns their impact on existing XRs for
+    // the command to render. When `resources` is non-empty, impact analysis is restricted to the
+    // named composites. The output is nil only when the call fails before analysis (no
+    // compositions, a failed --resource preflight); otherwise it is returned even with an error.
+    DiffComposition(ctx context.Context, compositions []*un.Unstructured, namespace string, resources []k8stypes.NamespacedName) (*renderer.CompDiffOutput, error)
 
     Initialize(ctx context.Context) error
     Cleaner
@@ -1602,7 +1613,8 @@ human-readable and a structured (JSON/YAML) implementation.
 ```go
 // DiffRenderer handles rendering XR diffs.
 type DiffRenderer interface {
-    // RenderDiffs writes diffs grouped by input XR, plus the top-level (union) errors. The output
+    // RenderDiffs writes diffs grouped by input XR, plus the top-level (union) errors; the command
+    // passes it the fields of the XRReport PerformDiff returned. The output
     // writer is held by the renderer (configured at construction time), not passed in per call, so
     // the same interface can serve human-readable and structured renderers without leaking
     // io.Writer. warnings is for structured output only: each warning already went to stderr when
@@ -1662,7 +1674,10 @@ Implementations:
 
 #### 6.8.2 Output format selection and error contract
 
-The selection is via `OutputFormat` on `ProcessorConfig`:
+The command selects and builds the renderer; the processors never see it. `diffOptions` (`cmd_utils.go`) turns the
+flags and the kong context's stdout and stderr into `renderer.DiffOptions`, and `newDiffRenderer` /
+`newCompDiffRenderer` pick the structured renderer for `json` and `yaml` and the human-readable one otherwise (an
+empty or unknown `--output` falls back to `diff`). The selection is via `DiffOptions.Format`:
 
 ```go
 type OutputFormat string
@@ -1673,7 +1688,7 @@ const (
 )
 ```
 
-`OutputVersion` on `ProcessorConfig` (`--output-version`, reaching the renderers as `DiffOptions.OutputVersion`)
+`DiffOptions.OutputVersion` (`--output-version`)
 selects the structured schema, `"v1"` (the default; an empty value means v1) or `"v2"`, and has no effect on `diff`.
 The processors build the same internal types either way; only the structured renderers' wire builders differ (§6.8.3).
 Every structured document names its version in a top-level `outputVersion` field; adding it is the only change to
@@ -2023,7 +2038,8 @@ the leftover-container advisory (today from the render engine's run sweep of con
 `FunctionProvider.Cleanup`), and it was invoked solely from the command layer's `defer`, which runs
 at command exit — after `PerformDiff`/`DiffComposition` have already serialized `warnings[]`. That made
 one advisory permanently stderr-only, contradicting this section's own contract. Both processors
-therefore release resources immediately *before* rendering (`CleanupDetached`), on a context that keeps
+therefore release resources (`CleanupDetached`) immediately *before* reading the collected advisories into the report
+they return, which the command then renders. They do this on a context that keeps
 the run context's values but drops its cancellation (`context.WithoutCancel`), bounded by
 `CleanupTimeout`, so an expired `--timeout` cannot make teardown fail fast and report a container leak
 that is not real. The same detachment is what makes teardown survive Ctrl+C (#515): `main()` calls
@@ -2183,8 +2199,10 @@ The client layer provides interfaces to interact with Kubernetes and Crossplane 
       against its own render. A resource rendered at a new API version is therefore updated in place, not removed.
       Removals are built straight from cluster state and never carry a `DryRunInfo` — there is no desired state to
       preview.
-    - The `DiffRenderer` (human-readable or structured) formats and displays the result.
-5. `Cleanup` tears down any function containers / networks created during rendering. This is essential — without it,
+5. `PerformDiff` runs `Cleanup` (below), then returns the `XRReport`: every input's group, the union errors and the
+   collected advisories. `XRCmd.Run` renders it with the `DiffRenderer` (human-readable or structured) it built from
+   its flags, then sets the exit code.
+6. `Cleanup` tears down any function containers / networks created during rendering. This is essential — without it,
    Docker resources outlive the run. If the process dies before `Cleanup` runs, the next run reclaims what it left
    behind before starting any containers of its own (§6.7.2).
 
@@ -2224,7 +2242,8 @@ The client layer provides interfaces to interact with Kubernetes and Crossplane 
       XR's), so it reaches render but never the dry-run payload. No name is returned, with a warning, when it is not
       predictable (§6.2 step 3a). Anything derived from the name is shown.
 4. Aggregate per-XR results into a `CompDiffOutput` (composition diff + `XRImpact` list +
-   `AffectedResourcesSummary`) and render via the `CompDiffRenderer`.
+   `AffectedResourcesSummary`), run `Cleanup`, add the collected advisories, and return it. `CompCmd.Run` renders it
+   via the `CompDiffRenderer` it built from its flags; a render failure takes precedence over the processor's error.
 
 ### 7.3 Resource Rendering Workflow
 

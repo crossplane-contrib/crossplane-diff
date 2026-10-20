@@ -20,6 +20,7 @@ import (
 	"context"
 	"time"
 
+	"github.com/alecthomas/kong"
 	dp "github.com/crossplane-contrib/crossplane-diff/cmd/diff/diffprocessor"
 	"github.com/crossplane-contrib/crossplane-diff/cmd/diff/renderer"
 	ld "github.com/crossplane/cli/v2/cmd/crossplane/common/load"
@@ -58,6 +59,70 @@ func initializeAppContext(sigCtx context.Context, timeout time.Duration, appCtx 
 	return ctx, cancel, nil
 }
 
+// diffOptions returns the renderer options the command's flags select, writing to the kong context's
+// stdout and stderr. The processors return reports; the command renders them with these options.
+func diffOptions(fields CommonCmdFields, kongCtx *kong.Context) renderer.DiffOptions {
+	opts := renderer.DefaultDiffOptions()
+	opts.UseColors = !fields.NoColor
+	opts.Compact = fields.Compact
+	opts.Stdout = kongCtx.Stdout
+	opts.Stderr = kongCtx.Stderr
+
+	switch format := renderer.OutputFormat(fields.Output); format {
+	case renderer.OutputFormatJSON, renderer.OutputFormatYAML, renderer.OutputFormatDiff:
+		opts.Format = format
+	default:
+		// Empty string or unrecognized values fall back to the human-readable diff.
+		opts.Format = renderer.OutputFormatDiff
+	}
+
+	if fields.OutputVersion != "" {
+		opts.OutputVersion = renderer.OutputVersion(fields.OutputVersion)
+	}
+
+	return opts
+}
+
+// newDiffRenderer returns the renderer for an xr report in the format opts select.
+func newDiffRenderer(log logging.Logger, opts renderer.DiffOptions) renderer.DiffRenderer {
+	switch opts.Format {
+	case renderer.OutputFormatJSON, renderer.OutputFormatYAML:
+		return renderer.NewStructuredDiffRenderer(log, opts)
+	case renderer.OutputFormatDiff:
+		return renderer.NewDiffRenderer(log, opts)
+	default:
+		return renderer.NewDiffRenderer(log, opts)
+	}
+}
+
+// newCompDiffRenderer returns the renderer for a comp report in the format opts select.
+func newCompDiffRenderer(log logging.Logger, opts renderer.DiffOptions) renderer.CompDiffRenderer {
+	switch opts.Format {
+	case renderer.OutputFormatJSON, renderer.OutputFormatYAML:
+		return renderer.NewStructuredCompDiffRenderer(log, opts)
+	case renderer.OutputFormatDiff:
+		fallthrough
+	default:
+		return renderer.NewDefaultCompDiffRenderer(log, renderer.NewDiffRenderer(log, opts), opts)
+	}
+}
+
+// withRenderError adds a render failure to a run's error. A joined run error is flattened first, so
+// the result reads as one list, the way it did when the processor rendered and joined it itself.
+func withRenderError(err, renderErr error) error {
+	var errs []error
+
+	switch e := err.(type) { //nolint:errorlint // Flattens only the top-level join, not wrapped errors.
+	case nil:
+	case interface{ Unwrap() []error }:
+		errs = e.Unwrap()
+	default:
+		errs = []error{err}
+	}
+
+	return errors.Join(append(errs, renderErr)...)
+}
+
 // defaultProcessorOptions returns the standard default options used by both XR and composition processors.
 // This is the single source of truth for behavior defaults in the CLI layer.
 func defaultProcessorOptions(fields CommonCmdFields) []dp.ProcessorOption {
@@ -67,32 +132,12 @@ func defaultProcessorOptions(fields CommonCmdFields) []dp.ProcessorOption {
 	// --ignore-paths" indistinguishable from "we always ignore something", which comp-diff relies on
 	// to tell an edited composition from a merely re-applied one.
 	opts := []dp.ProcessorOption{
-		dp.WithColorize(!fields.NoColor),
-		dp.WithCompact(fields.Compact),
 		dp.WithMaxNestedDepth(fields.MaxNestedDepth),
 		dp.WithMaxRenderIterations(fields.MaxIterations),
 		dp.WithEventualState(fields.EventualState),
 		dp.WithIgnorePaths(fields.IgnorePaths),
 		dp.WithDryRunOn(dp.DryRunOn(fields.DryRunOn)),
 	}
-
-	// Add output format option
-	// Import renderer package to use OutputFormat type
-	var outputFormat renderer.OutputFormat
-
-	switch renderer.OutputFormat(fields.Output) {
-	case renderer.OutputFormatJSON:
-		outputFormat = renderer.OutputFormatJSON
-	case renderer.OutputFormatYAML:
-		outputFormat = renderer.OutputFormatYAML
-	case renderer.OutputFormatDiff:
-		outputFormat = renderer.OutputFormatDiff
-	default:
-		// Empty string or unrecognized values fall back to the human-readable diff.
-		outputFormat = renderer.OutputFormatDiff
-	}
-
-	opts = append(opts, dp.WithOutputFormat(outputFormat), dp.WithOutputVersion(renderer.OutputVersion(fields.OutputVersion)))
 
 	// Add function credentials if provided (empty path with no secrets errors in FunctionCredentials.Decode)
 	if len(fields.FunctionCredentials.Secrets) > 0 {

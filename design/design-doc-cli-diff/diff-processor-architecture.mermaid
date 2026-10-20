@@ -1,7 +1,7 @@
 classDiagram
     class DiffProcessor {
         <<interface>>
-        +PerformDiff(ctx, resources, compositionProvider) (bool, error)
+        +PerformDiff(ctx, resources, compositionProvider) (*XRReport, error)
         +DiffSingleResource(ctx, res, compositionProvider) (map[string]*ResourceDiff, error)
         +Initialize(ctx) error
         +Cleanup(ctx) error
@@ -9,7 +9,7 @@ classDiagram
 
     class CompDiffProcessor {
         <<interface>>
-        +DiffComposition(ctx, comps, namespace, resources) (bool, error)
+        +DiffComposition(ctx, comps, namespace, resources) (*CompDiffOutput, error)
         +Initialize(ctx) error
         +Cleanup(ctx) error
     }
@@ -26,11 +26,10 @@ classDiagram
         -compositeResolver CompositeResolver
         -renderDefaulter Defaulter
         -diffCalculator DiffCalculator
-        -diffRenderer DiffRenderer
         -requirementsProvider RequirementsProvider
         +Initialize(ctx) error
         +Cleanup(ctx) error
-        +PerformDiff(ctx, resources, compositionProvider) (bool, error)
+        +PerformDiff(ctx, resources, compositionProvider) (*XRReport, error)
         +DiffSingleResource(ctx, res, compositionProvider) (map[string]*ResourceDiff, error)
         +RenderToStableState(ctx, xr, comp, fns, id, observed, synthReady) (render.CompositionOutputs, error)
     }
@@ -39,28 +38,21 @@ classDiagram
         -compositionClient CompositionClient
         -config ProcessorConfig
         -xrProc DiffProcessor
-        -compDiffRenderer CompDiffRenderer
-        +DiffComposition(ctx, comps, ns, resources) (bool, error)
+        +DiffComposition(ctx, comps, ns, resources) (*CompDiffOutput, error)
     }
 
     class ProcessorConfig {
-        +Colorize bool
-        +Compact bool
-        +OutputFormat OutputFormat
         +MaxNestedDepth int
         +MaxRenderIterations int
         +IncludeManual bool
         +EventualState bool
         +AnalyzeOn AnalyzeOn
-        +MinimizeComposition bool
         +IgnorePaths []string
         +FunctionCredentials []corev1.Secret
         +FunctionRegistryOverride string
         +CrossplaneRenderBinary string
         +CrossplaneVersion string
         +CrossplaneImage string
-        +Stdout io.Writer
-        +Stderr io.Writer
         +Logger logging.Logger
         +Advisories *AdvisoryCollector
         +RenderFunc RenderFn
@@ -72,8 +64,6 @@ classDiagram
         +SchemaValidator
         +Defaulter
         +DiffCalculator
-        +DiffRenderer
-        +CompDiffRenderer
         +RequirementsProvider
         +FunctionProvider
         +InputValidator
@@ -135,14 +125,18 @@ classDiagram
         +ClearCache()
     }
 
-    class DiffRenderer {
-        <<interface>>
-        +RenderDiffs(diffs, errs) error
+    class XRReport {
+        +Groups []XRDiffGroup
+        +Errors []OutputError
+        +Warnings []OutputWarning
+        +HasChanges() bool
     }
 
-    class CompDiffRenderer {
-        <<interface>>
-        +RenderCompDiff(output) error
+    class CompDiffOutput {
+        +Compositions []CompositionDiff
+        +Errors []OutputError
+        +Warnings []OutputWarning
+        +HasChanges() bool
     }
 
     DefaultDiffProcessor ..|> DiffProcessor
@@ -158,8 +152,8 @@ classDiagram
     DefaultDiffProcessor --> RequirementsProvider
     DefaultDiffProcessor --> FunctionProvider
     DefaultDiffProcessor --> InputValidator : one per PerformDiff
-    DefaultDiffProcessor --> DiffRenderer
-    DefaultCompDiffProcessor --> CompDiffRenderer
+    DefaultDiffProcessor ..> XRReport : returns
+    DefaultCompDiffProcessor ..> CompDiffOutput : returns
 
     ProcessorConfig --> ComponentFactories
 

@@ -45,7 +45,7 @@ classDiagram
 
     class DiffProcessor {
         <<interface>>
-        +PerformDiff(ctx, resources, compositionProvider) (bool, error)
+        +PerformDiff(ctx, resources, compositionProvider) (*XRReport, error)
         +DiffSingleResource(ctx, res, compositionProvider) (map[string]*ResourceDiff, error)
         +Initialize(ctx) error
         +Cleanup(ctx) error
@@ -53,7 +53,7 @@ classDiagram
 
     class CompDiffProcessor {
         <<interface>>
-        +DiffComposition(ctx, comps, namespace, resources) (bool, error)
+        +DiffComposition(ctx, comps, namespace, resources) (*CompDiffOutput, error)
         +Initialize(ctx) error
         +Cleanup(ctx) error
     }
@@ -168,10 +168,10 @@ classDiagram
     DiffProcessor --> ResourceManager
     DiffProcessor --> FunctionProvider
     DiffProcessor --> InputValidator
-    DiffProcessor --> DiffRenderer
-    CompDiffProcessor --> CompDiffRenderer
     DiffCalculator --> compare : GenerateDiff
     CompDiffProcessor --> compare : GenerateDiff, composition diff
+    XRCmd --> DiffRenderer : renders the XRReport
+    CompCmd --> CompDiffRenderer : renders the CompDiffOutput
 
     AppContext --> KubernetesClients
     AppContext --> CrossplaneClients

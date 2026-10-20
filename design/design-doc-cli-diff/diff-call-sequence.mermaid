@@ -120,7 +120,7 @@ sequenceDiagram
         end
     end
 
-    Note over CDP, Render: Cleanup runs before output is rendered, so a teardown advisory reaches warnings[]
+    Note over CDP, Render: Cleanup runs before the processor collects the report, so a teardown advisory reaches warnings[]
     alt comp subcommand
         CDP->>DP: Cleanup(ctx)
     end
@@ -128,10 +128,12 @@ sequenceDiagram
     DP->>Render: Cleanup(ctx)
     Note over Render: The run removes its labelled containers, the engine removes its network, the run removes any of its networks left, then releases its lease
     alt comp subcommand
-        CDP->>Renderer: RenderCompDiff(output)
+        CDP-->>Cmd: CompDiffOutput (incl. errors, warnings)
+        Cmd->>Renderer: RenderCompDiff(output)
     else xr subcommand
-        DP->>Renderer: RenderDiffs(groups, errs, warnings)
+        DP-->>Cmd: XRReport (groups, errors, warnings)
+        Cmd->>Renderer: RenderDiffs(groups, errors, warnings)
     end
 
-    Renderer-->>Cmd: formatted output
+    Renderer-->>Cmd: formatted output to stdout
     Cmd-->>CLI: ExitCode

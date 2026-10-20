@@ -393,6 +393,17 @@ func (c *CompositionDiff) HasChanges() bool {
 	return false
 }
 
+// HasChanges returns true if any composition in the output has changes (see CompositionDiff.HasChanges).
+func (o *CompDiffOutput) HasChanges() bool {
+	for i := range o.Compositions {
+		if o.Compositions[i].HasChanges() {
+			return true
+		}
+	}
+
+	return false
+}
+
 // AffectedResourcesSummary contains counts of affected resources by status.
 type AffectedResourcesSummary struct {
 	Total       int `json:"total"`

@@ -143,7 +143,7 @@ cmd/diff/
 │   └── processor_config.go   # Configuration and dependency injection
 ├── dockerrun/                # Ties a run's function containers and network to it; reaps dead runs'
 ├── compare/                  # Computes ResourceDiffs (cleanup, ignore paths); no presentation
-├── renderer/                 # Formats diffs for output (text, JSON/YAML); presentation only
+├── renderer/                 # Presents the reports the processors return (text, JSON/YAML); presentation only
 ├── testutils/                # Test helpers and mock builders
 └── types/                    # Shared types and interfaces
 ```
@@ -154,6 +154,11 @@ cmd/diff/
    - Processors are configured using functional options pattern (`ProcessorOption`)
    - Dependencies flow inward: CLI layer → Application layer → Domain layer → Client layer
    - Factories at top level (CLI) control construction strategies (e.g., cached vs. default function providers)
+   - Processors compute, the command presents: `PerformDiff` returns a `*dt.XRReport` and `DiffComposition` a
+     `*renderer.CompDiffOutput`, and `XRCmd.Run` / `CompCmd.Run` render them with a renderer built from the flags
+     (`diffOptions`, `newDiffRenderer`, `newCompDiffRenderer` in `cmd_utils.go`). `ProcessorConfig` holds no output
+     format, version, colour, compaction or writers; its default `AdvisoryCollector` collects only, and the CLI
+     injects one that also writes to stderr
 
 2. **Interface-Based Design**
    - All major components defined as interfaces (`DiffProcessor`, `CompDiffProcessor`, `FunctionProvider`, etc.)
@@ -338,7 +343,7 @@ When using structured output (`--output json` or `--output yaml`):
    ```
    Note: Only JSON tags are used because `sigs.k8s.io/yaml` uses JSON tags for YAML serialization.
 
-3. **Always render output**: Even if all operations fail, render valid structured output with errors. Never return before rendering in structured output mode.
+3. **Always render output**: Even if all operations fail, render valid structured output with errors. Never return before rendering in structured output mode. The processors return their report alongside any error, and the command renders whatever report it gets back.
 
 ### Testing Requirements
 

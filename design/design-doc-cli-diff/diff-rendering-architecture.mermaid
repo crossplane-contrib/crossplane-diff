@@ -47,6 +47,14 @@ classDiagram
         +Err *OutputError
     }
 
+    class XRReport {
+        <<returned by PerformDiff>>
+        +Groups []XRDiffGroup
+        +Errors []OutputError
+        +Warnings []OutputWarning
+        +HasChanges() bool
+    }
+
     class OutputFormat {
         <<enumeration>>
         OutputFormatDiff
@@ -113,9 +121,11 @@ classDiagram
     }
 
     class CompDiffOutput {
+        <<returned by DiffComposition>>
         +Compositions []CompositionDiff
         +Errors []OutputError
         +Warnings []OutputWarning
+        +HasChanges() bool
     }
 
     class CompositionDiff {
@@ -249,7 +259,8 @@ classDiagram
     StructuredCompDiffRenderer --> CompDiffOutput
     DefaultCompDiffRenderer --> DiffRenderer
 
-    DiffRenderer ..> XRDiffGroup
+    DiffRenderer ..> XRReport : renders its fields
+    XRReport --> XRDiffGroup
     XRDiffGroup --> ResourceDiff
     XRDiffGroup --> OutputError
     DefaultDiffRenderer ..> dryRunWarnings

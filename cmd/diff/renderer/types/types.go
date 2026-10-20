@@ -45,6 +45,31 @@ type XRDiffGroup struct {
 	Err           *OutputError
 }
 
+// XRReport is what one xr diff run produced: everything a DiffRenderer renders.
+type XRReport struct {
+	// Groups holds one entry per input XR/claim, in input order.
+	Groups []XRDiffGroup
+	// Errors is the run's union error list: every group's error, plus errors no single group owns
+	// (render overlaps, an interruption).
+	Errors []OutputError
+	// Warnings are the advisories the run raised, sorted.
+	Warnings []OutputWarning
+}
+
+// HasChanges reports whether any group has a non-equal diff. Groups may hold DiffTypeEqual entries
+// (e.g. the XR, stored for removal detection), which are not changes.
+func (r *XRReport) HasChanges() bool {
+	for _, group := range r.Groups {
+		for _, diff := range group.Diffs {
+			if diff.DiffType != DiffTypeEqual {
+				return true
+			}
+		}
+	}
+
+	return false
+}
+
 // ResourceViews holds the two representations of a single resource involved in
 // a diff: the Raw object (as rendered, or as fetched from the cluster) and the
 // Clean object (Raw after cleanupForDiff has stripped ignored paths and

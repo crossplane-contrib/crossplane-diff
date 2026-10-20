@@ -5,7 +5,6 @@ import (
 	"context"
 	"fmt"
 	"maps"
-	"os"
 	"slices"
 	"sort"
 	"strconv"
@@ -14,7 +13,6 @@ import (
 
 	xp "github.com/crossplane-contrib/crossplane-diff/cmd/diff/client/crossplane"
 	k8 "github.com/crossplane-contrib/crossplane-diff/cmd/diff/client/kubernetes"
-	"github.com/crossplane-contrib/crossplane-diff/cmd/diff/renderer"
 	dt "github.com/crossplane-contrib/crossplane-diff/cmd/diff/renderer/types"
 	"github.com/crossplane-contrib/crossplane-diff/cmd/diff/types"
 	"github.com/crossplane/cli/v2/cmd/crossplane/render"
@@ -47,9 +45,10 @@ const (
 
 // DiffProcessor interface for processing resources.
 type DiffProcessor interface {
-	// PerformDiff processes resources using a composition provider function.
-	// Returns (hasDiffs, error) where hasDiffs indicates if any differences were detected.
-	PerformDiff(ctx context.Context, resources []*un.Unstructured, compositionProvider types.CompositionProvider) (bool, error)
+	// PerformDiff processes resources using a composition provider function, and returns the report
+	// for the caller to render. The report is non-nil whenever resources were processed, even with an
+	// error, so the successful inputs' results and the failures' errors can still be rendered.
+	PerformDiff(ctx context.Context, resources []*un.Unstructured, compositionProvider types.CompositionProvider) (*dt.XRReport, error)
 
 	// DiffSingleResource processes a single resource and returns its diffs.
 	DiffSingleResource(ctx context.Context, res *un.Unstructured, compositionProvider types.CompositionProvider) (map[string]*dt.ResourceDiff, error)
@@ -75,7 +74,6 @@ type DefaultDiffProcessor struct {
 	schemaValidator      SchemaValidator
 	renderDefaulter      Defaulter // strict; defaults the XR render consumes (see EffectiveComposite)
 	diffCalculator       DiffCalculator
-	diffRenderer         renderer.DiffRenderer
 	requirementsProvider *RequirementsProvider
 	// engineFn is set when using the default engine-backed RenderFunc so its
 	// Docker network and function runtimes can be released in Cleanup. nil when
@@ -86,13 +84,11 @@ type DefaultDiffProcessor struct {
 // NewDiffProcessor creates a new DefaultDiffProcessor with the provided options.
 func NewDiffProcessor(k8cs k8.Clients, xpcs xp.Clients, opts ...ProcessorOption) DiffProcessor {
 	// Create default configuration
-	// Note: Presentation defaults (Colorize, Compact) are intentionally not set here. They should be
-	// provided via ProcessorOptions from the CLI layer. Engine limits default here so a caller that
-	// doesn't go through the CLI gets the same limits.
+	// Note: The processor does no presentation; the caller renders the report PerformDiff returns.
+	// Engine limits default here so a caller that doesn't go through the CLI gets the same limits.
 	config := ProcessorConfig{
 		MaxNestedDepth:      DefaultMaxNestedDepth,
 		MaxRenderIterations: DefaultMaxRenderIterations,
-		Stderr:              os.Stderr,
 		Logger:              logging.NewNopLogger(),
 	}
 
@@ -101,8 +97,10 @@ func NewDiffProcessor(k8cs k8.Clients, xpcs xp.Clients, opts ...ProcessorOption)
 		option(&config)
 	}
 
+	// Unset, advisories are only collected into the report; a caller that wants them echoed as they
+	// are raised injects a collector that writes to its stderr.
 	if config.Advisories == nil {
-		config.Advisories = NewAdvisoryCollector(config.Stderr)
+		config.Advisories = NewAdvisoryCollector(nil)
 	}
 
 	// Default the render function to an engine-backed implementation if the
@@ -118,9 +116,6 @@ func NewDiffProcessor(k8cs k8.Clients, xpcs xp.Clients, opts ...ProcessorOption)
 	// Set default factory functions if not provided
 	config.SetDefaultFactories()
 
-	// Create the diff options based on configuration
-	diffOpts := config.GetDiffOptions()
-
 	// Create components using factories
 	resourceManager := config.Factories.ResourceManager(k8cs.Resource, xpcs.Definition, xpcs.ResourceTree, config.Logger, config.Advisories)
 	schemaValidator := config.Factories.SchemaValidator(k8cs.Schema, k8cs.Resource, xpcs.Definition, config.Logger)
@@ -128,7 +123,6 @@ func NewDiffProcessor(k8cs k8.Clients, xpcs xp.Clients, opts ...ProcessorOption)
 	renderDefaulter := config.Factories.Defaulter(k8cs.Schema, xpcs.Definition, StrictDefaulting)
 	predictor := config.Factories.Defaulter(k8cs.Schema, xpcs.Definition, LenientDefaulting)
 	diffCalculator := config.Factories.DiffCalculator(k8cs.Apply, k8cs.Access, xpcs.ResourceTree, resourceManager, config.Logger, config.GetCompareOptions(), config.DryRunOn, predictor)
-	diffRenderer := config.Factories.DiffRenderer(config.Logger, diffOpts)
 
 	functionProvider := config.Factories.FunctionProvider(xpcs.Function, config.Logger)
 	if config.FunctionRegistryOverride != "" {
@@ -152,7 +146,6 @@ func NewDiffProcessor(k8cs k8.Clients, xpcs xp.Clients, opts ...ProcessorOption)
 		schemaValidator:      schemaValidator,
 		renderDefaulter:      renderDefaulter,
 		diffCalculator:       diffCalculator,
-		diffRenderer:         diffRenderer,
 		requirementsProvider: requirementsProvider,
 		engineFn:             defaultEngineFn,
 	}
@@ -243,14 +236,15 @@ func (p *DefaultDiffProcessor) initializeSchemaValidator(ctx context.Context) er
 	return nil
 }
 
-// PerformDiff processes resources using a composition provider function.
-// Returns (hasDiffs, error) where hasDiffs indicates if any differences were detected.
-func (p *DefaultDiffProcessor) PerformDiff(ctx context.Context, resources []*un.Unstructured, compositionProvider types.CompositionProvider) (bool, error) {
+// PerformDiff processes resources using a composition provider function, and returns the report for
+// the caller to render. The report is non-nil whenever resources were processed, even with an error.
+func (p *DefaultDiffProcessor) PerformDiff(ctx context.Context, resources []*un.Unstructured, compositionProvider types.CompositionProvider) (*dt.XRReport, error) {
 	p.config.Logger.Debug("Processing resources with composition provider", "count", len(resources))
 
 	if len(resources) == 0 {
+		// Nothing was processed, so there is no report to render.
 		p.config.Logger.Debug("No resources to process")
-		return false, nil
+		return nil, nil
 	}
 
 	// Build one diff group per input XR/claim, in input order, so the renderer
@@ -336,55 +330,41 @@ func (p *DefaultDiffProcessor) PerformDiff(ctx context.Context, resources []*un.
 		groups[i].Err = &outErr
 	}
 
-	// Third: renders that reach one resource in ways no single diff can represent. Collected before the
-	// output is rendered so they reach errors[] and stderr like any other error; the output is still
-	// rendered, so structured output stays valid.
+	// Third: renders that reach one resource in ways no single diff can represent. Collected into the
+	// report so they reach errors[] and stderr like any other error; the report is still rendered, so
+	// structured output stays valid.
 	for _, err := range validator.RenderOverlaps(groups) {
 		errs = append(errs, err)
 		outputErrors = append(outputErrors, dt.OutputError{Message: err.Error()})
 	}
 
-	// Release resources before rendering, so an advisory raised during teardown (leftover function
-	// containers) is still in warnings[] when the renderer reads it; the command's deferred Cleanup
-	// would run only after output has been emitted.
+	// Release resources before draining advisories, so one raised during teardown (leftover function
+	// containers) is still in the report's warnings; the command's deferred Cleanup would run only
+	// after output has been emitted.
 	CleanupDetached(ctx, p, p.config.Logger)
 
-	outputErrors = withInterruption(ctx, outputErrors)
-
-	// Always render (even if only errors exist) to ensure valid structured output
-	// The renderer will include errors in the structured output and write them to stderr
-	err := p.diffRenderer.RenderDiffs(groups, outputErrors, p.config.Advisories.Advisories())
-	if err != nil {
-		p.config.Logger.Debug("Failed to render diffs", "error", err)
-		errs = append(errs, errors.Wrap(err, "failed to render diffs"))
+	report := &dt.XRReport{
+		Groups:   groups,
+		Errors:   withInterruption(ctx, outputErrors),
+		Warnings: p.config.Advisories.Advisories(),
 	}
 
-	// Count only non-equal diffs as "having diffs".
-	// The diffs map may contain DiffTypeEqual entries (e.g., XR stored for removal detection).
-	hasDiffs := false
 	totalDiffs := 0
-
 	for _, group := range groups {
-		for _, diff := range group.Diffs {
-			totalDiffs++
-
-			if diff.DiffType != dt.DiffTypeEqual {
-				hasDiffs = true
-			}
-		}
+		totalDiffs += len(group.Diffs)
 	}
 
 	p.config.Logger.Debug("Processing complete",
 		"resourceCount", len(resources),
 		"totalDiffs", totalDiffs,
-		"hasDiffs", hasDiffs,
+		"hasDiffs", report.HasChanges(),
 		"errorCount", len(errs))
 
 	if len(errs) > 0 {
-		return hasDiffs, errors.Join(errs...)
+		return report, errors.Join(errs...)
 	}
 
-	return hasDiffs, nil
+	return report, nil
 }
 
 // DiffSingleResource handles one resource at a time and returns its diffs.

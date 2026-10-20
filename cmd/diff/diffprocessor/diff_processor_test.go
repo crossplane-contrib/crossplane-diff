@@ -3,7 +3,6 @@ package diffprocessor
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"fmt"
 	"strings"
 	"testing"
@@ -12,7 +11,6 @@ import (
 	xp "github.com/crossplane-contrib/crossplane-diff/cmd/diff/client/crossplane"
 	k8 "github.com/crossplane-contrib/crossplane-diff/cmd/diff/client/kubernetes"
 	"github.com/crossplane-contrib/crossplane-diff/cmd/diff/compare"
-	"github.com/crossplane-contrib/crossplane-diff/cmd/diff/renderer"
 	dt "github.com/crossplane-contrib/crossplane-diff/cmd/diff/renderer/types"
 	tu "github.com/crossplane-contrib/crossplane-diff/cmd/diff/testutils"
 	"github.com/crossplane-contrib/crossplane-diff/cmd/diff/types"
@@ -214,8 +212,6 @@ func testProcessorOptions(t *testing.T) []ProcessorOption {
 	t.Helper()
 
 	return []ProcessorOption{
-		WithColorize(false),
-		WithCompact(false),
 		WithLogger(tu.TestLogger(t, false)),
 		WithRenderFunc(func(_ context.Context, _ logging.Logger, in RenderInputs) (render.CompositionOutputs, error) {
 			return render.CompositionOutputs{CompositeResource: in.CompositeResource}, nil
@@ -260,7 +256,7 @@ func TestDefaultDiffProcessor_PerformDiff(t *testing.T) {
 		setupMocks      func() (k8.Clients, xp.Clients)
 		resources       []*un.Unstructured
 		processorOpts   []ProcessorOption
-		verifyOutput    func(t *testing.T, output string)
+		wantHasChanges  bool
 		want            error
 		validationError bool
 	}{
@@ -320,10 +316,9 @@ func TestDefaultDiffProcessor_PerformDiff(t *testing.T) {
 			},
 			resources:     []*un.Unstructured{resource1},
 			processorOpts: testProcessorOptions(t),
-			// Note: Error output now goes to stderr (see TestDefaultDiffProcessor_PerformDiff_StderrErrorOutput)
-			// This test verifies the error return value, not stderr output
-			verifyOutput: nil,
-			want:         errors.New("unable to process resource XR1/my-xr-1: cannot get composition: composition not found"),
+			// The report carries the error for the caller to render (see
+			// TestDefaultDiffProcessor_PerformDiff_StderrErrorOutput); this verifies the error return value.
+			want: errors.New("unable to process resource XR1/my-xr-1: cannot get composition: composition not found"),
 		},
 		"MultipleResourceErrors": {
 			setupMocks: func() (k8.Clients, xp.Clients) {
@@ -353,9 +348,8 @@ func TestDefaultDiffProcessor_PerformDiff(t *testing.T) {
 			},
 			resources:     []*un.Unstructured{resource1, resource2},
 			processorOpts: testProcessorOptions(t),
-			// Note: Error output now goes to stderr (see TestDefaultDiffProcessor_PerformDiff_StderrErrorOutput)
-			// This test verifies the error return value, not stderr output
-			verifyOutput: nil,
+			// The report carries the errors for the caller to render (see
+			// TestDefaultDiffProcessor_PerformDiff_StderrErrorOutput); this verifies the error return value.
 			want: errors.New("[unable to process resource XR1/my-xr-1: cannot get composition: composition not found, " +
 				"unable to process resource XR1/my-xr-2: cannot get composition: composition not found]"),
 		},
@@ -606,49 +600,9 @@ func TestDefaultDiffProcessor_PerformDiff(t *testing.T) {
 						},
 					}
 				}),
-				// Override the diff renderer factory to produce actual output
-				// The factory receives DiffOptions which contains Stdout where output should be written
-				WithDiffRendererFactory(func(_ logging.Logger, opts renderer.DiffOptions) renderer.DiffRenderer {
-					return &tu.MockDiffRenderer{
-						RenderDiffsFn: func(_ []dt.XRDiffGroup, _ []dt.OutputError, _ []dt.OutputWarning) error {
-							// Write a simple summary to the output via opts.Stdout
-							w := opts.Stdout
-
-							_, err := fmt.Fprintln(w, "Changes will be applied to 2 resources:")
-							if err != nil {
-								return err
-							}
-
-							_, err = fmt.Fprintln(w, "- example.org/v1/XR1/test-xr will be modified")
-							if err != nil {
-								return err
-							}
-
-							_, err = fmt.Fprintln(w, "- example.org/v1/ComposedResource/resource-a will be modified")
-							if err != nil {
-								return err
-							}
-
-							_, err = fmt.Fprintln(w, "\nSummary: 0 to create, 2 to modify, 0 to delete")
-
-							return err
-						},
-					}
-				}),
 			),
-			verifyOutput: func(t *testing.T, output string) {
-				t.Helper()
-				// We should have some output from the diff
-				if output == "" {
-					t.Errorf("Expected non-empty diff output")
-				}
-
-				// Simple check for expected output format
-				if !strings.Contains(output, "Summary:") {
-					t.Errorf("Expected diff output to contain a Summary section")
-				}
-			},
-			want: nil,
+			wantHasChanges: true,
+			want:           nil,
 		},
 		"ValidationError": {
 			setupMocks: func() (k8.Clients, xp.Clients) {
@@ -750,24 +704,18 @@ func TestDefaultDiffProcessor_PerformDiff(t *testing.T) {
 			// Create components for testing
 			k8sClients, xpClients := tt.setupMocks()
 
-			// Create stdout buffer and add it to processor options so renderers can access it
-			var stdout bytes.Buffer
-
-			opts := append([]ProcessorOption{}, tt.processorOpts...)
-			opts = append(opts, WithStdout(&stdout))
-
 			// Create the diff processor
-			processor := NewDiffProcessor(k8sClients, xpClients, opts...)
+			processor := NewDiffProcessor(k8sClients, xpClients, tt.processorOpts...)
 
 			// Create a mock composition provider that uses the same mock composition client
 			compositionProvider := func(ctx context.Context, res *un.Unstructured) (types.ResolvedComposition, error) {
 				return xpClients.Composition.FindMatchingComposition(ctx, res)
 			}
-			_, err := processor.PerformDiff(ctx, tt.resources, compositionProvider)
+			report, err := processor.PerformDiff(ctx, tt.resources, compositionProvider)
 
-			// Check output if verification function is provided (do this first, before error checks)
-			if tt.verifyOutput != nil {
-				tt.verifyOutput(t, stdout.String())
+			// Checked first, before the error checks: the report is returned even with an error.
+			if got := report != nil && report.HasChanges(); got != tt.wantHasChanges {
+				t.Errorf("PerformDiff(...): report.HasChanges() = %v, want %v", got, tt.wantHasChanges)
 			}
 
 			if tt.want != nil {
@@ -1014,11 +962,7 @@ func TestDefaultDiffProcessor_PerformDiff_Groups(t *testing.T) {
 				ResourceTree: tu.NewMockResourceTreeClient().WithEmptyResourceTree().Build(),
 			}
 
-			var (
-				gotGroups   []dt.XRDiffGroup
-				gotErrs     []dt.OutputError
-				gotRecorded []recorded
-			)
+			var gotRecorded []recorded
 
 			opts := append(testProcessorOptions(t),
 				WithSchemaValidatorFactory(func(k8.SchemaClient, k8.ResourceClient, xp.DefinitionClient, logging.Logger) SchemaValidator {
@@ -1041,16 +985,6 @@ func TestDefaultDiffProcessor_PerformDiff_Groups(t *testing.T) {
 							keys.AddKey(sharedKey)
 
 							return map[string]*dt.ResourceDiff{sharedKey: diff}, keys, nil
-						},
-					}
-				}),
-				WithDiffRendererFactory(func(logging.Logger, renderer.DiffOptions) renderer.DiffRenderer {
-					return &tu.MockDiffRenderer{
-						RenderDiffsFn: func(groups []dt.XRDiffGroup, errs []dt.OutputError, _ []dt.OutputWarning) error {
-							gotGroups = groups
-							gotErrs = errs
-
-							return nil
 						},
 					}
 				}),
@@ -1077,13 +1011,13 @@ func TestDefaultDiffProcessor_PerformDiff_Groups(t *testing.T) {
 
 			processor := NewDiffProcessor(k8sClients, xpClients, opts...)
 
-			_, err := processor.PerformDiff(ctx, tt.resources, func(ctx context.Context, res *un.Unstructured) (types.ResolvedComposition, error) {
+			report, err := processor.PerformDiff(ctx, tt.resources, func(ctx context.Context, res *un.Unstructured) (types.ResolvedComposition, error) {
 				return xpClients.Composition.FindMatchingComposition(ctx, res)
 			})
 
 			result := got{Recorded: gotRecorded}
 
-			for _, g := range gotGroups {
+			for _, g := range report.Groups {
 				result.XRs = append(result.XRs, g.XR)
 
 				if g.Err == nil {
@@ -1101,7 +1035,7 @@ func TestDefaultDiffProcessor_PerformDiff_Groups(t *testing.T) {
 				result.GroupErrs[g.XR.Name] = g.Err.Message
 			}
 
-			for _, e := range gotErrs {
+			for _, e := range report.Errors {
 				result.GlobalErrs = append(result.GlobalErrs, e.Message)
 			}
 
@@ -1121,13 +1055,14 @@ func TestDefaultDiffProcessor_PerformDiff_Groups(t *testing.T) {
 // advisory is raised from FunctionProvider.Cleanup, which used to run in the command layer's defer —
 // i.e. after the renderer had already consumed and serialized the warning slice — so it reached stderr
 // but was structurally absent from warnings[], contradicting the README. PerformDiff therefore tears
-// down before rendering, and this test fails if that ordering is lost.
+// down before it drains advisories into the report the command renders, and this test fails if that
+// ordering is lost.
 func TestDefaultDiffProcessor_PerformDiff_LateWarningsReachStructuredOutput(t *testing.T) {
 	ctx := t.Context()
 
 	const advisory = "Some containers could not be cleaned up"
 
-	var stdout, stderr bytes.Buffer
+	var stderr bytes.Buffer
 
 	advisories := NewAdvisoryCollector(&stderr)
 
@@ -1153,9 +1088,6 @@ func TestDefaultDiffProcessor_PerformDiff_LateWarningsReachStructuredOutput(t *t
 	processor := NewDiffProcessor(k8sClients, xpClients,
 		append(testProcessorOptions(t),
 			WithAdvisories(advisories),
-			WithOutputFormat(renderer.OutputFormatJSON),
-			WithStdout(&stdout),
-			WithStderr(&stderr),
 			// Stands in for CachedFunctionProvider.Cleanup raising its advisory when a container could
 			// not be removed; the point under test is WHEN cleanup runs, not how it detects leftovers.
 			WithFunctionProviderFactory(func(xp.FunctionClient, logging.Logger) FunctionProvider {
@@ -1173,7 +1105,8 @@ func TestDefaultDiffProcessor_PerformDiff_LateWarningsReachStructuredOutput(t *t
 		WithSpecField("coolField", "test-value-1").
 		Build()
 
-	if _, err := processor.PerformDiff(ctx, []*un.Unstructured{resource}, xpClients.Composition.FindMatchingComposition); err == nil {
+	report, err := processor.PerformDiff(ctx, []*un.Unstructured{resource}, xpClients.Composition.FindMatchingComposition)
+	if err == nil {
 		t.Fatal("PerformDiff(): expected the XR's diff to fail, got nil")
 	}
 
@@ -1181,40 +1114,27 @@ func TestDefaultDiffProcessor_PerformDiff_LateWarningsReachStructuredOutput(t *t
 		t.Errorf("teardown advisory should reach stderr, got:\n%s", stderr.String())
 	}
 
-	// Decoded via the wire contract rather than the renderer's own struct: what matters is that a
-	// machine consumer reading warnings[] out of the JSON sees the advisory.
-	var got struct {
-		Warnings []dt.OutputWarning `json:"warnings"`
-		Errors   []dt.OutputError   `json:"errors"`
-	}
-
-	if err := json.Unmarshal(stdout.Bytes(), &got); err != nil {
-		t.Fatalf("cannot parse structured output %q: %v", stdout.String(), err)
-	}
-
+	// The report's warnings are what the structured renderer serializes as warnings[].
 	want := []dt.OutputWarning{{Message: advisory, Context: map[string]string{"errors": "1"}}}
-	if diff := gcmp.Diff(want, got.Warnings); diff != "" {
-		t.Errorf("structured warnings[] mismatch (-want +got):\n%s", diff)
+	if diff := gcmp.Diff(want, report.Warnings); diff != "" {
+		t.Errorf("report warnings mismatch (-want +got):\n%s", diff)
 	}
 
-	if len(got.Errors) != 1 {
-		t.Errorf("expected the XR's failure to still be reported in errors[], got %v", got.Errors)
+	if len(report.Errors) != 1 {
+		t.Errorf("expected the XR's failure to still be reported in the report's errors, got %v", report.Errors)
 	}
 }
 
-// TestDefaultDiffProcessor_PerformDiff_StderrErrorOutput verifies that when
-// resource processing fails, detailed errors are written to stderr for human visibility.
-// This tests the WithStderr option and the stderr error output path.
-func TestDefaultDiffProcessor_PerformDiff_StderrErrorOutput(t *testing.T) {
+// TestDefaultDiffProcessor_PerformDiff_ReportErrorOutput verifies that when resource processing
+// fails, the report carries the detailed error, attributed to the failed XR, for the command to render
+// to stderr and structured output.
+func TestDefaultDiffProcessor_PerformDiff_ReportErrorOutput(t *testing.T) {
 	ctx := t.Context()
 
 	// Create test resource
 	resource := tu.NewResource("example.org/v1", "XR1", "my-xr-1").
 		WithSpecField("coolField", "test-value-1").
 		Build()
-
-	// Create stderr buffer to capture error output
-	var stderrBuf bytes.Buffer
 
 	// Create Kubernetes client mocks. The XR's CRD is needed because the effective XR is defaulted
 	// before its composition is resolved.
@@ -1243,12 +1163,7 @@ func TestDefaultDiffProcessor_PerformDiff_StderrErrorOutput(t *testing.T) {
 		ResourceTree: tu.NewMockResourceTreeClient().Build(),
 	}
 
-	// Create processor with custom stderr buffer
-	processor := NewDiffProcessor(k8sClients, xpClients,
-		append(testProcessorOptions(t),
-			WithStderr(&stderrBuf), // Inject test buffer to capture stderr
-		)...,
-	)
+	processor := NewDiffProcessor(k8sClients, xpClients, testProcessorOptions(t)...)
 
 	// Create composition provider using mock client
 	compositionProvider := func(ctx context.Context, res *un.Unstructured) (types.ResolvedComposition, error) {
@@ -1256,24 +1171,20 @@ func TestDefaultDiffProcessor_PerformDiff_StderrErrorOutput(t *testing.T) {
 	}
 
 	// Run the diff
-	_, err := processor.PerformDiff(ctx, []*un.Unstructured{resource}, compositionProvider)
+	report, err := processor.PerformDiff(ctx, []*un.Unstructured{resource}, compositionProvider)
 
 	// Should return an error
 	if err == nil {
 		t.Fatal("PerformDiff() expected error but got none")
 	}
 
-	// Verify stderr contains the error output
-	stderrOutput := stderrBuf.String()
-
-	// The error should be formatted using FormatError() which produces:
-	// "ERROR: {ResourceID}: {Message}"
-	if !strings.Contains(stderrOutput, "ERROR: XR1/my-xr-1:") {
-		t.Errorf("Expected stderr to contain 'ERROR: XR1/my-xr-1:', got: %q", stderrOutput)
+	// The renderer writes each as FormatError() does: "ERROR: {ResourceID}: {Message}".
+	if len(report.Errors) != 1 {
+		t.Fatalf("Expected one error in the report, got: %v", report.Errors)
 	}
 
-	if !strings.Contains(stderrOutput, "composition not found") {
-		t.Errorf("Expected stderr to contain 'composition not found' error detail, got: %q", stderrOutput)
+	if got := report.Errors[0].FormatError(); !strings.Contains(got, "ERROR: XR1/my-xr-1:") || !strings.Contains(got, "composition not found") {
+		t.Errorf("Expected the report's error to name XR1/my-xr-1 and 'composition not found', got: %q", got)
 	}
 }
 
@@ -1330,7 +1241,6 @@ func TestDefaultDiffProcessor_warnIfDeleting(t *testing.T) {
 
 			processor := &DefaultDiffProcessor{
 				config: ProcessorConfig{
-					Stderr:     &stderrBuf,
 					Logger:     tu.TestLogger(t, false),
 					Advisories: advisories,
 				},
