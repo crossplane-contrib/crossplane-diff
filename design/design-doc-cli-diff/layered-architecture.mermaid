@@ -61,9 +61,10 @@ flowchart TD
     %% depends on the same groups below it, and enumerating each pair
     %% adds noise without information.
     CMDL --> APPL
-    %% AppContext constructs every client and hands them to the processors.
     APPL --> DOML
-    APPL --> CLIL
+    %% AppContext constructs every client and injects them into the domain (IoC),
+    %% so this one edge covers the Application layer's reach into the Client layer.
+    APPL -->|"injects clients"| CLIL
     DOML --> CLIL
     %% Crossplane clients are built on the generic ResourceClient.
     XPC --> K8SC
