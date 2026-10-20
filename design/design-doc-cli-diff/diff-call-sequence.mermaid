@@ -12,6 +12,7 @@ sequenceDiagram
     participant ResMgr as ResourceManager
     participant Validator as SchemaValidator
     participant DiffCalc as DiffCalculator
+    participant Compare as compare.GenerateDiff
     participant K8sAPI as Kubernetes API
     participant Renderer as DiffRenderer / CompDiffRenderer
 
@@ -25,8 +26,8 @@ sequenceDiagram
         Cmd->>CDP: DiffComposition(ctx, comps, ns, resources)
         CDP->>CompClient: FindComposites(ctx, comp, opts)
         CompClient-->>CDP: [affected XRs]
-        CDP->>DiffCalc: CalculateDiff(ctx, currentComp, newComp)
-        DiffCalc-->>CDP: composition-level diff
+        CDP->>Compare: GenerateDiff(ctx, currentComp, newComp, logger, Options)
+        Compare-->>CDP: composition-level diff
         Note over CDP, DP: For each affected XR, CDP calls DP.DiffSingleResource with a provider that returns the proposed composition, and the predicted revision name for a composite that would re-point. See per-XR body below.
     else xr subcommand
         Cmd->>DP: Initialize(ctx)

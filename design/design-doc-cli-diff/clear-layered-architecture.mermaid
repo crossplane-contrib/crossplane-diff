@@ -10,7 +10,7 @@ flowchart TD
     end
 
     subgraph "Domain Layer (Business Logic)"
-        CALC["Diff & Resources\n(DiffCalculator, ResourceManager, RequirementsProvider, FunctionProvider)"]
+        CALC["Diff & Resources\n(DiffCalculator, compare.GenerateDiff, ResourceManager, RequirementsProvider, FunctionProvider)"]
         VALD["Validation\n(SchemaValidator)"]
         REND["Rendering\n(DiffRenderer, CompDiffRenderer, structured renderers)"]
         RENFN["Render Function\n(Resource composition rendering)"]

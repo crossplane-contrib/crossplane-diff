@@ -21,7 +21,9 @@ cmd/diff/
 ├── comp.go                    # Composition diff command
 ├── client/                    # Kubernetes and Crossplane API clients
 ├── diffprocessor/            # Core diff logic (domain layer)
-├── renderer/                 # Crossplane render pipeline wrapper
+├── dockerrun/                # Ties a run's function containers and network to it; reaps dead runs'
+├── compare/                  # Computes ResourceDiffs (cleanup, ignore paths); no presentation
+├── renderer/                 # Formats diffs for output (text, JSON/YAML); presentation only
 ├── testutils/                # Test helpers and mock builders
 └── types/                    # Shared types and interfaces
 ```
