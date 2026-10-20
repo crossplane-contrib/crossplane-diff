@@ -653,15 +653,19 @@ The data flow through the system follows these key steps:
     - YAML files or stdin content is loaded and parsed into unstructured resources
 
 2. **Processing**:
-    - For each Composite Resource (XR):
-        - Find the matching composition
+    - For each Composite Resource (XR) or Claim:
+        - Resolve the effective composite (inherit cluster-written fields, default with the XR's CRD)
+        - Find the matching composition and its revision
         - Render the XR and composed resources using Crossplane functions
-        - Discover and resolve requirements for rendering
-        - Validate the rendered resources against schemas
-        - Calculate diffs between current and desired states
+        - Discover and resolve requirements for rendering, iterating until the render is stable
+        - Validate the rendered resources against schemas and scope
+        - Recurse into nested XRs
+        - Phase 1: dry-run apply each resource and compare it with `compare.GenerateDiff`
+        - Phase 2: detect resources the composite no longer composes
 
 3. **Output**:
-    - Format and display diffs to the console
+    - Clean up function containers
+    - Render the diffs as text, JSON or YAML to stdout; errors go to stderr
 
 ## 6. Component Design
 
