@@ -7,7 +7,7 @@ import (
 
 	xp "github.com/crossplane-contrib/crossplane-diff/cmd/diff/client/crossplane"
 	k8 "github.com/crossplane-contrib/crossplane-diff/cmd/diff/client/kubernetes"
-	"github.com/crossplane-contrib/crossplane-diff/cmd/diff/renderer"
+	"github.com/crossplane-contrib/crossplane-diff/cmd/diff/compare"
 	dt "github.com/crossplane-contrib/crossplane-diff/cmd/diff/renderer/types"
 	dtypes "github.com/crossplane-contrib/crossplane-diff/cmd/diff/types"
 	"github.com/crossplane/cli/v2/cmd/crossplane/common/resource"
@@ -48,20 +48,20 @@ type DefaultDiffCalculator struct {
 	accessChecker   k8.AccessChecker
 	resourceManager ResourceManager
 	logger          logging.Logger
-	diffOptions     renderer.DiffOptions
+	diffOptions     compare.Options
 	dryRunOn        DryRunOn
 	predictor       Defaulter
 }
 
 // SetDiffOptions updates the diff options used by the calculator.
-func (c *DefaultDiffCalculator) SetDiffOptions(options renderer.DiffOptions) {
+func (c *DefaultDiffCalculator) SetDiffOptions(options compare.Options) {
 	c.diffOptions = options
 }
 
 // NewDiffCalculator creates a new DefaultDiffCalculator. predictor predicts CRD defaults for the
 // additions that get no apiserver result; see dryRunCreateAddition. It should be lenient
 // (LenientDefaulting): a prediction is best effort, and must not fail an addition for want of a CRD.
-func NewDiffCalculator(apply k8.ApplyClient, access k8.AccessChecker, tree xp.ResourceTreeClient, resourceManager ResourceManager, logger logging.Logger, diffOptions renderer.DiffOptions, dryRunOn DryRunOn, predictor Defaulter) DiffCalculator {
+func NewDiffCalculator(apply k8.ApplyClient, access k8.AccessChecker, tree xp.ResourceTreeClient, resourceManager ResourceManager, logger logging.Logger, diffOptions compare.Options, dryRunOn DryRunOn, predictor Defaulter) DiffCalculator {
 	return &DefaultDiffCalculator{
 		treeClient:      tree,
 		applyClient:     apply,
@@ -165,7 +165,7 @@ func (c *DefaultDiffCalculator) CalculateDiff(ctx context.Context, composite *un
 	}
 
 	// Generate diff with the configured options
-	diff, err := renderer.GenerateDiffWithOptions(ctx, current, wouldBeResult, c.logger, c.diffOptions)
+	diff, err := compare.GenerateDiff(ctx, current, wouldBeResult, c.logger, c.diffOptions)
 	if err != nil {
 		c.logger.Debug("Failed to generate diff", "resource", resourceID, "error", err)
 		return nil, err
@@ -444,7 +444,7 @@ func (c *DefaultDiffCalculator) CalculateRemovedResourceDiffs(ctx context.Contex
 
 			c.logger.Debug("Resource will be removed", "resource", resourceID)
 
-			diff, err := renderer.GenerateDiffWithOptions(ctx, &node.Unstructured, nil, c.logger, c.diffOptions)
+			diff, err := compare.GenerateDiff(ctx, &node.Unstructured, nil, c.logger, c.diffOptions)
 			if err != nil {
 				c.logger.Debug("Cannot calculate removal diff (continuing)",
 					"resource", resourceID,
@@ -682,7 +682,7 @@ func (c *DefaultDiffCalculator) classifyApplyFailure(ctx context.Context, desire
 // create (it is a subresource) and hands back an empty one, so taking the server's would delete the
 // user's output under the banner of fidelity.
 // Latent because status never reaches any rendered diff in the first place: cleanupForDiff
-// (renderer/diff_formatter.go) deletes metadata.status unconditionally from both sides, and Clean is
+// (compare/compare.go) deletes metadata.status unconditionally from both sides, and Clean is
 // the only view renderers read. That makes this the same shape of mistake as the ownerReferences
 // comment this change deleted — a restoration justified by an output effect that does not exist — so
 // it is labelled rather than presented as load-bearing. Whether composition-authored status SHOULD be
@@ -733,7 +733,7 @@ func apiserverMessage(err error) string {
 // ownerReferences is in this list, and a note on why, because the code it replaces claimed the
 // opposite. The previous comment here justified stripping ownerRefs on the update path only, on the
 // grounds that "for new resources we skip DryRunApply entirely so the rendered ownerRefs still
-// surface in the diff output". They never surface: cleanupForDiff (renderer/diff_formatter.go)
+// surface in the diff output". They never surface: cleanupForDiff (compare/compare.go)
 // removes metadata.ownerReferences unconditionally from both sides of every comparison, ungated by
 // forVerdict. So dropping them from the REQUEST costs nothing in displayed output, while sending them
 // risks two real failures — an empty owner UID, which the apiserver rejects outright, and

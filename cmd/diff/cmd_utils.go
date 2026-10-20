@@ -62,8 +62,8 @@ func initializeAppContext(sigCtx context.Context, timeout time.Duration, appCtx 
 // This is the single source of truth for behavior defaults in the CLI layer.
 func defaultProcessorOptions(fields CommonCmdFields) []dp.ProcessorOption {
 	// IgnorePaths carries only what the user asked to mask. The paths that are always filtered
-	// (kubectl's last-applied-configuration) are stripped unconditionally by the renderer instead —
-	// see renderer.alwaysIgnoredPaths. Prepending them here would make "the user passed
+	// (kubectl's last-applied-configuration) are stripped unconditionally by the comparison instead —
+	// see displayOnlyIgnoredPaths in compare.cleanupForDiff. Prepending them here would make "the user passed
 	// --ignore-paths" indistinguishable from "we always ignore something", which comp-diff relies on
 	// to tell an edited composition from a merely re-applied one.
 	opts := []dp.ProcessorOption{

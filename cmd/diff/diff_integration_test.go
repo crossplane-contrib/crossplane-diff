@@ -848,7 +848,7 @@ func TestDiffIntegration(t *testing.T) {
 			skip: true,
 			skipReason: "The re-attached status cannot be observed in any output, so this assertion " +
 				"cannot pass and could not be made to fail by breaking the production code it targets. " +
-				"cleanupForDiff (renderer/diff_formatter.go) deletes metadata.status unconditionally from " +
+				"cleanupForDiff (compare/compare.go) deletes metadata.status unconditionally from " +
 				"both sides of every diff, in the same block that deletes ownerReferences — the strip whose " +
 				"identical consequence for ownerReferences this feature's own spec documented (§1a) and then " +
 				"missed for status. ResourceViews.Clean is the only view any renderer reads " +

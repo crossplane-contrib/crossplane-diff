@@ -142,6 +142,7 @@ cmd/diff/
 │   ├── function_provider.go  # Provides functions for composition pipeline
 │   └── processor_config.go   # Configuration and dependency injection
 ├── dockerrun/                # Ties a run's function containers and network to it; reaps dead runs'
+├── compare/                  # Computes ResourceDiffs (cleanup, ignore paths); no presentation
 ├── renderer/                 # Crossplane render pipeline wrapper
 ├── testutils/                # Test helpers and mock builders
 └── types/                    # Shared types and interfaces

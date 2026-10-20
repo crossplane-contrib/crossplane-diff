@@ -1,28 +1,30 @@
 flowchart TD
-    subgraph "Input"
-        A[YAML Files/StdIn] --> B[Loader]
-        B --> C[Unstructured Resources]
+    A["YAML files / stdin"] --> B["Loader<br/>Unstructured resources"]
+
+    subgraph perXR ["For each XR or Claim"]
+        direction TD
+        C["CompositeResolver.Resolve<br/>inherit cluster fields, default with CRD"]
+        D["Resolve Composition and revision"]
+        E["Render with functions"]
+        R["RequirementsProvider<br/>extra resources, schemas"]
+        V["Validate<br/>schema and scope"]
+        N{"Nested XRs?"}
+        P1["Phase 1: dry-run apply and<br/>compare.GenerateDiff per resource"]
+        P2["Phase 2: detect removed resources"]
+        C --> D --> E
+        E <-->|"iterate until stable"| R
+        E --> V --> N
+        N -->|"yes: recurse"| C
+        N -->|no| P1 --> P2
     end
-    
-    subgraph "Processing"
-        C --> D[DiffProcessor]
-        D -->|"For each XR"| E[Find Matching Composition]
-        E --> F[Render Resources\nwith Functions]
-        F -->|"Discover Requirements"| M[RequirementsProvider]
-        M -->|"Additional Resources"| F
-        F --> G[Validate Resources]
-        G --> H[Calculate Diffs]
-    end
-    
-    subgraph "External Systems"
-        I[Kubernetes API]
-    end
-    
-    I <-->|"Get Current State"| H
-    I <-->|"DryRun Apply"| H
-    I <-->|"Fetch Resources"| M
-    
-    subgraph "Output"
-        H --> K[Format Diffs]
-        K --> L[Render to Console]
-    end
+
+    B --> C
+    K8S[("Kubernetes API")]
+    K8S <-->|"cluster state, XRDs, compositions"| C
+    K8S <--> R
+    K8S <-->|"server-side dry run"| P1
+    K8S <-->|"resource tree"| P2
+
+    P2 --> X["Cleanup function containers"]
+    X --> O["Renderer: text, JSON or YAML"]
+    O --> Y["stdout, errors to stderr"]

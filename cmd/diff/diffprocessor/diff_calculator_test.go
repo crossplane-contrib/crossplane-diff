@@ -8,7 +8,7 @@ import (
 
 	xp "github.com/crossplane-contrib/crossplane-diff/cmd/diff/client/crossplane"
 	k8 "github.com/crossplane-contrib/crossplane-diff/cmd/diff/client/kubernetes"
-	"github.com/crossplane-contrib/crossplane-diff/cmd/diff/renderer"
+	"github.com/crossplane-contrib/crossplane-diff/cmd/diff/compare"
 	dt "github.com/crossplane-contrib/crossplane-diff/cmd/diff/renderer/types"
 	tu "github.com/crossplane-contrib/crossplane-diff/cmd/diff/testutils"
 	dtypes "github.com/crossplane-contrib/crossplane-diff/cmd/diff/types"
@@ -977,7 +977,7 @@ func TestDefaultDiffCalculator_CalculateDiff(t *testing.T) {
 				resourceTreeClient,
 				resourceManager,
 				logger,
-				renderer.DefaultDiffOptions(),
+				compare.Options{},
 				tt.dryRunOn,
 				markerDefaulterStoringAt(tt.storedAt),
 			)
@@ -1494,7 +1494,7 @@ func TestDefaultDiffCalculator_CalculateDiffs(t *testing.T) {
 				resourceTreeClient,
 				resourceManager,
 				logger,
-				renderer.DefaultDiffOptions(),
+				compare.Options{},
 				DryRunOnAll,
 				&tu.MockDefaulter{},
 			)
@@ -1740,7 +1740,7 @@ func TestDefaultDiffCalculator_CalculateRemovedResourceDiffs(t *testing.T) {
 				tt.tree,
 				NewResourceManager(tu.NewMockResourceClient().Build(), tu.NewMockDefinitionClient().Build(), tu.NewMockResourceTreeClient().Build(), logger, NewAdvisoryCollector(nil)),
 				logger,
-				renderer.DefaultDiffOptions(),
+				compare.Options{},
 				DryRunOnAll,
 				&tu.MockDefaulter{},
 			)
@@ -2301,7 +2301,7 @@ func TestDefaultDiffCalculator_DegradedDryRunDetail(t *testing.T) {
 					tu.NewMockResourceTreeClient().Build(),
 					tu.TestLogger(t, false), advisories),
 				tu.TestLogger(t, false),
-				renderer.DefaultDiffOptions(),
+				compare.Options{},
 				DryRunOnAll,
 				&tu.MockDefaulter{},
 			)
@@ -2451,7 +2451,7 @@ func TestDefaultDiffCalculator_CalculateNonRemovalDiffsRendered(t *testing.T) {
 				tu.NewMockResourceTreeClient().WithEmptyResourceTree().Build(),
 				NewResourceManager(resourceClient, tu.NewMockDefinitionClient().Build(), tu.NewMockResourceTreeClient().Build(), logger, NewAdvisoryCollector(nil)),
 				logger,
-				renderer.DefaultDiffOptions(),
+				compare.Options{},
 				DryRunOnAll,
 				&tu.MockDefaulter{},
 			)
