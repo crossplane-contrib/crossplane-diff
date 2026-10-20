@@ -3,7 +3,7 @@ package diffprocessor
 import (
 	"testing"
 
-	dt "github.com/crossplane-contrib/crossplane-diff/cmd/diff/renderer/types"
+	dt "github.com/crossplane-contrib/crossplane-diff/cmd/diff/result"
 	tu "github.com/crossplane-contrib/crossplane-diff/cmd/diff/testutils"
 	gcmp "github.com/google/go-cmp/cmp"
 	"github.com/google/go-cmp/cmp/cmpopts"

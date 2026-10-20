@@ -26,7 +26,7 @@ import (
 	"sync"
 
 	"github.com/crossplane-contrib/crossplane-diff/cmd/diff/dockerrun"
-	dt "github.com/crossplane-contrib/crossplane-diff/cmd/diff/renderer/types"
+	dt "github.com/crossplane-contrib/crossplane-diff/cmd/diff/result"
 	"github.com/crossplane/cli/v2/cmd/crossplane/render"
 	corev1 "k8s.io/api/core/v1"
 	kunstructured "k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"

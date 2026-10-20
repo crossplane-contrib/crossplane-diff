@@ -13,7 +13,7 @@ import (
 
 	xp "github.com/crossplane-contrib/crossplane-diff/cmd/diff/client/crossplane"
 	k8 "github.com/crossplane-contrib/crossplane-diff/cmd/diff/client/kubernetes"
-	dt "github.com/crossplane-contrib/crossplane-diff/cmd/diff/renderer/types"
+	dt "github.com/crossplane-contrib/crossplane-diff/cmd/diff/result"
 	"github.com/crossplane-contrib/crossplane-diff/cmd/diff/types"
 	"github.com/crossplane/cli/v2/cmd/crossplane/render"
 	corev1 "k8s.io/api/core/v1"
@@ -249,7 +249,7 @@ func (p *DefaultDiffProcessor) PerformDiff(ctx context.Context, resources []*un.
 
 	// Build one diff group per input XR/claim, in input order, so the renderer
 	// can group structured output (xrs[]) and human output (per-XR sections) by
-	// the input that produced each change. See renderer/types.XRDiffGroup.
+	// the input that produced each change. See result.XRDiffGroup.
 	groups := make([]dt.XRDiffGroup, 0, len(resources))
 
 	// Collect errors for the top-level/global (union) error list, preserved for

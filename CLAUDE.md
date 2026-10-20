@@ -144,6 +144,7 @@ cmd/diff/
 ├── dockerrun/                # Ties a run's function containers and network to it; reaps dead runs'
 ├── compare/                  # Computes ResourceDiffs (cleanup, ignore paths); no presentation
 ├── renderer/                 # Presents the reports the processors return (text, JSON/YAML); presentation only
+├── result/                   # The reports (XRReport, CompDiffOutput), their verdicts and the dry-run summary
 ├── testutils/                # Test helpers and mock builders
 └── types/                    # Shared types and interfaces
 ```
@@ -155,8 +156,8 @@ cmd/diff/
    - Dependencies flow inward: CLI layer → Application layer → Domain layer → Client layer
    - Factories at top level (CLI) control construction strategies (e.g., cached vs. default function providers)
    - Processors compute, the command presents: `PerformDiff` returns a `*dt.XRReport` and `DiffComposition` a
-     `*renderer.CompDiffOutput`, and `XRCmd.Run` / `CompCmd.Run` render them with a renderer built from the flags
-     (`diffOptions`, `newDiffRenderer`, `newCompDiffRenderer` in `cmd_utils.go`). `ProcessorConfig` holds no output
+     `*dt.CompDiffOutput` (both in `result`), and `XRCmd.Run` / `CompCmd.Run` render them with a renderer built from
+     the flags (`diffOptions`, `newDiffRenderer`, `newCompDiffRenderer` in `cmd_utils.go`). `ProcessorConfig` holds no output
      format, version, colour, compaction or writers; its default `AdvisoryCollector` collects only, and the CLI
      injects one that also writes to stderr
 
@@ -334,7 +335,7 @@ When using structured output (`--output json` or `--output yaml`):
    - Humans see errors immediately in stderr
    - The structured output is always valid JSON/YAML, even when errors occur
 
-2. **Consistent error structure**: Use the same `OutputError` type (defined in `renderer/types/types.go`) across all commands:
+2. **Consistent error structure**: Use the same `OutputError` type (defined in `result/types.go`) across all commands:
    ```go
    type OutputError struct {
        ResourceID string `json:"resourceID,omitempty"` // optional - identifies which resource failed

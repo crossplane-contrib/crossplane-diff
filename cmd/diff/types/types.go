@@ -51,7 +51,7 @@ import (
 // testutils must name it to implement the mock, and testutils cannot import
 // client/kubernetes — that package's tests are internal (package kubernetes)
 // and import testutils, so the edge would close a cycle. Same reason
-// renderer/types exists. Do not "tidy" this back next to the interface.
+// result is a leaf package. Do not "tidy" this back next to the interface.
 type Verb string
 
 const (

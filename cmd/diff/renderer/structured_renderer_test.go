@@ -10,7 +10,7 @@ import (
 	"testing"
 
 	"github.com/crossplane-contrib/crossplane-diff/cmd/diff/compare"
-	dt "github.com/crossplane-contrib/crossplane-diff/cmd/diff/renderer/types"
+	dt "github.com/crossplane-contrib/crossplane-diff/cmd/diff/result"
 	tu "github.com/crossplane-contrib/crossplane-diff/cmd/diff/testutils"
 	"github.com/google/go-cmp/cmp"
 	corev1 "k8s.io/api/core/v1"
@@ -367,18 +367,18 @@ func TestStructuredDiffRenderer_GroupsByXR(t *testing.T) {
 				Xrs: []xrEntryWire{
 					{
 						XR:      xrRef("changed-xr"),
-						Status:  XRStatusChanged,
+						Status:  dt.XRStatusChanged,
 						Summary: Summary{Modified: 1},
 						Changes: []ChangeDetail{bucketChange},
 					},
 					{
 						XR:      xrRef("unchanged-xr"),
-						Status:  XRStatusUnchanged,
+						Status:  dt.XRStatusUnchanged,
 						Changes: []ChangeDetail{},
 					},
 					{
 						XR:      xrRef("broken-xr"),
-						Status:  XRStatusError,
+						Status:  dt.XRStatusError,
 						Changes: []ChangeDetail{},
 						Errors:  []dt.OutputError{{ResourceID: "XBucket/broken-xr", Message: "cannot get composition"}},
 					},
@@ -396,7 +396,7 @@ func TestStructuredDiffRenderer_GroupsByXR(t *testing.T) {
 				OutputVersion: OutputVersionV1,
 				Changes:       []ChangeDetail{},
 				Xrs: []xrEntryWire{
-					{XR: xrRef("unchanged-xr"), Status: XRStatusUnchanged, Changes: []ChangeDetail{}},
+					{XR: xrRef("unchanged-xr"), Status: dt.XRStatusUnchanged, Changes: []ChangeDetail{}},
 				},
 			},
 			wantKeys: []string{"changes", "outputVersion", "summary", "xrs"},
@@ -426,18 +426,18 @@ func TestStructuredDiffRenderer_GroupsByXR(t *testing.T) {
 				Xrs: []xrEntryWire{
 					{
 						XR:      xrRef("changed-xr"),
-						Status:  XRStatusChanged,
+						Status:  dt.XRStatusChanged,
 						Summary: Summary{Modified: 1},
 						Changes: []ChangeDetail{bucketChange},
 					},
 					{
 						XR:      xrRef("unchanged-xr"),
-						Status:  XRStatusUnchanged,
+						Status:  dt.XRStatusUnchanged,
 						Changes: []ChangeDetail{},
 					},
 					{
 						XR:      xrRef("broken-xr"),
-						Status:  XRStatusError,
+						Status:  dt.XRStatusError,
 						Changes: []ChangeDetail{},
 						Errors:  []dt.OutputError{{ResourceID: "XBucket/broken-xr", Message: "cannot get composition"}},
 					},
@@ -468,13 +468,13 @@ func TestStructuredDiffRenderer_GroupsByXR(t *testing.T) {
 				Xrs: []xrEntryWire{
 					{
 						XR:      xrRef("app-claim"),
-						Status:  XRStatusChanged,
+						Status:  dt.XRStatusChanged,
 						Summary: Summary{Modified: 1},
 						Changes: []ChangeDetail{sharedChange("us-west-2")},
 					},
 					{
 						XR:      xrRef("app-xr"),
-						Status:  XRStatusChanged,
+						Status:  dt.XRStatusChanged,
 						Summary: Summary{Modified: 1},
 						Changes: []ChangeDetail{sharedChange("us-west-2")},
 					},
@@ -503,13 +503,13 @@ func TestStructuredDiffRenderer_GroupsByXR(t *testing.T) {
 				Xrs: []xrEntryWire{
 					{
 						XR:      xrRef("app-a"),
-						Status:  XRStatusChanged,
+						Status:  dt.XRStatusChanged,
 						Summary: Summary{Modified: 1},
 						Changes: []ChangeDetail{sharedChange("us-west-2")},
 					},
 					{
 						XR:      xrRef("app-b"),
-						Status:  XRStatusChanged,
+						Status:  dt.XRStatusChanged,
 						Summary: Summary{Modified: 1},
 						Changes: []ChangeDetail{sharedChange("eu-west-1")},
 					},

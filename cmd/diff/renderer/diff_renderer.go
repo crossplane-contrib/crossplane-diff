@@ -7,7 +7,7 @@ import (
 	"slices"
 	"strings"
 
-	dt "github.com/crossplane-contrib/crossplane-diff/cmd/diff/renderer/types"
+	dt "github.com/crossplane-contrib/crossplane-diff/cmd/diff/result"
 
 	"github.com/crossplane/crossplane-runtime/v2/pkg/errors"
 	"github.com/crossplane/crossplane-runtime/v2/pkg/logging"
@@ -42,7 +42,7 @@ type DiffRenderer interface {
 	// order with the work that produced them. The human renderer therefore ignores this parameter.
 	//
 	// One kind of warning is instead derived here, from the groups: the summary of added resources
-	// that could not be verified against the apiserver (see dryRunWarnings). Deciding what to summarise
+	// that could not be verified against the apiserver (see dt.DryRunWarnings). Deciding what to summarise
 	// is a presentation decision, and the DryRunInfo it is built from only exists once the diffs do.
 	// Every renderer writes that summary to stderr; a structured one also appends it to warnings[],
 	// after the warnings passed in.
@@ -248,7 +248,7 @@ func (r *DefaultDiffRenderer) RenderDiffs(groups []dt.XRDiffGroup, errs []dt.Out
 		return err
 	}
 
-	if err := writeWarnings(r.diffOpts.Stderr, xrDryRunWarnings(xrGroups)); err != nil {
+	if err := writeWarnings(r.diffOpts.Stderr, dt.XRDryRunWarnings(xrGroups)); err != nil {
 		return err
 	}
 

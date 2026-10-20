@@ -3,7 +3,7 @@ package compare
 import (
 	"testing"
 
-	"github.com/crossplane-contrib/crossplane-diff/cmd/diff/renderer/types"
+	dt "github.com/crossplane-contrib/crossplane-diff/cmd/diff/result"
 	tu "github.com/crossplane-contrib/crossplane-diff/cmd/diff/testutils"
 	"github.com/google/go-cmp/cmp"
 	"github.com/sergi/go-diff/diffmatchpatch"
@@ -77,7 +77,7 @@ func TestGenerateDiff(t *testing.T) {
 		kind     string
 		resName  string
 		options  Options
-		wantDiff *types.ResourceDiff
+		wantDiff *dt.ResourceDiff
 		wantErr  bool
 	}{
 		"ModifiedResource": {
@@ -86,13 +86,13 @@ func TestGenerateDiff(t *testing.T) {
 			kind:    "TestResource",
 			resName: "test-resource",
 			options: Options{},
-			wantDiff: &types.ResourceDiff{
+			wantDiff: &dt.ResourceDiff{
 				Gvk:          current.GroupVersionKind(),
 				ResourceName: "test-resource",
-				DiffType:     types.DiffTypeModified,
+				DiffType:     dt.DiffTypeModified,
 				// Nothing to strip, so Clean is content-equal to Raw.
-				Current: types.ResourceViews{Raw: current, Clean: current},
-				Desired: types.ResourceViews{Raw: desired, Clean: desired},
+				Current: dt.ResourceViews{Raw: current, Clean: current},
+				Desired: dt.ResourceViews{Raw: desired, Clean: desired},
 				// LineDiffs will be checked separately
 			},
 		},
@@ -102,13 +102,13 @@ func TestGenerateDiff(t *testing.T) {
 			kind:    "TestResource",
 			resName: "test-resource",
 			options: Options{},
-			wantDiff: &types.ResourceDiff{
+			wantDiff: &dt.ResourceDiff{
 				Gvk:          current.GroupVersionKind(),
 				ResourceName: "test-resource",
-				DiffType:     types.DiffTypeEqual,
+				DiffType:     dt.DiffTypeEqual,
 				// Equal diffs render nothing, so Clean is left nil by generation.
-				Current: types.ResourceViews{Raw: current},
-				Desired: types.ResourceViews{Raw: noChanges},
+				Current: dt.ResourceViews{Raw: current},
+				Desired: dt.ResourceViews{Raw: noChanges},
 			},
 		},
 		"NewResource": {
@@ -117,12 +117,12 @@ func TestGenerateDiff(t *testing.T) {
 			kind:    "TestResource",
 			resName: "test-resource",
 			options: Options{},
-			wantDiff: &types.ResourceDiff{
+			wantDiff: &dt.ResourceDiff{
 				Gvk:          desired.GroupVersionKind(),
 				ResourceName: "test-resource",
-				DiffType:     types.DiffTypeAdded,
-				Current:      types.ResourceViews{},
-				Desired:      types.ResourceViews{Raw: desired, Clean: desired},
+				DiffType:     dt.DiffTypeAdded,
+				Current:      dt.ResourceViews{},
+				Desired:      dt.ResourceViews{Raw: desired, Clean: desired},
 				// LineDiffs will be checked separately
 			},
 		},
@@ -132,12 +132,12 @@ func TestGenerateDiff(t *testing.T) {
 			kind:    "TestResource",
 			resName: "test-resource",
 			options: Options{},
-			wantDiff: &types.ResourceDiff{
+			wantDiff: &dt.ResourceDiff{
 				Gvk:          current.GroupVersionKind(),
 				ResourceName: "test-resource",
-				DiffType:     types.DiffTypeRemoved,
-				Current:      types.ResourceViews{Raw: current, Clean: current},
-				Desired:      types.ResourceViews{},
+				DiffType:     dt.DiffTypeRemoved,
+				Current:      dt.ResourceViews{Raw: current, Clean: current},
+				Desired:      dt.ResourceViews{},
 				// LineDiffs will be checked separately
 			},
 		},
@@ -150,12 +150,12 @@ func TestGenerateDiff(t *testing.T) {
 			kind:    "TestResource",
 			resName: "test-resource",
 			options: ignoreOpts,
-			wantDiff: &types.ResourceDiff{
+			wantDiff: &dt.ResourceDiff{
 				Gvk:          noisyCurrent.GroupVersionKind(),
 				ResourceName: "test-resource",
-				DiffType:     types.DiffTypeModified,
-				Current:      types.ResourceViews{Raw: noisyCurrent, Clean: noisyCurrentClean},
-				Desired:      types.ResourceViews{Raw: noisyDesired, Clean: noisyDesiredClean},
+				DiffType:     dt.DiffTypeModified,
+				Current:      dt.ResourceViews{Raw: noisyCurrent, Clean: noisyCurrentClean},
+				Desired:      dt.ResourceViews{Raw: noisyDesired, Clean: noisyDesiredClean},
 			},
 		},
 		"ModifiedResource_PrefersCurrentNamespace": {
@@ -166,13 +166,13 @@ func TestGenerateDiff(t *testing.T) {
 			kind:    "TestResource",
 			resName: "test-resource",
 			options: Options{},
-			wantDiff: &types.ResourceDiff{
+			wantDiff: &dt.ResourceDiff{
 				Gvk:          nsCurrent.GroupVersionKind(),
 				ResourceName: "test-resource",
 				Namespace:    "production",
-				DiffType:     types.DiffTypeModified,
-				Current:      types.ResourceViews{Raw: nsCurrent, Clean: nsCurrent},
-				Desired:      types.ResourceViews{Raw: nsDesired, Clean: nsDesired},
+				DiffType:     dt.DiffTypeModified,
+				Current:      dt.ResourceViews{Raw: nsCurrent, Clean: nsCurrent},
+				Desired:      dt.ResourceViews{Raw: nsDesired, Clean: nsDesired},
 			},
 		},
 		"BothNil": {
@@ -218,7 +218,7 @@ func TestGenerateDiff(t *testing.T) {
 			}
 
 			// Check for line diffs - should be non-empty for changed resources
-			if diff.DiffType != types.DiffTypeEqual && len(diff.LineDiffs) == 0 {
+			if diff.DiffType != dt.DiffTypeEqual && len(diff.LineDiffs) == 0 {
 				t.Errorf("LineDiffs is empty for %s", name)
 			}
 

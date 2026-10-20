@@ -34,9 +34,11 @@ classDiagram
         +RenderCompDiff(output) error
     }
 
-    class dryRunWarnings {
-        <<function>>
-        +dryRunWarnings(diffSets) []OutputWarning
+    class DryRunWarnings {
+        <<function in package result>>
+        +DryRunWarnings(diffSets) []OutputWarning
+        +XRDryRunWarnings(groups) []OutputWarning
+        +CompDryRunWarnings(output) []OutputWarning
         one per GVK + namespace + reason + detail, with count
     }
 
@@ -263,12 +265,12 @@ classDiagram
     XRReport --> XRDiffGroup
     XRDiffGroup --> ResourceDiff
     XRDiffGroup --> OutputError
-    DefaultDiffRenderer ..> dryRunWarnings
-    StructuredDiffRenderer ..> dryRunWarnings
-    DefaultCompDiffRenderer ..> dryRunWarnings
-    StructuredCompDiffRenderer ..> dryRunWarnings
-    dryRunWarnings ..> DryRunInfo
-    dryRunWarnings ..> OutputWarning
+    DefaultDiffRenderer ..> DryRunWarnings
+    StructuredDiffRenderer ..> DryRunWarnings
+    DefaultCompDiffRenderer ..> DryRunWarnings
+    StructuredCompDiffRenderer ..> DryRunWarnings
+    DryRunWarnings ..> DryRunInfo
+    DryRunWarnings ..> OutputWarning
 
     StructuredDiffOutput --> Summary
     StructuredDiffOutput --> ChangeDetail

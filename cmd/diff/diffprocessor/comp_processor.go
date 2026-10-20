@@ -25,8 +25,7 @@ import (
 	xp "github.com/crossplane-contrib/crossplane-diff/cmd/diff/client/crossplane"
 	"github.com/crossplane-contrib/crossplane-diff/cmd/diff/compare"
 	"github.com/crossplane-contrib/crossplane-diff/cmd/diff/ref"
-	"github.com/crossplane-contrib/crossplane-diff/cmd/diff/renderer"
-	dt "github.com/crossplane-contrib/crossplane-diff/cmd/diff/renderer/types"
+	dt "github.com/crossplane-contrib/crossplane-diff/cmd/diff/result"
 	dtypes "github.com/crossplane-contrib/crossplane-diff/cmd/diff/types"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/equality"
@@ -79,7 +78,7 @@ type CompDiffProcessor interface {
 	// preflight pass. If any ref is relevant to no supplied composition, the call fails before
 	// processing any composition, with a nil report (CLI input error). When `resources` is empty,
 	// behavior is unchanged.
-	DiffComposition(ctx context.Context, compositions []*un.Unstructured, namespace string, resources []k8stypes.NamespacedName) (*renderer.CompDiffOutput, error)
+	DiffComposition(ctx context.Context, compositions []*un.Unstructured, namespace string, resources []k8stypes.NamespacedName) (*dt.CompDiffOutput, error)
 	Initialize(ctx context.Context) error
 	// Cleaner releases any resources held by the processor (e.g., Docker containers).
 	Cleaner
@@ -159,7 +158,7 @@ func (p *DefaultCompDiffProcessor) Cleanup(ctx context.Context) error {
 // DiffComposition processes composition changes and their impact on existing XRs, and returns the
 // report for the caller to render. The report is non-nil whenever compositions were processed, even
 // with an error.
-func (p *DefaultCompDiffProcessor) DiffComposition(ctx context.Context, compositions []*un.Unstructured, namespace string, resources []k8stypes.NamespacedName) (*renderer.CompDiffOutput, error) {
+func (p *DefaultCompDiffProcessor) DiffComposition(ctx context.Context, compositions []*un.Unstructured, namespace string, resources []k8stypes.NamespacedName) (*dt.CompDiffOutput, error) {
 	p.config.Logger.Debug("Processing composition diff",
 		"compositionCount", len(compositions),
 		"namespace", namespace,
@@ -177,8 +176,8 @@ func (p *DefaultCompDiffProcessor) DiffComposition(ctx context.Context, composit
 		return nil, err
 	}
 
-	output := &renderer.CompDiffOutput{
-		Compositions: make([]renderer.CompositionDiff, 0, len(compositions)),
+	output := &dt.CompDiffOutput{
+		Compositions: make([]dt.CompositionDiff, 0, len(compositions)),
 		Errors:       []dt.OutputError{},
 	}
 
@@ -234,16 +233,16 @@ func (p *DefaultCompDiffProcessor) DiffComposition(ctx context.Context, composit
 			compositionErrors++
 
 			// Include failed composition with error instead of skipping
-			output.Compositions = append(output.Compositions, renderer.CompositionDiff{
+			output.Compositions = append(output.Compositions, dt.CompositionDiff{
 				Name:  compositionID,
 				Error: new(NewOutputError(fmt.Sprintf("Composition/%s", compositionID), err)),
-				AffectedResources: renderer.AffectedResourcesSummary{
+				AffectedResources: dt.AffectedResourcesSummary{
 					Total:       0,
 					WithChanges: 0,
 					Unchanged:   0,
 					WithErrors:  0,
 				},
-				ImpactAnalysis: []renderer.XRImpact{},
+				ImpactAnalysis: []dt.XRImpact{},
 			})
 		} else {
 			output.Compositions = append(output.Compositions, *compResult)
@@ -255,7 +254,7 @@ func (p *DefaultCompDiffProcessor) DiffComposition(ctx context.Context, composit
 		for _, impact := range comp.ImpactAnalysis {
 			// The impact carries the OutputError built when it was created (see buildImpactAnalysis), so the
 			// per-XR entry and this list hold the same error.
-			if impact.Status == renderer.XRStatusError && impact.Error != nil {
+			if impact.Status == dt.XRStatusError && impact.Error != nil {
 				output.Errors = append(output.Errors, *impact.Error)
 			}
 		}
@@ -350,11 +349,11 @@ func (p *DefaultCompDiffProcessor) preflightResourceRefs(ctx context.Context, co
 // switch whether this comes from the --resource preflight or default-discovery via FindComposites).
 // When `surfaceFiltered` is true, XRs dropped by update-policy filtering are surfaced in
 // ImpactAnalysis with XRStatusFilteredByPolicy so users see what was matched-but-skipped.
-func (p *DefaultCompDiffProcessor) processSingleComposition(ctx context.Context, newComp *un.Unstructured, affectedXRs []*un.Unstructured, surfaceFiltered bool) (*renderer.CompositionDiff, error) {
-	result := &renderer.CompositionDiff{
+func (p *DefaultCompDiffProcessor) processSingleComposition(ctx context.Context, newComp *un.Unstructured, affectedXRs []*un.Unstructured, surfaceFiltered bool) (*dt.CompositionDiff, error) {
+	result := &dt.CompositionDiff{
 		Name:           newComp.GetName(),
-		ImpactAnalysis: []renderer.XRImpact{},
-		AffectedResources: renderer.AffectedResourcesSummary{
+		ImpactAnalysis: []dt.XRImpact{},
+		AffectedResources: dt.AffectedResourcesSummary{
 			Total:            0,
 			WithChanges:      0,
 			Unchanged:        0,
@@ -385,7 +384,7 @@ func (p *DefaultCompDiffProcessor) processSingleComposition(ctx context.Context,
 	// independent of whether anything renders differently — so it is reported at every --analyze-on
 	// setting, and carried as a typed per-composition field rather than a warning, because a CI
 	// consumer may want to gate on it.
-	result.RevisionImpact = renderer.RevisionImpact{
+	result.RevisionImpact = dt.RevisionImpact{
 		ChangeScope:     string(comparison.scope),
 		CreatesRevision: comparison.changed(),
 	}
@@ -427,14 +426,14 @@ func (p *DefaultCompDiffProcessor) processSingleComposition(ctx context.Context,
 	// In default-discovery mode, preserve the existing summary-only behavior.
 	if surfaceFiltered {
 		for _, d := range droppedXRs {
-			result.ImpactAnalysis = append(result.ImpactAnalysis, renderer.XRImpact{
+			result.ImpactAnalysis = append(result.ImpactAnalysis, dt.XRImpact{
 				ObjectReference: corev1.ObjectReference{
 					APIVersion: d.xr.GetAPIVersion(),
 					Kind:       d.xr.GetKind(),
 					Name:       d.xr.GetName(),
 					Namespace:  d.xr.GetNamespace(),
 				},
-				Status:       renderer.XRStatusFiltered,
+				Status:       dt.XRStatusFiltered,
 				FilterReason: d.reason,
 				FilterDetail: d.detail,
 			})
@@ -980,7 +979,7 @@ func predictedRevisionLabels(newComp *un.Unstructured, pred predictedRevision) m
 // optional human-readable detail (e.g. which selector failed to match which labels).
 type filteredXR struct {
 	xr     *un.Unstructured
-	reason renderer.FilterReason
+	reason dt.FilterReason
 	detail string
 }
 
@@ -1069,7 +1068,7 @@ func (p *DefaultCompDiffProcessor) classifyXR(xr *un.Unstructured, targetLabels,
 
 		return xrDisposition{filtered: &filteredXR{
 			xr:     xr,
-			reason: renderer.FilterReasonDeleting,
+			reason: dt.FilterReasonDeleting,
 			detail: fmt.Sprintf("deletionTimestamp: %s", stamp),
 		}}, nil
 	}
@@ -1091,7 +1090,7 @@ func (p *DefaultCompDiffProcessor) classifyXR(xr *un.Unstructured, targetLabels,
 			return xrDisposition{pinnedToRevision: true}, nil
 		}
 
-		return xrDisposition{filtered: &filteredXR{xr: xr, reason: renderer.FilterReasonManualPolicy}}, nil
+		return xrDisposition{filtered: &filteredXR{xr: xr, reason: dt.FilterReasonManualPolicy}}, nil
 	}
 
 	// Automatic (or default) policy: honor compositionRevisionSelector. An XR whose selector does not
@@ -1103,7 +1102,7 @@ func (p *DefaultCompDiffProcessor) classifyXR(xr *un.Unstructured, targetLabels,
 	}
 
 	if !matches {
-		return xrDisposition{filtered: &filteredXR{xr: xr, reason: renderer.FilterReasonRevisionSelectorMismatch, detail: detail}}, nil
+		return xrDisposition{filtered: &filteredXR{xr: xr, reason: dt.FilterReasonRevisionSelectorMismatch, detail: detail}}, nil
 	}
 
 	return xrDisposition{}, nil
@@ -1123,11 +1122,11 @@ func countFilterReasons(dropped []filteredXR) filterCounts {
 
 	for _, d := range dropped {
 		switch d.reason {
-		case renderer.FilterReasonManualPolicy:
+		case dt.FilterReasonManualPolicy:
 			counts.byPolicy++
-		case renderer.FilterReasonRevisionSelectorMismatch:
+		case dt.FilterReasonRevisionSelectorMismatch:
 			counts.bySelector++
-		case renderer.FilterReasonDeleting:
+		case dt.FilterReasonDeleting:
 			counts.byDeletion++
 		}
 	}
@@ -1137,16 +1136,16 @@ func countFilterReasons(dropped []filteredXR) filterCounts {
 
 // applyTo writes the per-reason tallies onto a summary. Centralized so every code path that builds
 // an AffectedResourcesSummary reports the same set of reasons.
-func (c filterCounts) applyTo(summary *renderer.AffectedResourcesSummary) {
+func (c filterCounts) applyTo(summary *dt.AffectedResourcesSummary) {
 	summary.FilteredByPolicy = c.byPolicy
 	summary.FilteredBySelector = c.bySelector
 	summary.FilteredByDeletion = c.byDeletion
 }
 
 // buildImpactAnalysis builds the impact analysis and summary from XR results.
-func (p *DefaultCompDiffProcessor) buildImpactAnalysis(xrs []*un.Unstructured, results map[string]*XRDiffResult) ([]renderer.XRImpact, renderer.AffectedResourcesSummary) {
-	impacts := make([]renderer.XRImpact, 0, len(xrs))
-	summary := renderer.AffectedResourcesSummary{
+func (p *DefaultCompDiffProcessor) buildImpactAnalysis(xrs []*un.Unstructured, results map[string]*XRDiffResult) ([]dt.XRImpact, dt.AffectedResourcesSummary) {
+	impacts := make([]dt.XRImpact, 0, len(xrs))
+	summary := dt.AffectedResourcesSummary{
 		Total: len(xrs),
 	}
 
@@ -1154,7 +1153,7 @@ func (p *DefaultCompDiffProcessor) buildImpactAnalysis(xrs []*un.Unstructured, r
 		resourceID := dt.MakeDiffKeyFromResource(xr)
 		result := results[resourceID]
 
-		impact := renderer.XRImpact{
+		impact := dt.XRImpact{
 			ObjectReference: corev1.ObjectReference{
 				APIVersion: xr.GetAPIVersion(),
 				Kind:       xr.GetKind(),
@@ -1165,17 +1164,17 @@ func (p *DefaultCompDiffProcessor) buildImpactAnalysis(xrs []*un.Unstructured, r
 
 		switch {
 		case result != nil && result.HasError():
-			impact.Status = renderer.XRStatusError
+			impact.Status = dt.XRStatusError
 			// NewOutputError surfaces typed validation failures via OutputError.ValidationFailures
 			// when result.Error wraps a SchemaValidationError carrying a structured Result.
 			impact.Error = new(NewOutputError(fmt.Sprintf("%s/%s", impact.Kind, impact.Name), result.Error))
 			summary.WithErrors++
 		case result != nil && result.HasChanges():
-			impact.Status = renderer.XRStatusChanged
+			impact.Status = dt.XRStatusChanged
 			impact.Diffs = result.Diffs
 			summary.WithChanges++
 		default:
-			impact.Status = renderer.XRStatusUnchanged
+			impact.Status = dt.XRStatusUnchanged
 			summary.Unchanged++
 		}
 

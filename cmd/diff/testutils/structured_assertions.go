@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	dt "github.com/crossplane-contrib/crossplane-diff/cmd/diff/renderer/types"
+	dt "github.com/crossplane-contrib/crossplane-diff/cmd/diff/result"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/client-go/util/jsonpath"
 )
@@ -26,7 +26,7 @@ type StructuredDiffOutput struct {
 	Xrs           []XRDiffWire    `json:"xrs"`
 }
 
-// OutputWarning mirrors renderer/types.OutputWarning: a non-fatal advisory carried in structured
+// OutputWarning mirrors result.OutputWarning: a non-fatal advisory carried in structured
 // output alongside (but distinct from) errors.
 type OutputWarning struct {
 	Message string            `json:"message"`
@@ -1329,11 +1329,11 @@ type CompositionDiffWire struct {
 	ImpactAnalysisSkipped bool `json:"impactAnalysisSkipped,omitempty"`
 	// MaskedChangesOnly records that an absent compositionChanges does not mean unchanged.
 	MaskedChangesOnly bool `json:"maskedChangesOnly,omitempty"`
-	// RevisionImpact mirrors renderer.RevisionImpact.
+	// RevisionImpact mirrors result.RevisionImpact.
 	RevisionImpact RevisionImpactWire `json:"revisionImpact"`
 }
 
-// RevisionImpactWire mirrors renderer.RevisionImpact.
+// RevisionImpactWire mirrors result.RevisionImpact.
 type RevisionImpactWire struct {
 	ChangeScope           string `json:"changeScope"`
 	CreatesRevision       bool   `json:"createsRevision"`
@@ -1341,7 +1341,7 @@ type RevisionImpactWire struct {
 	PredictedRevisionName string `json:"predictedRevisionName,omitempty"`
 }
 
-// AffectedResourcesSummary mirrors renderer.AffectedResourcesSummary.
+// AffectedResourcesSummary mirrors result.AffectedResourcesSummary.
 type AffectedResourcesSummary struct {
 	Total              int `json:"total"`
 	WithChanges        int `json:"withChanges"`

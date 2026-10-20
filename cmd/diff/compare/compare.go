@@ -7,7 +7,7 @@ import (
 	"fmt"
 	"strings"
 
-	t "github.com/crossplane-contrib/crossplane-diff/cmd/diff/renderer/types"
+	t "github.com/crossplane-contrib/crossplane-diff/cmd/diff/result"
 	"github.com/sergi/go-diff/diffmatchpatch"
 	"k8s.io/apimachinery/pkg/api/equality"
 	un "k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"

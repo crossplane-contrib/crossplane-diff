@@ -1,5 +1,7 @@
-// Package types provides types used in the renderer in order to facilitate code reuse in test
-package types
+// Package result is the model of what a diff run found: the reports the processors return and the
+// renderers present, with the verdicts and derivations every consumer of a report shares. It imports
+// nothing else in cmd/diff, so the processors, the renderers and testutils can all depend on it.
+package result
 
 import (
 	"crypto/sha256"
@@ -30,7 +32,7 @@ import (
 // diffprocessor package; having the renderer convert would require a
 // renderer -> diffprocessor import cycle. It is nil unless this XR failed.
 //
-// This type lives in the leaf types package (rather than the renderer package
+// This type lives in the leaf result package (rather than the renderer package
 // alongside the DiffRenderer interface) so that testutils — which provides the
 // DiffRenderer mock — can reference it without importing renderer, which would
 // close an import cycle through renderer's in-package tests.

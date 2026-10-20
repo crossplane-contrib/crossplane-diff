@@ -25,7 +25,7 @@ import (
 
 	"github.com/alecthomas/kong"
 	dp "github.com/crossplane-contrib/crossplane-diff/cmd/diff/diffprocessor"
-	dt "github.com/crossplane-contrib/crossplane-diff/cmd/diff/renderer/types"
+	dt "github.com/crossplane-contrib/crossplane-diff/cmd/diff/result"
 	gcmp "github.com/google/go-cmp/cmp"
 	zapraw "go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
