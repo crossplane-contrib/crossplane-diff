@@ -1,19 +1,19 @@
 %%{init: {"flowchart": {"defaultRenderer": "elk"}}}%%
 flowchart TD
-    subgraph "Command Layer"
+    subgraph CMDL["Command Layer"]
         CMD[Cmd]
         HELP[Help Function]
     end
     
-    subgraph "Application Layer"
+    subgraph APPL["Application Layer"]
         APP[AppContext]
         DPR[DiffProcessor]
         CDPR[CompDiffProcessor]
         LOAD[Loader]
     end
 
-    subgraph "Domain Layer"
-        subgraph "Processing Components"
+    subgraph DOML["Domain Layer"]
+        subgraph PROC["Processing Components"]
             DIFFCALC[DiffCalculator]
             SCHMVLD[SchemaValidator]
             RESMGR[ResourceManager]
@@ -22,19 +22,19 @@ flowchart TD
             CMPR[compare.GenerateDiff]
         end
 
-        subgraph "Rendering Components"
+        subgraph REND["Rendering Components"]
             DIFFRND[DiffRenderer]
             CDIFFRND[CompDiffRenderer]
             DIFFFRM[DiffFormatter]
         end
 
-        subgraph "Resource Components"
+        subgraph RESC["Resource Components"]
             RENDER[Render Function]
         end
     end
 
-    subgraph "Client Layer"
-        subgraph "Kubernetes Clients"
+    subgraph CLIL["Client Layer"]
+        subgraph K8SC["Kubernetes Clients"]
             APPLY[ApplyClient]
             ACCSS[AccessChecker]
             RESRC[ResourceClient]
@@ -42,7 +42,7 @@ flowchart TD
             TCONV[TypeConverter]
         end
 
-        subgraph "Crossplane Clients"
+        subgraph XPC["Crossplane Clients"]
             COMP[CompositionClient]
             DEFN[DefinitionClient]
             ENVT[EnvironmentClient]
@@ -53,87 +53,22 @@ flowchart TD
         end
     end
     
-    subgraph "External Systems"
+    subgraph EXTL["External Systems"]
         K8S[Kubernetes API]
     end
     
-    %% Command Layer connections
-    CMD --> APP
-    CMD --> DPR
-    CMD --> CDPR
-    CMD --> LOAD
-    CMD <--> HELP
+    %% Edges join groups, not components: every component in a group
+    %% depends on the same groups below it, and enumerating each pair
+    %% adds noise without information.
+    CMDL --> APPL
+    %% AppContext constructs every client and hands them to the processors.
+    APPL --> DOML
+    APPL --> CLIL
+    DOML --> CLIL
+    %% Crossplane clients are built on the generic ResourceClient.
+    XPC --> K8SC
+    CLIL --> EXTL
 
-    %% Application Layer connections
-    APP --> APPLY
-    APP --> ACCSS
-    APP --> RESRC
-    APP --> SCHMA
-    APP --> TCONV
-    APP --> COMP
-    APP --> DEFN
-    APP --> ENVT
-    APP --> FUNC
-    APP --> CRED
-    APP --> TREE
-
-    CDPR --> DPR
-    CDPR --> CDIFFRND
-    CDPR --> COMP
-
-    %% CompositionClient owns its CompositionRevisionClient internally;
-    %% callers don't wire CREV directly.
-    COMP --> CREV
-
-    DPR --> DIFFCALC
-    DPR --> SCHMVLD
-    DPR --> RESMGR
-    DPR --> REQPRV
-    DPR --> FNPRV
-    DPR --> DIFFRND
-    DPR --> RENDER
-    DPR --> COMP
-    DPR --> FUNC
-
-    %% Domain Layer connections
-    DIFFCALC --> RESMGR
-    DIFFCALC --> CMPR
-    DIFFCALC --> TREE
-    DIFFCALC --> APPLY
-    %% Consulted only after a dry run returns 403, to tell an RBAC denial
-    %% (degrade this resource) from an admission/quota refusal (report it).
-    DIFFCALC --> ACCSS
-
-    SCHMVLD --> SCHMA
-    SCHMVLD --> DEFN
-
-    RESMGR --> RESRC
-    RESMGR --> TREE
-
-    REQPRV --> RESRC
-    REQPRV --> ENVT
-
-    FNPRV --> FUNC
-    FNPRV --> CRED
-
-    DIFFRND --> DIFFFRM
-    CDIFFRND --> DIFFRND
-    
-    %% Client Layer connections
-    APPLY --> K8S
-    ACCSS --> K8S
-    RESRC --> K8S
-    SCHMA --> K8S
-    TCONV --> K8S
-    
-    COMP --> RESRC
-    DEFN --> RESRC
-    ENVT --> RESRC
-    FUNC --> RESRC
-    CRED --> RESRC
-    CREV --> RESRC
-    TREE --> K8S
-    
     %% Styling
     classDef commandLayer fill:#f9d5e5,stroke:#333,stroke-width:1px
     classDef applicationLayer fill:#eeeeee,stroke:#333,stroke-width:1px
