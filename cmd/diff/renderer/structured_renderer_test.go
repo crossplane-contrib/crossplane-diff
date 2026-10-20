@@ -2,7 +2,6 @@ package renderer
 
 import (
 	"bytes"
-	"context"
 	"encoding/json"
 	"maps"
 	"reflect"
@@ -788,7 +787,7 @@ func TestStructuredDiffRenderer_RespectsIgnorePaths(t *testing.T) {
 				// integration test in diff_integration_test.go.
 				diffOpts := compare.Options{IgnorePaths: tc.ignorePaths}
 
-				rd, err := compare.GenerateDiff(context.Background(), tc.current, tc.desired, logger, diffOpts)
+				rd, err := compare.GenerateDiff(t.Context(), tc.current, tc.desired, logger, diffOpts)
 				if err != nil {
 					t.Fatalf("compare.GenerateDiff: %v", err)
 				}
