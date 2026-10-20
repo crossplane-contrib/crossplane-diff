@@ -33,7 +33,7 @@ permissions:
 
 jobs:
   auto-approve:
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     # Only approve PRs authored by Renovate.
     if: ${{ github.event.pull_request.user.login == 'renovate[bot]' }}
     steps:
