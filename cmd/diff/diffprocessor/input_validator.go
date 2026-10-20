@@ -6,7 +6,7 @@ import (
 	"strconv"
 	"strings"
 
-	dt "github.com/crossplane-contrib/crossplane-diff/cmd/diff/renderer/types"
+	dt "github.com/crossplane-contrib/crossplane-diff/cmd/diff/result"
 	"github.com/crossplane-contrib/crossplane-diff/cmd/diff/types"
 	"k8s.io/apimachinery/pkg/api/equality"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"

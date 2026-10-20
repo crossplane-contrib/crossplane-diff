@@ -23,7 +23,7 @@ import (
 	"slices"
 	"strings"
 
-	dt "github.com/crossplane-contrib/crossplane-diff/cmd/diff/renderer/types"
+	dt "github.com/crossplane-contrib/crossplane-diff/cmd/diff/result"
 	sigsyaml "sigs.k8s.io/yaml"
 
 	"github.com/crossplane/crossplane-runtime/v2/pkg/errors"
@@ -43,7 +43,7 @@ type CompDiffRenderer interface {
 	// Top-level and tool errors go to DiffOptions.Stderr and are included in
 	// structured output payloads. Per-composition messages (diffs, "no changes",
 	// per-composition errors) go to DiffOptions.Stdout as part of the diff narrative.
-	RenderCompDiff(output *CompDiffOutput) error
+	RenderCompDiff(output *dt.CompDiffOutput) error
 }
 
 // DefaultCompDiffRenderer renders composition diffs in human-readable format.
@@ -65,7 +65,7 @@ func NewDefaultCompDiffRenderer(logger logging.Logger, diffRenderer DiffRenderer
 // RenderCompDiff renders the composition diff in human-readable format.
 // Top-level errors go to r.opts.Stderr. Per-composition output (diffs, status
 // messages, per-composition errors) goes to r.opts.Stdout.
-func (r *DefaultCompDiffRenderer) RenderCompDiff(output *CompDiffOutput) error {
+func (r *DefaultCompDiffRenderer) RenderCompDiff(output *dt.CompDiffOutput) error {
 	stdout := r.opts.Stdout
 
 	for i, comp := range output.Compositions {
@@ -82,7 +82,7 @@ func (r *DefaultCompDiffRenderer) RenderCompDiff(output *CompDiffOutput) error {
 
 	// One run-wide summary of unverified additions; see DiffRenderer.RenderDiffs for why it is derived
 	// at render time, and why the per-composition reuse of the diff renderer above does not emit it.
-	if err := writeWarnings(r.opts.Stderr, compDryRunWarnings(output)); err != nil {
+	if err := writeWarnings(r.opts.Stderr, dt.CompDryRunWarnings(output)); err != nil {
 		return err
 	}
 
@@ -100,7 +100,7 @@ func (r *DefaultCompDiffRenderer) RenderCompDiff(output *CompDiffOutput) error {
 // followed — only if it processed successfully — by the sections describing its effect on composites.
 // A composition that failed to process has no such sections to show; renderCompositionChanges
 // reported the error in their place.
-func (r *DefaultCompDiffRenderer) renderComposition(comp *CompositionDiff) error {
+func (r *DefaultCompDiffRenderer) renderComposition(comp *dt.CompositionDiff) error {
 	switch {
 	case r.opts.MinimizeComposition:
 		if err := r.renderMinimizedCompositionChanges(comp); err != nil {
@@ -122,7 +122,7 @@ func (r *DefaultCompDiffRenderer) renderComposition(comp *CompositionDiff) error
 // renderCompositionImpact renders the sections describing how a composition affects its composites:
 // either the note standing in for them when their evaluation was skipped, or the affected-XR list and
 // the downstream impact analysis.
-func (r *DefaultCompDiffRenderer) renderCompositionImpact(comp *CompositionDiff) error {
+func (r *DefaultCompDiffRenderer) renderCompositionImpact(comp *dt.CompositionDiff) error {
 	if comp.ImpactAnalysisSkipped {
 		return r.renderSkippedComposition(comp)
 	}
@@ -146,7 +146,7 @@ func (r *DefaultCompDiffRenderer) renderCompositionImpact(comp *CompositionDiff)
 // composition's XRs were deliberately not evaluated. Both sections would be empty and misleading in
 // that case, so say so once instead — then report the composites the tool did rule out locally, which
 // no render was needed to establish.
-func (r *DefaultCompDiffRenderer) renderSkippedComposition(comp *CompositionDiff) error {
+func (r *DefaultCompDiffRenderer) renderSkippedComposition(comp *dt.CompositionDiff) error {
 	if _, err := fmt.Fprint(r.opts.Stdout, skippedMessage(comp.RevisionImpact)); err != nil {
 		return errors.Wrap(err, "cannot write impact analysis skipped message")
 	}
@@ -155,7 +155,7 @@ func (r *DefaultCompDiffRenderer) renderSkippedComposition(comp *CompositionDiff
 }
 
 // renderCompositionChanges renders the composition changes section.
-func (r *DefaultCompDiffRenderer) renderCompositionChanges(comp *CompositionDiff) error {
+func (r *DefaultCompDiffRenderer) renderCompositionChanges(comp *dt.CompositionDiff) error {
 	stdout := r.opts.Stdout
 
 	if _, err := fmt.Fprintf(stdout, headerCompositionChanges+"\n\n"); err != nil {
@@ -202,7 +202,7 @@ func (r *DefaultCompDiffRenderer) renderCompositionChanges(comp *CompositionDiff
 // CompositionRevision and so genuinely cannot affect anything, whereas a metadata-only change does
 // create one — the user simply asked not to pay for evaluating it. Reporting the first message for
 // the second case would claim a guarantee the tool did not establish.
-func skippedMessage(impact RevisionImpact) string {
+func skippedMessage(impact dt.RevisionImpact) string {
 	if impact.CreatesRevision {
 		return fmt.Sprintf("Impact analysis skipped: --analyze-on=spec-change and this composition's spec is unchanged. Applying it still creates a new CompositionRevision that %d composite%s would adopt; whether that changes any rendered output was not evaluated. Pass --analyze-on=any-change to check.\n\n",
 			impact.RepointedComposites, pluralize(impact.RepointedComposites))
@@ -225,7 +225,7 @@ func skippedMessage(impact RevisionImpact) string {
 // entries, because the kept composites were never rendered. That is the processor's guarantee, pinned
 // by its SkipReportsFilterConsequences test. Re-filtering here would not add safety — it would hide an
 // unearned changed/unchanged verdict from this output while it still reached the structured output.
-func (r *DefaultCompDiffRenderer) renderFilteredUnderSkip(comp *CompositionDiff) error {
+func (r *DefaultCompDiffRenderer) renderFilteredUnderSkip(comp *dt.CompositionDiff) error {
 	filtered := totalFiltered(comp.AffectedResources)
 	if filtered == 0 {
 		return nil
@@ -271,7 +271,7 @@ func (r *DefaultCompDiffRenderer) renderFilteredUnderSkip(comp *CompositionDiff)
 //
 // The skipped path does not use this: skippedMessage carries the same fact in its own sentence, so
 // emitting both would state it twice.
-func revisionImpactMessage(impact RevisionImpact) string {
+func revisionImpactMessage(impact dt.RevisionImpact) string {
 	if !impact.CreatesRevision || impact.RepointedComposites == 0 {
 		return ""
 	}
@@ -285,7 +285,7 @@ func revisionImpactMessage(impact RevisionImpact) string {
 // identical, or it differs only in fields excluded from the diff. The latter is still a change —
 // applying it produces a new CompositionRevision that affected composites adopt — so it must not be
 // announced as "no changes".
-func writeNoDisplayableChanges(stdout io.Writer, comp *CompositionDiff) error {
+func writeNoDisplayableChanges(stdout io.Writer, comp *dt.CompositionDiff) error {
 	if comp.MaskedChangesOnly {
 		if _, err := fmt.Fprintf(stdout, "Composition %s differs only in fields excluded from this diff (--ignore-paths, or fields suppressed for readability). That is still a change: applying it creates a new CompositionRevision.\n\n", comp.Name); err != nil {
 			return errors.Wrap(err, "cannot write masked-changes message")
@@ -304,7 +304,7 @@ func writeNoDisplayableChanges(stdout io.Writer, comp *CompositionDiff) error {
 // renderMinimizedCompositionChanges renders a single marker line per composition
 // instead of the full YAML diff body. Errors and no-change compositions are
 // shown as usual (i.e., not minimized); only changed compositions are collapsed.
-func (r *DefaultCompDiffRenderer) renderMinimizedCompositionChanges(comp *CompositionDiff) error {
+func (r *DefaultCompDiffRenderer) renderMinimizedCompositionChanges(comp *dt.CompositionDiff) error {
 	stdout := r.opts.Stdout
 
 	if _, err := fmt.Fprintf(stdout, headerCompositionChanges+"\n\n"); err != nil {
@@ -354,7 +354,7 @@ func (r *DefaultCompDiffRenderer) renderMinimizedCompositionChanges(comp *Compos
 }
 
 // renderAffectedResourcesList renders the affected XRs list with status indicators.
-func (r *DefaultCompDiffRenderer) renderAffectedResourcesList(comp *CompositionDiff) error {
+func (r *DefaultCompDiffRenderer) renderAffectedResourcesList(comp *dt.CompositionDiff) error {
 	stdout := r.opts.Stdout
 
 	if len(comp.ImpactAnalysis) == 0 {
@@ -394,7 +394,7 @@ func (r *DefaultCompDiffRenderer) renderAffectedResourcesList(comp *CompositionD
 }
 
 // renderImpactAnalysis renders the impact analysis section with downstream diffs.
-func (r *DefaultCompDiffRenderer) renderImpactAnalysis(comp *CompositionDiff) error {
+func (r *DefaultCompDiffRenderer) renderImpactAnalysis(comp *dt.CompositionDiff) error {
 	stdout := r.opts.Stdout
 
 	if _, err := fmt.Fprintf(stdout, headerImpactAnalysis+"\n\n"); err != nil {
@@ -405,7 +405,7 @@ func (r *DefaultCompDiffRenderer) renderImpactAnalysis(comp *CompositionDiff) er
 	allDiffs := make(map[string]*dt.ResourceDiff)
 
 	for _, impact := range comp.ImpactAnalysis {
-		if impact.Status == XRStatusChanged && impact.Diffs != nil {
+		if impact.Status == dt.XRStatusChanged && impact.Diffs != nil {
 			for key, diff := range impact.Diffs {
 				// Skip equal diffs (may be stored for removal detection purposes)
 				if diff.DiffType != dt.DiffTypeEqual {
@@ -434,7 +434,7 @@ func (r *DefaultCompDiffRenderer) renderImpactAnalysis(comp *CompositionDiff) er
 
 // totalFiltered sums the per-reason filter counters. Kept in one place so adding a reason cannot
 // leave a caller silently ignoring it.
-func totalFiltered(summary AffectedResourcesSummary) int {
+func totalFiltered(summary dt.AffectedResourcesSummary) int {
 	return summary.FilteredByPolicy + summary.FilteredBySelector + summary.FilteredByDeletion
 }
 
@@ -443,7 +443,7 @@ func totalFiltered(summary AffectedResourcesSummary) int {
 // nothing is shown and how to see more. Single-reason cases get bespoke prose that names the
 // remedy; mixed reasons fall through to an enumerated breakdown. Only called when at least one
 // XR was filtered.
-func allFilteredMessage(compName string, summary AffectedResourcesSummary) string {
+func allFilteredMessage(compName string, summary dt.AffectedResourcesSummary) string {
 	byPolicy, bySelector, byDeletion := summary.FilteredByPolicy, summary.FilteredBySelector, summary.FilteredByDeletion
 	total := totalFiltered(summary)
 
@@ -467,7 +467,7 @@ func allFilteredMessage(compName string, summary AffectedResourcesSummary) strin
 // "1 with Manual update policy (use --include-manual to see them), 2 being deleted"), omitting reasons
 // with no XRs. Shared by allFilteredMessage's mixed-reason case and renderFilteredUnderSkip so a newly
 // added reason is described identically in both.
-func filteredClauses(summary AffectedResourcesSummary) string {
+func filteredClauses(summary dt.AffectedResourcesSummary) string {
 	clauses := make([]string, 0, 3)
 
 	for _, c := range []struct {
@@ -489,17 +489,17 @@ func filteredClauses(summary AffectedResourcesSummary) string {
 // filteredSuffix returns the human-readable explanation appended to a filtered XR line, chosen by
 // the XR's FilterReason. Selector-mismatch entries additionally surface the concrete FilterDetail
 // hint (which selector failed to match which labels) so users can self-diagnose the exclusion.
-func filteredSuffix(impact XRImpact) string {
+func filteredSuffix(impact dt.XRImpact) string {
 	switch impact.FilterReason {
-	case FilterReasonManualPolicy:
+	case dt.FilterReasonManualPolicy:
 		return " — filtered: Manual update policy (use --include-manual to evaluate)"
-	case FilterReasonRevisionSelectorMismatch:
+	case dt.FilterReasonRevisionSelectorMismatch:
 		if impact.FilterDetail != "" {
 			return fmt.Sprintf(" — filtered: revision selector mismatch (%s)", impact.FilterDetail)
 		}
 
 		return " — filtered: revision selector mismatch"
-	case FilterReasonDeleting:
+	case dt.FilterReasonDeleting:
 		if impact.FilterDetail != "" {
 			return fmt.Sprintf(" — filtered: being deleted (%s)", impact.FilterDetail)
 		}
@@ -511,7 +511,7 @@ func filteredSuffix(impact XRImpact) string {
 }
 
 // buildXRStatusList builds the XR list with status indicators.
-func (r *DefaultCompDiffRenderer) buildXRStatusList(impacts []XRImpact) string {
+func (r *DefaultCompDiffRenderer) buildXRStatusList(impacts []dt.XRImpact) string {
 	var sb strings.Builder
 
 	// Color codes and indicators
@@ -544,16 +544,16 @@ func (r *DefaultCompDiffRenderer) buildXRStatusList(impacts []XRImpact) string {
 		)
 
 		switch impact.Status {
-		case XRStatusError:
+		case dt.XRStatusError:
 			indicator = errorMark
 			color = colorRed
-		case XRStatusChanged:
+		case dt.XRStatusChanged:
 			indicator = warningMark
 			color = colorYellow
-		case XRStatusUnchanged:
+		case dt.XRStatusUnchanged:
 			indicator = checkMark
 			color = colorGreen
-		case XRStatusFiltered:
+		case dt.XRStatusFiltered:
 			indicator = "⊘" // ⊘
 			color = colorYellow
 			suffix = filteredSuffix(impact)
@@ -567,7 +567,7 @@ func (r *DefaultCompDiffRenderer) buildXRStatusList(impacts []XRImpact) string {
 			colorReset)
 
 		// Include error details for XRStatusError impacts so users can diagnose issues.
-		if impact.Status == XRStatusError && impact.Error != nil {
+		if impact.Status == dt.XRStatusError && impact.Error != nil {
 			fmt.Fprintf(&sb, "%s    Error: %s%s\n", color, impact.Error.Message, colorReset)
 		}
 	}
@@ -592,10 +592,10 @@ func NewStructuredCompDiffRenderer(logger logging.Logger, opts DiffOptions) Comp
 // RenderCompDiff renders the composition diff in structured format (JSON/YAML).
 // Top-level errors go to both r.opts.Stderr (for human visibility) and the
 // structured output payload. Per-composition data goes to r.opts.Stdout.
-func (r *StructuredCompDiffRenderer) RenderCompDiff(output *CompDiffOutput) error {
+func (r *StructuredCompDiffRenderer) RenderCompDiff(output *dt.CompDiffOutput) error {
 	// One run-wide summary of unverified additions, derived here from the diffs and appended after the
 	// warnings raised during the run. See DiffRenderer.RenderDiffs.
-	dryRun := compDryRunWarnings(output)
+	dryRun := dt.CompDryRunWarnings(output)
 
 	// Convert internal representation to JSON output structure
 	warnings := append(slices.Clone(output.Warnings), dryRun...)
@@ -657,7 +657,7 @@ func (r *StructuredCompDiffRenderer) RenderCompDiff(output *CompDiffOutput) erro
 // buildStructuredCompOutput converts internal CompDiffOutput to the v2 document, from which v1 is
 // derived (see compDiffWireV2.v1). Each failed composition's error is appended to the top-level
 // errors, after the processor's, so that list is the union of every error in the document.
-func buildStructuredCompOutput(output *CompDiffOutput) *compDiffWireV2 {
+func buildStructuredCompOutput(output *dt.CompDiffOutput) *compDiffWireV2 {
 	result := &compDiffWireV2{
 		OutputVersion: OutputVersionV2,
 		Compositions:  make([]compositionDiffWireV2, 0, len(output.Compositions)),
@@ -675,8 +675,8 @@ func buildStructuredCompOutput(output *CompDiffOutput) *compDiffWireV2 {
 
 		// Omit revisionImpact entirely when the comparison never completed, rather than serializing a
 		// zero value that would claim changeScope "" and createsRevision false. See
-		// RevisionImpact.determined and issue #479.
-		if comp.RevisionImpact.determined() {
+		// RevisionImpact.Determined and issue #479.
+		if comp.RevisionImpact.Determined() {
 			revisionImpact := comp.RevisionImpact
 			jsonComp.RevisionImpact = &revisionImpact
 		}
@@ -759,7 +759,7 @@ func (e xrEntryWire) v1() xrImpactWire {
 		Error:           firstErrorMessage(e.Errors),
 	}
 
-	if e.Status == XRStatusChanged && len(e.Changes) > 0 {
+	if e.Status == dt.XRStatusChanged && len(e.Changes) > 0 {
 		result.DownstreamChanges = &DownstreamChanges{Summary: e.Summary, Changes: e.Changes}
 	}
 

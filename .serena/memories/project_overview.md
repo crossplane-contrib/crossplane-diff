@@ -24,6 +24,7 @@ cmd/diff/
 ├── dockerrun/                # Ties a run's function containers and network to it; reaps dead runs'
 ├── compare/                  # Computes ResourceDiffs (cleanup, ignore paths); no presentation
 ├── renderer/                 # Formats diffs for output (text, JSON/YAML); presentation only
+├── result/                   # The reports the processors return, their verdicts and the dry-run summary
 ├── testutils/                # Test helpers and mock builders
 └── types/                    # Shared types and interfaces
 ```

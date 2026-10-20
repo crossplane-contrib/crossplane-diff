@@ -27,7 +27,7 @@ import (
 
 	xp "github.com/crossplane-contrib/crossplane-diff/cmd/diff/client/crossplane"
 	"github.com/crossplane-contrib/crossplane-diff/cmd/diff/renderer"
-	dt "github.com/crossplane-contrib/crossplane-diff/cmd/diff/renderer/types"
+	dt "github.com/crossplane-contrib/crossplane-diff/cmd/diff/result"
 	tu "github.com/crossplane-contrib/crossplane-diff/cmd/diff/testutils"
 	"github.com/crossplane-contrib/crossplane-diff/cmd/diff/types"
 	"github.com/crossplane/cli/v2/cmd/crossplane/render"
@@ -733,7 +733,7 @@ func TestDefaultCompDiffProcessor_partitionXRsByUpdatePolicy(t *testing.T) {
 	// against these to decide whether the XR would adopt the new revision.
 	type droppedWant struct {
 		name   string
-		reason renderer.FilterReason
+		reason dt.FilterReason
 	}
 
 	tests := map[string]struct {
@@ -792,7 +792,7 @@ func TestDefaultCompDiffProcessor_partitionXRsByUpdatePolicy(t *testing.T) {
 			},
 			wantKept:       []string{"manual-xr"},
 			wantRepointing: nil,
-			wantDropped:    []droppedWant{{name: "auto-mismatch", reason: renderer.FilterReasonRevisionSelectorMismatch}},
+			wantDropped:    []droppedWant{{name: "auto-mismatch", reason: dt.FilterReasonRevisionSelectorMismatch}},
 			// The only kept XR is the pinned Manual one, so nothing re-points.
 		},
 		"IncludeManualFalse_FiltersManualXRs": {
@@ -806,7 +806,7 @@ func TestDefaultCompDiffProcessor_partitionXRsByUpdatePolicy(t *testing.T) {
 			},
 			wantKept:       []string{"auto-xr"},
 			wantRepointing: []string{"auto-xr"},
-			wantDropped:    []droppedWant{{name: "manual-xr", reason: renderer.FilterReasonManualPolicy}},
+			wantDropped:    []droppedWant{{name: "manual-xr", reason: dt.FilterReasonManualPolicy}},
 		},
 		// Automatic XR whose selector does not match the composition labels is dropped.
 		"AutomaticSelectorMismatch_Dropped": {
@@ -819,7 +819,7 @@ func TestDefaultCompDiffProcessor_partitionXRsByUpdatePolicy(t *testing.T) {
 			},
 			wantKept:       nil,
 			wantRepointing: nil,
-			wantDropped:    []droppedWant{{name: "selector-old", reason: renderer.FilterReasonRevisionSelectorMismatch}},
+			wantDropped:    []droppedWant{{name: "selector-old", reason: dt.FilterReasonRevisionSelectorMismatch}},
 		},
 		// Automatic XR whose selector matches the composition labels is kept.
 		"AutomaticSelectorMatch_Kept": {
@@ -896,7 +896,7 @@ func TestDefaultCompDiffProcessor_partitionXRsByUpdatePolicy(t *testing.T) {
 			},
 			wantKept:       nil,
 			wantRepointing: nil,
-			wantDropped:    []droppedWant{{name: "manual-match", reason: renderer.FilterReasonManualPolicy}},
+			wantDropped:    []droppedWant{{name: "manual-match", reason: dt.FilterReasonManualPolicy}},
 		},
 		"EmptyList_ReturnsEmpty": {
 			includeManual:  false,
@@ -920,7 +920,7 @@ func TestDefaultCompDiffProcessor_partitionXRsByUpdatePolicy(t *testing.T) {
 			},
 			wantKept:       []string{"live-xr"},
 			wantRepointing: []string{"live-xr"},
-			wantDropped:    []droppedWant{{name: "deleting-xr", reason: renderer.FilterReasonDeleting}},
+			wantDropped:    []droppedWant{{name: "deleting-xr", reason: dt.FilterReasonDeleting}},
 		},
 		// Deletion is evaluated before the policy rules and is not rescued by --include-manual: a
 		// deleting Manual XR is reported as deleting, not as manual_policy.
@@ -934,7 +934,7 @@ func TestDefaultCompDiffProcessor_partitionXRsByUpdatePolicy(t *testing.T) {
 			},
 			wantKept:       nil,
 			wantRepointing: nil,
-			wantDropped:    []droppedWant{{name: "deleting-manual", reason: renderer.FilterReasonDeleting}},
+			wantDropped:    []droppedWant{{name: "deleting-manual", reason: dt.FilterReasonDeleting}},
 		},
 		// A matching compositionRevisionSelector does not rescue a deleting XR either.
 		"DeletingWithMatchingSelector_Dropped": {
@@ -948,7 +948,7 @@ func TestDefaultCompDiffProcessor_partitionXRsByUpdatePolicy(t *testing.T) {
 			},
 			wantKept:       nil,
 			wantRepointing: nil,
-			wantDropped:    []droppedWant{{name: "deleting-match", reason: renderer.FilterReasonDeleting}},
+			wantDropped:    []droppedWant{{name: "deleting-match", reason: dt.FilterReasonDeleting}},
 		},
 		// An explicit null deletionTimestamp is how round-tripped Kubernetes YAML spells "unset";
 		// it must not be mistaken for a deleting XR.
@@ -976,7 +976,7 @@ func TestDefaultCompDiffProcessor_partitionXRsByUpdatePolicy(t *testing.T) {
 			},
 			wantKept:       nil,
 			wantRepointing: nil,
-			wantDropped:    []droppedWant{{name: "selector-xr", reason: renderer.FilterReasonRevisionSelectorMismatch}},
+			wantDropped:    []droppedWant{{name: "selector-xr", reason: dt.FilterReasonRevisionSelectorMismatch}},
 		},
 	}
 
@@ -1074,45 +1074,45 @@ func TestDefaultCompDiffProcessor_buildImpactAnalysis(t *testing.T) {
 
 	tests := map[string]struct {
 		result      *XRDiffResult
-		wantImpact  renderer.XRImpact
-		wantSummary renderer.AffectedResourcesSummary
+		wantImpact  dt.XRImpact
+		wantSummary dt.AffectedResourcesSummary
 	}{
 		// The impact's error is what both the per-XR entry and the top-level errors[] report, so it
 		// must keep the typed validation breakdown rather than flatten it to a message.
 		"ValidationErrorKeepsValidationFailures": {
 			result: &XRDiffResult{Error: validationErr},
-			wantImpact: renderer.XRImpact{
+			wantImpact: dt.XRImpact{
 				ObjectReference: ref,
-				Status:          renderer.XRStatusError,
+				Status:          dt.XRStatusError,
 				Error: &dt.OutputError{
 					ResourceID:         "XResource/my-xr",
 					Message:            validationErr.Error(),
 					ValidationFailures: failures,
 				},
 			},
-			wantSummary: renderer.AffectedResourcesSummary{Total: 1, WithErrors: 1},
+			wantSummary: dt.AffectedResourcesSummary{Total: 1, WithErrors: 1},
 		},
 		"PlainErrorCarriesOnlyItsMessage": {
 			result: &XRDiffResult{Error: errors.New("render failed")},
-			wantImpact: renderer.XRImpact{
+			wantImpact: dt.XRImpact{
 				ObjectReference: ref,
-				Status:          renderer.XRStatusError,
+				Status:          dt.XRStatusError,
 				Error:           &dt.OutputError{ResourceID: "XResource/my-xr", Message: "render failed"},
 			},
-			wantSummary: renderer.AffectedResourcesSummary{Total: 1, WithErrors: 1},
+			wantSummary: dt.AffectedResourcesSummary{Total: 1, WithErrors: 1},
 		},
 		"Changed": {
 			result: &XRDiffResult{Diffs: map[string]*dt.ResourceDiff{"Bucket/my-bucket": modified}},
-			wantImpact: renderer.XRImpact{
+			wantImpact: dt.XRImpact{
 				ObjectReference: ref,
-				Status:          renderer.XRStatusChanged,
+				Status:          dt.XRStatusChanged,
 				Diffs:           map[string]*dt.ResourceDiff{"Bucket/my-bucket": modified},
 			},
-			wantSummary: renderer.AffectedResourcesSummary{Total: 1, WithChanges: 1},
+			wantSummary: dt.AffectedResourcesSummary{Total: 1, WithChanges: 1},
 		},
 		"NoResultIsUnchanged": {
-			wantImpact:  renderer.XRImpact{ObjectReference: ref, Status: renderer.XRStatusUnchanged},
-			wantSummary: renderer.AffectedResourcesSummary{Total: 1, Unchanged: 1},
+			wantImpact:  dt.XRImpact{ObjectReference: ref, Status: dt.XRStatusUnchanged},
+			wantSummary: dt.AffectedResourcesSummary{Total: 1, Unchanged: 1},
 		},
 	}
 
@@ -1125,7 +1125,7 @@ func TestDefaultCompDiffProcessor_buildImpactAnalysis(t *testing.T) {
 
 			impacts, summary := (&DefaultCompDiffProcessor{}).buildImpactAnalysis([]*un.Unstructured{xr}, results)
 
-			if diff := gcmp.Diff([]renderer.XRImpact{tt.wantImpact}, impacts); diff != "" {
+			if diff := gcmp.Diff([]dt.XRImpact{tt.wantImpact}, impacts); diff != "" {
 				t.Errorf("buildImpactAnalysis() impacts mismatch (-want +got):\n%s", diff)
 			}
 
@@ -1846,14 +1846,14 @@ func TestDefaultCompDiffProcessor_DiffComposition_ResourceMode(t *testing.T) {
 		surfaceTests := map[string]struct {
 			surfaceFiltered bool
 			wantImpactCount int
-			wantStatus      renderer.XRStatus     // empty when wantImpactCount == 0
-			wantReason      renderer.FilterReason // empty when wantImpactCount == 0
+			wantStatus      dt.XRStatus     // empty when wantImpactCount == 0
+			wantReason      dt.FilterReason // empty when wantImpactCount == 0
 		}{
 			"ResourceMode_SurfacesFilteredXRs": {
 				surfaceFiltered: true,
 				wantImpactCount: 1,
-				wantStatus:      renderer.XRStatusFiltered,
-				wantReason:      renderer.FilterReasonManualPolicy,
+				wantStatus:      dt.XRStatusFiltered,
+				wantReason:      dt.FilterReasonManualPolicy,
 			},
 			"DefaultDiscovery_OmitsFilteredFromImpactAnalysis": {
 				surfaceFiltered: false,
@@ -1920,8 +1920,8 @@ func TestDefaultCompDiffProcessor_DiffComposition_ResourceMode(t *testing.T) {
 
 		type want struct {
 			Skipped        bool
-			Summary        renderer.AffectedResourcesSummary
-			RevisionImpact renderer.RevisionImpact
+			Summary        dt.AffectedResourcesSummary
+			RevisionImpact dt.RevisionImpact
 			// Impacts is every ImpactAnalysis entry as "<status> <name>", in order — deliberately not
 			// narrowed to the filtered ones. Under a skip the kept composites were never evaluated, so
 			// ImpactAnalysis must hold only the filtered entries; a changed/unchanged/error entry here
@@ -1939,8 +1939,8 @@ func TestDefaultCompDiffProcessor_DiffComposition_ResourceMode(t *testing.T) {
 				analyzeOn: AnalyzeOnSpecChange,
 				want: want{
 					Skipped:        true,
-					Summary:        renderer.AffectedResourcesSummary{Total: 2, FilteredByPolicy: 1},
-					RevisionImpact: renderer.RevisionImpact{ChangeScope: "metadata", CreatesRevision: true, RepointedComposites: 1},
+					Summary:        dt.AffectedResourcesSummary{Total: 2, FilteredByPolicy: 1},
+					RevisionImpact: dt.RevisionImpact{ChangeScope: "metadata", CreatesRevision: true, RepointedComposites: 1},
 				},
 			},
 			"Skipped_ResourceMode_NamesFilteredComposites": {
@@ -1948,8 +1948,8 @@ func TestDefaultCompDiffProcessor_DiffComposition_ResourceMode(t *testing.T) {
 				surfaceFiltered: true,
 				want: want{
 					Skipped:        true,
-					Summary:        renderer.AffectedResourcesSummary{Total: 2, FilteredByPolicy: 1},
-					RevisionImpact: renderer.RevisionImpact{ChangeScope: "metadata", CreatesRevision: true, RepointedComposites: 1},
+					Summary:        dt.AffectedResourcesSummary{Total: 2, FilteredByPolicy: 1},
+					RevisionImpact: dt.RevisionImpact{ChangeScope: "metadata", CreatesRevision: true, RepointedComposites: 1},
 					Impacts:        []string{"filtered manual-xr"},
 				},
 			},
@@ -1961,8 +1961,8 @@ func TestDefaultCompDiffProcessor_DiffComposition_ResourceMode(t *testing.T) {
 				surfaceFiltered: true,
 				want: want{
 					Skipped:        true,
-					Summary:        renderer.AffectedResourcesSummary{Total: 2},
-					RevisionImpact: renderer.RevisionImpact{ChangeScope: "metadata", CreatesRevision: true, RepointedComposites: 1},
+					Summary:        dt.AffectedResourcesSummary{Total: 2},
+					RevisionImpact: dt.RevisionImpact{ChangeScope: "metadata", CreatesRevision: true, RepointedComposites: 1},
 				},
 			},
 			// The same tally when the analysis does run: both composites are evaluated, one re-points.
@@ -1972,8 +1972,8 @@ func TestDefaultCompDiffProcessor_DiffComposition_ResourceMode(t *testing.T) {
 				includeManual:   true,
 				surfaceFiltered: true,
 				want: want{
-					Summary:        renderer.AffectedResourcesSummary{Total: 2, Unchanged: 2},
-					RevisionImpact: renderer.RevisionImpact{ChangeScope: "metadata", CreatesRevision: true, RepointedComposites: 1},
+					Summary:        dt.AffectedResourcesSummary{Total: 2, Unchanged: 2},
+					RevisionImpact: dt.RevisionImpact{ChangeScope: "metadata", CreatesRevision: true, RepointedComposites: 1},
 					Impacts:        []string{"unchanged xr-1", "unchanged manual-xr"},
 				},
 			},
@@ -2056,12 +2056,12 @@ func TestDefaultCompDiffProcessor_DiffComposition_ResourceMode(t *testing.T) {
 		}
 
 		impact := got.ImpactAnalysis[0]
-		if impact.Status != renderer.XRStatusFiltered {
-			t.Errorf("Status: got %q, want %q", impact.Status, renderer.XRStatusFiltered)
+		if impact.Status != dt.XRStatusFiltered {
+			t.Errorf("Status: got %q, want %q", impact.Status, dt.XRStatusFiltered)
 		}
 
-		if impact.FilterReason != renderer.FilterReasonRevisionSelectorMismatch {
-			t.Errorf("FilterReason: got %q, want %q", impact.FilterReason, renderer.FilterReasonRevisionSelectorMismatch)
+		if impact.FilterReason != dt.FilterReasonRevisionSelectorMismatch {
+			t.Errorf("FilterReason: got %q, want %q", impact.FilterReason, dt.FilterReasonRevisionSelectorMismatch)
 		}
 
 		if !strings.Contains(impact.FilterDetail, "does not match composition labels") {
@@ -2085,7 +2085,7 @@ func TestDefaultCompDiffProcessor_DiffComposition_ResourceMode(t *testing.T) {
 // renderCompReport renders a DiffComposition report the way the comp command does, in the given format
 // (empty means the human-readable diff) and structured output version (empty means the default), and
 // returns what it wrote to stdout.
-func renderCompReport(t *testing.T, output *renderer.CompDiffOutput, format renderer.OutputFormat, version renderer.OutputVersion) string {
+func renderCompReport(t *testing.T, output *dt.CompDiffOutput, format renderer.OutputFormat, version renderer.OutputVersion) string {
 	t.Helper()
 
 	if output == nil {

@@ -71,6 +71,14 @@ classDiagram
         +GenerateDiff(ctx, current, desired, logger, options) (*ResourceDiff, error)
     }
 
+    class result {
+        <<package>>
+        +XRReport
+        +CompDiffOutput
+        +ResourceDiff
+        +DryRunWarnings(diffSets) []OutputWarning
+    }
+
     class Defaulter {
         <<interface>>
         +Default(ctx, obj) (*Unstructured, storageVersion string, error)
@@ -172,6 +180,10 @@ classDiagram
     CompDiffProcessor --> compare : GenerateDiff, composition diff
     XRCmd --> DiffRenderer : renders the XRReport
     CompCmd --> CompDiffRenderer : renders the CompDiffOutput
+    DiffProcessor ..> result : returns an XRReport
+    CompDiffProcessor ..> result : returns a CompDiffOutput
+    DiffRenderer ..> result : presents
+    CompDiffRenderer ..> result : presents
 
     AppContext --> KubernetesClients
     AppContext --> CrossplaneClients

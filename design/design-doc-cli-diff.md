@@ -707,7 +707,7 @@ type Cleaner interface {
     Cleanup(ctx context.Context) error
 }
 
-// XRReport (in renderer/types) is everything a DiffRenderer renders for one xr run.
+// XRReport (in result) is everything a DiffRenderer renders for one xr run.
 type XRReport struct {
     Groups   []XRDiffGroup   // one per input, in input order
     Errors   []OutputError   // union: every group's error, overlaps, and the interruption entry
@@ -835,7 +835,7 @@ type CompDiffProcessor interface {
     // the command to render. When `resources` is non-empty, impact analysis is restricted to the
     // named composites. The output is nil only when the call fails before analysis (no
     // compositions, a failed --resource preflight); otherwise it is returned even with an error.
-    DiffComposition(ctx context.Context, compositions []*un.Unstructured, namespace string, resources []k8stypes.NamespacedName) (*renderer.CompDiffOutput, error)
+    DiffComposition(ctx context.Context, compositions []*un.Unstructured, namespace string, resources []k8stypes.NamespacedName) (*dt.CompDiffOutput, error)
 
     Initialize(ctx context.Context) error
     Cleaner
@@ -1626,7 +1626,7 @@ type DiffRenderer interface {
 
 // CompDiffRenderer handles rendering composition diffs.
 type CompDiffRenderer interface {
-    RenderCompDiff(output *CompDiffOutput) error
+    RenderCompDiff(output *dt.CompDiffOutput) error
 }
 ```
 
@@ -1640,7 +1640,8 @@ renderer emits both the deprecated flat `changes[]` and the grouped `xrs[]`.
 
 **Summary of unverified additions.** Every renderer derives one kind of warning itself rather than
 receiving it: the advisory that added resources could not be verified against the apiserver (§6.3.3).
-`dryRunWarnings` (`renderer/dry_run_warnings.go`) groups the diffs' `DryRunInfo` by GVK, namespace,
+`DryRunWarnings` (`result/dry_run_warnings.go`, with `XRDryRunWarnings` and `CompDryRunWarnings` over an xr run's
+groups and a comp run's output) groups the diffs' `DryRunInfo` by GVK, namespace,
 skip reason and `Detail`, and emits one `OutputWarning` per group with `gvk`, `namespace`, the detail
 (under `cause`, or `reason` for `forbidden`) and `count`, the number of distinct resources behind it,
 in `Context`. Grouping on the detail is what keeps every distinct cause visible: the text renderer
@@ -1736,20 +1737,25 @@ removed.)
 
 #### 6.8.3 Structured output types
 
-The structured types are split across two files:
+The types are split between the model and the renderer:
 
-- The top-level output types and their components live in `cmd/diff/renderer/structured_renderer.go` alongside the
-  structured renderers themselves: `StructuredDiffOutput`, `Summary`, `ChangeDetail`, `CompDiffOutput`,
-  `CompositionDiff`, `RevisionImpact`, `XRImpact`, `XRStatus`, `AffectedResourcesSummary`, `DownstreamChanges`,
-  `OutputVersion`.
-- The error envelope and the validation-failure types live in `cmd/diff/renderer/types/`: `OutputError`,
-  `ResourceValidationFailure`, `FieldValidationError`. These are separated because they're consumed by the
-  human-readable renderer too, not just the structured ones.
-- `DryRunInfo` and `DryRunSkipReason` also live in `cmd/diff/renderer/types/`, because they hang off `ResourceDiff` —
-  the processor→renderer type — and are copied onto the wire shape by the structured renderer.
-- `XRDiffGroup` also lives in `cmd/diff/renderer/types/`. It is the processor→renderer handoff type (input-XR
+- The model of what a run found lives in `cmd/diff/result/` (imported as `dt`), which imports nothing else in
+  `cmd/diff`, so the processors, the renderers and `testutils` all depend on it and on nothing of each other's:
+  - the reports the processors return, `XRReport` and `CompDiffOutput`, with the `HasChanges` verdicts that drive
+    the exit code, and their parts: `XRDiffGroup`, `ResourceDiff`, `CompositionDiff`, `RevisionImpact`, `XRImpact`,
+    `XRStatus`, `FilterReason`, `AffectedResourcesSummary`;
+  - the error envelope and the validation-failure types: `OutputError`, `ResourceValidationFailure`,
+    `FieldValidationError`;
+  - `DryRunInfo` and `DryRunSkipReason`, which hang off `ResourceDiff` and are copied onto the wire shape by the
+    structured renderer;
+  - the derivation of the unverified-additions summary (`DryRunWarnings`, §6.8.1), exported so a consumer other than
+    the renderers can produce the same summary from a report.
+- The wire types live in `cmd/diff/renderer/structured_renderer.go` alongside the structured renderers themselves:
+  `StructuredDiffOutput`, `Summary`, `ChangeDetail`, `DownstreamChanges`, `OutputVersion`, and the unexported `…Wire`
+  types below.
+- `XRDiffGroup` is the processor→renderer handoff type (input-XR
   identity + its `Diffs map[string]*ResourceDiff` + a pre-converted `*OutputError`), not a wire type. It lives in the
-  leaf `types` package rather than alongside the `DiffRenderer` interface so `testutils` (which mocks `DiffRenderer`)
+  leaf `result` package rather than alongside the `DiffRenderer` interface so `testutils` (which mocks `DiffRenderer`)
   can reference it without importing `renderer`, which would close an import cycle through `renderer`'s in-package
   tests. The pre-converted error (vs. a raw `error`) keeps the conversion — `NewOutputError`, which lives in
   `diffprocessor` — out of the renderer, avoiding a renderer→diffprocessor dependency.
@@ -1985,7 +1991,7 @@ resources — that's deliberate, so consumers iterating `ValidationFailures` nev
 
 An advisory is something the user should know that does not fail the diff: an ownership takeover, a
 resource being deleted, a credential secret that could not be fetched, Docker resources left behind.
-Advisories have a typed channel of their own, `dt.Advisories` (in `renderer/types`), with one method:
+Advisories have a typed channel of their own, `dt.Advisories` (in `result`), with one method:
 
 ```go
 type Advisories interface {
@@ -2871,6 +2877,9 @@ cmd/
 │   ├── compare/                   # GenerateDiff: structured ResourceDiff between two objects,
 │   │                              #   cleanup and ignore paths (compare.Options)
 │   ├── renderer/                  # DiffRenderer, CompDiffRenderer, structured (JSON/YAML) renderers
+│   ├── result/                    # The model the processors return and the renderers present:
+│   │                              #   XRReport, CompDiffOutput, ResourceDiff, OutputError, verdicts,
+│   │                              #   the unverified-additions summary
 │   ├── ref/                       # Composite-ref parsing for `comp --resource`
 │   ├── kubecfg/                   # kubeconfig resolution helpers
 │   ├── types/                     # Shared types (CompositionProvider, ResolvedComposition, etc.)

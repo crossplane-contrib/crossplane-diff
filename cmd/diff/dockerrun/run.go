@@ -42,7 +42,7 @@ import (
 	"time"
 
 	cerrdefs "github.com/containerd/errdefs"
-	dt "github.com/crossplane-contrib/crossplane-diff/cmd/diff/renderer/types"
+	dt "github.com/crossplane-contrib/crossplane-diff/cmd/diff/result"
 	"github.com/crossplane/cli/v2/cmd/crossplane/render"
 	"github.com/moby/moby/client"
 

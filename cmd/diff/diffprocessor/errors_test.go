@@ -23,7 +23,7 @@ import (
 	"testing"
 	"time"
 
-	dt "github.com/crossplane-contrib/crossplane-diff/cmd/diff/renderer/types"
+	dt "github.com/crossplane-contrib/crossplane-diff/cmd/diff/result"
 	pkgvalidate "github.com/crossplane/cli/v2/pkg/validate"
 	gcmp "github.com/google/go-cmp/cmp"
 	un "k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
