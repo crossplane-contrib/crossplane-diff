@@ -16,8 +16,8 @@ type DiffOptions struct {
 	// Stdout is the writer for diff output (defaults to os.Stdout)
 	Stdout io.Writer
 
-	// Stderr is the writer for error output (defaults to os.Stderr)
-	// Errors are written here following Unix conventions (errors to stderr, output to stdout)
+	// Stderr is the writer for warnings (defaults to os.Stderr). Errors are not
+	// written here: they are returned to the command, which prints them once.
 	Stderr io.Writer
 
 	// Format specifies the output format (diff, json, yaml)

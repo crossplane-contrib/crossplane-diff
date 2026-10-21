@@ -30,10 +30,11 @@ func flattenGroups(groups []dt.XRDiffGroup) map[string]*dt.ResourceDiff {
 
 // DiffRenderer handles rendering diffs to output.
 type DiffRenderer interface {
-	// RenderDiffs formats and outputs diffs, grouped by input XR.
-	// Diff output goes to DiffOptions.Stdout, errors go to DiffOptions.Stderr.
-	// The errs parameter contains the union of resource processing errors to
-	// include in output (the top-level/global error list).
+	// RenderDiffs formats and outputs diffs, grouped by input XR, to
+	// DiffOptions.Stdout. The errs parameter contains the union of resource
+	// processing errors (the top-level/global error list). A structured
+	// renderer includes them in its output; no renderer writes them to stderr,
+	// because the processor returns them to the command, which prints them once.
 	//
 	// The warnings parameter carries non-fatal advisories for structured output only. Unlike errors,
 	// warnings have ALREADY been written to stderr, at the moment they were raised (see
@@ -203,8 +204,8 @@ func identitylessGroups(diffs map[string]*dt.ResourceDiff) []dt.XRDiffGroup {
 	return []dt.XRDiffGroup{{Diffs: diffs}}
 }
 
-// RenderDiffs formats and prints the diffs.
-// Diff output goes to r.diffOpts.Stdout, errors go to r.diffOpts.Stderr.
+// RenderDiffs formats and prints the diffs to r.diffOpts.Stdout. It does not
+// print errs; the command prints the error the processor returns.
 //
 // Identity-bearing groups (the xr command) render as per-input-XR sections,
 // each with a header and per-section summary, followed by an aggregate footer
@@ -248,18 +249,7 @@ func (r *DefaultDiffRenderer) RenderDiffs(groups []dt.XRDiffGroup, errs []dt.Out
 		return err
 	}
 
-	if err := writeWarnings(r.diffOpts.Stderr, dt.XRDryRunWarnings(xrGroups)); err != nil {
-		return err
-	}
-
-	// Write errors to stderr following Unix conventions
-	for _, e := range errs {
-		if _, err := fmt.Fprintln(r.diffOpts.Stderr, e.FormatError()); err != nil {
-			return errors.Wrap(err, "failed to write error to stderr")
-		}
-	}
-
-	return nil
+	return writeWarnings(r.diffOpts.Stderr, dt.XRDryRunWarnings(xrGroups))
 }
 
 // renderFlat renders a single flat block of diffs plus a "Summary:" line. This

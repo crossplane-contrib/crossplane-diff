@@ -1178,13 +1178,13 @@ func TestDefaultDiffProcessor_PerformDiff_ReportErrorOutput(t *testing.T) {
 		t.Fatal("PerformDiff() expected error but got none")
 	}
 
-	// The renderer writes each as FormatError() does: "ERROR: {ResourceID}: {Message}".
+	// The returned error is the only place a human sees the failure, so it names the resource.
 	if len(report.Errors) != 1 {
 		t.Fatalf("Expected one error in the report, got: %v", report.Errors)
 	}
 
-	if got := report.Errors[0].FormatError(); !strings.Contains(got, "ERROR: XR1/my-xr-1:") || !strings.Contains(got, "composition not found") {
-		t.Errorf("Expected the report's error to name XR1/my-xr-1 and 'composition not found', got: %q", got)
+	if got := err.Error(); !strings.Contains(got, "XR1/my-xr-1") || !strings.Contains(got, "composition not found") {
+		t.Errorf("Expected the returned error to name XR1/my-xr-1 and 'composition not found', got: %q", got)
 	}
 }
 

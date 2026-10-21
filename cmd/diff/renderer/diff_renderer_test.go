@@ -346,63 +346,30 @@ func TestDefaultDiffRenderer_RenderDiffs(t *testing.T) {
 	}
 }
 
-func TestDefaultDiffRenderer_RenderDiffs_WithErrors(t *testing.T) {
-	tests := map[string]struct {
-		errs     []dt.OutputError
-		expected []string
-	}{
-		"ErrorsWithResourceID": {
-			errs: []dt.OutputError{
-				{ResourceID: "Resource/my-resource", Message: "failed to render"},
-				{ResourceID: "OtherResource/other", Message: "connection refused"},
-			},
-			expected: []string{
-				"ERROR: Resource/my-resource: failed to render",
-				"ERROR: OtherResource/other: connection refused",
-			},
-		},
-		"ErrorsWithEmptyResourceID": {
-			errs: []dt.OutputError{
-				{ResourceID: "", Message: "cluster connection timeout"},
-				{ResourceID: "Resource/has-id", Message: "specific error"},
-			},
-			expected: []string{
-				"ERROR: <global>: cluster connection timeout",
-				"ERROR: Resource/has-id: specific error",
-			},
-		},
-		"NoErrors": {
-			errs:     []dt.OutputError{},
-			expected: []string{},
-		},
+// TestDefaultDiffRenderer_RenderDiffs_ErrorsNotPrinted verifies the renderer writes no error to
+// stderr: the processor returns them to the command, which prints them once.
+func TestDefaultDiffRenderer_RenderDiffs_ErrorsNotPrinted(t *testing.T) {
+	errs := []dt.OutputError{
+		{ResourceID: "Resource/my-resource", Message: "failed to render"},
+		{Message: "cluster connection timeout"},
 	}
 
-	for name, tt := range tests {
-		t.Run(name, func(t *testing.T) {
-			logger := tu.TestLogger(t, false)
+	var stdout, stderr bytes.Buffer
 
-			// Errors go to stderr now, so capture stderr
-			var stderr bytes.Buffer
+	opts := DefaultDiffOptions()
+	opts.Stdout = &stdout
+	opts.Stderr = &stderr
 
-			opts := DefaultDiffOptions()
-			opts.Stdout = &bytes.Buffer{} // discard stdout
-			opts.Stderr = &stderr
+	renderer := NewDiffRenderer(tu.TestLogger(t, false), opts)
 
-			renderer := NewDiffRenderer(logger, opts)
+	if err := renderer.RenderDiffs(identitylessGroups(map[string]*dt.ResourceDiff{}), errs, nil); err != nil {
+		t.Fatalf("RenderDiffs() failed with error: %v", err)
+	}
 
-			err := renderer.RenderDiffs(identitylessGroups(map[string]*dt.ResourceDiff{}), tt.errs, nil)
-			if err != nil {
-				t.Fatalf("RenderDiffs() failed with error: %v", err)
-			}
-
-			output := stderr.String()
-
-			for _, expectedMsg := range tt.expected {
-				if !strings.Contains(output, expectedMsg) {
-					t.Errorf("Expected stderr to contain %q but it didn't\nStderr: %s", expectedMsg, output)
-				}
-			}
-		})
+	for _, e := range errs {
+		if strings.Contains(stderr.String(), e.Message) || strings.Contains(stdout.String(), e.Message) {
+			t.Errorf("Expected error %q to be printed nowhere, got stdout %q, stderr %q", e.Message, stdout.String(), stderr.String())
+		}
 	}
 }
 

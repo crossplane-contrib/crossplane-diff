@@ -649,10 +649,10 @@ func TestDefaultCompDiffRenderer_RenderCompDiff(t *testing.T) {
 	}
 }
 
-// TestDefaultCompDiffRenderer_RenderCompDiff_TopLevelErrorsToStderr verifies that
+// TestDefaultCompDiffRenderer_RenderCompDiff_TopLevelErrorsNotPrinted verifies that
 // top-level errors in CompDiffOutput.Errors are written to stderr (not stdout)
 // to follow Unix conventions.
-func TestDefaultCompDiffRenderer_RenderCompDiff_TopLevelErrorsToStderr(t *testing.T) {
+func TestDefaultCompDiffRenderer_RenderCompDiff_TopLevelErrorsNotPrinted(t *testing.T) {
 	output := &dt.CompDiffOutput{
 		Compositions: []dt.CompositionDiff{},
 		Errors: []dt.OutputError{
@@ -680,23 +680,21 @@ func TestDefaultCompDiffRenderer_RenderCompDiff_TopLevelErrorsToStderr(t *testin
 		t.Fatalf("RenderCompDiff() failed: %v", err)
 	}
 
-	stderrOut := stderr.String()
-	for _, e := range output.Errors {
-		if !strings.Contains(stderrOut, e.FormatError()) {
-			t.Errorf("Expected stderr to contain %q, got: %q", e.FormatError(), stderrOut)
-		}
+	if stderr.Len() != 0 {
+		t.Errorf("Expected nothing on stderr, got: %q", stderr.String())
+	}
 
-		// Verify errors were NOT written to stdout
-		if strings.Contains(stdout.String(), e.FormatError()) {
-			t.Errorf("Expected stdout to NOT contain error %q, got: %q", e.FormatError(), stdout.String())
+	for _, e := range output.Errors {
+		if strings.Contains(stdout.String(), e.Message) {
+			t.Errorf("Expected stdout to NOT contain error %q, got: %q", e.Message, stdout.String())
 		}
 	}
 }
 
-// TestStructuredCompDiffRenderer_RenderCompDiff_TopLevelErrorsToStderr verifies that
+// TestStructuredCompDiffRenderer_RenderCompDiff_TopLevelErrorsNotPrinted verifies that
 // top-level errors in CompDiffOutput.Errors are written to stderr in addition to being
 // included in the structured output.
-func TestStructuredCompDiffRenderer_RenderCompDiff_TopLevelErrorsToStderr(t *testing.T) {
+func TestStructuredCompDiffRenderer_RenderCompDiff_TopLevelErrorsNotPrinted(t *testing.T) {
 	output := &dt.CompDiffOutput{
 		Compositions: []dt.CompositionDiff{},
 		Errors: []dt.OutputError{
@@ -725,12 +723,9 @@ func TestStructuredCompDiffRenderer_RenderCompDiff_TopLevelErrorsToStderr(t *tes
 				t.Fatalf("RenderCompDiff() failed: %v", err)
 			}
 
-			// Verify errors in stderr
-			stderrOut := stderr.String()
-			for _, e := range output.Errors {
-				if !strings.Contains(stderrOut, e.FormatError()) {
-					t.Errorf("Expected stderr to contain %q, got: %q", e.FormatError(), stderrOut)
-				}
+			// Errors are returned to the command, which prints them once; the renderer does not
+			if stderr.Len() != 0 {
+				t.Errorf("Expected nothing on stderr, got: %q", stderr.String())
 			}
 
 			// Verify errors are ALSO in structured output (stdout)
@@ -1447,7 +1442,6 @@ func TestStructuredCompDiffRenderer_OutputVersions(t *testing.T) {
 				// v1 does not list the failed composition here.
 				Errors: []dt.OutputError{*xrErr},
 			},
-			wantStderr: []string{xrErr.FormatError()},
 		},
 		"V2": {
 			version: OutputVersionV2,
@@ -1474,7 +1468,6 @@ func TestStructuredCompDiffRenderer_OutputVersions(t *testing.T) {
 				// v2 appends the failed composition, so the list is the union of the document's errors.
 				Errors: []dt.OutputError{*xrErr, *compErr},
 			},
-			wantStderr: []string{xrErr.FormatError(), compErr.FormatError()},
 		},
 	}
 
@@ -1504,8 +1497,8 @@ func TestStructuredCompDiffRenderer_OutputVersions(t *testing.T) {
 				t.Errorf("structured output mismatch (-want +got):\n%s", diff)
 			}
 
-			if diff := gcmp.Diff(tc.wantStderr, strings.Split(strings.TrimSpace(stderr.String()), "\n")); diff != "" {
-				t.Errorf("stderr mismatch (-want +got):\n%s", diff)
+			if stderr.Len() != 0 {
+				t.Errorf("expected nothing on stderr, got: %q", stderr.String())
 			}
 		})
 	}

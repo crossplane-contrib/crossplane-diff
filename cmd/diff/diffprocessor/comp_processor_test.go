@@ -1640,15 +1640,15 @@ func TestDefaultCompDiffProcessor_DiffComposition_ReportErrorOutput(t *testing.T
 		t.Error("Expected error due to XR processing failure, got nil")
 	}
 
-	// The renderer writes each as FormatError() does: "ERROR: {ResourceID}: {Message}".
 	if output == nil || len(output.Errors) != 1 {
 		t.Fatalf("Expected one error in the report, got: %+v", output)
 	}
 
-	got := output.Errors[0].FormatError()
-	for _, want := range []string{"ERROR:", "XResource/fail-xr", "render pipeline failed"} {
+	// The returned error is the only place a human sees the failure, so it names the resource.
+	got := err.Error()
+	for _, want := range []string{"impact analysis failed for 1 XR(s)", "XResource/fail-xr", "render pipeline failed"} {
 		if !strings.Contains(got, want) {
-			t.Errorf("Expected the report's error to contain %q, got: %q", want, got)
+			t.Errorf("Expected the returned error to contain %q, got: %q", want, got)
 		}
 	}
 }

@@ -485,6 +485,12 @@ func runIntegrationTest(t *testing.T, testType DiffTestType, tt IntegrationTestC
 		t.Errorf("expected exit code %d, got %d", tt.expectedExitCode, exitCode.Code)
 	}
 
+	// Print a returned error as main does, the only place errors are printed, so the stderr
+	// assertions see what a user sees.
+	if err != nil {
+		fmt.Fprintf(&stderr, "Error: %v\n", err)
+	}
+
 	// Assert stderr expectations before any of the early returns below, so they apply in every
 	// output mode (human-readable, JSON, and expected-error cases alike).
 	for _, want := range tt.expectedStderrContains {

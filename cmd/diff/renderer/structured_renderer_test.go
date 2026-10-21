@@ -6,7 +6,6 @@ import (
 	"maps"
 	"reflect"
 	"slices"
-	"strings"
 	"testing"
 
 	"github.com/crossplane-contrib/crossplane-diff/cmd/diff/compare"
@@ -586,12 +585,9 @@ func TestStructuredDiffRenderer_RenderDiffs_ErrorsToStderr(t *testing.T) {
 				t.Fatalf("RenderDiffs() failed: %v", err)
 			}
 
-			// Verify errors are in stderr
-			stderrOut := stderr.String()
-			for _, e := range errs {
-				if !strings.Contains(stderrOut, e.FormatError()) {
-					t.Errorf("Expected stderr to contain %q, got: %q", e.FormatError(), stderrOut)
-				}
+			// Errors are returned to the command, which prints them once; the renderer does not
+			if stderr.Len() != 0 {
+				t.Errorf("Expected nothing on stderr, got: %q", stderr.String())
 			}
 
 			// Verify errors are ALSO in structured output (stdout)

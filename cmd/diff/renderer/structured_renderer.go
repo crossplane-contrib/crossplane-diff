@@ -3,7 +3,6 @@ package renderer
 import (
 	"cmp"
 	"encoding/json"
-	"fmt"
 	"maps"
 	"reflect"
 	"slices"
@@ -389,20 +388,10 @@ func (r *StructuredDiffRenderer) RenderDiffs(groups []dt.XRDiffGroup, errs []dt.
 		return errors.Wrap(err, "failed to write newline")
 	}
 
-	// Write errors to stderr for human visibility (they're also included in the structured output).
-	// Of the warnings, only the ones derived here are written: the rest already went to stderr when
-	// they were raised.
-	if err := writeWarnings(r.opts.Stderr, dryRun); err != nil {
-		return err
-	}
-
-	for _, e := range errs {
-		if _, err := fmt.Fprintln(r.opts.Stderr, e.FormatError()); err != nil {
-			return errors.Wrap(err, "failed to write error to stderr")
-		}
-	}
-
-	return nil
+	// Errors are in the structured output, and the command prints the error the processor returns,
+	// so they are not written to stderr here. Of the warnings, only the ones derived here are
+	// written: the rest already went to stderr when they were raised.
+	return writeWarnings(r.opts.Stderr, dryRun)
 }
 
 // buildChangeSet walks a diff map into the (summary, changes) pair shared by
