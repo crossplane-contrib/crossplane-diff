@@ -218,13 +218,14 @@ func skippedMessage(impact dt.RevisionImpact) string {
 // renderAffectedResourcesList prints, which would be unearned here — those composites went
 // unevaluated.
 //
-// As elsewhere, --resource mode names each composite (the user asked about them by name, and their
-// FilterReason reached ImpactAnalysis) while default discovery reports the per-reason breakdown.
+// As elsewhere, --resource mode names each composite (the user asked about them by name) while
+// default discovery reports the per-reason breakdown (see listedImpacts).
 //
-// ImpactAnalysis is listed as-is, not re-filtered by status: under a skip it holds only the filtered
-// entries, because the kept composites were never rendered. That is the processor's guarantee, pinned
-// by its SkipReportsFilterConsequences test. Re-filtering here would not add safety — it would hide an
-// unearned changed/unchanged verdict from this output while it still reached the structured output.
+// The listed impacts are not re-filtered by status: under a skip ImpactAnalysis holds only the
+// filtered entries, because the kept composites were never rendered. That is the processor's
+// guarantee, pinned by its SkipReportsFilterConsequences test. Re-filtering here would not add safety
+// — it would hide an unearned changed/unchanged verdict from this output while it still reached the
+// structured output.
 func (r *DefaultCompDiffRenderer) renderFilteredUnderSkip(comp *dt.CompositionDiff) error {
 	filtered := totalFiltered(comp.AffectedResources)
 	if filtered == 0 {
@@ -238,8 +239,8 @@ func (r *DefaultCompDiffRenderer) renderFilteredUnderSkip(comp *dt.CompositionDi
 		return errors.Wrap(err, "cannot write filtered XRs summary")
 	}
 
-	if len(comp.ImpactAnalysis) > 0 {
-		if _, err := fmt.Fprint(stdout, r.buildXRStatusList(comp.ImpactAnalysis)); err != nil {
+	if impacts := listedImpacts(comp); len(impacts) > 0 {
+		if _, err := fmt.Fprint(stdout, r.buildXRStatusList(impacts)); err != nil {
 			return errors.Wrap(err, "cannot write filtered XRs list")
 		}
 	}
@@ -353,11 +354,32 @@ func (r *DefaultCompDiffRenderer) renderMinimizedCompositionChanges(comp *dt.Com
 	return nil
 }
 
+// listedImpacts is the part of a composition's ImpactAnalysis the output lists one by one. The
+// processor records the filtered composites in both modes, but only --resource mode (Scoped) names
+// them: the user asked about those composites by name. Default discovery reports them only through
+// the AffectedResources filter counters.
+func listedImpacts(comp *dt.CompositionDiff) []dt.XRImpact {
+	if comp.Scoped {
+		return comp.ImpactAnalysis
+	}
+
+	listed := make([]dt.XRImpact, 0, len(comp.ImpactAnalysis))
+
+	for _, impact := range comp.ImpactAnalysis {
+		if impact.Status != dt.XRStatusFiltered {
+			listed = append(listed, impact)
+		}
+	}
+
+	return listed
+}
+
 // renderAffectedResourcesList renders the affected XRs list with status indicators.
 func (r *DefaultCompDiffRenderer) renderAffectedResourcesList(comp *dt.CompositionDiff) error {
 	stdout := r.opts.Stdout
+	impacts := listedImpacts(comp)
 
-	if len(comp.ImpactAnalysis) == 0 {
+	if len(impacts) == 0 {
 		// No XRs surfaced. Either none were found, or all matched-by-name XRs were filtered out
 		// (by Manual policy, revision-selector mismatch, and/or being deleted); report the
 		// breakdown if so.
@@ -376,7 +398,7 @@ func (r *DefaultCompDiffRenderer) renderAffectedResourcesList(comp *dt.Compositi
 	}
 
 	// Build the XR list with status indicators
-	xrList := r.buildXRStatusList(comp.ImpactAnalysis)
+	xrList := r.buildXRStatusList(impacts)
 
 	// Generate summary line
 	summary := formatXRStatusSummary(
@@ -690,7 +712,7 @@ func buildStructuredCompOutput(output *dt.CompDiffOutput) *compDiffWireV2 {
 			jsonComp.CompositionChanges = resourceDiffToChangeDetail(comp.CompositionDiff)
 		}
 
-		for _, impact := range comp.ImpactAnalysis {
+		for _, impact := range listedImpacts(&comp) {
 			entry := toXREntry(impact.ObjectReference, impact.Status, impact.Diffs, impact.Error)
 			entry.FilterReason = impact.FilterReason
 			entry.FilterDetail = impact.FilterDetail

@@ -408,11 +408,11 @@ The `comp` subcommand has its own set of integration tests:
   `changeScope: metadata`, `createsRevision: true` and the one composite that would adopt the revision, with exit code 0.
   That pairing is what pins the flag as a cost knob rather than a correctness mode.
 - **What a Skip May and May Not Suppress**: `TestDefaultCompDiffProcessor_DiffComposition_ResourceMode/SkipReportsFilterConsequences`
-  pins the boundary as a matrix of `--analyze-on` against `--include-manual` against `surfaceFiltered`: a skipped analysis
-  still reports `AffectedResources.Total`, the per-reason filter counters, and (in `--resource` mode) the individual
-  `filtered` entries, while withholding only the changed/unchanged/errored verdict. The same cases pin that a Manual
-  composite kept by `--include-manual` is not counted in `RepointedComposites`, so a run can never report zero affected
-  composites beside a non-zero re-point count (issues #478, #479).
+  pins the boundary as a matrix of `--analyze-on` against `--include-manual` against `--resource` (`Scoped`): a skipped
+  analysis still reports `AffectedResources.Total`, the per-reason filter counters, and the individual `filtered`
+  entries, while withholding only the changed/unchanged/errored verdict. The same cases pin that a Manual composite kept
+  by `--include-manual` is not counted in `RepointedComposites`, and is marked `Pinned`, so a run can never report zero
+  affected composites beside a non-zero re-point count (issues #478, #479).
   `TestDefaultCompDiffProcessor_DiffComposition/AnalyzeOnSpecChangeStillReportsFilteredComposites` and the
   `SkippedAnalysis*` cases in `TestDefaultCompDiffRenderer_RenderCompDiff` cover the human-readable side, including that
   a skip with nothing filtered still prints the skip note alone.
@@ -912,10 +912,11 @@ type CompDiffProcessor interface {
 
    The same rule governs step 2's output, which is why the skip check sits *after* it. The composites discovered, and
    which of them would not adopt the resulting revision and why, are settled by local reads with no render at all — so
-   they are recorded before the early return: `AffectedResources.Total` plus the per-reason filter counters always, and
-   the individual `filtered` impact entries in `--resource` mode, where the user named those composites and expects to be
-   told what happened to them. The human renderer mirrors this with `renderFilteredUnderSkip`, printed after the skip
-   note. What the skip legitimately withholds is the `changed`/`unchanged`/`errored` verdict about the *kept* composites,
+   they are recorded before the early return: `AffectedResources.Total`, the per-reason filter counters, and the
+   individual `filtered` impact entries, in either mode. The renderers list those entries only in `--resource` mode
+   (`CompositionDiff.Scoped`), where the user named those composites and expects to be told what happened to them, and
+   otherwise report only the counters (`listedImpacts`). The human renderer mirrors this with
+   `renderFilteredUnderSkip`, printed after the skip note. What the skip legitimately withholds is the `changed`/`unchanged`/`errored` verdict about the *kept* composites,
    which is exactly what the renders it did not run would have produced. Returning before step 2's accounting instead
    dropped real filter consequences and let a run report `affectedResources.total: 0` beside
    `revisionImpact.repointedComposites: 1` — a self-contradiction (issue #478).
@@ -1861,13 +1862,17 @@ contract:
 - `CompositionDiff` — per-composition entry: `Name`, optional `Error *OutputError` (built by `comp_processor` with
   `NewOutputError` and `ResourceID` `Composition/<name>`; v1 serializes only its `Message`), optional `CompositionDiff *ResourceDiff` (the
   composition's own diff against its in-cluster version), `AffectedResources AffectedResourcesSummary`,
-  `ImpactAnalysis []XRImpact`, `ImpactAnalysisSkipped` (the composites were deliberately not evaluated because the
+  `ImpactAnalysis []XRImpact` (every affected composite: the filtered ones first, as `filtered` entries, in both
+  modes), `Scoped` (the composites were the ones `--resource` named rather than discovered; not serialized — the
+  renderers list the `filtered` entries only when it is set, and in default discovery report them only through the
+  `AffectedResources` counters, so presentation is the renderer's decision while the processor hides no data),
+  `ImpactAnalysisSkipped` (the composites were deliberately not evaluated because the
   change was smaller than `--analyze-on` asked to analyse; serialized as `impactAnalysisSkipped` so consumers can
   distinguish "not evaluated" from "none found"), `MaskedChangesOnly` (`maskedChangesOnly`, omitted when false: the
   composition differs only in fields excluded from the rendered diff, so an absent `compositionChanges` must not be read
   as "unchanged"), and `RevisionImpact`. `ImpactAnalysisSkipped` does **not** imply an empty `ImpactAnalysis`: the
-  filtered composites are established locally and are reported either way (§6.2 step 3a), so in `--resource` mode they
-  are present here as `filtered` entries while `impactAnalysisSkipped` is true.
+  filtered composites are established locally and are recorded either way (§6.2 step 3a), so they are present here as
+  `filtered` entries while `impactAnalysisSkipped` is true.
 - `RevisionImpact` — what applying a composition does to CompositionRevisions and the composites tracking them,
   independent of whether anything renders differently: `ChangeScope` (`changeScope`, one of `"none"` / `"metadata"` /
   `"spec"`), `CreatesRevision` (`createsRevision`), `RepointedComposites` (`repointedComposites`, the composites that
@@ -1903,11 +1908,16 @@ contract:
   and three optional filter counters: `FilteredByPolicy` (XRs dropped because of a `Manual`
   `compositionUpdatePolicy`), `FilteredBySelector` (XRs dropped because their `compositionRevisionSelector` does not
   match the diffed composition's labels), and `FilteredByDeletion` (XRs dropped because they are being deleted). Split
-  by reason so the breakdown survives even in default-discovery mode, where individual XR impacts are not surfaced.
+  by reason so the breakdown survives even in default-discovery mode, where the renderers do not list the individual
+  `filtered` impacts.
 - `XRImpact` — per-XR entry inside `ImpactAnalysis`: embeds `corev1.ObjectReference` (apiVersion/kind/name/namespace),
   carries a `Status`, a `FilterReason` (meaningful only when `Status == "filtered"`), an optional human-readable
-  `FilterDetail`, an optional `Error *OutputError`, and an optional `Diffs map[string]*ResourceDiff` of downstream
-  changes. `comp_processor` builds `Error` once with `NewOutputError` (so `ValidationFailures` survive) and lists the
+  `FilterDetail` (the failed selector for `revision_selector_mismatch`, the `deletionTimestamp` for `deleting`, and
+  for `manual_policy` the revision the composite stays pinned to, `compositionRevisionRef: <name>`, when it names one;
+  the human line for `manual_policy` omits it), `Pinned` (an evaluated composite, kept only by `--include-manual`, that
+  would not adopt the resulting revision because its Manual policy pins it; not serialized, and the complement of what
+  `RevisionImpact.RepointedComposites` counts among the evaluated composites), an optional `Error *OutputError`, and an
+  optional `Diffs map[string]*ResourceDiff` of downstream changes. `comp_processor` builds `Error` once with `NewOutputError` (so `ValidationFailures` survive) and lists the
   same value in the top-level `errors`; v1 serializes only its `Message`, v2 the whole envelope. As with `XRDiffGroup`,
   the pre-converted error keeps `NewOutputError` out of the renderer.
 - `XRStatus` — enumeration: `"changed"`, `"unchanged"`, `"error"`, `"filtered"`. The filtered *outcome* is divorced

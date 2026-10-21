@@ -134,6 +134,7 @@ classDiagram
         +Name string
         +Error *OutputError
         +CompositionDiff *ResourceDiff
+        +Scoped bool
         +AffectedResources AffectedResourcesSummary
         +ImpactAnalysis []XRImpact
         +ImpactAnalysisSkipped bool
@@ -153,6 +154,7 @@ classDiagram
         +Status XRStatus
         +FilterReason FilterReason
         +FilterDetail string
+        +Pinned bool
         +Error *OutputError
         +Diffs map[string]*ResourceDiff
     }

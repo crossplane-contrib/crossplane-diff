@@ -1839,29 +1839,54 @@ func TestDefaultCompDiffProcessor_DiffComposition_ResourceMode(t *testing.T) {
 		}
 	})
 
-	// SurfaceFilteredControlsImpactAnalysis: when surfaceFiltered=true (resource mode),
-	// Manual-policy XRs are surfaced as XRStatusFiltered impacts (reason manual_policy); when false
-	// (default-discovery), they're counted in the summary but absent from ImpactAnalysis.
-	t.Run("SurfaceFilteredControlsImpactAnalysis", func(t *testing.T) {
-		surfaceTests := map[string]struct {
-			surfaceFiltered bool
-			wantImpactCount int
-			wantStatus      dt.XRStatus     // empty when wantImpactCount == 0
-			wantReason      dt.FilterReason // empty when wantImpactCount == 0
+	// RecordsFilteredInBothModes: Manual-policy XRs are recorded as XRStatusFiltered impacts (reason
+	// manual_policy) whether the set came from --resource or from discovery; Scoped records which, so
+	// the renderer can decide whether to name them. A Manual XR that names its revision carries it as
+	// FilterDetail.
+	t.Run("RecordsFilteredInBothModes", func(t *testing.T) {
+		pinnedManualXR := tu.NewResource("example.org/v1", "XR", "pinned-manual-xr").
+			InNamespace("ns").
+			WithSpecField("compositionRef", map[string]any{"name": "test-comp"}).
+			WithSpecField("crossplane", map[string]any{
+				"compositionUpdatePolicy": "Manual",
+				"compositionRevisionRef":  map[string]any{"name": "test-comp-abc1234"},
+			}).
+			Build()
+
+		filtered := func(name, detail string) dt.XRImpact {
+			return dt.XRImpact{
+				ObjectReference: corev1.ObjectReference{APIVersion: "example.org/v1", Kind: "XR", Name: name, Namespace: "ns"},
+				Status:          dt.XRStatusFiltered,
+				FilterReason:    dt.FilterReasonManualPolicy,
+				FilterDetail:    detail,
+			}
+		}
+
+		type want struct {
+			Scoped         bool
+			Summary        dt.AffectedResourcesSummary
+			ImpactAnalysis []dt.XRImpact
+		}
+
+		wantImpacts := []dt.XRImpact{
+			filtered("manual-xr", ""),
+			filtered("pinned-manual-xr", "compositionRevisionRef: test-comp-abc1234"),
+		}
+
+		cases := map[string]struct {
+			scoped bool
+			want   want
 		}{
-			"ResourceMode_SurfacesFilteredXRs": {
-				surfaceFiltered: true,
-				wantImpactCount: 1,
-				wantStatus:      dt.XRStatusFiltered,
-				wantReason:      dt.FilterReasonManualPolicy,
+			"ResourceMode": {
+				scoped: true,
+				want:   want{Scoped: true, Summary: dt.AffectedResourcesSummary{Total: 2, FilteredByPolicy: 2}, ImpactAnalysis: wantImpacts},
 			},
-			"DefaultDiscovery_OmitsFilteredFromImpactAnalysis": {
-				surfaceFiltered: false,
-				wantImpactCount: 0,
+			"DefaultDiscovery": {
+				want: want{Summary: dt.AffectedResourcesSummary{Total: 2, FilteredByPolicy: 2}, ImpactAnalysis: wantImpacts},
 			},
 		}
 
-		for name, tt := range surfaceTests {
+		for name, tt := range cases {
 			t.Run(name, func(t *testing.T) {
 				client := tu.NewMockCompositionClient().
 					WithSuccessfulCompositionFetch(&apiextensionsv1.Composition{}).
@@ -1869,29 +1894,14 @@ func TestDefaultCompDiffProcessor_DiffComposition_ResourceMode(t *testing.T) {
 
 				proc := newCompProcessorForTest(t, client, false /* IncludeManual */)
 
-				got, err := proc.processSingleComposition(t.Context(), comp, []*un.Unstructured{manualXR}, tt.surfaceFiltered)
+				got, err := proc.processSingleComposition(t.Context(), comp, []*un.Unstructured{manualXR, pinnedManualXR}, tt.scoped)
 				if err != nil {
 					t.Fatalf("processSingleComposition: %v", err)
 				}
 
-				if len(got.ImpactAnalysis) != tt.wantImpactCount {
-					t.Fatalf("ImpactAnalysis: got %d entries, want %d (%+v)", len(got.ImpactAnalysis), tt.wantImpactCount, got.ImpactAnalysis)
-				}
-
-				if tt.wantImpactCount > 0 && got.ImpactAnalysis[0].Status != tt.wantStatus {
-					t.Errorf("ImpactAnalysis[0].Status: got %q, want %q", got.ImpactAnalysis[0].Status, tt.wantStatus)
-				}
-
-				if tt.wantImpactCount > 0 && got.ImpactAnalysis[0].FilterReason != tt.wantReason {
-					t.Errorf("ImpactAnalysis[0].FilterReason: got %q, want %q", got.ImpactAnalysis[0].FilterReason, tt.wantReason)
-				}
-
-				if got.AffectedResources.FilteredByPolicy != 1 {
-					t.Errorf("FilteredByPolicy: got %d, want 1", got.AffectedResources.FilteredByPolicy)
-				}
-
-				if got.AffectedResources.Total != 1 {
-					t.Errorf("Total: got %d, want 1", got.AffectedResources.Total)
+				gotWant := want{Scoped: got.Scoped, Summary: got.AffectedResources, ImpactAnalysis: got.ImpactAnalysis}
+				if diff := gcmp.Diff(tt.want, gotWant); diff != "" {
+					t.Errorf("processSingleComposition() mismatch (-want +got):\n%s", diff)
 				}
 			})
 		}
@@ -1922,30 +1932,33 @@ func TestDefaultCompDiffProcessor_DiffComposition_ResourceMode(t *testing.T) {
 			Skipped        bool
 			Summary        dt.AffectedResourcesSummary
 			RevisionImpact dt.RevisionImpact
-			// Impacts is every ImpactAnalysis entry as "<status> <name>", in order — deliberately not
-			// narrowed to the filtered ones. Under a skip the kept composites were never evaluated, so
-			// ImpactAnalysis must hold only the filtered entries; a changed/unchanged/error entry here
-			// would be a verdict the tool never earned, and narrowing this view would hide exactly that.
+			// Impacts is every ImpactAnalysis entry as "<status> <name>", in order, with " pinned" appended
+			// for a Pinned one — deliberately not narrowed to the filtered ones. Under a skip the kept
+			// composites were never evaluated, so ImpactAnalysis must hold only the filtered entries; a
+			// changed/unchanged/error entry here would be a verdict the tool never earned, and narrowing
+			// this view would hide exactly that.
 			Impacts []string
 		}
 
 		cases := map[string]struct {
-			analyzeOn       AnalyzeOn
-			includeManual   bool
-			surfaceFiltered bool
-			want            want
+			analyzeOn     AnalyzeOn
+			includeManual bool
+			scoped        bool
+			want          want
 		}{
-			"Skipped_DefaultDiscovery_CountsFilteredComposites": {
+			// Discovery records the filtered composite too; only the renderer leaves it unnamed.
+			"Skipped_DefaultDiscovery_RecordsFilteredComposites": {
 				analyzeOn: AnalyzeOnSpecChange,
 				want: want{
 					Skipped:        true,
 					Summary:        dt.AffectedResourcesSummary{Total: 2, FilteredByPolicy: 1},
 					RevisionImpact: dt.RevisionImpact{ChangeScope: "metadata", CreatesRevision: true, RepointedComposites: 1},
+					Impacts:        []string{"filtered manual-xr"},
 				},
 			},
 			"Skipped_ResourceMode_NamesFilteredComposites": {
-				analyzeOn:       AnalyzeOnSpecChange,
-				surfaceFiltered: true,
+				analyzeOn: AnalyzeOnSpecChange,
+				scoped:    true,
 				want: want{
 					Skipped:        true,
 					Summary:        dt.AffectedResourcesSummary{Total: 2, FilteredByPolicy: 1},
@@ -1956,9 +1969,9 @@ func TestDefaultCompDiffProcessor_DiffComposition_ResourceMode(t *testing.T) {
 			// --include-manual keeps the Manual composite, so nothing is filtered — but it stays pinned by
 			// compositionRevisionRef, so only the Automatic composite re-points.
 			"Skipped_IncludeManual_ManualCompositeDoesNotRepoint": {
-				analyzeOn:       AnalyzeOnSpecChange,
-				includeManual:   true,
-				surfaceFiltered: true,
+				analyzeOn:     AnalyzeOnSpecChange,
+				includeManual: true,
+				scoped:        true,
 				want: want{
 					Skipped:        true,
 					Summary:        dt.AffectedResourcesSummary{Total: 2},
@@ -1966,15 +1979,16 @@ func TestDefaultCompDiffProcessor_DiffComposition_ResourceMode(t *testing.T) {
 				},
 			},
 			// The same tally when the analysis does run: both composites are evaluated, one re-points.
-			// Evaluated, so unlike every skipped case they carry a verdict.
+			// Evaluated, so unlike every skipped case they carry a verdict, and the one that does not
+			// re-point is marked Pinned.
 			"Analysed_IncludeManual_ManualCompositeDoesNotRepoint": {
-				analyzeOn:       AnalyzeOnAnyChange,
-				includeManual:   true,
-				surfaceFiltered: true,
+				analyzeOn:     AnalyzeOnAnyChange,
+				includeManual: true,
+				scoped:        true,
 				want: want{
 					Summary:        dt.AffectedResourcesSummary{Total: 2, Unchanged: 2},
 					RevisionImpact: dt.RevisionImpact{ChangeScope: "metadata", CreatesRevision: true, RepointedComposites: 1},
-					Impacts:        []string{"unchanged xr-1", "unchanged manual-xr"},
+					Impacts:        []string{"unchanged xr-1", "unchanged manual-xr pinned"},
 				},
 			},
 		}
@@ -1988,7 +2002,7 @@ func TestDefaultCompDiffProcessor_DiffComposition_ResourceMode(t *testing.T) {
 				proc := newCompProcessorForTest(t, client, tt.includeManual)
 				proc.config.AnalyzeOn = tt.analyzeOn
 
-				got, err := proc.processSingleComposition(t.Context(), metaOnlyComp, []*un.Unstructured{xr1, manualXR}, tt.surfaceFiltered)
+				got, err := proc.processSingleComposition(t.Context(), metaOnlyComp, []*un.Unstructured{xr1, manualXR}, tt.scoped)
 				if err != nil {
 					t.Fatalf("processSingleComposition: %v", err)
 				}
@@ -1996,7 +2010,12 @@ func TestDefaultCompDiffProcessor_DiffComposition_ResourceMode(t *testing.T) {
 				impacts := make([]string, 0, len(got.ImpactAnalysis))
 
 				for _, impact := range got.ImpactAnalysis {
-					impacts = append(impacts, fmt.Sprintf("%s %s", impact.Status, impact.Name))
+					entry := fmt.Sprintf("%s %s", impact.Status, impact.Name)
+					if impact.Pinned {
+						entry += " pinned"
+					}
+
+					impacts = append(impacts, entry)
 				}
 
 				// The predicted name's derivation is pinned by TestRevisionIdentity; this matrix only
@@ -2046,7 +2065,7 @@ func TestDefaultCompDiffProcessor_DiffComposition_ResourceMode(t *testing.T) {
 
 		proc := newCompProcessorForTest(t, client, false /* IncludeManual */)
 
-		got, err := proc.processSingleComposition(t.Context(), labeledComp, []*un.Unstructured{selectorMismatchXR}, true /* surfaceFiltered */)
+		got, err := proc.processSingleComposition(t.Context(), labeledComp, []*un.Unstructured{selectorMismatchXR}, true /* scoped */)
 		if err != nil {
 			t.Fatalf("processSingleComposition: %v", err)
 		}
