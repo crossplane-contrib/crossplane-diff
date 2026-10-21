@@ -256,11 +256,8 @@ func main() {
 	err := ctx.Run()
 	// Handle error output - commands set exitCode.Code based on their results
 	if err != nil {
-		// Schema validation errors are already rendered by the processors as part of the
-		// diff output, so don't duplicate them here. Only print other (tool) errors.
-		if !dp.IsSchemaValidationError(err) {
-			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-		}
+		// The renderers do not print errors, so this is the only place a human sees them.
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		// If the command returned an error but didn't set an exit code, default to tool error
 		if exitCode.Code == dp.ExitCodeSuccess {
 			exitCode.Code = dp.ExitCodeToolError

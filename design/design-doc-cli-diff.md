@@ -365,8 +365,8 @@ The integration test cases cover:
 - **Summary Output**: Tests that the summary of changes (added, modified, removed) is correctly generated.
 - **Structured Output (JSON / YAML)**: Field-level assertions on `--output json` / `--output yaml` payloads using
   `tu.AssertStructuredDiff` and `tu.AssertStructuredCompDiff` builders. These let tests assert on specific old/new
-  values and on summary counts without depending on ANSI escape sequences. Errors must appear in both stderr and the
-  structured output.
+  values and on summary counts without depending on ANSI escape sequences. Errors must appear in both stderr (printed
+  once, by the command) and the structured output.
 - **Typed Validation Failures**: Schema-validation tests use the fluent `WithError` / `WithValidationFailure` /
   `WithFieldError` builder chain to pin specific GVKs, namespaces, statuses, error types (`schema`, `cel`,
   `unknownField`, `defaulting`), and field paths. Message wording is intentionally not asserted so apimachinery
@@ -666,7 +666,7 @@ The data flow through the system follows these key steps:
 
 3. **Output**:
     - Clean up function containers
-    - Render the diffs as text, JSON or YAML to stdout; errors go to stderr
+    - Render the diffs as text, JSON or YAML to stdout; the returned error is printed once, to stderr, by the command
 
 ## 6. Component Design
 
@@ -1654,13 +1654,13 @@ diffs do not") and a `versions` context key (`"requested v1alpha1, stored v1"`).
 such a group: the user chose `--dry-run-on=existing`, so its unverified additions are not news, but the version
 mismatch is. Its message has no cause key. The summaries are sorted (diffs arrive in map order), so they
 change the order of `warnings[]`: they come after the warnings raised during the run, grouped, and on
-stderr just before any errors. For `comp` there is one run-wide summary, across every composition,
+stderr (an error is printed after, by the command). For `comp` there is one run-wide summary, across every composition,
 because `warnings[]` is top-level; the human comp renderer reuses `DefaultDiffRenderer` per
 composition with identity-less groups, so `DefaultDiffRenderer` summarises identity-bearing groups
 only and leaves the run-wide summary to `DefaultCompDiffRenderer`.
 
 A failed XR's diffs are withheld, so no dry-run summary is shown for it: the summary says how far to
-trust the diffs that are shown, and the XR's error is reported in `errors[]` and on stderr;
+trust the diffs that are shown, and the XR's error is reported in `errors[]` and the command's error;
 re-running after fixing it gives the full summary. This differs from the calculator-raised warning it
 replaces, which appeared for a failed XR only incidentally, because it fired mid-calculation. Carrying
 a failed XR's unverified additions through to the renderer was considered and rejected: it would have
@@ -1696,7 +1696,7 @@ The processors build the same internal types either way; only the structured ren
 Every structured document names its version in a top-level `outputVersion` field; adding it is the only change to
 v1 output.
 
-Under `json`/`yaml`, errors are written to **both** stderr (for human visibility) and the structured output (so CI/CD
+Under `json`/`yaml`, errors go to **both** stderr (for human visibility; the processor returns them and the command prints them once, each naming its resource) and the structured output (so CI/CD
 pipelines can parse them programmatically). The structured renderers always emit a valid document — even when every XR
 fails — by attaching errors to an `OutputError` field. `OutputError` uses JSON struct tags only (the YAML library reads
 JSON tags), so the field naming is consistent across formats.
@@ -1957,8 +1957,8 @@ contract:
   `Context` under whatever key the call site used. `FormatWarning` renders the stderr line, sorting
   context keys so output is byte-stable across runs.
 
-  Warnings follow the same dual-emission contract as errors — stderr for humans, structured output for
-  machines — with two deliberate differences: they never affect the exit code (a consumer gating on
+  Warnings are emitted twice — stderr for humans, structured output for machines — whereas an error is
+  returned to the command, which prints it once, and also goes in structured output. Two further differences: they never affect the exit code (a consumer gating on
   failure reads `errors[]`), and the stderr half is written when the warning is *raised* rather than at
   render time. Emitting at render time would lose any warning raised during a run that fails before
   rendering, and would report warnings out of chronological order with the work that produced them.

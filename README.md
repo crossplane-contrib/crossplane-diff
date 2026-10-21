@@ -189,7 +189,7 @@ otherwise not warned about. Its message then begins "did not verify added resour
 apiserver (--dry-run-on=existing)" and has no cause key. Built-in types, single-version CRDs and
 resources requested at their storage version never get this note. A failed XR's diffs are withheld, so no summary is shown
 for it: the summary says how far to trust the diffs that are shown, and the XR's error is reported in
-`errors[]` and on stderr; re-running after fixing it gives the full summary. (Before this was derived
+`errors[]` and the command's error; re-running after fixing it gives the full summary. (Before this was derived
 from the diffs, a failed XR's warning could appear incidentally, because it was raised mid-calculation.)
 For `comp` the summary is run-wide, in the
 top-level `warnings[]`, not per composition.
@@ -1145,11 +1145,11 @@ Exit-code precedence (per `DetermineExitCode`): any error in the run beats diff 
 
 **Human-readable output** (`crossplane-diff xr invalid-xr.yaml`):
 
-Per Unix convention, errors go to stderr and diff content goes to stdout. When validation is the only failure, stdout is empty and the structured failure detail appears on stderr, prefixed by an `ERROR: <resourceID>:` marker:
+Per Unix convention, errors go to stderr and diff content goes to stdout. When validation is the only failure, stdout is empty and the structured failure detail appears on stderr, printed once, as the error the command fails with (`Error: ...`):
 
 ```
 # stderr
-ERROR: XNopResource/invalid-schema-xr: cannot validate resources: ns.diff.example.org/v1alpha1/XNopResource default/invalid-schema-xr:
+Error: unable to process resource XNopResource/invalid-schema-xr: cannot validate resources: ns.diff.example.org/v1alpha1/XNopResource default/invalid-schema-xr:
   spec.coolField: Invalid value: "number": ... [schema]
 ns.nop.example.org/v1alpha1/XDownstreamResource default/invalid-schema-xr:
   spec.forProvider.configData: Invalid value: "boolean": ... [schema]
@@ -1166,9 +1166,9 @@ Each per-resource block starts with a header that includes the resource identity
 - Namespaced resource: `<apiVersion>/<Kind> <namespace>/<name>:`
 - Resource without `metadata.name` (e.g. a resource discovered missing a schema before it was named): collapses to just `<apiVersion>/<Kind>:`
 
-Each indented error line has the shape `<message> [<type>]`, where `<type>` is one of `[schema]`, `[cel]`, `[unknownField]`, or `[defaulting]`. A bad value is appended as `(got <value>)` when it isn't already substring-present in the message. When some inputs in a batched run succeed and others fail validation, the successful diffs appear on stdout and the failing inputs' `ERROR:` blocks appear on stderr.
+Each indented error line has the shape `<message> [<type>]`, where `<type>` is one of `[schema]`, `[cel]`, `[unknownField]`, or `[defaulting]`. A bad value is appended as `(got <value>)` when it isn't already substring-present in the message. When some inputs in a batched run succeed and others fail validation, the successful diffs appear on stdout and the failing inputs' `Error:` blocks appear on stderr.
 
-This per-resource block form belongs to the local validator. A cluster rejection has nothing to break into field-level lines — the apiserver hands back one message — so it prints as a single `ERROR:` line and carries no `[<type>]` suffix. Its `"admission"` type is visible in structured output only.
+This per-resource block form belongs to the local validator. A cluster rejection has nothing to break into field-level lines — the apiserver hands back one message — so it prints as a single `Error:` line and carries no `[<type>]` suffix. Its `"admission"` type is visible in structured output only.
 
 **Machine-readable output** (`crossplane-diff xr invalid-xr.yaml --output json`):
 
@@ -1222,7 +1222,7 @@ The `OutputError` schema:
 | Field | Type | Description |
 |-------|------|-------------|
 | `resourceID` | string | Identifies which user-supplied input the diff was processing (one entry per batched run). Format: `<Kind>/<name>`. |
-| `message` | string | Human-readable error string — the same text written to stderr. |
+| `message` | string | Human-readable error string — the same text the command prints to stderr as part of its error. |
 | `validationFailures` | `[]ResourceValidationFailure`, optional | Structured per-resource breakdown. Set for local schema-validation failures and for cluster rejections during the dry run; `nil` for tool, IO, render, and scope-check errors. |
 
 `ResourceValidationFailure` carries `apiVersion`, `kind`, `name`, `namespace`, `status` (one of `"invalid"` or `"missingSchema"` — `"valid"` rows are filtered out), and `errors`, a list of `FieldValidationError` records:

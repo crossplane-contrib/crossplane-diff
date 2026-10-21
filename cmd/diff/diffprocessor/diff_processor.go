@@ -331,7 +331,7 @@ func (p *DefaultDiffProcessor) PerformDiff(ctx context.Context, resources []*un.
 	}
 
 	// Third: renders that reach one resource in ways no single diff can represent. Collected into the
-	// report so they reach errors[] and stderr like any other error; the report is still rendered, so
+	// report so they reach errors[] and the returned error like any other error; the report is still rendered, so
 	// structured output stays valid.
 	for _, err := range validator.RenderOverlaps(groups) {
 		errs = append(errs, err)

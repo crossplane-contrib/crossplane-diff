@@ -40,8 +40,9 @@ const (
 // Both human-readable and structured (JSON/YAML) renderers implement this interface.
 type CompDiffRenderer interface {
 	// RenderCompDiff renders the complete composition diff output.
-	// Top-level and tool errors go to DiffOptions.Stderr and are included in
-	// structured output payloads. Per-composition messages (diffs, "no changes",
+	// Top-level errors are included in structured output payloads but not
+	// written to stderr: the processor returns them to the command, which
+	// prints them once. Per-composition messages (diffs, "no changes",
 	// per-composition errors) go to DiffOptions.Stdout as part of the diff narrative.
 	RenderCompDiff(output *dt.CompDiffOutput) error
 }
@@ -63,8 +64,8 @@ func NewDefaultCompDiffRenderer(logger logging.Logger, diffRenderer DiffRenderer
 }
 
 // RenderCompDiff renders the composition diff in human-readable format.
-// Top-level errors go to r.opts.Stderr. Per-composition output (diffs, status
-// messages, per-composition errors) goes to r.opts.Stdout.
+// Per-composition output (diffs, status messages, per-composition errors) goes
+// to r.opts.Stdout. Top-level errors are not printed; see CompDiffRenderer.
 func (r *DefaultCompDiffRenderer) RenderCompDiff(output *dt.CompDiffOutput) error {
 	stdout := r.opts.Stdout
 
@@ -82,18 +83,7 @@ func (r *DefaultCompDiffRenderer) RenderCompDiff(output *dt.CompDiffOutput) erro
 
 	// One run-wide summary of unverified additions; see DiffRenderer.RenderDiffs for why it is derived
 	// at render time, and why the per-composition reuse of the diff renderer above does not emit it.
-	if err := writeWarnings(r.opts.Stderr, dt.CompDryRunWarnings(output)); err != nil {
-		return err
-	}
-
-	// Write top-level errors to stderr
-	for _, e := range output.Errors {
-		if _, err := fmt.Fprintln(r.opts.Stderr, e.FormatError()); err != nil {
-			return errors.Wrap(err, "failed to write error to stderr")
-		}
-	}
-
-	return nil
+	return writeWarnings(r.opts.Stderr, dt.CompDryRunWarnings(output))
 }
 
 // renderComposition renders every section belonging to a single composition: its own changes,
@@ -612,8 +602,8 @@ func NewStructuredCompDiffRenderer(logger logging.Logger, opts DiffOptions) Comp
 }
 
 // RenderCompDiff renders the composition diff in structured format (JSON/YAML).
-// Top-level errors go to both r.opts.Stderr (for human visibility) and the
-// structured output payload. Per-composition data goes to r.opts.Stdout.
+// Top-level errors go into the payload only; see CompDiffRenderer.
+// Per-composition data goes to r.opts.Stdout.
 func (r *StructuredCompDiffRenderer) RenderCompDiff(output *dt.CompDiffOutput) error {
 	// One run-wide summary of unverified additions, derived here from the diffs and appended after the
 	// warnings raised during the run. See DiffRenderer.RenderDiffs.
@@ -626,14 +616,9 @@ func (r *StructuredCompDiffRenderer) RenderCompDiff(output *dt.CompDiffOutput) e
 	v2.Warnings = warnings
 
 	// Anything but v2, including the empty value, is v1.
-	var (
-		jsonOutput any = v2
-		errs           = v2.Errors
-	)
-
+	var jsonOutput any = v2
 	if r.opts.OutputVersion != OutputVersionV2 {
-		v1 := v2.v1()
-		jsonOutput, errs = v1, v1.Errors
+		jsonOutput = v2.v1()
 	}
 
 	var (
@@ -662,18 +647,7 @@ func (r *StructuredCompDiffRenderer) RenderCompDiff(output *dt.CompDiffOutput) e
 	}
 
 	// Of the warnings, only the ones derived here go to stderr: the rest went there when raised.
-	if err := writeWarnings(r.opts.Stderr, dryRun); err != nil {
-		return err
-	}
-
-	// Write errors to stderr for human visibility (they're also included in the structured output)
-	for _, e := range errs {
-		if _, err := fmt.Fprintln(r.opts.Stderr, e.FormatError()); err != nil {
-			return errors.Wrap(err, "failed to write error to stderr")
-		}
-	}
-
-	return nil
+	return writeWarnings(r.opts.Stderr, dryRun)
 }
 
 // buildStructuredCompOutput converts internal CompDiffOutput to the v2 document, from which v1 is

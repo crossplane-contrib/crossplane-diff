@@ -43,9 +43,9 @@ import (
 //
 // # Why it writes to stderr itself
 //
-// Owning the human rendering here means one mechanism produces both views, the same dual-emission
-// contract OutputError follows, and the text stays fit for a CLI rather than taking a logger's
-// development-mode format (timestamp, level, caller).
+// Owning the human rendering here means one mechanism produces both views, and the text stays fit
+// for a CLI rather than taking a logger's development-mode format (timestamp, level, caller).
+// Errors differ: they are returned to the command, which prints them once.
 //
 // # Why identical advisories are collapsed
 //

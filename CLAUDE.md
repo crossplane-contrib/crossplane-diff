@@ -330,9 +330,11 @@ The tool prioritizes **accuracy over convenience**:
 
 When using structured output (`--output json` or `--output yaml`):
 
-1. **Errors go to BOTH places**: Write errors to stderr (for human visibility) AND include them in the structured output (for machine parsing). This ensures:
+1. **Errors are printed once, and also go in the structured output**: The renderers never print errors. The
+   processor returns them (each naming its resource) and `main` prints the returned error to stderr as `Error: ...`;
+   the renderer includes them in the structured output (for machine parsing). This ensures:
    - CI/CD tools can parse errors programmatically from stdout
-   - Humans see errors immediately in stderr
+   - Humans see each error once, on stderr
    - The structured output is always valid JSON/YAML, even when errors occur
 
 2. **Consistent error structure**: Use the same `OutputError` type (defined in `result/types.go`) across all commands:
