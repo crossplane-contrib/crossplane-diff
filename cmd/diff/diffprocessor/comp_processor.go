@@ -196,18 +196,15 @@ func (p *DefaultCompDiffProcessor) DiffComposition(ctx context.Context, composit
 
 		// Resolve the affected XR set up-front. In --resource mode the preflight already produced it;
 		// in default-discovery mode we query the cluster (best-effort: net-new compositions yield empty).
-		// surfaceFiltered controls whether Manual-policy XRs go into ImpactAnalysis as XRStatusFilteredByPolicy
-		// entries (true in --resource mode so users see what was matched-but-skipped) vs. only being counted
-		// in the summary (default-discovery mode).
-		var (
-			affectedXRs     []*un.Unstructured
-			surfaceFiltered bool
-		)
+		// Either way the filtered XRs are recorded in ImpactAnalysis; scoped records which mode produced
+		// the set, so the renderer can decide how to present them.
+		scoped := len(resources) > 0
+
+		var affectedXRs []*un.Unstructured
 
 		switch {
-		case len(resources) > 0:
+		case scoped:
 			affectedXRs = preflightMatches[compositionID]
-			surfaceFiltered = true
 		default:
 			// Default-discovery only needs comp.GetName() — pass the unstructured directly.
 			// FindComposites converts to typed internally only in refs mode (which we're not in here).
@@ -226,7 +223,7 @@ func (p *DefaultCompDiffProcessor) DiffComposition(ctx context.Context, composit
 		}
 
 		// Process this single composition and build the result
-		compResult, err := p.processSingleComposition(ctx, comp, affectedXRs, surfaceFiltered)
+		compResult, err := p.processSingleComposition(ctx, comp, affectedXRs, scoped)
 		if err != nil {
 			p.config.Logger.Debug("Failed to process composition", "composition", compositionID, "error", err)
 
@@ -234,8 +231,9 @@ func (p *DefaultCompDiffProcessor) DiffComposition(ctx context.Context, composit
 
 			// Include failed composition with error instead of skipping
 			output.Compositions = append(output.Compositions, dt.CompositionDiff{
-				Name:  compositionID,
-				Error: new(NewOutputError(fmt.Sprintf("Composition/%s", compositionID), err)),
+				Name:   compositionID,
+				Scoped: scoped,
+				Error:  new(NewOutputError(fmt.Sprintf("Composition/%s", compositionID), err)),
 				AffectedResources: dt.AffectedResourcesSummary{
 					Total:       0,
 					WithChanges: 0,
@@ -347,11 +345,11 @@ func (p *DefaultCompDiffProcessor) preflightResourceRefs(ctx context.Context, co
 // processSingleComposition processes a single composition and builds the result.
 // `affectedXRs` is the pre-resolved set of XRs to evaluate (caller decides via DiffComposition's
 // switch whether this comes from the --resource preflight or default-discovery via FindComposites).
-// When `surfaceFiltered` is true, XRs dropped by update-policy filtering are surfaced in
-// ImpactAnalysis with XRStatusFilteredByPolicy so users see what was matched-but-skipped.
-func (p *DefaultCompDiffProcessor) processSingleComposition(ctx context.Context, newComp *un.Unstructured, affectedXRs []*un.Unstructured, surfaceFiltered bool) (*dt.CompositionDiff, error) {
+// `scoped` records that the set came from --resource rather than discovery (see CompositionDiff.Scoped).
+func (p *DefaultCompDiffProcessor) processSingleComposition(ctx context.Context, newComp *un.Unstructured, affectedXRs []*un.Unstructured, scoped bool) (*dt.CompositionDiff, error) {
 	result := &dt.CompositionDiff{
 		Name:           newComp.GetName(),
+		Scoped:         scoped,
 		ImpactAnalysis: []dt.XRImpact{},
 		AffectedResources: dt.AffectedResourcesSummary{
 			Total:            0,
@@ -421,23 +419,20 @@ func (p *DefaultCompDiffProcessor) processSingleComposition(ctx context.Context,
 		"filteredByDeletion", counts.byDeletion,
 		"includeManual", p.config.IncludeManual)
 
-	// In --resource mode (surfaceFiltered=true), surface filtered composites in the impact
-	// analysis as XRStatusFiltered (with their reason) so users see what was matched-but-skipped.
-	// In default-discovery mode, preserve the existing summary-only behavior.
-	if surfaceFiltered {
-		for _, d := range droppedXRs {
-			result.ImpactAnalysis = append(result.ImpactAnalysis, dt.XRImpact{
-				ObjectReference: corev1.ObjectReference{
-					APIVersion: d.xr.GetAPIVersion(),
-					Kind:       d.xr.GetKind(),
-					Name:       d.xr.GetName(),
-					Namespace:  d.xr.GetNamespace(),
-				},
-				Status:       dt.XRStatusFiltered,
-				FilterReason: d.reason,
-				FilterDetail: d.detail,
-			})
-		}
+	// Record every filtered composite as XRStatusFiltered, with its reason, in either mode. Whether to
+	// list them or only count them is the renderer's decision (see CompositionDiff.Scoped).
+	for _, d := range droppedXRs {
+		result.ImpactAnalysis = append(result.ImpactAnalysis, dt.XRImpact{
+			ObjectReference: corev1.ObjectReference{
+				APIVersion: d.xr.GetAPIVersion(),
+				Kind:       d.xr.GetKind(),
+				Name:       d.xr.GetName(),
+				Namespace:  d.xr.GetNamespace(),
+			},
+			Status:       dt.XRStatusFiltered,
+			FilterReason: d.reason,
+			FilterDetail: d.detail,
+		})
 	}
 
 	// Which composites were discovered, and which of them would not adopt the resulting revision, is
@@ -469,7 +464,7 @@ func (p *DefaultCompDiffProcessor) processSingleComposition(ctx context.Context,
 		return result, nil
 	}
 
-	p.config.Logger.Debug("Processing affected XRs", "composition", newComp.GetName(), "count", len(affectedXRs), "surfaceFiltered", surfaceFiltered)
+	p.config.Logger.Debug("Processing affected XRs", "composition", newComp.GetName(), "count", len(affectedXRs), "scoped", scoped)
 
 	if len(keptXRs) == 0 {
 		// All XRs were filtered; the summary recorded above is already complete.
@@ -503,6 +498,12 @@ func (p *DefaultCompDiffProcessor) processSingleComposition(ctx context.Context,
 	// Build impact analysis and counts from results for the kept set, then merge in any
 	// already-appended filtered entries.
 	keptImpacts, keptSummary := p.buildImpactAnalysis(keptXRs, xrResults)
+	// buildImpactAnalysis keeps keptXRs' order. A kept composite that does not re-point is one
+	// --include-manual kept although its Manual policy pins it.
+	for i, xr := range keptXRs {
+		keptImpacts[i].Pinned = !repointingXRs[dt.MakeDiffKeyFromResource(xr)]
+	}
+
 	result.ImpactAnalysis = append(result.ImpactAnalysis, keptImpacts...)
 	// keptSummary.Total counts only kept; widen to include filtered so totals stay consistent.
 	keptSummary.Total = len(affectedXRs)
@@ -1090,7 +1091,18 @@ func (p *DefaultCompDiffProcessor) classifyXR(xr *un.Unstructured, targetLabels,
 			return xrDisposition{pinnedToRevision: true}, nil
 		}
 
-		return xrDisposition{filtered: &filteredXR{xr: xr, reason: dt.FilterReasonManualPolicy}}, nil
+		// Name the revision it stays pinned to, when it names one.
+		revision, err := xp.XRCompositionRevisionRef(xr.Object, xr.GetAPIVersion())
+		if err != nil {
+			return xrDisposition{}, errors.Wrapf(err, "cannot read compositionRevisionRef for XR %q", xr.GetName())
+		}
+
+		detail := ""
+		if revision != "" {
+			detail = "compositionRevisionRef: " + revision
+		}
+
+		return xrDisposition{filtered: &filteredXR{xr: xr, reason: dt.FilterReasonManualPolicy, detail: detail}}, nil
 	}
 
 	// Automatic (or default) policy: honor compositionRevisionSelector. An XR whose selector does not

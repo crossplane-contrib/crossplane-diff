@@ -1113,7 +1113,9 @@ shape shown above. v2 converges the two commands' per-XR entries, so `xr`'s `xrs
 
 - `xr` holds the XR's `apiVersion`, `kind`, `name` and `namespace`.
 - `status` is `"changed"`, `"unchanged"`, `"error"` or (comp only) `"filtered"`; a filtered entry also carries
-  `filterReason` and, where available, `filterDetail`.
+  `filterReason` and, where available, `filterDetail`: the selector that failed to match for
+  `revision_selector_mismatch`, the `deletionTimestamp` for `deleting`, and for `manual_policy` the revision the
+  composite stays pinned to (`compositionRevisionRef: <name>`), when it names one.
 - `summary` and `changes` are always present: zero counts and `[]` unless the status is `"changed"`.
 - `errors` is present only for an `"error"` entry, and holds the same `OutputError` the top-level `errors[]` lists.
 

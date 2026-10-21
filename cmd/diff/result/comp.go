@@ -59,20 +59,26 @@ type CompDiffOutput struct {
 // This stores rich ResourceDiff data. Conversion to JSON happens in the renderer.
 type CompositionDiff struct {
 	Name string
+	// Scoped records that the composites were the ones named by --resource rather than discovered from
+	// the cluster. ImpactAnalysis holds the filtered composites (XRStatusFiltered) either way; the
+	// human renderer lists them by name only when Scoped, and otherwise reports only the counts.
+	Scoped bool
 	// Error is the per-composition processing error (nil if successful). Its ResourceID is
 	// "Composition/<name>".
 	Error             *OutputError
 	CompositionDiff   *ResourceDiff // the actual composition diff (nil if unchanged)
 	AffectedResources AffectedResourcesSummary
-	ImpactAnalysis    []XRImpact
+	// ImpactAnalysis holds every affected composite: the filtered ones first, as XRStatusFiltered,
+	// then the evaluated ones.
+	ImpactAnalysis []XRImpact
 	// ImpactAnalysisSkipped records that the affected XRs were deliberately not evaluated, because
 	// the composition changed by less than --analyze-on asked to analyse. Distinguishes "we did not
 	// look" from "we looked and found no affected XRs", which would otherwise be indistinguishable.
 	//
 	// It does not mean ImpactAnalysis is empty. Composites excluded by update policy, revision
 	// selector or deletion are identified locally, with no render, so they are reported whether or not
-	// the analysis ran — in --resource mode as XRStatusFiltered entries here, and always via the
-	// AffectedResources filter counters (issue #478). What a skip suppresses is the renders, and
+	// the analysis ran — as XRStatusFiltered entries here, and via the AffectedResources filter
+	// counters (issue #478). What a skip suppresses is the renders, and
 	// therefore any changed/unchanged/errored verdict about the composites that were kept.
 	//
 	// Why the composites went unevaluated is not recoverable from this field alone — read
@@ -207,8 +213,14 @@ type XRImpact struct {
 	// FilterReason explains a Status == XRStatusFiltered outcome; empty otherwise.
 	FilterReason FilterReason
 	// FilterDetail is an optional human-readable explanation for a filtered outcome (e.g. which
-	// selector failed to match which labels), surfaced to help users self-diagnose the exclusion.
+	// selector failed to match which labels), surfaced to help users self-diagnose the exclusion. A
+	// Manual-policy composite names the revision it stays pinned to ("compositionRevisionRef: <name>")
+	// when it has a ref.
 	FilterDetail string
+	// Pinned marks an evaluated composite that would not adopt the composition's resulting revision,
+	// because its Manual compositionUpdatePolicy pins it to its compositionRevisionRef. Only
+	// --include-manual evaluates such a composite; without it, the composite is XRStatusFiltered.
+	Pinned bool
 	// Error is the structured processing error for an XRStatusError impact (nil otherwise), the same
 	// OutputError the command lists in its top-level errors.
 	Error *OutputError

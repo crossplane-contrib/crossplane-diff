@@ -324,20 +324,59 @@ func TestDefaultCompDiffRenderer_RenderCompDiff(t *testing.T) {
 				}
 			},
 		},
+		// Discovery records the filtered composites in ImpactAnalysis but reports only their count.
 		"FilteredByPolicy": {
 			output: &dt.CompDiffOutput{
 				Compositions: []dt.CompositionDiff{{
 					Name:              "test-comp",
-					AffectedResources: dt.AffectedResourcesSummary{FilteredByPolicy: 3},
-					ImpactAnalysis:    []dt.XRImpact{},
+					AffectedResources: dt.AffectedResourcesSummary{Total: 1, FilteredByPolicy: 1},
+					ImpactAnalysis: []dt.XRImpact{{
+						ObjectReference: corev1.ObjectReference{APIVersion: "example.org/v1", Kind: "XR", Name: "manual-xr", Namespace: "ns"},
+						Status:          dt.XRStatusFiltered,
+						FilterReason:    dt.FilterReasonManualPolicy,
+						FilterDetail:    "compositionRevisionRef: test-comp-abc1234",
+					}},
 				}},
 			},
 			colorize: false,
 			validate: func(t *testing.T, result string) {
 				t.Helper()
 
-				if !strings.Contains(result, "Manual update policy") {
-					t.Error("Expected Manual update policy message")
+				if !strings.Contains(result, "All 1 XR(s) using composition test-comp have Manual update policy (use --include-manual to see them)") {
+					t.Errorf("Expected Manual update policy message, got:\n%s", result)
+				}
+
+				if strings.Contains(result, "manual-xr") || strings.Contains(result, "=== Affected Composite Resources ===") {
+					t.Errorf("Expected discovery to leave the filtered composite unnamed, got:\n%s", result)
+				}
+			},
+		},
+		// With evaluated composites beside a filtered one, discovery lists only the evaluated ones.
+		"DiscoveryListsOnlyEvaluatedComposites": {
+			output: &dt.CompDiffOutput{
+				Compositions: []dt.CompositionDiff{{
+					Name:              "test-comp",
+					AffectedResources: dt.AffectedResourcesSummary{Total: 2, Unchanged: 1, FilteredBySelector: 1},
+					ImpactAnalysis: []dt.XRImpact{
+						{
+							ObjectReference: corev1.ObjectReference{APIVersion: "example.org/v1", Kind: "XR", Name: "selector-xr", Namespace: "ns"},
+							Status:          dt.XRStatusFiltered,
+							FilterReason:    dt.FilterReasonRevisionSelectorMismatch,
+						},
+						{ObjectReference: corev1.ObjectReference{APIVersion: "example.org/v1", Kind: "XR", Name: "xr-1", Namespace: "ns"}, Status: dt.XRStatusUnchanged},
+					},
+				}},
+			},
+			colorize: false,
+			validate: func(t *testing.T, result string) {
+				t.Helper()
+
+				if !strings.Contains(result, "XR/xr-1 (namespace: ns)") {
+					t.Errorf("Expected the evaluated composite listed, got:\n%s", result)
+				}
+
+				if strings.Contains(result, "selector-xr") {
+					t.Errorf("Expected discovery to leave the filtered composite unnamed, got:\n%s", result)
 				}
 			},
 		},
@@ -459,12 +498,31 @@ func TestDefaultCompDiffRenderer_RenderCompDiff(t *testing.T) {
 					ImpactAnalysisSkipped: true,
 					RevisionImpact:        dt.RevisionImpact{ChangeScope: "metadata", CreatesRevision: true, RepointedComposites: 1},
 					AffectedResources:     dt.AffectedResourcesSummary{Total: 3, FilteredByPolicy: 1, FilteredByDeletion: 1},
-					ImpactAnalysis:        []dt.XRImpact{},
+					ImpactAnalysis: []dt.XRImpact{
+						{
+							ObjectReference: corev1.ObjectReference{APIVersion: "example.org/v1", Kind: "XR", Name: "my-manual-xr", Namespace: "default"},
+							Status:          dt.XRStatusFiltered,
+							FilterReason:    dt.FilterReasonManualPolicy,
+						},
+						{
+							ObjectReference: corev1.ObjectReference{APIVersion: "example.org/v1", Kind: "XR", Name: "my-deleting-xr", Namespace: "default"},
+							Status:          dt.XRStatusFiltered,
+							FilterReason:    dt.FilterReasonDeleting,
+							FilterDetail:    "deletionTimestamp: 2026-09-07T11:25:03Z",
+						},
+					},
 				}},
 			},
 			colorize: false,
 			validate: func(t *testing.T, result string) {
 				t.Helper()
+
+				// Discovery reports the breakdown, not the names.
+				for _, unwanted := range []string{"my-manual-xr", "my-deleting-xr"} {
+					if strings.Contains(result, unwanted) {
+						t.Errorf("did not expect discovery to name %q, got:\n%s", unwanted, result)
+					}
+				}
 
 				for _, want := range []string{
 					"Impact analysis skipped",
@@ -492,6 +550,7 @@ func TestDefaultCompDiffRenderer_RenderCompDiff(t *testing.T) {
 			output: &dt.CompDiffOutput{
 				Compositions: []dt.CompositionDiff{{
 					Name:                  "test-comp",
+					Scoped:                true,
 					ImpactAnalysisSkipped: true,
 					RevisionImpact:        dt.RevisionImpact{ChangeScope: "metadata", CreatesRevision: true},
 					AffectedResources:     dt.AffectedResourcesSummary{Total: 1, FilteredByDeletion: 1},
@@ -839,6 +898,7 @@ func TestXRStatusFiltered_JSON(t *testing.T) {
 	output := &dt.CompDiffOutput{
 		Compositions: []dt.CompositionDiff{{
 			Name:              "test-comp",
+			Scoped:            true,
 			AffectedResources: dt.AffectedResourcesSummary{Total: 3, FilteredByPolicy: 1, FilteredBySelector: 1, FilteredByDeletion: 1},
 			ImpactAnalysis: []dt.XRImpact{
 				{
@@ -928,6 +988,28 @@ func TestXRStatusFiltered_JSON(t *testing.T) {
 	if got := parsed.Compositions[0].AffectedResources.FilteredByDeletion; got != 1 {
 		t.Errorf("filteredByDeletion: got %d, want 1", got)
 	}
+
+	// Default discovery records the same filtered composites but, as in the human output, reports
+	// them only through the counters.
+	output.Compositions[0].Scoped = false
+	jsonBuf.Reset()
+
+	if err := r.RenderCompDiff(output); err != nil {
+		t.Fatalf("RenderCompDiff (discovery): %v", err)
+	}
+
+	var discovery compDiffWire
+	if err := json.Unmarshal(jsonBuf.Bytes(), &discovery); err != nil {
+		t.Fatalf("unmarshal (discovery): %v", err)
+	}
+
+	if got := discovery.Compositions[0].ImpactAnalysis; len(got) != 0 {
+		t.Errorf("discovery impactAnalysis: got %+v, want none", got)
+	}
+
+	if got := discovery.Compositions[0].AffectedResources; got != output.Compositions[0].AffectedResources {
+		t.Errorf("discovery affectedResources: got %+v, want %+v", got, output.Compositions[0].AffectedResources)
+	}
 }
 
 func TestXRStatusFiltered_TextRenderer(t *testing.T) {
@@ -939,6 +1021,7 @@ func TestXRStatusFiltered_TextRenderer(t *testing.T) {
 				ObjectReference: corev1.ObjectReference{APIVersion: "example.org/v1", Kind: "XR", Name: "manual-xr", Namespace: "ns"},
 				Status:          dt.XRStatusFiltered,
 				FilterReason:    dt.FilterReasonManualPolicy,
+				FilterDetail:    "compositionRevisionRef: test-comp-abc1234",
 			},
 			{
 				ObjectReference: corev1.ObjectReference{APIVersion: "example.org/v1", Kind: "XR", Name: "selector-xr", Namespace: "ns"},
@@ -963,9 +1046,14 @@ func TestXRStatusFiltered_TextRenderer(t *testing.T) {
 		t.Errorf("expected both XR names in output, got %q", got)
 	}
 
-	// Manual-policy exclusion must mention the policy and the escape hatch.
-	if !strings.Contains(strings.ToLower(got), "manual update policy") {
-		t.Errorf("expected 'Manual update policy' verbiage, got %q", got)
+	// Manual-policy exclusion must mention the policy and the escape hatch, and nothing more: the
+	// revision it stays pinned to is data for structured output, not part of the human line.
+	if !strings.Contains(got, "manual-xr (namespace: ns) — filtered: Manual update policy (use --include-manual to evaluate)\x1b[0m\n") {
+		t.Errorf("expected the Manual-policy line unchanged, got %q", got)
+	}
+
+	if strings.Contains(got, "compositionRevisionRef") {
+		t.Errorf("expected the Manual-policy line to omit its FilterDetail, got %q", got)
 	}
 
 	// Selector-mismatch exclusion must distinguish itself from policy and surface the hint.
@@ -1309,6 +1397,7 @@ func TestStructuredCompDiffRenderer_OutputVersions(t *testing.T) {
 		Compositions: []dt.CompositionDiff{
 			{
 				Name:              "xbuckets.example.org",
+				Scoped:            true,
 				AffectedResources: affected,
 				RevisionImpact:    revisionImpact,
 				ImpactAnalysis: []dt.XRImpact{

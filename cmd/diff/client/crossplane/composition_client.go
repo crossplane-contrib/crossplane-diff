@@ -223,12 +223,12 @@ func (c *DefaultCompositionClient) cachedCompositions() []*apiextensionsv1.Compo
 // (present but not a string/object), which is treated as a hard failure by the caller.
 // Checks both v2 (spec.crossplane.compositionRevisionRef) and v1 (spec.compositionRevisionRef) paths.
 func (c *DefaultCompositionClient) getCompositionRevisionRef(xrd, res *un.Unstructured) (string, bool, error) {
-	name, found, err := nestedCrossplaneString(res.Object, xrd.GetAPIVersion(), "compositionRevisionRef", "name")
+	name, err := XRCompositionRevisionRef(res.Object, xrd.GetAPIVersion())
 	if err != nil {
 		return "", false, err
 	}
 
-	return name, found && name != "", nil
+	return name, name != "", nil
 }
 
 // resolveCompositionFromRevisions selects the CompositionRevision Crossplane would compose res with,
