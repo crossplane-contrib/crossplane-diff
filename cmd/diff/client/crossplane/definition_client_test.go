@@ -201,7 +201,6 @@ func TestDefaultDefinitionClient_listXRDs(t *testing.T) {
 }
 
 func TestDefaultDefinitionClient_GetXRDForClaim(t *testing.T) {
-
 	// Create test XRDs
 	xrdWithClaimKind := tu.NewResource("apiextensions.crossplane.io/v1", CompositeResourceDefinitionKind, "xexampleresources.example.org").
 		WithSpecField("group", "example.org").
@@ -357,7 +356,6 @@ func TestDefaultDefinitionClient_GetXRDForClaim(t *testing.T) {
 }
 
 func TestDefaultDefinitionClient_GetXRDForXR(t *testing.T) {
-
 	// Create test XRDs
 	xrdForXR1 := tu.NewResource("apiextensions.crossplane.io/v1", CompositeResourceDefinitionKind, "xr1s.example.org").
 		WithSpecField("group", "example.org").
@@ -570,7 +568,6 @@ func TestDefaultDefinitionClient_Initialize(t *testing.T) {
 }
 
 func TestDefaultDefinitionClient_IsClaimResource(t *testing.T) {
-
 	tests := map[string]struct {
 		reason   string
 		cluster  xrdCluster
@@ -668,7 +665,6 @@ func TestDefaultDefinitionClient_IsClaimResource(t *testing.T) {
 }
 
 func TestDefaultDefinitionClient_GetCompositeSchema(t *testing.T) {
-
 	// v1 XRD: defines an XR (no claimNames here for simplicity).
 	xrdV1 := tu.NewResource("apiextensions.crossplane.io/v1", CompositeResourceDefinitionKind, "xlegacyresources.example.org").
 		WithSpecField("group", "example.org").
