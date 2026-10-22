@@ -49,29 +49,6 @@ func NewSchemaValidator(sClient k8.SchemaClient, rClient k8.ResourceClient, dCli
 	}
 }
 
-// LoadCRDs loads CRDs from the cluster.
-func (v *DefaultSchemaValidator) LoadCRDs(ctx context.Context) error {
-	v.logger.Debug("Loading CRDs from cluster")
-
-	// Get XRDs from the client (which will use its cache when available)
-	xrds, err := v.defClient.GetXRDs(ctx)
-	if err != nil {
-		v.logger.Debug("Failed to get XRDs", "error", err)
-		return errors.Wrap(err, "cannot get XRDs")
-	}
-
-	// Use SchemaClient to load CRDs from XRDs
-	err = v.schemaClient.LoadCRDsFromXRDs(ctx, xrds)
-	if err != nil {
-		v.logger.Debug("Failed to load CRDs into schema client", "error", err)
-		return errors.Wrap(err, "cannot load CRDs into schema client")
-	}
-
-	// Logging is handled internally by the schema client
-
-	return nil
-}
-
 // GetCRDs returns the current CRDs.
 func (v *DefaultSchemaValidator) GetCRDs() []*extv1.CustomResourceDefinition {
 	return v.schemaClient.GetAllCRDs()
@@ -98,7 +75,7 @@ func (v *DefaultSchemaValidator) ValidateResources(ctx context.Context, xr *un.U
 		resources = append(resources, &un.Unstructured{Object: composed[i].UnstructuredContent()})
 	}
 
-	// Ensure we have all the required CRDs
+	// Fetch the CRDs of the XR and the composed resources: none is loaded until a resource needs it.
 	v.logger.Debug("Ensuring required CRDs for validation",
 		"cachedCRDs", len(v.schemaClient.GetAllCRDs()),
 		"resourceCount", len(resources))

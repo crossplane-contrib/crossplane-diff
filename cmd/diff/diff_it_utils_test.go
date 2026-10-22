@@ -17,6 +17,8 @@ import (
 
 	tu "github.com/crossplane-contrib/crossplane-diff/cmd/diff/testutils"
 	gyaml "gopkg.in/yaml.v3"
+	authorizationv1 "k8s.io/api/authorization/v1"
+	rbacv1 "k8s.io/api/rbac/v1"
 	extv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -24,6 +26,8 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/util/yaml"
+	"k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/rest"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/envtest"
 
@@ -139,38 +143,6 @@ func createTestCompositionWithExtraResources() (*xpextv1.Composition, error) {
 			},
 		},
 	}, nil
-}
-
-// createTestXRD creates a test XRD for the XR.
-func createTestXRD() *xpextv1.CompositeResourceDefinition {
-	return tu.NewXRD("xexampleresources.example.org", "example.org", "XExampleResource").
-		WithPlural("xexampleresources").
-		WithSingular("xexampleresource").
-		WithRawSchema([]byte(`{
-			"type": "object",
-			"properties": {
-				"spec": {
-					"type": "object",
-					"properties": {
-						"coolParam": {
-							"type": "string"
-						},
-						"replicas": {
-							"type": "integer"
-						}
-					}
-				},
-				"status": {
-					"type": "object",
-					"properties": {
-						"coolStatus": {
-							"type": "string"
-						}
-					}
-				}
-			}
-		}`)).
-		Build()
 }
 
 // createExtraResource creates a test extra resource.
@@ -546,6 +518,89 @@ func envtestCRDs(crdDirs, setupFiles []string) ([]*extv1.CustomResourceDefinitio
 	}
 
 	return crds, nil
+}
+
+// leastPrivilegeRules is the access a diff of an XNopResource composing XDownstreamResources needs, the
+// types the testdata XRDs, compositions and CRDs use. It grants Crossplane's own types only get, except a
+// list of CompositionRevisions, which are found by their composition's label. It grants list only where a
+// lookup is scoped by a label. xrVerbs are the verbs on
+// the XR type: get to read the existing XR, patch and create to dry-run it, and list only where the
+// command finds composites by listing them.
+func leastPrivilegeRules(xrVerbs ...string) []rbacv1.PolicyRule {
+	return []rbacv1.PolicyRule{
+		// Fetched by name as the input needs them: the XR's XRD and CRD, its Composition, the
+		// pipeline's Functions, and any EnvironmentConfig a function requires by name.
+		{APIGroups: []string{"apiextensions.crossplane.io"}, Resources: []string{"compositeresourcedefinitions", "compositions", "environmentconfigs"}, Verbs: []string{"get"}},
+		{APIGroups: []string{"apiextensions.k8s.io"}, Resources: []string{"customresourcedefinitions"}, Verbs: []string{"get"}},
+		{APIGroups: []string{"pkg.crossplane.io"}, Resources: []string{"functions"}, Verbs: []string{"get"}},
+		// A composition's revisions are listed by its crossplane.io/composition-name label.
+		{APIGroups: []string{"apiextensions.crossplane.io"}, Resources: []string{"compositionrevisions"}, Verbs: []string{"get", "list"}},
+		// The XR type.
+		{APIGroups: []string{"ns.diff.example.org"}, Resources: []string{"xnopresources"}, Verbs: xrVerbs},
+		// Composed resources: read from the XR's resource tree, listed by their crossplane.io/composite
+		// label to find a new XR's existing ones, and dry-run created or applied.
+		{APIGroups: []string{"ns.nop.example.org"}, Resources: []string{"xdownstreamresources"}, Verbs: []string{"get", "list", "create", "patch"}},
+	}
+}
+
+// addUserWithRules provisions an envtest user bound to a ClusterRole granting exactly rules, and returns
+// its config once the apiserver's RBAC authorizer honours the binding. envtest's apiserver authorizes
+// with RBAC, so the user can do only what rules allow, plus what bootstrap RBAC grants every
+// authenticated user (discovery, and reviewing its own access).
+func addUserWithRules(ctx context.Context, env *envtest.Environment, c client.Client, admin *rest.Config, rules []rbacv1.PolicyRule) (*rest.Config, error) {
+	const name = "least-privilege"
+
+	role := &rbacv1.ClusterRole{ObjectMeta: metav1.ObjectMeta{Name: name}, Rules: rules}
+	if err := c.Create(ctx, role); err != nil {
+		return nil, fmt.Errorf("cannot create ClusterRole %s: %w", name, err)
+	}
+
+	binding := &rbacv1.ClusterRoleBinding{
+		ObjectMeta: metav1.ObjectMeta{Name: name},
+		RoleRef:    rbacv1.RoleRef{APIGroup: rbacv1.GroupName, Kind: "ClusterRole", Name: name},
+		Subjects:   []rbacv1.Subject{{APIGroup: rbacv1.GroupName, Kind: rbacv1.UserKind, Name: name}},
+	}
+	if err := c.Create(ctx, binding); err != nil {
+		return nil, fmt.Errorf("cannot create ClusterRoleBinding %s: %w", name, err)
+	}
+
+	user, err := env.AddUser(envtest.User{Name: name}, &rest.Config{QPS: admin.QPS, Burst: admin.Burst})
+	if err != nil {
+		return nil, fmt.Errorf("cannot add user %s: %w", name, err)
+	}
+
+	cfg := user.Config()
+
+	kube, err := kubernetes.NewForConfig(cfg)
+	if err != nil {
+		return nil, fmt.Errorf("cannot create a client for user %s: %w", name, err)
+	}
+
+	// The authorizer learns of the binding through an informer, so wait until the user holds the first
+	// rule's first grant before running anything as the user.
+	first := rules[0]
+	review := &authorizationv1.SelfSubjectAccessReview{Spec: authorizationv1.SelfSubjectAccessReviewSpec{
+		ResourceAttributes: &authorizationv1.ResourceAttributes{
+			Group: first.APIGroups[0], Resource: first.Resources[0], Verb: first.Verbs[0],
+		},
+	}}
+
+	for {
+		got, err := kube.AuthorizationV1().SelfSubjectAccessReviews().Create(ctx, review, metav1.CreateOptions{})
+		if err != nil {
+			return nil, fmt.Errorf("cannot review user %s's access: %w", name, err)
+		}
+
+		if got.Status.Allowed {
+			return cfg, nil
+		}
+
+		select {
+		case <-ctx.Done():
+			return nil, fmt.Errorf("user %s never gained the access its ClusterRoleBinding grants: %w", name, ctx.Err())
+		case <-time.After(100 * time.Millisecond):
+		}
+	}
 }
 
 // createResources creates all resources in the cluster
@@ -990,6 +1045,48 @@ func reconcileCompositionRevisions(ctx context.Context, c client.Client) error {
 
 		if !found {
 			if err := c.Create(ctx, newCompositionRevision(comp, latest+1, owner)); err != nil {
+				return err
+			}
+		}
+	}
+
+	return nil
+}
+
+// reconcileXRDCRDOwnership does what Crossplane's definition controllers would, since envtest runs none: it
+// makes each XRD the controller of the XR and claim CRDs generated from it. The CRDs are installed before
+// any XRD exists, so CRDsForXRD cannot give them the reference xcrd does. An XRD whose CRD does not exist
+// (one in unestablishedXRDs) is skipped.
+func reconcileXRDCRDOwnership(ctx context.Context, c client.Client) error {
+	xrds := &xpextv1.CompositeResourceDefinitionList{}
+	if err := c.List(ctx, xrds); err != nil {
+		return err
+	}
+
+	for i := range xrds.Items {
+		xrd := &xrds.Items[i]
+		owner := meta.AsController(meta.TypedReferenceTo(xrd, xpextv1.CompositeResourceDefinitionGroupVersionKind))
+
+		names := []string{xrd.Spec.Names.Plural + "." + xrd.Spec.Group}
+		if xrd.Spec.ClaimNames != nil {
+			names = append(names, xrd.Spec.ClaimNames.Plural+"."+xrd.Spec.Group)
+		}
+
+		for _, name := range names {
+			crd := &extv1.CustomResourceDefinition{}
+
+			err := c.Get(ctx, client.ObjectKey{Name: name}, crd)
+			if apierrors.IsNotFound(err) {
+				continue
+			}
+
+			if err != nil {
+				return err
+			}
+
+			meta.AddOwnerReference(crd, owner)
+
+			if err := c.Update(ctx, crd); err != nil {
 				return err
 			}
 		}

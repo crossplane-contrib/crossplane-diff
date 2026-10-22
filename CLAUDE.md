@@ -462,7 +462,13 @@ under a named manager, and input files are left as written.
 
 `reconcileCompositionRevisions`, after `setupFiles`, then does what the composition revision controller would: it gives
 each revision a controller reference to its Composition's real UID and creates the revision of each Composition's
-current hash that no fixture declares.
+current hash that no fixture declares. Before it, `reconcileXRDCRDOwnership` does what the definition controllers would:
+it makes each XRD the controller of its generated XR and claim CRDs, which are installed before the XRD exists.
+
+An XRD in a case's `unestablishedXRDs` is applied after `setupFiles` with no generated CRDs, modelling one Crossplane
+hasn't established yet. A case's `rbacRules` runs the command twice, as the admin and then as an envtest user
+(`addUserWithRules`) bound to a ClusterRole with just those rules (envtest's apiserver authorizes with RBAC), and fails
+if the outputs differ. `leastPrivilegeRules` is the role for the `XNopResource` testdata.
 
 **Neither Test Suite Reproduces What a Real Client Adds**
 

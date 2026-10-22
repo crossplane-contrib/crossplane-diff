@@ -100,7 +100,7 @@ classDiagram
 
     class FunctionProvider {
         <<interface>>
-        +GetFunctionsForComposition(comp) ([]Function, error)
+        +GetFunctionsForComposition(ctx, comp) ([]Function, error)
         +Cleanup(ctx) error
     }
 

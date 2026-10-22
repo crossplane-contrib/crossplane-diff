@@ -1,0 +1,11 @@
+# first-xr.yaml naming its composition, so finding the composition needs no list of every Composition.
+apiVersion: ns.diff.example.org/v1alpha1
+kind: XNopResource
+metadata:
+  name: first-resource
+  namespace: default
+spec:
+  coolField: "first-value"
+  crossplane:
+    compositionRef:
+      name: xnopresources.diff.example.org

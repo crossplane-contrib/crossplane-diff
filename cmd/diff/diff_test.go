@@ -37,7 +37,6 @@ import (
 	extv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	un "k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
-	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"sigs.k8s.io/yaml"
 
@@ -292,16 +291,9 @@ metadata:
 func TestDiffCommand(t *testing.T) {
 	// Create common test resources
 	testComposition, _ := createTestCompositionWithExtraResources()
-	testXRD := createTestXRD()
 	testExtraResource := createExtraResource()
 	existingResource := createExistingComposedResource()
 	matchingResource := createMatchingComposedResource()
-
-	// Convert the test XRD to unstructured for GetXRDs to return
-	xrdUnstructured, err := runtime.DefaultUnstructuredConverter.ToUnstructured(testXRD)
-	if err != nil {
-		t.Fatalf("Failed to convert XRD to unstructured: %v", err)
-	}
 
 	tests := map[string]struct {
 		setupKubeClients       func() k8.Clients
@@ -389,16 +381,10 @@ func TestDiffCommand(t *testing.T) {
 					WithSuccessfulCompositionMatch(testComposition).
 					Build()
 
-				definitionClient := tu.NewMockDefinitionClient().
-					WithGetXRDs(func(context.Context) ([]*un.Unstructured, error) {
-						return []*un.Unstructured{
-							{Object: xrdUnstructured},
-						}, nil
-					}).
-					Build()
+				definitionClient := tu.NewMockDefinitionClient().Build()
 
 				functionClient := tu.NewMockFunctionClient().
-					WithGetFunctionsFromPipeline(func(*xpextv1.Composition) ([]pkgv1.Function, error) {
+					WithGetFunctionsFromPipeline(func(context.Context, *xpextv1.Composition) ([]pkgv1.Function, error) {
 						// Return functions for the composition pipeline
 						return []pkgv1.Function{
 							{
@@ -493,7 +479,7 @@ spec:
 					Build()
 
 				functionClient := tu.NewMockFunctionClient().
-					WithGetFunctionsFromPipeline(func(*xpextv1.Composition) ([]pkgv1.Function, error) {
+					WithGetFunctionsFromPipeline(func(context.Context, *xpextv1.Composition) ([]pkgv1.Function, error) {
 						return []pkgv1.Function{
 							{
 								ObjectMeta: metav1.ObjectMeta{
@@ -585,7 +571,7 @@ spec:
 					Build()
 
 				functionClient := tu.NewMockFunctionClient().
-					WithGetFunctionsFromPipeline(func(*xpextv1.Composition) ([]pkgv1.Function, error) {
+					WithGetFunctionsFromPipeline(func(context.Context, *xpextv1.Composition) ([]pkgv1.Function, error) {
 						return []pkgv1.Function{
 							{
 								ObjectMeta: metav1.ObjectMeta{
@@ -601,13 +587,7 @@ spec:
 					}).
 					Build()
 
-				definitionClient := tu.NewMockDefinitionClient().
-					WithGetXRDs(func(context.Context) ([]*un.Unstructured, error) {
-						return []*un.Unstructured{
-							{Object: xrdUnstructured},
-						}, nil
-					}).
-					Build()
+				definitionClient := tu.NewMockDefinitionClient().Build()
 
 				return xp.Clients{
 					Composition:  compositionClient,
@@ -686,7 +666,7 @@ spec:
 					Build()
 
 				functionClient := tu.NewMockFunctionClient().
-					WithGetFunctionsFromPipeline(func(*xpextv1.Composition) ([]pkgv1.Function, error) {
+					WithGetFunctionsFromPipeline(func(context.Context, *xpextv1.Composition) ([]pkgv1.Function, error) {
 						return []pkgv1.Function{
 							{
 								ObjectMeta: metav1.ObjectMeta{
@@ -702,13 +682,7 @@ spec:
 					}).
 					Build()
 
-				definitionClient := tu.NewMockDefinitionClient().
-					WithGetXRDs(func(context.Context) ([]*un.Unstructured, error) {
-						return []*un.Unstructured{
-							{Object: xrdUnstructured},
-						}, nil
-					}).
-					Build()
+				definitionClient := tu.NewMockDefinitionClient().Build()
 
 				return xp.Clients{
 					Composition:  compositionClient,

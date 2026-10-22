@@ -104,11 +104,11 @@ func otherStorageVersion(crd *extv1.CustomResourceDefinition, version string) st
 	return ""
 }
 
-// crdFor finds the CRD for gvk. An XR's comes from its XRD, by name, from the CRDs loaded when the
-// processor initialized; any other resource's is looked up by GVK. A built-in type has none.
+// crdFor finds the CRD for gvk. An XR's is named after its XRD (both are <plural>.<group>); any other
+// resource's is looked up by GVK. A built-in type has none.
 func (d *CRDDefaulter) crdFor(ctx context.Context, gvk schema.GroupVersionKind) (*extv1.CustomResourceDefinition, error) {
 	if xrd, err := d.defClient.GetXRDForXR(ctx, gvk); err == nil && xrd != nil {
-		crd, err := d.schemaClient.GetCRDByName(xrd.GetName())
+		crd, err := d.schemaClient.GetCRDByName(ctx, xrd.GetName())
 		if err != nil {
 			return nil, errors.Wrapf(err, "cannot find CRD for XRD %s", xrd.GetName())
 		}

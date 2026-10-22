@@ -6,6 +6,8 @@ import (
 
 	"github.com/crossplane-contrib/crossplane-diff/cmd/diff/client/core"
 	"github.com/crossplane-contrib/crossplane-diff/cmd/diff/client/kubernetes"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	un "k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 
@@ -18,13 +20,8 @@ import (
 const CompositeResourceDefinitionKind = "CompositeResourceDefinition"
 
 // DefinitionClient handles Crossplane definitions (XRDs).
-//
-//nolint:interfacebloat // The 6 methods are cohesively about XRD lookup; splitting just to satisfy the linter would create surface without value.
 type DefinitionClient interface {
 	core.Initializable
-
-	// GetXRDs gets all XRDs in the cluster
-	GetXRDs(ctx context.Context) ([]*un.Unstructured, error)
 
 	// GetXRDForClaim finds the XRD that defines the given claim type
 	GetXRDForClaim(ctx context.Context, gvk schema.GroupVersionKind) (*un.Unstructured, error)
@@ -49,25 +46,41 @@ type DefinitionClient interface {
 // DefaultDefinitionClient implements DefinitionClient.
 type DefaultDefinitionClient struct {
 	resourceClient kubernetes.ResourceClient
+	typeConverter  kubernetes.TypeConverter
 	logger         logging.Logger
 
-	// XRDs cache
+	// XRDs cache: every XRD in the cluster, listed by listXRDs at most once.
 	gvks       []schema.GroupVersionKind
 	xrds       []*un.Unstructured
 	xrdsMutex  sync.RWMutex
 	xrdsLoaded bool
+
+	// The XRD that defines each XR and claim GVK looked up so far, or nil where none does.
+	// byGVKMu guards both, and is never held across a cluster request.
+	xrdsForXR    map[schema.GroupVersionKind]*un.Unstructured
+	xrdsForClaim map[schema.GroupVersionKind]*un.Unstructured
+	byGVKMu      sync.Mutex
 }
 
-// NewDefinitionClient creates a new DefaultDefinitionClient.
-func NewDefinitionClient(resourceClient kubernetes.ResourceClient, logger logging.Logger) DefinitionClient {
+// crdGVK is the GVK of the CustomResourceDefinitions Crossplane generates for each XRD's XR and claim.
+func crdGVK() schema.GroupVersionKind {
+	return schema.GroupVersionKind{Group: "apiextensions.k8s.io", Version: "v1", Kind: "CustomResourceDefinition"}
+}
+
+// NewDefinitionClient creates a new DefaultDefinitionClient. The type converter supplies the plural
+// resource names XRDs and their CRDs are named by.
+func NewDefinitionClient(resourceClient kubernetes.ResourceClient, typeConverter kubernetes.TypeConverter, logger logging.Logger) DefinitionClient {
 	return &DefaultDefinitionClient{
 		resourceClient: resourceClient,
+		typeConverter:  typeConverter,
 		logger:         logger,
 		xrds:           []*un.Unstructured{},
+		xrdsForXR:      make(map[schema.GroupVersionKind]*un.Unstructured),
+		xrdsForClaim:   make(map[schema.GroupVersionKind]*un.Unstructured),
 	}
 }
 
-// Initialize loads XRDs into the cache.
+// Initialize discovers the served XRD versions. XRDs are fetched on demand.
 func (c *DefaultDefinitionClient) Initialize(ctx context.Context) error {
 	c.logger.Debug("Initializing definition client")
 
@@ -78,19 +91,13 @@ func (c *DefaultDefinitionClient) Initialize(ctx context.Context) error {
 
 	c.gvks = gvks
 
-	// Load XRDs
-	_, err = c.GetXRDs(ctx)
-	if err != nil {
-		return errors.Wrap(err, "cannot load XRDs")
-	}
-
-	c.logger.Debug("Definition client initialized", "xrdsCount", len(c.xrds))
+	c.logger.Debug("Definition client initialized")
 
 	return nil
 }
 
-// GetXRDs gets all XRDs in the cluster.
-func (c *DefaultDefinitionClient) GetXRDs(ctx context.Context) ([]*un.Unstructured, error) {
+// listXRDs lists every XRD in the cluster, at most once per client.
+func (c *DefaultDefinitionClient) listXRDs(ctx context.Context) ([]*un.Unstructured, error) {
 	// Check if XRDs are already loaded
 	c.xrdsMutex.RLock()
 
@@ -134,104 +141,197 @@ func (c *DefaultDefinitionClient) GetXRDs(ctx context.Context) ([]*un.Unstructur
 
 // GetXRDForClaim finds the XRD that defines the given claim type.
 func (c *DefaultDefinitionClient) GetXRDForClaim(ctx context.Context, gvk schema.GroupVersionKind) (*un.Unstructured, error) {
-	c.logger.Debug("Looking for XRD that defines claim",
-		"gvk", gvk.String())
-
-	// Get all XRDs
-	xrds, err := c.GetXRDs(ctx)
+	xrd, err := c.xrdForClaim(ctx, gvk)
 	if err != nil {
-		return nil, errors.Wrap(err, "cannot get XRDs")
+		return nil, err
 	}
 
-	// Loop through XRDs to find one that defines this GVK as a claim
-	for _, xrd := range xrds {
-		claimGroup, found, _ := un.NestedString(xrd.Object, "spec", "group")
-
-		// Skip if group doesn't match
-		if !found || claimGroup != gvk.Group {
-			continue
-		}
-
-		// Check claim kind
-		claimNames, found, _ := un.NestedMap(xrd.Object, "spec", "claimNames")
-		if !found || claimNames == nil {
-			continue
-		}
-
-		claimKind, found, _ := un.NestedString(claimNames, "kind")
-		if !found || claimKind != gvk.Kind {
-			continue
-		}
-
-		c.logger.Debug("Found matching XRD for claim type",
-			"gvk", gvk.String(),
-			"xrd", xrd.GetName())
-
-		return xrd, nil
-	}
-
-	return nil, errors.Errorf("no XRD found that defines claim type %s", gvk.String())
+	// A copy, so a caller that modifies what it gets does not modify this cache, which concurrent callers share.
+	return xrd.DeepCopy(), nil
 }
 
 // GetXRDForXR finds the XRD that defines the given XR type.
 func (c *DefaultDefinitionClient) GetXRDForXR(ctx context.Context, gvk schema.GroupVersionKind) (*un.Unstructured, error) {
-	c.logger.Debug("Looking for XRD that defines XR",
-		"gvk", gvk.String())
+	c.logger.Debug("Looking for XRD that defines XR", "gvk", gvk.String())
 
-	// Get all XRDs
-	xrds, err := c.GetXRDs(ctx)
+	xrd, err := c.cachedLookup(ctx, c.xrdsForXR, gvk, c.fetchXRDForXR)
 	if err != nil {
-		return nil, errors.Wrap(err, "cannot get XRDs")
+		return nil, err
 	}
 
-	// Loop through XRDs to find one that defines this GVK as an XR
-	for _, xrd := range xrds {
-		xrGroup, found, _ := un.NestedString(xrd.Object, "spec", "group")
+	if xrd == nil {
+		return nil, errors.Errorf("no XRD found that defines XR type %s", gvk.String())
+	}
 
-		// Skip if group doesn't match
-		if !found || xrGroup != gvk.Group {
-			continue
-		}
+	c.logger.Debug("Found matching XRD for XR type", "gvk", gvk.String(), "xrd", xrd.GetName())
 
-		// Check XR kind
-		xrKind, found, _ := un.NestedString(xrd.Object, "spec", "names", "kind")
-		if !found || xrKind != gvk.Kind {
-			continue
-		}
+	// A copy, so a caller that modifies what it gets does not modify this cache, which concurrent callers share.
+	return xrd.DeepCopy(), nil
+}
 
-		// Check version matches
-		versions, found, _ := un.NestedSlice(xrd.Object, "spec", "versions")
-		if !found {
-			continue
-		}
+// xrdForClaim is GetXRDForClaim without the copy, for callers that only read the XRD.
+func (c *DefaultDefinitionClient) xrdForClaim(ctx context.Context, gvk schema.GroupVersionKind) (*un.Unstructured, error) {
+	c.logger.Debug("Looking for XRD that defines claim", "gvk", gvk.String())
 
-		versionMatches := false
+	xrd, err := c.cachedLookup(ctx, c.xrdsForClaim, gvk, c.fetchXRDForClaim)
+	if err != nil {
+		return nil, err
+	}
 
-		for _, v := range versions {
-			version, ok := v.(map[string]any)
-			if !ok {
-				continue
-			}
+	if xrd == nil {
+		return nil, errors.Errorf("no XRD found that defines claim type %s", gvk.String())
+	}
 
-			name, found, _ := un.NestedString(version, "name")
-			if found && name == gvk.Version {
-				versionMatches = true
-				break
-			}
-		}
+	c.logger.Debug("Found matching XRD for claim type", "gvk", gvk.String(), "xrd", xrd.GetName())
 
-		if !versionMatches {
-			continue
-		}
+	return xrd, nil
+}
 
-		c.logger.Debug("Found matching XRD for XR type",
-			"gvk", gvk.String(),
-			"xrd", xrd.GetName())
+// cachedLookup returns cache's entry for gvk, nil if gvk is cached as defined by no XRD, and otherwise
+// fetches it and caches the result, a miss included. A failed fetch is not cached.
+func (c *DefaultDefinitionClient) cachedLookup(ctx context.Context, cache map[schema.GroupVersionKind]*un.Unstructured, gvk schema.GroupVersionKind,
+	fetch func(context.Context, schema.GroupVersionKind) (*un.Unstructured, error),
+) (*un.Unstructured, error) {
+	c.byGVKMu.Lock()
+	xrd, ok := cache[gvk]
+	c.byGVKMu.Unlock()
 
+	if ok {
 		return xrd, nil
 	}
 
-	return nil, errors.Errorf("no XRD found that defines XR type %s", gvk.String())
+	if gvk.Group == "" {
+		// A core type, such as a ConfigMap. No XRD defines one: an XRD's group is required.
+		return nil, nil
+	}
+
+	xrd, err := fetch(ctx, gvk)
+	if err != nil {
+		return nil, err
+	}
+
+	c.byGVKMu.Lock()
+	cache[gvk] = xrd
+	c.byGVKMu.Unlock()
+
+	return xrd, nil
+}
+
+// fetchXRDForXR gets the XRD that defines gvk as an XR, or nil if none does. An XRD is named
+// <plural>.<group> of the XR type it defines, and discovery knows the XR type's plural.
+func (c *DefaultDefinitionClient) fetchXRDForXR(ctx context.Context, gvk schema.GroupVersionKind) (*un.Unstructured, error) {
+	plural, err := c.typeConverter.GetResourceNameForGVK(ctx, gvk)
+	if err != nil {
+		// Not served, so no XRD defines it at this version. Not cached: discovery already caches it.
+		return nil, errors.Wrapf(err, "no XRD found that defines XR type %s", gvk.String())
+	}
+
+	xrd, err := c.getXRD(ctx, plural+"."+gvk.Group)
+	if err != nil || xrd == nil || !definesXR(xrd, gvk) {
+		return nil, err
+	}
+
+	return xrd, nil
+}
+
+// fetchXRDForClaim gets the XRD that defines gvk as a claim, or nil if none does. Crossplane names a
+// claim's CRD <plural>.<group> and makes the XRD its controller. A CRD without a controller reference
+// (applied by hand rather than generated by Crossplane) is matched against every XRD, listed once.
+func (c *DefaultDefinitionClient) fetchXRDForClaim(ctx context.Context, gvk schema.GroupVersionKind) (*un.Unstructured, error) {
+	plural, err := c.typeConverter.GetResourceNameForGVK(ctx, gvk)
+	if err != nil {
+		// Not served, so no XRD defines it at this version. Not cached: discovery already caches it.
+		return nil, errors.Wrapf(err, "no XRD found that defines claim type %s", gvk.String())
+	}
+
+	crdName := plural + "." + gvk.Group
+
+	crd, err := c.resourceClient.GetResource(ctx, crdGVK(), "", crdName)
+	if apierrors.IsNotFound(err) {
+		return nil, nil
+	}
+
+	if err != nil {
+		return nil, errors.Wrapf(err, "cannot get CRD %s", crdName)
+	}
+
+	owner := metav1.GetControllerOf(crd)
+	if owner == nil {
+		c.logger.Debug("CRD has no controller; looking for its claim type among all XRDs", "crd", crdName)
+
+		xrds, err := c.listXRDs(ctx)
+		if err != nil {
+			return nil, errors.Wrap(err, "cannot get XRDs")
+		}
+
+		for _, xrd := range xrds {
+			if definesClaim(xrd, gvk) {
+				return xrd, nil
+			}
+		}
+
+		return nil, nil
+	}
+
+	// A CRD controlled by something other than an XRD, such as a provider's, names no XRD that
+	// defines the claim, and definesClaim rejects any XRD that shares its owner's name.
+	xrd, err := c.getXRD(ctx, owner.Name)
+	if err != nil || xrd == nil || !definesClaim(xrd, gvk) {
+		return nil, err
+	}
+
+	return xrd, nil
+}
+
+// getXRD gets the named XRD at the first served XRD version (the version listing them would have
+// returned it at), or nil if there is none.
+func (c *DefaultDefinitionClient) getXRD(ctx context.Context, name string) (*un.Unstructured, error) {
+	if len(c.gvks) == 0 {
+		return nil, nil
+	}
+
+	xrd, err := c.resourceClient.GetResource(ctx, c.gvks[0], "", name)
+	if apierrors.IsNotFound(err) {
+		return nil, nil
+	}
+
+	if err != nil {
+		return nil, errors.Wrapf(err, "cannot get XRD %s", name)
+	}
+
+	return xrd, nil
+}
+
+// definesXR reports whether xrd defines gvk as an XR: its group and kind, at one of its versions.
+func definesXR(xrd *un.Unstructured, gvk schema.GroupVersionKind) bool {
+	xrGroup, _, _ := un.NestedString(xrd.Object, "spec", "group")
+	xrKind, _, _ := un.NestedString(xrd.Object, "spec", "names", "kind")
+
+	if xrGroup != gvk.Group || xrKind != gvk.Kind {
+		return false
+	}
+
+	versions, _, _ := un.NestedSlice(xrd.Object, "spec", "versions")
+	for _, v := range versions {
+		version, ok := v.(map[string]any)
+		if !ok {
+			continue
+		}
+
+		if name, found, _ := un.NestedString(version, "name"); found && name == gvk.Version {
+			return true
+		}
+	}
+
+	return false
+}
+
+// definesClaim reports whether xrd defines gvk as a claim: its group and claim kind, at any version.
+func definesClaim(xrd *un.Unstructured, gvk schema.GroupVersionKind) bool {
+	group, _, _ := un.NestedString(xrd.Object, "spec", "group")
+	claimKind, found, _ := un.NestedString(xrd.Object, "spec", "claimNames", "kind")
+
+	return found && group == gvk.Group && claimKind == gvk.Kind
 }
 
 // IsClaimResource checks if the given resource is a claim type by attempting
@@ -240,7 +340,7 @@ func (c *DefaultDefinitionClient) IsClaimResource(ctx context.Context, resource 
 	gvk := resource.GroupVersionKind()
 
 	// Try to find an XRD that defines this resource type as a claim
-	_, err := c.GetXRDForClaim(ctx, gvk)
+	_, err := c.xrdForClaim(ctx, gvk)
 	if err != nil {
 		c.logger.Debug("Resource is not a claim type", "gvk", gvk.String(), "error", err)
 		return false

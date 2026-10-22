@@ -13,7 +13,9 @@ import (
 	"github.com/crossplane-contrib/crossplane-diff/cmd/diff/ref"
 	dtypes "github.com/crossplane-contrib/crossplane-diff/cmd/diff/types"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	un "k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	k8stypes "k8s.io/apimachinery/pkg/types"
@@ -78,10 +80,25 @@ type DefaultCompositionClient struct {
 	revisionClient   CompositionRevisionClient
 	logger           logging.Logger
 
-	// Cache of compositions, guarded by compositionsMu.
+	// Caches guarded by compositionsMu, which is never held across a cluster request: compositions by
+	// name, the error a GET of each name the cluster has no composition for returned, and the
+	// compositions each label selector (formatted) matches.
 	compositions   map[string]*apiextensionsv1.Composition
+	missing        map[string]error
+	selected       map[string][]*apiextensionsv1.Composition
 	compositionsMu sync.RWMutex
-	gvks           []schema.GroupVersionKind
+
+	// listedAll records that compositions holds every composition in the cluster. listMu guards it and
+	// is held across the one full LIST, so concurrent lookups by type share it.
+	listedAll bool
+	listMu    sync.Mutex
+
+	gvks []schema.GroupVersionKind
+}
+
+// compositionGVK returns the one Composition version this client reads, as typed Compositions.
+func compositionGVK() schema.GroupVersionKind {
+	return schema.GroupVersionKind{Group: CrossplaneAPIExtGroup, Version: "v1", Kind: CompositionKind}
 }
 
 // NewCompositionClient creates a new DefaultCompositionClient.
@@ -92,10 +109,13 @@ func NewCompositionClient(resourceClient kubernetes.ResourceClient, definitionCl
 		revisionClient:   NewCompositionRevisionClient(resourceClient, logger),
 		logger:           logger,
 		compositions:     make(map[string]*apiextensionsv1.Composition),
+		missing:          make(map[string]error),
+		selected:         make(map[string][]*apiextensionsv1.Composition),
 	}
 }
 
-// Initialize loads compositions into the cache.
+// Initialize discovers the served Composition versions. Compositions are fetched on demand: by name,
+// by label selector, or all of them, once, for a composite that names neither.
 func (c *DefaultCompositionClient) Initialize(ctx context.Context) error {
 	c.logger.Debug("Initializing composition client")
 
@@ -111,20 +131,7 @@ func (c *DefaultCompositionClient) Initialize(ctx context.Context) error {
 		return errors.Wrap(err, "cannot initialize composition revision client")
 	}
 
-	// List compositions to populate the cache
-	comps, err := c.ListCompositions(ctx)
-	if err != nil {
-		return errors.Wrap(err, "cannot list compositions")
-	}
-
-	// Store in cache
-	c.compositionsMu.Lock()
-	for _, comp := range comps {
-		c.compositions[comp.GetName()] = comp
-	}
-	c.compositionsMu.Unlock()
-
-	c.logger.Debug("Composition client initialized", "compositionsCount", len(comps))
+	c.logger.Debug("Composition client initialized")
 
 	return nil
 }
@@ -133,24 +140,28 @@ func (c *DefaultCompositionClient) Initialize(ctx context.Context) error {
 func (c *DefaultCompositionClient) ListCompositions(ctx context.Context) ([]*apiextensionsv1.Composition, error) {
 	c.logger.Debug("Listing compositions from cluster")
 
-	// Define the composition GVK
-	gvk := schema.GroupVersionKind{
-		Group:   CrossplaneAPIExtGroup,
-		Version: "v1",
-		Kind:    CompositionKind,
-	}
-
 	// TODO:  we don't actually use our cached GVKs here -- but there's only one version of Composition
 	// and this part is strongly typed which will make a second version hard to handle
 
 	// Get all compositions using the resource client
-	unComps, err := c.resourceClient.ListResources(ctx, gvk, "")
+	unComps, err := c.resourceClient.ListResources(ctx, compositionGVK(), "")
 	if err != nil {
 		c.logger.Debug("Failed to list compositions", "error", err)
 		return nil, errors.Wrap(err, "cannot list compositions from cluster")
 	}
 
-	// Convert unstructured to typed
+	compositions, err := c.toCompositions(unComps)
+	if err != nil {
+		return nil, err
+	}
+
+	c.logger.Debug("Successfully retrieved compositions", "count", len(compositions))
+
+	return compositions, nil
+}
+
+// toCompositions converts listed unstructured Compositions to typed ones.
+func (c *DefaultCompositionClient) toCompositions(unComps []*un.Unstructured) ([]*apiextensionsv1.Composition, error) {
 	compositions := make([]*apiextensionsv1.Composition, 0, len(unComps))
 	for _, obj := range unComps {
 		comp := &apiextensionsv1.Composition{}
@@ -167,32 +178,37 @@ func (c *DefaultCompositionClient) ListCompositions(ctx context.Context) ([]*api
 		compositions = append(compositions, comp)
 	}
 
-	c.logger.Debug("Successfully retrieved compositions", "count", len(compositions))
-
 	return compositions, nil
 }
 
 // GetComposition gets a composition by name.
 func (c *DefaultCompositionClient) GetComposition(ctx context.Context, name string) (*apiextensionsv1.Composition, error) {
-	// Check cache first
+	// Check cache first, for the composition or the cluster not having it
 	c.compositionsMu.RLock()
 	comp, ok := c.compositions[name]
+	missingErr := c.missing[name]
 	c.compositionsMu.RUnlock()
 
 	if ok {
 		return comp, nil
 	}
 
-	// Not in cache, fetch from cluster
-	gvk := schema.GroupVersionKind{
-		Group:   CrossplaneAPIExtGroup,
-		Version: "v1",
-		Kind:    CompositionKind,
+	if missingErr != nil {
+		return nil, missingErr
 	}
 
-	unComp, err := c.resourceClient.GetResource(ctx, gvk, "" /* Compositions are cluster scoped */, name)
+	// Not in cache, fetch from cluster
+	unComp, err := c.resourceClient.GetResource(ctx, compositionGVK(), "" /* Compositions are cluster scoped */, name)
 	if err != nil {
-		return nil, errors.Wrapf(err, "cannot get composition %s", name)
+		err = errors.Wrapf(err, "cannot get composition %s", name)
+
+		if apierrors.IsNotFound(err) {
+			c.compositionsMu.Lock()
+			c.missing[name] = err
+			c.compositionsMu.Unlock()
+		}
+
+		return nil, err
 	}
 
 	// Convert to typed # TODO:  troublesome because typed has a version
@@ -216,6 +232,101 @@ func (c *DefaultCompositionClient) cachedCompositions() []*apiextensionsv1.Compo
 	defer c.compositionsMu.RUnlock()
 
 	return slices.Collect(maps.Values(c.compositions))
+}
+
+// allCompositions returns every composition in the cluster. The first call lists them; later calls,
+// including concurrent ones, are served from the cache.
+func (c *DefaultCompositionClient) allCompositions(ctx context.Context) ([]*apiextensionsv1.Composition, error) {
+	c.listMu.Lock()
+	defer c.listMu.Unlock()
+
+	if !c.listedAll {
+		comps, err := c.ListCompositions(ctx)
+		if err != nil {
+			return nil, err
+		}
+
+		c.compositionsMu.Lock()
+		for _, comp := range comps {
+			c.compositions[comp.GetName()] = comp
+			delete(c.missing, comp.GetName())
+		}
+		c.compositionsMu.Unlock()
+
+		c.listedAll = true
+	}
+
+	return c.cachedCompositions(), nil
+}
+
+// compositionsMatching returns the compositions labelsMatch says match matchLabels. The first lookup
+// of a set of labels lists the compositions carrying them from the cluster, with them as the selector.
+func (c *DefaultCompositionClient) compositionsMatching(ctx context.Context, matchLabels map[string]string) ([]*apiextensionsv1.Composition, error) {
+	// labelsMatch lets a composition without a label match an empty value for it, which a selector
+	// requiring the label would not, so only non-empty values go into the selector.
+	required := make(map[string]string, len(matchLabels))
+
+	for k, v := range matchLabels {
+		if v != "" {
+			required[k] = v
+		}
+	}
+
+	// The apiserver only accepts valid labels on a composition, so a non-empty label that is not
+	// valid matches none. Listing with it would instead fail the request.
+	if _, err := labels.ValidatedSelectorFromSet(required); err != nil {
+		c.logger.Debug("Composition selector labels are not valid labels, so no composition matches", "labels", matchLabels, "reason", err)
+		return nil, nil
+	}
+
+	selected, err := c.compositionsSelectedBy(ctx, metav1.LabelSelector{MatchLabels: required})
+	if err != nil {
+		return nil, err
+	}
+
+	var matching []*apiextensionsv1.Composition
+
+	for _, comp := range selected {
+		if c.labelsMatch(comp.GetLabels(), matchLabels) {
+			matching = append(matching, comp)
+		}
+	}
+
+	return matching, nil
+}
+
+// compositionsSelectedBy returns the compositions sel selects, listing them from the cluster the
+// first time sel is asked for.
+func (c *DefaultCompositionClient) compositionsSelectedBy(ctx context.Context, sel metav1.LabelSelector) ([]*apiextensionsv1.Composition, error) {
+	key := metav1.FormatLabelSelector(&sel)
+
+	c.compositionsMu.RLock()
+	comps, ok := c.selected[key]
+	c.compositionsMu.RUnlock()
+
+	if ok {
+		return comps, nil
+	}
+
+	unComps, err := c.resourceClient.GetResourcesByLabel(ctx, compositionGVK(), "" /* Compositions are cluster scoped */, sel)
+	if err != nil {
+		return nil, errors.Wrap(err, "cannot list compositions from cluster")
+	}
+
+	comps, err = c.toCompositions(unComps)
+	if err != nil {
+		return nil, err
+	}
+
+	c.compositionsMu.Lock()
+	c.selected[key] = comps
+	for _, comp := range comps {
+		c.compositions[comp.GetName()] = comp
+		delete(c.missing, comp.GetName())
+	}
+	c.compositionsMu.Unlock()
+
+	return comps, nil
 }
 
 // getCompositionRevisionRef reads the compositionRevisionRef from an XR/Claim spec.
@@ -687,22 +798,15 @@ func (c *DefaultCompositionClient) findByLabelSelector(ctx context.Context, xrd,
 		// Find compositions matching the labels
 		var matchingCompositions []*apiextensionsv1.Composition
 
-		// Get all compositions if we haven't loaded them yet
-		cached := c.cachedCompositions()
-		if len(cached) == 0 {
-			if _, err := c.ListCompositions(ctx); err != nil {
-				return nil, errors.Wrap(err, "cannot list compositions to match selector")
-			}
+		selected, err := c.compositionsMatching(ctx, stringLabels)
+		if err != nil {
+			return nil, errors.Wrap(err, "cannot list compositions to match selector")
 		}
 
-		// Search through all compositions looking for compatible ones with matching labels
-		for _, comp := range cached {
-			// Check if this composition is for the right XR type
+		// Keep the compositions with matching labels that are for the right XR type
+		for _, comp := range selected {
 			if c.isCompositionCompatible(comp, targetGVK) {
-				// Check if labels match
-				if c.labelsMatch(comp.GetLabels(), stringLabels) {
-					matchingCompositions = append(matchingCompositions, comp)
-				}
+				matchingCompositions = append(matchingCompositions, comp)
 			}
 		}
 
@@ -733,18 +837,15 @@ func (c *DefaultCompositionClient) findByLabelSelector(ctx context.Context, xrd,
 
 // findByTypeReference attempts to find a composition by matching the type reference.
 func (c *DefaultCompositionClient) findByTypeReference(ctx context.Context, _ *un.Unstructured, targetGVK schema.GroupVersionKind, resourceID string) (*apiextensionsv1.Composition, error) {
-	// Get all compositions if we haven't loaded them yet
-	cached := c.cachedCompositions()
-	if len(cached) == 0 {
-		if _, err := c.ListCompositions(ctx); err != nil {
-			return nil, errors.Wrap(err, "cannot list compositions to match type")
-		}
+	all, err := c.allCompositions(ctx)
+	if err != nil {
+		return nil, errors.Wrap(err, "cannot list compositions to match type")
 	}
 
 	// Find all compositions that match this target type
 	var compatibleCompositions []*apiextensionsv1.Composition
 
-	for _, comp := range cached {
+	for _, comp := range all {
 		if c.isCompositionCompatible(comp, targetGVK) {
 			compatibleCompositions = append(compatibleCompositions, comp)
 		}

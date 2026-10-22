@@ -302,52 +302,33 @@ func TestDefaultEnvironmentClient_GetEnvironmentConfig(t *testing.T) {
 func TestDefaultEnvironmentClient_Initialize(t *testing.T) {
 	ctx := t.Context()
 
-	// Create test environment configurations
-	envConfig1 := tu.NewResource("apiextensions.crossplane.io/v1alpha1", "EnvironmentConfig", "env-config-1").Build()
-	envConfig2 := tu.NewResource("apiextensions.crossplane.io/v1alpha1", "EnvironmentConfig", "env-config-2").Build()
-
 	tests := map[string]struct {
 		reason       string
 		mockResource tu.MockResourceClient
 		wantErr      bool
-		wantCached   map[string]bool
 	}{
 		"SuccessfulInitialization": {
-			reason: "Should successfully initialize and cache environment configs",
+			reason: "Should discover the EnvironmentConfig versions and cache no configs, which are fetched on demand",
 			mockResource: *tu.NewMockResourceClient().
 				WithSuccessfulInitialize().
 				WithFoundGVKs([]schema.GroupVersionKind{EnvConfigV1alpha1GVK}).
-				WithListResources(func(_ context.Context, gvk schema.GroupVersionKind, _ string) ([]*un.Unstructured, error) {
-					if gvk.Group == "apiextensions.crossplane.io" &&
-						gvk.Version == "v1alpha1" &&
-						gvk.Kind == "EnvironmentConfig" {
-						return []*un.Unstructured{envConfig1, envConfig2}, nil
-					}
-
-					return nil, errors.New("unexpected GVK")
-				}).
 				Build(),
 			wantErr: false,
-			wantCached: map[string]bool{
-				"env-config-1": true,
-				"env-config-2": true,
-			},
 		},
-		"NoConfigs": {
-			reason: "Should successfully initialize with empty cache when no configs exist",
+		"NoListPermission": {
+			reason: "Should initialize when the credentials cannot list environment configs",
 			mockResource: *tu.NewMockResourceClient().
 				WithSuccessfulInitialize().
 				WithFoundGVKs([]schema.GroupVersionKind{EnvConfigV1alpha1GVK}).
-				WithEmptyListResources().
+				WithErrorOnListOf(EnvConfigV1alpha1GVK).
 				Build(),
-			wantErr:    false,
-			wantCached: map[string]bool{},
+			wantErr: false,
 		},
-		"ListError": {
-			reason: "Should return error when listing environment configs fails",
+		"DiscoveryFailed": {
+			reason: "Should return error when the EnvironmentConfig versions cannot be discovered",
 			mockResource: *tu.NewMockResourceClient().
 				WithSuccessfulInitialize().
-				WithListResourcesFailure("list error").
+				WithoutFoundGVKs("discovery error").
 				Build(),
 			wantErr: true,
 		},
@@ -371,18 +352,8 @@ func TestDefaultEnvironmentClient_Initialize(t *testing.T) {
 				return
 			}
 
-			// If no error expected, check the cache state
-			if !tt.wantErr {
-				for name := range tt.wantCached {
-					if _, ok := c.envConfigs["/"+name]; !ok {
-						t.Errorf("\n%s\nInitialize(): expected config %s to be cached, but it's not", tt.reason, name)
-					}
-				}
-
-				// Check we don't have extra configs
-				if len(c.envConfigs) != len(tt.wantCached) {
-					t.Errorf("\n%s\nInitialize(): expected %d cached configs, got %d", tt.reason, len(tt.wantCached), len(c.envConfigs))
-				}
+			if len(c.envConfigs) != 0 {
+				t.Errorf("\n%s\nInitialize(): expected no cached configs, got %d", tt.reason, len(c.envConfigs))
 			}
 		})
 	}

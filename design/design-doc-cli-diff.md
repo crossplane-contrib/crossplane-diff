@@ -494,6 +494,22 @@ The `comp` subcommand has its own set of integration tests:
 - **`crossplane.io/composite` Label**: Confirms that diffing a Claim does not show spurious changes to the composite
   label, since Crossplane uses the XR name there even when rendering from a Claim.
 
+### 4.14 Scoped Cluster Access
+
+The diff reads only what its input needs, so a run's cost and its required permissions don't grow with the rest of
+the control plane.
+
+- **Least-Privilege Credentials** (`xr` and `comp`): the case runs the command as the cluster admin and then as an
+  envtest user bound to a ClusterRole (the case's `rbacRules`) that grants `get`, not `list`, on Crossplane's own types.
+  It grants `list` only on CompositionRevisions and composed resources, which are selected by label, and, for `comp`
+  without `--resource`, on the composition's XR type. Both runs must print identical JSON.
+- **Unrelated XRD Without a CRD**: an XRD the input doesn't use, applied with no generated CRD (the case's
+  `unestablishedXRDs`, as for an XRD Crossplane hasn't established yet), leaves the diff unchanged.
+- **Name-Scoped `comp` Without Composite List**: `comp --resource` looks composites up by name, so a user who cannot
+  list the XR type gets the admin's impact analysis.
+- **Missing Function**: a pipeline step naming a Function the cluster doesn't have fails the diff, naming the function
+  and the step.
+
 These comprehensive test cases ensure that both subcommands function correctly across the full range of Crossplane
 resource types and composition patterns. The implementation described in the following sections is designed to satisfy
 all these test cases.
@@ -693,7 +709,8 @@ type DiffProcessor interface {
     // Used by CompDiffProcessor to drive per-XR diffs.
     DiffSingleResource(ctx context.Context, res *un.Unstructured, compositionProvider types.CompositionProvider) (map[string]*dt.ResourceDiff, error)
 
-    // Initialize loads required resources like CRDs.
+    // Initialize prepares the processor. It fetches no CRDs or XRDs: each is fetched when a resource
+    // being diffed needs it.
     Initialize(ctx context.Context) error
 
     // Cleaner releases resources held by the processor (in particular, Docker function containers
@@ -1355,8 +1372,9 @@ type SchemaValidator interface {
 
 The `DefaultSchemaValidator` handles:
 
-- Loading CRDs from the cluster on demand
-- Converting XRDs to CRDs (so XRs can be schema-validated)
+- Loading CRDs from the cluster on demand: the XR's (or claim's) and each composed resource's, and no others. Nothing
+  is loaded when the processor initializes, so an XRD unrelated to the input, or a missing CRD for one, does not affect
+  the run, while a missing CRD for the input itself fails it
 - Validating resources against those schemas via the upstream `pkg/validate.SchemaValidate` structured API
 - Enforcing scope constraints across the rendered tree
 
@@ -1460,8 +1478,9 @@ concrete struct (not an interface) and is owned by the XR processor.
 The `RequirementsProvider` handles:
 
 - Caching frequently used resources to avoid re-fetching across the iterative render loop
-- Fetching resources by name or label selector, scoped to the XR's namespace where appropriate
-- Loading EnvironmentConfigs as a baseline available to every render
+- Fetching resources by name or label selector, scoped to the XR's namespace where appropriate. EnvironmentConfigs are
+  fetched like any other required resource: by name with a GET, by label with a scoped LIST. Nothing is prefetched,
+  so a run needs no permission to list every EnvironmentConfig in the cluster
 
 **Unmet requirements are non-fatal.** A `matchName` selector that resolves to a NotFound (the referenced resource
 doesn't exist) returns `(nil, false, nil)` from `processNameSelector` — no resources, not from cache, no error —
@@ -1486,7 +1505,7 @@ functions a composition's pipeline runs. Starting, reusing and removing their co
 ```go
 // FunctionProvider resolves the function set used by a given composition.
 type FunctionProvider interface {
-    GetFunctionsForComposition(comp *apiextensionsv1.Composition) ([]pkgv1.Function, error)
+    GetFunctionsForComposition(ctx context.Context, comp *apiextensionsv1.Composition) ([]pkgv1.Function, error)
     Cleaner
 }
 ```
@@ -1498,7 +1517,8 @@ Three implementations are wired up at the CLI layer based on configuration:
   functions once per run. The factory selection happens at the CLI layer; the processors are oblivious to which
   strategy is in use. It is safe for concurrent use, and each call returns its own deep copy, because the wrapping
   providers below and the render engine modify the functions they are given; `FunctionClient.GetFunctionsFromPipeline`
-  copies out of its cache for the same reason.
+  copies out of its cache for the same reason. `FunctionClient` lists no Functions: it GETs each function a pipeline
+  names the first time it is asked for, and caches what it finds and what the cluster does not have.
 - **`RegistryOverrideFunctionProvider`**: Wraps another provider and rewrites function image references to a mirror
   (used with `--function-registry-override`).
 - **`EnvInjectingFunctionProvider`**: Wraps another provider and upserts env pairs into each function's
@@ -2103,23 +2123,35 @@ The client layer provides interfaces to interact with Kubernetes and Crossplane 
   folded into `reason`, because a wrongly-*allowed* answer converts an RBAC denial into a reported cluster rejection — a
   false finding — whereas a wrongly-denied one only costs fidelity on one resource.
 - `ResourceClient`: Handles basic CRUD operations against the dynamic client
-- `SchemaClient`: Handles schema-related operations (fetching CRDs, scope detection)
+- `SchemaClient`: Handles schema-related operations (fetching CRDs, scope detection). `GetCRD` and `GetCRDByName`
+  GET a CRD the first time it is asked for and cache it; a CRD found not to exist is cached too, so it is fetched at
+  most once per run, while any other failure is not cached. `GetAllCRDs` returns the CRDs fetched so far, which is what
+  `SchemaValidate` validates against
 - `TypeConverter`: Handles GVK ↔ GVR resolution and resource-name lookup
 
 #### 6.9.2 Crossplane Clients
 
 - `CompositionClient`: Finds and fetches Compositions. `DefaultCompositionClient` also constructs and owns a
   `CompositionRevisionClient` internally (it is not part of the injected `xp.Clients` bundle); callers don't wire a
-  revision client directly.
+  revision client directly. It lists no Compositions when it initializes. It fetches them on demand: a `compositionRef`
+  by name with a GET, a `compositionSelector` with a LIST of the compositions carrying its labels, and, for a composite
+  that names neither, every composition with one LIST the first time one is needed. It caches what it finds and the
+  names the cluster does not have, so a run needs no permission to list every Composition unless one of its composites
+  is matched by type alone.
 - `CompositionRevisionClient`: Fetches CompositionRevisions and selects the effective revision for an XR. Under an
   Automatic `compositionUpdatePolicy`, `DefaultCompositionClient.resolveCompositionFromRevisions` selects the latest
   revision whose labels match the XR's `compositionRevisionSelector` via
   `GetLatestRevisionForComposition(ctx, name, selector)` (a nil selector means latest overall). If the selector
   matches no revision, the diff fails rather than silently rendering against a non-matching revision. Accessed via
   `DefaultCompositionClient`, not directly from `AppContext`.
-- `DefinitionClient`: Fetches XRDs and resolves XR/claim relationships
-- `EnvironmentClient`: Fetches EnvironmentConfigs
-- `FunctionClient`: Fetches Function package definitions and per-composition pipelines
+- `DefinitionClient`: Fetches XRDs and resolves XR/claim relationships. It lists no XRDs when it initializes. An XRD
+  is named `<plural>.<group>` of the XR type it defines, so it finds an XR type's XRD with one GET of that name, the
+  plural coming from discovery. For a claim type it GETs the claim's CRD, which Crossplane names the same way, and then
+  the XRD that is the CRD's controller. Only a claim CRD with no controller (applied by hand rather than generated by
+  Crossplane) makes it list every XRD, once per run. It caches each type's XRD, and the types no XRD defines, and
+  returns copies, so finding a type's XRD needs no permission to list XRDs.
+- `EnvironmentClient`: Fetches EnvironmentConfigs by name, on demand
+- `FunctionClient`: Fetches, by name and on demand, the Function package definitions a composition's pipeline names
 - `CredentialClient`: Fetches the Secrets a composition's pipeline steps reference as function credentials
   (`FetchCompositionCredentials(ctx, comp) (types.CredentialFetchResult, error)`). The result separates the secrets
   actually read from the cluster (`Secrets`) from the referenced secrets that do not exist (`Absent`, deduplicated:
@@ -2627,9 +2659,9 @@ This rendering layer:
   started once: the second caller waits on the mutex, then finds it running. Startup has to be serialized anyway,
   because upstream's docker engine `Setup` is not safe for concurrent use (its first call records the network it
   creates). The rest of the processor is safe for concurrent `DiffSingleResource` calls too: every lazily filled
-  cache is mutex-guarded (composition, revision, XRD, CRD, access-review, GVR and requirements caches), and the
-  function client's cache, filled by `Initialize`, is only read afterwards. `AdvisoryCollector.Advisories` sorts what it
-  returns (§6.8.1), so concurrent work raising advisories in a different order does not change the output
+  cache is mutex-guarded (composition, revision, XRD, CRD, access-review, GVR, requirements and function caches).
+  `AdvisoryCollector.Advisories` sorts what it returns (§6.8.1), so concurrent work raising advisories in a different
+  order does not change the output
 
 #### 9.5.4 Resource Tree Evaluation
 

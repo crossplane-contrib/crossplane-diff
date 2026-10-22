@@ -3,9 +3,11 @@ package crossplane
 import (
 	"context"
 	"fmt"
+	"sync"
 
 	"github.com/crossplane-contrib/crossplane-diff/cmd/diff/client/core"
 	"github.com/crossplane-contrib/crossplane-diff/cmd/diff/client/kubernetes"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 
@@ -20,8 +22,9 @@ import (
 type FunctionClient interface {
 	core.Initializable
 
-	// GetFunctionsFromPipeline gets functions used in a composition pipeline
-	GetFunctionsFromPipeline(comp *apiextensionsv1.Composition) ([]pkgv1.Function, error)
+	// GetFunctionsFromPipeline gets functions used in a composition pipeline, fetching each one the
+	// pipeline names from the cluster the first time it is asked for.
+	GetFunctionsFromPipeline(ctx context.Context, comp *apiextensionsv1.Composition) ([]pkgv1.Function, error)
 
 	// ListFunctions lists all functions in the cluster
 	ListFunctions(ctx context.Context) ([]pkgv1.Function, error)
@@ -32,9 +35,17 @@ type DefaultFunctionClient struct {
 	resourceClient kubernetes.ResourceClient
 	logger         logging.Logger
 
-	// Cache of functions
-	functions map[string]pkgv1.Function
-	gvks      []schema.GroupVersionKind
+	// Cache of functions by name: those found, and the names the cluster has no Function for.
+	// functionsMu guards both, and is never held across a cluster request.
+	functions   map[string]pkgv1.Function
+	missing     map[string]bool
+	functionsMu sync.Mutex
+	gvks        []schema.GroupVersionKind
+}
+
+// functionGVK returns the one Function version this client reads, as typed pkgv1.Functions.
+func functionGVK() schema.GroupVersionKind {
+	return schema.GroupVersionKind{Group: CrossplanePkgGroup, Version: "v1", Kind: FunctionKind}
 }
 
 // NewFunctionClient creates a new DefaultFunctionClient.
@@ -43,10 +54,12 @@ func NewFunctionClient(resourceClient kubernetes.ResourceClient, logger logging.
 		resourceClient: resourceClient,
 		logger:         logger,
 		functions:      make(map[string]pkgv1.Function),
+		missing:        make(map[string]bool),
 	}
 }
 
-// Initialize loads functions into the cache.
+// Initialize discovers the served Function versions. Functions are fetched on demand by
+// GetFunctionsFromPipeline.
 func (c *DefaultFunctionClient) Initialize(ctx context.Context) error {
 	c.logger.Debug("Initializing function client")
 
@@ -57,18 +70,7 @@ func (c *DefaultFunctionClient) Initialize(ctx context.Context) error {
 
 	c.gvks = gvks
 
-	// List functions to populate the cache
-	fns, err := c.ListFunctions(ctx)
-	if err != nil {
-		return errors.Wrap(err, "cannot list functions")
-	}
-
-	// Store in cache
-	for _, fn := range fns {
-		c.functions[fn.GetName()] = fn
-	}
-
-	c.logger.Debug("Function client initialized", "functionsCount", len(c.functions))
+	c.logger.Debug("Function client initialized")
 
 	return nil
 }
@@ -80,15 +82,8 @@ func (c *DefaultFunctionClient) ListFunctions(ctx context.Context) ([]pkgv1.Func
 	// TODO:  we don't actually use our cached GVKs here -- but there's only one version of Function
 	// and this part is strongly typed which will make a second version hard to handle
 
-	// Define the function GVK
-	gvk := schema.GroupVersionKind{
-		Group:   CrossplanePkgGroup,
-		Version: "v1",
-		Kind:    FunctionKind,
-	}
-
 	// Get all functions using the resource client
-	unFns, err := c.resourceClient.ListResources(ctx, gvk, "")
+	unFns, err := c.resourceClient.ListResources(ctx, functionGVK(), "")
 	if err != nil {
 		c.logger.Debug("Failed to list functions", "error", err)
 		return nil, errors.Wrap(err, "cannot list functions from cluster")
@@ -117,7 +112,7 @@ func (c *DefaultFunctionClient) ListFunctions(ctx context.Context) ([]pkgv1.Func
 }
 
 // GetFunctionsFromPipeline gets functions used in a composition pipeline.
-func (c *DefaultFunctionClient) GetFunctionsFromPipeline(comp *apiextensionsv1.Composition) ([]pkgv1.Function, error) {
+func (c *DefaultFunctionClient) GetFunctionsFromPipeline(ctx context.Context, comp *apiextensionsv1.Composition) ([]pkgv1.Function, error) {
 	c.logger.Debug("Getting functions from pipeline", "composition_name", comp.GetName())
 
 	if comp.Spec.Mode != apiextensionsv1.CompositionModePipeline {
@@ -136,7 +131,11 @@ func (c *DefaultFunctionClient) GetFunctionsFromPipeline(comp *apiextensionsv1.C
 	c.logger.Debug("Processing pipeline steps", "steps_count", len(comp.Spec.Pipeline))
 
 	for _, step := range comp.Spec.Pipeline {
-		fn, ok := c.functions[step.FunctionRef.Name]
+		fn, ok, err := c.getFunction(ctx, step.FunctionRef.Name)
+		if err != nil {
+			return nil, err
+		}
+
 		if !ok {
 			c.logger.Debug("Function not found",
 				"step", step.Step,
@@ -158,4 +157,40 @@ func (c *DefaultFunctionClient) GetFunctionsFromPipeline(comp *apiextensionsv1.C
 		"composition_name", comp.GetName())
 
 	return functions, nil
+}
+
+// getFunction returns the named Function, from the cache or else from the cluster, and whether it
+// exists. Both outcomes are cached, so each name is fetched at most once.
+func (c *DefaultFunctionClient) getFunction(ctx context.Context, name string) (pkgv1.Function, bool, error) {
+	c.functionsMu.Lock()
+	fn, found := c.functions[name]
+	missing := c.missing[name]
+	c.functionsMu.Unlock()
+
+	if found || missing {
+		return fn, found, nil
+	}
+
+	u, err := c.resourceClient.GetResource(ctx, functionGVK(), "", name)
+	if apierrors.IsNotFound(err) {
+		c.functionsMu.Lock()
+		c.missing[name] = true
+		c.functionsMu.Unlock()
+
+		return pkgv1.Function{}, false, nil
+	}
+
+	if err != nil {
+		return pkgv1.Function{}, false, errors.Wrapf(err, "cannot get function %q", name)
+	}
+
+	if err := runtime.DefaultUnstructuredConverter.FromUnstructured(u.Object, &fn); err != nil {
+		return pkgv1.Function{}, false, errors.Wrap(err, "cannot convert unstructured to Function")
+	}
+
+	c.functionsMu.Lock()
+	c.functions[name] = fn
+	c.functionsMu.Unlock()
+
+	return fn, true, nil
 }

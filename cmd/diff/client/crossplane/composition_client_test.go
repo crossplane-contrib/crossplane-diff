@@ -4,6 +4,7 @@ import (
 	"context"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 
 	tu "github.com/crossplane-contrib/crossplane-diff/cmd/diff/testutils"
@@ -44,9 +45,9 @@ func TestDefaultCompositionClient_FindMatchingComposition(t *testing.T) {
 		WithCompositeTypeRef("example.org/v1", "XR1").
 		Build()
 
-	nonMatchingComp := tu.NewComposition("non-matching-comp").
-		WithCompositeTypeRef("example.org/v1", "OtherXR").
-		Build()
+	nonMatchingCompBuilder := tu.NewComposition("non-matching-comp").
+		WithCompositeTypeRef("example.org/v1", "OtherXR")
+	nonMatchingComp := nonMatchingCompBuilder.Build()
 
 	referencedComp := tu.NewComposition("referenced-comp").
 		WithCompositeTypeRef("example.org/v1", "XR1").
@@ -56,39 +57,20 @@ func TestDefaultCompositionClient_FindMatchingComposition(t *testing.T) {
 		WithCompositeTypeRef("example.org/v1", "OtherXR").
 		Build()
 
-	labeledComp := func() *apiextensionsv1.Composition {
-		comp := tu.NewComposition("labeled-comp").
-			WithCompositeTypeRef("example.org/v1", "XR1").
-			Build()
-		comp.SetLabels(map[string]string{
+	labeledComp := tu.NewComposition("labeled-comp").
+		WithCompositeTypeRef("example.org/v1", "XR1").
+		WithLabels(map[string]string{
 			"environment": "production",
 			"tier":        "standard",
 		})
 
-		return comp
-	}()
+	aComp := tu.NewComposition("a-comp").
+		WithCompositeTypeRef("example.org/v1", "XR1").
+		WithLabels(map[string]string{"environment": "production"})
 
-	aComp := func() *apiextensionsv1.Composition {
-		comp := tu.NewComposition("a-comp").
-			WithCompositeTypeRef("example.org/v1", "XR1").
-			Build()
-		comp.SetLabels(map[string]string{
-			"environment": "production",
-		})
-
-		return comp
-	}()
-
-	bComp := func() *apiextensionsv1.Composition {
-		comp := tu.NewComposition("b-comp").
-			WithCompositeTypeRef("example.org/v1", "XR1").
-			Build()
-		comp.SetLabels(map[string]string{
-			"environment": "production",
-		})
-
-		return comp
-	}()
+	bComp := tu.NewComposition("b-comp").
+		WithCompositeTypeRef("example.org/v1", "XR1").
+		WithLabels(map[string]string{"environment": "production"})
 
 	versionMismatchComp := tu.NewComposition("version-mismatch-comp").
 		WithCompositeTypeRef("example.org/v2", "XR1").
@@ -110,7 +92,6 @@ func TestDefaultCompositionClient_FindMatchingComposition(t *testing.T) {
 				Build(),
 			mockDef: *tu.NewMockDefinitionClient().
 				WithSuccessfulInitialize().
-				WithEmptyXRDsFetch().
 				WithV1XRDForXR().
 				Build(),
 			fields: fields{
@@ -134,7 +115,6 @@ func TestDefaultCompositionClient_FindMatchingComposition(t *testing.T) {
 				Build(),
 			mockDef: *tu.NewMockDefinitionClient().
 				WithSuccessfulInitialize().
-				WithEmptyXRDsFetch().
 				WithV1XRDForXR().
 				Build(),
 			fields: fields{
@@ -159,7 +139,6 @@ func TestDefaultCompositionClient_FindMatchingComposition(t *testing.T) {
 				Build(),
 			mockDef: *tu.NewMockDefinitionClient().
 				WithSuccessfulInitialize().
-				WithEmptyXRDsFetch().
 				WithV1XRDForXR().
 				Build(),
 			fields: fields{
@@ -195,7 +174,6 @@ func TestDefaultCompositionClient_FindMatchingComposition(t *testing.T) {
 				Build(),
 			mockDef: *tu.NewMockDefinitionClient().
 				WithSuccessfulInitialize().
-				WithEmptyXRDsFetch().
 				WithV1XRDForXR().
 				Build(),
 			fields: fields{
@@ -222,7 +200,6 @@ func TestDefaultCompositionClient_FindMatchingComposition(t *testing.T) {
 				Build(),
 			mockDef: *tu.NewMockDefinitionClient().
 				WithSuccessfulInitialize().
-				WithEmptyXRDsFetch().
 				WithV1XRDForXR().
 				Build(),
 			fields: fields{
@@ -252,7 +229,6 @@ func TestDefaultCompositionClient_FindMatchingComposition(t *testing.T) {
 				Build(),
 			mockDef: *tu.NewMockDefinitionClient().
 				WithSuccessfulInitialize().
-				WithEmptyXRDsFetch().
 				WithV1XRDForXR().
 				Build(),
 			fields: fields{
@@ -277,18 +253,14 @@ func TestDefaultCompositionClient_FindMatchingComposition(t *testing.T) {
 			reason: "Should return composition matching the selector labels",
 			mockResource: *tu.NewMockResourceClient().
 				WithSuccessfulInitialize().
-				WithEmptyListResources().
+				WithListableResources(labeledComp.BuildAsUnstructured(), nonMatchingCompBuilder.BuildAsUnstructured()).
 				Build(),
 			mockDef: *tu.NewMockDefinitionClient().
 				WithSuccessfulInitialize().
-				WithEmptyXRDsFetch().
 				WithV1XRDForXR().
 				Build(),
 			fields: fields{
-				compositions: map[string]*apiextensionsv1.Composition{
-					"labeled-comp":      labeledComp,
-					"non-matching-comp": nonMatchingComp,
-				},
+				compositions: map[string]*apiextensionsv1.Composition{},
 			},
 			args: args{
 				ctx: t.Context(),
@@ -302,33 +274,24 @@ func TestDefaultCompositionClient_FindMatchingComposition(t *testing.T) {
 				}(),
 			},
 			want: want{
-				composition: labeledComp,
+				composition: labeledComp.Build(),
 			},
 		},
 		"CompositionSelectorNoMatch": {
 			reason: "Should return error when no composition matches the selector",
 			mockResource: *tu.NewMockResourceClient().
 				WithSuccessfulInitialize().
-				WithEmptyListResources().
+				WithListableResources(tu.NewComposition("labeled-comp").
+					WithCompositeTypeRef("example.org/v1", "XR1").
+					WithLabels(map[string]string{"environment": "staging"}).
+					BuildAsUnstructured()).
 				Build(),
 			mockDef: *tu.NewMockDefinitionClient().
 				WithSuccessfulInitialize().
-				WithEmptyXRDsFetch().
 				WithV1XRDForXR().
 				Build(),
 			fields: fields{
-				compositions: map[string]*apiextensionsv1.Composition{
-					"labeled-comp": func() *apiextensionsv1.Composition {
-						comp := tu.NewComposition("labeled-comp").
-							WithCompositeTypeRef("example.org/v1", "XR1").
-							Build()
-						comp.SetLabels(map[string]string{
-							"environment": "staging",
-						})
-
-						return comp
-					}(),
-				},
+				compositions: map[string]*apiextensionsv1.Composition{},
 			},
 			args: args{
 				ctx: t.Context(),
@@ -349,18 +312,14 @@ func TestDefaultCompositionClient_FindMatchingComposition(t *testing.T) {
 			reason: "Should return an error when multiple compositions match the selector",
 			mockResource: *tu.NewMockResourceClient().
 				WithSuccessfulInitialize().
-				WithEmptyListResources().
+				WithListableResources(aComp.BuildAsUnstructured(), bComp.BuildAsUnstructured()).
 				Build(),
 			mockDef: *tu.NewMockDefinitionClient().
 				WithSuccessfulInitialize().
-				WithEmptyXRDsFetch().
 				WithV1XRDForXR().
 				Build(),
 			fields: fields{
-				compositions: map[string]*apiextensionsv1.Composition{
-					"a-comp": aComp,
-					"b-comp": bComp,
-				},
+				compositions: map[string]*apiextensionsv1.Composition{},
 			},
 			args: args{
 				ctx: t.Context(),
@@ -385,7 +344,6 @@ func TestDefaultCompositionClient_FindMatchingComposition(t *testing.T) {
 				Build(),
 			mockDef: *tu.NewMockDefinitionClient().
 				WithSuccessfulInitialize().
-				WithEmptyXRDsFetch().
 				WithV1XRDForXR().
 				Build(),
 			fields: fields{
@@ -407,7 +365,6 @@ func TestDefaultCompositionClient_FindMatchingComposition(t *testing.T) {
 				Build(),
 			mockDef: *tu.NewMockDefinitionClient().
 				WithSuccessfulInitialize().
-				WithEmptyXRDsFetch().
 				WithV1XRDForXR().
 				Build(),
 			fields: fields{
@@ -434,7 +391,6 @@ func TestDefaultCompositionClient_FindMatchingComposition(t *testing.T) {
 				Build(),
 			mockDef: *tu.NewMockDefinitionClient().
 				WithSuccessfulInitialize().
-				WithEmptyXRDsFetch().
 				WithV1XRDForXR().
 				Build(),
 			fields: fields{
@@ -463,7 +419,6 @@ func TestDefaultCompositionClient_FindMatchingComposition(t *testing.T) {
 				Build(),
 			mockDef: *tu.NewMockDefinitionClient().
 				WithSuccessfulInitialize().
-				WithEmptyXRDsFetch().
 				WithV1XRDForXR().
 				Build(),
 			fields: fields{
@@ -488,7 +443,6 @@ func TestDefaultCompositionClient_FindMatchingComposition(t *testing.T) {
 				Build(),
 			mockDef: *tu.NewMockDefinitionClient().
 				WithSuccessfulInitialize().
-				WithEmptyXRDsFetch().
 				WithV1XRDForXR().
 				Build(),
 			fields: fields{
@@ -793,6 +747,8 @@ func TestDefaultCompositionClient_FindMatchingComposition(t *testing.T) {
 				revisionClient:   NewCompositionRevisionClient(&tt.mockResource, tu.TestLogger(t, false)),
 				logger:           tu.TestLogger(t, false),
 				compositions:     tt.fields.compositions,
+				missing:          make(map[string]error),
+				selected:         make(map[string][]*apiextensionsv1.Composition),
 			}
 
 			// Test the FindMatchingComposition method
@@ -832,6 +788,223 @@ func TestDefaultCompositionClient_FindMatchingComposition(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestFindByTypeReferenceWhenCacheEmpty covers an XR that names no composition, so it is matched
+// against the compositions the cluster lists because none are cached yet. The selector case lists
+// those carrying its labels.
+func TestFindByTypeReferenceWhenCacheEmpty(t *testing.T) {
+	matching := tu.NewComposition("matching-comp").
+		WithCompositeTypeRef("example.org/v1", "XR1").
+		WithLabels(map[string]string{"environment": "production"})
+
+	// Same labels, different composite type: only the type separates it from the match.
+	other := tu.NewComposition("other-comp").
+		WithCompositeTypeRef("example.org/v1", "OtherXR").
+		WithLabels(map[string]string{"environment": "production"})
+
+	listed := []*un.Unstructured{matching.BuildAsUnstructured(), other.BuildAsUnstructured()}
+
+	tests := map[string]struct {
+		reason string
+		res    *un.Unstructured
+	}{
+		"NoRefNoSelector": {
+			reason: "An XR with neither a compositionRef nor a selector should resolve to the one listed composition of its type",
+			res:    tu.NewResource("example.org/v1", "XR1", "my-xr").Build(),
+		},
+		"LabelSelector": {
+			reason: "An XR with a compositionSelector should resolve to the listed composition of its type matching the labels",
+			res: tu.NewResource("example.org/v1", "XR1", "my-xr").
+				WithSpecField("compositionSelector", map[string]any{
+					"matchLabels": map[string]any{"environment": "production"},
+				}).
+				Build(),
+		},
+	}
+
+	for name, tt := range tests {
+		t.Run(name, func(t *testing.T) {
+			mockResource := tu.NewMockResourceClient().
+				WithListableResources(listed...).
+				Build()
+
+			c := &DefaultCompositionClient{
+				resourceClient:   mockResource,
+				definitionClient: tu.NewMockDefinitionClient().WithV1XRDForXR().Build(),
+				revisionClient:   NewCompositionRevisionClient(mockResource, tu.TestLogger(t, false)),
+				logger:           tu.TestLogger(t, false),
+				compositions:     make(map[string]*apiextensionsv1.Composition),
+				missing:          make(map[string]error),
+				selected:         make(map[string][]*apiextensionsv1.Composition),
+			}
+
+			got, err := c.FindMatchingComposition(t.Context(), tt.res)
+			if err != nil {
+				t.Fatalf("\n%s\nFindMatchingComposition(...): unexpected error: %v", tt.reason, err)
+			}
+
+			if diff := cmp.Diff(matching.Build(), got.Composition); diff != "" {
+				t.Errorf("\n%s\nFindMatchingComposition(...): -want composition, +got composition:\n%s", tt.reason, diff)
+			}
+		})
+	}
+}
+
+// TestFindByLabelSelectorWithoutFullCache resolves composites that select their composition by label
+// on credentials that cannot list every composition, so the compositions carrying the labels are all
+// the client can see. The composition chosen, and the failure when several match, are as when the
+// selector is evaluated against every composition.
+func TestFindByLabelSelectorWithoutFullCache(t *testing.T) {
+	production := map[string]string{"environment": "production"}
+
+	prodXR1 := tu.NewComposition("prod-xr1").WithCompositeTypeRef("example.org/v1", "XR1").WithLabels(production)
+	// Same labels, different composite type: only the type separates it from prodXR1.
+	prodOther := tu.NewComposition("prod-other").WithCompositeTypeRef("example.org/v1", "OtherXR").WithLabels(production)
+	// Same type, different labels: only the labels separate it from prodXR1.
+	stagingXR1 := tu.NewComposition("staging-xr1").WithCompositeTypeRef("example.org/v1", "XR1").
+		WithLabels(map[string]string{"environment": "staging"})
+	// More labels than the selector names; a selector matches a subset of a composition's labels.
+	prodStandardXR1 := tu.NewComposition("prod-standard-xr1").WithCompositeTypeRef("example.org/v1", "XR1").
+		WithLabels(map[string]string{"environment": "production", "tier": "standard"})
+	secondProdXR1 := tu.NewComposition("second-prod-xr1").WithCompositeTypeRef("example.org/v1", "XR1").WithLabels(production)
+
+	selecting := func(matchLabels map[string]any) *un.Unstructured {
+		return tu.NewResource("example.org/v1", "XR1", "my-xr").
+			WithSpecField("compositionSelector", map[string]any{"matchLabels": matchLabels}).
+			Build()
+	}
+
+	type want struct {
+		composition *apiextensionsv1.Composition
+		err         string
+	}
+
+	tests := map[string]struct {
+		reason  string
+		cluster []*un.Unstructured
+		res     *un.Unstructured
+		want    want
+	}{
+		"OnlyCompositionOfTheTypeWithTheLabels": {
+			reason:  "The composition of the composite's type carrying the selected labels is chosen over those differing in type or labels",
+			cluster: []*un.Unstructured{prodOther.BuildAsUnstructured(), stagingXR1.BuildAsUnstructured(), prodXR1.BuildAsUnstructured()},
+			res:     selecting(map[string]any{"environment": "production"}),
+			want:    want{composition: prodXR1.Build()},
+		},
+		"CompositionWithMoreLabelsThanSelected": {
+			reason:  "A composition carrying labels beyond those selected still matches",
+			cluster: []*un.Unstructured{prodStandardXR1.BuildAsUnstructured(), stagingXR1.BuildAsUnstructured()},
+			res:     selecting(map[string]any{"environment": "production"}),
+			want:    want{composition: prodStandardXR1.Build()},
+		},
+		"EverySelectedLabelMustMatch": {
+			reason:  "Of compositions sharing one selected label, only the one carrying all of them matches",
+			cluster: []*un.Unstructured{prodXR1.BuildAsUnstructured(), prodStandardXR1.BuildAsUnstructured()},
+			res:     selecting(map[string]any{"environment": "production", "tier": "standard"}),
+			want:    want{composition: prodStandardXR1.Build()},
+		},
+		"EmptySelectedValueMatchesAbsentLabel": {
+			reason:  "A selected label with an empty value matches a composition without that label, as it always has",
+			cluster: []*un.Unstructured{prodXR1.BuildAsUnstructured(), stagingXR1.BuildAsUnstructured()},
+			res:     selecting(map[string]any{"environment": "production", "tier": ""}),
+			want:    want{composition: prodXR1.Build()},
+		},
+		"SeveralMatchIsAmbiguous": {
+			reason:  "Two compositions of the type carrying the labels fail as ambiguous rather than either being chosen",
+			cluster: []*un.Unstructured{prodXR1.BuildAsUnstructured(), prodOther.BuildAsUnstructured(), secondProdXR1.BuildAsUnstructured()},
+			res:     selecting(map[string]any{"environment": "production"}),
+			want:    want{err: "ambiguous composition selection: multiple compositions match"},
+		},
+		"InvalidLabelValueMatchesNothing": {
+			reason:  "A label value no composition can carry matches none, rather than failing the lookup",
+			cluster: []*un.Unstructured{prodXR1.BuildAsUnstructured()},
+			res:     selecting(map[string]any{"environment": "not a valid label value"}),
+			want:    want{err: "no compatible composition found matching labels map[environment:not a valid label value] for example.org/v1, Kind=XR1/my-xr"},
+		},
+	}
+
+	for name, tt := range tests {
+		t.Run(name, func(t *testing.T) {
+			mockResource := tu.NewMockResourceClient().
+				WithListableResources(tt.cluster...).
+				WithErrorOnListOf(compositionGVK()).
+				Build()
+
+			c := NewCompositionClient(mockResource, tu.NewMockDefinitionClient().WithV1XRDForXR().Build(), tu.TestLogger(t, false))
+
+			got, err := c.FindMatchingComposition(t.Context(), tt.res)
+
+			if tt.want.err != "" {
+				if err == nil || !strings.Contains(err.Error(), tt.want.err) {
+					t.Errorf("\n%s\nFindMatchingComposition(...): want error containing %q, got composition %v and error %v",
+						tt.reason, tt.want.err, got.Composition, err)
+				}
+
+				return
+			}
+
+			if err != nil {
+				t.Fatalf("\n%s\nFindMatchingComposition(...): unexpected error: %v", tt.reason, err)
+			}
+
+			if diff := cmp.Diff(tt.want.composition, got.Composition); diff != "" {
+				t.Errorf("\n%s\nFindMatchingComposition(...): -want composition, +got composition:\n%s", tt.reason, diff)
+			}
+		})
+	}
+}
+
+// TestFindByTypeReferenceListsOnce resolves composites that name no composition, sequentially and
+// concurrently, on a cluster that serves the list of compositions only once. Each resolves to the
+// one composition of its type, so later lookups are served from what the first one listed. Run it
+// with -race.
+func TestFindByTypeReferenceListsOnce(t *testing.T) {
+	xr1 := tu.NewComposition("xr1-comp").WithCompositeTypeRef("example.org/v1", "XR1")
+	xr2 := tu.NewComposition("xr2-comp").WithCompositeTypeRef("example.org/v1", "XR2")
+
+	var listed atomic.Bool
+
+	mockResource := tu.NewMockResourceClient().
+		WithListResources(func(_ context.Context, gvk schema.GroupVersionKind, _ string) ([]*un.Unstructured, error) {
+			if gvk != compositionGVK() {
+				return nil, errors.Errorf("unexpected list of %s", gvk)
+			}
+
+			if listed.Swap(true) {
+				return nil, errors.New("compositions were already listed")
+			}
+
+			return []*un.Unstructured{xr1.BuildAsUnstructured(), xr2.BuildAsUnstructured()}, nil
+		}).
+		Build()
+
+	c := NewCompositionClient(mockResource, tu.NewMockDefinitionClient().WithV1XRDForXR().Build(), tu.TestLogger(t, false))
+
+	want := map[string]*apiextensionsv1.Composition{"XR1": xr1.Build(), "XR2": xr2.Build()}
+
+	resolve := func(kind string) {
+		got, err := c.FindMatchingComposition(t.Context(), tu.NewResource("example.org/v1", kind, "my-xr").Build())
+		if err != nil {
+			t.Errorf("FindMatchingComposition(%s): unexpected error: %v", kind, err)
+			return
+		}
+
+		if diff := cmp.Diff(want[kind], got.Composition); diff != "" {
+			t.Errorf("FindMatchingComposition(%s): -want composition, +got composition:\n%s", kind, diff)
+		}
+	}
+
+	var wg sync.WaitGroup
+	for range 4 {
+		wg.Go(func() { resolve("XR1") })
+		wg.Go(func() { resolve("XR2") })
+	}
+
+	wg.Wait()
+
+	resolve("XR1")
+	resolve("XR2")
 }
 
 func TestDefaultCompositionClient_GetComposition(t *testing.T) {
@@ -904,6 +1077,7 @@ func TestDefaultCompositionClient_GetComposition(t *testing.T) {
 				revisionClient: NewCompositionRevisionClient(mockResource, tu.TestLogger(t, false)),
 				logger:         tu.TestLogger(t, false),
 				compositions:   tt.cache,
+				missing:        make(map[string]error),
 			}
 
 			comp, err := c.GetComposition(ctx, tt.name)
@@ -1096,13 +1270,14 @@ func TestDefaultCompositionClient_Initialize(t *testing.T) {
 				Build(),
 			expectError: true,
 		},
-		"ListCompositionsFailed": {
-			reason: "Should return error when listing compositions fails",
+		"ListCompositionsForbidden": {
+			reason: "Should initialize when the credentials cannot list compositions, since compositions are fetched on demand",
 			mockResource: tu.NewMockResourceClient().
 				WithSuccessfulInitialize().
-				WithListResourcesFailure("list error").
+				WithFoundGVKs([]schema.GroupVersionKind{{Group: CrossplaneAPIExtGroup, Kind: "Composition"}}).
+				WithErrorOnListOf(compositionGVK()).
 				Build(),
-			expectError: true,
+			expectError: false,
 		},
 	}
 
@@ -1560,7 +1735,6 @@ func TestDefaultCompositionClient_V2XRDWithV1StylePaths(t *testing.T) {
 				Build(),
 			mockDef: *tu.NewMockDefinitionClient().
 				WithSuccessfulInitialize().
-				WithEmptyXRDsFetch().
 				WithV2XRDForXR().
 				Build(),
 			compositions: map[string]*apiextensionsv1.Composition{
@@ -1578,25 +1752,16 @@ func TestDefaultCompositionClient_V2XRDWithV1StylePaths(t *testing.T) {
 			reason: "Should find composition when v2 XRD uses v1-style spec.compositionSelector path",
 			mockResource: *tu.NewMockResourceClient().
 				WithSuccessfulInitialize().
-				WithEmptyListResources().
+				WithListableResources(tu.NewComposition("matching-comp").
+					WithCompositeTypeRef("example.org/v1", "XExampleResource").
+					WithLabels(map[string]string{"environment": "production"}).
+					BuildAsUnstructured()).
 				Build(),
 			mockDef: *tu.NewMockDefinitionClient().
 				WithSuccessfulInitialize().
-				WithEmptyXRDsFetch().
 				WithV2XRDForXR().
 				Build(),
-			compositions: map[string]*apiextensionsv1.Composition{
-				"matching-comp": func() *apiextensionsv1.Composition {
-					comp := tu.NewComposition("matching-comp").
-						WithCompositeTypeRef("example.org/v1", "XExampleResource").
-						Build()
-					comp.SetLabels(map[string]string{
-						"environment": "production",
-					})
-
-					return comp
-				}(),
-			},
+			compositions: map[string]*apiextensionsv1.Composition{},
 			res: tu.NewResource("example.org/v1", "XExampleResource", "my-xr").
 				// v1-style path: spec.compositionSelector (not spec.crossplane.compositionSelector)
 				WithSpecField("compositionSelector", map[string]any{
@@ -1626,6 +1791,8 @@ func TestDefaultCompositionClient_V2XRDWithV1StylePaths(t *testing.T) {
 				revisionClient:   NewCompositionRevisionClient(&tt.mockResource, tu.TestLogger(t, false)),
 				logger:           tu.TestLogger(t, false),
 				compositions:     tt.compositions,
+				missing:          make(map[string]error),
+				selected:         make(map[string][]*apiextensionsv1.Composition),
 			}
 
 			got, err := c.FindMatchingComposition(t.Context(), tt.res)
@@ -2244,6 +2411,7 @@ func TestDefaultCompositionClient_ConcurrentUse(t *testing.T) {
 		resourceClient: tu.NewMockResourceClient().WithResourcesExist(cluster...).Build(),
 		logger:         tu.TestLogger(t, false),
 		compositions:   map[string]*apiextensionsv1.Composition{},
+		missing:        map[string]error{},
 	}
 
 	var wg sync.WaitGroup

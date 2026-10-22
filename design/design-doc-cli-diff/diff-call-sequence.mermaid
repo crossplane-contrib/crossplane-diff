@@ -57,7 +57,7 @@ sequenceDiagram
             DP->>CompClient: compositionProvider(ctx, renderXR)
             CompClient-->>DP: ResolvedComposition (cluster's composition and revision, or proposed under comp)
             Note over DP: If a revision was resolved, set renderXR's compositionRevisionRef to it (creating the ref if absent), as the reconciler does before composing.
-            DP->>FnProv: GetFunctionsForComposition(comp)
+            DP->>FnProv: GetFunctionsForComposition(ctx, comp)
             FnProv-->>DP: []Function
             DP->>ResMgr: FetchObservedResources(ctx, Composed())
             ResMgr-->>DP: observed composed resources (fetch failure is fatal)
