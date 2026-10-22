@@ -5,7 +5,6 @@ import (
 	"strings"
 	"testing"
 
-	xp "github.com/crossplane-contrib/crossplane-diff/cmd/diff/client/crossplane"
 	tu "github.com/crossplane-contrib/crossplane-diff/cmd/diff/testutils"
 	pkgvalidate "github.com/crossplane/cli/v2/pkg/validate"
 	"github.com/google/go-cmp/cmp"
@@ -113,7 +112,6 @@ func TestDefaultSchemaValidator_ValidateResources(t *testing.T) {
 					WithCachingBehavior().
 					Build()
 				def := tu.NewMockDefinitionClient().
-					WithEmptyXRDsFetch().
 					Build()
 
 				return sch, def
@@ -134,7 +132,6 @@ func TestDefaultSchemaValidator_ValidateResources(t *testing.T) {
 					WithCachingBehavior().
 					Build()
 				def := tu.NewMockDefinitionClient().
-					WithEmptyXRDsFetch().
 					Build()
 
 				return sch, def
@@ -329,92 +326,6 @@ func TestDefaultSchemaValidator_EnsureComposedResourceCRDs(t *testing.T) {
 	}
 }
 
-func TestDefaultSchemaValidator_LoadCRDs(t *testing.T) {
-	ctx := t.Context()
-
-	// Create sample CRDs as un
-	xrdUn := tu.NewResource("apiextensions.crossplane.io/v1", "CompositeResourceDefinition", "xrd1").
-		WithSpecField("group", "testExampleOrg").
-		WithSpecField("names", map[string]any{
-			"kind":     "XR",
-			"plural":   "xrs",
-			"singular": "xr",
-		}).
-		Build()
-
-	tests := map[string]struct {
-		setupClient    func() xp.DefinitionClient
-		expectedErr    bool
-		expectedErrMsg string
-		// for caching tests
-		callTwice      bool // Test making two calls to LoadCRDs
-		expectXRDCalls int  // Expected number of calls to GetXRDs
-	}{
-		"SuccessfulLoad": {
-			setupClient: func() xp.DefinitionClient {
-				return tu.NewMockDefinitionClient().
-					WithSuccessfulXRDsFetch([]*un.Unstructured{xrdUn}).
-					Build()
-			},
-			expectedErr: false,
-		},
-		"XRDFetchError": {
-			setupClient: func() xp.DefinitionClient {
-				return tu.NewMockDefinitionClient().
-					WithFailedXRDsFetch("failed to fetch XRDs").
-					Build()
-			},
-			expectedErr: true,
-		},
-		"UsesCachedXRDs": {
-			setupClient: func() xp.DefinitionClient {
-				// Create a tracking client that counts GetXRDs calls
-				return &xrdCountingClient{
-					MockDefinitionClient: *tu.NewMockDefinitionClient().
-						WithSuccessfulXRDsFetch([]*un.Unstructured{xrdUn}).
-						Build(),
-				}
-			},
-			expectedErr:    false,
-			callTwice:      true, // Make two calls to LoadCRDs
-			expectXRDCalls: 1,    // GetXRDs should only be called once due to caching
-		},
-	}
-
-	for name, tt := range tests {
-		t.Run(name, func(t *testing.T) {
-			defClient := tt.setupClient()
-			logger := tu.TestLogger(t, false)
-
-			// Create the schema validator with caching behavior
-			validator := NewSchemaValidator(tu.NewMockSchemaClient().WithCachingBehavior().Build(), tu.NewMockResourceClient().Build(), defClient, logger)
-
-			// Call the function under test
-			err := validator.(*DefaultSchemaValidator).LoadCRDs(ctx)
-
-			// Check error expectations
-			if tt.expectedErr {
-				if err == nil {
-					t.Errorf("LoadCRDs() expected error but got none")
-				}
-
-				return
-			}
-
-			if err != nil {
-				t.Errorf("LoadCRDs() unexpected error: %v", err)
-				return
-			}
-
-			// Verify CRDs were loaded (for successful case)
-			crds := validator.(*DefaultSchemaValidator).GetCRDs()
-			if len(crds) == 0 {
-				t.Errorf("LoadCRDs() did not load any CRDs")
-			}
-		})
-	}
-}
-
 // Helper function to create a simple CRD.
 func makeCRD(name string, kind string, group string, version string) *extv1.CustomResourceDefinition {
 	return tu.NewCRD(name, group, kind).
@@ -435,19 +346,6 @@ func createCRDWithStringField(baseCRD *extv1.CustomResourceDefinition) *extv1.Cu
 	}
 
 	return crd
-}
-
-// Helper type to track GetXRDs calls.
-type xrdCountingClient struct {
-	tu.MockDefinitionClient
-
-	getXRDsCallCount int
-}
-
-// Override GetXRDs to count calls.
-func (c *xrdCountingClient) GetXRDs(ctx context.Context) ([]*un.Unstructured, error) {
-	c.getXRDsCallCount++
-	return c.MockDefinitionClient.GetXRDs(ctx)
 }
 
 // ValidateResources must be read-only. Its results feed the diff calculator, and anything it added to

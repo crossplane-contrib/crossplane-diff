@@ -52,9 +52,8 @@ classDiagram
     class SchemaClient {
         <<interface>>
         +GetCRD(ctx, gvk) (*CustomResourceDefinition, error)
-        +GetCRDByName(name) (*CustomResourceDefinition, error)
+        +GetCRDByName(ctx, name) (*CustomResourceDefinition, error)
         +IsCRDRequired(ctx, gvk) bool
-        +LoadCRDsFromXRDs(ctx, xrds) error
         +GetAllCRDs() []*CustomResourceDefinition
     }
     
@@ -127,7 +126,6 @@ classDiagram
     class DefinitionClient {
         <<interface>>
         +Initialize(ctx) error
-        +GetXRDs(ctx) ([]*Unstructured, error)
         +GetXRDForClaim(ctx, gvk) (*Unstructured, error)
         +GetXRDForXR(ctx, gvk) (*Unstructured, error)
         +IsClaimResource(ctx, resource) bool
@@ -137,7 +135,7 @@ classDiagram
     class FunctionClient {
         <<interface>>
         +Initialize(ctx) error
-        +GetFunctionsFromPipeline(comp) ([]Function, error)
+        +GetFunctionsFromPipeline(ctx, comp) ([]Function, error)
         +ListFunctions(ctx) ([]Function, error)
     }
     

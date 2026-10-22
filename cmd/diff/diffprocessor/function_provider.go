@@ -35,7 +35,7 @@ import (
 // Different implementations can fetch functions on-demand or return cached functions.
 type FunctionProvider interface {
 	// GetFunctionsForComposition returns the functions needed to render a composition.
-	GetFunctionsForComposition(comp *apiextensionsv1.Composition) ([]pkgv1.Function, error)
+	GetFunctionsForComposition(ctx context.Context, comp *apiextensionsv1.Composition) ([]pkgv1.Function, error)
 
 	// Cleaner stops and removes any resources created during function execution.
 	// For providers that don't create resources (like the wrappers), this is a no-op.
@@ -77,11 +77,11 @@ func NewCachedFunctionProvider(fnClient xp.FunctionClient, logger logging.Logger
 }
 
 // GetFunctionsForComposition fetches and caches functions on first call per composition.
-func (p *CachedFunctionProvider) GetFunctionsForComposition(comp *apiextensionsv1.Composition) ([]pkgv1.Function, error) {
+func (p *CachedFunctionProvider) GetFunctionsForComposition(ctx context.Context, comp *apiextensionsv1.Composition) ([]pkgv1.Function, error) {
 	compName := comp.GetName()
 
-	// Held across the fetch, which only reads the function client's in-memory cache, so each
-	// composition is fetched once.
+	// Held across the fetch, so each composition's functions are fetched once however many
+	// concurrent renders ask for them.
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
@@ -93,7 +93,7 @@ func (p *CachedFunctionProvider) GetFunctionsForComposition(comp *apiextensionsv
 	// Cache miss - fetch and cache functions
 	p.logger.Debug("Fetching functions for caching", "composition", compName)
 
-	fns, err := p.fnClient.GetFunctionsFromPipeline(comp)
+	fns, err := p.fnClient.GetFunctionsFromPipeline(ctx, comp)
 	if err != nil {
 		return nil, errors.Wrap(err, "cannot get functions from pipeline")
 	}
@@ -140,8 +140,8 @@ func NewRegistryOverrideFunctionProvider(inner FunctionProvider, registry string
 
 // GetFunctionsForComposition delegates to the wrapped provider and rewrites
 // the registry portion of each returned function's package ref.
-func (p *RegistryOverrideFunctionProvider) GetFunctionsForComposition(comp *apiextensionsv1.Composition) ([]pkgv1.Function, error) {
-	fns, err := p.inner.GetFunctionsForComposition(comp)
+func (p *RegistryOverrideFunctionProvider) GetFunctionsForComposition(ctx context.Context, comp *apiextensionsv1.Composition) ([]pkgv1.Function, error) {
+	fns, err := p.inner.GetFunctionsForComposition(ctx, comp)
 	if err != nil {
 		return nil, err
 	}
@@ -199,8 +199,8 @@ func NewEnvInjectingFunctionProvider(inner FunctionProvider, envs map[string]str
 // configured env pairs into each function's runtime-docker-env annotation. The
 // upsert is idempotent so repeated calls over a caching inner provider don't
 // duplicate pairs.
-func (p *EnvInjectingFunctionProvider) GetFunctionsForComposition(comp *apiextensionsv1.Composition) ([]pkgv1.Function, error) {
-	fns, err := p.inner.GetFunctionsForComposition(comp)
+func (p *EnvInjectingFunctionProvider) GetFunctionsForComposition(ctx context.Context, comp *apiextensionsv1.Composition) ([]pkgv1.Function, error) {
+	fns, err := p.inner.GetFunctionsForComposition(ctx, comp)
 	if err != nil {
 		return nil, err
 	}

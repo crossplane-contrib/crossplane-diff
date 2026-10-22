@@ -488,10 +488,9 @@ func (m *MockResourceClient) IsNamespacedResource(ctx context.Context, gvk schem
 type MockSchemaClient struct {
 	InitializeFn       func(ctx context.Context) error
 	GetCRDFn           func(ctx context.Context, gvk schema.GroupVersionKind) (*extv1.CustomResourceDefinition, error)
-	GetCRDByNameFn     func(name string) (*extv1.CustomResourceDefinition, error)
+	GetCRDByNameFn     func(ctx context.Context, name string) (*extv1.CustomResourceDefinition, error)
 	IsCRDRequiredFn    func(ctx context.Context, gvk schema.GroupVersionKind) bool
 	ValidateResourceFn func(ctx context.Context, resource *un.Unstructured) error
-	LoadCRDsFromXRDsFn func(ctx context.Context, xrds []*un.Unstructured) error
 	GetAllCRDsFn       func() []*extv1.CustomResourceDefinition
 }
 
@@ -514,9 +513,9 @@ func (m *MockSchemaClient) GetCRD(ctx context.Context, gvk schema.GroupVersionKi
 }
 
 // GetCRDByName implements kubernetes.SchemaClient.
-func (m *MockSchemaClient) GetCRDByName(name string) (*extv1.CustomResourceDefinition, error) {
+func (m *MockSchemaClient) GetCRDByName(ctx context.Context, name string) (*extv1.CustomResourceDefinition, error) {
 	if m.GetCRDByNameFn != nil {
-		return m.GetCRDByNameFn(name)
+		return m.GetCRDByNameFn(ctx, name)
 	}
 
 	return nil, errors.New("GetCRDByName not implemented")
@@ -535,15 +534,6 @@ func (m *MockSchemaClient) IsCRDRequired(ctx context.Context, gvk schema.GroupVe
 func (m *MockSchemaClient) ValidateResource(ctx context.Context, resource *un.Unstructured) error {
 	if m.ValidateResourceFn != nil {
 		return m.ValidateResourceFn(ctx, resource)
-	}
-
-	return nil
-}
-
-// LoadCRDsFromXRDs implements kubernetes.SchemaClient.
-func (m *MockSchemaClient) LoadCRDsFromXRDs(ctx context.Context, xrds []*un.Unstructured) error {
-	if m.LoadCRDsFromXRDsFn != nil {
-		return m.LoadCRDsFromXRDsFn(ctx, xrds)
 	}
 
 	return nil
@@ -711,7 +701,7 @@ func (m *MockCompositionClient) FindComposites(ctx context.Context, comp *un.Uns
 // MockFunctionClient implements the crossplane.FunctionClient interface.
 type MockFunctionClient struct {
 	InitializeFn               func(ctx context.Context) error
-	GetFunctionsFromPipelineFn func(comp *xpextv1.Composition) ([]pkgv1.Function, error)
+	GetFunctionsFromPipelineFn func(ctx context.Context, comp *xpextv1.Composition) ([]pkgv1.Function, error)
 	ListFunctionsFn            func(ctx context.Context) ([]pkgv1.Function, error)
 }
 
@@ -725,9 +715,9 @@ func (m *MockFunctionClient) Initialize(ctx context.Context) error {
 }
 
 // GetFunctionsFromPipeline implements crossplane.FunctionClient.
-func (m *MockFunctionClient) GetFunctionsFromPipeline(comp *xpextv1.Composition) ([]pkgv1.Function, error) {
+func (m *MockFunctionClient) GetFunctionsFromPipeline(ctx context.Context, comp *xpextv1.Composition) ([]pkgv1.Function, error) {
 	if m.GetFunctionsFromPipelineFn != nil {
-		return m.GetFunctionsFromPipelineFn(comp)
+		return m.GetFunctionsFromPipelineFn(ctx, comp)
 	}
 
 	return nil, errors.New("GetFunctionsFromPipeline not implemented")
@@ -779,7 +769,6 @@ func (m *MockEnvironmentClient) GetEnvironmentConfig(ctx context.Context, name s
 // MockDefinitionClient implements the crossplane.DefinitionClient interface.
 type MockDefinitionClient struct {
 	InitializeFn         func(ctx context.Context) error
-	GetXRDsFn            func(ctx context.Context) ([]*un.Unstructured, error)
 	GetXRDForClaimFn     func(ctx context.Context, gvk schema.GroupVersionKind) (*un.Unstructured, error)
 	GetXRDForXRFn        func(ctx context.Context, gvk schema.GroupVersionKind) (*un.Unstructured, error)
 	IsClaimResourceFn    func(ctx context.Context, resource *un.Unstructured) bool
@@ -793,15 +782,6 @@ func (m *MockDefinitionClient) Initialize(ctx context.Context) error {
 	}
 
 	return nil
-}
-
-// GetXRDs implements crossplane.DefinitionClient.
-func (m *MockDefinitionClient) GetXRDs(ctx context.Context) ([]*un.Unstructured, error) {
-	if m.GetXRDsFn != nil {
-		return m.GetXRDsFn(ctx)
-	}
-
-	return nil, errors.New("GetXRDs not implemented")
 }
 
 // GetXRDForClaim implements crossplane.DefinitionClient.
@@ -954,14 +934,14 @@ func (m *MockCompositionProvider) GetComposition() (*xpextv1.Composition, error)
 
 // MockFunctionProvider provides a mock implementation for FunctionProvider.
 type MockFunctionProvider struct {
-	GetFunctionsForCompositionFn func(comp *xpextv1.Composition) ([]pkgv1.Function, error)
+	GetFunctionsForCompositionFn func(ctx context.Context, comp *xpextv1.Composition) ([]pkgv1.Function, error)
 	CleanupFn                    func(ctx context.Context) error
 }
 
 // GetFunctionsForComposition implements FunctionProvider.
-func (m *MockFunctionProvider) GetFunctionsForComposition(comp *xpextv1.Composition) ([]pkgv1.Function, error) {
+func (m *MockFunctionProvider) GetFunctionsForComposition(ctx context.Context, comp *xpextv1.Composition) ([]pkgv1.Function, error) {
 	if m.GetFunctionsForCompositionFn != nil {
-		return m.GetFunctionsForCompositionFn(comp)
+		return m.GetFunctionsForCompositionFn(ctx, comp)
 	}
 
 	return nil, nil

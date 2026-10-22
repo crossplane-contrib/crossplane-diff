@@ -153,18 +153,13 @@ func NewDiffProcessor(k8cs k8.Clients, xpcs xp.Clients, opts ...ProcessorOption)
 	return processor
 }
 
-// Initialize loads required resources like CRDs and environment configs.
+// Initialize prepares the requirements provider. CRDs and XRDs are fetched as the resources being
+// diffed need them, so nothing unrelated to the input is read from the cluster.
 func (p *DefaultDiffProcessor) Initialize(ctx context.Context) error {
 	p.config.Logger.Debug("Initializing diff processor")
 
-	// Load CRDs (handled by the schema validator)
-	err := p.initializeSchemaValidator(ctx)
-	if err != nil {
-		return err
-	}
-
 	// Init requirements provider
-	err = p.requirementsProvider.Initialize(ctx)
+	err := p.requirementsProvider.Initialize(ctx)
 	if err != nil {
 		return err
 	}
@@ -218,22 +213,6 @@ func CleanupDetached(ctx context.Context, c Cleaner, logger logging.Logger) {
 	if err := c.Cleanup(cleanupCtx); err != nil {
 		logger.Debug("Failed to release processor resources", "error", err)
 	}
-}
-
-// initializeSchemaValidator initializes the schema validator with CRDs.
-func (p *DefaultDiffProcessor) initializeSchemaValidator(ctx context.Context) error {
-	// If the schema validator implements our interface with LoadCRDs, use it
-	if validator, ok := p.schemaValidator.(*DefaultSchemaValidator); ok {
-		err := validator.LoadCRDs(ctx)
-		if err != nil {
-			return errors.Wrap(err, "cannot load CRDs")
-		}
-
-		p.config.Logger.Debug("Schema validator initialized with CRDs",
-			"crdCount", len(validator.GetCRDs()))
-	}
-
-	return nil
 }
 
 // PerformDiff processes resources using a composition provider function, and returns the report for
@@ -431,7 +410,7 @@ func (p *DefaultDiffProcessor) diffSingleResourceInternal(ctx context.Context, r
 	p.config.Logger.Debug("Resource setup complete", "resource", resourceID, "composition", comp.GetName(), "revision", resolved.RevisionName)
 
 	// Get functions for this composition (provider handles caching internally)
-	fns, err := p.functionProvider.GetFunctionsForComposition(comp)
+	fns, err := p.functionProvider.GetFunctionsForComposition(ctx, comp)
 	if err != nil {
 		p.config.Logger.Debug("Failed to get functions", "resource", resourceID, "error", err)
 		return nil, types.RenderedResources{}, errors.Wrap(err, "cannot get functions for composition")

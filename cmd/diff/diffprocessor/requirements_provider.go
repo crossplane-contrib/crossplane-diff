@@ -60,22 +60,11 @@ func NewRequirementsProvider(res k8.ResourceClient, env xp.EnvironmentClient, lo
 	}
 }
 
-// Initialize pre-fetches resources like environment configs.
-func (p *RequirementsProvider) Initialize(ctx context.Context) error {
-	p.logger.Debug("Initializing extra resource provider")
-
-	// Pre-fetch environment configs
-	envConfigs, err := p.envClient.GetEnvironmentConfigs(ctx)
-	if err != nil {
-		return errors.Wrap(err, "cannot get environment configs")
-	}
-
-	// Add to cache
-	p.cacheResources(envConfigs)
-
-	p.logger.Debug("Extra resource provider initialized",
-		"envConfigCount", len(envConfigs),
-		"cacheSize", len(p.resourceCache))
+// Initialize prepares the provider. It fetches nothing: required resources, environment configs
+// included, are fetched when a render asks for them (see ResolveSelectors), so the run needs no
+// permission to list them.
+func (p *RequirementsProvider) Initialize(_ context.Context) error {
+	p.logger.Debug("Extra resource provider initialized")
 
 	return nil
 }

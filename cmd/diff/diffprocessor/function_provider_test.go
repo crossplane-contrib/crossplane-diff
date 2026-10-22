@@ -17,6 +17,7 @@ limitations under the License.
 package diffprocessor
 
 import (
+	"context"
 	"strconv"
 	"strings"
 	"sync"
@@ -79,7 +80,7 @@ func TestCachedFunctionProvider_GetFunctionsForComposition_LazyLoading(t *testin
 		ObjectMeta: metav1.ObjectMeta{Name: "test-composition"},
 	}
 
-	fns, err := provider.GetFunctionsForComposition(comp)
+	fns, err := provider.GetFunctionsForComposition(t.Context(), comp)
 	if err != nil {
 		t.Fatalf("GetFunctionsForComposition() error = %v", err)
 	}
@@ -123,7 +124,7 @@ func TestCachedFunctionProvider_GetFunctionsForComposition_CacheHit(t *testing.T
 	}
 
 	// First call should fetch
-	fns1, err := provider.GetFunctionsForComposition(comp)
+	fns1, err := provider.GetFunctionsForComposition(t.Context(), comp)
 	if err != nil {
 		t.Fatalf("First GetFunctionsForComposition() error = %v", err)
 	}
@@ -133,7 +134,7 @@ func TestCachedFunctionProvider_GetFunctionsForComposition_CacheHit(t *testing.T
 	}
 
 	// Second call should use cache
-	fns2, err := provider.GetFunctionsForComposition(comp)
+	fns2, err := provider.GetFunctionsForComposition(t.Context(), comp)
 	if err != nil {
 		t.Fatalf("Second GetFunctionsForComposition() error = %v", err)
 	}
@@ -164,7 +165,7 @@ func TestCachedFunctionProvider_GetFunctionsForComposition_Error(t *testing.T) {
 		ObjectMeta: metav1.ObjectMeta{Name: "test-composition"},
 	}
 
-	_, err := provider.GetFunctionsForComposition(comp)
+	_, err := provider.GetFunctionsForComposition(t.Context(), comp)
 	if err == nil {
 		t.Fatal("GetFunctionsForComposition() expected error, got nil")
 	}
@@ -178,7 +179,7 @@ func TestCachedFunctionProvider_GetFunctionsForComposition_MultipleCompositions(
 	fetchCalls := make(map[string]int)
 
 	fnClient := tu.NewMockFunctionClient().
-		WithGetFunctionsFromPipeline(func(comp *apiextensionsv1.Composition) ([]pkgv1.Function, error) {
+		WithGetFunctionsFromPipeline(func(_ context.Context, comp *apiextensionsv1.Composition) ([]pkgv1.Function, error) {
 			fetchCalls[comp.Name]++
 
 			if comp.Name == "composition-1" {
@@ -218,19 +219,19 @@ func TestCachedFunctionProvider_GetFunctionsForComposition_MultipleCompositions(
 	}
 
 	// Fetch for composition 1
-	fns1, err := provider.GetFunctionsForComposition(comp1)
+	fns1, err := provider.GetFunctionsForComposition(t.Context(), comp1)
 	if err != nil {
 		t.Fatalf("GetFunctionsForComposition(comp1) error = %v", err)
 	}
 
 	// Fetch for composition 2
-	fns2, err := provider.GetFunctionsForComposition(comp2)
+	fns2, err := provider.GetFunctionsForComposition(t.Context(), comp2)
 	if err != nil {
 		t.Fatalf("GetFunctionsForComposition(comp2) error = %v", err)
 	}
 
 	// Fetch comp1 again (should hit cache)
-	fns1Again, err := provider.GetFunctionsForComposition(comp1)
+	fns1Again, err := provider.GetFunctionsForComposition(t.Context(), comp1)
 	if err != nil {
 		t.Fatalf("GetFunctionsForComposition(comp1 again) error = %v", err)
 	}
@@ -348,7 +349,7 @@ func TestRegistryOverrideFunctionProvider(t *testing.T) {
 		ObjectMeta: metav1.ObjectMeta{Name: "test-composition"},
 	}
 
-	fns, err := provider.GetFunctionsForComposition(comp)
+	fns, err := provider.GetFunctionsForComposition(t.Context(), comp)
 	if err != nil {
 		t.Fatalf("GetFunctionsForComposition() error = %v", err)
 	}
@@ -415,7 +416,7 @@ func TestEnvInjectingFunctionProvider(t *testing.T) {
 	t.Run("injects when annotation absent", func(t *testing.T) {
 		p := NewEnvInjectingFunctionProvider(newInner(nil), envs, tu.TestLogger(t, false))
 
-		fns, err := p.GetFunctionsForComposition(comp)
+		fns, err := p.GetFunctionsForComposition(t.Context(), comp)
 		if err != nil {
 			t.Fatalf("GetFunctionsForComposition() error = %v", err)
 		}
@@ -428,7 +429,7 @@ func TestEnvInjectingFunctionProvider(t *testing.T) {
 	t.Run("appends to existing runtime-docker-env", func(t *testing.T) {
 		p := NewEnvInjectingFunctionProvider(newInner(map[string]string{render.AnnotationKeyRuntimeEnvironmentVariables: "FOO=bar"}), envs, tu.TestLogger(t, false))
 
-		fns, err := p.GetFunctionsForComposition(comp)
+		fns, err := p.GetFunctionsForComposition(t.Context(), comp)
 		if err != nil {
 			t.Fatalf("GetFunctionsForComposition() error = %v", err)
 		}
@@ -440,11 +441,11 @@ func TestEnvInjectingFunctionProvider(t *testing.T) {
 
 	t.Run("idempotent across repeated calls", func(t *testing.T) {
 		p := NewEnvInjectingFunctionProvider(newInner(nil), envs, tu.TestLogger(t, false))
-		if _, err := p.GetFunctionsForComposition(comp); err != nil {
+		if _, err := p.GetFunctionsForComposition(t.Context(), comp); err != nil {
 			t.Fatalf("first call error = %v", err)
 		}
 
-		fns, err := p.GetFunctionsForComposition(comp)
+		fns, err := p.GetFunctionsForComposition(t.Context(), comp)
 		if err != nil {
 			t.Fatalf("second call error = %v", err)
 		}
@@ -477,7 +478,7 @@ func TestCachedFunctionProvider_ConcurrentUse(t *testing.T) {
 	var wg sync.WaitGroup
 	for i := range 8 {
 		wg.Go(func() {
-			fns, err := provider.GetFunctionsForComposition(comp)
+			fns, err := provider.GetFunctionsForComposition(t.Context(), comp)
 			if err != nil {
 				t.Errorf("GetFunctionsForComposition(): %v", err)
 				return
@@ -493,7 +494,7 @@ func TestCachedFunctionProvider_ConcurrentUse(t *testing.T) {
 		t.Errorf("fetches = %d, want 1", got)
 	}
 
-	fns, err := provider.GetFunctionsForComposition(comp)
+	fns, err := provider.GetFunctionsForComposition(t.Context(), comp)
 	if err != nil {
 		t.Fatalf("GetFunctionsForComposition(): %v", err)
 	}

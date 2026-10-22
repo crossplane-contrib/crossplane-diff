@@ -42,7 +42,8 @@ func NewEnvironmentClient(resourceClient kubernetes.ResourceClient, logger loggi
 	}
 }
 
-// Initialize loads environment configs into the cache.
+// Initialize discovers the served EnvironmentConfig versions. EnvironmentConfigs are fetched on
+// demand by GetEnvironmentConfig.
 func (c *DefaultEnvironmentClient) Initialize(ctx context.Context) error {
 	c.logger.Debug("Initializing environment client")
 
@@ -53,18 +54,7 @@ func (c *DefaultEnvironmentClient) Initialize(ctx context.Context) error {
 
 	c.gvks = gvks
 
-	// List environment configs to populate the cache
-	configs, err := c.GetEnvironmentConfigs(ctx)
-	if err != nil {
-		return errors.Wrap(err, "cannot list environment configs")
-	}
-
-	// Store in cache
-	for _, config := range configs {
-		c.envConfigs[cacheKey("", config.GetName())] = config
-	}
-
-	c.logger.Debug("Environment client initialized", "envConfigsCount", len(c.envConfigs))
+	c.logger.Debug("Environment client initialized")
 
 	return nil
 }

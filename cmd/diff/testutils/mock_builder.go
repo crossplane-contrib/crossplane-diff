@@ -16,6 +16,7 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	un "k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	k8stypes "k8s.io/apimachinery/pkg/types"
@@ -46,6 +47,9 @@ type MockResourceClientBuilder struct {
 	// WithNamespacedResource / WithClusterScopedResource calls so the two
 	// can be combined on one builder.
 	resourceScopes map[schema.GroupVersionKind]bool
+
+	// forbiddenLists holds the GVKs WithErrorOnListOf denies a full list of.
+	forbiddenLists map[schema.GroupVersionKind]bool
 }
 
 // NewMockResourceClient creates a new MockResourceClientBuilder.
@@ -167,6 +171,22 @@ func (b *MockResourceClientBuilder) WithListResourcesFailure(errorStr string) *M
 	})
 }
 
+// WithErrorOnListOf makes ListResources return Forbidden for these GVKs, as for credentials
+// without list permission on them, and behave as otherwise configured for the rest. It can be
+// combined with any other ListResources option, in any order. GetResource and
+// GetResourcesByLabel are unaffected.
+func (b *MockResourceClientBuilder) WithErrorOnListOf(gvks ...schema.GroupVersionKind) *MockResourceClientBuilder {
+	if b.forbiddenLists == nil {
+		b.forbiddenLists = make(map[schema.GroupVersionKind]bool)
+	}
+
+	for _, gvk := range gvks {
+		b.forbiddenLists[gvk] = true
+	}
+
+	return b
+}
+
 // WithGetResourcesByLabel sets the GetResourcesByLabel behavior.
 func (b *MockResourceClientBuilder) WithGetResourcesByLabel(fn func(context.Context, schema.GroupVersionKind, string, metav1.LabelSelector) ([]*un.Unstructured, error)) *MockResourceClientBuilder {
 	b.mock.GetResourcesByLabelFn = fn
@@ -216,6 +236,37 @@ func (b *MockResourceClientBuilder) WithResourcesFoundByLabel(resources []*un.Un
 
 		// Fall through to the original function
 		return originalFn(ctx, gvk, namespace, selector)
+	})
+}
+
+// WithListableResources serves resources to ListResources and GetResourcesByLabel as a cluster holding
+// them would: each returns those of the requested GVK in the requested namespace (every namespace for
+// ""), and GetResourcesByLabel only those its selector matches, evaluated as the apiserver does. Other
+// GVKs list empty.
+func (b *MockResourceClientBuilder) WithListableResources(resources ...*un.Unstructured) *MockResourceClientBuilder {
+	listed := func(gvk schema.GroupVersionKind, namespace string, sel labels.Selector) []*un.Unstructured {
+		out := []*un.Unstructured{}
+
+		for _, r := range resources {
+			if r.GroupVersionKind() == gvk && (namespace == "" || r.GetNamespace() == namespace) && sel.Matches(labels.Set(r.GetLabels())) {
+				out = append(out, r)
+			}
+		}
+
+		return out
+	}
+
+	b.WithListResources(func(_ context.Context, gvk schema.GroupVersionKind, namespace string) ([]*un.Unstructured, error) {
+		return listed(gvk, namespace, labels.Everything()), nil
+	})
+
+	return b.WithGetResourcesByLabel(func(_ context.Context, gvk schema.GroupVersionKind, namespace string, ls metav1.LabelSelector) ([]*un.Unstructured, error) {
+		sel, err := metav1.LabelSelectorAsSelector(&ls)
+		if err != nil {
+			return nil, err
+		}
+
+		return listed(gvk, namespace, sel), nil
 	})
 }
 
@@ -273,7 +324,25 @@ func (b *MockResourceClientBuilder) withResourceScopes(gvks []schema.GroupVersio
 
 // Build returns the built mock.
 func (b *MockResourceClientBuilder) Build() *MockResourceClient {
-	return b.mock
+	if len(b.forbiddenLists) == 0 {
+		return b.mock
+	}
+
+	forbidden := b.forbiddenLists
+	m := *b.mock
+	m.ListResourcesFn = func(ctx context.Context, gvk schema.GroupVersionKind, namespace string) ([]*un.Unstructured, error) {
+		if forbidden[gvk] {
+			return nil, apierrors.NewForbidden(
+				schema.GroupResource{Group: gvk.Group, Resource: strings.ToLower(gvk.Kind) + "s"},
+				"",
+				errors.New("list is not permitted"),
+			)
+		}
+
+		return b.mock.ListResources(ctx, gvk, namespace)
+	}
+
+	return &m
 }
 
 // MockSchemaClientBuilder helps build kubernetes.SchemaClient mocks.
@@ -353,7 +422,10 @@ func (b *MockSchemaClientBuilder) WithFoundCRDs(crdMappings map[schema.GroupKind
 
 // WithGetCRDByName sets the GetCRDByName behavior.
 func (b *MockSchemaClientBuilder) WithGetCRDByName(fn func(string) (*extv1.CustomResourceDefinition, error)) *MockSchemaClientBuilder {
-	b.mock.GetCRDByNameFn = fn
+	b.mock.GetCRDByNameFn = func(_ context.Context, name string) (*extv1.CustomResourceDefinition, error) {
+		return fn(name)
+	}
+
 	return b
 }
 
@@ -413,7 +485,7 @@ func (b *MockSchemaClientBuilder) WithGetAllCRDs(fn func() []*extv1.CustomResour
 	return b
 }
 
-// WithCachingBehavior creates a mock that simulates caching CRDs when GetCRD or LoadCRDsFromXRDs is called.
+// WithCachingBehavior creates a mock that simulates caching CRDs when GetCRD is called.
 func (b *MockSchemaClientBuilder) WithCachingBehavior() *MockSchemaClientBuilder {
 	cachedCRDs := make(map[string]*extv1.CustomResourceDefinition)
 
@@ -438,67 +510,6 @@ func (b *MockSchemaClientBuilder) WithCachingBehavior() *MockSchemaClientBuilder
 		}
 
 		return nil, errors.New("GetCRD not implemented")
-	}
-
-	// Override LoadCRDsFromXRDs to simulate caching CRDs converted from XRDs
-	originalLoadCRDs := b.mock.LoadCRDsFromXRDsFn
-	b.mock.LoadCRDsFromXRDsFn = func(ctx context.Context, xrds []*un.Unstructured) error {
-		// Call original function first
-		if originalLoadCRDs != nil {
-			err := originalLoadCRDs(ctx, xrds)
-			if err != nil {
-				return err
-			}
-		}
-
-		// Simulate caching CRDs converted from XRDs
-		// For test purposes, create a simple CRD from each XRD
-		for _, xrd := range xrds {
-			group, _, _ := un.NestedString(xrd.Object, "spec", "group")
-			if group == "" {
-				continue // Skip invalid XRDs
-			}
-
-			names, ok, _ := un.NestedMap(xrd.Object, "spec", "names")
-			if !ok {
-				continue
-			}
-
-			kind, _ := names["kind"].(string)
-			if kind == "" {
-				continue
-			}
-
-			// Create a simple CRD for this XRD
-			crd := &extv1.CustomResourceDefinition{
-				TypeMeta: metav1.TypeMeta{
-					APIVersion: "apiextensions.k8s.io/v1",
-					Kind:       "CustomResourceDefinition",
-				},
-				ObjectMeta: metav1.ObjectMeta{
-					Name: xrd.GetName(),
-				},
-				Spec: extv1.CustomResourceDefinitionSpec{
-					Group: group,
-					Names: extv1.CustomResourceDefinitionNames{
-						Kind: kind,
-					},
-					Scope: extv1.NamespaceScoped,
-					Versions: []extv1.CustomResourceDefinitionVersion{
-						{
-							Name:    "v1",
-							Served:  true,
-							Storage: true,
-						},
-					},
-				},
-			}
-
-			gvk := schema.GroupVersionKind{Group: group, Version: "v1", Kind: kind}
-			cachedCRDs[gvk.String()] = crd
-		}
-
-		return nil
 	}
 
 	// Override GetAllCRDs to return cached CRDs
@@ -958,28 +969,28 @@ func (b *MockFunctionClientBuilder) WithFailedInitialize(errMsg string) *MockFun
 }
 
 // WithGetFunctionsFromPipeline sets the GetFunctionsFromPipeline behavior.
-func (b *MockFunctionClientBuilder) WithGetFunctionsFromPipeline(fn func(*xpextv1.Composition) ([]pkgv1.Function, error)) *MockFunctionClientBuilder {
+func (b *MockFunctionClientBuilder) WithGetFunctionsFromPipeline(fn func(context.Context, *xpextv1.Composition) ([]pkgv1.Function, error)) *MockFunctionClientBuilder {
 	b.mock.GetFunctionsFromPipelineFn = fn
 	return b
 }
 
 // WithSuccessfulFunctionsFetch sets GetFunctionsFromPipeline to return specific functions.
 func (b *MockFunctionClientBuilder) WithSuccessfulFunctionsFetch(functions []pkgv1.Function) *MockFunctionClientBuilder {
-	return b.WithGetFunctionsFromPipeline(func(*xpextv1.Composition) ([]pkgv1.Function, error) {
+	return b.WithGetFunctionsFromPipeline(func(context.Context, *xpextv1.Composition) ([]pkgv1.Function, error) {
 		return functions, nil
 	})
 }
 
 // WithNoFunctions sets GetFunctionsFromPipeline to return an empty function list.
 func (b *MockFunctionClientBuilder) WithNoFunctions() *MockFunctionClientBuilder {
-	return b.WithGetFunctionsFromPipeline(func(*xpextv1.Composition) ([]pkgv1.Function, error) {
+	return b.WithGetFunctionsFromPipeline(func(context.Context, *xpextv1.Composition) ([]pkgv1.Function, error) {
 		return []pkgv1.Function{}, nil
 	})
 }
 
 // WithFailedFunctionsFetch sets GetFunctionsFromPipeline to return an error.
 func (b *MockFunctionClientBuilder) WithFailedFunctionsFetch(errMsg string) *MockFunctionClientBuilder {
-	return b.WithGetFunctionsFromPipeline(func(*xpextv1.Composition) ([]pkgv1.Function, error) {
+	return b.WithGetFunctionsFromPipeline(func(context.Context, *xpextv1.Composition) ([]pkgv1.Function, error) {
 		return nil, errors.New(errMsg)
 	})
 }
@@ -993,7 +1004,7 @@ func (b *MockFunctionClientBuilder) WithListFunctions(fn func(context.Context) (
 // WithFunctionsFetchCallback sets a callback that's called when GetFunctionsFromPipeline is invoked.
 // This is useful for testing caching behavior by tracking how many times functions are fetched.
 func (b *MockFunctionClientBuilder) WithFunctionsFetchCallback(callback func() ([]pkgv1.Function, error)) *MockFunctionClientBuilder {
-	return b.WithGetFunctionsFromPipeline(func(*xpextv1.Composition) ([]pkgv1.Function, error) {
+	return b.WithGetFunctionsFromPipeline(func(context.Context, *xpextv1.Composition) ([]pkgv1.Function, error) {
 		return callback()
 	})
 }
@@ -1106,33 +1117,6 @@ func (b *MockDefinitionClientBuilder) WithFailedInitialize(errMsg string) *MockD
 	}
 
 	return b
-}
-
-// WithGetXRDs sets the GetXRDs behavior.
-func (b *MockDefinitionClientBuilder) WithGetXRDs(fn func(context.Context) ([]*un.Unstructured, error)) *MockDefinitionClientBuilder {
-	b.mock.GetXRDsFn = fn
-	return b
-}
-
-// WithSuccessfulXRDsFetch sets GetXRDs to return specific XRDs.
-func (b *MockDefinitionClientBuilder) WithSuccessfulXRDsFetch(xrds []*un.Unstructured) *MockDefinitionClientBuilder {
-	return b.WithGetXRDs(func(context.Context) ([]*un.Unstructured, error) {
-		return xrds, nil
-	})
-}
-
-// WithEmptyXRDsFetch sets GetXRDs to return an empty set of XRDs.
-func (b *MockDefinitionClientBuilder) WithEmptyXRDsFetch() *MockDefinitionClientBuilder {
-	return b.WithGetXRDs(func(context.Context) ([]*un.Unstructured, error) {
-		return []*un.Unstructured{}, nil
-	})
-}
-
-// WithFailedXRDsFetch sets GetXRDs to return an error.
-func (b *MockDefinitionClientBuilder) WithFailedXRDsFetch(errMsg string) *MockDefinitionClientBuilder {
-	return b.WithGetXRDs(func(context.Context) ([]*un.Unstructured, error) {
-		return nil, errors.New(errMsg)
-	})
 }
 
 // WithGetXRDForClaim sets the GetXRDForClaim behavior.

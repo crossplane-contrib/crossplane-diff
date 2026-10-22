@@ -7,6 +7,7 @@ import (
 
 	tu "github.com/crossplane-contrib/crossplane-diff/cmd/diff/testutils"
 	"github.com/google/go-cmp/cmp"
+	"github.com/google/go-cmp/cmp/cmpopts"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	un "k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -120,6 +121,7 @@ func TestDefaultFunctionClient_GetFunctionsFromPipeline(t *testing.T) {
 			},
 			mockResource: tu.NewMockResourceClient().
 				WithSuccessfulInitialize().
+				WithResourceNotFound().
 				Build(),
 			args: args{
 				comp: &apiextensionsv1.Composition{
@@ -256,10 +258,11 @@ func TestDefaultFunctionClient_GetFunctionsFromPipeline(t *testing.T) {
 			c := &DefaultFunctionClient{
 				resourceClient: tt.mockResource,
 				functions:      tt.fields.functions,
+				missing:        make(map[string]bool),
 				logger:         tu.TestLogger(t, false),
 			}
 
-			got, err := c.GetFunctionsFromPipeline(tt.args.comp)
+			got, err := c.GetFunctionsFromPipeline(t.Context(), tt.args.comp)
 
 			if tt.want.err != nil {
 				if err == nil {
@@ -299,6 +302,80 @@ func TestDefaultFunctionClient_GetFunctionsFromPipeline(t *testing.T) {
 
 				if diff := cmp.Diff(wantFn.GetName(), got[i].GetName()); diff != "" {
 					t.Errorf("\n%s\nGetFunctionsFromPipeline(...): -want function name, +got function name at index %d:\n%s", tt.reason, i, diff)
+				}
+			}
+		})
+	}
+}
+
+func TestGetFunctionsFromPipelineWithoutListPermission(t *testing.T) {
+	fnA := tu.NewResource("pkg.crossplane.io/v1", "Function", "function-a").Build()
+	fnB := tu.NewResource("pkg.crossplane.io/v1", "Function", "function-b").Build()
+
+	comp := tu.NewComposition("test-comp").
+		WithPipelineMode().
+		WithPipelineStep("step-a", "function-a", nil).
+		WithPipelineStep("step-b", "function-b", nil).
+		WithPipelineStep("step-c", "function-a", nil).
+		Build()
+
+	type want struct {
+		names []string
+		err   string
+	}
+
+	tests := map[string]struct {
+		reason    string
+		functions []*un.Unstructured
+		want      want
+	}{
+		"AllFunctionsExist": {
+			reason:    "Should get each function the pipeline names, in step order, though the credentials cannot list functions",
+			functions: []*un.Unstructured{fnA, fnB},
+			want:      want{names: []string{"function-a", "function-b", "function-a"}},
+		},
+		"FunctionMissing": {
+			reason:    "Should report a function the cluster does not have as missing, as when functions were listed",
+			functions: []*un.Unstructured{fnA},
+			want:      want{err: `function "function-b" referenced in pipeline step "step-b" not found`},
+		},
+	}
+
+	for name, tt := range tests {
+		t.Run(name, func(t *testing.T) {
+			ctx := t.Context()
+
+			c := NewFunctionClient(tu.NewMockResourceClient().
+				WithSuccessfulInitialize().
+				WithFoundGVKs([]schema.GroupVersionKind{functionGVK()}).
+				WithResourcesExist(tt.functions...).
+				WithErrorOnListOf(functionGVK()).
+				Build(), tu.TestLogger(t, false))
+
+			if err := c.Initialize(ctx); err != nil {
+				t.Fatalf("\n%s\nInitialize(): unexpected error: %v", tt.reason, err)
+			}
+
+			// Ask twice: the second call is answered from what the first one fetched.
+			for range 2 {
+				fns, err := c.GetFunctionsFromPipeline(ctx, comp)
+
+				gotErr := ""
+				if err != nil {
+					gotErr = err.Error()
+				}
+
+				if diff := cmp.Diff(tt.want.err, gotErr); diff != "" {
+					t.Fatalf("\n%s\nGetFunctionsFromPipeline(...): -want error, +got error:\n%s", tt.reason, diff)
+				}
+
+				names := make([]string, 0, len(fns))
+				for _, fn := range fns {
+					names = append(names, fn.GetName())
+				}
+
+				if diff := cmp.Diff(tt.want.names, names, cmpopts.EquateEmpty()); diff != "" {
+					t.Errorf("\n%s\nGetFunctionsFromPipeline(...): -want function names, +got function names:\n%s", tt.reason, diff)
 				}
 			}
 		})
@@ -426,6 +503,7 @@ func TestDefaultFunctionClient_ListFunctions(t *testing.T) {
 				resourceClient: &tt.mockResource,
 				logger:         tu.TestLogger(t, false),
 				functions:      make(map[string]pkgv1.Function),
+				missing:        make(map[string]bool),
 			}
 
 			got, err := c.ListFunctions(ctx)
@@ -487,95 +565,33 @@ func TestDefaultFunctionClient_ListFunctions(t *testing.T) {
 func TestDefaultFunctionClient_Initialize(t *testing.T) {
 	ctx := t.Context()
 
-	// Create test functions
-	fn1 := pkgv1.Function{
-		TypeMeta: metav1.TypeMeta{
-			APIVersion: "pkg.crossplane.io/v1",
-			Kind:       "Function",
-		},
-		ObjectMeta: metav1.ObjectMeta{
-			Name: "function-1",
-		},
-	}
-
-	fn2 := pkgv1.Function{
-		TypeMeta: metav1.TypeMeta{
-			APIVersion: "pkg.crossplane.io/v1",
-			Kind:       "Function",
-		},
-		ObjectMeta: metav1.ObjectMeta{
-			Name: "function-2",
-		},
-	}
-
-	// Convert to unstructured for testing
-	u1 := &un.Unstructured{}
-	obj1, _ := runtime.DefaultUnstructuredConverter.ToUnstructured(&fn1)
-	u1.SetUnstructuredContent(obj1)
-	u1.SetGroupVersionKind(schema.GroupVersionKind{
-		Group:   "pkg.crossplane.io",
-		Version: "v1",
-		Kind:    "Function",
-	})
-
-	u2 := &un.Unstructured{}
-	obj2, _ := runtime.DefaultUnstructuredConverter.ToUnstructured(&fn2)
-	u2.SetUnstructuredContent(obj2)
-	u2.SetGroupVersionKind(schema.GroupVersionKind{
-		Group:   "pkg.crossplane.io",
-		Version: "v1",
-		Kind:    "Function",
-	})
-
 	tests := map[string]struct {
 		reason       string
 		mockResource tu.MockResourceClient
 		wantErr      bool
-		wantCached   map[string]bool
 	}{
 		"SuccessfulInitialization": {
-			reason: "Should successfully initialize and cache functions",
+			reason: "Should discover the Function versions and cache no functions, which are fetched on demand",
 			mockResource: *tu.NewMockResourceClient().
 				WithSuccessfulInitialize().
-				WithFoundGVKs([]schema.GroupVersionKind{EnvConfigV1alpha1GVK}).
-				WithListResources(func(_ context.Context, gvk schema.GroupVersionKind, _ string) ([]*un.Unstructured, error) {
-					if gvk.Group == "pkg.crossplane.io" && gvk.Kind == "Function" {
-						return []*un.Unstructured{u1, u2}, nil
-					}
-
-					return nil, errors.New("unexpected GVK")
-				}).
+				WithFoundGVKs([]schema.GroupVersionKind{functionGVK()}).
 				Build(),
 			wantErr: false,
-			wantCached: map[string]bool{
-				"function-1": true,
-				"function-2": true,
-			},
 		},
-		"NoFunctions": {
-			reason: "Should successfully initialize with empty cache when no functions exist",
+		"NoListPermission": {
+			reason: "Should initialize when the credentials cannot list functions",
 			mockResource: *tu.NewMockResourceClient().
 				WithSuccessfulInitialize().
-				WithFoundGVKs([]schema.GroupVersionKind{EnvConfigV1alpha1GVK}).
-				WithEmptyListResources().
+				WithFoundGVKs([]schema.GroupVersionKind{functionGVK()}).
+				WithErrorOnListOf(functionGVK()).
 				Build(),
-			wantErr:    false,
-			wantCached: map[string]bool{},
+			wantErr: false,
 		},
-		"ResourceClientInitFailed": {
-			reason: "Should return error when resource client initialization fails",
-			mockResource: *tu.NewMockResourceClient().
-				WithInitialize(func(_ context.Context) error {
-					return errors.New("init error")
-				}).
-				Build(),
-			wantErr: true,
-		},
-		"ListFunctionsFailed": {
-			reason: "Should return error when listing functions fails",
+		"DiscoveryFailed": {
+			reason: "Should return error when the Function versions cannot be discovered",
 			mockResource: *tu.NewMockResourceClient().
 				WithSuccessfulInitialize().
-				WithListResourcesFailure("list error").
+				WithoutFoundGVKs("discovery error").
 				Build(),
 			wantErr: true,
 		},
@@ -587,6 +603,7 @@ func TestDefaultFunctionClient_Initialize(t *testing.T) {
 				resourceClient: &tt.mockResource,
 				logger:         tu.TestLogger(t, false),
 				functions:      make(map[string]pkgv1.Function),
+				missing:        make(map[string]bool),
 			}
 
 			err := c.Initialize(ctx)
@@ -604,16 +621,8 @@ func TestDefaultFunctionClient_Initialize(t *testing.T) {
 				return
 			}
 
-			// If successful, check the cache state
-			for name := range tt.wantCached {
-				if _, ok := c.functions[name]; !ok {
-					t.Errorf("\n%s\nInitialize(): expected function %s to be cached, but it's not", tt.reason, name)
-				}
-			}
-
-			// Check we don't have extra functions
-			if len(c.functions) != len(tt.wantCached) {
-				t.Errorf("\n%s\nInitialize(): expected %d cached functions, got %d", tt.reason, len(tt.wantCached), len(c.functions))
+			if len(c.functions) != 0 {
+				t.Errorf("\n%s\nInitialize(): expected no cached functions, got %d", tt.reason, len(c.functions))
 			}
 		})
 	}

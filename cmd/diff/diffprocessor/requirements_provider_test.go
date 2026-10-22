@@ -4,6 +4,7 @@ import (
 	"context"
 	"testing"
 
+	xp "github.com/crossplane-contrib/crossplane-diff/cmd/diff/client/crossplane"
 	tu "github.com/crossplane-contrib/crossplane-diff/cmd/diff/testutils"
 	v1 "github.com/crossplane/function-sdk-go/proto/v1"
 	"github.com/google/go-cmp/cmp"
@@ -14,6 +15,74 @@ import (
 
 	"github.com/crossplane/crossplane-runtime/v2/pkg/errors"
 )
+
+// TestRequirementsWithoutEnvironmentConfigList checks that credentials which cannot list
+// EnvironmentConfigs can still initialize and resolve a name selector for one, which is fetched
+// by name.
+func TestRequirementsWithoutEnvironmentConfigList(t *testing.T) {
+	envConfigGVK := schema.GroupVersionKind{Group: "apiextensions.crossplane.io", Version: "v1beta1", Kind: "EnvironmentConfig"}
+	envConfig := tu.NewResource("apiextensions.crossplane.io/v1beta1", "EnvironmentConfig", "env-config").
+		WithSpecField("data", map[string]any{"region": "us-east-1"}).
+		Build()
+
+	type want struct {
+		resources []*un.Unstructured
+	}
+
+	tests := map[string]struct {
+		reason string
+		name   string
+		want   want
+	}{
+		"EnvironmentConfigExists": {
+			reason: "Should return the named EnvironmentConfig",
+			name:   "env-config",
+			want:   want{resources: []*un.Unstructured{envConfig}},
+		},
+		"EnvironmentConfigMissing": {
+			reason: "Should treat a missing EnvironmentConfig as an unmet requirement, not an error",
+			name:   "absent",
+			want:   want{},
+		},
+	}
+
+	for name, tt := range tests {
+		t.Run(name, func(t *testing.T) {
+			ctx := t.Context()
+			logger := tu.TestLogger(t, false)
+
+			resourceClient := tu.NewMockResourceClient().
+				WithFoundGVKs([]schema.GroupVersionKind{envConfigGVK}).
+				WithClusterScopedResource(envConfigGVK).
+				WithResourcesExist(envConfig).
+				WithErrorOnListOf(envConfigGVK).
+				Build()
+
+			envClient := xp.NewEnvironmentClient(resourceClient, logger)
+			if err := envClient.Initialize(ctx); err != nil {
+				t.Fatalf("\n%s\nEnvironmentClient.Initialize(): unexpected error: %v", tt.reason, err)
+			}
+
+			provider := NewRequirementsProvider(resourceClient, envClient, logger)
+			if err := provider.Initialize(ctx); err != nil {
+				t.Fatalf("\n%s\nInitialize(): unexpected error: %v", tt.reason, err)
+			}
+
+			got, err := provider.ResolveSelectors(ctx, []*v1.ResourceSelector{{
+				ApiVersion: "apiextensions.crossplane.io/v1beta1",
+				Kind:       "EnvironmentConfig",
+				Match:      &v1.ResourceSelector_MatchName{MatchName: tt.name},
+			}}, "")
+			if err != nil {
+				t.Fatalf("\n%s\nResolveSelectors(): unexpected error: %v", tt.reason, err)
+			}
+
+			if diff := cmp.Diff(tt.want.resources, got); diff != "" {
+				t.Errorf("\n%s\nResolveSelectors(): -want, +got:\n%s", tt.reason, diff)
+			}
+		})
+	}
+}
 
 // TestRequirementsProvider_ResolveSelectors covers the selector-flat entry
 // point used by the new render.CompositionOutputs.RequiredResources shape.

@@ -8,6 +8,7 @@ import (
 
 	"github.com/crossplane/cli/v2/cmd/crossplane/common/resource/xrm"
 	"k8s.io/client-go/discovery"
+	"k8s.io/client-go/discovery/cached/memory"
 	"k8s.io/client-go/dynamic"
 	kubeclient "k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/kubernetes/scheme"
@@ -106,8 +107,17 @@ func makeXrmClient(config *rest.Config) (*xrm.Client, error) {
 	return xrmClient, nil
 }
 
+// makeDiscoveryClient returns a discovery client that fetches the server's groups and resources once and
+// serves every later lookup from memory. Every client's Initialize and most lookups consult discovery, so
+// without the cache a run repeats the same discovery requests many times over. The cache lives for the run:
+// a type the server starts serving mid-run is not seen, which a diff of a fixed cluster state never needs.
 func makeDiscoveryClient(config *rest.Config) (discovery.DiscoveryInterface, error) {
-	return discovery.NewDiscoveryClientForConfig(config)
+	d, err := discovery.NewDiscoveryClientForConfig(config)
+	if err != nil {
+		return nil, err
+	}
+
+	return memory.NewMemCacheClient(d), nil
 }
 
 // InitializeClients initializes a list of clients, collecting all errors.

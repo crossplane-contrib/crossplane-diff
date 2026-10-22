@@ -1,0 +1,17 @@
+# Names a function, function-not-installed, that no Function on the cluster provides.
+apiVersion: apiextensions.crossplane.io/v1
+kind: Composition
+metadata:
+  name: xnopresources.diff.example.org
+spec:
+  compositeTypeRef:
+    apiVersion: ns.diff.example.org/v1alpha1
+    kind: XNopResource
+  mode: Pipeline
+  pipeline:
+    - step: generate-resources
+      functionRef:
+        name: function-not-installed
+    - step: automatically-detect-ready-composed-resources
+      functionRef:
+        name: function-auto-ready

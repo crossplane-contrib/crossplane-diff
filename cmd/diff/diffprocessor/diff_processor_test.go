@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/crossplane-contrib/crossplane-diff/cmd/diff/client/core"
 	xp "github.com/crossplane-contrib/crossplane-diff/cmd/diff/client/crossplane"
 	k8 "github.com/crossplane-contrib/crossplane-diff/cmd/diff/client/kubernetes"
 	"github.com/crossplane-contrib/crossplane-diff/cmd/diff/compare"
@@ -24,8 +25,10 @@ import (
 	extv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	un "k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	k8stypes "k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/dynamic/fake"
 
 	"github.com/crossplane/crossplane-runtime/v2/pkg/errors"
 	"github.com/crossplane/crossplane-runtime/v2/pkg/logging"
@@ -512,7 +515,6 @@ func TestDefaultDiffProcessor_PerformDiff(t *testing.T) {
 						Build(),
 					Credential: &tu.MockCredentialClient{},
 					Definition: tu.NewMockDefinitionClient().
-						WithEmptyXRDsFetch().
 						WithXRDForGVK(schema.GroupVersionKind{Group: testGroup, Version: "v1", Kind: testKind}, mainXRD).
 						WithXRDForGVK(schema.GroupVersionKind{Group: "cpd.org", Version: "v1", Kind: "ComposedResource"}, composedXRD).
 						Build(),
@@ -1259,19 +1261,124 @@ func TestDefaultDiffProcessor_warnIfDeleting(t *testing.T) {
 	}
 }
 
+// TestDiffFetchesOnlyTheInputsCRD runs a diff through the real schema and definition clients, with
+// validation and defaulting as the processor builds them, against a cluster that forbids listing XRDs
+// and holds an XRD unrelated to the input whose CRD is missing. The run reads only what the input
+// needs, so neither matters; the input's own CRD going missing still fails it.
+func TestDiffFetchesOnlyTheInputsCRD(t *testing.T) {
+	xrGVK := schema.GroupVersionKind{Group: testGroup, Version: testAPIVersion, Kind: testKind}
+	xrdGVK := schema.GroupVersionKind{Group: xp.CrossplaneAPIExtGroup, Version: "v1", Kind: xp.CompositeResourceDefinitionKind}
+
+	inputXRD := tu.NewXRD(testXRDName, testGroup, testKind).
+		WithPlural(testPlural).
+		WithSingular(testSingular).
+		WithVersion(testAPIVersion, true, true).
+		BuildAsUnstructured()
+	unrelatedXRD := tu.NewXRD("xothers."+testGroup, testGroup, "XOther").
+		WithPlural("xothers").
+		WithSingular("xother").
+		WithVersion(testAPIVersion, true, true).
+		BuildAsUnstructured()
+
+	xr := tu.NewResource(testGroup+"/"+testAPIVersion, testKind, "my-xr").WithSpecField("coolField", "value").Build()
+	composition := tu.NewComposition("test-comp").
+		WithCompositeTypeRef(testGroup+"/"+testAPIVersion, testKind).
+		WithPipelineMode().
+		WithPipelineStep("step1", "function-test", nil).
+		Build()
+
+	tests := map[string]struct {
+		reason string
+		// crds are the CRDs in the cluster.
+		crds           []*extv1.CustomResourceDefinition
+		wantHasChanges bool
+		wantErr        string
+	}{
+		"UnrelatedXRDWithoutCRD": {
+			reason:         "An XRD unrelated to the input, and its missing CRD, must not fail the run",
+			crds:           []*extv1.CustomResourceDefinition{makeTestCRD(testCRDName, testKind, testGroup, testAPIVersion)},
+			wantHasChanges: true,
+		},
+		"InputXRDWithoutCRD": {
+			reason: "The input's own CRD missing still fails the run",
+			wantErr: `unable to process resource XR1/my-xr: cannot apply XRD defaults: cannot default example.org/v1, Kind=XR1 "my-xr": ` +
+				`cannot find CRD for XRD xr1s.example.org: cannot get CRD xr1s.example.org: ` +
+				`customresourcedefinitions.apiextensions.k8s.io "xr1s.example.org" not found`,
+		},
+	}
+
+	for name, tt := range tests {
+		t.Run(name, func(t *testing.T) {
+			ctx := t.Context()
+			logger := tu.TestLogger(t, false)
+
+			crdObjs := make([]runtime.Object, 0, len(tt.crds))
+
+			for _, crd := range tt.crds {
+				obj, err := runtime.DefaultUnstructuredConverter.ToUnstructured(crd)
+				if err != nil {
+					t.Fatalf("cannot convert CRD: %v", err)
+				}
+
+				crdObjs = append(crdObjs, &un.Unstructured{Object: obj})
+			}
+
+			typeConverter := tu.NewMockTypeConverter().WithDefaultGetResourceNameForGVK().Build()
+			resourceClient := tu.NewMockResourceClient().
+				WithFoundGVKs([]schema.GroupVersionKind{xrdGVK}).
+				WithResourcesExist(inputXRD, unrelatedXRD).
+				WithErrorOnListOf(xrdGVK).
+				WithClusterScopedResource(xrGVK).
+				Build()
+
+			defClient := xp.NewDefinitionClient(resourceClient, typeConverter, logger)
+			if err := defClient.Initialize(ctx); err != nil {
+				t.Fatalf("cannot initialize definition client: %v", err)
+			}
+
+			k8sClients := k8.Clients{
+				Apply:    tu.NewMockApplyClient().WithSuccessfulDryRun().WithSuccessfulDryRunCreate().Build(),
+				Resource: resourceClient,
+				Schema:   k8.NewSchemaClient(&core.Clients{Dynamic: fake.NewSimpleDynamicClient(runtime.NewScheme(), crdObjs...)}, typeConverter, logger),
+				Type:     typeConverter,
+			}
+			xpClients := xp.Clients{
+				Composition:  tu.NewMockCompositionClient().WithSuccessfulCompositionMatch(composition).Build(),
+				Credential:   &tu.MockCredentialClient{},
+				Definition:   defClient,
+				Environment:  tu.NewMockEnvironmentClient().WithNoEnvironmentConfigs().Build(),
+				Function:     tu.NewMockFunctionClient().WithSuccessfulFunctionsFetch([]pkgv1.Function{{ObjectMeta: metav1.ObjectMeta{Name: "function-test"}}}).Build(),
+				ResourceTree: tu.NewMockResourceTreeClient().WithEmptyResourceTree().Build(),
+			}
+
+			processor := NewDiffProcessor(k8sClients, xpClients, testProcessorOptions(t)...)
+			if err := processor.Initialize(ctx); err != nil {
+				t.Fatalf("\n%s\nInitialize(...): unexpected error: %v", tt.reason, err)
+			}
+
+			report, err := processor.PerformDiff(ctx, []*un.Unstructured{xr}, func(ctx context.Context, res *un.Unstructured) (types.ResolvedComposition, error) {
+				return xpClients.Composition.FindMatchingComposition(ctx, res)
+			})
+
+			gotErr := ""
+			if err != nil {
+				gotErr = err.Error()
+			}
+
+			if diff := gcmp.Diff(tt.wantErr, gotErr); diff != "" {
+				t.Errorf("\n%s\nPerformDiff(...): -want error, +got error:\n%s", tt.reason, diff)
+			}
+
+			if got := report != nil && report.HasChanges(); got != tt.wantHasChanges {
+				t.Errorf("\n%s\nPerformDiff(...): report.HasChanges() = %v, want %v", tt.reason, got, tt.wantHasChanges)
+			}
+		})
+	}
+}
+
 func TestDefaultDiffProcessor_Initialize(t *testing.T) {
 	// Setup test context
 	ctx := t.Context()
-
-	// Create test resources
-	xrd1 := tu.NewResource("apiextensions.crossplane.io/v1", "CompositeResourceDefinition", "xrd1").
-		WithSpecField("group", "example.org").
-		WithSpecField("names", map[string]any{
-			"kind":     "XExampleResource",
-			"plural":   "xexampleresources",
-			"singular": "xexampleresource",
-		}).
-		Build()
 
 	// Test cases
 	tests := map[string]struct {
@@ -1279,66 +1386,6 @@ func TestDefaultDiffProcessor_Initialize(t *testing.T) {
 		processorOpts []ProcessorOption
 		want          error
 	}{
-		"XRDsError": {
-			setupMocks: func() (k8.Clients, xp.Clients) {
-				// Create Kubernetes client mocks
-				k8sClients := k8.Clients{
-					Apply:    tu.NewMockApplyClient().Build(),
-					Resource: tu.NewMockResourceClient().Build(),
-					Schema:   tu.NewMockSchemaClient().Build(),
-					Type:     tu.NewMockTypeConverter().Build(),
-				}
-
-				// Create Crossplane client mocks with a failing Definition client
-				xpClients := xp.Clients{
-					Composition: tu.NewMockCompositionClient().Build(),
-					Credential:  &tu.MockCredentialClient{},
-					Definition: tu.NewMockDefinitionClient().
-						WithFailedXRDsFetch("XRD not found").
-						Build(),
-					Environment: tu.NewMockEnvironmentClient().
-						WithNoEnvironmentConfigs().
-						Build(),
-					Function:     tu.NewMockFunctionClient().Build(),
-					ResourceTree: tu.NewMockResourceTreeClient().Build(),
-				}
-
-				return k8sClients, xpClients
-			},
-			processorOpts: testProcessorOptions(t),
-			want:          errors.Wrap(errors.Wrap(errors.New("XRD not found"), "cannot get XRDs"), "cannot load CRDs"),
-		},
-		"EnvConfigsError": {
-			setupMocks: func() (k8.Clients, xp.Clients) {
-				// Create Kubernetes client mocks
-				k8sClients := k8.Clients{
-					Apply:    tu.NewMockApplyClient().Build(),
-					Resource: tu.NewMockResourceClient().Build(),
-					Schema:   tu.NewMockSchemaClient().Build(),
-					Type:     tu.NewMockTypeConverter().Build(),
-				}
-
-				// Create Crossplane client mocks with a failing Environment client
-				xpClients := xp.Clients{
-					Composition: tu.NewMockCompositionClient().Build(),
-					Credential:  &tu.MockCredentialClient{},
-					Definition: tu.NewMockDefinitionClient().
-						WithEmptyXRDsFetch().
-						Build(),
-					Environment: tu.NewMockEnvironmentClient().
-						WithGetEnvironmentConfigs(func(_ context.Context) ([]*un.Unstructured, error) {
-							return nil, errors.New("env configs not found")
-						}).
-						Build(),
-					Function:     tu.NewMockFunctionClient().Build(),
-					ResourceTree: tu.NewMockResourceTreeClient().Build(),
-				}
-
-				return k8sClients, xpClients
-			},
-			processorOpts: testProcessorOptions(t),
-			want:          errors.Wrap(errors.New("env configs not found"), "cannot get environment configs"),
-		},
 		"Success": {
 			setupMocks: func() (k8.Clients, xp.Clients) {
 				// Create Kubernetes client mocks
@@ -1355,9 +1402,7 @@ func TestDefaultDiffProcessor_Initialize(t *testing.T) {
 				xpClients := xp.Clients{
 					Composition: tu.NewMockCompositionClient().Build(),
 					Credential:  &tu.MockCredentialClient{},
-					Definition: tu.NewMockDefinitionClient().
-						WithSuccessfulXRDsFetch([]*un.Unstructured{xrd1}).
-						Build(),
+					Definition:  tu.NewMockDefinitionClient().Build(),
 					Environment: tu.NewMockEnvironmentClient().
 						WithNoEnvironmentConfigs().
 						Build(),
