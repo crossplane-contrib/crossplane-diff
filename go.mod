@@ -1,14 +1,14 @@
 module github.com/crossplane-contrib/crossplane-diff
 
-go 1.26.7
+go 1.26.10
 
 require (
 	github.com/Masterminds/semver v1.5.0
 	github.com/alecthomas/kong v1.16.1
 	github.com/crossplane/cli/v2 v2.6.0-rc.0.0.20261015190153-9703fb560313
-	github.com/crossplane/crossplane-runtime/v2 v2.4.2
+	github.com/crossplane/crossplane-runtime/v2 v2.4.3
 	github.com/crossplane/crossplane/apis/v2 v2.4.3
-	github.com/crossplane/crossplane/v2 v2.4.2
+	github.com/crossplane/crossplane/v2 v2.4.3
 	github.com/google/go-cmp v0.7.0
 	github.com/google/go-containerregistry v0.22.1
 	github.com/moby/moby/api v1.56.1
