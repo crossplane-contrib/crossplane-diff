@@ -4,7 +4,7 @@ go 1.26.10
 
 require (
 	github.com/Masterminds/semver v1.5.0
-	github.com/alecthomas/kong v1.16.1
+	github.com/alecthomas/kong v1.17.0
 	github.com/crossplane/cli/v2 v2.6.0-rc.0.0.20261015190153-9703fb560313
 	github.com/crossplane/crossplane-runtime/v2 v2.4.3
 	github.com/crossplane/crossplane/apis/v2 v2.4.3
