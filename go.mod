@@ -14,7 +14,7 @@ require (
 	github.com/moby/moby/api v1.57.0
 	github.com/moby/moby/client v0.6.3
 	github.com/pkg/errors v0.9.1
-	github.com/sergi/go-diff v1.4.4
+	github.com/sergi/go-diff v1.4.5
 	github.com/shirou/gopsutil/v4 v4.26.10
 	k8s.io/api v0.35.3
 	k8s.io/apiextensions-apiserver v0.35.3
